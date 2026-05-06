@@ -2,13 +2,20 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../lib/cn";
 
-export interface ContextMenuItem {
+interface ContextMenuButton {
+  type?: "button";
   label: string;
   icon?: React.ReactNode;
   onClick: () => void;
   danger?: boolean;
   disabled?: boolean;
 }
+
+interface ContextMenuSeparator {
+  type: "separator";
+}
+
+export type ContextMenuItem = ContextMenuButton | ContextMenuSeparator;
 
 interface ContextMenuProps {
   open: boolean;
@@ -75,34 +82,46 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
       }}
       className="min-w-[9rem] overflow-hidden rounded-md border border-border bg-bg-elevated shadow-2xl"
     >
-      <ul className="py-1 text-[11px]">
-        {items.map((item, i) => (
-          <li key={i}>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={item.disabled}
-              onClick={() => {
-                if (item.disabled) return;
-                onClose();
-                item.onClick();
-              }}
-              className={cn(
-                "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
-                item.disabled
-                  ? "cursor-not-allowed text-fg-muted/50"
-                  : item.danger
-                    ? "text-danger hover:bg-danger/15"
-                    : "text-fg hover:bg-bg-sidebar",
-              )}
-            >
-              {item.icon ? (
-                <span className="shrink-0 text-fg-muted">{item.icon}</span>
-              ) : null}
-              <span className="truncate">{item.label}</span>
-            </button>
-          </li>
-        ))}
+      <ul className="py-1 text-[12px]">
+        {items.map((item, i) => {
+          if (item.type === "separator") {
+            return (
+              <li
+                key={i}
+                role="separator"
+                aria-orientation="horizontal"
+                className="my-1 h-px bg-border"
+              />
+            );
+          }
+          return (
+            <li key={i}>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                onClick={() => {
+                  if (item.disabled) return;
+                  onClose();
+                  item.onClick();
+                }}
+                className={cn(
+                  "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
+                  item.disabled
+                    ? "cursor-not-allowed text-fg-muted/50"
+                    : item.danger
+                      ? "text-danger hover:bg-danger/15"
+                      : "text-fg hover:bg-bg-sidebar",
+                )}
+              >
+                {item.icon ? (
+                  <span className="shrink-0 text-fg-muted">{item.icon}</span>
+                ) : null}
+                <span className="truncate">{item.label}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>,
     document.body,

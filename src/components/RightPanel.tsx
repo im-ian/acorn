@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup } from "react-resizable-panels";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
@@ -272,18 +272,54 @@ function CommitsTab({
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setError(null);
     setSelected(null);
     setDiff(null);
     setHasMore(true);
     setLoadingMore(false);
+    setCommits([]);
     api
       .listCommits(repoPath, 0, COMMITS_PAGE_SIZE)
       .then((page) => {
+        if (cancelled) return;
         setCommits(page);
         setHasMore(page.length === COMMITS_PAGE_SIZE);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => {
+        if (cancelled) return;
+        setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const page = await api.listCommits(repoPath, 0, COMMITS_PAGE_SIZE);
+        if (cancelled) return;
+        setCommits((prev) => {
+          if (prev.length === 0) {
+            return page;
+          }
+          // The fetched page is authoritative for the top of history. Splice it
+          // over the equivalent prefix of `prev` so abandoned commits (e.g.
+          // after `git reset` / amend) get evicted instead of lingering in the
+          // middle of the list.
+          return [...page, ...prev.slice(page.length)];
+        });
+      } catch {
+        // silent — next tick retries
+      }
+    };
+    const handle = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
   }, [repoPath]);
 
   const loadMore = useCallback(() => {
@@ -401,6 +437,9 @@ function CommitsTab({
                   <button
                     type="button"
                     onClick={() => selectCommit(c.sha)}
+                    onDoubleClick={() => {
+                      void expandCommit(c);
+                    }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, commit: c });
@@ -415,7 +454,13 @@ function CommitsTab({
                     style={{ height: COMMIT_ROW_HEIGHT }}
                   >
                     <span className="flex w-full min-w-0 items-center gap-2">
-                      <span className="shrink-0 font-mono text-accent">
+                      <span
+                        className={cn(
+                          "shrink-0 font-mono",
+                          c.pushed ? "text-accent" : "text-fg-muted",
+                        )}
+                        title={c.pushed ? "Pushed" : "Not pushed"}
+                      >
                         {c.short_sha}
                       </span>
                       <span className="truncate text-fg">{c.summary}</span>
@@ -530,17 +575,42 @@ function StagedTab({
   } | null>(null);
 
   useEffect(() => {
-    setError(null);
-    Promise.all([api.listStaged(repoPath), api.stagedDiff(repoPath)])
-      .then(([f, d]) => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const [f, d] = await Promise.all([
+          api.listStaged(repoPath),
+          api.stagedDiff(repoPath),
+        ]);
+        if (cancelled) return;
         setFiles(f);
         setDiff(d);
-      })
-      .catch((e) => setError(String(e)));
+        setError(null);
+      } catch (e) {
+        if (cancelled) return;
+        setError(String(e));
+      }
+    };
+
+    setError(null);
+    void refresh();
+    const handle = setInterval(refresh, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
   }, [repoPath]);
 
   function isDeleted(file: StagedFile): boolean {
     return file.status.toLowerCase().includes("delete");
+  }
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function openInEditor(file: StagedFile) {
@@ -550,6 +620,18 @@ function StagedTab({
     }
     try {
       await openFileInEditor(joinPath(repoPath, file.path));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openWithDefaultApp(file: StagedFile) {
+    if (isDeleted(file)) {
+      setError("File was deleted; nothing to open.");
+      return;
+    }
+    try {
+      await openPath(joinPath(repoPath, file.path));
     } catch (e) {
       setError(String(e));
     }
@@ -568,6 +650,10 @@ function StagedTab({
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, file: f });
+              }}
+              onDoubleClick={() => {
+                if (isDeleted(f)) return;
+                void openWithDefaultApp(f);
               }}
               className="flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40"
             >
@@ -611,6 +697,21 @@ function StagedTab({
                   disabled: isDeleted(menu.file),
                   onClick: () => {
                     void openInEditor(menu.file);
+                  },
+                },
+                { type: "separator" },
+                {
+                  label: "Copy relative path",
+                  icon: <Copy size={12} />,
+                  onClick: () => {
+                    void copyText(menu.file.path);
+                  },
+                },
+                {
+                  label: "Copy absolute path",
+                  icon: <Copy size={12} />,
+                  onClick: () => {
+                    void copyText(joinPath(repoPath, menu.file.path));
                   },
                 },
               ] satisfies ContextMenuItem[])

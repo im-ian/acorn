@@ -31,6 +31,7 @@ export interface CommitInfo {
   author: string;
   timestamp: number;
   summary: string;
+  pushed: boolean;
 }
 
 export interface StagedFile {
@@ -42,6 +43,9 @@ export interface DiffFile {
   old_path: string | null;
   new_path: string | null;
   patch: string;
+  is_image: boolean;
+  old_image?: string | null;
+  new_image?: string | null;
 }
 
 export interface DiffPayload {

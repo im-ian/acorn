@@ -36,6 +36,7 @@ parking_lot = "0.12"
 dashmap = "6"
 directories = "5"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3
