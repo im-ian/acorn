@@ -19,6 +19,9 @@ target/
 # Git worktrees
 .worktrees/
 
+# Claude Code project-local state
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
