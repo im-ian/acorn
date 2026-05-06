@@ -9,6 +9,7 @@ use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::session::{Project, Session, SessionStatus};
+use crate::session_status;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
@@ -407,6 +408,31 @@ pub fn read_session_todos(session_id: String, cwd: String) -> AppResult<Vec<Todo
     todos::read_latest_todos(&session_id, &cwd)
 }
 
+#[derive(serde::Serialize)]
+pub struct SessionStatusEntry {
+    pub id: String,
+    pub status: SessionStatus,
+}
+
+#[tauri::command]
+pub fn detect_session_statuses(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Vec<SessionStatusEntry> {
+    ids.into_iter()
+        .map(|id| {
+            let status = session_status::detect(&id).unwrap_or(SessionStatus::Idle);
+            // Mirror the detected status into the in-memory store so persisted
+            // sessions reflect liveness on next save. Best-effort: ignore errors
+            // (e.g. UUID parse failure for a stale id from the frontend).
+            if let Ok(uuid) = Uuid::parse_str(&id) {
+                let _ = state.sessions.refresh_status(&uuid, status);
+            }
+            SessionStatusEntry { id, status }
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn list_commits(
     repo_path: String,
@@ -433,6 +459,39 @@ pub fn commit_diff(repo_path: String, sha: String) -> AppResult<DiffPayload> {
 #[tauri::command]
 pub fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<String>> {
     git_ops::web_url_for_commit(&PathBuf::from(repo_path), &sha)
+}
+
+/// Check whether a `claude` CLI transcript already exists on disk for the
+/// given `session_id`. Used by the frontend to decide between `--session-id`
+/// (new conversation) and `--resume` (existing) when (re)spawning claude —
+/// claude refuses `--session-id` for an id that already has a transcript.
+///
+/// Claude's project-directory encoding has changed across versions
+/// (underscores were once normalised to dashes; newer versions preserve
+/// them; future versions could change again). To avoid getting tripped up
+/// by the encoding, we look for `<session-id>.jsonl` under any subdir of
+/// `~/.claude/projects/`.
+#[tauri::command]
+pub fn claude_session_exists(_cwd: String, session_id: String) -> bool {
+    let home = match std::env::var_os("HOME") {
+        Some(v) => PathBuf::from(v),
+        None => return false,
+    };
+    let projects = home.join(".claude").join("projects");
+    let target = format!("{session_id}.jsonl");
+    let Ok(entries) = std::fs::read_dir(&projects) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.join(&target).exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Spawn an external editor on `path`. Used by the "Open in editor" action
