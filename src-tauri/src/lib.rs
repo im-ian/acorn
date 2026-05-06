@@ -4,6 +4,7 @@ mod git_ops;
 mod persistence;
 mod pty;
 mod session;
+mod session_status;
 mod state;
 mod todos;
 mod worktree;
@@ -128,6 +129,7 @@ pub fn run() {
             commands::list_staged,
             commands::commit_diff,
             commands::commit_web_url,
+            commands::claude_session_exists,
             commands::open_in_editor,
             commands::staged_diff,
             commands::pty_spawn,
@@ -135,6 +137,7 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_kill,
             commands::read_session_todos,
+            commands::detect_session_statuses,
             commands::get_memory_usage,
         ])
         .run(tauri::generate_context!())

@@ -198,6 +198,20 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    /// Update status without bumping `updated_at`. No-op if the status is
+    /// unchanged. Used by the periodic liveness probe so polling doesn't
+    /// reshuffle the sidebar's most-recent-first ordering.
+    pub fn refresh_status(&self, id: &Uuid, status: SessionStatus) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        if entry.status != status {
+            entry.status = status;
+        }
+        Ok(entry.clone())
+    }
+
     pub fn rename(&self, id: &Uuid, name: String) -> AppResult<Session> {
         let mut entry = self
             .inner

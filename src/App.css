@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #1f2326;
+  --color-bg-elevated: #272b2f;
+  --color-bg-sidebar: #1a1d20;
+  --color-fg: #ededed;
+  --color-fg-muted: oklch(64% 0.01 250);
+  --color-border: #2f3338;
+  --color-accent: oklch(72% 0.16 145);
+  --color-accent-hover: oklch(78% 0.16 145);
+  --color-danger: oklch(62% 0.22 25);
+  --color-warning: oklch(78% 0.16 75);
+
+  --font-sans: "Inter", "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
+}
+
+.acorn-terminal .xterm-viewport {
+  background-color: transparent !important;
+}
+
+.acorn-terminal .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.acorn-terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+.acorn-terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  cursor: default;
+}
+
+input,
+textarea,
+.acorn-terminal,
+.acorn-selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.acorn-terminal,
+.acorn-terminal * {
+  cursor: text;
+}
+
+/*
+ * WKWebView (used by Tauri on macOS) blocks HTML5 drag on arbitrary elements
+ * unless `-webkit-user-drag: element` is set. The body rule above disables
+ * dragging globally; re-enable it explicitly for opt-in draggables.
+ */
+[draggable="true"] {
+  -webkit-user-drag: element;
+}
