@@ -1,10 +1,36 @@
 import { useEffect, useState } from "react";
+import { homeDir } from "@tauri-apps/api/path";
 import { api } from "../lib/api";
 import type { MemoryProcess } from "../lib/types";
 import { useAppStore } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
 
 const MEMORY_POLL_MS = 2000;
+
+function useHomeDir(): string | null {
+  const [home, setHome] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    homeDir()
+      .then((h) => {
+        if (!cancelled) setHome(h.replace(/\/+$/, ""));
+      })
+      .catch(() => {
+        if (!cancelled) setHome(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return home;
+}
+
+function tildify(path: string, home: string | null): string {
+  if (!home) return path;
+  if (path === home) return "~";
+  if (path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
+  return path;
+}
 
 interface MemorySnapshot {
   bytes: number;
@@ -50,7 +76,9 @@ export function StatusBar() {
   const { sessions, activeSessionId, error, loading } = useAppStore();
   const active = sessions.find((s) => s.id === activeSessionId);
   const memory = useMemoryUsage(MEMORY_POLL_MS);
+  const home = useHomeDir();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const displayPath = active ? tildify(active.worktree_path, home) : null;
 
   return (
     <>
@@ -71,12 +99,12 @@ export function StatusBar() {
               error: {error}
             </span>
           ) : null}
-          {active ? (
+          {active && displayPath ? (
             <span
               className="truncate text-right text-fg-muted"
               title={active.worktree_path}
             >
-              {active.worktree_path}
+              {displayPath}
             </span>
           ) : null}
           <span className="text-fg-muted/50">|</span>
