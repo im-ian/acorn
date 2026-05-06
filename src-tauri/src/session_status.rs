@@ -4,22 +4,25 @@
 //! - last assistant turn with `stop_reason=end_turn` → Idle (waiting on user)
 //! - last assistant turn with `stop_reason=tool_use` → Running (tool pending)
 //! - last user turn (new prompt or tool_result) → Running (assistant pending)
-//! - mtime within 2s → Running (still streaming, even if tail shows end_turn)
 //! - no transcript yet → Idle
 //!
 //! Meta-only lines (type `last-prompt`, `permission-mode`, `attachment`,
-//! `file-history-snapshot`) are ignored when picking the last message.
+//! `file-history-snapshot`) are ignored when picking the last message. The
+//! transcript line itself is the source of truth — we deliberately do NOT
+//! gate on mtime, otherwise the moment after `end_turn` (when the file is
+//! still warm) gets misreported as Running.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::time::SystemTime;
 
 use crate::error::AppResult;
 use crate::session::SessionStatus;
 use crate::todos;
 
-const TAIL_BYTES: u64 = 65_536;
-const STREAMING_FRESH_SECS: u64 = 2;
+// Big enough to comfortably contain the last assistant turn line for typical
+// Claude responses. JSONL lines are one-per-message, so a long assistant
+// response can be many KB on a single line.
+const TAIL_BYTES: u64 = 262_144;
 
 /// Locate the JSONL transcript via `todos::locate_transcript` and infer the
 /// session's status from its tail.
@@ -29,29 +32,17 @@ pub fn detect(session_id: &str) -> AppResult<SessionStatus> {
         None => return Ok(SessionStatus::Idle),
     };
 
-    let mtime_age = std::fs::metadata(&path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| SystemTime::now().duration_since(t).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(u64::MAX);
-
+    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let read_full = file_size <= TAIL_BYTES;
     let tail = read_tail(&path, TAIL_BYTES).unwrap_or_default();
-    let last_kind = last_meaningful_kind(&tail);
+    let last_kind = last_meaningful_kind(&tail, read_full);
 
-    let status = match last_kind {
+    Ok(match last_kind {
         Some(LastKind::AssistantEndTurn) => SessionStatus::Idle,
         Some(LastKind::AssistantToolUse) => SessionStatus::Running,
         Some(LastKind::User) => SessionStatus::Running,
         None => SessionStatus::Idle,
-    };
-
-    // If the file was just touched, treat as Running regardless of tail (the
-    // assistant turn currently streaming may not be fully written yet).
-    if mtime_age <= STREAMING_FRESH_SECS && status == SessionStatus::Idle {
-        return Ok(SessionStatus::Running);
-    }
-    Ok(status)
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,15 +62,16 @@ fn read_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<String> 
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn last_meaningful_kind(tail: &str) -> Option<LastKind> {
-    // Walk lines newest-first; skip meta lines and partial first line.
+fn last_meaningful_kind(tail: &str, read_full: bool) -> Option<LastKind> {
+    // Walk lines newest-first; skip meta lines.
     let mut lines: Vec<&str> = tail.lines().collect();
     if lines.is_empty() {
         return None;
     }
-    // The first line in the buffer may be truncated (we did a tail read).
-    // Drop it unless it's the only line.
-    if lines.len() > 1 {
+    // The first line in the buffer may be truncated when we tail-read; drop
+    // it. When the entire file fit in the buffer, the first line is intact
+    // and we keep it.
+    if !read_full && lines.len() > 1 {
         lines.remove(0);
     }
     for line in lines.into_iter().rev() {

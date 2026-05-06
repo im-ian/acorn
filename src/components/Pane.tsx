@@ -59,13 +59,10 @@ export function Pane({ paneId }: PaneProps) {
 
   const isFocused = focusedPaneId === paneId;
 
-  // Spawn a new session in the same project as the existing tabs. Triggered
-  // by double-clicking the empty area of the tab strip. We bypass the store
-  // wrapper so we can grab the new session id and immediately focus its tab
-  // in this pane.
-  async function handleNewTabFromStrip() {
-    if (tabs.length === 0) return;
-    const repoPath = tabs[0].repo_path;
+  // Spawn a new session in the given project. Triggered by double-clicking
+  // the empty pane body or the tab strip. We bypass the store wrapper so we
+  // can grab the new session id and immediately focus its tab in this pane.
+  async function spawnSession(repoPath: string) {
     setFocusedPane(paneId);
     const name = suggestSessionName(repoPath, sessions);
     try {
@@ -73,8 +70,24 @@ export function Pane({ paneId }: PaneProps) {
       await useAppStore.getState().refreshAll();
       selectSession(created.id);
     } catch (err) {
-      console.error("[Pane] new session via tab strip failed", err);
+      console.error("[Pane] new session spawn failed", err);
     }
+  }
+
+  async function handleNewTabFromStrip() {
+    if (tabs.length === 0) return;
+    await spawnSession(tabs[0].repo_path);
+  }
+
+  async function handleNewTabFromEmpty() {
+    // Prefer the pane's project if any tabs exist (shouldn't here), else use
+    // the globally active project. With no project at all, do nothing.
+    const repoPath =
+      tabs[0]?.repo_path ??
+      useAppStore.getState().activeProject ??
+      null;
+    if (!repoPath) return;
+    await spawnSession(repoPath);
   }
 
   return (
@@ -116,7 +129,7 @@ export function Pane({ paneId }: PaneProps) {
           active. We render only an EmptyPane fallback here for the
           no-active-session case.
         */}
-        {active ? null : <EmptyPane />}
+        {active ? null : <EmptyPane onDoubleClick={handleNewTabFromEmpty} />}
         <PaneDropOverlay paneId={paneId} />
       </div>
     </div>
@@ -133,11 +146,17 @@ function suggestSessionName(repoPath: string, existing: Session[]): string {
   return `${base}-${n}`;
 }
 
-function EmptyPane() {
+function EmptyPane({ onDoubleClick }: { onDoubleClick: () => void }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 text-fg-muted">
+    <div
+      className="flex h-full flex-col items-center justify-center gap-2 text-fg-muted hover:text-fg/80 transition cursor-pointer select-none"
+      onDoubleClick={onDoubleClick}
+      role="button"
+      tabIndex={0}
+      title="Double-click to start a new session"
+    >
       <TerminalIcon size={28} className="opacity-40" />
-      <p className="text-xs">Drop a tab here or pick a session</p>
+      <p className="text-xs">Drop a tab here or double-click to start a session</p>
     </div>
   );
 }

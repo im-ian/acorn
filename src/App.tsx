@@ -51,7 +51,7 @@ function App() {
   useEffect(() => {
     const tick = () => useAppStore.getState().pollSessionStatuses();
     tick();
-    const handle = setInterval(tick, 3000);
+    const handle = setInterval(tick, 1000);
     return () => clearInterval(handle);
   }, []);
 
