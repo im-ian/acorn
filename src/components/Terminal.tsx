@@ -157,23 +157,6 @@ export function Terminal({
     const compositionView = container.querySelector<HTMLElement>(
       ".composition-view",
     );
-    const helperTextarea = container.querySelector<HTMLTextAreaElement>(
-      ".xterm-helper-textarea",
-    );
-    // Drain helper textarea after non-IME input (paste, plain insertText,
-    // delete) and after each IME commit. Without this, the textarea
-    // accumulates content (especially after a paste) and the macOS IME
-    // anchors the next composition at a stale cursor offset, which
-    // produces broken Korean syllables once the user resumes typing.
-    // Schedule via setTimeout(0) so xterm's own input handler — which we
-    // intentionally let run for non-IME types — finishes reading the
-    // textarea first.
-    const drainTextarea = () => {
-      if (!helperTextarea) return;
-      window.setTimeout(() => {
-        helperTextarea.value = "";
-      }, 0);
-    };
     const getCellDims = (): { width: number; height: number } | null => {
       // xterm v6 exposes render dimensions only via internals.
       const core = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } } })
@@ -198,6 +181,17 @@ export function Terminal({
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
       }
+      // Sync font with the current xterm options so the preview uses the
+      // user's configured terminal font/size, not the default sans inherited
+      // from the parent.
+      const fontFamily = term.options.fontFamily;
+      const fontSize = term.options.fontSize;
+      if (typeof fontFamily === "string") {
+        compositionView.style.fontFamily = fontFamily;
+      }
+      if (typeof fontSize === "number") {
+        compositionView.style.fontSize = `${fontSize}px`;
+      }
       compositionView.classList.add("active");
     };
     const hideComposing = () => {
@@ -206,33 +200,97 @@ export function Terminal({
       compositionView.textContent = "";
     };
 
+    // macOS WKWebView delivers Korean IME via two different inputType
+    // families depending on system/IME mode. We support both:
+    //
+    // Family A — composition-clean (W3C spec):
+    //   insertCompositionText / deleteCompositionText / insertFromComposition
+    //   `ev.data` on commit holds the full composed syllable.
+    //
+    // Family B — replacement-based:
+    //   insertText (start of new syllable / committing previous trailing)
+    //   insertReplacementText (composing in progress, replacing trailing)
+    //   No clean commit event — we infer commits from textarea diff.
+    //
+    // For Family B we maintain `sentPrefix` so we know which characters
+    // were already forwarded to the PTY. The `lastKeyCode229` flag
+    // differentiates an IME-driven `insertText` from a plain ASCII one.
+    let sentPrefix = "";
+    let lastKeyCode229 = false;
+    // Hangul jamo, Hangul syllables, Hiragana, Katakana, CJK ideographs.
+    // Used to recognise IME-driven `insertText` events even when the
+    // accompanying `keydown` (with keyCode 229) hasn't fired yet — on
+    // WKWebView the `input` event sometimes arrives BEFORE its keydown.
+    const CJK_DATA_RE =
+      /[ᄀ-ᇿ㄰-㆏가-힯぀-ゟ゠-ヿ一-鿿]/;
+
+    const flushTrailing = () => {
+      const ta = container.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!ta) return;
+      const value = ta.value;
+      if (value.length > sentPrefix.length) {
+        sendToPty(value.slice(sentPrefix.length));
+      }
+      sentPrefix = "";
+      ta.value = "";
+      hideComposing();
+    };
+
     const onInput = (e: Event) => {
       const ev = e as InputEvent;
+      const ta = container.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
       switch (ev.inputType) {
+        // Family A — composition-clean
         case "insertCompositionText":
-          // Live preview update — e.g. user typed another jamo and the
-          // syllable shape changed (ㅇ → 아 → 안). Show but don't commit.
           showComposing(ev.data ?? "");
           ev.stopImmediatePropagation();
           return;
         case "deleteCompositionText":
-          // Preview being torn down just before a commit. Don't send.
           ev.stopImmediatePropagation();
           return;
         case "insertFromComposition":
-          // Composition committed. ev.data is the final syllable.
           if (ev.data) sendToPty(ev.data);
           hideComposing();
-          drainTextarea();
           ev.stopImmediatePropagation();
           return;
+
+        // Family B — replacement-based
+        case "insertReplacementText": {
+          // In-syllable replacement; trailing char being recomposed.
+          // Don't commit; show preview of trailing.
+          if (ta) showComposing(ta.value.slice(sentPrefix.length));
+          ev.stopImmediatePropagation();
+          return;
+        }
+        case "insertText": {
+          // Plain ASCII vs IME first-jamo. We treat it as IME when EITHER
+          // a keyCode-229 keydown was just observed OR `ev.data` itself is
+          // a CJK character. WKWebView occasionally fires `input` before
+          // the corresponding keydown, so the flag alone is unreliable
+          // for the very first jamo of a session.
+          const isIme =
+            lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
+          if (!isIme) {
+            hideComposing();
+            return;
+          }
+          if (!ta) return;
+          const value = ta.value;
+          const newCharLen = ev.data?.length ?? 0;
+          const committedEnd = value.length - newCharLen;
+          if (committedEnd > sentPrefix.length) {
+            sendToPty(value.slice(sentPrefix.length, committedEnd));
+            sentPrefix = value.slice(0, committedEnd);
+          }
+          showComposing(value.slice(sentPrefix.length));
+          ev.stopImmediatePropagation();
+          return;
+        }
         default:
-          // Plain insertText (ASCII paste / non-IME), deleteContentBackward,
-          // etc. Let xterm's own _inputEvent handle it. We deliberately do
-          // NOT drain the textarea here: a setTimeout(0) drain races with
-          // the user's next IME composition keystroke and can clear the
-          // textarea mid-composition, which makes the next syllable's
-          // jamo arrive split (e.g. ㄱㅏ instead of 가).
           hideComposing();
           return;
       }
@@ -242,11 +300,33 @@ export function Terminal({
       const ev = e as KeyboardEvent;
       // keyCode 229 = IME composing key. xterm's keydown handler reacts
       // to this with a `_handleAnyTextareaChanges` setTimeout that would
-      // emit duplicate text. Stop it at capture phase.
+      // emit duplicate text. Stop it at capture phase, AND remember it so
+      // a following `insertText` is treated as IME first-jamo (Family B).
       if (ev.keyCode === 229) {
+        lastKeyCode229 = true;
         ev.stopImmediatePropagation();
         return;
       }
+      // Non-IME key: any pending Family-B trailing must be flushed before
+      // this key's effect (Enter, space, English letter…).
+      lastKeyCode229 = false;
+      if (sentPrefix.length > 0) {
+        flushTrailing();
+      } else {
+        // Defensive textarea reset. The browser keeps inserting characters
+        // into the helper textarea even when xterm `preventDefault`s the
+        // matching `input` event (the spec says `input` is not cancelable),
+        // so spaces, deletes, and other non-IME keystrokes silently
+        // accumulate. If we don't reset here, the next IME `insertText`
+        // diff includes that stale prefix and the PTY receives ghost
+        // characters before the Korean syllable.
+        const ta = container.querySelector<HTMLTextAreaElement>(
+          ".xterm-helper-textarea",
+        );
+        if (ta && ta.value.length > 0) ta.value = "";
+        sentPrefix = "";
+      }
+
       // Shift+Enter: insert newline (LF) instead of submitting (CR). xterm
       // by default emits \r for both Enter and Shift+Enter, so TUIs like
       // Claude CLI cannot tell them apart. Send a literal LF and stop the
