@@ -16,6 +16,9 @@ dist-ssr
 # Cargo / Tauri build output
 target/
 
+# Git worktrees
+.worktrees/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
