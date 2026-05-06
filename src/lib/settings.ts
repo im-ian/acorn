@@ -4,10 +4,38 @@ const STORAGE_KEY = "acorn:settings:v1";
 
 export type SessionStartupMode = "claude" | "terminal" | "custom";
 
+export type TerminalFontWeight =
+  | 100
+  | 200
+  | 300
+  | 400
+  | 500
+  | 600
+  | 700
+  | 800
+  | 900;
+
+export const TERMINAL_FONT_WEIGHTS: ReadonlyArray<{
+  value: TerminalFontWeight;
+  label: string;
+}> = [
+  { value: 100, label: "100 — Thin" },
+  { value: 200, label: "200 — Extra Light" },
+  { value: 300, label: "300 — Light" },
+  { value: 400, label: "400 — Normal" },
+  { value: 500, label: "500 — Medium" },
+  { value: 600, label: "600 — Semi Bold" },
+  { value: 700, label: "700 — Bold" },
+  { value: 800, label: "800 — Extra Bold" },
+  { value: 900, label: "900 — Black" },
+];
+
 export interface AcornSettings {
   terminal: {
     fontFamily: string;
     fontSize: number;
+    fontWeight: TerminalFontWeight;
+    fontWeightBold: TerminalFontWeight;
   };
   sessionStartup: {
     mode: SessionStartupMode;
@@ -45,6 +73,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontFamily:
       '"JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, monospace',
     fontSize: 12,
+    fontWeight: 400,
+    fontWeightBold: 700,
   },
   sessionStartup: {
     mode: "claude",
@@ -66,6 +96,20 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
 };
 
+const VALID_WEIGHTS = new Set<TerminalFontWeight>([
+  100, 200, 300, 400, 500, 600, 700, 800, 900,
+]);
+
+function normalizeWeight(
+  v: unknown,
+  fallback: TerminalFontWeight,
+): TerminalFontWeight {
+  if (typeof v === "number" && VALID_WEIGHTS.has(v as TerminalFontWeight)) {
+    return v as TerminalFontWeight;
+  }
+  return fallback;
+}
+
 function loadSettings(): AcornSettings {
   if (typeof localStorage === "undefined") return DEFAULT_SETTINGS;
   try {
@@ -73,10 +117,19 @@ function loadSettings(): AcornSettings {
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw) as Partial<AcornSettings> | null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
+    const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
     return {
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
-        ...(parsed.terminal ?? {}),
+        ...terminalRaw,
+        fontWeight: normalizeWeight(
+          terminalRaw.fontWeight,
+          DEFAULT_SETTINGS.terminal.fontWeight,
+        ),
+        fontWeightBold: normalizeWeight(
+          terminalRaw.fontWeightBold,
+          DEFAULT_SETTINGS.terminal.fontWeightBold,
+        ),
       },
       sessionStartup: {
         ...DEFAULT_SETTINGS.sessionStartup,

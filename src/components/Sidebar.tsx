@@ -1,6 +1,8 @@
 import {
   ChevronRight,
+  Copy,
   FolderGit2,
+  FolderOpen,
   FolderPlus,
   GitBranch,
   GripVertical,
@@ -9,6 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../store";
@@ -307,6 +310,23 @@ function ProjectGroupView({
   onRemoveProject,
 }: ProjectGroupViewProps) {
   const rowRef = useRef<HTMLLIElement>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function openInFinder(path: string) {
+    try {
+      await openPath(path);
+    } catch {
+      // ignore
+    }
+  }
 
   return (
     <li
@@ -332,6 +352,11 @@ function ProjectGroupView({
         />
       ) : null}
       <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
         className={cn(
           "group flex items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
@@ -407,6 +432,45 @@ function ProjectGroupView({
           </button>
         </Tooltip>
       </div>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={[
+          {
+            label: "New session",
+            icon: <Plus size={12} />,
+            onClick: () => onAddSession(false),
+          },
+          {
+            label: "New isolated session",
+            icon: <GitBranch size={12} />,
+            onClick: () => onAddSession(true),
+          },
+          { type: "separator" },
+          {
+            label: "Reveal in Finder",
+            icon: <FolderOpen size={12} />,
+            onClick: () => {
+              void openInFinder(project.repoPath);
+            },
+          },
+          {
+            label: "Copy path",
+            icon: <Copy size={12} />,
+            onClick: () => {
+              void copyText(project.repoPath);
+            },
+          },
+          { type: "separator" },
+          {
+            label: "Close project",
+            icon: <X size={12} />,
+            onClick: onRemoveProject,
+          },
+        ]}
+      />
       {!collapsed ? (
         <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
           {project.sessions.length === 0 ? (
@@ -552,7 +616,6 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           {
             label: "Remove",
             icon: <Trash2 size={12} />,
-            danger: true,
             onClick: onRemove,
           },
         ]}

@@ -12,6 +12,7 @@ pub struct CommitInfo {
     pub author: String,
     pub timestamp: i64,
     pub summary: String,
+    pub pushed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,6 +31,11 @@ pub struct DiffFile {
     pub old_path: Option<String>,
     pub new_path: Option<String>,
     pub patch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_image: Option<String>,
+    pub is_image: bool,
 }
 
 /// Resolve an origin remote URL into a GitHub-style web URL pointing at the
@@ -86,6 +92,8 @@ pub fn list_commits(
     limit: usize,
 ) -> AppResult<Vec<CommitInfo>> {
     let repo = ensure_repo(repo_path)?;
+    let pushed_set = pushed_oid_set(&repo);
+
     let mut walk = repo.revwalk()?;
     walk.push_head()?;
     walk.set_sorting(git2::Sort::TIME)?;
@@ -101,15 +109,50 @@ pub fn list_commits(
             author: author.name().unwrap_or("?").to_string(),
             timestamp: commit.time().seconds(),
             summary: commit.summary().unwrap_or("").to_string(),
+            pushed: pushed_set.contains(&oid),
         });
     }
     Ok(out)
 }
 
+/// Build the set of commit OIDs reachable from any remote-tracking branch.
+/// A commit is "pushed" if its OID is in this set. Computed in a single
+/// revwalk to avoid quadratic per-commit ancestry checks.
+fn pushed_oid_set(repo: &Repository) -> std::collections::HashSet<git2::Oid> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(mut walk) = repo.revwalk() else {
+        return set;
+    };
+    let _ = walk.set_sorting(git2::Sort::TOPOLOGICAL);
+
+    let Ok(branches) = repo.branches(Some(git2::BranchType::Remote)) else {
+        return set;
+    };
+    let mut pushed_any = false;
+    for entry in branches.flatten() {
+        let (branch, _) = entry;
+        if branch.get().symbolic_target().is_some() {
+            continue;
+        }
+        if let Some(oid) = branch.get().target() {
+            if walk.push(oid).is_ok() {
+                pushed_any = true;
+            }
+        }
+    }
+    if !pushed_any {
+        return set;
+    }
+    for oid in walk.flatten() {
+        set.insert(oid);
+    }
+    set
+}
+
 pub fn list_staged(repo_path: &Path) -> AppResult<Vec<StagedFile>> {
     let repo = ensure_repo(repo_path)?;
     let mut opts = git2::StatusOptions::new();
-    opts.include_untracked(true);
+    opts.include_untracked(true).recurse_untracked_dirs(true);
     let statuses = repo.statuses(Some(&mut opts))?;
     let mut files = Vec::new();
     for entry in statuses.iter() {
@@ -120,7 +163,26 @@ pub fn list_staged(repo_path: &Path) -> AppResult<Vec<StagedFile>> {
             files.push(StagedFile { path, status });
         }
     }
+    files.sort_by(|a, b| {
+        status_sort_key(&a.status)
+            .cmp(&status_sort_key(&b.status))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     Ok(files)
+}
+
+fn status_sort_key(status: &str) -> u8 {
+    if status.contains("untracked") {
+        0
+    } else if status.contains("staged") {
+        1
+    } else if status.contains("modified") {
+        2
+    } else if status.contains("deleted") {
+        3
+    } else {
+        4
+    }
 }
 
 fn describe_status(s: git2::Status) -> String {
@@ -169,11 +231,14 @@ pub fn diff_staged(repo_path: &Path) -> AppResult<DiffPayload> {
     let repo = ensure_repo(repo_path)?;
     let head_tree = repo.head().ok().and_then(|r| r.peel_to_tree().ok());
     let mut opts = DiffOptions::new();
-    let diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true);
+    let diff = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
     collect_diff(&repo, &diff)
 }
 
-fn collect_diff(_repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> {
+fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> {
     use std::cell::RefCell;
     let acc: RefCell<Vec<DiffFile>> = RefCell::new(Vec::new());
     let current: RefCell<Option<DiffFile>> = RefCell::new(None);
@@ -183,10 +248,29 @@ fn collect_diff(_repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload>
             if let Some(prev) = current.borrow_mut().take() {
                 acc.borrow_mut().push(prev);
             }
+            let old_path = delta.old_file().path().map(|p| p.display().to_string());
+            let new_path = delta.new_file().path().map(|p| p.display().to_string());
+            let path_for_type = new_path.as_deref().or(old_path.as_deref()).unwrap_or("");
+            let is_image = is_image_path(path_for_type);
+            let (old_image, new_image) = if is_image {
+                (
+                    image_data_uri(repo, delta.old_file().id(), old_path.as_deref()),
+                    image_data_uri_workdir(
+                        repo,
+                        delta.new_file().id(),
+                        new_path.as_deref(),
+                    ),
+                )
+            } else {
+                (None, None)
+            };
             *current.borrow_mut() = Some(DiffFile {
-                old_path: delta.old_file().path().map(|p| p.display().to_string()),
-                new_path: delta.new_file().path().map(|p| p.display().to_string()),
+                old_path,
+                new_path,
                 patch: String::new(),
+                old_image,
+                new_image,
+                is_image,
             });
             true
         },
@@ -212,4 +296,73 @@ fn collect_diff(_repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload>
     Ok(DiffPayload {
         files: acc.into_inner(),
     })
+}
+
+fn is_image_path(path: &str) -> bool {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif"
+    )
+}
+
+fn image_mime(path: &str) -> &'static str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    }
+}
+
+fn encode_data_uri(bytes: &[u8], path: &str) -> String {
+    use base64::Engine as _;
+    format!(
+        "data:{};base64,{}",
+        image_mime(path),
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+fn image_data_uri(repo: &Repository, oid: git2::Oid, path: Option<&str>) -> Option<String> {
+    let path = path?;
+    if oid.is_zero() {
+        return None;
+    }
+    let blob = repo.find_blob(oid).ok()?;
+    Some(encode_data_uri(blob.content(), path))
+}
+
+/// Resolve image bytes for the "new" side of a diff.
+/// Falls back to reading the workdir file when the diff has no oid (untracked
+/// or staged-but-unwritten cases).
+fn image_data_uri_workdir(
+    repo: &Repository,
+    oid: git2::Oid,
+    path: Option<&str>,
+) -> Option<String> {
+    let path = path?;
+    if !oid.is_zero() {
+        if let Ok(blob) = repo.find_blob(oid) {
+            return Some(encode_data_uri(blob.content(), path));
+        }
+    }
+    let workdir = repo.workdir()?;
+    let abs = workdir.join(path);
+    let bytes = std::fs::read(abs).ok()?;
+    Some(encode_data_uri(&bytes, path))
 }

@@ -7,7 +7,7 @@ import { openFileInEditor } from "../lib/editor";
 import type { DiffFile, DiffPayload } from "../lib/types";
 import { joinPath } from "../lib/paths";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { DiffLine } from "./DiffView";
+import { DiffLine, useHighlightedDiff } from "./DiffView";
 import { ResizeHandle } from "./ResizeHandle";
 
 interface DiffSplitViewProps {
@@ -179,11 +179,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               </span>
             </span>
           </header>
-          <div className="acorn-selectable min-h-0 flex-1 select-text overflow-auto font-mono text-[11px] leading-5">
-            {selected.lines.map((line, i) => (
-              <DiffLine key={i} line={line} />
-            ))}
-          </div>
+          <DiffSplitContent entry={selected} />
         </section>
       </Panel>
     </PanelGroup>
@@ -211,6 +207,18 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
   );
 }
 
+
+function DiffSplitContent({ entry }: { entry: FileEntry }) {
+  const path = entry.file.new_path ?? entry.file.old_path ?? entry.path;
+  const highlighted = useHighlightedDiff(entry.lines, path);
+  return (
+    <div className="acorn-selectable min-h-0 flex-1 select-text overflow-auto font-mono text-[11px] leading-5">
+      {entry.lines.map((line, i) => (
+        <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
+      ))}
+    </div>
+  );
+}
 
 function basenameOf(path: string): string {
   // For renames the path contains " → " — show the new (right) part's base.

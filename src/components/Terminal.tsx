@@ -78,6 +78,8 @@ export function Terminal({
       theme: TERMINAL_THEME,
       fontFamily: initialSettings.terminal.fontFamily,
       fontSize: initialSettings.terminal.fontSize,
+      fontWeight: initialSettings.terminal.fontWeight,
+      fontWeightBold: initialSettings.terminal.fontWeightBold,
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 5000,
@@ -114,6 +116,14 @@ export function Terminal({
       }
       if (next.fontSize !== previous.fontSize) {
         term.options.fontSize = next.fontSize;
+        changed = true;
+      }
+      if (next.fontWeight !== previous.fontWeight) {
+        term.options.fontWeight = next.fontWeight;
+        changed = true;
+      }
+      if (next.fontWeightBold !== previous.fontWeightBold) {
+        term.options.fontWeightBold = next.fontWeightBold;
         changed = true;
       }
       if (changed) {
@@ -186,11 +196,15 @@ export function Terminal({
       // from the parent.
       const fontFamily = term.options.fontFamily;
       const fontSize = term.options.fontSize;
+      const fontWeight = term.options.fontWeight;
       if (typeof fontFamily === "string") {
         compositionView.style.fontFamily = fontFamily;
       }
       if (typeof fontSize === "number") {
         compositionView.style.fontSize = `${fontSize}px`;
+      }
+      if (typeof fontWeight === "number" || typeof fontWeight === "string") {
+        compositionView.style.fontWeight = String(fontWeight);
       }
       compositionView.classList.add("active");
     };

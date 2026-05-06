@@ -4,6 +4,8 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import {
   type SessionStartupMode,
+  type TerminalFontWeight,
+  TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
 
@@ -139,7 +141,48 @@ function TerminalSettings() {
           className="w-24 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
         />
       </Field>
+      <Field
+        label="Font weight"
+        hint="Weight for normal text. Effective values depend on the chosen font's available weights."
+      >
+        <WeightSelect
+          value={settings.terminal.fontWeight}
+          onChange={(v) => patchTerminal({ fontWeight: v })}
+        />
+      </Field>
+      <Field
+        label="Bold font weight"
+        hint="Weight used when the terminal renders bold cells."
+      >
+        <WeightSelect
+          value={settings.terminal.fontWeightBold}
+          onChange={(v) => patchTerminal({ fontWeightBold: v })}
+        />
+      </Field>
     </section>
+  );
+}
+
+interface WeightSelectProps {
+  value: TerminalFontWeight;
+  onChange: (v: TerminalFontWeight) => void;
+}
+
+function WeightSelect({ value, onChange }: WeightSelectProps) {
+  return (
+    <select
+      value={value}
+      onChange={(e) =>
+        onChange(Number(e.target.value) as TerminalFontWeight)
+      }
+      className="w-48 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
+    >
+      {TERMINAL_FONT_WEIGHTS.map((w) => (
+        <option key={w.value} value={w.value}>
+          {w.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
