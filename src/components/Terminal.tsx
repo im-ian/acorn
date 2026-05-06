@@ -275,7 +275,13 @@ export function Terminal({
           const isIme =
             lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
           if (!isIme) {
+            // Plain ASCII char that xterm's keypress already emitted to
+            // the PTY. The browser still appends it to the helper textarea
+            // though (input is non-cancelable), so we must advance
+            // sentPrefix or the next IME insertText will re-emit it as
+            // part of its committed-prefix diff.
             hideComposing();
+            if (ta) sentPrefix = ta.value;
             return;
           }
           if (!ta) return;
@@ -302,30 +308,41 @@ export function Terminal({
       // to this with a `_handleAnyTextareaChanges` setTimeout that would
       // emit duplicate text. Stop it at capture phase, AND remember it so
       // a following `insertText` is treated as IME first-jamo (Family B).
+      //
+      // EXCEPT: macOS reports keyCode 229 even for the terminator
+      // keystroke that finalizes the composition (space, Enter, etc.)
+      // when the user has uncommitted IME state. If we treat such a key
+      // as IME, the subsequent `input` event takes the IME branch and
+      // re-emits the terminator on top of xterm's own keypress emit,
+      // producing duplicate spaces / Enters. Detect ASCII-printable keys
+      // and fall through to the non-IME path instead.
       if (ev.keyCode === 229) {
-        lastKeyCode229 = true;
-        ev.stopImmediatePropagation();
-        return;
+        const isAsciiTerminator =
+          ev.key.length === 1 && ev.key.charCodeAt(0) < 0x80;
+        if (!isAsciiTerminator) {
+          lastKeyCode229 = true;
+          ev.stopImmediatePropagation();
+          return;
+        }
+        // ASCII terminator under IME — treat as non-IME; the previous
+        // syllable still needs flushing, which happens below because
+        // `lastKeyCode229` remains true from the prior real IME keydown.
       }
-      // Non-IME key: any pending Family-B trailing must be flushed before
-      // this key's effect (Enter, space, English letter…).
-      lastKeyCode229 = false;
-      if (sentPrefix.length > 0) {
+      // Non-IME key. If we just left IME mode (last keydown was 229),
+      // flush whatever Korean syllable is mid-composition so it lands in
+      // the PTY before this key's effect (space, Enter, English…).
+      // Otherwise leave the textarea alone — xterm's own keypress handler
+      // will emit the printable char, and we sync sentPrefix to the
+      // textarea length so the next IME insertText diff treats those
+      // already-emitted chars as committed.
+      if (lastKeyCode229) {
         flushTrailing();
-      } else {
-        // Defensive textarea reset. The browser keeps inserting characters
-        // into the helper textarea even when xterm `preventDefault`s the
-        // matching `input` event (the spec says `input` is not cancelable),
-        // so spaces, deletes, and other non-IME keystrokes silently
-        // accumulate. If we don't reset here, the next IME `insertText`
-        // diff includes that stale prefix and the PTY receives ghost
-        // characters before the Korean syllable.
-        const ta = container.querySelector<HTMLTextAreaElement>(
-          ".xterm-helper-textarea",
-        );
-        if (ta && ta.value.length > 0) ta.value = "";
-        sentPrefix = "";
       }
+      lastKeyCode229 = false;
+      const ta = container.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (ta) sentPrefix = ta.value;
 
       // Shift+Enter: insert newline (LF) instead of submitting (CR). xterm
       // by default emits \r for both Enter and Shift+Enter, so TUIs like
@@ -337,6 +354,28 @@ export function Terminal({
         ev.stopImmediatePropagation();
         return;
       }
+      // macOS line-navigation conventions. Cmd+Left / Cmd+Right map to the
+      // emacs-style readline shortcuts that nearly every interactive shell
+      // honours: Ctrl+A (start of line) and Ctrl+E (end of line).
+      if (
+        ev.metaKey &&
+        !ev.ctrlKey &&
+        !ev.altKey &&
+        !ev.shiftKey
+      ) {
+        if (ev.key === "ArrowLeft") {
+          sendToPty("\x01");
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return;
+        }
+        if (ev.key === "ArrowRight") {
+          sendToPty("\x05");
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return;
+        }
+      }
     };
 
     // Register on `container` (ancestor of helperTextarea) with capture=true
@@ -346,6 +385,23 @@ export function Terminal({
 
     const inputDisposable = term.onData((data: string) => {
       sendToPty(data);
+    });
+
+    // Re-anchor the composition preview to the cursor on every xterm render.
+    // The cursor advances asynchronously after a commit (PTY echo → emit →
+    // term.write); without this, the preview stays painted at the previous
+    // cursor cell and visually appears one column to the left of the new
+    // cursor until the user types again.
+    const renderDisposable = term.onRender(() => {
+      if (!compositionView || !compositionView.classList.contains("active")) {
+        return;
+      }
+      const cell = getCellDims();
+      if (!cell) return;
+      const cursorX = term.buffer.active.cursorX;
+      const cursorY = term.buffer.active.cursorY;
+      compositionView.style.left = `${cursorX * cell.width}px`;
+      compositionView.style.top = `${cursorY * cell.height}px`;
     });
 
     // Custom event hook so a global hotkey (Cmd+K) can clear THIS terminal
@@ -498,6 +554,7 @@ export function Terminal({
       container.removeEventListener("keydown", onKeydown, true);
       window.removeEventListener("acorn:terminal-clear", onClearRequested);
       inputDisposable.dispose();
+      renderDisposable.dispose();
       resizeDisposable.dispose();
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
