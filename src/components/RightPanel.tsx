@@ -37,8 +37,10 @@ const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
 
 export function RightPanel() {
-  const { sessions, activeSessionId, rightTab, setRightTab } = useAppStore();
+  const { sessions, activeSessionId, activeProject, rightTab, setRightTab } =
+    useAppStore();
   const active = sessions.find((s) => s.id === activeSessionId);
+  const repoPath = active?.worktree_path ?? activeProject ?? null;
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
 
   return (
@@ -64,30 +66,29 @@ export function RightPanel() {
         />
       </nav>
       <div className="flex-1 overflow-hidden">
-        {!active ? (
-          <Empty msg="No session selected" />
-        ) : rightTab === "todos" ? (
-          <TodosTab
-            sessionId={active.id}
-            cwd={active.worktree_path}
-          />
+        {rightTab === "todos" ? (
+          active ? (
+            <TodosTab sessionId={active.id} cwd={active.worktree_path} />
+          ) : (
+            <Empty msg="No session selected" />
+          )
         ) : rightTab === "commits" ? (
-          <CommitsTab
-            repoPath={active.worktree_path}
-            onExpand={setExpanded}
-          />
+          repoPath ? (
+            <CommitsTab repoPath={repoPath} onExpand={setExpanded} />
+          ) : (
+            <Empty msg="No project selected" />
+          )
+        ) : repoPath ? (
+          <StagedTab repoPath={repoPath} onExpand={setExpanded} />
         ) : (
-          <StagedTab
-            repoPath={active.worktree_path}
-            onExpand={setExpanded}
-          />
+          <Empty msg="No project selected" />
         )}
       </div>
       <DiffViewerModal
         payload={expanded?.payload ?? null}
         title={expanded?.title ?? ""}
         subtitle={expanded?.subtitle}
-        cwd={active?.worktree_path}
+        cwd={repoPath ?? undefined}
         onClose={() => setExpanded(null)}
       />
     </aside>
