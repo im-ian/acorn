@@ -21,6 +21,11 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { useSettings } from "../lib/settings";
+import {
+  planChevronClick,
+  planTitleClick,
+  type ProjectClickPlan,
+} from "../lib/sidebar-actions";
 import type { Project, Session, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
@@ -156,16 +161,35 @@ export function Sidebar() {
     setDropTarget(null);
   }
 
-  function toggleProject(repoPath: string) {
+  function expandProject(repoPath: string) {
     setCollapsed((prev) => {
+      if (!prev.has(repoPath)) return prev;
       const next = new Set(prev);
-      if (next.has(repoPath)) {
-        next.delete(repoPath);
-      } else {
-        next.add(repoPath);
-      }
+      next.delete(repoPath);
       return next;
     });
+  }
+
+  function collapseProject(repoPath: string) {
+    setCollapsed((prev) => {
+      if (prev.has(repoPath)) return prev;
+      const next = new Set(prev);
+      next.add(repoPath);
+      return next;
+    });
+  }
+
+  function applyClickPlan(plan: ProjectClickPlan, project: ProjectGroup) {
+    if (plan.collapseChange === "expand") {
+      expandProject(project.repoPath);
+    } else if (plan.collapseChange === "collapse") {
+      collapseProject(project.repoPath);
+    }
+    if (plan.shouldActivate) {
+      setActiveProject(project.repoPath);
+      const target = pickSessionToActivate(project.sessions, activeSessionId);
+      if (target) selectSession(target);
+    }
   }
 
   async function onAddProject() {
@@ -252,23 +276,27 @@ export function Sidebar() {
                 onDragOver={(e) => onProjectDragOver(e, project.repoPath)}
                 onDragLeave={onProjectDragLeave}
                 onDragEnd={onProjectDragEnd}
-                onToggle={() => {
-                  toggleProject(project.repoPath);
-                  // Activate a session belonging to this project so the
-                  // workspace's terminal becomes visible. Prefer the
-                  // currently-focused-pane session if it already belongs
-                  // to this project; otherwise pick the most recent
-                  // session (sessions are sorted newest-first by the
-                  // backend `list_sessions`).
-                  setActiveProject(project.repoPath);
-                  const target = pickSessionToActivate(
-                    project.sessions,
-                    activeSessionId,
-                  );
-                  if (target) selectSession(target);
-                }}
+                onTitleClick={() =>
+                  applyClickPlan(
+                    planTitleClick({
+                      wasActive: activeProject === project.repoPath,
+                      wasCollapsed: collapsed.has(project.repoPath),
+                    }),
+                    project,
+                  )
+                }
+                onChevronClick={() =>
+                  applyClickPlan(
+                    planChevronClick({
+                      wasActive: activeProject === project.repoPath,
+                      wasCollapsed: collapsed.has(project.repoPath),
+                    }),
+                    project,
+                  )
+                }
                 onActivate={() => {
                   setActiveProject(project.repoPath);
+                  expandProject(project.repoPath);
                   const target = pickSessionToActivate(
                     project.sessions,
                     activeSessionId,
@@ -329,7 +357,11 @@ interface ProjectGroupViewProps {
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;
   onDragEnd: (e: React.DragEvent) => void;
-  onToggle: () => void;
+  /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
+  onTitleClick: () => void;
+  /** Chevron click: activate + toggle expand. */
+  onChevronClick: () => void;
+  /** Empty-state row click: activate + expand + select a session. */
   onActivate: () => void;
   onSelectSession: (id: string) => void;
   onRemoveSession: (s: Session) => void;
@@ -348,7 +380,8 @@ function ProjectGroupView({
   onDragOver,
   onDragLeave,
   onDragEnd,
-  onToggle,
+  onTitleClick,
+  onChevronClick,
   onActivate,
   onSelectSession,
   onRemoveSession,
@@ -398,19 +431,30 @@ function ProjectGroupView({
         />
       ) : null}
       <div
+        role="button"
+        tabIndex={0}
+        onClick={onTitleClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onTitleClick();
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
+        aria-label={`Project ${project.name}`}
         className={cn(
-          "group flex items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
+          "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
         <span
           draggable
           onDragStart={onDragStart}
+          onClick={(e) => e.stopPropagation()}
           aria-label="Drag to reorder project"
           title="Drag to reorder"
           className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
@@ -419,17 +463,23 @@ function ProjectGroupView({
         </span>
         <button
           type="button"
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChevronClick();
+          }}
+          aria-label={collapsed ? "Expand project" : "Collapse project"}
           aria-expanded={!collapsed}
+          className="flex shrink-0 items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           <ChevronRight
-            size={12}
+            size={14}
             className={cn(
-              "shrink-0 text-fg-muted transition-transform",
+              "transition-transform",
               !collapsed && "rotate-90",
             )}
           />
+        </button>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <FolderGit2 size={12} className="shrink-0 text-fg-muted" />
           <span className="truncate text-sm font-medium text-fg">
             {project.name}
@@ -437,7 +487,7 @@ function ProjectGroupView({
           <span className="ml-1 shrink-0 rounded bg-bg-elevated/80 px-1 text-[10px] text-fg-muted">
             {project.sessions.length}
           </span>
-        </button>
+        </span>
         <Tooltip label="New session" side="bottom">
           <button
             type="button"
@@ -672,13 +722,13 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
-          "group flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left transition",
+          "group flex w-full cursor-pointer items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
         )}
       >
         <span
           className={cn(
-            "mt-1.5 size-2 shrink-0 rounded-full",
+            "mt-1.5 size-1.5 shrink-0 rounded-full",
             STATUS_DOT[session.status],
           )}
         />
@@ -696,7 +746,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
                 onCancel={() => setEditing(false)}
               />
             ) : (
-              <span className="truncate text-sm font-medium text-fg">
+              <span className="truncate text-[13px] font-medium text-fg">
                 {session.name}
               </span>
             )}
@@ -708,7 +758,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
               />
             ) : null}
           </span>
-          <span className="block truncate text-xs text-fg-muted">
+          <span className="block truncate text-[11px] text-fg-muted">
             {session.branch} · {STATUS_LABEL[session.status]}
           </span>
         </span>
@@ -779,7 +829,7 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
         }
       }}
       onBlur={() => onSubmit(value.trim())}
-      className="min-w-0 flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-sm font-medium text-fg outline-none focus:border-accent"
+      className="min-w-0 flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-[13px] font-medium text-fg outline-none focus:border-accent"
     />
   );
 }
