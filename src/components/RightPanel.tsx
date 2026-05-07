@@ -4,9 +4,11 @@ import {
   ExternalLink,
   FileDiff,
   GitCommit,
+  GitPullRequest,
   Globe,
   ListTodo,
   Maximize2,
+  RefreshCw,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup } from "react-resizable-panels";
@@ -19,6 +21,9 @@ import { useAppStore } from "../store";
 import type {
   CommitInfo,
   DiffPayload,
+  PrStateFilter,
+  PullRequestInfo,
+  PullRequestListing,
   StagedFile,
   TodoItem,
 } from "../lib/types";
@@ -43,15 +48,41 @@ export function RightPanel() {
   const repoPath = active?.worktree_path ?? activeProject ?? null;
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
 
+  // Polling lives at the panel level (not inside TodosTab) so we can hide the
+  // Todos tab when the active session has none — without requiring the tab to
+  // be mounted first to discover that.
+  const todosState = useSessionTodos(
+    active?.id ?? null,
+    active?.worktree_path ?? null,
+  );
+  const showTodos = todosState.todos.length > 0;
+
+  // If the user is sitting on Todos but the underlying list emptied (e.g.
+  // session ended, switched to a session with no todos), fall back rather
+  // than render an empty hidden tab.
+  useEffect(() => {
+    if (rightTab === "todos" && !showTodos && todosState.loaded) {
+      setRightTab("commits");
+    }
+  }, [rightTab, showTodos, todosState.loaded, setRightTab]);
+
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
-      <nav className="flex shrink-0 border-b border-border">
-        <TabButton
-          icon={<ListTodo size={14} />}
-          label="Todos"
-          active={rightTab === "todos"}
-          onClick={() => setRightTab("todos")}
-        />
+      <nav
+        className={cn(
+          "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border",
+          "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        )}
+      >
+        {showTodos ? (
+          <TabButton
+            icon={<ListTodo size={14} />}
+            label="Todos"
+            badge={todosState.todos.length}
+            active={rightTab === "todos"}
+            onClick={() => setRightTab("todos")}
+          />
+        ) : null}
         <TabButton
           icon={<GitCommit size={14} />}
           label="Commits"
@@ -64,13 +95,19 @@ export function RightPanel() {
           active={rightTab === "staged"}
           onClick={() => setRightTab("staged")}
         />
+        <TabButton
+          icon={<GitPullRequest size={14} />}
+          label="PRs"
+          active={rightTab === "prs"}
+          onClick={() => setRightTab("prs")}
+        />
       </nav>
       <div className="flex-1 overflow-hidden">
         {rightTab === "todos" ? (
-          active ? (
-            <TodosTab sessionId={active.id} cwd={active.worktree_path} />
+          active && showTodos ? (
+            <TodosTab todos={todosState.todos} />
           ) : (
-            <Empty msg="No session selected" />
+            <Empty msg="No todos in this session" />
           )
         ) : rightTab === "commits" ? (
           repoPath ? (
@@ -78,8 +115,14 @@ export function RightPanel() {
           ) : (
             <Empty msg="No project selected" />
           )
+        ) : rightTab === "staged" ? (
+          repoPath ? (
+            <StagedTab repoPath={repoPath} onExpand={setExpanded} />
+          ) : (
+            <Empty msg="No project selected" />
+          )
         ) : repoPath ? (
-          <StagedTab repoPath={repoPath} onExpand={setExpanded} />
+          <PullRequestsTab repoPath={repoPath} />
         ) : (
           <Empty msg="No project selected" />
         )}
@@ -100,15 +143,16 @@ interface TabButtonProps {
   label: string;
   active: boolean;
   onClick: () => void;
+  badge?: number;
 }
 
-function TabButton({ icon, label, active, onClick }: TabButtonProps) {
+function TabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex flex-1 items-center justify-center gap-1.5 px-2 py-2 text-xs transition",
+        "relative flex shrink-0 items-center justify-center gap-1.5 px-3 py-2 text-xs transition",
         active
           ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
           : "text-fg-muted hover:text-fg",
@@ -116,6 +160,18 @@ function TabButton({ icon, label, active, onClick }: TabButtonProps) {
     >
       {icon}
       {label}
+      {typeof badge === "number" && badge > 0 ? (
+        <span
+          className={cn(
+            "rounded-full px-1.5 py-px text-[9px] font-medium tabular-nums",
+            active
+              ? "bg-accent/20 text-fg"
+              : "bg-fg-muted/15 text-fg-muted",
+          )}
+        >
+          {badge}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -130,32 +186,42 @@ function Empty({ msg }: { msg: string }) {
 
 const TODOS_POLL_INTERVAL_MS = 1500;
 
-function TodosTab({ sessionId, cwd }: { sessionId: string; cwd: string }) {
-  const [todos, setTodos] = useState<TodoItem[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface SessionTodosState {
+  todos: TodoItem[];
+  loaded: boolean;
+  error: string | null;
+}
+
+function useSessionTodos(
+  sessionId: string | null,
+  cwd: string | null,
+): SessionTodosState {
+  const [state, setState] = useState<SessionTodosState>({
+    todos: [],
+    loaded: false,
+    error: null,
+  });
 
   useEffect(() => {
+    if (!sessionId || !cwd) {
+      setState({ todos: [], loaded: true, error: null });
+      return;
+    }
     let cancelled = false;
-    setLoaded(false);
-    setError(null);
-    setTodos([]);
+    setState({ todos: [], loaded: false, error: null });
 
     const poll = async () => {
       try {
         const result = await api.readSessionTodos(sessionId, cwd);
         if (cancelled) return;
-        setTodos(result);
-        setError(null);
+        setState({ todos: result, loaded: true, error: null });
       } catch (e) {
         if (cancelled) return;
-        setError(String(e));
-      } finally {
-        if (!cancelled) setLoaded(true);
+        setState((prev) => ({ ...prev, loaded: true, error: String(e) }));
       }
     };
 
-    poll();
+    void poll();
     const handle = setInterval(poll, TODOS_POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
@@ -163,24 +229,10 @@ function TodosTab({ sessionId, cwd }: { sessionId: string; cwd: string }) {
     };
   }, [sessionId, cwd]);
 
-  if (error) {
-    return <div className="p-3 text-xs text-danger">{error}</div>;
-  }
-  if (!loaded) {
-    return <Empty msg="Loading todos..." />;
-  }
-  if (todos.length === 0) {
-    return (
-      <div className="p-3 text-xs text-fg-muted">
-        <p>No todos yet.</p>
-        <p className="mt-1 opacity-60">
-          Todos appear once Claude calls `TodoWrite` or `TaskCreate` in this
-          session.
-        </p>
-      </div>
-    );
-  }
+  return state;
+}
 
+function TodosTab({ todos }: { todos: TodoItem[] }) {
   const counts = countByStatus(todos);
 
   return (
@@ -722,4 +774,213 @@ function StagedTab({
       />
     </PanelGroup>
   );
+}
+
+const PR_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "closed", label: "Closed" },
+  { value: "merged", label: "Merged" },
+  { value: "all", label: "All" },
+];
+
+const PR_REFRESH_INTERVAL_MS = 60_000;
+
+function PullRequestsTab({ repoPath }: { repoPath: string }) {
+  const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
+  const [listing, setListing] = useState<PullRequestListing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    pr: PullRequestInfo;
+  } | null>(null);
+
+  const fetchPrs = useCallback(
+    async (signal?: { cancelled: boolean }) => {
+      setLoading(true);
+      try {
+        const result = await api.listPullRequests(repoPath, stateFilter);
+        if (signal?.cancelled) return;
+        setListing(result);
+        setError(null);
+      } catch (e) {
+        if (signal?.cancelled) return;
+        setError(String(e));
+      } finally {
+        if (!signal?.cancelled) setLoading(false);
+      }
+    },
+    [repoPath, stateFilter],
+  );
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void fetchPrs(signal);
+    const handle = setInterval(() => {
+      void fetchPrs(signal);
+    }, PR_REFRESH_INTERVAL_MS);
+    return () => {
+      signal.cancelled = true;
+      clearInterval(handle);
+    };
+  }, [fetchPrs]);
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openPr(pr: PullRequestInfo) {
+    try {
+      await openUrl(pr.url);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+        {PR_STATE_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => setStateFilter(opt.value)}
+            className={cn(
+              "rounded px-2 py-0.5 text-[11px] transition",
+              stateFilter === opt.value
+                ? "bg-bg-elevated text-fg"
+                : "text-fg-muted hover:text-fg",
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => void fetchPrs()}
+          className="ml-auto rounded p-1 text-fg-muted transition hover:text-fg"
+          title="Refresh"
+          disabled={loading}
+        >
+          <RefreshCw
+            size={12}
+            className={cn(loading && "animate-spin")}
+          />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {error ? (
+          <div className="p-3 text-xs text-danger">{error}</div>
+        ) : !listing ? (
+          <Empty msg="Loading pull requests..." />
+        ) : listing.kind === "not_github" ? (
+          <Empty msg="Origin remote is not a GitHub repository." />
+        ) : listing.items.length === 0 ? (
+          <Empty msg={`No ${stateFilter} pull requests.`} />
+        ) : (
+          <ul className="text-xs">
+            {listing.items.map((pr) => (
+              <li key={pr.number}>
+                <button
+                  type="button"
+                  onClick={() => void openPr(pr)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, pr });
+                  }}
+                  className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50"
+                  title={absoluteTime(toUnixSeconds(pr.updated_at))}
+                >
+                  <span className="flex w-full min-w-0 items-center gap-2">
+                    <span className="shrink-0 font-mono text-fg-muted">
+                      #{pr.number}
+                    </span>
+                    <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
+                    <span className="truncate text-fg">{pr.title}</span>
+                  </span>
+                  <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
+                    <span className="truncate">{pr.author}</span>
+                    <span className="opacity-50">·</span>
+                    <span className="truncate font-mono">
+                      {pr.head_branch} → {pr.base_branch}
+                    </span>
+                    <span className="opacity-50">·</span>
+                    <span className="font-mono">
+                      {relativeTime(toUnixSeconds(pr.updated_at))}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={
+          menu
+            ? ([
+                {
+                  label: "Open in browser",
+                  icon: <ExternalLink size={12} />,
+                  onClick: () => {
+                    void openPr(menu.pr);
+                  },
+                },
+                {
+                  label: "Copy URL",
+                  icon: <Copy size={12} />,
+                  onClick: () => {
+                    void copyText(menu.pr.url);
+                  },
+                },
+                {
+                  label: `Copy branch (${menu.pr.head_branch})`,
+                  icon: <Copy size={12} />,
+                  onClick: () => {
+                    void copyText(menu.pr.head_branch);
+                  },
+                },
+              ] satisfies ContextMenuItem[])
+            : []
+        }
+        onClose={() => setMenu(null)}
+      />
+    </div>
+  );
+}
+
+function PrStateBadge({ state, isDraft }: { state: string; isDraft: boolean }) {
+  const upper = state.toUpperCase();
+  const label = isDraft ? "DRAFT" : upper;
+  const tone = isDraft
+    ? "bg-fg-muted/15 text-fg-muted"
+    : upper === "OPEN"
+      ? "bg-emerald-500/15 text-emerald-400"
+      : upper === "MERGED"
+        ? "bg-purple-500/15 text-purple-400"
+        : "bg-rose-500/15 text-rose-400";
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
+        tone,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function toUnixSeconds(iso: string): number {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return Math.floor(Date.now() / 1000);
+  return Math.floor(ms / 1000);
 }

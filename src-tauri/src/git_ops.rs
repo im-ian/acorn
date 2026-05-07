@@ -42,6 +42,19 @@ pub struct DiffFile {
 /// given commit. Returns `None` when there is no `origin` remote, the URL
 /// cannot be parsed, or the host is not recognised as GitHub.
 pub fn web_url_for_commit(repo_path: &Path, sha: &str) -> AppResult<Option<String>> {
+    let Some(owner_repo) = github_owner_repo(repo_path)? else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "https://github.com/{owner_repo}/commit/{sha}"
+    )))
+}
+
+/// Return the GitHub `owner/repo` slug derived from the repo's `origin`
+/// remote, or `None` when there's no origin, the URL is unparseable, or the
+/// host isn't GitHub. Reused by features that talk to the GitHub web/API
+/// layer (commit URLs, PR listing).
+pub fn github_owner_repo(repo_path: &Path) -> AppResult<Option<String>> {
     let repo = ensure_repo(repo_path)?;
     let remote = match repo.find_remote("origin") {
         Ok(r) => r,
@@ -50,10 +63,10 @@ pub fn web_url_for_commit(repo_path: &Path, sha: &str) -> AppResult<Option<Strin
     let Some(url) = remote.url() else {
         return Ok(None);
     };
-    Ok(parse_github_commit_url(url, sha))
+    Ok(parse_github_owner_repo(url))
 }
 
-fn parse_github_commit_url(remote: &str, sha: &str) -> Option<String> {
+fn parse_github_owner_repo(remote: &str) -> Option<String> {
     let trimmed = remote.trim();
     // Pull "host" + "owner/repo[.git]" out of any of the three common URL
     // shapes git uses.
@@ -83,7 +96,7 @@ fn parse_github_commit_url(remote: &str, sha: &str) -> Option<String> {
     if owner_repo.is_empty() || !owner_repo.contains('/') {
         return None;
     }
-    Some(format!("https://github.com/{owner_repo}/commit/{sha}"))
+    Some(owner_repo.to_string())
 }
 
 pub fn list_commits(

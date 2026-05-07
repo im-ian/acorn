@@ -13,7 +13,7 @@ import {
   splitPaneInLayout,
 } from "./lib/layout";
 
-type RightTab = "todos" | "commits" | "staged";
+type RightTab = "todos" | "commits" | "staged" | "prs";
 
 const ROOT_PANE_ID: PaneId = "root";
 

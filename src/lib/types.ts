@@ -74,3 +74,21 @@ export interface TodoItem {
   status: TodoStatus | string;
   activeForm?: string | null;
 }
+
+export type PrStateFilter = "open" | "closed" | "merged" | "all";
+
+export interface PullRequestInfo {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  head_branch: string;
+  base_branch: string;
+  url: string;
+  updated_at: string;
+  is_draft: boolean;
+}
+
+export type PullRequestListing =
+  | { kind: "ok"; items: PullRequestInfo[] }
+  | { kind: "not_github" };

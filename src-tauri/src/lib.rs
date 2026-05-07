@@ -3,6 +3,7 @@ mod error;
 mod git_ops;
 mod persistence;
 mod pty;
+mod pull_requests;
 mod scrollback;
 mod session;
 mod session_status;
@@ -144,6 +145,7 @@ pub fn run() {
             commands::claude_session_exists,
             commands::open_in_editor,
             commands::staged_diff,
+            commands::list_pull_requests,
             commands::pty_spawn,
             commands::pty_write,
             commands::pty_resize,

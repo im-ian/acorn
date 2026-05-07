@@ -119,6 +119,10 @@ function App() {
         e.preventDefault();
         useAppStore.getState().setRightTab("staged");
       },
+      [Hotkeys.togglePrs]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useAppStore.getState().setRightTab("prs");
+      },
       [Hotkeys.splitVertical]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().splitFocusedPane("horizontal");

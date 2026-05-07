@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
+use crate::pull_requests::{self, PrStateFilter, PullRequestListing};
 use crate::scrollback;
 use crate::session::{Project, Session, SessionStatus};
 use crate::session_status;
@@ -553,6 +554,19 @@ pub fn open_in_editor(
 #[tauri::command]
 pub fn staged_diff(repo_path: String) -> AppResult<DiffPayload> {
     git_ops::diff_staged(&PathBuf::from(repo_path))
+}
+
+#[tauri::command]
+pub fn list_pull_requests(
+    repo_path: String,
+    state: Option<PrStateFilter>,
+    limit: Option<u32>,
+) -> AppResult<PullRequestListing> {
+    pull_requests::list_pull_requests(
+        &PathBuf::from(repo_path),
+        state.unwrap_or(PrStateFilter::Open),
+        limit.unwrap_or(50),
+    )
 }
 
 fn create_unique_worktree(
