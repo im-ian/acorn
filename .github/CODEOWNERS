@@ -1,0 +1,7 @@
+# Auto-request review from the listed owner on every PR that touches a
+# matching path. Earlier patterns can be overridden by later ones; the
+# last matching pattern wins.
+#
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-policies/about-code-owners
+
+* @im-ian
