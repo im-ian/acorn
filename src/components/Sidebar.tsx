@@ -433,19 +433,30 @@ function ProjectGroupView({
         />
       ) : null}
       <div
+        role="button"
+        tabIndex={0}
+        onClick={onTitleClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onTitleClick();
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
+        aria-label={`Project ${project.name}`}
         className={cn(
-          "group flex items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
+          "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
         <span
           draggable
           onDragStart={onDragStart}
+          onClick={(e) => e.stopPropagation()}
           aria-label="Drag to reorder project"
           title="Drag to reorder"
           className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
@@ -470,11 +481,7 @@ function ProjectGroupView({
             )}
           />
         </button>
-        <button
-          type="button"
-          onClick={onTitleClick}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <FolderGit2 size={12} className="shrink-0 text-fg-muted" />
           <span className="truncate text-sm font-medium text-fg">
             {project.name}
@@ -482,7 +489,7 @@ function ProjectGroupView({
           <span className="ml-1 shrink-0 rounded bg-bg-elevated/80 px-1 text-[10px] text-fg-muted">
             {project.sessions.length}
           </span>
-        </button>
+        </span>
         <Tooltip label="New session" side="bottom">
           <button
             type="button"
