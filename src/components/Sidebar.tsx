@@ -280,17 +280,21 @@ export function Sidebar() {
                   if (target) selectSession(target);
                 }}
                 onChevronClick={() => {
-                  // Chevron always activates the project and toggles the
-                  // expand state. This is the single way to collapse a
-                  // project, and it pairs with title-click for "activate
-                  // and force-expand" on inactive collapsed projects.
-                  setActiveProject(project.repoPath);
+                  // Chevron toggles expand. It activates the project only
+                  // when expanding an inactive collapsed one — collapsing
+                  // an inactive project must not steal focus from the
+                  // currently-active project.
+                  const wasActive = activeProject === project.repoPath;
+                  const wasCollapsed = collapsed.has(project.repoPath);
                   toggleProject(project.repoPath);
-                  const target = pickSessionToActivate(
-                    project.sessions,
-                    activeSessionId,
-                  );
-                  if (target) selectSession(target);
+                  if (wasCollapsed && !wasActive) {
+                    setActiveProject(project.repoPath);
+                    const target = pickSessionToActivate(
+                      project.sessions,
+                      activeSessionId,
+                    );
+                    if (target) selectSession(target);
+                  }
                 }}
                 onActivate={() => {
                   setActiveProject(project.repoPath);
