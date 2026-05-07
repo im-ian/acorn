@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -88,8 +89,10 @@ export function Terminal({
 
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
+    const serializeAddon = new SerializeAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
+    term.loadAddon(serializeAddon);
     termRef.current = term;
     fitRef.current = fitAddon;
 
@@ -553,12 +556,70 @@ export function Terminal({
       });
       unlistenFns.push(() => restartDisposable.dispose());
 
+      // Restore prior scrollback before spawning so the user sees the
+      // previous session's output immediately on app restart. The dim
+      // separator marks where the live PTY output begins.
+      try {
+        const saved = await invoke<string | null>("scrollback_load", {
+          sessionId,
+        });
+        if (!disposed && saved && saved.length > 0) {
+          term.write(saved);
+          term.write(
+            `\r\n${ANSI_DIM}— restored from previous session —${ANSI_RESET}\r\n`,
+          );
+        }
+      } catch (err) {
+        console.warn("[Terminal] scrollback_load failed", err);
+      }
+
       await spawnPty();
     })();
+
+    // Periodic scrollback persistence. xterm's serialize addon snapshots
+    // the current buffer (plus a capped scrollback window) as ANSI text the
+    // backend writes to disk. We re-save every 10s while the terminal lives
+    // and once more on unmount; the backend caps total payload size.
+    const SCROLLBACK_SAVE_MS = 10_000;
+    const SCROLLBACK_MAX_ROWS = 2000;
+    const persistScrollback = () => {
+      if (disposed) return;
+      try {
+        const data = serializeAddon.serialize({
+          scrollback: SCROLLBACK_MAX_ROWS,
+        });
+        invoke("scrollback_save", { sessionId, data }).catch((err: unknown) => {
+          console.warn("[Terminal] scrollback_save failed", err);
+        });
+      } catch (err) {
+        console.warn("[Terminal] serialize failed", err);
+      }
+    };
+    const scrollbackTimer = window.setInterval(
+      persistScrollback,
+      SCROLLBACK_SAVE_MS,
+    );
 
     return () => {
       disposed = true;
       unsubSettings();
+      window.clearInterval(scrollbackTimer);
+      // Final scrollback flush before xterm is torn down. Run synchronously
+      // off the buffer; the invoke call is fire-and-forget and may race
+      // with app shutdown — accept the loss on hard quits.
+      try {
+        const finalSnapshot = serializeAddon.serialize({
+          scrollback: 2000,
+        });
+        invoke("scrollback_save", {
+          sessionId,
+          data: finalSnapshot,
+        }).catch(() => {
+          // ignore — best-effort on teardown
+        });
+      } catch {
+        // ignore — best-effort
+      }
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
         resizeTimer = null;
@@ -578,6 +639,7 @@ export function Terminal({
       });
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { webLinksAddon.dispose(); } catch { /* ignore */ }
+      try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

@@ -50,6 +50,16 @@ function PortaledTerminal({ session }: { session: Session }) {
     return null;
   });
 
+  // The workspace layout reference. Splits/merges replace the layout node, so
+  // a new reference signals that pane DOM bodies were remounted — even when
+  // `visiblePaneId` is unchanged. Without this dep the reattach effect skips
+  // re-running and the terminal target stays detached from the new pane body.
+  const layoutRef = useAppStore((state) =>
+    state.activeProject
+      ? state.workspaces[state.activeProject]?.layout ?? null
+      : null,
+  );
+
   // Park the target in limbo immediately on mount so React's createPortal
   // has a connected DOM node to render into; full unmount returns it to
   // the document tree so we don't leak the orphaned subtree.
@@ -89,7 +99,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       cancelled = true;
       cancelAnimationFrame(id);
     };
-  }, [visiblePaneId]);
+  }, [visiblePaneId, layoutRef]);
 
   return createPortal(
     <Terminal
