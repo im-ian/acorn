@@ -96,7 +96,7 @@ pub struct MemoryUsage {
 }
 
 #[tauri::command]
-pub fn get_memory_usage() -> MemoryUsage {
+pub async fn get_memory_usage() -> MemoryUsage {
     let mut guard = MEMORY_PROBE.lock().expect("memory probe poisoned");
     let sys = guard.get_or_insert_with(|| {
         System::new_with_specifics(
@@ -148,7 +148,7 @@ pub fn get_memory_usage() -> MemoryUsage {
 }
 
 #[tauri::command]
-pub fn create_session(
+pub async fn create_session(
     state: State<'_, AppState>,
     name: String,
     repo_path: String,
@@ -207,7 +207,7 @@ pub fn reorder_projects(
 }
 
 #[tauri::command]
-pub fn remove_project(
+pub async fn remove_project(
     state: State<'_, AppState>,
     repo_path: String,
     remove_sessions: Option<bool>,
@@ -238,7 +238,7 @@ pub fn remove_project(
 }
 
 #[tauri::command]
-pub fn remove_session(
+pub async fn remove_session(
     state: State<'_, AppState>,
     id: String,
     remove_worktree: Option<bool>,
@@ -342,7 +342,7 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
 }
 
 #[tauri::command]
-pub fn pty_spawn<R: Runtime>(
+pub async fn pty_spawn<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     session_id: String,
@@ -408,7 +408,7 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
 }
 
 #[tauri::command]
-pub fn scrollback_save(
+pub async fn scrollback_save(
     state: State<'_, AppState>,
     session_id: String,
     data: String,
@@ -424,17 +424,17 @@ pub fn scrollback_save(
 }
 
 #[tauri::command]
-pub fn scrollback_load(session_id: String) -> AppResult<Option<String>> {
+pub async fn scrollback_load(session_id: String) -> AppResult<Option<String>> {
     scrollback::load(&session_id)
 }
 
 #[tauri::command]
-pub fn scrollback_delete(session_id: String) -> AppResult<()> {
+pub async fn scrollback_delete(session_id: String) -> AppResult<()> {
     scrollback::delete(&session_id)
 }
 
 #[tauri::command]
-pub fn read_session_todos(session_id: String, cwd: String) -> AppResult<Vec<TodoItem>> {
+pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Vec<TodoItem>> {
     let cwd = PathBuf::from(cwd);
     todos::read_latest_todos(&session_id, &cwd)
 }
@@ -446,11 +446,12 @@ pub struct SessionStatusEntry {
 }
 
 #[tauri::command]
-pub fn detect_session_statuses(
+pub async fn detect_session_statuses(
     state: State<'_, AppState>,
     ids: Vec<String>,
-) -> Vec<SessionStatusEntry> {
-    ids.into_iter()
+) -> AppResult<Vec<SessionStatusEntry>> {
+    Ok(ids
+        .into_iter()
         .map(|id| {
             let status = session_status::detect(&id).unwrap_or(SessionStatus::Idle);
             // Mirror the detected status into the in-memory store so persisted
@@ -461,11 +462,11 @@ pub fn detect_session_statuses(
             }
             SessionStatusEntry { id, status }
         })
-        .collect()
+        .collect())
 }
 
 #[tauri::command]
-pub fn list_commits(
+pub async fn list_commits(
     repo_path: String,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -478,17 +479,17 @@ pub fn list_commits(
 }
 
 #[tauri::command]
-pub fn list_staged(repo_path: String) -> AppResult<Vec<StagedFile>> {
+pub async fn list_staged(repo_path: String) -> AppResult<Vec<StagedFile>> {
     git_ops::list_staged(&PathBuf::from(repo_path))
 }
 
 #[tauri::command]
-pub fn commit_diff(repo_path: String, sha: String) -> AppResult<DiffPayload> {
+pub async fn commit_diff(repo_path: String, sha: String) -> AppResult<DiffPayload> {
     git_ops::diff_for_commit(&PathBuf::from(repo_path), &sha)
 }
 
 #[tauri::command]
-pub fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<String>> {
+pub async fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<String>> {
     git_ops::web_url_for_commit(&PathBuf::from(repo_path), &sha)
 }
 
@@ -503,7 +504,7 @@ pub fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<String
 /// by the encoding, we look for `<session-id>.jsonl` under any subdir of
 /// `~/.claude/projects/`.
 #[tauri::command]
-pub fn claude_session_exists(_cwd: String, session_id: String) -> bool {
+pub async fn claude_session_exists(_cwd: String, session_id: String) -> bool {
     let home = match std::env::var_os("HOME") {
         Some(v) => PathBuf::from(v),
         None => return false,
@@ -534,7 +535,7 @@ pub fn claude_session_exists(_cwd: String, session_id: String) -> bool {
 /// the binary themselves at runtime — adding it to a static capability scope
 /// would defeat the configurability.
 #[tauri::command]
-pub fn open_in_editor(
+pub async fn open_in_editor(
     command: String,
     args: Vec<String>,
     path: String,
@@ -554,12 +555,12 @@ pub fn open_in_editor(
 }
 
 #[tauri::command]
-pub fn staged_diff(repo_path: String) -> AppResult<DiffPayload> {
+pub async fn staged_diff(repo_path: String) -> AppResult<DiffPayload> {
     git_ops::diff_staged(&PathBuf::from(repo_path))
 }
 
 #[tauri::command]
-pub fn list_pull_requests(
+pub async fn list_pull_requests(
     repo_path: String,
     state: Option<PrStateFilter>,
     limit: Option<u32>,
@@ -572,7 +573,7 @@ pub fn list_pull_requests(
 }
 
 #[tauri::command]
-pub fn get_pull_request_detail(
+pub async fn get_pull_request_detail(
     repo_path: String,
     number: u64,
 ) -> AppResult<PullRequestDetailListing> {
