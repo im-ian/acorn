@@ -796,6 +796,7 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
     y: number;
     pr: PullRequestInfo;
   } | null>(null);
+  const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
 
   const fetchPrs = useCallback(
     async (signal?: { cancelled: boolean }) => {
@@ -805,6 +806,10 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
         if (signal?.cancelled) return;
         setListing(result);
         setError(null);
+        setPrAccountForRepo(
+          repoPath,
+          result.kind === "ok" ? result.account : null,
+        );
       } catch (e) {
         if (signal?.cancelled) return;
         setError(String(e));
@@ -812,7 +817,7 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
         if (!signal?.cancelled) setLoading(false);
       }
     },
-    [repoPath, stateFilter],
+    [repoPath, stateFilter, setPrAccountForRepo],
   );
 
   useEffect(() => {
@@ -843,9 +848,6 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
     }
   }
 
-  const activeAccount =
-    listing && listing.kind === "ok" ? listing.account : null;
-
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
@@ -864,14 +866,6 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
             {opt.label}
           </button>
         ))}
-        {activeAccount ? (
-          <span
-            className="ml-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted"
-            title={`Listed via gh account @${activeAccount}`}
-          >
-            @{activeAccount}
-          </span>
-        ) : null}
         <button
           type="button"
           onClick={() => void fetchPrs()}
