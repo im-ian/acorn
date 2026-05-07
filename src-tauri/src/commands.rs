@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
+use crate::scrollback;
 use crate::session::{Project, Session, SessionStatus};
 use crate::session_status;
 use crate::state::AppState;
@@ -242,6 +243,7 @@ pub fn remove_session(
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
     state.pty.kill(&id).ok();
+    scrollback::delete(&id.to_string()).ok();
     if session.isolated && remove_worktree.unwrap_or(false) {
         let safe_name = sanitize_worktree_name(&session.name);
         worktree::remove_worktree(&session.repo_path, &safe_name).ok();
@@ -400,6 +402,32 @@ pub fn pty_resize(
 pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     state.pty.kill(&id)
+}
+
+#[tauri::command]
+pub fn scrollback_save(
+    state: State<'_, AppState>,
+    session_id: String,
+    data: String,
+) -> AppResult<()> {
+    // Reject saves for sessions that no longer exist. Without this guard,
+    // Terminal.tsx's unmount-time flush races against `remove_session` and
+    // recreates the orphan file the remove just deleted.
+    let id = parse_id(&session_id)?;
+    if state.sessions.get(&id).is_err() {
+        return Ok(());
+    }
+    scrollback::save(&session_id, &data)
+}
+
+#[tauri::command]
+pub fn scrollback_load(session_id: String) -> AppResult<Option<String>> {
+    scrollback::load(&session_id)
+}
+
+#[tauri::command]
+pub fn scrollback_delete(session_id: String) -> AppResult<()> {
+    scrollback::delete(&session_id)
 }
 
 #[tauri::command]

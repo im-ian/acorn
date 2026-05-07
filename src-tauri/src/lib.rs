@@ -3,6 +3,7 @@ mod error;
 mod git_ops;
 mod persistence;
 mod pty;
+mod scrollback;
 mod session;
 mod session_status;
 mod state;
@@ -113,6 +114,17 @@ pub fn run() {
                     .to_string();
                 state.projects.ensure(session.repo_path.clone(), name);
             }
+            // Drop scrollback files for sessions that no longer exist (e.g.
+            // removed while the app was offline, or pre-feature debris).
+            let live_ids: Vec<String> = state
+                .sessions
+                .list()
+                .iter()
+                .map(|s| s.id.to_string())
+                .collect();
+            if let Err(err) = scrollback::prune_orphans(&live_ids) {
+                tracing::warn!("scrollback prune at boot failed: {err}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -136,6 +148,9 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::scrollback_save,
+            commands::scrollback_load,
+            commands::scrollback_delete,
             commands::read_session_todos,
             commands::detect_session_statuses,
             commands::get_memory_usage,
