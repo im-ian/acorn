@@ -1,4 +1,4 @@
-import { Settings as SettingsIcon, X } from "lucide-react";
+import { Settings as SettingsIcon } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
@@ -8,6 +8,16 @@ import {
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
+import {
+  CheckboxRow,
+  Field,
+  Modal,
+  ModalHeader,
+  RadioCard,
+  Select,
+  Stepper,
+  TextInput,
+} from "./ui";
 
 type Tab = "terminal" | "sessions" | "editor" | "notifications";
 
@@ -31,79 +41,60 @@ export function SettingsModal() {
     onConfirm: () => setOpen(false),
   });
 
-  if (!open) return null;
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="acorn-settings-title"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-24"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) setOpen(false);
-      }}
+    <Modal
+      open={open}
+      onClose={() => setOpen(false)}
+      variant="dialog"
+      size="2xl"
+      ariaLabelledBy="acorn-settings-title"
     >
-      <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-2xl">
-        <header className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
-            <SettingsIcon size={14} className="text-fg-muted" />
-            <h3
-              id="acorn-settings-title"
-              className="text-sm font-semibold tracking-tight text-fg"
+      <ModalHeader
+        title="Settings"
+        titleId="acorn-settings-title"
+        icon={<SettingsIcon size={14} className="text-fg-muted" />}
+        onClose={() => setOpen(false)}
+      />
+      <div className="flex min-h-[20rem]">
+        <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={cn(
+                "px-4 py-1.5 text-left text-xs transition",
+                tab === t.id
+                  ? "bg-bg-elevated text-fg"
+                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+              )}
             >
-              Settings
-            </h3>
+              {t.label}
+            </button>
+          ))}
+          <div className="mt-auto px-4 pb-2">
+            <button
+              type="button"
+              onClick={reset}
+              className="text-[11px] text-fg-muted transition hover:text-danger"
+            >
+              Reset to defaults
+            </button>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={() => setOpen(false)}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
-          >
-            <X size={14} />
-          </button>
-        </header>
-        <div className="flex min-h-[20rem]">
-          <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  "px-4 py-1.5 text-left text-xs transition",
-                  tab === t.id
-                    ? "bg-bg-elevated text-fg"
-                    : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-            <div className="mt-auto px-4 pb-2">
-              <button
-                type="button"
-                onClick={reset}
-                className="text-[11px] text-fg-muted transition hover:text-danger"
-              >
-                Reset to defaults
-              </button>
-            </div>
-          </nav>
-          <div className="flex-1 overflow-y-auto p-4">
-            {tab === "terminal" ? (
-              <TerminalSettings />
-            ) : tab === "sessions" ? (
-              <SessionSettings />
-            ) : tab === "editor" ? (
-              <EditorSettings />
-            ) : (
-              <NotificationSettings />
-            )}
-          </div>
+        </nav>
+        <div className="flex-1 overflow-y-auto p-4">
+          {tab === "terminal" ? (
+            <TerminalSettings />
+          ) : tab === "sessions" ? (
+            <SessionSettings />
+          ) : tab === "editor" ? (
+            <EditorSettings />
+          ) : (
+            <NotificationSettings />
+          )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -117,28 +108,18 @@ function TerminalSettings() {
         label="Font family"
         hint="Comma-separated stack. First family that resolves wins."
       >
-        <input
-          type="text"
+        <TextInput
           value={settings.terminal.fontFamily}
           onChange={(e) => patchTerminal({ fontFamily: e.target.value })}
-          spellCheck={false}
-          className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
         />
       </Field>
       <Field label="Font size" hint="In CSS pixels. Range 8–32.">
-        <input
-          type="number"
+        <Stepper
+          value={settings.terminal.fontSize}
           min={8}
           max={32}
-          value={settings.terminal.fontSize}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (!Number.isFinite(n)) return;
-            patchTerminal({
-              fontSize: Math.max(8, Math.min(32, Math.round(n))),
-            });
-          }}
-          className="w-24 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
+          unit="px"
+          onChange={(n) => patchTerminal({ fontSize: n })}
         />
       </Field>
       <Field
@@ -170,19 +151,17 @@ interface WeightSelectProps {
 
 function WeightSelect({ value, onChange }: WeightSelectProps) {
   return (
-    <select
+    <Select
       value={value}
-      onChange={(e) =>
-        onChange(Number(e.target.value) as TerminalFontWeight)
-      }
-      className="w-48 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
+      onChange={(e) => onChange(Number(e.target.value) as TerminalFontWeight)}
+      className="w-48"
     >
       {TERMINAL_FONT_WEIGHTS.map((w) => (
         <option key={w.value} value={w.value}>
           {w.label}
         </option>
       ))}
-    </select>
+    </Select>
   );
 }
 
@@ -199,21 +178,24 @@ function SessionSettings() {
         hint="What to launch when you create a new session tab."
       >
         <div className="flex flex-col gap-1.5">
-          <ModeRadio
+          <RadioCard<SessionStartupMode>
+            name="session-startup"
             value="terminal"
             current={mode}
             label="Terminal (default)"
             description="Launch a plain shell using $SHELL."
             onSelect={(v) => patchSessionStartup({ mode: v })}
           />
-          <ModeRadio
+          <RadioCard<SessionStartupMode>
+            name="session-startup"
             value="claude"
             current={mode}
             label="Claude"
             description="Launch the `claude` CLI in the session worktree."
             onSelect={(v) => patchSessionStartup({ mode: v })}
           />
-          <ModeRadio
+          <RadioCard<SessionStartupMode>
+            name="session-startup"
             value="custom"
             current={mode}
             label="Custom command"
@@ -224,15 +206,12 @@ function SessionSettings() {
       </Field>
       {mode === "custom" ? (
         <Field label="Custom command" hint="Falls back to $SHELL when blank.">
-          <input
-            type="text"
+          <TextInput
             value={settings.sessionStartup.customCommand}
             onChange={(e) =>
               patchSessionStartup({ customCommand: e.target.value })
             }
             placeholder="e.g. claude --resume"
-            spellCheck={false}
-            className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
           />
         </Field>
       ) : null}
@@ -270,13 +249,10 @@ function EditorSettings() {
         label="Editor command"
         hint='Leave blank for the OS default. Examples: "code", "cursor --wait", "subl", "idea". The file path is appended as the last argument.'
       >
-        <input
-          type="text"
+        <TextInput
           value={settings.editor.command}
           onChange={(e) => patchEditor({ command: e.target.value })}
           placeholder="(use OS default)"
-          spellCheck={false}
-          className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-fg outline-none focus:border-accent"
         />
       </Field>
       <p className="text-[11px] text-fg-muted">
@@ -312,7 +288,7 @@ function NotificationSettings() {
       </Field>
       <Field label="Trigger on">
         <div className="flex flex-col gap-1">
-          <EventCheckbox
+          <CheckboxRow
             label="Needs input"
             description="Claude is waiting on the user."
             checked={settings.notifications.events.needsInput}
@@ -321,14 +297,14 @@ function NotificationSettings() {
               patchNotifications({ events: { needsInput: v } })
             }
           />
-          <EventCheckbox
+          <CheckboxRow
             label="Failed"
             description="Session terminated with an error."
             checked={settings.notifications.events.failed}
             disabled={!enabled}
             onChange={(v) => patchNotifications({ events: { failed: v } })}
           />
-          <EventCheckbox
+          <CheckboxRow
             label="Completed"
             description="Session reached the completed state."
             checked={settings.notifications.events.completed}
@@ -343,99 +319,5 @@ function NotificationSettings() {
         macOS may ask once for permission the first time a notification fires.
       </p>
     </section>
-  );
-}
-
-interface EventCheckboxProps {
-  label: string;
-  description: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-}
-
-function EventCheckbox({
-  label,
-  description,
-  checked,
-  disabled,
-  onChange,
-}: EventCheckboxProps) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg px-3 py-2 transition",
-        disabled && "cursor-not-allowed opacity-50",
-        !disabled && "hover:border-fg-muted/40",
-      )}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-[var(--color-accent)]"
-      />
-      <span className="flex flex-col">
-        <span className="text-xs font-medium text-fg">{label}</span>
-        <span className="text-[11px] text-fg-muted">{description}</span>
-      </span>
-    </label>
-  );
-}
-
-interface ModeRadioProps {
-  value: SessionStartupMode;
-  current: SessionStartupMode;
-  label: string;
-  description: string;
-  onSelect: (v: SessionStartupMode) => void;
-}
-
-function ModeRadio({
-  value,
-  current,
-  label,
-  description,
-  onSelect,
-}: ModeRadioProps) {
-  const active = current === value;
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 transition",
-        active
-          ? "border-accent/60 bg-accent/10"
-          : "border-border bg-bg hover:border-fg-muted/40",
-      )}
-    >
-      <input
-        type="radio"
-        name="session-startup"
-        checked={active}
-        onChange={() => onSelect(value)}
-        className="mt-0.5 accent-[var(--color-accent)]"
-      />
-      <span className="flex flex-col">
-        <span className="text-xs font-medium text-fg">{label}</span>
-        <span className="text-[11px] text-fg-muted">{description}</span>
-      </span>
-    </label>
-  );
-}
-
-interface FieldProps {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}
-
-function Field({ label, hint, children }: FieldProps) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-fg">{label}</span>
-      {children}
-      {hint ? <span className="text-[11px] text-fg-muted">{hint}</span> : null}
-    </div>
   );
 }

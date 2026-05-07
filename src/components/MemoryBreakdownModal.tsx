@@ -1,7 +1,7 @@
-import { X } from "lucide-react";
 import { useMemo } from "react";
 import type { MemoryProcess } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
+import { Modal, ModalHeader } from "./ui";
 
 interface MemoryBreakdownModalProps {
   open: boolean;
@@ -121,42 +121,22 @@ export function MemoryBreakdownModal({
 
   const rows = useMemo(() => buildTree(processes), [processes]);
 
-  if (!open) return null;
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="memory-breakdown-title"
-      className="fixed inset-0 z-50 flex flex-col bg-black/60 px-4 py-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      variant="panel"
+      size="3xl"
+      ariaLabelledBy="memory-breakdown-title"
     >
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-bg shadow-2xl">
-        <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-          <div className="min-w-0">
-            <h3
-              id="memory-breakdown-title"
-              className="truncate text-sm font-semibold tracking-tight text-fg"
-            >
-              Memory breakdown
-            </h3>
-            <p className="truncate font-mono text-xs text-fg-muted">
-              total (RSS, sum): {formatBytes(totalBytes)} · {processes.length} processes
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-          >
-            <X size={16} />
-          </button>
-        </header>
+      <ModalHeader
+        title="Memory breakdown"
+        titleId="memory-breakdown-title"
+        subtitle={`total (RSS, sum): ${formatBytes(totalBytes)} · ${processes.length} processes`}
+        onClose={onClose}
+      />
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
           <table className="w-full font-mono text-xs">
             <thead className="sticky top-0 bg-bg-sidebar text-fg-muted">
               <tr className="border-b border-border">
@@ -211,12 +191,11 @@ export function MemoryBreakdownModal({
           </table>
         </div>
 
-        <footer className="shrink-0 border-t border-border px-4 py-2 font-mono text-[11px] text-fg-muted">
-          Tree ordered by parent→child (DFS). Siblings sorted by subtree RSS desc.
-          Sum-of-RSS overcounts shared memory; WebView helpers and PTY children
-          (claude, node) included.
-        </footer>
-      </div>
-    </div>
+      <footer className="shrink-0 border-t border-border px-4 py-2 font-mono text-[11px] text-fg-muted">
+        Tree ordered by parent→child (DFS). Siblings sorted by subtree RSS desc.
+        Sum-of-RSS overcounts shared memory; WebView helpers and PTY children
+        (claude, node) included.
+      </footer>
+    </Modal>
   );
 }
