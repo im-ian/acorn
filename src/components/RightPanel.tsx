@@ -44,8 +44,11 @@ const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
 
 export function RightPanel() {
-  const { sessions, activeSessionId, activeProject, rightTab, setRightTab } =
-    useAppStore();
+  const sessions = useAppStore((s) => s.sessions);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeProject = useAppStore((s) => s.activeProject);
+  const rightTab = useAppStore((s) => s.rightTab);
+  const setRightTab = useAppStore((s) => s.setRightTab);
   const active = sessions.find((s) => s.id === activeSessionId);
   const repoPath = active?.worktree_path ?? activeProject ?? null;
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
