@@ -198,6 +198,34 @@ function Empty({ msg }: { msg: string }) {
   );
 }
 
+/**
+ * Shimmer placeholder row used while a tab's initial fetch is in flight.
+ * Switching projects clears and refetches all the right-panel tabs at once;
+ * without these the panel goes briefly blank and the click feels janky.
+ */
+function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
+  return (
+    <div
+      className="flex items-center gap-2 border-b border-border/40 px-3 py-2"
+      style={{ animationDelay: `${pulseDelayMs}ms` }}
+    >
+      <span className="h-3 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
+      <span className="h-3 w-full max-w-[60%] animate-pulse rounded bg-fg-muted/10" />
+      <span className="h-3 w-10 shrink-0 animate-pulse rounded bg-fg-muted/10 ml-auto" />
+    </div>
+  );
+}
+
+function SkeletonList({ count = 6 }: { count?: number }) {
+  return (
+    <div className="text-xs">
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonRow key={i} pulseDelayMs={i * 80} />
+      ))}
+    </div>
+  );
+}
+
 const TODOS_POLL_INTERVAL_MS = 1500;
 
 interface SessionTodosState {
@@ -331,6 +359,9 @@ function CommitsTab({
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Tracks the very first fetch for the current `repoPath` so we can show
+  // skeleton rows instead of a blank panel on project switch.
+  const [loadingFirst, setLoadingFirst] = useState(true);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -345,6 +376,7 @@ function CommitsTab({
     setDiff(null);
     setHasMore(true);
     setLoadingMore(false);
+    setLoadingFirst(true);
     setCommits([]);
     api
       .listCommits(repoPath, 0, COMMITS_PAGE_SIZE)
@@ -356,6 +388,9 @@ function CommitsTab({
       .catch((e) => {
         if (cancelled) return;
         setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFirst(false);
       });
     return () => {
       cancelled = true;
@@ -469,6 +504,25 @@ function CommitsTab({
   }, [lastItem, hasMore, loadingMore, commits.length, loadMore]);
 
   if (error) return <div className="p-3 text-xs text-danger">{error}</div>;
+  if (loadingFirst && commits.length === 0) {
+    return (
+      <PanelGroup direction="vertical" autoSaveId="acorn:layout:commits">
+        <Panel id="commits-list" order={1} defaultSize={50} minSize={20}>
+          <div className="h-full overflow-y-auto">
+            <SkeletonList count={8} />
+          </div>
+        </Panel>
+        <ResizeHandle direction="vertical" />
+        <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
+          <div className="h-full overflow-y-auto p-3">
+            <div className="h-3 w-1/2 animate-pulse rounded bg-fg-muted/15" />
+            <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-fg-muted/10" />
+            <div className="mt-2 h-3 w-2/3 animate-pulse rounded bg-fg-muted/10" />
+          </div>
+        </Panel>
+      </PanelGroup>
+    );
+  }
 
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:commits">
@@ -635,6 +689,7 @@ function StagedTab({
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [diff, setDiff] = useState<DiffPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadingFirst, setLoadingFirst] = useState(true);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -656,10 +711,15 @@ function StagedTab({
       } catch (e) {
         if (cancelled) return;
         setError(String(e));
+      } finally {
+        if (!cancelled) setLoadingFirst(false);
       }
     };
 
     setError(null);
+    setLoadingFirst(true);
+    setFiles([]);
+    setDiff(null);
     void refresh();
     const handle = setInterval(refresh, 2000);
     return () => {
@@ -705,7 +765,10 @@ function StagedTab({
   }
 
   if (error) return <div className="p-3 text-xs text-danger">{error}</div>;
-  if (files.length === 0) return <Empty msg="No staged or modified files" />;
+  if (files.length === 0) {
+    if (loadingFirst) return <SkeletonList count={6} />;
+    return <Empty msg="No staged or modified files" />;
+  }
 
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
@@ -902,7 +965,7 @@ function PullRequestsTab({
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
         ) : !listing ? (
-          <Empty msg="Loading pull requests..." />
+          <SkeletonList count={6} />
         ) : listing.kind === "not_github" ? (
           <Empty msg="Origin remote is not a GitHub repository." />
         ) : listing.kind === "no_access" ? (

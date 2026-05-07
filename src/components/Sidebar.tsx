@@ -254,13 +254,21 @@ export function Sidebar() {
                 onDragEnd={onProjectDragEnd}
                 onToggle={() => {
                   toggleProject(project.repoPath);
-                  setActiveProject(project.repoPath);
                   // Activate a session belonging to this project so the
                   // workspace's terminal becomes visible. Prefer the
                   // currently-focused-pane session if it already belongs
                   // to this project; otherwise pick the most recent
                   // session (sessions are sorted newest-first by the
                   // backend `list_sessions`).
+                  setActiveProject(project.repoPath);
+                  const target = pickSessionToActivate(
+                    project.sessions,
+                    activeSessionId,
+                  );
+                  if (target) selectSession(target);
+                }}
+                onActivate={() => {
+                  setActiveProject(project.repoPath);
                   const target = pickSessionToActivate(
                     project.sessions,
                     activeSessionId,
@@ -322,6 +330,7 @@ interface ProjectGroupViewProps {
   onDragLeave: (e: React.DragEvent) => void;
   onDragEnd: (e: React.DragEvent) => void;
   onToggle: () => void;
+  onActivate: () => void;
   onSelectSession: (id: string) => void;
   onRemoveSession: (s: Session) => void;
   onAddSession: (isolated: boolean) => void;
@@ -340,6 +349,7 @@ function ProjectGroupView({
   onDragLeave,
   onDragEnd,
   onToggle,
+  onActivate,
   onSelectSession,
   onRemoveSession,
   onAddSession,
@@ -513,6 +523,7 @@ function ProjectGroupView({
             <li
               role="button"
               tabIndex={0}
+              onClick={onActivate}
               onDoubleClick={() => onAddSession(false)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
@@ -520,7 +531,7 @@ function ProjectGroupView({
                   onAddSession(false);
                 }
               }}
-              title="Double-click to add a session"
+              title="Click to activate · double-click to add a session"
               className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
             >
               No sessions. Add one with{" "}
