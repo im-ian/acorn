@@ -101,7 +101,16 @@ async function seed(
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // resetAllMocks clears both call history *and* the queued
+  // mockResolvedValueOnce return values; clearAllMocks leaves the queue
+  // intact, which can leak between tests under some runtimes.
+  vi.resetAllMocks();
+  // Re-establish the safe defaults that resetAllMocks just wiped.
+  mockApi.listSessions.mockResolvedValue([]);
+  mockApi.listProjects.mockResolvedValue([]);
+  mockApi.detectSessionStatuses.mockResolvedValue([]);
+  mockApi.removeSession.mockResolvedValue(undefined);
+  mockApi.removeProject.mockResolvedValue(undefined);
   resetStore();
 });
 
