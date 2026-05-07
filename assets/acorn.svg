@@ -1,68 +1,47 @@
 <svg width="160" height="160" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Acorn">
   <defs>
     <linearGradient id="nut" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#F2C291"/>
-      <stop offset="50%" stop-color="#D89B57"/>
-      <stop offset="100%" stop-color="#A8682B"/>
+      <stop offset="0%" stop-color="#D89B57"/>
+      <stop offset="55%" stop-color="#B97335"/>
+      <stop offset="100%" stop-color="#7A4416"/>
     </linearGradient>
     <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#8C5A2E"/>
-      <stop offset="100%" stop-color="#5A3618"/>
+      <stop offset="0%" stop-color="#6B3E1A"/>
+      <stop offset="100%" stop-color="#3F2410"/>
     </linearGradient>
-    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#7BC56C"/>
-      <stop offset="100%" stop-color="#3F8A36"/>
-    </linearGradient>
-    <radialGradient id="shine" cx="0.32" cy="0.22" r="0.45">
-      <stop offset="0%" stop-color="#FFEFD0" stop-opacity="0.7"/>
-      <stop offset="100%" stop-color="#FFEFD0" stop-opacity="0"/>
+    <radialGradient id="shine" cx="0.35" cy="0.3" r="0.5">
+      <stop offset="0%" stop-color="#FFE9C7" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#FFE9C7" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
-  <!-- leaf -->
-  <path d="M88 26 Q104 14 110 28 Q104 38 88 32 Z" fill="url(#leaf)"/>
-  <path d="M90 30 Q100 24 108 30" fill="none" stroke="#2D5C24" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-
   <!-- stem -->
-  <path d="M80 22 Q82 12 86 16 Q90 22 86 32" fill="none" stroke="#3A2412" stroke-width="4" stroke-linecap="round"/>
+  <path d="M78 10 Q80 4 84 8 Q88 14 84 24" fill="none" stroke="#2E1A0A" stroke-width="4" stroke-linecap="round"/>
 
   <!-- nut body -->
-  <path d="M36 70 Q36 138 80 144 Q124 138 124 70 Q124 64 80 64 Q36 64 36 70 Z" fill="url(#nut)" stroke="#7A4416" stroke-width="1.5"/>
-  <path d="M36 70 Q36 138 80 144 Q124 138 124 70 Q124 64 80 64 Q36 64 36 70 Z" fill="url(#shine)"/>
+  <path d="M40 60 Q40 130 80 142 Q120 130 120 60 Z" fill="url(#nut)"/>
+  <path d="M40 60 Q40 130 80 142 Q120 130 120 60 Z" fill="url(#shine)"/>
 
   <!-- cap -->
-  <path d="M28 64 Q28 32 80 32 Q132 32 132 64 Q132 76 80 78 Q28 76 28 64 Z" fill="url(#cap)" stroke="#2A1808" stroke-width="1.2"/>
+  <path d="M32 56 Q32 30 80 30 Q128 30 128 56 Q128 66 80 70 Q32 66 32 56 Z" fill="url(#cap)"/>
 
-  <!-- cap dot texture -->
-  <g fill="#2A1808" opacity="0.5">
-    <circle cx="50" cy="50" r="2"/>
-    <circle cx="62" cy="46" r="2"/>
-    <circle cx="74" cy="44" r="2"/>
-    <circle cx="86" cy="44" r="2"/>
-    <circle cx="98" cy="46" r="2"/>
-    <circle cx="110" cy="50" r="2"/>
-    <circle cx="42" cy="60" r="1.8"/>
-    <circle cx="56" cy="58" r="1.8"/>
-    <circle cx="68" cy="56" r="1.8"/>
-    <circle cx="80" cy="56" r="1.8"/>
-    <circle cx="92" cy="56" r="1.8"/>
-    <circle cx="104" cy="58" r="1.8"/>
-    <circle cx="118" cy="60" r="1.8"/>
+  <!-- cap cross-hatch -->
+  <g stroke="#241308" stroke-width="1.4" opacity="0.55">
+    <line x1="44" y1="42" x2="56" y2="58"/>
+    <line x1="60" y1="38" x2="72" y2="58"/>
+    <line x1="76" y1="36" x2="88" y2="58"/>
+    <line x1="92" y1="38" x2="104" y2="58"/>
+    <line x1="108" y1="42" x2="116" y2="58"/>
+    <line x1="56" y1="42" x2="44" y2="58"/>
+    <line x1="72" y1="38" x2="60" y2="58"/>
+    <line x1="88" y1="36" x2="76" y2="58"/>
+    <line x1="104" y1="38" x2="92" y2="58"/>
+    <line x1="116" y1="42" x2="108" y2="58"/>
   </g>
 
-  <!-- cap shine highlight -->
-  <ellipse cx="50" cy="44" rx="14" ry="6" fill="#FFFFFF" opacity="0.18"/>
+  <!-- cap rim -->
+  <ellipse cx="80" cy="62" rx="48" ry="6" fill="#1F1108" opacity="0.45"/>
 
-  <!-- cheeks -->
-  <ellipse cx="60" cy="108" rx="6" ry="4" fill="#FF8FA3" opacity="0.55"/>
-  <ellipse cx="100" cy="108" rx="6" ry="4" fill="#FF8FA3" opacity="0.55"/>
-
-  <!-- eyes -->
-  <ellipse cx="68" cy="98" rx="2.6" ry="3.4" fill="#2A1808"/>
-  <ellipse cx="92" cy="98" rx="2.6" ry="3.4" fill="#2A1808"/>
-  <circle cx="69" cy="96.5" r="0.9" fill="#FFFFFF"/>
-  <circle cx="93" cy="96.5" r="0.9" fill="#FFFFFF"/>
-
-  <!-- smile -->
-  <path d="M74 114 Q80 120 86 114" fill="none" stroke="#2A1808" stroke-width="2" stroke-linecap="round"/>
+  <!-- nut highlight -->
+  <ellipse cx="62" cy="92" rx="8" ry="22" fill="#FFD9A8" opacity="0.18"/>
 </svg>
