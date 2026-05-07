@@ -40,6 +40,7 @@ export function RemoveProjectDialog({
           <ModalHeader
             title="Close project"
             icon={<AlertTriangle size={16} className="text-warning" />}
+            variant="dialog"
             onClose={() => onClose("cancel")}
           />
           <div className="space-y-3 px-4 py-3 text-sm text-fg">

@@ -52,6 +52,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
           <ModalHeader
             title="Remove session"
             icon={<AlertTriangle size={16} className="text-warning" />}
+            variant="dialog"
             onClose={() => commit("cancel")}
           />
           <div className="space-y-3 px-4 py-3 text-sm text-fg">

@@ -137,59 +137,64 @@ export function MemoryBreakdownModal({
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-          <table className="w-full font-mono text-xs">
-            <thead className="sticky top-0 bg-bg-sidebar text-fg-muted">
-              <tr className="border-b border-border">
-                <th className="px-4 py-2 text-left font-medium">PID</th>
-                <th className="px-4 py-2 text-left font-medium">Process tree</th>
-                <th className="px-4 py-2 text-right font-medium">RSS</th>
-                <th className="px-4 py-2 text-right font-medium" title="Sum of this process and all descendants">
-                  Subtree
-                </th>
-                <th className="px-4 py-2 text-right font-medium">Share</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ process, subtreeBytes, prefix }) => {
-                const share = totalBytes > 0 ? (process.bytes / totalBytes) * 100 : 0;
-                return (
-                  <tr
-                    key={process.pid}
-                    className="border-b border-border/50 hover:bg-bg-elevated"
-                  >
-                    <td className="px-4 py-1.5 text-fg-muted">{process.pid}</td>
-                    <td className="px-4 py-1.5 text-fg">
-                      <span className="whitespace-pre text-fg-muted/60">{prefix}</span>
-                      <span title={process.command_line || undefined}>
-                        {process.name}
+        <table className="w-full font-mono text-xs">
+          <thead className="sticky top-0 bg-bg-sidebar text-fg-muted">
+            <tr className="border-b border-border">
+              <th className="px-4 py-2 text-left font-medium">PID</th>
+              <th className="px-4 py-2 text-left font-medium">Process tree</th>
+              <th className="px-4 py-2 text-right font-medium">RSS</th>
+              <th
+                className="px-4 py-2 text-right font-medium"
+                title="Sum of this process and all descendants"
+              >
+                Subtree
+              </th>
+              <th className="px-4 py-2 text-right font-medium">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ process, subtreeBytes, prefix }) => {
+              const share =
+                totalBytes > 0 ? (process.bytes / totalBytes) * 100 : 0;
+              return (
+                <tr
+                  key={process.pid}
+                  className="border-b border-border/50 hover:bg-bg-elevated"
+                >
+                  <td className="px-4 py-1.5 text-fg-muted">{process.pid}</td>
+                  <td className="px-4 py-1.5 text-fg">
+                    <span className="whitespace-pre text-fg-muted/60">
+                      {prefix}
+                    </span>
+                    <span title={process.command_line || undefined}>
+                      {process.name}
+                    </span>
+                    {process.command_line ? (
+                      <span
+                        className="ml-2 truncate text-fg-muted/60"
+                        title={process.command_line}
+                      >
+                        {truncateMiddle(process.command_line, 80)}
                       </span>
-                      {process.command_line ? (
-                        <span
-                          className="ml-2 truncate text-fg-muted/60"
-                          title={process.command_line}
-                        >
-                          {truncateMiddle(process.command_line, 80)}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-fg">
-                      {formatBytes(process.bytes)}
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-fg-muted">
-                      {process.depth === 0 ||
-                      subtreeBytes !== process.bytes
-                        ? formatBytes(subtreeBytes)
-                        : ""}
-                    </td>
-                    <td className="px-4 py-1.5 text-right text-fg-muted">
-                      {share.toFixed(1)}%
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-fg">
+                    {formatBytes(process.bytes)}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-fg-muted">
+                    {process.depth === 0 || subtreeBytes !== process.bytes
+                      ? formatBytes(subtreeBytes)
+                      : ""}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-fg-muted">
+                    {share.toFixed(1)}%
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <footer className="shrink-0 border-t border-border px-4 py-2 font-mono text-[11px] text-fg-muted">
         Tree ordered by parent→child (DFS). Siblings sorted by subtree RSS desc.

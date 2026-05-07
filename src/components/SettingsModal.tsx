@@ -53,6 +53,7 @@ export function SettingsModal() {
         title="Settings"
         titleId="acorn-settings-title"
         icon={<SettingsIcon size={14} className="text-fg-muted" />}
+        variant="dialog"
         onClose={() => setOpen(false)}
       />
       <div className="flex min-h-[20rem]">
