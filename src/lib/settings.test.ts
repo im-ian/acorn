@@ -11,32 +11,32 @@ function withStartup(
 }
 
 describe("resolveStartupCommand", () => {
-  it("returns claude with no args for the default `claude` mode", () => {
+  it("returns empty command for the default `terminal` mode (Rust falls back to $SHELL)", () => {
     expect(resolveStartupCommand(DEFAULT_SETTINGS)).toEqual({
-      command: "claude",
-      args: [],
-    });
-  });
-
-  it("returns empty command for `terminal` mode (Rust falls back to $SHELL)", () => {
-    expect(resolveStartupCommand(withStartup({ mode: "terminal" }))).toEqual({
       command: "",
       args: [],
     });
   });
 
-  it("falls back to claude when custom command is blank", () => {
-    expect(
-      resolveStartupCommand(withStartup({ mode: "custom", customCommand: "" })),
-    ).toEqual({ command: "claude", args: [] });
+  it("returns claude with no args for `claude` mode", () => {
+    expect(resolveStartupCommand(withStartup({ mode: "claude" }))).toEqual({
+      command: "claude",
+      args: [],
+    });
   });
 
-  it("falls back to claude when custom command is whitespace only", () => {
+  it("falls back to $SHELL (empty command) when custom command is blank", () => {
+    expect(
+      resolveStartupCommand(withStartup({ mode: "custom", customCommand: "" })),
+    ).toEqual({ command: "", args: [] });
+  });
+
+  it("falls back to $SHELL (empty command) when custom command is whitespace only", () => {
     expect(
       resolveStartupCommand(
         withStartup({ mode: "custom", customCommand: "   \t  " }),
       ),
-    ).toEqual({ command: "claude", args: [] });
+    ).toEqual({ command: "", args: [] });
   });
 
   it("tokenises a custom command on whitespace", () => {
