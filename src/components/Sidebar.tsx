@@ -1,12 +1,14 @@
 import {
   ChevronRight,
   Copy,
+  Files,
   FolderGit2,
   FolderOpen,
   FolderPlus,
   GitBranch,
   GripVertical,
   Pencil,
+  PencilLine,
   Plus,
   Trash2,
   X,
@@ -15,9 +17,12 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../store";
+import { api } from "../lib/api";
 import { cn } from "../lib/cn";
+import { openInConfiguredEditor } from "../lib/editor";
+import { useSettings } from "../lib/settings";
 import type { Project, Session, SessionStatus } from "../lib/types";
-import { ContextMenu } from "./ContextMenu";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
@@ -250,6 +255,17 @@ export function Sidebar() {
                 onToggle={() => {
                   toggleProject(project.repoPath);
                   setActiveProject(project.repoPath);
+                  // Activate a session belonging to this project so the
+                  // workspace's terminal becomes visible. Prefer the
+                  // currently-focused-pane session if it already belongs
+                  // to this project; otherwise pick the most recent
+                  // session (sessions are sorted newest-first by the
+                  // backend `list_sessions`).
+                  const target = pickSessionToActivate(
+                    project.sessions,
+                    activeSessionId,
+                  );
+                  if (target) selectSession(target);
                 }}
                 onSelectSession={selectSession}
                 onRemoveSession={(s) => requestRemoveSession(s.id)}
@@ -264,6 +280,26 @@ export function Sidebar() {
       </div>
     </aside>
   );
+}
+
+/**
+ * Choose which session to activate when the user clicks a project header.
+ * If the already-active session belongs to this project, keep it. Otherwise
+ * fall back to the first listed session (backend lists newest-first).
+ * Returns null when the project has no sessions.
+ */
+function pickSessionToActivate(
+  projectSessions: Session[],
+  currentActiveId: string | null,
+): string | null {
+  if (projectSessions.length === 0) return null;
+  if (
+    currentActiveId &&
+    projectSessions.some((s) => s.id === currentActiveId)
+  ) {
+    return currentActiveId;
+  }
+  return projectSessions[0]?.id ?? null;
 }
 
 function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
@@ -517,8 +553,91 @@ interface SessionRowProps {
 
 function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
   const renameSession = useAppStore((s) => s.renameSession);
+  const sessions = useAppStore((s) => s.sessions);
+  const editorCommand = useSettings((s) => s.settings.editor.command);
+  const editorConfigured = editorCommand.trim().length > 0;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+
+  async function duplicate() {
+    const base = session.name;
+    const taken = new Set(sessions.map((s) => s.name));
+    let next = `${base}-copy`;
+    let n = 2;
+    while (taken.has(next)) {
+      next = `${base}-copy-${n}`;
+      n += 1;
+    }
+    try {
+      await api.createSession(next, session.repo_path, session.isolated);
+      await useAppStore.getState().refreshAll();
+    } catch (err) {
+      console.error("[Sidebar] duplicate session failed", err);
+    }
+  }
+
+  const sessionMenuItems: ContextMenuItem[] = [
+    {
+      label: "Rename",
+      icon: <Pencil size={12} />,
+      onClick: () => setEditing(true),
+    },
+    {
+      label: "Duplicate Session",
+      icon: <Files size={12} />,
+      onClick: () => void duplicate(),
+    },
+    { type: "separator" },
+    {
+      label: "Open Worktree in Editor",
+      icon: <PencilLine size={12} />,
+      disabled: !editorConfigured,
+      onClick: () => {
+        void openInConfiguredEditor(session.worktree_path).catch(
+          (err: unknown) => {
+            console.error("[Sidebar] open in editor failed", err);
+          },
+        );
+      },
+    },
+    {
+      label: "Reveal in Finder",
+      icon: <FolderOpen size={12} />,
+      onClick: () => {
+        void openPath(session.worktree_path).catch((err: unknown) => {
+          console.error("[Sidebar] reveal failed", err);
+        });
+      },
+    },
+    {
+      label: "Copy Worktree Path",
+      icon: <Copy size={12} />,
+      onClick: () => void copyToClipboard(session.worktree_path),
+    },
+    {
+      label: "Copy Worktree Name",
+      icon: <Copy size={12} />,
+      onClick: () => void copyToClipboard(basename(session.worktree_path)),
+    },
+    {
+      label: "Copy Branch Name",
+      icon: <Copy size={12} />,
+      onClick: () => void copyToClipboard(session.branch),
+      disabled: !session.branch,
+    },
+    {
+      label: "Copy Session ID",
+      icon: <Copy size={12} />,
+      onClick: () => void copyToClipboard(session.id),
+    },
+    { type: "separator" },
+    {
+      label: "Remove",
+      icon: <Trash2 size={12} />,
+      onClick: onRemove,
+      danger: true,
+    },
+  ];
 
   return (
     <li>
@@ -607,21 +726,18 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         x={menu?.x ?? 0}
         y={menu?.y ?? 0}
         onClose={() => setMenu(null)}
-        items={[
-          {
-            label: "Rename",
-            icon: <Pencil size={12} />,
-            onClick: () => setEditing(true),
-          },
-          {
-            label: "Remove",
-            icon: <Trash2 size={12} />,
-            onClick: onRemove,
-          },
-        ]}
+        items={sessionMenuItems}
       />
     </li>
   );
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn("[Sidebar] clipboard write failed", err);
+  }
 }
 
 interface RenameInputProps {
