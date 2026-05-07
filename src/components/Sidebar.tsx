@@ -168,6 +168,15 @@ export function Sidebar() {
     });
   }
 
+  function expandProject(repoPath: string) {
+    setCollapsed((prev) => {
+      if (!prev.has(repoPath)) return prev;
+      const next = new Set(prev);
+      next.delete(repoPath);
+      return next;
+    });
+  }
+
   async function onAddProject() {
     try {
       const repoPath = await open({
@@ -253,14 +262,20 @@ export function Sidebar() {
                 onDragLeave={onProjectDragLeave}
                 onDragEnd={onProjectDragEnd}
                 onToggle={() => {
-                  toggleProject(project.repoPath);
-                  // Activate a session belonging to this project so the
-                  // workspace's terminal becomes visible. Prefer the
-                  // currently-focused-pane session if it already belongs
-                  // to this project; otherwise pick the most recent
-                  // session (sessions are sorted newest-first by the
-                  // backend `list_sessions`).
+                  // Title click is context-aware:
+                  //   inactive  → activate (and expand if collapsed); never collapses
+                  //   active    → toggle expand/collapse
+                  // This decouples "switch project" from "fold sessions" so a
+                  // user switching projects can't accidentally hide their
+                  // session list, while a re-click on the active project
+                  // still gives a single-target toggle.
+                  const wasActive = activeProject === project.repoPath;
+                  if (wasActive) {
+                    toggleProject(project.repoPath);
+                    return;
+                  }
                   setActiveProject(project.repoPath);
+                  expandProject(project.repoPath);
                   const target = pickSessionToActivate(
                     project.sessions,
                     activeSessionId,
@@ -269,6 +284,7 @@ export function Sidebar() {
                 }}
                 onActivate={() => {
                   setActiveProject(project.repoPath);
+                  expandProject(project.repoPath);
                   const target = pickSessionToActivate(
                     project.sessions,
                     activeSessionId,
@@ -424,9 +440,9 @@ function ProjectGroupView({
           aria-expanded={!collapsed}
         >
           <ChevronRight
-            size={12}
+            size={14}
             className={cn(
-              "shrink-0 text-fg-muted transition-transform",
+              "-mx-0.5 shrink-0 text-fg-muted transition-transform",
               !collapsed && "rotate-90",
             )}
           />
@@ -672,13 +688,13 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
-          "group flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left transition",
+          "group flex w-full cursor-pointer items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
         )}
       >
         <span
           className={cn(
-            "mt-1.5 size-2 shrink-0 rounded-full",
+            "mt-1.5 size-1.5 shrink-0 rounded-full",
             STATUS_DOT[session.status],
           )}
         />
@@ -696,7 +712,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
                 onCancel={() => setEditing(false)}
               />
             ) : (
-              <span className="truncate text-sm font-medium text-fg">
+              <span className="truncate text-[13px] font-medium text-fg">
                 {session.name}
               </span>
             )}
@@ -708,7 +724,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
               />
             ) : null}
           </span>
-          <span className="block truncate text-xs text-fg-muted">
+          <span className="block truncate text-[11px] text-fg-muted">
             {session.branch} · {STATUS_LABEL[session.status]}
           </span>
         </span>
@@ -779,7 +795,7 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
         }
       }}
       onBlur={() => onSubmit(value.trim())}
-      className="min-w-0 flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-sm font-medium text-fg outline-none focus:border-accent"
+      className="min-w-0 flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-[13px] font-medium text-fg outline-none focus:border-accent"
     />
   );
 }
