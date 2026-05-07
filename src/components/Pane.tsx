@@ -1,5 +1,17 @@
-import { GitBranch, Terminal as TerminalIcon, X } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import {
+  Copy,
+  Files,
+  FolderOpen,
+  GitBranch,
+  Pencil,
+  PencilLine,
+  SplitSquareHorizontal,
+  SplitSquareVertical,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
+import { useMemo, useRef, useState, useEffect } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -8,7 +20,13 @@ import {
   isTabDrag,
   setTabDragPayload,
 } from "../lib/dnd";
-import type { PaneId } from "../lib/layout";
+import {
+  hasConfiguredEditor,
+  openInConfiguredEditor,
+} from "../lib/editor";
+import { useSettings } from "../lib/settings";
+import type { Direction, PaneId } from "../lib/layout";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import type { Session, SessionStatus } from "../lib/types";
 
@@ -35,11 +53,17 @@ interface PaneProps {
 export function Pane({ paneId }: PaneProps) {
   const sessions = useAppStore((s) => s.sessions);
   const pane = useAppStore((s) => s.panes[paneId]);
+  const totalPanes = useAppStore((s) => Object.keys(s.panes).length);
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const selectSession = useAppStore((s) => s.selectSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const moveTab = useAppStore((s) => s.moveTab);
+  const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
+  const closePane = useAppStore((s) => s.closePane);
+  const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
 
   const tabs = useMemo<Session[]>(() => {
     if (!pane) return [];
@@ -116,11 +140,37 @@ export function Pane({ paneId }: PaneProps) {
             });
           }}
           onNewTab={handleNewTabFromStrip}
+          onSplitTab={(sessionId, direction) => {
+            // Move the tab into a fresh pane created on the right (horizontal)
+            // or below (vertical) the current pane. Mirrors VS Code's
+            // "Split Right / Split Down" command on a tab.
+            moveTab({
+              sessionId,
+              fromPaneId: paneId,
+              toPaneId: paneId,
+              splitDirection: direction,
+              splitSide: "after",
+            });
+          }}
+          onDuplicate={(repoPath) => {
+            void spawnSession(repoPath);
+          }}
         />
       ) : null}
       <div
         className="relative min-h-0 flex-1"
         data-pane-body={paneId}
+        onContextMenu={(e) => {
+          // Only react when the body itself is right-clicked (not the
+          // terminal output, which has its own native menu via xterm). The
+          // terminal portal target sits inside this div, so we filter on the
+          // event target identity.
+          if (e.target !== e.currentTarget) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setFocusedPane(paneId);
+          setPaneMenu({ x: e.clientX, y: e.clientY });
+        }}
       >
         {/*
           The actual <Terminal> for the active session lives in <TerminalHost>
@@ -129,9 +179,32 @@ export function Pane({ paneId }: PaneProps) {
           active. We render only an EmptyPane fallback here for the
           no-active-session case.
         */}
-        {active ? null : <EmptyPane onDoubleClick={handleNewTabFromEmpty} />}
+        {active ? null : (
+          <EmptyPane
+            onDoubleClick={handleNewTabFromEmpty}
+            onContextMenu={(x, y) => {
+              setFocusedPane(paneId);
+              setPaneMenu({ x, y });
+            }}
+          />
+        )}
         <PaneDropOverlay paneId={paneId} />
       </div>
+      <ContextMenu
+        open={paneMenu !== null}
+        x={paneMenu?.x ?? 0}
+        y={paneMenu?.y ?? 0}
+        onClose={() => setPaneMenu(null)}
+        items={buildPaneMenuItems({
+          activeSession: active,
+          totalPanes,
+          paneId,
+          onNewTab: () => void handleNewTabFromEmpty(),
+          onSplit: splitFocusedPane,
+          onClose: () => closePane(paneId),
+          activeProjectFallback: useAppStore.getState().activeProject,
+        })}
+      />
     </div>
   );
 }
@@ -146,11 +219,22 @@ function suggestSessionName(repoPath: string, existing: Session[]): string {
   return `${base}-${n}`;
 }
 
-function EmptyPane({ onDoubleClick }: { onDoubleClick: () => void }) {
+function EmptyPane({
+  onDoubleClick,
+  onContextMenu,
+}: {
+  onDoubleClick: () => void;
+  onContextMenu: (x: number, y: number) => void;
+}) {
   return (
     <div
       className="flex h-full flex-col items-center justify-center gap-2 text-fg-muted hover:text-fg/80 transition cursor-pointer select-none"
       onDoubleClick={onDoubleClick}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(e.clientX, e.clientY);
+      }}
       role="button"
       tabIndex={0}
       title="Double-click to start a new session"
@@ -172,6 +256,8 @@ interface TabStripProps {
     toIndex: number,
   ) => void;
   onNewTab: () => void;
+  onSplitTab: (sessionId: string, direction: Direction) => void;
+  onDuplicate: (repoPath: string) => void;
 }
 
 function TabStrip({
@@ -182,6 +268,8 @@ function TabStrip({
   onClose,
   onDropReorder,
   onNewTab,
+  onSplitTab,
+  onDuplicate,
 }: TabStripProps) {
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
@@ -243,6 +331,17 @@ function TabStrip({
           insertBefore={insertIndex === i}
           onSelect={() => onSelect(tab.id)}
           onClose={() => onClose(tab.id)}
+          onCloseOthers={() => {
+            for (const t of tabs) {
+              if (t.id !== tab.id) onClose(t.id);
+            }
+          }}
+          onCloseAll={() => {
+            for (const t of tabs) onClose(t.id);
+          }}
+          onSplitTab={(direction) => onSplitTab(tab.id, direction)}
+          onDuplicate={() => onDuplicate(tab.repo_path)}
+          siblingCount={tabs.length}
           registerRef={(el) => {
             if (el) tabRefs.current.set(tab.id, el);
             else tabRefs.current.delete(tab.id);
@@ -278,6 +377,11 @@ interface TabItemProps {
   insertBefore: boolean;
   onSelect: () => void;
   onClose: () => void;
+  onCloseOthers: () => void;
+  onCloseAll: () => void;
+  onSplitTab: (direction: Direction) => void;
+  onDuplicate: () => void;
+  siblingCount: number;
   registerRef: (el: HTMLDivElement | null) => void;
 }
 
@@ -288,8 +392,116 @@ function TabItem({
   insertBefore,
   onSelect,
   onClose,
+  onCloseOthers,
+  onCloseAll,
+  onSplitTab,
+  onDuplicate,
+  siblingCount,
   registerRef,
 }: TabItemProps) {
+  const renameSession = useAppStore((s) => s.renameSession);
+  // Subscribe to the editor command so the menu's enabled/disabled state
+  // updates immediately when the user configures an editor in Settings.
+  const editorCommand = useSettings(
+    (s) => s.settings.editor.command,
+  );
+  const editorConfigured = editorCommand.trim().length > 0;
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  const menuItems: ContextMenuItem[] = [
+    {
+      label: "Rename",
+      icon: <Pencil size={12} />,
+      onClick: () => setEditing(true),
+    },
+    {
+      label: "Duplicate Session",
+      icon: <Files size={12} />,
+      onClick: onDuplicate,
+    },
+    { type: "separator" },
+    {
+      label: "Split Right",
+      icon: <SplitSquareHorizontal size={12} />,
+      onClick: () => onSplitTab("horizontal"),
+      disabled: siblingCount <= 1,
+    },
+    {
+      label: "Split Down",
+      icon: <SplitSquareVertical size={12} />,
+      onClick: () => onSplitTab("vertical"),
+      disabled: siblingCount <= 1,
+    },
+    { type: "separator" },
+    {
+      label: "Open Worktree in Editor",
+      icon: <PencilLine size={12} />,
+      disabled: !editorConfigured,
+      onClick: () => {
+        void openInConfiguredEditor(tab.worktree_path).catch(
+          (err: unknown) => {
+            console.error("[Pane] open in editor failed", err);
+          },
+        );
+      },
+    },
+    {
+      label: "Reveal in Finder",
+      icon: <FolderOpen size={12} />,
+      onClick: () => {
+        void openPath(tab.worktree_path).catch((err: unknown) => {
+          console.error("[Pane] reveal in finder failed", err);
+        });
+      },
+    },
+    {
+      label: "Copy Worktree Path",
+      icon: <Copy size={12} />,
+      onClick: () => {
+        void copyToClipboard(tab.worktree_path);
+      },
+    },
+    {
+      label: "Copy Worktree Name",
+      icon: <Copy size={12} />,
+      onClick: () => {
+        void copyToClipboard(basename(tab.worktree_path));
+      },
+    },
+    {
+      label: "Copy Branch Name",
+      icon: <Copy size={12} />,
+      onClick: () => {
+        void copyToClipboard(tab.branch);
+      },
+      disabled: !tab.branch,
+    },
+    {
+      label: "Copy Session ID",
+      icon: <Copy size={12} />,
+      onClick: () => {
+        void copyToClipboard(tab.id);
+      },
+    },
+    { type: "separator" },
+    {
+      label: "Close",
+      icon: <X size={12} />,
+      onClick: onClose,
+    },
+    {
+      label: "Close Others",
+      onClick: onCloseOthers,
+      disabled: siblingCount <= 1,
+    },
+    {
+      label: "Close All",
+      onClick: onCloseAll,
+      danger: true,
+    },
+  ];
+
   return (
     <>
       {insertBefore ? (
@@ -299,15 +511,31 @@ function TabItem({
         ref={registerRef}
         role="button"
         tabIndex={0}
-        draggable
+        draggable={!editing}
         onDragStart={(e) => {
           setTabDragPayload(e, { sessionId: tab.id, fromPaneId: paneId });
         }}
-        onClick={onSelect}
+        onClick={editing ? undefined : onSelect}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setEditing(true);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // Activate the tab on right-click so the visible context matches the
+          // menu target — mirrors VS Code / browser tab behavior.
+          if (!active) onSelect();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
         onKeyDown={(e) => {
+          if (editing) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect();
+          } else if (e.key === "F2") {
+            e.preventDefault();
+            setEditing(true);
           }
         }}
         className={cn(
@@ -320,7 +548,20 @@ function TabItem({
         <span
           className={cn("size-1.5 rounded-full", STATUS_DOT[tab.status])}
         />
-        <span className="max-w-[12rem] truncate">{tab.name}</span>
+        {editing ? (
+          <TabRenameInput
+            initial={tab.name}
+            onSubmit={async (next) => {
+              setEditing(false);
+              if (next && next !== tab.name) {
+                await renameSession(tab.id, next);
+              }
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <span className="max-w-[12rem] truncate">{tab.name}</span>
+        )}
         {tab.isolated ? (
           <GitBranch
             size={10}
@@ -349,6 +590,152 @@ function TabItem({
           <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent/30" />
         ) : null}
       </div>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={menuItems}
+      />
     </>
   );
+}
+
+interface TabRenameInputProps {
+  initial: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}
+
+function TabRenameInput({ initial, onSubmit, onCancel }: TabRenameInputProps) {
+  const [value, setValue] = useState(initial);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      autoFocus
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onSubmit(value.trim());
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => onSubmit(value.trim())}
+      className="w-32 min-w-0 rounded bg-bg-sidebar px-1 text-xs text-fg outline-none ring-1 ring-accent"
+    />
+  );
+}
+
+function buildPaneMenuItems({
+  activeSession,
+  totalPanes,
+  paneId: _paneId,
+  onNewTab,
+  onSplit,
+  onClose,
+  activeProjectFallback,
+}: {
+  activeSession: Session | null;
+  totalPanes: number;
+  paneId: PaneId;
+  onNewTab: () => void;
+  onSplit: (direction: Direction) => void;
+  onClose: () => void;
+  activeProjectFallback: string | null;
+}): ContextMenuItem[] {
+  const editorReady = hasConfiguredEditor();
+  const worktreeItems: ContextMenuItem[] = activeSession
+    ? [
+        { type: "separator" },
+        {
+          label: "Open Worktree in Editor",
+          icon: <PencilLine size={12} />,
+          disabled: !editorReady,
+          onClick: () => {
+            void openInConfiguredEditor(activeSession.worktree_path).catch(
+              (err: unknown) => {
+                console.error("[Pane] open in editor failed", err);
+              },
+            );
+          },
+        },
+        {
+          label: "Reveal in Finder",
+          icon: <FolderOpen size={12} />,
+          onClick: () => {
+            void openPath(activeSession.worktree_path).catch(
+              (err: unknown) => {
+                console.error("[Pane] reveal failed", err);
+              },
+            );
+          },
+        },
+        {
+          label: "Copy Worktree Path",
+          icon: <Copy size={12} />,
+          onClick: () => void copyToClipboard(activeSession.worktree_path),
+        },
+        {
+          label: "Copy Worktree Name",
+          icon: <Copy size={12} />,
+          onClick: () =>
+            void copyToClipboard(basename(activeSession.worktree_path)),
+        },
+      ]
+    : [];
+
+  return [
+    {
+      label: "New Session in This Pane",
+      icon: <TerminalIcon size={12} />,
+      onClick: onNewTab,
+      disabled: !activeSession && activeProjectFallback === null,
+    },
+    { type: "separator" },
+    {
+      label: "Split Right",
+      icon: <SplitSquareHorizontal size={12} />,
+      onClick: () => onSplit("horizontal"),
+    },
+    {
+      label: "Split Down",
+      icon: <SplitSquareVertical size={12} />,
+      onClick: () => onSplit("vertical"),
+    },
+    ...worktreeItems,
+    { type: "separator" },
+    {
+      label: "Close Pane",
+      icon: <X size={12} />,
+      onClick: onClose,
+      disabled: totalPanes <= 1,
+      danger: true,
+    },
+  ];
+}
+
+function basename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn("[Pane] clipboard write failed", err);
+  }
 }
