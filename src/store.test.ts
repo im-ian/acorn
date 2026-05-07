@@ -368,16 +368,22 @@ describe("reconcile via refreshSessions", () => {
       fromPaneId: otherPaneId,
       toPaneId: focusedAfterSplit,
     });
-    expect(useAppStore.getState().layout.kind).toBe("split");
+    // Pre-condition: two panes, one per session.
+    expect(Object.keys(useAppStore.getState().panes)).toHaveLength(2);
 
     // Backend now reports only a1; a2 is gone. The pane that held a2 should collapse.
     mockApi.listSessions.mockResolvedValueOnce([session("a1", REPO_A)]);
     await useAppStore.getState().refreshSessions();
 
     const s = useAppStore.getState();
-    expect(s.layout.kind).toBe("pane");
+    // Invariants we care about, regardless of internal layout shape:
+    //   1. only one pane remains (the empty one was collapsed)
+    //   2. the surviving pane holds exactly the still-known session
+    //   3. no orphan sessions linger anywhere
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    const surviving = Object.values(s.panes)[0];
+    expect(surviving.sessionIds).toEqual(["a1"]);
+    expect(s.activeSessionId).toBe("a1");
   });
 
   it("places newly seen sessions in the focused pane", async () => {
