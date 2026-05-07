@@ -21,6 +21,11 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { useSettings } from "../lib/settings";
+import {
+  planChevronClick,
+  planTitleClick,
+  type ProjectClickPlan,
+} from "../lib/sidebar-actions";
 import type { Project, Session, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
@@ -156,18 +161,6 @@ export function Sidebar() {
     setDropTarget(null);
   }
 
-  function toggleProject(repoPath: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(repoPath)) {
-        next.delete(repoPath);
-      } else {
-        next.add(repoPath);
-      }
-      return next;
-    });
-  }
-
   function expandProject(repoPath: string) {
     setCollapsed((prev) => {
       if (!prev.has(repoPath)) return prev;
@@ -175,6 +168,28 @@ export function Sidebar() {
       next.delete(repoPath);
       return next;
     });
+  }
+
+  function collapseProject(repoPath: string) {
+    setCollapsed((prev) => {
+      if (prev.has(repoPath)) return prev;
+      const next = new Set(prev);
+      next.add(repoPath);
+      return next;
+    });
+  }
+
+  function applyClickPlan(plan: ProjectClickPlan, project: ProjectGroup) {
+    if (plan.collapseChange === "expand") {
+      expandProject(project.repoPath);
+    } else if (plan.collapseChange === "collapse") {
+      collapseProject(project.repoPath);
+    }
+    if (plan.shouldActivate) {
+      setActiveProject(project.repoPath);
+      const target = pickSessionToActivate(project.sessions, activeSessionId);
+      if (target) selectSession(target);
+    }
   }
 
   async function onAddProject() {
@@ -261,41 +276,24 @@ export function Sidebar() {
                 onDragOver={(e) => onProjectDragOver(e, project.repoPath)}
                 onDragLeave={onProjectDragLeave}
                 onDragEnd={onProjectDragEnd}
-                onTitleClick={() => {
-                  // Title click never collapses. It activates an inactive
-                  // project (preserving its collapse state) and expands an
-                  // already-active collapsed one. Collapse is reserved for
-                  // the chevron, so a user switching between projects can't
-                  // accidentally hide the destination's session list.
-                  const wasActive = activeProject === project.repoPath;
-                  if (wasActive) {
-                    expandProject(project.repoPath);
-                    return;
-                  }
-                  setActiveProject(project.repoPath);
-                  const target = pickSessionToActivate(
-                    project.sessions,
-                    activeSessionId,
-                  );
-                  if (target) selectSession(target);
-                }}
-                onChevronClick={() => {
-                  // Chevron toggles expand. It activates the project only
-                  // when expanding an inactive collapsed one — collapsing
-                  // an inactive project must not steal focus from the
-                  // currently-active project.
-                  const wasActive = activeProject === project.repoPath;
-                  const wasCollapsed = collapsed.has(project.repoPath);
-                  toggleProject(project.repoPath);
-                  if (wasCollapsed && !wasActive) {
-                    setActiveProject(project.repoPath);
-                    const target = pickSessionToActivate(
-                      project.sessions,
-                      activeSessionId,
-                    );
-                    if (target) selectSession(target);
-                  }
-                }}
+                onTitleClick={() =>
+                  applyClickPlan(
+                    planTitleClick({
+                      wasActive: activeProject === project.repoPath,
+                      wasCollapsed: collapsed.has(project.repoPath),
+                    }),
+                    project,
+                  )
+                }
+                onChevronClick={() =>
+                  applyClickPlan(
+                    planChevronClick({
+                      wasActive: activeProject === project.repoPath,
+                      wasCollapsed: collapsed.has(project.repoPath),
+                    }),
+                    project,
+                  )
+                }
                 onActivate={() => {
                   setActiveProject(project.repoPath);
                   expandProject(project.repoPath);
