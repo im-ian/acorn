@@ -88,7 +88,7 @@ fn parse_github_owner_repo(remote: &str) -> Option<String> {
         return None;
     };
 
-    if !host.eq_ignore_ascii_case("github.com") {
+    if !is_github_host(host) {
         return None;
     }
 
@@ -97,6 +97,73 @@ fn parse_github_owner_repo(remote: &str) -> Option<String> {
         return None;
     }
     Some(owner_repo.to_string())
+}
+
+/// Test whether `host` ultimately points at github.com.
+///
+/// Direct match for plain `github.com`. For everything else we resolve via
+/// `ssh -G <host>` — multi-identity setups commonly alias github.com in
+/// `~/.ssh/config` with blocks like:
+///
+/// ```text
+/// Host github-im-ian
+///     HostName github.com
+///     IdentityFile ~/.ssh/id_im_ian
+/// ```
+///
+/// which produces remotes such as `git@github-im-ian:org/repo.git`. Without
+/// alias resolution we'd reject those as "not GitHub" even though they're
+/// just GitHub-with-routing.
+fn is_github_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("github.com") {
+        return true;
+    }
+    cached_ssh_hostname(host)
+        .map(|real| real.eq_ignore_ascii_case("github.com"))
+        .unwrap_or(false)
+}
+
+fn cached_ssh_hostname(alias: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(map) = cache.lock() {
+        if let Some(hit) = map.get(alias) {
+            return hit.clone();
+        }
+    }
+
+    let resolved = resolve_ssh_hostname(alias);
+    if let Ok(mut map) = cache.lock() {
+        map.insert(alias.to_string(), resolved.clone());
+    }
+    resolved
+}
+
+fn resolve_ssh_hostname(alias: &str) -> Option<String> {
+    let out = std::process::Command::new("ssh")
+        .args(["-G", alias])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for line in stdout.lines() {
+        // `ssh -G` lowercases keys; the hostname line is exactly:
+        //     hostname github.com
+        if let Some(rest) = line.strip_prefix("hostname ") {
+            let h = rest.trim();
+            if !h.is_empty() {
+                return Some(h.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn list_commits(
