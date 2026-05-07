@@ -26,8 +26,11 @@
 //! The picked token is passed to `gh pr list` via `GH_TOKEN`, overriding
 //! whichever account `gh` would otherwise pick.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -130,6 +133,64 @@ pub enum PullRequestListing {
 
 const GH_HOST: &str = "github.com";
 
+/// How long a successful (login, repo) resolution stays trusted before we
+/// re-probe access. Picked to be long enough to make periodic refreshes
+/// cheap, short enough that a `gh auth login` for a new account becomes
+/// usable without restarting the app.
+const RESOLUTION_TTL: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone)]
+struct CachedResolution {
+    login: String,
+    cached_at: Instant,
+}
+
+impl CachedResolution {
+    fn fresh(&self) -> bool {
+        self.cached_at.elapsed() < RESOLUTION_TTL
+    }
+}
+
+/// Per-repo cache of which gh login was last seen with access. Keyed by
+/// the repo path the frontend sent (the worktree). The token itself is
+/// re-fetched on every call — that's a fast local `gh auth token` spawn,
+/// no network — so we never store secrets in this cache.
+fn resolution_cache() -> &'static Mutex<HashMap<PathBuf, CachedResolution>> {
+    use std::sync::OnceLock;
+    static CELL: OnceLock<Mutex<HashMap<PathBuf, CachedResolution>>> =
+        OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_login(repo_path: &Path) -> Option<CachedResolution> {
+    let cache = resolution_cache().lock().ok()?;
+    let entry = cache.get(repo_path)?;
+    if entry.fresh() {
+        Some(entry.clone())
+    } else {
+        None
+    }
+}
+
+fn store_resolution(repo_path: &Path, login: &str) {
+    let Ok(mut cache) = resolution_cache().lock() else {
+        return;
+    };
+    cache.insert(
+        repo_path.to_path_buf(),
+        CachedResolution {
+            login: login.to_string(),
+            cached_at: Instant::now(),
+        },
+    );
+}
+
+fn invalidate_resolution(repo_path: &Path) {
+    if let Ok(mut cache) = resolution_cache().lock() {
+        cache.remove(repo_path);
+    }
+}
+
 pub fn list_pull_requests(
     repo_path: &Path,
     state: PrStateFilter,
@@ -139,6 +200,30 @@ pub fn list_pull_requests(
         return Ok(PullRequestListing::NotGithub);
     };
 
+    // Fast path: a recently-resolved login for this repo. Skip every probe
+    // and only pay for `gh auth token` (local) + `gh pr list` (network).
+    if let Some(cached) = cached_login(repo_path) {
+        if let Some(token) = gh_token_for(&cached.login) {
+            match run_pr_list(&slug, &token, state, limit) {
+                Ok(items) => {
+                    return Ok(PullRequestListing::Ok {
+                        items,
+                        account: cached.login,
+                    });
+                }
+                Err(_) => {
+                    // Cached login lost access (token expired, removed from
+                    // org, etc.) — drop the cache and fall through to a
+                    // fresh resolution below.
+                    invalidate_resolution(repo_path);
+                }
+            }
+        } else {
+            // Login disappeared from gh between calls — re-resolve.
+            invalidate_resolution(repo_path);
+        }
+    }
+
     let resolution = resolve_account_for_repo(repo_path, &slug)?;
     let Some(picked) = resolution.picked else {
         return Ok(PullRequestListing::NoAccess {
@@ -147,9 +232,23 @@ pub fn list_pull_requests(
         });
     };
 
+    let items = run_pr_list(&slug, &picked.token, state, limit)?;
+    store_resolution(repo_path, &picked.login);
+    Ok(PullRequestListing::Ok {
+        items,
+        account: picked.login,
+    })
+}
+
+fn run_pr_list(
+    slug: &str,
+    token: &str,
+    state: PrStateFilter,
+    limit: u32,
+) -> AppResult<Vec<PullRequestInfo>> {
     let limit = limit.clamp(1, 200);
     let output = Command::new("gh")
-        .env("GH_TOKEN", &picked.token)
+        .env("GH_TOKEN", token)
         // gh treats GH_HOST + GH_TOKEN as an "external" auth source and skips
         // its own keyring lookup, so this isolates the run to the picked
         // identity even when a different `gh auth status` account is active.
@@ -158,7 +257,7 @@ pub fn list_pull_requests(
             "pr",
             "list",
             "--repo",
-            &slug,
+            slug,
             "--state",
             state.as_gh_arg(),
             "--limit",
@@ -182,7 +281,7 @@ pub fn list_pull_requests(
     let raw: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)
         .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
 
-    let items = raw
+    Ok(raw
         .into_iter()
         .map(|pr| PullRequestInfo {
             number: pr.number,
@@ -195,11 +294,7 @@ pub fn list_pull_requests(
             updated_at: pr.updated_at,
             is_draft: pr.is_draft,
         })
-        .collect();
-    Ok(PullRequestListing::Ok {
-        items,
-        account: picked.login,
-    })
+        .collect())
 }
 
 struct PickedAccount {
@@ -216,6 +311,11 @@ struct AccountResolution {
 /// order: only-accessible-account → email-match against the repo's git
 /// config → currently-active gh account → first accessible. Returns
 /// `picked = None` when nothing has access.
+///
+/// Per-account `gh auth token` and `gh api repos/<slug>` probes run in
+/// parallel — they're independent and each costs a process spawn plus
+/// (for the API call) a network round-trip, so serializing them dominated
+/// the total resolution time on multi-account setups.
 fn resolve_account_for_repo(repo_path: &Path, slug: &str) -> AppResult<AccountResolution> {
     let logins = enumerate_logins(GH_HOST)?;
     if logins.is_empty() {
@@ -224,23 +324,49 @@ fn resolve_account_for_repo(repo_path: &Path, slug: &str) -> AppResult<AccountRe
         ));
     }
 
-    let mut candidates: Vec<AccountSummary> = Vec::with_capacity(logins.len());
+    struct Probe {
+        login: String,
+        token: Option<String>,
+        has_access: bool,
+    }
+
+    let probes: Vec<Probe> = std::thread::scope(|scope| {
+        let handles: Vec<_> = logins
+            .iter()
+            .map(|login| {
+                let login = login.clone();
+                let slug = slug.to_string();
+                scope.spawn(move || {
+                    let token = gh_token_for(&login);
+                    let has_access = token
+                        .as_deref()
+                        .map(|t| account_can_access(&slug, t))
+                        .unwrap_or(false);
+                    Probe {
+                        login,
+                        token,
+                        has_access,
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("probe thread panicked"))
+            .collect()
+    });
+
+    let mut candidates: Vec<AccountSummary> = Vec::with_capacity(probes.len());
     let mut accessible: Vec<(String, String)> = Vec::new();
-    for login in &logins {
-        let Some(token) = gh_token_for(login) else {
-            candidates.push(AccountSummary {
-                login: login.clone(),
-                has_access: false,
-            });
-            continue;
-        };
-        let has_access = account_can_access(slug, &token);
+    for p in probes {
         candidates.push(AccountSummary {
-            login: login.clone(),
-            has_access,
+            login: p.login.clone(),
+            has_access: p.has_access,
         });
-        if has_access {
-            accessible.push((login.clone(), token));
+        if p.has_access {
+            if let Some(tok) = p.token {
+                accessible.push((p.login, tok));
+            }
         }
     }
 
