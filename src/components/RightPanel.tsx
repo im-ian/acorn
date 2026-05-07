@@ -44,8 +44,11 @@ const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
 
 export function RightPanel() {
-  const { sessions, activeSessionId, activeProject, rightTab, setRightTab } =
-    useAppStore();
+  const sessions = useAppStore((s) => s.sessions);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeProject = useAppStore((s) => s.activeProject);
+  const rightTab = useAppStore((s) => s.rightTab);
+  const setRightTab = useAppStore((s) => s.setRightTab);
   const active = sessions.find((s) => s.id === activeSessionId);
   const repoPath = active?.worktree_path ?? activeProject ?? null;
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
@@ -221,6 +224,54 @@ function SkeletonList({ count = 6 }: { count?: number }) {
     <div className="text-xs">
       {Array.from({ length: count }).map((_, i) => (
         <SkeletonRow key={i} pulseDelayMs={i * 80} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Shaped placeholder for the Pull Requests tab. Mirrors the real PR row
+ * layout — two lines, with `#number`, state badge, title on top and
+ * author · branches · time underneath — so the panel doesn't reflow when
+ * data arrives. Bar widths are randomized per row (deterministically) so
+ * the placeholder reads as multiple distinct items rather than a stripe.
+ */
+function PrSkeletonRow({ index }: { index: number }) {
+  // Cycle through a handful of width pairs so the skeleton looks like a
+  // varied list instead of identical bars stacked vertically.
+  const titleWidths = ["55%", "72%", "40%", "65%", "48%", "60%"];
+  const branchWidths = ["38%", "52%", "30%", "44%"];
+  const titleW = titleWidths[index % titleWidths.length];
+  const branchW = branchWidths[index % branchWidths.length];
+  return (
+    <div className="flex flex-col gap-1.5 border-b border-border/40 px-3 py-2">
+      <div className="flex w-full items-center gap-2">
+        <span className="h-3 w-8 shrink-0 animate-pulse rounded bg-fg-muted/15" />
+        <span className="h-4 w-12 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
+        <span
+          className="h-3 min-w-0 flex-1 animate-pulse rounded bg-fg-muted/10"
+          style={{ width: titleW }}
+        />
+      </div>
+      <div className="flex w-full items-center gap-2">
+        <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+        <span className="text-[10px] text-fg-muted/40">·</span>
+        <span
+          className="h-2.5 animate-pulse rounded bg-fg-muted/10"
+          style={{ width: branchW }}
+        />
+        <span className="text-[10px] text-fg-muted/40">·</span>
+        <span className="h-2.5 w-10 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+      </div>
+    </div>
+  );
+}
+
+function PrSkeletonList({ count = 6 }: { count?: number }) {
+  return (
+    <div className="text-xs">
+      {Array.from({ length: count }).map((_, i) => (
+        <PrSkeletonRow key={i} index={i} />
       ))}
     </div>
   );
@@ -903,6 +954,10 @@ function PullRequestsTab({
   );
 
   useEffect(() => {
+    // Drop the prior project's listing so the panel renders skeletons during
+    // the next fetch instead of flashing stale PR rows for the old repo.
+    setListing(null);
+    setError(null);
     const signal = { cancelled: false };
     void fetchPrs(signal);
     const handle = setInterval(() => {
@@ -965,7 +1020,7 @@ function PullRequestsTab({
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
         ) : !listing ? (
-          <SkeletonList count={6} />
+          <PrSkeletonList count={10} />
         ) : listing.kind === "not_github" ? (
           <Empty msg="Origin remote is not a GitHub repository." />
         ) : listing.kind === "no_access" ? (
