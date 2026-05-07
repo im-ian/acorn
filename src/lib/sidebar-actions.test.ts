@@ -1,13 +1,7 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { planChevronClick, planTitleClick } from "./sidebar-actions";
-
-const SIDEBAR_SOURCE = readFileSync(
-  resolve(__dirname, "../components/Sidebar.tsx"),
-  "utf8",
-);
+import SIDEBAR_SOURCE from "../components/Sidebar.tsx?raw";
 
 describe("planTitleClick", () => {
   it("inactive + collapsed → activates, preserves collapse state", () => {
