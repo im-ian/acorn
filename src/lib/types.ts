@@ -89,6 +89,12 @@ export interface PullRequestInfo {
   is_draft: boolean;
 }
 
+export interface AccountSummary {
+  login: string;
+  has_access: boolean;
+}
+
 export type PullRequestListing =
-  | { kind: "ok"; items: PullRequestInfo[] }
-  | { kind: "not_github" };
+  | { kind: "ok"; items: PullRequestInfo[]; account: string }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };

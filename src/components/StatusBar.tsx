@@ -72,13 +72,36 @@ function useMemoryUsage(intervalMs: number): MemorySnapshot | null {
   return snapshot;
 }
 
+// GitHub octocat mark — lucide-react has no brand glyphs, so inline the
+// official Mark path. `currentColor` lets the surrounding text style it.
+function GitHubMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={11}
+      height={11}
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+    </svg>
+  );
+}
+
 export function StatusBar() {
-  const { sessions, activeSessionId, error, loading } = useAppStore();
+  const { sessions, activeSessionId, activeProject, error, loading } =
+    useAppStore();
+  const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
   const active = sessions.find((s) => s.id === activeSessionId);
   const memory = useMemoryUsage(MEMORY_POLL_MS);
   const home = useHomeDir();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const displayPath = active ? tildify(active.worktree_path, home) : null;
+  // The PR-tab account map is keyed by the same repoPath we hand to the PRs
+  // tab — prefer the active session's worktree (matches what was probed),
+  // then fall back to the active project root.
+  const prAccountKey = active?.worktree_path ?? activeProject ?? null;
+  const prAccount = prAccountKey ? prAccountByRepo[prAccountKey] ?? null : null;
 
   return (
     <>
@@ -97,6 +120,15 @@ export function StatusBar() {
           {error ? (
             <span className="truncate text-danger" title={error}>
               error: {error}
+            </span>
+          ) : null}
+          {prAccount ? (
+            <span
+              className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted"
+              title={`PRs listed via gh account ${prAccount}`}
+            >
+              <GitHubMark />
+              {prAccount}
             </span>
           ) : null}
           {active && displayPath ? (

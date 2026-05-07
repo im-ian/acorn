@@ -53,6 +53,10 @@ interface AppStateModel {
   activeSessionId: string | null;
 
   rightTab: RightTab;
+  /** gh login most recently resolved as having access to a given repo, keyed
+   *  by repo path. Populated by the PRs tab; consumed by the StatusBar to
+   *  surface "which identity am I acting as for this repo". In-memory only. */
+  prAccountByRepo: Record<string, string>;
   loading: boolean;
   error: string | null;
   pendingRemoveId: string | null;
@@ -88,6 +92,7 @@ interface AppStateModel {
   requestRemoveProject: (repoPath: string) => void;
   clearPendingRemoveProject: () => void;
   setRightTab: (tab: RightTab) => void;
+  setPrAccountForRepo: (repoPath: string, login: string | null) => void;
 }
 
 let paneCounter = 0;
@@ -284,6 +289,7 @@ export const useAppStore = create<AppStateModel>()(
   activeSessionId: null,
 
   rightTab: "commits",
+  prAccountByRepo: {},
   loading: false,
   error: null,
   pendingRemoveId: null,
@@ -729,6 +735,21 @@ export const useAppStore = create<AppStateModel>()(
 
   setRightTab(tab) {
     set({ rightTab: tab });
+  },
+
+  setPrAccountForRepo(repoPath, login) {
+    set((s) => {
+      const prev = s.prAccountByRepo[repoPath] ?? null;
+      if (login === null) {
+        if (prev === null) return s;
+        const { [repoPath]: _, ...rest } = s.prAccountByRepo;
+        return { prAccountByRepo: rest };
+      }
+      if (prev === login) return s;
+      return {
+        prAccountByRepo: { ...s.prAccountByRepo, [repoPath]: login },
+      };
+    });
   },
     }),
     {

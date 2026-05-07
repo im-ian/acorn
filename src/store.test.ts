@@ -82,6 +82,7 @@ function resetStore(): void {
       focusedPaneId: "root",
       activeSessionId: null,
       rightTab: "commits",
+      prAccountByRepo: {},
       loading: false,
       error: null,
       pendingRemoveId: null,

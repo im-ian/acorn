@@ -19,6 +19,7 @@ import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
 import { useAppStore } from "../store";
 import type {
+  AccountSummary,
   CommitInfo,
   DiffPayload,
   PrStateFilter,
@@ -795,6 +796,7 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
     y: number;
     pr: PullRequestInfo;
   } | null>(null);
+  const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
 
   const fetchPrs = useCallback(
     async (signal?: { cancelled: boolean }) => {
@@ -804,6 +806,10 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
         if (signal?.cancelled) return;
         setListing(result);
         setError(null);
+        setPrAccountForRepo(
+          repoPath,
+          result.kind === "ok" ? result.account : null,
+        );
       } catch (e) {
         if (signal?.cancelled) return;
         setError(String(e));
@@ -811,7 +817,7 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
         if (!signal?.cancelled) setLoading(false);
       }
     },
-    [repoPath, stateFilter],
+    [repoPath, stateFilter, setPrAccountForRepo],
   );
 
   useEffect(() => {
@@ -880,6 +886,8 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
           <Empty msg="Loading pull requests..." />
         ) : listing.kind === "not_github" ? (
           <Empty msg="Origin remote is not a GitHub repository." />
+        ) : listing.kind === "no_access" ? (
+          <NoAccessBanner slug={listing.slug} accounts={listing.accounts} />
         ) : listing.items.length === 0 ? (
           <Empty msg={`No ${stateFilter} pull requests.`} />
         ) : (
@@ -953,6 +961,35 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
         }
         onClose={() => setMenu(null)}
       />
+    </div>
+  );
+}
+
+function NoAccessBanner({
+  slug,
+  accounts,
+}: {
+  slug: string;
+  accounts: AccountSummary[];
+}) {
+  const tried = accounts.map((a) => `@${a.login}`).join(", ");
+  return (
+    <div className="space-y-2 p-3 text-xs text-fg-muted">
+      <p className="text-fg">
+        No logged-in <code className="font-mono">gh</code> account can access{" "}
+        <span className="font-mono text-fg">{slug}</span>.
+      </p>
+      {accounts.length > 0 ? (
+        <p>
+          <span className="opacity-70">Tried:</span> {tried}
+        </p>
+      ) : (
+        <p>No accounts authenticated against github.com.</p>
+      )}
+      <p className="opacity-70">
+        Run <code className="font-mono">gh auth login</code> with an account
+        that has access, or accept the invitation on github.com.
+      </p>
     </div>
   );
 }
