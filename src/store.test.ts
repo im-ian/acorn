@@ -385,10 +385,18 @@ describe("reconcile via refreshSessions", () => {
     await useAppStore.getState().refreshSessions();
 
     const s = useAppStore.getState();
-    // Invariants we care about, regardless of internal layout shape:
-    //   1. only one pane remains (the empty one was collapsed)
-    //   2. the surviving pane holds exactly the still-known session
-    //   3. no orphan sessions linger anywhere
+    // eslint-disable-next-line no-console
+    console.log("DEBUG drops-removed-sessions:", JSON.stringify({
+      sessions: s.sessions.map((x) => x.id),
+      panes: Object.fromEntries(
+        Object.entries(s.panes).map(([k, v]) => [k, v.sessionIds]),
+      ),
+      layoutKind: s.layout.kind,
+      focusedPaneId: s.focusedPaneId,
+      activeSessionId: s.activeSessionId,
+      listSessionsCalls: mockApi.listSessions.mock.calls.length,
+      listSessionsResults: mockApi.listSessions.mock.results.map((r) => r.value),
+    }));
     expect(Object.keys(s.panes)).toHaveLength(1);
     const surviving = Object.values(s.panes)[0];
     expect(surviving.sessionIds).toEqual(["a1"]);
