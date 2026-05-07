@@ -31,6 +31,7 @@ import type {
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
+import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 
 interface ExpandedDiff {
@@ -48,6 +49,10 @@ export function RightPanel() {
   const active = sessions.find((s) => s.id === activeSessionId);
   const repoPath = active?.worktree_path ?? activeProject ?? null;
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
+  const [prDetail, setPrDetail] = useState<{
+    repoPath: string;
+    number: number;
+  } | null>(null);
 
   // Polling lives at the panel level (not inside TodosTab) so we can hide the
   // Todos tab when the active session has none — without requiring the tab to
@@ -123,7 +128,10 @@ export function RightPanel() {
             <Empty msg="No project selected" />
           )
         ) : repoPath ? (
-          <PullRequestsTab repoPath={repoPath} />
+          <PullRequestsTab
+            repoPath={repoPath}
+            onOpenDetail={(number) => setPrDetail({ repoPath, number })}
+          />
         ) : (
           <Empty msg="No project selected" />
         )}
@@ -134,6 +142,11 @@ export function RightPanel() {
         subtitle={expanded?.subtitle}
         cwd={repoPath ?? undefined}
         onClose={() => setExpanded(null)}
+      />
+      <PullRequestDetailModal
+        open={prDetail}
+        cwd={repoPath ?? undefined}
+        onClose={() => setPrDetail(null)}
       />
     </aside>
   );
@@ -786,7 +799,13 @@ const PR_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
 
 const PR_REFRESH_INTERVAL_MS = 60_000;
 
-function PullRequestsTab({ repoPath }: { repoPath: string }) {
+function PullRequestsTab({
+  repoPath,
+  onOpenDetail,
+}: {
+  repoPath: string;
+  onOpenDetail: (number: number) => void;
+}) {
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const [listing, setListing] = useState<PullRequestListing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -840,7 +859,7 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
     }
   }
 
-  async function openPr(pr: PullRequestInfo) {
+  async function openPrInBrowser(pr: PullRequestInfo) {
     try {
       await openUrl(pr.url);
     } catch (e) {
@@ -896,7 +915,7 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
               <li key={pr.number}>
                 <button
                   type="button"
-                  onClick={() => void openPr(pr)}
+                  onClick={() => onOpenDetail(pr.number)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setMenu({ x: e.clientX, y: e.clientY, pr });
@@ -936,10 +955,17 @@ function PullRequestsTab({ repoPath }: { repoPath: string }) {
           menu
             ? ([
                 {
+                  label: "Open detail",
+                  icon: <Maximize2 size={12} />,
+                  onClick: () => {
+                    onOpenDetail(menu.pr.number);
+                  },
+                },
+                {
                   label: "Open in browser",
                   icon: <ExternalLink size={12} />,
                   onClick: () => {
-                    void openPr(menu.pr);
+                    void openPrInBrowser(menu.pr);
                   },
                 },
                 {

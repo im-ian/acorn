@@ -8,7 +8,9 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
-use crate::pull_requests::{self, PrStateFilter, PullRequestListing};
+use crate::pull_requests::{
+    self, PrStateFilter, PullRequestDetailListing, PullRequestListing,
+};
 use crate::scrollback;
 use crate::session::{Project, Session, SessionStatus};
 use crate::session_status;
@@ -567,6 +569,14 @@ pub fn list_pull_requests(
         state.unwrap_or(PrStateFilter::Open),
         limit.unwrap_or(50),
     )
+}
+
+#[tauri::command]
+pub fn get_pull_request_detail(
+    repo_path: String,
+    number: u64,
+) -> AppResult<PullRequestDetailListing> {
+    pull_requests::get_pull_request_detail(&PathBuf::from(repo_path), number)
 }
 
 fn create_unique_worktree(

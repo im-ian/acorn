@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::git_ops::github_owner_repo;
+use crate::git_ops::{github_owner_repo, DiffPayload};
 
 /// PR state filter accepted from the frontend. Mirrors the values gh
 /// understands so we can pass it straight through.
@@ -200,43 +200,70 @@ pub fn list_pull_requests(
         return Ok(PullRequestListing::NotGithub);
     };
 
-    // Fast path: a recently-resolved login for this repo. Skip every probe
-    // and only pay for `gh auth token` (local) + `gh pr list` (network).
+    match try_with_account(repo_path, &slug, |token| {
+        run_pr_list(&slug, token, state, limit)
+    })? {
+        AccountOutcome::Ok { account, value } => Ok(PullRequestListing::Ok {
+            items: value,
+            account,
+        }),
+        AccountOutcome::NoAccess { accounts } => {
+            Ok(PullRequestListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+/// Outcome of running an authenticated gh operation for a repo. `Ok` carries
+/// the gh login that ultimately serviced the call so the frontend can render
+/// "via @login" context. `NoAccess` lets callers branch into a typed empty
+/// state without going through the error path.
+enum AccountOutcome<T> {
+    Ok { account: String, value: T },
+    NoAccess { accounts: Vec<AccountSummary> },
+}
+
+/// Run `op` with the right gh token for `slug`. Tries the cached login
+/// first; on failure (or cache miss / stale login) falls through to a
+/// fresh resolution and stores the picked login on success.
+fn try_with_account<T, F>(
+    repo_path: &Path,
+    slug: &str,
+    op: F,
+) -> AppResult<AccountOutcome<T>>
+where
+    F: Fn(&str) -> AppResult<T>,
+{
     if let Some(cached) = cached_login(repo_path) {
         if let Some(token) = gh_token_for(&cached.login) {
-            match run_pr_list(&slug, &token, state, limit) {
-                Ok(items) => {
-                    return Ok(PullRequestListing::Ok {
-                        items,
+            match op(&token) {
+                Ok(value) => {
+                    return Ok(AccountOutcome::Ok {
                         account: cached.login,
+                        value,
                     });
                 }
                 Err(_) => {
-                    // Cached login lost access (token expired, removed from
-                    // org, etc.) — drop the cache and fall through to a
-                    // fresh resolution below.
+                    // Cached login lost access — drop and fall through.
                     invalidate_resolution(repo_path);
                 }
             }
         } else {
-            // Login disappeared from gh between calls — re-resolve.
             invalidate_resolution(repo_path);
         }
     }
 
-    let resolution = resolve_account_for_repo(repo_path, &slug)?;
+    let resolution = resolve_account_for_repo(repo_path, slug)?;
     let Some(picked) = resolution.picked else {
-        return Ok(PullRequestListing::NoAccess {
-            slug,
+        return Ok(AccountOutcome::NoAccess {
             accounts: resolution.candidates,
         });
     };
 
-    let items = run_pr_list(&slug, &picked.token, state, limit)?;
+    let value = op(&picked.token)?;
     store_resolution(repo_path, &picked.login);
-    Ok(PullRequestListing::Ok {
-        items,
+    Ok(AccountOutcome::Ok {
         account: picked.login,
+        value,
     })
 }
 
@@ -543,4 +570,315 @@ fn git_user_email(repo_path: &Path) -> Option<String> {
     } else {
         Some(s)
     }
+}
+
+// ---------------------------------------------------------------------------
+// PR detail
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestComment {
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestReview {
+    pub author: String,
+    /// Review state from GitHub: `APPROVED` / `CHANGES_REQUESTED` / `COMMENTED` / `DISMISSED` / `PENDING`.
+    pub state: String,
+    pub body: String,
+    pub submitted_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestCheck {
+    pub name: String,
+    /// `QUEUED` / `IN_PROGRESS` / `COMPLETED` / `PENDING` (status checks).
+    pub status: String,
+    /// `SUCCESS` / `FAILURE` / `CANCELLED` / `NEUTRAL` / `SKIPPED` / `TIMED_OUT` / `ACTION_REQUIRED`.
+    /// None while the run is still in progress.
+    pub conclusion: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub url: Option<String>,
+    /// Workflow display name (CheckRun) — empty for legacy StatusContext entries.
+    pub workflow_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestDetail {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub author: String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub url: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub merged_at: Option<String>,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    pub comments: Vec<PullRequestComment>,
+    pub reviews: Vec<PullRequestReview>,
+    pub checks: Vec<PullRequestCheck>,
+    pub diff: DiffPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PullRequestDetailListing {
+    Ok {
+        account: String,
+        detail: PullRequestDetail,
+    },
+    NotGithub,
+    NoAccess {
+        slug: String,
+        accounts: Vec<AccountSummary>,
+    },
+}
+
+pub fn get_pull_request_detail(
+    repo_path: &Path,
+    number: u64,
+) -> AppResult<PullRequestDetailListing> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(PullRequestDetailListing::NotGithub);
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        let view = run_pr_view(&slug, number, token)?;
+        let diff_text = run_pr_diff(&slug, number, token)?;
+        Ok((view, diff_text))
+    })? {
+        AccountOutcome::Ok {
+            account,
+            value: (view, diff_text),
+        } => {
+            let detail = build_detail(number, view, diff_text);
+            Ok(PullRequestDetailListing::Ok { account, detail })
+        }
+        AccountOutcome::NoAccess { accounts } => {
+            Ok(PullRequestDetailListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+fn build_detail(
+    number: u64,
+    view: GhPullRequestView,
+    diff_text: String,
+) -> PullRequestDetail {
+    let comments = view
+        .comments
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| PullRequestComment {
+            author: c.author.login.unwrap_or_else(|| "unknown".to_string()),
+            body: c.body.unwrap_or_default(),
+            created_at: c.created_at.unwrap_or_default(),
+        })
+        .collect();
+
+    let reviews = view
+        .reviews
+        .unwrap_or_default()
+        .into_iter()
+        // Keep only reviews that actually carry a verdict or message — gh
+        // emits a noisy stream of "PENDING" / empty COMMENTED entries that
+        // would otherwise flood the conversation tab.
+        .filter(|r| {
+            !r.body.as_deref().unwrap_or("").is_empty()
+                || r.state
+                    .as_deref()
+                    .map(|s| s == "APPROVED" || s == "CHANGES_REQUESTED" || s == "DISMISSED")
+                    .unwrap_or(false)
+        })
+        .map(|r| PullRequestReview {
+            author: r.author.login.unwrap_or_else(|| "unknown".to_string()),
+            state: r.state.unwrap_or_default(),
+            body: r.body.unwrap_or_default(),
+            submitted_at: r.submitted_at.unwrap_or_default(),
+        })
+        .collect();
+
+    let checks = view
+        .status_check_rollup
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| PullRequestCheck {
+            name: c.name.unwrap_or_else(|| c.context.unwrap_or_default()),
+            status: c.status.unwrap_or_default(),
+            conclusion: c.conclusion,
+            started_at: c.started_at,
+            completed_at: c.completed_at,
+            url: c.details_url.or(c.target_url),
+            workflow_name: c.workflow_name,
+        })
+        .collect();
+
+    PullRequestDetail {
+        number,
+        title: view.title.unwrap_or_default(),
+        body: view.body.unwrap_or_default(),
+        state: view.state.unwrap_or_default(),
+        is_draft: view.is_draft.unwrap_or(false),
+        author: view
+            .author
+            .unwrap_or_default()
+            .login
+            .unwrap_or_else(|| "unknown".to_string()),
+        head_branch: view.head_ref_name.unwrap_or_default(),
+        base_branch: view.base_ref_name.unwrap_or_default(),
+        url: view.url.unwrap_or_default(),
+        created_at: view.created_at.unwrap_or_default(),
+        updated_at: view.updated_at.unwrap_or_default(),
+        merged_at: view.merged_at,
+        additions: view.additions.unwrap_or(0),
+        deletions: view.deletions.unwrap_or(0),
+        changed_files: view.changed_files.unwrap_or(0),
+        comments,
+        reviews,
+        checks,
+        diff: crate::unified_diff::parse_unified_diff(&diff_text),
+    }
+}
+
+fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestView> {
+    let output = Command::new("gh")
+        .env("GH_TOKEN", token)
+        .env("GH_HOST", GH_HOST)
+        .args([
+            "pr",
+            "view",
+            &number.to_string(),
+            "--repo",
+            slug,
+            "--json",
+            "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
+             createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
+             comments,reviews,statusCheckRollup",
+        ])
+        .output()
+        .map_err(map_gh_spawn_error)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))
+}
+
+fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
+    let output = Command::new("gh")
+        .env("GH_TOKEN", token)
+        .env("GH_HOST", GH_HOST)
+        .args([
+            "pr",
+            "diff",
+            &number.to_string(),
+            "--repo",
+            slug,
+        ])
+        .output()
+        .map_err(map_gh_spawn_error)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    // gh writes the patch to stdout as UTF-8. Lossy decode keeps things
+    // working for the rare diff containing invalid bytes (binary files,
+    // mojibake) — those segments are non-renderable anyway and the parser
+    // ultimately routes them into the binary-placeholder branch.
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhPullRequestView {
+    title: Option<String>,
+    body: Option<String>,
+    state: Option<String>,
+    #[serde(rename = "isDraft")]
+    is_draft: Option<bool>,
+    author: Option<GhAuthor>,
+    #[serde(rename = "headRefName")]
+    head_ref_name: Option<String>,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: Option<String>,
+    url: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    #[serde(rename = "mergedAt")]
+    merged_at: Option<String>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
+    #[serde(rename = "changedFiles")]
+    changed_files: Option<u64>,
+    comments: Option<Vec<GhComment>>,
+    reviews: Option<Vec<GhReview>>,
+    #[serde(rename = "statusCheckRollup")]
+    status_check_rollup: Option<Vec<GhCheck>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhComment {
+    #[serde(default)]
+    author: GhAuthor,
+    body: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhReview {
+    #[serde(default)]
+    author: GhAuthor,
+    state: Option<String>,
+    body: Option<String>,
+    #[serde(rename = "submittedAt")]
+    submitted_at: Option<String>,
+}
+
+/// gh blends two shapes into `statusCheckRollup`: `CheckRun` (from GitHub
+/// Actions / app check-runs) and `StatusContext` (legacy commit statuses).
+/// Field availability differs, so every key is optional.
+#[derive(Debug, Deserialize)]
+struct GhCheck {
+    name: Option<String>,
+    /// Legacy StatusContext label.
+    context: Option<String>,
+    status: Option<String>,
+    conclusion: Option<String>,
+    #[serde(rename = "startedAt")]
+    started_at: Option<String>,
+    #[serde(rename = "completedAt")]
+    completed_at: Option<String>,
+    #[serde(rename = "detailsUrl")]
+    details_url: Option<String>,
+    /// StatusContext exposes `targetUrl` instead of `detailsUrl`.
+    #[serde(rename = "targetUrl")]
+    target_url: Option<String>,
+    #[serde(rename = "workflowName")]
+    workflow_name: Option<String>,
 }
