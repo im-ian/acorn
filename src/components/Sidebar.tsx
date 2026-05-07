@@ -261,21 +261,31 @@ export function Sidebar() {
                 onDragOver={(e) => onProjectDragOver(e, project.repoPath)}
                 onDragLeave={onProjectDragLeave}
                 onDragEnd={onProjectDragEnd}
-                onToggle={() => {
-                  // Title click is context-aware:
-                  //   inactive  → activate (and expand if collapsed); never collapses
-                  //   active    → toggle expand/collapse
-                  // This decouples "switch project" from "fold sessions" so a
-                  // user switching projects can't accidentally hide their
-                  // session list, while a re-click on the active project
-                  // still gives a single-target toggle.
+                onTitleClick={() => {
+                  // Title click never collapses. It activates an inactive
+                  // project (preserving its collapse state) and expands an
+                  // already-active collapsed one. Collapse is reserved for
+                  // the chevron, so a user switching between projects can't
+                  // accidentally hide the destination's session list.
                   const wasActive = activeProject === project.repoPath;
                   if (wasActive) {
-                    toggleProject(project.repoPath);
+                    expandProject(project.repoPath);
                     return;
                   }
                   setActiveProject(project.repoPath);
-                  expandProject(project.repoPath);
+                  const target = pickSessionToActivate(
+                    project.sessions,
+                    activeSessionId,
+                  );
+                  if (target) selectSession(target);
+                }}
+                onChevronClick={() => {
+                  // Chevron always activates the project and toggles the
+                  // expand state. This is the single way to collapse a
+                  // project, and it pairs with title-click for "activate
+                  // and force-expand" on inactive collapsed projects.
+                  setActiveProject(project.repoPath);
+                  toggleProject(project.repoPath);
                   const target = pickSessionToActivate(
                     project.sessions,
                     activeSessionId,
@@ -345,7 +355,11 @@ interface ProjectGroupViewProps {
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;
   onDragEnd: (e: React.DragEvent) => void;
-  onToggle: () => void;
+  /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
+  onTitleClick: () => void;
+  /** Chevron click: activate + toggle expand. */
+  onChevronClick: () => void;
+  /** Empty-state row click: activate + expand + select a session. */
   onActivate: () => void;
   onSelectSession: (id: string) => void;
   onRemoveSession: (s: Session) => void;
@@ -364,7 +378,8 @@ function ProjectGroupView({
   onDragOver,
   onDragLeave,
   onDragEnd,
-  onToggle,
+  onTitleClick,
+  onChevronClick,
   onActivate,
   onSelectSession,
   onRemoveSession,
@@ -435,17 +450,27 @@ function ProjectGroupView({
         </span>
         <button
           type="button"
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChevronClick();
+          }}
+          aria-label={collapsed ? "Expand project" : "Collapse project"}
           aria-expanded={!collapsed}
+          className="flex shrink-0 items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           <ChevronRight
             size={14}
             className={cn(
-              "-mx-0.5 shrink-0 text-fg-muted transition-transform",
+              "transition-transform",
               !collapsed && "rotate-90",
             )}
           />
+        </button>
+        <button
+          type="button"
+          onClick={onTitleClick}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
           <FolderGit2 size={12} className="shrink-0 text-fg-muted" />
           <span className="truncate text-sm font-medium text-fg">
             {project.name}
