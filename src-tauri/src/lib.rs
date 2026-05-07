@@ -9,6 +9,7 @@ mod session;
 mod session_status;
 mod state;
 mod todos;
+mod unified_diff;
 mod worktree;
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -146,6 +147,7 @@ pub fn run() {
             commands::open_in_editor,
             commands::staged_diff,
             commands::list_pull_requests,
+            commands::get_pull_request_detail,
             commands::pty_spawn,
             commands::pty_write,
             commands::pty_resize,

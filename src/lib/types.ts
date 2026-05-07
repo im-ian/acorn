@@ -98,3 +98,56 @@ export type PullRequestListing =
   | { kind: "ok"; items: PullRequestInfo[]; account: string }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface PullRequestComment {
+  author: string;
+  body: string;
+  created_at: string;
+}
+
+export interface PullRequestReview {
+  author: string;
+  /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING */
+  state: string;
+  body: string;
+  submitted_at: string;
+}
+
+export interface PullRequestCheck {
+  name: string;
+  /** QUEUED | IN_PROGRESS | COMPLETED | PENDING */
+  status: string;
+  /** SUCCESS | FAILURE | CANCELLED | NEUTRAL | SKIPPED | TIMED_OUT | ACTION_REQUIRED. null while still running. */
+  conclusion: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  url: string | null;
+  workflow_name: string | null;
+}
+
+export interface PullRequestDetail {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  is_draft: boolean;
+  author: string;
+  head_branch: string;
+  base_branch: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  merged_at: string | null;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  comments: PullRequestComment[];
+  reviews: PullRequestReview[];
+  checks: PullRequestCheck[];
+  diff: DiffPayload;
+}
+
+export type PullRequestDetailListing =
+  | { kind: "ok"; account: string; detail: PullRequestDetail }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };

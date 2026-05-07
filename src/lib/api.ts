@@ -5,6 +5,7 @@ import type {
   MemoryUsage,
   Project,
   PrStateFilter,
+  PullRequestDetailListing,
   PullRequestListing,
   Session,
   SessionStatus,
@@ -82,6 +83,15 @@ export const api = {
       repoPath,
       state,
       limit,
+    });
+  },
+  getPullRequestDetail(
+    repoPath: string,
+    number: number,
+  ): Promise<PullRequestDetailListing> {
+    return invoke<PullRequestDetailListing>("get_pull_request_detail", {
+      repoPath,
+      number,
     });
   },
   getMemoryUsage(): Promise<MemoryUsage> {
