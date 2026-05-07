@@ -32,6 +32,10 @@ export const Hotkeys = {
   toggleStaged: "$mod+Shift+s",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
+  // Cmd+= mirrors VS Code's "Workbench: Toggle Centered Layout" pattern of
+  // using = for equal/centered actions. Avoid Cmd+Alt+0 which collides with
+  // browser zoom-reset behavior in some webviews.
+  equalizePanes: "$mod+=",
   closeTab: "$mod+w",
   closeEmptyPane: "Escape",
   openSettings: "$mod+Comma",
