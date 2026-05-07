@@ -200,17 +200,17 @@ function SessionSettings() {
       >
         <div className="flex flex-col gap-1.5">
           <ModeRadio
-            value="claude"
+            value="terminal"
             current={mode}
-            label="Claude"
-            description="Launch the `claude` CLI in the session worktree (default)."
+            label="Terminal (default)"
+            description="Launch a plain shell using $SHELL."
             onSelect={(v) => patchSessionStartup({ mode: v })}
           />
           <ModeRadio
-            value="terminal"
+            value="claude"
             current={mode}
-            label="Terminal"
-            description="Launch a plain shell using $SHELL."
+            label="Claude"
+            description="Launch the `claude` CLI in the session worktree."
             onSelect={(v) => patchSessionStartup({ mode: v })}
           />
           <ModeRadio
@@ -223,7 +223,7 @@ function SessionSettings() {
         </div>
       </Field>
       {mode === "custom" ? (
-        <Field label="Custom command" hint="Falls back to `claude` when blank.">
+        <Field label="Custom command" hint="Falls back to $SHELL when blank.">
           <input
             type="text"
             value={settings.sessionStartup.customCommand}

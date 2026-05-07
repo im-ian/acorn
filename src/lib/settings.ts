@@ -77,7 +77,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeightBold: 700,
   },
   sessionStartup: {
-    mode: "claude",
+    mode: "terminal",
     customCommand: "",
   },
   sessions: {
@@ -250,21 +250,23 @@ export const useSettings = create<SettingsState>((set) => ({
  * Resolve the command (and args) used to spawn a session's PTY based on the
  * current `sessionStartup` setting.
  *
- * - `claude` → `claude` binary
  * - `terminal` → empty string; the Rust pty_spawn falls back to `$SHELL`
- * - `custom` → user-provided command, falls back to claude when blank
+ * - `claude`   → `claude` binary
+ * - `custom`   → user-provided command, falls back to terminal when blank
  */
 export function resolveStartupCommand(s: AcornSettings): {
   command: string;
   args: string[];
 } {
-  if (s.sessionStartup.mode === "terminal") return { command: "", args: [] };
+  if (s.sessionStartup.mode === "claude") {
+    return { command: "claude", args: [] };
+  }
   if (s.sessionStartup.mode === "custom") {
     const trimmed = s.sessionStartup.customCommand.trim();
-    if (!trimmed) return { command: "claude", args: [] };
+    if (!trimmed) return { command: "", args: [] };
     // Light tokenisation: split on whitespace, no shell interpretation.
     const parts = trimmed.split(/\s+/);
     return { command: parts[0], args: parts.slice(1) };
   }
-  return { command: "claude", args: [] };
+  return { command: "", args: [] };
 }
