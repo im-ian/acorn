@@ -1,0 +1,47 @@
+<svg width="160" height="160" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Acorn">
+  <defs>
+    <linearGradient id="nut" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D89B57"/>
+      <stop offset="55%" stop-color="#B97335"/>
+      <stop offset="100%" stop-color="#7A4416"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6B3E1A"/>
+      <stop offset="100%" stop-color="#3F2410"/>
+    </linearGradient>
+    <radialGradient id="shine" cx="0.35" cy="0.3" r="0.5">
+      <stop offset="0%" stop-color="#FFE9C7" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#FFE9C7" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- stem -->
+  <path d="M78 10 Q80 4 84 8 Q88 14 84 24" fill="none" stroke="#2E1A0A" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- nut body -->
+  <path d="M40 60 Q40 130 80 142 Q120 130 120 60 Z" fill="url(#nut)"/>
+  <path d="M40 60 Q40 130 80 142 Q120 130 120 60 Z" fill="url(#shine)"/>
+
+  <!-- cap -->
+  <path d="M32 56 Q32 30 80 30 Q128 30 128 56 Q128 66 80 70 Q32 66 32 56 Z" fill="url(#cap)"/>
+
+  <!-- cap cross-hatch -->
+  <g stroke="#241308" stroke-width="1.4" opacity="0.55">
+    <line x1="44" y1="42" x2="56" y2="58"/>
+    <line x1="60" y1="38" x2="72" y2="58"/>
+    <line x1="76" y1="36" x2="88" y2="58"/>
+    <line x1="92" y1="38" x2="104" y2="58"/>
+    <line x1="108" y1="42" x2="116" y2="58"/>
+    <line x1="56" y1="42" x2="44" y2="58"/>
+    <line x1="72" y1="38" x2="60" y2="58"/>
+    <line x1="88" y1="36" x2="76" y2="58"/>
+    <line x1="104" y1="38" x2="92" y2="58"/>
+    <line x1="116" y1="42" x2="108" y2="58"/>
+  </g>
+
+  <!-- cap rim -->
+  <ellipse cx="80" cy="62" rx="48" ry="6" fill="#1F1108" opacity="0.45"/>
+
+  <!-- nut highlight -->
+  <ellipse cx="62" cy="92" rx="8" ry="22" fill="#FFD9A8" opacity="0.18"/>
+</svg>

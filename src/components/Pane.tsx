@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState, useEffect } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
+import acornLogo from "../assets/acorn.svg";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -241,7 +242,15 @@ function EmptyPane({
       tabIndex={0}
       title="Double-click to start a new session"
     >
-      <TerminalIcon size={28} className="opacity-40" />
+      <img
+        src={acornLogo}
+        alt=""
+        aria-hidden="true"
+        width={56}
+        height={56}
+        className="opacity-60 transition group-hover:opacity-80"
+        draggable={false}
+      />
       <p className="text-xs">Drop a tab here or double-click to start a session</p>
     </div>
   );
