@@ -4,6 +4,8 @@ import type {
   DiffPayload,
   MemoryUsage,
   Project,
+  PrStateFilter,
+  PullRequestListing,
   Session,
   SessionStatus,
   StagedFile,
@@ -70,6 +72,17 @@ export const api = {
   },
   stagedDiff(repoPath: string): Promise<DiffPayload> {
     return invoke<DiffPayload>("staged_diff", { repoPath });
+  },
+  listPullRequests(
+    repoPath: string,
+    state: PrStateFilter = "open",
+    limit = 50,
+  ): Promise<PullRequestListing> {
+    return invoke<PullRequestListing>("list_pull_requests", {
+      repoPath,
+      state,
+      limit,
+    });
   },
   getMemoryUsage(): Promise<MemoryUsage> {
     return invoke<MemoryUsage>("get_memory_usage");

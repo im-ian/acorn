@@ -3,6 +3,7 @@ import { Command } from "cmdk";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   GitCommit,
+  GitPullRequest,
   ListChecks,
   ListPlus,
   Plus,
@@ -69,7 +70,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }
   }
 
-  function handleSetTab(tab: "todos" | "commits" | "staged") {
+  function handleSetTab(tab: "todos" | "commits" | "staged" | "prs") {
     useAppStore.getState().setRightTab(tab);
     close();
   }
@@ -169,6 +170,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             <ListPlus size={14} className="text-fg-muted" />
             <span>View Staged</span>
+          </Command.Item>
+          <Command.Item
+            value="view-prs"
+            onSelect={() => handleSetTab("prs")}
+            keywords={["pull requests", "pr", "github"]}
+          >
+            <GitPullRequest size={14} className="text-fg-muted" />
+            <span>View Pull Requests</span>
           </Command.Item>
         </Command.Group>
 
