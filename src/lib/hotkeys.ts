@@ -30,6 +30,7 @@ export const Hotkeys = {
   toggleTodos: "$mod+Shift+t",
   toggleCommits: "$mod+Shift+c",
   toggleStaged: "$mod+Shift+s",
+  togglePrs: "$mod+Shift+p",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
   // Cmd+= mirrors VS Code's "Workbench: Toggle Centered Layout" pattern of
