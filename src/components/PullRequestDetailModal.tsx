@@ -26,6 +26,7 @@ import type {
   PullRequestReview,
 } from "../lib/types";
 import { DiffSplitView } from "./DiffSplitView";
+import { Modal, ModalHeader } from "./ui";
 
 type DetailTab = "conversation" | "checks" | "files";
 
@@ -82,19 +83,10 @@ export function PullRequestDetailModal({
     };
   }, [open]);
 
-  if (!open) return null;
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex flex-col bg-black/60 px-4 py-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-border bg-bg shadow-2xl">
-        {error ? (
+    <Modal open={open !== null} onClose={onClose} variant="panel" size="5xl">
+      {open ? (
+        error ? (
           <ModalShell title={`#${open.number}`} onClose={onClose}>
             <div className="p-4 text-xs text-danger">{error}</div>
           </ModalShell>
@@ -126,9 +118,9 @@ export function PullRequestDetailModal({
             cwd={cwd}
             onClose={onClose}
           />
-        )}
-      </div>
-    </div>
+        )
+      ) : null}
+    </Modal>
   );
 }
 
@@ -143,19 +135,7 @@ function ModalShell({
 }) {
   return (
     <>
-      <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-        <h3 className="truncate text-sm font-semibold tracking-tight text-fg">
-          {title}
-        </h3>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-        >
-          <X size={16} />
-        </button>
-      </header>
+      <ModalHeader title={title} onClose={onClose} />
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
     </>
   );
