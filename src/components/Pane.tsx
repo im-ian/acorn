@@ -1,4 +1,5 @@
 import {
+  Columns2,
   Copy,
   Files,
   FolderOpen,
@@ -24,6 +25,7 @@ import {
   hasConfiguredEditor,
   openInConfiguredEditor,
 } from "../lib/editor";
+import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -433,6 +435,13 @@ function TabItem({
       onClick: () => onSplitTab("vertical"),
       disabled: siblingCount <= 1,
     },
+    {
+      label: "Equalize Pane Sizes",
+      icon: <Columns2 size={12} />,
+      onClick: () => {
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+      },
+    },
     { type: "separator" },
     {
       label: "Open Worktree in Editor",
@@ -714,6 +723,14 @@ function buildPaneMenuItems({
       label: "Split Down",
       icon: <SplitSquareVertical size={12} />,
       onClick: () => onSplit("vertical"),
+    },
+    {
+      label: "Equalize Pane Sizes",
+      icon: <Columns2 size={12} />,
+      onClick: () => {
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+      },
+      disabled: totalPanes <= 1,
     },
     ...worktreeItems,
     { type: "separator" },

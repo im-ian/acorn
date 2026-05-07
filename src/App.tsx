@@ -7,6 +7,7 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { LayoutRenderer } from "./components/LayoutRenderer";
+import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { CommandPalette } from "./components/CommandPalette";
@@ -125,6 +126,10 @@ function App() {
       [Hotkeys.splitHorizontal]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().splitFocusedPane("vertical");
+      },
+      [Hotkeys.equalizePanes]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
       [Hotkeys.closeTab]: (e: KeyboardEvent) => {
         e.preventDefault();
