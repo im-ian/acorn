@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
 import type { Project, Session } from "./lib/types";
 import {
@@ -187,18 +188,10 @@ function reconcileWorkspace(
     }
   }
 
-  let newLayout = ws.layout;
-  let totalPanes = Object.keys(newPanes).length;
-  for (const pid of Object.keys(newPanes)) {
-    if (totalPanes <= 1) break;
-    if (newPanes[pid].sessionIds.length > 0) continue;
-    const collapsed = removePaneFromLayout(newLayout, pid);
-    if (collapsed) {
-      newLayout = collapsed;
-      delete newPanes[pid];
-      totalPanes -= 1;
-    }
-  }
+  // Empty panes are intentionally preserved (e.g. user split A→A+B and B is
+  // a drop target waiting for a tab). User closes panes explicitly via
+  // closePane / cmd+W. Reconcile must not silently delete them.
+  const newLayout = ws.layout;
 
   let newFocused = ws.focusedPaneId;
   if (!newPanes[newFocused]) {
@@ -276,7 +269,9 @@ function updateActiveWorkspace(
   };
 }
 
-export const useAppStore = create<AppStateModel>((set, get) => ({
+export const useAppStore = create<AppStateModel>()(
+  persist(
+    (set, get) => ({
   sessions: [],
   projects: [],
 
@@ -735,7 +730,28 @@ export const useAppStore = create<AppStateModel>((set, get) => ({
   setRightTab(tab) {
     set({ rightTab: tab });
   },
-}));
+    }),
+    {
+      name: "acorn-workspaces",
+      storage: createJSONStorage(() => localStorage),
+      version: 1,
+      partialize: (state) => ({
+        workspaces: state.workspaces,
+        activeProject: state.activeProject,
+        rightTab: state.rightTab,
+      }),
+      // Recompute the active-workspace mirror after hydration so consumers
+      // see the persisted layout immediately, before the first refreshAll.
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        Object.assign(
+          state,
+          mirrorActive(state.workspaces, state.activeProject),
+        );
+      },
+    },
+  ),
+);
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
