@@ -26,7 +26,7 @@ import type {
   PullRequestReview,
 } from "../lib/types";
 import { DiffSplitView } from "./DiffSplitView";
-import { Modal, ModalHeader } from "./ui";
+import { Markdown, Modal, ModalHeader } from "./ui";
 
 type DetailTab = "conversation" | "checks" | "files";
 
@@ -212,10 +212,8 @@ function DetailBody({
       </header>
 
       {detail.body.trim().length > 0 ? (
-        <div className="max-h-48 shrink-0 overflow-y-auto border-b border-border bg-bg-sidebar/40 px-4 py-3">
-          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-fg">
-            {detail.body}
-          </pre>
+        <div className="acorn-selectable max-h-48 shrink-0 overflow-y-auto border-b border-border bg-bg-sidebar/40 px-4 py-3">
+          <Markdown content={detail.body} />
         </div>
       ) : null}
 
@@ -377,9 +375,13 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
           {formatTimestamp(comment.created_at)}
         </span>
       </div>
-      <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-fg">
-        {comment.body || <span className="text-fg-muted">(empty)</span>}
-      </pre>
+      {comment.body.trim().length > 0 ? (
+        <div className="acorn-selectable">
+          <Markdown content={comment.body} />
+        </div>
+      ) : (
+        <p className="text-[11px] text-fg-muted">(empty)</p>
+      )}
     </li>
   );
 }
@@ -395,9 +397,9 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
         </span>
       </div>
       {review.body.trim().length > 0 ? (
-        <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-fg">
-          {review.body}
-        </pre>
+        <div className="acorn-selectable">
+          <Markdown content={review.body} />
+        </div>
       ) : (
         <p className="text-[11px] text-fg-muted">
           (no review comment)
