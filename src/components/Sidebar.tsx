@@ -660,7 +660,15 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       n += 1;
     }
     try {
-      await api.createSession(next, session.repo_path, session.isolated);
+      // Carry the source session's startup mode onto the duplicate so
+      // the duplicate respawns with the same kind of process, regardless
+      // of the current global default.
+      await api.createSession(
+        next,
+        session.repo_path,
+        session.isolated,
+        session.startup_mode,
+      );
       await useAppStore.getState().refreshAll();
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);

@@ -121,6 +121,20 @@ pub enum SessionStatus {
     Completed,
 }
 
+/// Persisted per-session PTY startup mode. Captured when the session is
+/// created (and updated whenever a future UI lets the user re-pick), so
+/// changing the global `sessionStartup.mode` setting does not retroactively
+/// change how existing sessions respawn after an app restart. Older
+/// persisted sessions without this field load as `None`, in which case
+/// the frontend falls back to the current global setting.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStartupMode {
+    Agent,
+    Terminal,
+    Custom,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -134,6 +148,8 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_message: Option<String>,
+    #[serde(default)]
+    pub startup_mode: Option<SessionStartupMode>,
 }
 
 impl Session {
@@ -143,6 +159,7 @@ impl Session {
         worktree_path: PathBuf,
         branch: String,
         isolated: bool,
+        startup_mode: Option<SessionStartupMode>,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -156,6 +173,7 @@ impl Session {
             created_at: now,
             updated_at: now,
             last_message: None,
+            startup_mode,
         }
     }
 }

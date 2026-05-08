@@ -13,7 +13,7 @@ use crate::pull_requests::{
     PullRequestListing,
 };
 use crate::scrollback;
-use crate::session::{Project, Session, SessionStatus};
+use crate::session::{Project, Session, SessionStartupMode, SessionStatus};
 use crate::session_status;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
@@ -154,6 +154,7 @@ pub async fn create_session(
     name: String,
     repo_path: String,
     isolated: Option<bool>,
+    startup_mode: Option<SessionStartupMode>,
 ) -> AppResult<Session> {
     let repo = PathBuf::from(&repo_path);
     if !repo.exists() {
@@ -169,7 +170,14 @@ pub async fn create_session(
     } else {
         repo.clone()
     };
-    let session = Session::new(name, repo.clone(), worktree_path, branch, isolated);
+    let session = Session::new(
+        name,
+        repo.clone(),
+        worktree_path,
+        branch,
+        isolated,
+        startup_mode,
+    );
     let inserted = state.sessions.insert(session);
     state
         .projects

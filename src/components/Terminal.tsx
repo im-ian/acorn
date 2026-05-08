@@ -7,10 +7,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import { resolveStartupCommand, useSettings } from "../lib/settings";
+import type { SessionStartupMode } from "../lib/types";
 
 interface TerminalProps {
   sessionId: string;
   cwd: string;
+  /**
+   * Per-session startup mode persisted on `Session.startup_mode`. `null`
+   * (or omitted) means the session has no recorded preference (legacy
+   * sessions created before this field existed) — the spawn falls back
+   * to the global `sessionStartup.mode` setting in that case.
+   */
+  startupMode?: SessionStartupMode | null;
   /**
    * When the terminal is hidden behind another tab in the same pane and then
    * made visible again, the DOM renderer can leave the rows blank because it
@@ -62,6 +70,7 @@ function encodeStringToBase64(input: string): string {
 export function Terminal({
   sessionId,
   cwd,
+  startupMode = null,
   isActive = true,
 }: TerminalProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -470,6 +479,7 @@ export function Terminal({
       try {
         const startup = resolveStartupCommand(
           useSettings.getState().settings,
+          startupMode,
         );
         // When launching the `claude` CLI, pin the transcript path to our
         // session UUID. claude refuses `--session-id` for an id that

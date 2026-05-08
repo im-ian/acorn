@@ -56,7 +56,8 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   },
 ];
 
-export type SessionStartupMode = "agent" | "terminal" | "custom";
+export type { SessionStartupMode } from "./types";
+import type { SessionStartupMode } from "./types";
 
 export type TerminalFontWeight =
   | 100
@@ -526,9 +527,18 @@ function tokenizeCustom(raw: string): ResolvedCommand | null {
  *                the agent custom command when selected === "custom"
  * - `custom`   → sessionStartup.customCommand (separate from the agent
  *                custom command), falls back to terminal when blank
+ *
+ * `modeOverride` lets a per-session preference (persisted on `Session`)
+ * win over the global setting so changing `sessionStartup.mode` does not
+ * retroactively swap the startup of existing sessions on respawn. `null`
+ * or `undefined` means "no per-session preference" → use the global.
  */
-export function resolveStartupCommand(s: AcornSettings): ResolvedCommand {
-  if (s.sessionStartup.mode === "agent") {
+export function resolveStartupCommand(
+  s: AcornSettings,
+  modeOverride?: SessionStartupMode | null,
+): ResolvedCommand {
+  const mode = modeOverride ?? s.sessionStartup.mode;
+  if (mode === "agent") {
     if (s.agents.selected === "custom") {
       return (
         tokenizeCustom(s.agents.customCommand) ??
@@ -537,7 +547,7 @@ export function resolveStartupCommand(s: AcornSettings): ResolvedCommand {
     }
     return agentInteractiveCommand(s.agents.selected, s.agents);
   }
-  if (s.sessionStartup.mode === "custom") {
+  if (mode === "custom") {
     return tokenizeCustom(s.sessionStartup.customCommand) ?? {
       command: "",
       args: [],

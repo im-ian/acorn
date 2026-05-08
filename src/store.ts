@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
+import { useSettings } from "./lib/settings";
 import type { Project, Session } from "./lib/types";
 import {
   type Direction,
@@ -633,7 +634,11 @@ export const useAppStore = create<AppStateModel>()(
   async createSession(name, repoPath, isolated = false) {
     set({ loading: true, error: null });
     try {
-      await api.createSession(name, repoPath, isolated);
+      // Snapshot the current global startup mode onto the session so a
+      // later change to `sessionStartup.mode` does not retroactively swap
+      // how this session respawns after an app restart.
+      const startupMode = useSettings.getState().settings.sessionStartup.mode;
+      await api.createSession(name, repoPath, isolated, startupMode);
       await get().refreshAll();
       // Ensure the project of the new session is active so its tab shows up.
       set((s) => {
