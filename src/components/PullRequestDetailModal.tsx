@@ -507,14 +507,14 @@ function PrStateGlyph({
   isDraft: boolean;
 }) {
   const upper = state.toUpperCase();
-  if (isDraft) {
-    return <GitPullRequestDraft size={14} className="text-fg-muted" />;
-  }
   if (upper === "MERGED") {
     return <GitMerge size={14} className="text-purple-400" />;
   }
   if (upper === "CLOSED") {
     return <GitPullRequestClosed size={14} className="text-rose-400" />;
+  }
+  if (isDraft) {
+    return <GitPullRequestDraft size={14} className="text-fg-muted" />;
   }
   return <GitPullRequest size={14} className="text-emerald-400" />;
 }
