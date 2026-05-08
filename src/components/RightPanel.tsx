@@ -8,7 +8,6 @@ import {
   Globe,
   ListTodo,
   Maximize2,
-  RefreshCw,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup } from "react-resizable-panels";
@@ -33,6 +32,7 @@ import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
+import { RefreshButton } from "./ui";
 
 interface ExpandedDiff {
   payload: DiffPayload;
@@ -1003,18 +1003,12 @@ function PullRequestsTab({
             {opt.label}
           </button>
         ))}
-        <button
-          type="button"
+        <RefreshButton
           onClick={() => void fetchPrs()}
-          className="ml-auto rounded p-1 text-fg-muted transition hover:text-fg"
-          title="Refresh"
-          disabled={loading}
-        >
-          <RefreshCw
-            size={12}
-            className={cn(loading && "animate-spin")}
-          />
-        </button>
+          loading={loading}
+          size={12}
+          className="ml-auto"
+        />
       </div>
       <div className="flex-1 overflow-y-auto">
         {error ? (

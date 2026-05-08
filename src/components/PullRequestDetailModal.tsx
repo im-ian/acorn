@@ -12,7 +12,6 @@ import {
   MessagesSquare,
   Minus,
   Plus,
-  RefreshCw,
   X,
   XCircle,
 } from "lucide-react";
@@ -28,7 +27,7 @@ import type {
   PullRequestReview,
 } from "../lib/types";
 import { DiffSplitView } from "./DiffSplitView";
-import { Markdown, Modal, ModalHeader } from "./ui";
+import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
 
 type DetailTab = "conversation" | "checks" | "files";
 
@@ -233,19 +232,7 @@ function DetailBody({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={refreshing}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
-            title="Refresh"
-            aria-label="Refresh"
-          >
-            <RefreshCw
-              size={14}
-              className={cn(refreshing && "animate-spin")}
-            />
-          </button>
+          <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
           <button
             type="button"
             onClick={() => void openUrl(detail.url)}
