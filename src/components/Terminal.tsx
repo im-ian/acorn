@@ -466,6 +466,7 @@ export function Terminal({
     let exited = false;
 
     async function spawnPty() {
+      if (disposed) return;
       try {
         const startup = resolveStartupCommand(
           useSettings.getState().settings,
@@ -490,10 +491,12 @@ export function Terminal({
           } catch (e) {
             console.error("[Terminal] claude_session_exists failed", e);
           }
+          if (disposed) return;
           args = exists
             ? [...startup.args, "--resume", sessionId]
             : [...startup.args, "--session-id", sessionId];
         }
+        if (disposed) return;
         await invoke("pty_spawn", {
           sessionId,
           cwd,
@@ -501,6 +504,14 @@ export function Terminal({
           args,
           env: {},
         });
+        if (disposed) {
+          // Cleanup ran mid-spawn — the pty just got created has no UI.
+          // Issue a kill so we do not leak a child process.
+          invoke("pty_kill", { sessionId }).catch(() => {
+            // best effort
+          });
+          return;
+        }
         exited = false;
       } catch (err) {
         if (!disposed) {
@@ -511,6 +522,15 @@ export function Terminal({
       }
     }
 
+    // React StrictMode in dev runs effects twice (mount → cleanup → mount).
+    // Without per-await `disposed` guards, the first IIFE keeps progressing
+    // after its cleanup has run, and ends up issuing `pty_spawn` for a
+    // session whose UI (term, listeners) was already torn down. Combined
+    // with the second mount's IIFE issuing its own spawn, two real PTY
+    // children get forked for the same session id; the backend insert
+    // collision then orphans one PTY, which exits and triggers the second
+    // PTY to also exit (zsh prints "Saving session..." twice). Guard every
+    // await resumption point so a disposed mount short-circuits cleanly.
     (async () => {
       try {
         const unlistenOutput = await listen<PtyOutputPayload>(
@@ -525,6 +545,10 @@ export function Terminal({
             }
           },
         );
+        if (disposed) {
+          unlistenOutput();
+          return;
+        }
         unlistenFns.push(unlistenOutput);
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
@@ -534,6 +558,10 @@ export function Terminal({
             `\r\n${ANSI_DIM}[process exited — press Enter to restart]${ANSI_RESET}\r\n`,
           );
         });
+        if (disposed) {
+          unlistenExit();
+          return;
+        }
         unlistenFns.push(unlistenExit);
       } catch (err) {
         if (!disposed) {
@@ -541,7 +569,10 @@ export function Terminal({
             `\r\n${ANSI_RED}[acorn] Failed to attach pty listeners: ${formatError(err)}${ANSI_RESET}\r\n`,
           );
         }
+        return;
       }
+
+      if (disposed) return;
 
       // Intercept Enter while exited to respawn the same session in-place.
       const restartDisposable = term.onKey(({ domEvent }) => {
@@ -563,7 +594,8 @@ export function Terminal({
         const saved = await invoke<string | null>("scrollback_load", {
           sessionId,
         });
-        if (!disposed && saved && saved.length > 0) {
+        if (disposed) return;
+        if (saved && saved.length > 0) {
           term.write(saved);
           term.write(
             `\r\n${ANSI_DIM}— restored from previous session —${ANSI_RESET}\r\n`,
@@ -573,6 +605,7 @@ export function Terminal({
         console.warn("[Terminal] scrollback_load failed", err);
       }
 
+      if (disposed) return;
       await spawnPty();
     })();
 
