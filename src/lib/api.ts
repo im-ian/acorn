@@ -10,6 +10,7 @@ import type {
   PullRequestDetailListing,
   PullRequestListing,
   Session,
+  SessionStartupMode,
   SessionStatus,
   StagedFile,
   TodoItem,
@@ -23,8 +24,14 @@ export const api = {
     name: string,
     repoPath: string,
     isolated = false,
+    startupMode: SessionStartupMode | null = null,
   ): Promise<Session> {
-    return invoke<Session>("create_session", { name, repoPath, isolated });
+    return invoke<Session>("create_session", {
+      name,
+      repoPath,
+      isolated,
+      startupMode,
+    });
   },
   removeSession(id: string, removeWorktree = false): Promise<void> {
     return invoke<void>("remove_session", { id, removeWorktree });
