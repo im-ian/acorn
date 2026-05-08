@@ -1102,19 +1102,23 @@ function PullRequestsTab({
                       label={`${pr.head_branch} → ${pr.base_branch}`}
                       side="top"
                       multiline
+                      className="min-w-0"
                     >
-                      <span className="truncate font-mono">
-                        {pr.head_branch} → {pr.base_branch}
+                      <span className="flex min-w-0 items-center gap-1 font-mono">
+                        <span className="truncate">{pr.head_branch}</span>
+                        <span className="shrink-0">→</span>
+                        <span className="truncate">{pr.base_branch}</span>
                       </span>
                     </Tooltip>
                     <PrChecksBadge checks={pr.checks} />
                   </span>
-                  <span className="opacity-50">·</span>
+                  <span className="shrink-0 opacity-50">·</span>
                   <Tooltip
                     label={absoluteTime(toUnixSeconds(pr.updated_at))}
                     side="top"
+                    className="shrink-0"
                   >
-                    <span className="font-mono">
+                    <span className="whitespace-nowrap font-mono">
                       {relativeTime(toUnixSeconds(pr.updated_at))}
                     </span>
                   </Tooltip>
