@@ -158,6 +158,13 @@ function DetailBody({
 }) {
   const conversationCount = detail.comments.length + detail.reviews.length;
   const checkCounts = summarizeChecks(detail.checks);
+  const totalChecks = detail.checks.length;
+  const allChecksPassed =
+    totalChecks > 0 && checkCounts.passed === totalChecks;
+  const allChecksFailed =
+    totalChecks > 0 && checkCounts.failed === totalChecks;
+  const checksPartial =
+    totalChecks > 0 && !allChecksPassed && !allChecksFailed;
   const fileCount = detail.diff.files.length;
 
   return (
@@ -230,13 +237,17 @@ function DetailBody({
           onClick={() => onTab("conversation")}
         />
         <DetailTabButton
-          icon={<CheckCircle2 size={13} />}
-          label="Checks"
-          badge={
-            detail.checks.length > 0 ? (
-              <ChecksBadge counts={checkCounts} />
-            ) : null
+          icon={
+            allChecksPassed ? (
+              <CheckCircle2 size={13} className="text-emerald-400" />
+            ) : allChecksFailed ? (
+              <XCircle size={13} className="text-rose-400" />
+            ) : (
+              <CheckCircle2 size={13} />
+            )
           }
+          label="Checks"
+          badge={checksPartial ? `${checkCounts.passed}/${totalChecks}` : null}
           active={tab === "checks"}
           onClick={() => onTab("checks")}
         />
@@ -310,16 +321,14 @@ function DetailTabButton({
 interface CheckCounts {
   passed: number;
   failed: number;
-  pending: number;
 }
 
 function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
   let passed = 0;
   let failed = 0;
-  let pending = 0;
   for (const c of checks) {
     if (c.status.toUpperCase() !== "COMPLETED") {
-      pending += 1;
+      // Pending / queued / in-progress checks fall through into neither bucket.
       continue;
     }
     switch ((c.conclusion ?? "").toUpperCase()) {
@@ -336,24 +345,7 @@ function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
         break;
     }
   }
-  return { passed, failed, pending };
-}
-
-function ChecksBadge({ counts }: { counts: CheckCounts }) {
-  const { passed, failed, pending } = counts;
-  return (
-    <>
-      <span className="text-emerald-400">{passed}</span>
-      <span className="opacity-40">/</span>
-      <span className="text-rose-400">{failed}</span>
-      {pending > 0 ? (
-        <>
-          <span className="opacity-40">·</span>
-          <span className="text-fg-muted">{pending}</span>
-        </>
-      ) : null}
-    </>
-  );
+  return { passed, failed };
 }
 
 function PrStateGlyph({
