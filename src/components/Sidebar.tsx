@@ -206,6 +206,33 @@ export function Sidebar() {
     }
   }
 
+  const onNewSessionRef = useRef<
+    (isolated: boolean, repoOverride?: string) => Promise<void>
+  >(async () => {});
+  const onAddProjectRef = useRef<() => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    const newSession = () => {
+      const project = useAppStore.getState().activeProject;
+      void onNewSessionRef.current(false, project ?? undefined);
+    };
+    const newIsolated = () => {
+      const project = useAppStore.getState().activeProject;
+      void onNewSessionRef.current(true, project ?? undefined);
+    };
+    const addProj = () => {
+      void onAddProjectRef.current();
+    };
+    window.addEventListener("acorn:new-session", newSession);
+    window.addEventListener("acorn:new-isolated-session", newIsolated);
+    window.addEventListener("acorn:add-project", addProj);
+    return () => {
+      window.removeEventListener("acorn:new-session", newSession);
+      window.removeEventListener("acorn:new-isolated-session", newIsolated);
+      window.removeEventListener("acorn:add-project", addProj);
+    };
+  }, []);
+
   async function onNewSession(isolated: boolean, repoOverride?: string) {
     try {
       const repoPath =
@@ -230,6 +257,9 @@ export function Sidebar() {
       console.error("create session failed", e);
     }
   }
+
+  onNewSessionRef.current = onNewSession;
+  onAddProjectRef.current = onAddProject;
 
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
