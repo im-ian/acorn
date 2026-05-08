@@ -107,23 +107,25 @@ export function StatusBar() {
   return (
     <>
       <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
+        {/* Left: aggregate counters about acorn itself — total sessions and
+            the active session's lifecycle status. */}
         <span>sessions: {sessions.length}</span>
+        {active ? (
+          <>
+            <span className="text-fg-muted/50">|</span>
+            <span>status: {active.status}</span>
+          </>
+        ) : null}
+
+        {/* Right: per-active-session context — gh account, branch, working
+            directory, memory. Grouped together so the eye scans them as
+            "where am I right now?". */}
         <span className="ml-auto flex min-w-0 items-center gap-3">
           {loading ? <span>working...</span> : null}
           {error ? (
             <Tooltip label={error} side="top" multiline>
               <span className="truncate text-danger">error: {error}</span>
             </Tooltip>
-          ) : null}
-          {active ? (
-            <>
-              <span>branch: {active.branch}</span>
-              <span className="text-fg-muted/50">|</span>
-              <span>status: {active.status}</span>
-              {prAccount || displayPath ? (
-                <span className="text-fg-muted/50">|</span>
-              ) : null}
-            </>
           ) : null}
           {prAccount ? (
             <Tooltip label={`PRs listed via gh account ${prAccount}`} side="top">
@@ -133,12 +135,21 @@ export function StatusBar() {
               </span>
             </Tooltip>
           ) : null}
+          {active ? (
+            <>
+              <span className="text-fg-muted/50">|</span>
+              <span>branch: {active.branch}</span>
+            </>
+          ) : null}
           {active && displayPath ? (
-            <Tooltip label={active.worktree_path} side="top" multiline>
-              <span className="truncate text-right text-fg-muted">
-                {displayPath}
-              </span>
-            </Tooltip>
+            <>
+              <span className="text-fg-muted/50">|</span>
+              <Tooltip label={active.worktree_path} side="top" multiline>
+                <span className="truncate text-right text-fg-muted">
+                  {displayPath}
+                </span>
+              </Tooltip>
+            </>
           ) : null}
           <span className="text-fg-muted/50">|</span>
           <Tooltip label="Click to view per-process breakdown" side="top">
@@ -148,7 +159,7 @@ export function StatusBar() {
               onClick={() => setBreakdownOpen(true)}
               className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
             >
-              mem: {memory ? formatBytes(memory.bytes) : "–"}
+              memory: {memory ? formatBytes(memory.bytes) : "–"}
             </button>
           </Tooltip>
         </span>
