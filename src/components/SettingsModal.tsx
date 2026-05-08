@@ -2,6 +2,7 @@ import { Settings as SettingsIcon } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import { sendTestNotification } from "../lib/notifications";
 import {
   AGENT_OPTIONS,
   type SelectedAgent,
@@ -280,6 +281,37 @@ function NotificationSettings() {
   const settings = useSettings((s) => s.settings);
   const patchNotifications = useSettings((s) => s.patchNotifications);
   const enabled = settings.notifications.enabled;
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<
+    | { tone: "success" | "warning" | "danger"; text: string }
+    | null
+  >(null);
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await sendTestNotification();
+      if (result === "sent") {
+        setTestResult({
+          tone: "success",
+          text: "Sent. Check your notification center if it didn't appear.",
+        });
+      } else if (result === "denied") {
+        setTestResult({
+          tone: "warning",
+          text: "Permission denied. Allow Acorn under System Settings → Notifications.",
+        });
+      } else {
+        setTestResult({
+          tone: "danger",
+          text: "Failed to send. See the console for details.",
+        });
+      }
+    } finally {
+      setTesting(false);
+    }
+  }
 
   return (
     <section className="space-y-4">
@@ -326,6 +358,36 @@ function NotificationSettings() {
               patchNotifications({ events: { completed: v } })
             }
           />
+        </div>
+      </Field>
+      <Field
+        label="Test"
+        hint="Verifies the OS permission and that a notification can actually appear, independent of the Enable / Trigger settings above."
+      >
+        <div className="flex flex-col items-start gap-2">
+          <button
+            type="button"
+            onClick={() => void handleTest()}
+            disabled={testing}
+            className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-fg transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {testing ? "Sending…" : "Send test notification"}
+          </button>
+          {testResult ? (
+            <p
+              className={cn(
+                "rounded-md border px-3 py-1.5 text-[11px]",
+                testResult.tone === "success" &&
+                  "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                testResult.tone === "warning" &&
+                  "border-warning/40 bg-warning/10 text-warning",
+                testResult.tone === "danger" &&
+                  "border-danger/40 bg-danger/10 text-danger",
+              )}
+            >
+              {testResult.text}
+            </p>
+          ) : null}
         </div>
       </Field>
       <p className="text-[11px] text-fg-muted">
