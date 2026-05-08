@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{github_owner_repo, DiffPayload};
 
@@ -172,8 +173,7 @@ impl CachedResolution {
 /// no network — so we never store secrets in this cache.
 fn resolution_cache() -> &'static Mutex<HashMap<PathBuf, CachedResolution>> {
     use std::sync::OnceLock;
-    static CELL: OnceLock<Mutex<HashMap<PathBuf, CachedResolution>>> =
-        OnceLock::new();
+    static CELL: OnceLock<Mutex<HashMap<PathBuf, CachedResolution>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -240,11 +240,7 @@ enum AccountOutcome<T> {
 /// Run `op` with the right gh token for `slug`. Tries the cached login
 /// first; on failure (or cache miss / stale login) falls through to a
 /// fresh resolution and stores the picked login on success.
-fn try_with_account<T, F>(
-    repo_path: &Path,
-    slug: &str,
-    op: F,
-) -> AppResult<AccountOutcome<T>>
+fn try_with_account<T, F>(repo_path: &Path, slug: &str, op: F) -> AppResult<AccountOutcome<T>>
 where
     F: Fn(&str) -> AppResult<T>,
 {
@@ -289,27 +285,28 @@ fn run_pr_list(
     limit: u32,
 ) -> AppResult<Vec<PullRequestInfo>> {
     let limit = limit.clamp(1, 200);
-    let output = Command::new("gh")
-        .env("GH_TOKEN", token)
-        // gh treats GH_HOST + GH_TOKEN as an "external" auth source and skips
-        // its own keyring lookup, so this isolates the run to the picked
-        // identity even when a different `gh auth status` account is active.
-        .env("GH_HOST", GH_HOST)
-        .args([
-            "pr",
-            "list",
-            "--repo",
-            slug,
-            "--state",
-            state.as_gh_arg(),
-            "--limit",
-            &limit.to_string(),
-            "--json",
-            "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
-             isDraft,statusCheckRollup",
-        ])
-        .output()
-        .map_err(map_gh_spawn_error)?;
+    let limit_s = limit.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            // gh treats GH_HOST + GH_TOKEN as an "external" auth source and
+            // skips its own keyring lookup, so this isolates the run to the
+            // picked identity even when a different `gh auth status` account
+            // is active.
+            .env("GH_HOST", GH_HOST)
+            .args([
+                "pr",
+                "list",
+                "--repo",
+                slug,
+                "--state",
+                state.as_gh_arg(),
+                "--limit",
+                &limit_s,
+                "--json",
+                "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
+                 isDraft,statusCheckRollup",
+            ]);
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -467,10 +464,7 @@ fn resolve_account_for_repo(repo_path: &Path, slug: &str) -> AppResult<AccountRe
     Ok(AccountResolution { candidates, picked })
 }
 
-fn pick_from_multiple(
-    repo_path: &Path,
-    accessible: &[(String, String)],
-) -> PickedAccount {
+fn pick_from_multiple(repo_path: &Path, accessible: &[(String, String)]) -> PickedAccount {
     // 1. Prefer an account whose primary email matches the repo's
     //    git user.email. Best-effort; either side may be missing.
     if let Some(repo_email) = git_user_email(repo_path) {
@@ -489,9 +483,7 @@ fn pick_from_multiple(
     // 2. Fall back to whatever account `gh` currently considers active —
     //    matches the user's existing mental model.
     if let Some(active) = gh_active_token() {
-        if let Some((login, token)) =
-            accessible.iter().find(|(_, t)| t == &active)
-        {
+        if let Some((login, token)) = accessible.iter().find(|(_, t)| t == &active) {
             return PickedAccount {
                 login: login.clone(),
                 token: token.clone(),
@@ -506,26 +498,14 @@ fn pick_from_multiple(
     }
 }
 
-fn map_gh_spawn_error(e: std::io::Error) -> AppError {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        AppError::Other(
-            "`gh` CLI not found. Install it from https://cli.github.com and run `gh auth login`."
-                .to_string(),
-        )
-    } else {
-        AppError::Other(format!("failed to invoke gh: {e}"))
-    }
-}
-
 /// Parse `gh auth status --hostname <host>` output and pull out logins.
 /// gh writes the human-readable status block to *stderr*, so we read both
 /// streams. Lines look like:
 ///   "  ✓ Logged in to github.com account jtf-ian (keyring)"
 fn enumerate_logins(host: &str) -> AppResult<Vec<String>> {
-    let out = Command::new("gh")
-        .args(["auth", "status", "--hostname", host])
-        .output()
-        .map_err(map_gh_spawn_error)?;
+    let out = cli_resolver::run("gh", |cmd| {
+        cmd.args(["auth", "status", "--hostname", host]);
+    })?;
     // Unauthenticated returns non-zero — empty list, not an error, so the
     // caller can produce a single canonical "not authenticated" message.
     let combined = format!(
@@ -537,12 +517,11 @@ fn enumerate_logins(host: &str) -> AppResult<Vec<String>> {
     let needle = " account ";
     let mut logins: Vec<String> = Vec::new();
     for line in combined.lines() {
-        let Some(idx) = line.find(needle) else { continue };
+        let Some(idx) = line.find(needle) else {
+            continue;
+        };
         let after = &line[idx + needle.len()..];
-        let login: String = after
-            .chars()
-            .take_while(|c| !c.is_whitespace())
-            .collect();
+        let login: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
         if !login.is_empty() && !logins.iter().any(|l| l == &login) {
             logins.push(login);
         }
@@ -551,10 +530,10 @@ fn enumerate_logins(host: &str) -> AppResult<Vec<String>> {
 }
 
 fn gh_token_for(login: &str) -> Option<String> {
-    let out = Command::new("gh")
-        .args(["auth", "token", "--user", login])
-        .output()
-        .ok()?;
+    let out = cli_resolver::run("gh", |cmd| {
+        cmd.args(["auth", "token", "--user", login]);
+    })
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -567,7 +546,10 @@ fn gh_token_for(login: &str) -> Option<String> {
 }
 
 fn gh_active_token() -> Option<String> {
-    let out = Command::new("gh").args(["auth", "token"]).output().ok()?;
+    let out = cli_resolver::run("gh", |cmd| {
+        cmd.args(["auth", "token"]);
+    })
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -583,11 +565,11 @@ fn gh_active_token() -> Option<String> {
 /// non-zero on 403/404, success on 200 — exactly the signal we need.
 fn account_can_access(slug: &str, token: &str) -> bool {
     let endpoint = format!("repos/{slug}");
-    let out = Command::new("gh")
-        .env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args(["api", &endpoint, "--silent"])
-        .output();
+    let out = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["api", &endpoint, "--silent"]);
+    });
     match out {
         Ok(o) => o.status.success(),
         Err(_) => false,
@@ -595,12 +577,12 @@ fn account_can_access(slug: &str, token: &str) -> bool {
 }
 
 fn primary_email_for(token: &str) -> Option<String> {
-    let out = Command::new("gh")
-        .env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args(["api", "user", "--jq", ".email"])
-        .output()
-        .ok()?;
+    let out = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["api", "user", "--jq", ".email"]);
+    })
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -732,11 +714,7 @@ pub fn get_pull_request_detail(
     }
 }
 
-fn build_detail(
-    number: u64,
-    view: GhPullRequestView,
-    diff_text: String,
-) -> PullRequestDetail {
+fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> PullRequestDetail {
     let comments = view
         .comments
         .unwrap_or_default()
@@ -814,22 +792,20 @@ fn build_detail(
 }
 
 fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestView> {
-    let output = Command::new("gh")
-        .env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args([
+    let number_s = number.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
             "pr",
             "view",
-            &number.to_string(),
+            &number_s,
             "--repo",
             slug,
             "--json",
             "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
-             createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
-             mergeable,comments,reviews,statusCheckRollup",
-        ])
-        .output()
-        .map_err(map_gh_spawn_error)?;
+                 createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
+                 mergeable,comments,reviews,statusCheckRollup",
+        ]);
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -846,18 +822,12 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
 }
 
 fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
-    let output = Command::new("gh")
-        .env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args([
-            "pr",
-            "diff",
-            &number.to_string(),
-            "--repo",
-            slug,
-        ])
-        .output()
-        .map_err(map_gh_spawn_error)?;
+    let number_s = number.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["pr", "diff", &number_s, "--repo", slug]);
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1013,9 +983,7 @@ pub fn close_pull_request(repo_path: &Path, number: u64) -> AppResult<()> {
         ));
     };
 
-    match try_with_account(repo_path, &slug, |token| {
-        run_pr_close(&slug, number, token)
-    })? {
+    match try_with_account(repo_path, &slug, |token| run_pr_close(&slug, number, token))? {
         AccountOutcome::Ok { value, .. } => Ok(value),
         AccountOutcome::NoAccess { .. } => Err(AppError::Other(
             "No logged-in gh account can close this PR.".to_string(),
@@ -1034,17 +1002,20 @@ fn run_pr_merge(
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut cmd = Command::new("gh");
-    cmd.env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args([
-            "pr",
-            "merge",
-            &number.to_string(),
-            "--repo",
-            slug,
-            method.flag(),
-        ]);
+    // stdin-piped invocation can't go through `cli_resolver::run` (which is
+    // shaped for `output()`-style calls), so resolve the path manually and
+    // build the Command ourselves. NotFound during spawn invalidates the
+    // cache so the next attempt re-resolves.
+    let gh_path = cli_resolver::resolve("gh")?;
+    let mut cmd = Command::new(&gh_path);
+    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+        "pr",
+        "merge",
+        &number.to_string(),
+        "--repo",
+        slug,
+        method.flag(),
+    ]);
 
     if method.accepts_message_override() {
         if let Some(title) = commit_title {
@@ -1068,7 +1039,12 @@ fn run_pr_merge(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(map_gh_spawn_error)?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                cli_resolver::invalidate("gh");
+            }
+            cli_resolver::spawn_error("gh", e)
+        })?;
     if let Some(stdin) = child.stdin.as_mut() {
         let _ = stdin.write_all(b"y\n");
     }
@@ -1088,18 +1064,12 @@ fn run_pr_merge(
 }
 
 fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
-    let output = Command::new("gh")
-        .env("GH_TOKEN", token)
-        .env("GH_HOST", GH_HOST)
-        .args([
-            "pr",
-            "close",
-            &number.to_string(),
-            "--repo",
-            slug,
-        ])
-        .output()
-        .map_err(map_gh_spawn_error)?;
+    let number_s = number.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["pr", "close", &number_s, "--repo", slug]);
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -1213,11 +1183,7 @@ fn build_commit_message_prompt(
 fn parse_commit_message_response(raw: &str) -> GeneratedCommitMessage {
     let trimmed = raw.trim_matches(|c: char| c.is_whitespace() || c == '`');
     let mut lines = trimmed.lines();
-    let title = lines
-        .next()
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string();
+    let title = lines.next().map(str::trim).unwrap_or("").to_string();
     let remaining: String = lines.collect::<Vec<_>>().join("\n");
     let body = remaining.trim_start_matches('\n').trim().to_string();
     GeneratedCommitMessage { title, body }
@@ -1227,11 +1193,20 @@ fn parse_commit_message_response(raw: &str) -> GeneratedCommitMessage {
 /// `args`, the prompt is piped in via stdin, and stdout is returned. We
 /// surface a typed error when the binary is missing so the frontend can
 /// point the user at install instructions for the configured provider.
+///
+/// Routes through `cli_resolver` so user-installed AI CLIs (claude, gemini,
+/// ollama, llm, …) resolve correctly even under the sanitized PATH that
+/// macOS hands GUI-launched apps.
 fn run_ai_oneshot(command: &str, args: &[String], prompt: &str) -> AppResult<String> {
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = Command::new(command)
+    let resolved = cli_resolver::resolve(command).map_err(|_| {
+        AppError::Other(format!(
+            "`{command}` not found. Install the configured AI CLI or change the provider in Settings → Commit message AI."
+        ))
+    })?;
+    let mut child = Command::new(&resolved)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1239,6 +1214,7 @@ fn run_ai_oneshot(command: &str, args: &[String], prompt: &str) -> AppResult<Str
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
+                cli_resolver::invalidate(command);
                 AppError::Other(format!(
                     "`{command}` not found. Install the configured AI CLI or change the provider in Settings → Commit message AI."
                 ))
