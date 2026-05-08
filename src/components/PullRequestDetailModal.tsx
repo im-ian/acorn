@@ -159,13 +159,18 @@ function DetailBody({
 }) {
   const conversationCount = detail.comments.length + detail.reviews.length;
   const checkCounts = summarizeChecks(detail.checks);
-  const totalChecks = detail.checks.length;
+  // Effective total ignores NEUTRAL / SKIPPED / CANCELLED — they carry no
+  // pass/fail signal and shouldn't push a green PR into the "partial" bucket
+  // just because some optional job was skipped.
+  const effectiveChecks =
+    checkCounts.passed + checkCounts.failed + checkCounts.pending;
   const allChecksPassed =
-    totalChecks > 0 && checkCounts.passed === totalChecks;
+    effectiveChecks > 0 && checkCounts.passed === effectiveChecks;
   const allChecksFailed =
-    totalChecks > 0 && checkCounts.failed === totalChecks;
+    effectiveChecks > 0 && checkCounts.failed === effectiveChecks;
   const checksPartial =
-    totalChecks > 0 && !allChecksPassed && !allChecksFailed;
+    effectiveChecks > 0 && !allChecksPassed && !allChecksFailed;
+  const totalChecks = effectiveChecks;
   const fileCount = detail.diff.files.length;
 
   return (
@@ -322,14 +327,16 @@ function DetailTabButton({
 interface CheckCounts {
   passed: number;
   failed: number;
+  pending: number;
 }
 
 function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
   let passed = 0;
   let failed = 0;
+  let pending = 0;
   for (const c of checks) {
     if (c.status.toUpperCase() !== "COMPLETED") {
-      // Pending / queued / in-progress checks fall through into neither bucket.
+      pending += 1;
       continue;
     }
     switch ((c.conclusion ?? "").toUpperCase()) {
@@ -342,11 +349,12 @@ function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
         failed += 1;
         break;
       default:
-        // NEUTRAL, SKIPPED, CANCELLED — do not count toward pass or fail.
+        // NEUTRAL, SKIPPED, CANCELLED carry no signal — excluded from
+        // the effective total used by the badge.
         break;
     }
   }
-  return { passed, failed };
+  return { passed, failed, pending };
 }
 
 function PrStateGlyph({
