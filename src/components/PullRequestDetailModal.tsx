@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -321,9 +321,9 @@ function DetailBody({
       </header>
 
       {detail.body.trim().length > 0 ? (
-        <div className="acorn-selectable max-h-48 shrink-0 overflow-y-auto border-b border-border bg-bg-sidebar/40 px-4 py-3">
+        <ResizableBody>
           <Markdown content={detail.body} />
-        </div>
+        </ResizableBody>
       ) : null}
 
       <nav className="flex shrink-0 border-b border-border">
@@ -496,6 +496,88 @@ function MergeActionButton({
     >
       Merge
     </button>
+  );
+}
+
+const BODY_HEIGHT_STORAGE_KEY = "acorn:pr-detail-body-height";
+const BODY_HEIGHT_DEFAULT = 192;
+const BODY_HEIGHT_MIN = 64;
+const BODY_HEIGHT_MAX = 600;
+
+function readStoredBodyHeight(): number {
+  if (typeof window === "undefined") return BODY_HEIGHT_DEFAULT;
+  try {
+    const raw = window.localStorage.getItem(BODY_HEIGHT_STORAGE_KEY);
+    if (!raw) return BODY_HEIGHT_DEFAULT;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return BODY_HEIGHT_DEFAULT;
+    return Math.min(BODY_HEIGHT_MAX, Math.max(BODY_HEIGHT_MIN, n));
+  } catch {
+    return BODY_HEIGHT_DEFAULT;
+  }
+}
+
+function ResizableBody({ children }: { children: React.ReactNode }) {
+  const [height, setHeight] = useState<number>(() => readStoredBodyHeight());
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BODY_HEIGHT_STORAGE_KEY, String(height));
+    } catch {
+      // ignore — non-persistent height is fine
+    }
+  }, [height]);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      dragRef.current = { startY: e.clientY, startH: height };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [height],
+  );
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const next = Math.min(
+      BODY_HEIGHT_MAX,
+      Math.max(BODY_HEIGHT_MIN, drag.startH + (e.clientY - drag.startY)),
+    );
+    setHeight(next);
+  }, []);
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
+  return (
+    <>
+      <div
+        className="acorn-selectable shrink-0 overflow-y-auto border-b border-border bg-bg-sidebar/40 px-4 py-3"
+        style={{ height }}
+      >
+        {children}
+      </div>
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize PR body"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={() => setHeight(BODY_HEIGHT_DEFAULT)}
+        title="Drag to resize · double-click to reset"
+        className="group relative flex h-1.5 shrink-0 cursor-row-resize items-center justify-center border-b border-border bg-bg-sidebar/40 transition hover:bg-accent/30"
+      >
+        <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
+      </div>
+    </>
   );
 }
 
