@@ -102,6 +102,19 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&cwd);
+        // Suppress macOS zsh's per-session restore (`/etc/zshrc_Apple_Terminal`).
+        // When acorn is launched from Terminal.app the child PTY inherits
+        // `TERM_PROGRAM=Apple_Terminal` and zsh treats every fresh PTY as a
+        // resumable Terminal.app session, printing "Restored session: ..."
+        // / "Saving session...completed." and writing per-session files into
+        // `~/.zsh_sessions/`. acorn manages its own session lifecycle and
+        // does not want zsh layering its own on top. `~/.zsh_history`
+        // (HISTFILE) is unaffected — only the dirstack/last-commands
+        // restore feature is disabled.
+        //
+        // Set this *before* applying the user-provided env so a user can
+        // still opt back in by passing `SHELL_SESSIONS_DISABLE=0`.
+        cmd.env("SHELL_SESSIONS_DISABLE", "1");
         for (k, v) in env {
             cmd.env(k, v);
         }
