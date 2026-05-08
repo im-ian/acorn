@@ -18,9 +18,11 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { CommandPalette } from "./components/CommandPalette";
 import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { Hotkeys, useHotkeys } from "./lib/hotkeys";
 import { startSessionNotificationWatcher } from "./lib/notifications";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
+import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
 import { useAppStore } from "./store";
 
@@ -68,6 +70,20 @@ function App() {
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  // Auto-update: check once on startup, then every 24h. Both calls are
+  // best-effort and non-blocking — surfaced via the App-level
+  // `<UpdateBanner />`. Manual recheck stays available in Settings.
+  useEffect(() => {
+    const updater = useUpdater.getState();
+    void updater.init();
+    void updater.check();
+    const interval = window.setInterval(
+      () => void useUpdater.getState().check(),
+      24 * 60 * 60 * 1000,
+    );
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     return startSessionNotificationWatcher();
@@ -302,6 +318,7 @@ function App() {
 
   return (
     <div className="flex h-screen w-screen flex-col bg-bg text-fg">
+      <UpdateBanner />
       <div className="flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
