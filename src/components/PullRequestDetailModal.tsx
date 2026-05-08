@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  Check,
   CheckCircle2,
   Circle,
   Clock,
@@ -237,17 +238,17 @@ function DetailBody({
           onClick={() => onTab("conversation")}
         />
         <DetailTabButton
-          icon={
-            allChecksPassed ? (
-              <CheckCircle2 size={13} className="text-emerald-400" />
-            ) : allChecksFailed ? (
-              <XCircle size={13} className="text-rose-400" />
-            ) : (
-              <CheckCircle2 size={13} />
-            )
-          }
+          icon={<CheckCircle2 size={13} />}
           label="Checks"
-          badge={checksPartial ? `${checkCounts.passed}/${totalChecks}` : null}
+          badge={
+            allChecksPassed ? (
+              <Check size={11} strokeWidth={3} className="text-emerald-400" />
+            ) : allChecksFailed ? (
+              <X size={11} strokeWidth={3} className="text-rose-400" />
+            ) : checksPartial ? (
+              `${checkCounts.passed}/${totalChecks}`
+            ) : null
+          }
           active={tab === "checks"}
           onClick={() => onTab("checks")}
         />
