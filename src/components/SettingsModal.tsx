@@ -56,7 +56,7 @@ export function SettingsModal() {
         variant="dialog"
         onClose={() => setOpen(false)}
       />
-      <div className="flex min-h-[20rem]">
+      <div className="flex h-[28rem]">
         <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
           {TABS.map((t) => (
             <button
