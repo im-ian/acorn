@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { MemoryProcess } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
+import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader } from "./ui";
 
 interface MemoryBreakdownModalProps {
@@ -143,11 +144,13 @@ export function MemoryBreakdownModal({
               <th className="px-4 py-2 text-left font-medium">PID</th>
               <th className="px-4 py-2 text-left font-medium">Process tree</th>
               <th className="px-4 py-2 text-right font-medium">RSS</th>
-              <th
-                className="px-4 py-2 text-right font-medium"
-                title="Sum of this process and all descendants"
-              >
-                Subtree
+              <th className="px-4 py-2 text-right font-medium">
+                <Tooltip
+                  label="Sum of this process and all descendants"
+                  side="bottom"
+                >
+                  <span>Subtree</span>
+                </Tooltip>
               </th>
               <th className="px-4 py-2 text-right font-medium">Share</th>
             </tr>
@@ -166,16 +169,19 @@ export function MemoryBreakdownModal({
                     <span className="whitespace-pre text-fg-muted/60">
                       {prefix}
                     </span>
-                    <span title={process.command_line || undefined}>
-                      {process.name}
-                    </span>
                     {process.command_line ? (
-                      <span
-                        className="ml-2 truncate text-fg-muted/60"
-                        title={process.command_line}
-                      >
-                        {truncateMiddle(process.command_line, 80)}
-                      </span>
+                      <Tooltip label={process.command_line} side="top" multiline>
+                        <span>{process.name}</span>
+                      </Tooltip>
+                    ) : (
+                      <span>{process.name}</span>
+                    )}
+                    {process.command_line ? (
+                      <Tooltip label={process.command_line} side="top" multiline>
+                        <span className="ml-2 truncate text-fg-muted/60">
+                          {truncateMiddle(process.command_line, 80)}
+                        </span>
+                      </Tooltip>
                     ) : null}
                   </td>
                   <td className="px-4 py-1.5 text-right text-fg">

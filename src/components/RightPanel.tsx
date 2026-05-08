@@ -35,6 +35,7 @@ import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
+import { Tooltip } from "./Tooltip";
 import { RefreshButton } from "./ui";
 
 interface ExpandedDiff {
@@ -630,27 +631,34 @@ function CommitsTab({
                         ? "bg-bg-elevated"
                         : "hover:bg-bg-elevated/50",
                     )}
-                    title={absoluteTime(c.timestamp)}
                     style={{ height: COMMIT_ROW_HEIGHT }}
                   >
                     <span className="flex w-full min-w-0 items-center gap-2">
-                      <span
-                        className={cn(
-                          "shrink-0 font-mono",
-                          c.pushed ? "text-accent" : "text-fg-muted",
-                        )}
-                        title={c.pushed ? "Pushed" : "Not pushed"}
+                      <Tooltip
+                        label={c.pushed ? "Pushed" : "Not pushed"}
+                        side="top"
                       >
-                        {c.short_sha}
-                      </span>
-                      <span className="truncate text-fg">{c.summary}</span>
+                        <span
+                          className={cn(
+                            "shrink-0 font-mono",
+                            c.pushed ? "text-accent" : "text-fg-muted",
+                          )}
+                        >
+                          {c.short_sha}
+                        </span>
+                      </Tooltip>
+                      <Tooltip label={c.summary} side="top" multiline>
+                        <span className="truncate text-fg">{c.summary}</span>
+                      </Tooltip>
                     </span>
                     <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
                       <span className="truncate">{c.author}</span>
                       <span className="opacity-50">·</span>
-                      <span className="font-mono">
-                        {relativeTime(c.timestamp)}
-                      </span>
+                      <Tooltip label={absoluteTime(c.timestamp)} side="top">
+                        <span className="font-mono">
+                          {relativeTime(c.timestamp)}
+                        </span>
+                      </Tooltip>
                     </span>
                   </button>
                 )}
@@ -1067,26 +1075,40 @@ function PullRequestsTab({
                   }
                 }}
                 className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50 focus-visible:outline-none focus-visible:bg-bg-elevated/60"
-                title={`${absoluteTime(toUnixSeconds(pr.updated_at))} · double-click to open`}
               >
                 <span className="flex w-full min-w-0 items-center gap-2">
                   <span className="shrink-0 font-mono text-fg-muted">
                     #{pr.number}
                   </span>
                   <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
-                  <PrChecksBadge checks={pr.checks} />
-                  <span className="truncate text-fg">{pr.title}</span>
+                  <Tooltip label={pr.title} side="top" multiline>
+                    <span className="truncate text-fg">{pr.title}</span>
+                  </Tooltip>
                 </span>
                 <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
                   <span className="truncate">{pr.author}</span>
                   <span className="opacity-50">·</span>
-                  <span className="truncate font-mono">
-                    {pr.head_branch} → {pr.base_branch}
+                  <span className="flex min-w-0 items-center gap-1">
+                    <Tooltip
+                      label={`${pr.head_branch} → ${pr.base_branch}`}
+                      side="top"
+                      multiline
+                    >
+                      <span className="truncate font-mono">
+                        {pr.head_branch} → {pr.base_branch}
+                      </span>
+                    </Tooltip>
+                    <PrChecksBadge checks={pr.checks} />
                   </span>
                   <span className="opacity-50">·</span>
-                  <span className="font-mono">
-                    {relativeTime(toUnixSeconds(pr.updated_at))}
-                  </span>
+                  <Tooltip
+                    label={absoluteTime(toUnixSeconds(pr.updated_at))}
+                    side="top"
+                  >
+                    <span className="font-mono">
+                      {relativeTime(toUnixSeconds(pr.updated_at))}
+                    </span>
+                  </Tooltip>
                 </span>
               </li>
             ))}
@@ -1183,32 +1205,38 @@ function PrChecksBadge({
 
   if (allPassed) {
     return (
-      <span
-        className="flex shrink-0 items-center justify-center rounded-full bg-emerald-500/20 px-1 py-0.5 text-emerald-300"
-        title={`All ${effective} check${effective === 1 ? "" : "s"} passed`}
+      <Tooltip
+        label={`All ${effective} check${effective === 1 ? "" : "s"} passed`}
+        side="top"
       >
-        <Check size={10} strokeWidth={3} />
-      </span>
+        <Check
+          size={10}
+          strokeWidth={3}
+          className="shrink-0 text-emerald-400"
+        />
+      </Tooltip>
     );
   }
   if (allFailed) {
     return (
-      <span
-        className="flex shrink-0 items-center justify-center rounded-full bg-rose-500/20 px-1 py-0.5 text-rose-300"
-        title={`All ${effective} check${effective === 1 ? "" : "s"} failed`}
+      <Tooltip
+        label={`All ${effective} check${effective === 1 ? "" : "s"} failed`}
+        side="top"
       >
-        <X size={10} strokeWidth={3} />
-      </span>
+        <X size={10} strokeWidth={3} className="shrink-0 text-rose-400" />
+      </Tooltip>
     );
   }
-  // Partial: show passed/total in a muted pill, matching the modal tab style.
+  // Partial: tiny inline `passed/total` next to the branch name, no pill.
   return (
-    <span
-      className="shrink-0 rounded-full bg-fg-muted/15 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-fg-muted"
-      title={`${checks.passed} passed, ${checks.failed} failed, ${checks.pending} pending`}
+    <Tooltip
+      label={`${checks.passed} passed, ${checks.failed} failed, ${checks.pending} pending`}
+      side="top"
     >
-      {checks.passed}/{effective}
-    </span>
+      <span className="shrink-0 font-mono tabular-nums opacity-80">
+        {checks.passed}/{effective}
+      </span>
+    </Tooltip>
   );
 }
 
