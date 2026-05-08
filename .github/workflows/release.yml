@@ -1,0 +1,224 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.2.0). Must already exist on the branch you ran this from."
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: Build & sign macOS bundles
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install JS deps
+        run: bun install --frozen-lockfile
+
+      - name: Build & sign tauri bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun run tauri build --target ${{ matrix.target }} --bundles app dmg updater
+
+      - name: Stage release artifacts
+        id: stage
+        run: |
+          set -euo pipefail
+          out=staged
+          mkdir -p "$out"
+          target="${{ matrix.target }}"
+          bundle_dir="src-tauri/target/${target}/release/bundle"
+          # Copy DMG, updater tarball, and the updater signature side-file.
+          # The signature is what tauri's updater plugin verifies against
+          # `latest.json`'s `signature` field — it must travel with the
+          # tarball as a release asset.
+          find "${bundle_dir}/dmg" -name "*.dmg" -maxdepth 2 -print0 \
+            | xargs -0 -I{} cp -v {} "$out/"
+          find "${bundle_dir}/macos" -name "*.app.tar.gz" -maxdepth 2 -print0 \
+            | xargs -0 -I{} cp -v {} "$out/"
+          find "${bundle_dir}/macos" -name "*.app.tar.gz.sig" -maxdepth 2 -print0 \
+            | xargs -0 -I{} cp -v {} "$out/"
+          ls -la "$out/"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.target }}
+          path: ${{ steps.stage.outputs.dir }}/**
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release + latest.json
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          pattern: bundles-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la bundles/
+
+      - name: Resolve tag + version
+        id: meta
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Generate the same auto-notes GitHub would compose from the
+          # tag, ahead of release creation, so they can be embedded into
+          # `latest.json` AND used as the release body. Falls back to a
+          # short "See release page" sentence if the API call fails
+          # (e.g. on the very first tag, before previous_tag_name has
+          # something to diff against).
+          if notes=$(gh api -X POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${REPO}/releases/generate-notes" \
+              -f "tag_name=${TAG}" \
+              --jq .body 2>/dev/null); then
+            :
+          else
+            notes="See https://github.com/${REPO}/releases/tag/${TAG}"
+          fi
+          # Persist to a file rather than $GITHUB_OUTPUT so newlines and
+          # markdown survive cleanly through later jq / action-gh-release
+          # consumers.
+          printf '%s' "$notes" > release_notes.md
+          echo "Notes preview (first 400 chars):"
+          head -c 400 release_notes.md || true
+          echo
+
+      - name: Generate latest.json manifest
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Build the per-platform manifest the Tauri updater plugin
+          # consumes. Each platform entry needs:
+          #   - signature: contents of the .app.tar.gz.sig file
+          #   - url:       direct download URL for the .app.tar.gz on
+          #                this release
+          # The download URLs use `releases/download/<tag>/<asset>` so
+          # they are stable per release; the endpoint configured in
+          # tauri.conf.json points at `releases/latest/download/latest.json`
+          # which always resolves to the newest tag.
+
+          arm_tar=$(ls bundles/*.app.tar.gz | grep -E 'aarch64' | head -n1 || true)
+          arm_sig=$(ls bundles/*.app.tar.gz.sig | grep -E 'aarch64' | head -n1 || true)
+          x64_tar=$(ls bundles/*.app.tar.gz | grep -E 'x64|x86_64' | head -n1 || true)
+          x64_sig=$(ls bundles/*.app.tar.gz.sig | grep -E 'x64|x86_64' | head -n1 || true)
+
+          # If the bundle filenames don't carry the arch hint (older
+          # tauri builds put both into a single name), fall back to the
+          # only available file for both arches.
+          if [[ -z "$arm_tar" || -z "$x64_tar" ]]; then
+            single_tar=$(ls bundles/*.app.tar.gz | head -n1)
+            single_sig=$(ls bundles/*.app.tar.gz.sig | head -n1)
+            arm_tar="${arm_tar:-$single_tar}"
+            arm_sig="${arm_sig:-$single_sig}"
+            x64_tar="${x64_tar:-$single_tar}"
+            x64_sig="${x64_sig:-$single_sig}"
+          fi
+
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          arm_url="${base}/$(basename "$arm_tar")"
+          x64_url="${base}/$(basename "$x64_tar")"
+          arm_sig_value=$(cat "$arm_sig")
+          x64_sig_value=$(cat "$x64_sig")
+
+          jq -n \
+            --arg version "$VERSION" \
+            --rawfile notes release_notes.md \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg arm_url "$arm_url" \
+            --arg arm_sig "$arm_sig_value" \
+            --arg x64_url "$x64_url" \
+            --arg x64_sig "$x64_sig_value" \
+            '{
+               version: $version,
+               notes: $notes,
+               pub_date: $pub_date,
+               platforms: {
+                 "darwin-aarch64": { signature: $arm_sig, url: $arm_url },
+                 "darwin-x86_64":  { signature: $x64_sig, url: $x64_url }
+               }
+             }' > latest.json
+
+          cat latest.json
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          # Use the pre-generated notes (also embedded in latest.json)
+          # instead of letting the action regenerate them, so the
+          # release page and the updater banner show identical text.
+          body_path: release_notes.md
+          files: |
+            bundles/*.dmg
+            bundles/*.app.tar.gz
+            bundles/*.app.tar.gz.sig
+            latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

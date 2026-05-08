@@ -1,9 +1,11 @@
-import { Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { Download, RefreshCcw, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { sendTestNotification } from "../lib/notifications";
+import { useUpdater } from "../lib/updater-store";
+import { Markdown } from "./ui/Markdown";
 import {
   AGENT_OPTIONS,
   type SelectedAgent,
@@ -30,7 +32,8 @@ type Tab =
   | "sessions"
   | "editor"
   | "notifications"
-  | "storage";
+  | "storage"
+  | "about";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
@@ -39,6 +42,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
   { id: "storage", label: "Storage" },
+  { id: "about", label: "About" },
 ];
 
 export function SettingsModal() {
@@ -107,8 +111,10 @@ export function SettingsModal() {
             <EditorSettings />
           ) : tab === "notifications" ? (
             <NotificationSettings />
-          ) : (
+          ) : tab === "storage" ? (
             <StorageSettings />
+          ) : (
+            <AboutSettings />
           )}
         </div>
       </div>
@@ -651,6 +657,111 @@ function StorageSettings() {
           </button>
         </div>
       )}
+    </section>
+  );
+}
+
+function formatRelative(ts: number | null): string {
+  if (!ts) return "never";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h ago`;
+  return `${Math.floor(diff / 86_400_000)} d ago`;
+}
+
+function AboutSettings() {
+  const currentVersion = useUpdater((s) => s.currentVersion);
+  const available = useUpdater((s) => s.available);
+  const busy = useUpdater((s) => s.busy);
+  const error = useUpdater((s) => s.error);
+  const lastCheckedAt = useUpdater((s) => s.lastCheckedAt);
+  const check = useUpdater((s) => s.check);
+  const install = useUpdater((s) => s.install);
+  const init = useUpdater((s) => s.init);
+
+  useEffect(() => {
+    void init();
+  }, [init]);
+
+  return (
+    <section className="space-y-4">
+      <header className="space-y-1">
+        <h3 className="text-sm font-medium text-fg">About Acorn</h3>
+        <p className="text-[11px] text-fg-muted">
+          Acorn checks for updates automatically on startup and once every
+          24 hours. You can also check manually below.
+        </p>
+      </header>
+
+      <div className="rounded border border-border">
+        <div className="flex items-baseline justify-between gap-3 px-3 py-2.5">
+          <span className="text-xs font-medium text-fg">Current version</span>
+          <span className="text-[11px] tabular-nums text-fg-muted">
+            {currentVersion ?? "loading…"}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between gap-3 border-t border-border px-3 py-2.5">
+          <span className="text-xs font-medium text-fg">Last checked</span>
+          <span className="text-[11px] tabular-nums text-fg-muted">
+            {formatRelative(lastCheckedAt)}
+          </span>
+        </div>
+        {available ? (
+          <div className="space-y-2 border-t border-border bg-accent/10 px-3 py-2.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-medium text-fg">
+                  Update available
+                </div>
+                <div className="text-[11px] text-fg-muted">
+                  Acorn {available.version} is ready to install.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void install()}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+              >
+                <Download size={11} />
+                {busy ? "Installing…" : "Install & relaunch"}
+              </button>
+            </div>
+            {available.body && available.body.trim().length > 0 ? (
+              <details className="group">
+                <summary className="cursor-pointer text-[11px] text-fg-muted transition hover:text-fg">
+                  What&apos;s new
+                </summary>
+                <div className="mt-2 max-h-64 overflow-y-auto rounded border border-border bg-bg p-3">
+                  <Markdown
+                    content={available.body}
+                    className="text-[11px]"
+                  />
+                </div>
+              </details>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {error ? (
+        <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => void check()}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
+        >
+          <RefreshCcw size={11} className={busy ? "animate-spin" : ""} />
+          {busy ? "Checking…" : "Check for updates"}
+        </button>
+      </div>
     </section>
   );
 }

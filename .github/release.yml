@@ -1,0 +1,63 @@
+# Configuration for GitHub's auto-generated release notes
+# (https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes).
+#
+# The same body is reused inside Acorn's "What's new" panel via the
+# updater plugin, so a tidy PR list here keeps both surfaces tidy.
+# PRs are matched against `categories` top-down — first match wins —
+# and the wildcard `*` bucket at the end catches anything we forgot
+# to label so nothing silently disappears from the changelog.
+
+changelog:
+  exclude:
+    # Skip robotic noise and PRs explicitly opted out via label.
+    labels:
+      - skip-changelog
+      - duplicate
+    authors:
+      - dependabot
+      - github-actions
+
+  categories:
+    - title: 🚀 Features
+      labels:
+        - feat
+        - feature
+        - enhancement
+
+    - title: 🐛 Fixes
+      labels:
+        - fix
+        - bug
+        - bugfix
+
+    - title: ⚡ Performance
+      labels:
+        - performance
+        - perf
+
+    - title: 🔒 Security
+      labels:
+        - security
+
+    - title: 📝 Docs
+      labels:
+        - docs
+        - documentation
+
+    - title: 🧹 Refactor & chore
+      labels:
+        - refactor
+        - chore
+        - cleanup
+        - branding
+
+    - title: 🛠️ Build & CI
+      labels:
+        - ci
+        - build
+        - dependencies
+        - deps
+
+    - title: 🔧 Other changes
+      labels:
+        - "*"
