@@ -122,6 +122,42 @@ where
     Ok(removed)
 }
 
+/// Sum of bytes used by orphan scrollback files — files whose session
+/// id no longer exists in `keep`. Files for live sessions are not
+/// counted because they cannot be safely reclaimed without losing the
+/// session's restorable buffer; the user-facing "Clear cache" UI only
+/// surfaces the reclaimable portion. Returns 0 on read errors.
+pub fn orphan_size_bytes<I, S>(keep: I) -> AppResult<u64>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let dir = scrollback_dir()?;
+    let keep_set: std::collections::HashSet<String> =
+        keep.into_iter().map(|s| s.as_ref().to_string()).collect();
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(0),
+    };
+    let mut total: u64 = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("txt") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if keep_set.contains(stem) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    Ok(total)
+}
+
 fn write_atomic(final_path: &Path, bytes: &[u8]) -> AppResult<()> {
     let tmp_path = final_path.with_extension("txt.tmp");
     fs::write(&tmp_path, bytes)?;
