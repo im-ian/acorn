@@ -40,3 +40,11 @@ jobs:
 
       - name: Build
         run: bun run build
+
+  demo-fail:
+    name: Demo Failing Job (intentional)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.head_ref == 'demo/checks-partial-state'
+    steps:
+      - name: Always fail
+        run: exit 1
