@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GitMerge, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -58,10 +58,19 @@ export function MergePullRequestDialog({
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Monotonic counter that bumps on every open/close so in-flight AI
+  // generation calls can detect that the dialog was reset under them. The
+  // Tauri invoke itself can't be aborted, so we instead drop the result
+  // when the captured epoch no longer matches `epochRef.current` — without
+  // this, closing the dialog mid-generate and reopening it would let the
+  // original response silently overwrite the freshly-reset commit message.
+  const epochRef = useRef(0);
+
   // Reset to a clean state every time the dialog opens against a new PR. The
   // method is loaded from prefs so the user's last choice persists across PRs.
   useEffect(() => {
     if (!open || !detail) return;
+    epochRef.current += 1;
     setMethod(loadLastMergeMethod());
     setTitle(detail.title);
     setBody(detail.body);
@@ -69,6 +78,16 @@ export function MergePullRequestDialog({
     setSubmitting(false);
     setGenerating(false);
   }, [open, detail]);
+
+  // Close also bumps the epoch — a generate kicked off right before the
+  // user dismissed the dialog must be invalidated even if they never
+  // reopen, so its `setGenerating(false)` (and any error) doesn't leak
+  // back into a future open.
+  useEffect(() => {
+    if (!open) {
+      epochRef.current += 1;
+    }
+  }, [open]);
 
   useDialogShortcuts(open, {
     onCancel: () => {
@@ -103,6 +122,7 @@ export function MergePullRequestDialog({
 
   async function handleGenerate() {
     if (!detail) return;
+    const epoch = epochRef.current;
     setGenerating(true);
     setError(null);
     try {
@@ -114,12 +134,17 @@ export function MergePullRequestDialog({
         command,
         args,
       );
+      // Dialog was closed (or reopened against another PR) while the
+      // CLI was running — drop the result so it doesn't clobber whatever
+      // the dialog is currently showing.
+      if (epoch !== epochRef.current) return;
       if (result.title.trim()) setTitle(result.title);
       setBody(result.body);
     } catch (e) {
+      if (epoch !== epochRef.current) return;
       setError(String(e));
     } finally {
-      setGenerating(false);
+      if (epoch === epochRef.current) setGenerating(false);
     }
   }
 
