@@ -1,0 +1,100 @@
+// Runs in the page context via Playwright's addInitScript.
+// Stands up a fake `window.__TAURI_INTERNALS__` so the React app boots in a
+// regular Chromium tab without a Tauri runtime. Tests register per-command
+// handlers on `window.__ACORN_MOCK_HANDLERS__`; anything unhandled falls
+// back to a safe default chosen to keep the UI from crashing.
+
+export const tauriMockSource = `
+(() => {
+  if (window.__ACORN_MOCK_INSTALLED__) return;
+  window.__ACORN_MOCK_INSTALLED__ = true;
+
+  const handlers = window.__ACORN_MOCK_HANDLERS__ || {};
+  let nextCallbackId = 0;
+
+  function pluginDefault(cmd) {
+    if (cmd === 'plugin:event|listen') return Promise.resolve(nextCallbackId++);
+    if (cmd === 'plugin:event|unlisten') return Promise.resolve(undefined);
+    if (cmd === 'plugin:event|emit') return Promise.resolve(undefined);
+    if (cmd === 'plugin:app|version') return Promise.resolve('0.0.0-test');
+    if (cmd === 'plugin:app|name') return Promise.resolve('acorn');
+    if (cmd === 'plugin:updater|check') return Promise.resolve(null);
+    if (cmd === 'plugin:notification|is_permission_granted') return Promise.resolve(true);
+    if (cmd === 'plugin:notification|request_permission') return Promise.resolve('granted');
+    if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);
+    if (cmd === 'plugin:window|destroy') return Promise.resolve(undefined);
+    if (cmd === 'plugin:window|close') return Promise.resolve(undefined);
+    return undefined;
+  }
+
+  function appDefault(cmd) {
+    if (cmd === 'list_sessions') return Promise.resolve([]);
+    if (cmd === 'list_projects') return Promise.resolve([]);
+    if (cmd === 'detect_session_statuses') return Promise.resolve([]);
+    if (cmd === 'read_session_todos') return Promise.resolve([]);
+    if (cmd === 'list_commits') return Promise.resolve([]);
+    if (cmd === 'list_staged') return Promise.resolve([]);
+    if (cmd === 'list_pull_requests') {
+      return Promise.resolve({ items: [], account: null, error: null });
+    }
+    if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
+    if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
+    if (cmd === 'scrollback_load') return Promise.resolve(null);
+    if (cmd === 'claude_session_exists') return Promise.resolve(false);
+    if (cmd === 'get_memory_usage') {
+      return Promise.resolve({
+        rss_bytes: 0,
+        sessions: [],
+        scrollback_disk_bytes: 0,
+      });
+    }
+    if (cmd === 'scrollback_orphan_size') return Promise.resolve(0);
+    if (cmd === 'scrollback_orphan_clear') return Promise.resolve(0);
+    if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
+    return Promise.resolve(null);
+  }
+
+  window.__TAURI_INTERNALS__ = {
+    metadata: {
+      currentWindow: { label: 'main' },
+      currentWebview: { label: 'main' },
+    },
+    transformCallback: (callback, once) => {
+      const id = nextCallbackId++;
+      const key = '_' + id;
+      window[key] = (...args) => {
+        if (once) {
+          try { delete window[key]; } catch (_) { window[key] = undefined; }
+        }
+        if (callback) callback(...args);
+      };
+      return id;
+    },
+    unregisterCallback: (id) => {
+      try { delete window['_' + id]; } catch (_) { window['_' + id] = undefined; }
+    },
+    invoke: async (cmd, args) => {
+      const handler = handlers[cmd];
+      if (handler) {
+        try {
+          return await handler(args);
+        } catch (err) {
+          return Promise.reject(err);
+        }
+      }
+      const plugin = pluginDefault(cmd);
+      if (plugin !== undefined) return plugin;
+      return appDefault(cmd);
+    },
+  };
+
+  // The event plugin in @tauri-apps/api 2.x calls into this global on unlisten.
+  // Without it, every \`listen()\` cleanup throws and noisy errors bury real ones.
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+    unregisterListener: () => {},
+  };
+
+  window.__ACORN_MOCK_HANDLERS__ = handlers;
+  window.__ACORN_TEST_MODE__ = true;
+})();
+`;
