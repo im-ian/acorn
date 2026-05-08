@@ -102,18 +102,33 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&cwd);
-        // Suppress macOS zsh's per-session restore (`/etc/zshrc_Apple_Terminal`).
-        // When acorn is launched from Terminal.app the child PTY inherits
-        // `TERM_PROGRAM=Apple_Terminal` and zsh treats every fresh PTY as a
-        // resumable Terminal.app session, printing "Restored session: ..."
-        // / "Saving session...completed." and writing per-session files into
-        // `~/.zsh_sessions/`. acorn manages its own session lifecycle and
-        // does not want zsh layering its own on top. `~/.zsh_history`
-        // (HISTFILE) is unaffected — only the dirstack/last-commands
-        // restore feature is disabled.
+        // Pretend the child PTY was not launched from Apple Terminal.
         //
-        // Set this *before* applying the user-provided env so a user can
-        // still opt back in by passing `SHELL_SESSIONS_DISABLE=0`.
+        // When acorn itself is launched from Terminal.app the child shell
+        // inherits `TERM_PROGRAM=Apple_Terminal` and `TERM_SESSION_ID=<UUID>`.
+        // /etc/zshrc then sources `/etc/zshrc_Apple_Terminal`, which:
+        //   - prints "Restored session: <date>" on every new PTY,
+        //   - prints "Saving session...completed." (and sometimes
+        //     "Deleting expired sessions...") on every exit,
+        //   - writes per-session restore files under `~/.zsh_sessions/`
+        //     keyed by the inherited `TERM_SESSION_ID`,
+        //   - on exit, runs `rm $TERM_SESSION_ID.session`, which prints
+        //     `rm: ... .session: No such file or directory` whenever the
+        //     save was suppressed but the inherited session id had no
+        //     corresponding file (e.g. `SHELL_SESSIONS_DISABLE=1` is set,
+        //     or the parent Terminal.app already cleaned it up).
+        //
+        // None of this adds value inside acorn — acorn manages its own
+        // session lifecycle. Removing `TERM_PROGRAM` makes the conditional
+        // in /etc/zshrc fall through, so `zshrc_Apple_Terminal` is never
+        // sourced; removing `TERM_SESSION_ID` ensures no leftover id leaks
+        // into anything else (e.g. user .zshrc) that keys off it.
+        // `SHELL_SESSIONS_DISABLE=1` is kept as belt-and-suspenders for
+        // user shells that source the Apple Terminal hooks themselves.
+        // `~/.zsh_history` (HISTFILE/HISTSIZE/SAVEHIST) is independent of
+        // all of these and continues to work normally.
+        cmd.env_remove("TERM_PROGRAM");
+        cmd.env_remove("TERM_SESSION_ID");
         cmd.env("SHELL_SESSIONS_DISABLE", "1");
         for (k, v) in env {
             cmd.env(k, v);
