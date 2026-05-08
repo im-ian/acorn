@@ -1,3 +1,4 @@
+mod cli_resolver;
 mod commands;
 mod error;
 mod git_ops;
@@ -7,6 +8,7 @@ mod pull_requests;
 mod scrollback;
 mod session;
 mod session_status;
+mod shell_util;
 mod state;
 mod todos;
 mod unified_diff;
@@ -74,9 +76,7 @@ pub fn run() {
                 .paste()
                 .select_all()
                 .build()?;
-            let view_submenu = SubmenuBuilder::new(app, "View")
-                .fullscreen()
-                .build()?;
+            let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
                 .maximize()

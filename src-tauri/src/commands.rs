@@ -15,6 +15,7 @@ use crate::pull_requests::{
 use crate::scrollback;
 use crate::session::{Project, Session, SessionStartupMode, SessionStatus};
 use crate::session_status;
+use crate::shell_util::shell_quote;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
@@ -179,9 +180,7 @@ pub async fn create_session(
         startup_mode,
     );
     let inserted = state.sessions.insert(session);
-    state
-        .projects
-        .ensure(repo.clone(), project_basename(&repo));
+    state.projects.ensure(repo.clone(), project_basename(&repo));
     persist(&state);
     Ok(inserted)
 }
@@ -197,18 +196,13 @@ pub fn add_project(state: State<'_, AppState>, repo_path: String) -> AppResult<P
     if !path.exists() {
         return Err(AppError::InvalidPath(repo_path));
     }
-    let project = state
-        .projects
-        .ensure(path.clone(), project_basename(&path));
+    let project = state.projects.ensure(path.clone(), project_basename(&path));
     persist(&state);
     Ok(project)
 }
 
 #[tauri::command]
-pub fn reorder_projects(
-    state: State<'_, AppState>,
-    order: Vec<String>,
-) -> AppResult<Vec<Project>> {
+pub fn reorder_projects(state: State<'_, AppState>, order: Vec<String>) -> AppResult<Vec<Project>> {
     let paths: Vec<PathBuf> = order.into_iter().map(PathBuf::from).collect();
     state.projects.reorder(&paths);
     persist(&state);
@@ -278,11 +272,7 @@ pub fn set_session_status(
 }
 
 #[tauri::command]
-pub fn rename_session(
-    state: State<'_, AppState>,
-    id: String,
-    name: String,
-) -> AppResult<Session> {
+pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> AppResult<Session> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
@@ -315,10 +305,7 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
             _ => INVALID,
         }
     }
-    let bytes: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if bytes.len() % 4 != 0 {
         return None;
     }
@@ -406,7 +393,10 @@ pub async fn pty_spawn<R: Runtime>(
                 script.push(' ');
                 script.push_str(&shell_quote(a));
             }
-            (shell, vec!["-l".to_string(), "-i".to_string(), "-c".to_string(), script])
+            (
+                shell,
+                vec!["-l".to_string(), "-i".to_string(), "-c".to_string(), script],
+            )
         }
     };
     state.pty.spawn(
@@ -421,77 +411,8 @@ pub async fn pty_spawn<R: Runtime>(
     )
 }
 
-/// Quote `s` so a POSIX shell parses it as a single argument verbatim.
-/// Returns `s` unquoted when it is composed solely of safe characters that
-/// the shell would not interpret (alphanumerics and a small allow-list);
-/// otherwise wraps it in single quotes with embedded `'` escaped as `'\''`.
-fn shell_quote(s: &str) -> String {
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    let safe = s.bytes().all(|b| {
-        b.is_ascii_alphanumeric()
-            || matches!(b, b'_' | b'-' | b'/' | b'.' | b'=' | b':' | b',' | b'@' | b'+')
-    });
-    if safe {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('\'');
-    for c in s.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
-}
-
-#[cfg(test)]
-mod shell_quote_tests {
-    use super::shell_quote;
-
-    #[test]
-    fn safe_inputs_pass_through() {
-        assert_eq!(shell_quote("claude"), "claude");
-        assert_eq!(shell_quote("--session-id"), "--session-id");
-        assert_eq!(shell_quote("a1b2-c3d4"), "a1b2-c3d4");
-        assert_eq!(shell_quote("/usr/local/bin/foo"), "/usr/local/bin/foo");
-        assert_eq!(shell_quote("KEY=value"), "KEY=value");
-    }
-
-    #[test]
-    fn empty_becomes_empty_quotes() {
-        assert_eq!(shell_quote(""), "''");
-    }
-
-    #[test]
-    fn space_triggers_quoting() {
-        assert_eq!(shell_quote("hello world"), "'hello world'");
-    }
-
-    #[test]
-    fn embedded_single_quote_is_escaped() {
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn shell_metacharacters_are_quoted() {
-        assert_eq!(shell_quote("a;b"), "'a;b'");
-        assert_eq!(shell_quote("$HOME"), "'$HOME'");
-        assert_eq!(shell_quote("`ls`"), "'`ls`'");
-        assert_eq!(shell_quote("a|b"), "'a|b'");
-    }
-}
-
 #[tauri::command]
-pub fn pty_write(
-    state: State<'_, AppState>,
-    session_id: String,
-    data: String,
-) -> AppResult<()> {
+pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
     state.pty.write(&id, &bytes)
@@ -670,11 +591,7 @@ pub async fn claude_session_exists(_cwd: String, session_id: String) -> bool {
 /// the binary themselves at runtime — adding it to a static capability scope
 /// would defeat the configurability.
 #[tauri::command]
-pub async fn open_in_editor(
-    command: String,
-    args: Vec<String>,
-    path: String,
-) -> AppResult<()> {
+pub async fn open_in_editor(command: String, args: Vec<String>, path: String) -> AppResult<()> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return Err(AppError::Other(
@@ -754,10 +671,7 @@ pub async fn generate_pr_commit_message(
     )
 }
 
-fn create_unique_worktree(
-    repo: &std::path::Path,
-    base: &str,
-) -> AppResult<(String, PathBuf)> {
+fn create_unique_worktree(repo: &std::path::Path, base: &str) -> AppResult<(String, PathBuf)> {
     let root = worktree::worktree_root(repo);
     let mut candidate = base.to_string();
     let mut n = 2;
@@ -782,7 +696,13 @@ fn create_unique_worktree(
 
 fn sanitize_worktree_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
