@@ -1,10 +1,13 @@
 //! Detects a Claude Code session's live status by inspecting the tail of its
 //! JSONL transcript. Status mapping:
 //!
-//! - last assistant turn with `stop_reason=end_turn` → Idle (waiting on user)
+//! - last assistant turn with `stop_reason=end_turn` → NeedsInput (claude
+//!   has finished its turn and is awaiting the user's next prompt). Surfaces
+//!   the warning-tone status dot in the Sidebar and triggers the
+//!   `needsInput` system notification when the user has it enabled.
 //! - last assistant turn with `stop_reason=tool_use` → Running (tool pending)
 //! - last user turn (new prompt or tool_result) → Running (assistant pending)
-//! - no transcript yet → Idle
+//! - no transcript yet → Idle (session has not produced any conversation)
 //!
 //! Meta-only lines (type `last-prompt`, `permission-mode`, `attachment`,
 //! `file-history-snapshot`) are ignored when picking the last message. The
@@ -38,7 +41,7 @@ pub fn detect(session_id: &str) -> AppResult<SessionStatus> {
     let last_kind = last_meaningful_kind(&tail, read_full);
 
     Ok(match last_kind {
-        Some(LastKind::AssistantEndTurn) => SessionStatus::Idle,
+        Some(LastKind::AssistantEndTurn) => SessionStatus::NeedsInput,
         Some(LastKind::AssistantToolUse) => SessionStatus::Running,
         Some(LastKind::User) => SessionStatus::Running,
         None => SessionStatus::Idle,
