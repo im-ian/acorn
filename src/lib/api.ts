@@ -150,4 +150,10 @@ export const api = {
       { ids },
     );
   },
+  scrollbackOrphanSize(): Promise<number> {
+    return invoke<number>("scrollback_orphan_size");
+  },
+  scrollbackOrphanClear(): Promise<number> {
+    return invoke<number>("scrollback_orphan_clear");
+  },
 };

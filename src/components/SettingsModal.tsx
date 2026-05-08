@@ -1,5 +1,6 @@
-import { Settings as SettingsIcon } from "lucide-react";
-import { useState } from "react";
+import { Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { sendTestNotification } from "../lib/notifications";
@@ -28,7 +29,8 @@ type Tab =
   | "agents"
   | "sessions"
   | "editor"
-  | "notifications";
+  | "notifications"
+  | "storage";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
@@ -36,6 +38,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "sessions", label: "Sessions" },
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
+  { id: "storage", label: "Storage" },
 ];
 
 export function SettingsModal() {
@@ -102,8 +105,10 @@ export function SettingsModal() {
             <SessionSettings />
           ) : tab === "editor" ? (
             <EditorSettings />
-          ) : (
+          ) : tab === "notifications" ? (
             <NotificationSettings />
+          ) : (
+            <StorageSettings />
           )}
         </div>
       </div>
@@ -477,6 +482,175 @@ function AgentSettings() {
         authenticated on this machine. Surfaces a clear error when the
         binary is missing.
       </p>
+    </section>
+  );
+}
+
+/**
+ * Per-category cache descriptor surfaced in the Storage settings tab.
+ * `loadSize` returns the on-disk byte total; `clear` deletes everything
+ * the category owns and returns the number of items removed (purely for
+ * the success message). New cache categories should drop in here as
+ * additional entries — the UI iterates the list and renders one row per
+ * entry, so no further wiring is required.
+ */
+interface CacheCategory {
+  id: string;
+  label: string;
+  description: string;
+  loadSize: () => Promise<number>;
+  clear: () => Promise<number>;
+}
+
+const CACHE_CATEGORIES: CacheCategory[] = [
+  {
+    id: "scrollback-orphans",
+    label: "Orphan terminal scrollback",
+    description:
+      "ANSI scrollback files left behind by sessions that no longer exist (e.g. removed while acorn was offline, or before the prune-on-boot logic existed). Live sessions' scrollback is not touched — only the unreclaimable leftovers are surfaced.",
+    loadSize: () => api.scrollbackOrphanSize(),
+    clear: () => api.scrollbackOrphanClear(),
+  },
+];
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function StorageSettings() {
+  const [sizes, setSizes] = useState<Record<string, number | null>>(() =>
+    Object.fromEntries(CACHE_CATEGORIES.map((c) => [c.id, null])),
+  );
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const refreshSizes = useCallback(async () => {
+    const results = await Promise.allSettled(
+      CACHE_CATEGORIES.map((c) => c.loadSize()),
+    );
+    setSizes(
+      Object.fromEntries(
+        CACHE_CATEGORIES.map((c, i) => {
+          const r = results[i];
+          return [c.id, r.status === "fulfilled" ? r.value : null];
+        }),
+      ),
+    );
+  }, []);
+
+  useEffect(() => {
+    void refreshSizes();
+  }, [refreshSizes]);
+
+  const totalBytes = Object.values(sizes).reduce<number>(
+    (sum, n) => sum + (n ?? 0),
+    0,
+  );
+
+  async function handleClear() {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const results = await Promise.allSettled(
+        CACHE_CATEGORIES.map((c) => c.clear()),
+      );
+      const totalRemoved = results.reduce<number>(
+        (sum, r) => sum + (r.status === "fulfilled" ? r.value : 0),
+        0,
+      );
+      setStatus(
+        totalRemoved > 0
+          ? `Cleared ${totalRemoved} cached file${totalRemoved === 1 ? "" : "s"}.`
+          : "Nothing to clear.",
+      );
+      await refreshSizes();
+    } catch (err) {
+      console.error("[Settings] cache clear failed", err);
+      setStatus("Clear failed — see console.");
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <header className="space-y-1">
+        <h3 className="text-sm font-medium text-fg">Reclaimable cache</h3>
+        <p className="text-[11px] text-fg-muted">
+          Disk artifacts that acorn cannot clean up through its normal
+          session lifecycle (e.g. files orphaned by a crash or by edits
+          made while acorn was offline). Sessions, projects, settings,
+          and live terminal scrollback are never touched.
+        </p>
+      </header>
+
+      <ul className="divide-y divide-border rounded border border-border">
+        {CACHE_CATEGORIES.map((cat) => {
+          const size = sizes[cat.id];
+          return (
+            <li key={cat.id} className="space-y-1 px-3 py-2.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-xs font-medium text-fg">
+                  {cat.label}
+                </span>
+                <span className="text-[11px] tabular-nums text-fg-muted">
+                  {size === null ? "—" : formatBytes(size)}
+                </span>
+              </div>
+              <p className="text-[11px] text-fg-muted">{cat.description}</p>
+            </li>
+          );
+        })}
+      </ul>
+
+      {confirming ? (
+        <div className="space-y-2 rounded border border-warning/40 bg-warning/10 p-3">
+          <p className="text-[11px] text-fg">
+            This will permanently delete the cached data listed above
+            ({formatBytes(totalBytes)}). Continue?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:text-fg disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleClear()}
+              disabled={busy}
+              className="rounded bg-danger px-2 py-1 text-[11px] font-medium text-white transition hover:bg-danger/90 disabled:opacity-50"
+            >
+              {busy ? "Clearing…" : "Clear cache"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] text-fg-muted">
+            {status ?? `Total: ${formatBytes(totalBytes)}`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy || totalBytes === 0}
+            className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-danger/60 hover:text-danger disabled:opacity-50"
+          >
+            <Trash2 size={11} />
+            Clear cache
+          </button>
+        </div>
+      )}
     </section>
   );
 }

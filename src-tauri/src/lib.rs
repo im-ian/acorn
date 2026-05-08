@@ -158,6 +158,8 @@ pub fn run() {
             commands::scrollback_save,
             commands::scrollback_load,
             commands::scrollback_delete,
+            commands::scrollback_orphan_size,
+            commands::scrollback_orphan_clear,
             commands::read_session_todos,
             commands::detect_session_statuses,
             commands::get_memory_usage,

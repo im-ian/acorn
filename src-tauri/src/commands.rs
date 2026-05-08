@@ -442,6 +442,34 @@ pub async fn scrollback_delete(session_id: String) -> AppResult<()> {
     scrollback::delete(&session_id)
 }
 
+/// Return the on-disk size (in bytes) of scrollback files whose session
+/// id no longer matches a known session. Live sessions' buffers are not
+/// counted — only the reclaimable orphan portion is surfaced.
+#[tauri::command]
+pub async fn scrollback_orphan_size(state: State<'_, AppState>) -> AppResult<u64> {
+    let live_ids: Vec<String> = state
+        .sessions
+        .list()
+        .iter()
+        .map(|s| s.id.to_string())
+        .collect();
+    scrollback::orphan_size_bytes(live_ids)
+}
+
+/// Delete scrollback files whose session id no longer matches a known
+/// session. Live sessions are untouched — their buffers stay on disk
+/// and will keep being kept up to date by the debounced output save.
+#[tauri::command]
+pub async fn scrollback_orphan_clear(state: State<'_, AppState>) -> AppResult<usize> {
+    let live_ids: Vec<String> = state
+        .sessions
+        .list()
+        .iter()
+        .map(|s| s.id.to_string())
+        .collect();
+    scrollback::prune_orphans(live_ids)
+}
+
 #[tauri::command]
 pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Vec<TodoItem>> {
     let cwd = PathBuf::from(cwd);
