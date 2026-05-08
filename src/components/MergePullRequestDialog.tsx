@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { GitMerge, Loader2, Sparkles } from "lucide-react";
+import { GitMerge, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
 import type { MergeMethod, PullRequestDetail } from "../lib/types";
-import { Modal, ModalHeader } from "./ui";
+import { Modal, ModalHeader, TextSwap } from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
   value: MergeMethod;
@@ -157,23 +157,29 @@ export function MergePullRequestDialog({
             {acceptsMessage ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-fg-muted">
-                    {generating ? "Generating commit message…" : "Commit message"}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void handleGenerate()}
-                    disabled={busy}
-                    title={generating ? "Generating…" : "Generate with AI (Claude)"}
-                    aria-label={generating ? "Generating commit message" : "Generate commit message with AI"}
-                    className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {generating ? (
-                      <Loader2 size={13} className="animate-spin" />
-                    ) : (
-                      <Sparkles size={13} />
-                    )}
-                  </button>
+                  <p className="text-fg-muted">Commit message</p>
+                  {generating ? (
+                    <button
+                      key="gen-button-loading"
+                      type="button"
+                      disabled
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted opacity-60"
+                    >
+                      <Sparkles size={11} />
+                      Generating…
+                    </button>
+                  ) : (
+                    <button
+                      key="gen-button-idle"
+                      type="button"
+                      onClick={() => void handleGenerate()}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                      title="Generate via Claude"
+                    >
+                      <Sparkles size={11} />
+                      Generate with AI
+                    </button>
+                  )}
                 </div>
                 <input
                   type="text"
@@ -221,7 +227,7 @@ export function MergePullRequestDialog({
               disabled={busy}
               className="rounded-md bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submitting ? "Merging…" : "Merge"}
+              <TextSwap>{submitting ? "Merging…" : "Merge"}</TextSwap>
             </button>
           </footer>
         </>
