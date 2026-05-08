@@ -5,6 +5,7 @@ import {
   type ImperativePanelHandle,
 } from "react-resizable-panels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
@@ -19,6 +20,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { Hotkeys, useHotkeys } from "./lib/hotkeys";
 import { startSessionNotificationWatcher } from "./lib/notifications";
+import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useSettings } from "./lib/settings";
 import { useAppStore } from "./store";
 
@@ -108,6 +110,49 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach settings listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Drain every live terminal's scrollback to disk before the window is
+  // destroyed, so a normal app quit never loses output that the
+  // debounced output-driven save has not yet flushed. We block the
+  // close, await all flushers, then call `destroy()` to actually close.
+  // Hard kill (kill -9, OS shutdown, crash) bypasses this and falls back
+  // to whatever the debounce window happened to write.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    let closing = false;
+    const win = getCurrentWindow();
+    win
+      .onCloseRequested(async (event) => {
+        if (closing) return;
+        closing = true;
+        event.preventDefault();
+        try {
+          await flushAllScrollbacks();
+        } catch (err) {
+          console.warn("[App] flushAllScrollbacks failed", err);
+        }
+        try {
+          await win.destroy();
+        } catch (err) {
+          console.error("[App] window destroy failed", err);
+        }
+      })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach close-requested listener", err);
       });
     return () => {
       cancelled = true;
