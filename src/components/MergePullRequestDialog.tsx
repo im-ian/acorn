@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
 import type { MergeMethod, PullRequestDetail } from "../lib/types";
+import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader, TextSwap } from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
@@ -169,16 +170,17 @@ export function MergePullRequestDialog({
                       Generating…
                     </button>
                   ) : (
-                    <button
-                      key="gen-button-idle"
-                      type="button"
-                      onClick={() => void handleGenerate()}
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-                      title="Generate via Claude"
-                    >
-                      <Sparkles size={11} />
-                      Generate with AI
-                    </button>
+                    <Tooltip label="Generate via Claude" side="top">
+                      <button
+                        key="gen-button-idle"
+                        type="button"
+                        onClick={() => void handleGenerate()}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                      >
+                        <Sparkles size={11} />
+                        Generate with AI
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
                 <input

@@ -29,6 +29,7 @@ import type {
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { DiffSplitView } from "./DiffSplitView";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
+import { Tooltip } from "./Tooltip";
 import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
 
 type DetailTab = "conversation" | "checks" | "files";
@@ -280,7 +281,9 @@ function DetailBody({
             <span className="opacity-50"> · </span>
             <span>{detail.changed_files} files</span>
             <span className="opacity-50"> · </span>
-            <span title={`Listed via gh account ${account}`}>@{account}</span>
+            <Tooltip label={`Listed via gh account ${account}`} side="bottom">
+              <span>@{account}</span>
+            </Tooltip>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -301,14 +304,15 @@ function DetailBody({
             </>
           ) : null}
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
-          <button
-            type="button"
-            onClick={() => void openUrl(detail.url)}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-            title="Open on GitHub"
-          >
-            <ExternalLink size={14} />
-          </button>
+          <Tooltip label="Open on GitHub" side="bottom">
+            <button
+              type="button"
+              onClick={() => void openUrl(detail.url)}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <ExternalLink size={14} />
+            </button>
+          </Tooltip>
           <button
             type="button"
             aria-label="Close"
@@ -482,20 +486,21 @@ function MergeActionButton({
       ? "Cannot merge — conflicting branch"
       : "Merge readiness still being determined…";
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!ready}
-      title={title}
-      className={cn(
-        "rounded-md px-2.5 py-1 text-[11px] font-medium transition",
-        ready
-          ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
-          : "cursor-not-allowed bg-bg-elevated text-fg-muted opacity-70",
-      )}
-    >
-      Merge
-    </button>
+    <Tooltip label={title} side="bottom">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={!ready}
+        className={cn(
+          "rounded-md px-2.5 py-1 text-[11px] font-medium transition",
+          ready
+            ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+            : "cursor-not-allowed bg-bg-elevated text-fg-muted opacity-70",
+        )}
+      >
+        Merge
+      </button>
+    </Tooltip>
   );
 }
 
@@ -738,16 +743,17 @@ function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
           </span>
           <CheckStatusLabel status={c.status} conclusion={c.conclusion} />
           {c.url ? (
-            <button
-              type="button"
-              onClick={() => {
-                if (c.url) void openUrl(c.url);
-              }}
-              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-              title="Open run"
-            >
-              <ExternalLink size={11} />
-            </button>
+            <Tooltip label="Open run" side="top">
+              <button
+                type="button"
+                onClick={() => {
+                  if (c.url) void openUrl(c.url);
+                }}
+                className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              >
+                <ExternalLink size={11} />
+              </button>
+            </Tooltip>
           ) : null}
         </li>
       ))}
