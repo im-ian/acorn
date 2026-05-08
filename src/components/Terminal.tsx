@@ -6,6 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
+import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import { resolveStartupCommand, useSettings } from "../lib/settings";
 import type { SessionStartupMode } from "../lib/types";
 
@@ -149,6 +150,35 @@ export function Terminal({
 
     let disposed = false;
     const unlistenFns: UnlistenFn[] = [];
+
+    // `scrollback_load` must finish before any save is allowed. Without
+    // this gate, React.StrictMode's mount → cleanup → mount cycle in dev
+    // can race the cleanup of mount A against mount A's load: the
+    // cleanup serialises the still-empty xterm buffer and writes 0
+    // bytes to disk, wiping the previously persisted scrollback. By the
+    // time mount B's load runs, the disk content is already gone. The
+    // flag flips to `true` only after the initial load step settles, so
+    // earlier serialise calls (whether from the debounced output trigger
+    // or from `flushAllScrollbacks` on app close) become no-ops.
+    let savesAllowed = false;
+
+    // Debounced "save scrollback to disk" trigger. Reset on every chunk
+    // of PTY output so a stream of bytes coalesces into one save 1s
+    // after the stream goes quiet, instead of one save per chunk.
+    const SCROLLBACK_SAVE_DEBOUNCE_MS = 1000;
+    let scrollbackSaveTimer: number | null = null;
+    const scheduleScrollbackSave = () => {
+      if (disposed) return;
+      if (scrollbackSaveTimer !== null) {
+        window.clearTimeout(scrollbackSaveTimer);
+      }
+      scrollbackSaveTimer = window.setTimeout(() => {
+        scrollbackSaveTimer = null;
+        // persistScrollbackAsync is hoisted as a function declaration in
+        // the IIFE region below; calling it here at runtime is safe.
+        void persistScrollbackAsync();
+      }, SCROLLBACK_SAVE_DEBOUNCE_MS);
+    };
 
     const sendToPty = (data: string) => {
       if (data.length === 0) return;
@@ -550,6 +580,9 @@ export function Terminal({
             try {
               const bytes = decodeBase64ToBytes(event.payload.data);
               term.write(bytes);
+              // Output landed in the buffer — schedule a debounced save
+              // so the new content reaches disk ~1s after activity ends.
+              scheduleScrollbackSave();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -615,54 +648,69 @@ export function Terminal({
         console.warn("[Terminal] scrollback_load failed", err);
       }
 
+      // Now safe to persist: the buffer either holds the prior session's
+      // restored content or starts genuinely empty. Either state is the
+      // legitimate post-load baseline, so future saves cannot accidentally
+      // overwrite still-on-disk content with a never-loaded empty buffer.
+      savesAllowed = true;
+
       if (disposed) return;
       await spawnPty();
     })();
 
-    // Periodic scrollback persistence. xterm's serialize addon snapshots
-    // the current buffer (plus a capped scrollback window) as ANSI text the
-    // backend writes to disk. We re-save every 10s while the terminal lives
-    // and once more on unmount; the backend caps total payload size.
-    const SCROLLBACK_SAVE_MS = 10_000;
+    // Scrollback persistence is event-driven, not periodic:
+    //
+    //   - Each chunk of PTY output schedules a debounced save 1s later
+    //     (`scheduleScrollbackSave`, called from the `pty:output` listener
+    //     above). A burst of output coalesces into one save 1s after the
+    //     burst ends, so a long-running `claude` stream or `ls -R` does
+    //     not pin the disk.
+    //   - The App-level `onCloseRequested` handler awaits a final flush
+    //     of every live terminal via `registerScrollbackFlusher`, so a
+    //     normal app quit never loses data even if a save is in flight.
+    //
+    // The previous 10s polling interval was a magic-number fallback for
+    // both lossy quits and idle preservation; the close-time flush makes
+    // it redundant. Hard kill (kill -9, OS crash) loses at most the
+    // ~1s debounce window of unsaved output; that is the cost we accept
+    // in exchange for not constantly serialising idle buffers.
     const SCROLLBACK_MAX_ROWS = 2000;
-    const persistScrollback = () => {
-      if (disposed) return;
+    const persistScrollbackAsync = async () => {
+      // `savesAllowed` flips true only after the initial scrollback_load
+      // settles. Skipping the save until then prevents a still-empty
+      // buffer from clobbering the persisted scrollback during the
+      // StrictMode mount → cleanup → mount cycle.
+      if (disposed || !savesAllowed) return;
       try {
         const data = serializeAddon.serialize({
           scrollback: SCROLLBACK_MAX_ROWS,
         });
-        invoke("scrollback_save", { sessionId, data }).catch((err: unknown) => {
-          console.warn("[Terminal] scrollback_save failed", err);
-        });
+        await invoke("scrollback_save", { sessionId, data });
       } catch (err) {
-        console.warn("[Terminal] serialize failed", err);
+        console.warn("[Terminal] scrollback_save failed", err);
       }
     };
-    const scrollbackTimer = window.setInterval(
-      persistScrollback,
-      SCROLLBACK_SAVE_MS,
+    const unregisterScrollbackFlusher = registerScrollbackFlusher(
+      sessionId,
+      persistScrollbackAsync,
     );
 
     return () => {
       disposed = true;
       unsubSettings();
-      window.clearInterval(scrollbackTimer);
-      // Final scrollback flush before xterm is torn down. Run synchronously
-      // off the buffer; the invoke call is fire-and-forget and may race
-      // with app shutdown — accept the loss on hard quits.
-      try {
-        const finalSnapshot = serializeAddon.serialize({
-          scrollback: 2000,
-        });
-        invoke("scrollback_save", {
-          sessionId,
-          data: finalSnapshot,
-        }).catch(() => {
-          // ignore — best-effort on teardown
-        });
-      } catch {
-        // ignore — best-effort
+      unregisterScrollbackFlusher();
+      if (scrollbackSaveTimer !== null) {
+        window.clearTimeout(scrollbackSaveTimer);
+        scrollbackSaveTimer = null;
       }
+      // No cleanup-time save: under React.StrictMode the cleanup of the
+      // first dev mount fires while the buffer is still empty (load
+      // hasn't run yet), and a fire-and-forget save here would clobber
+      // the persisted scrollback with 0 bytes. Tab-close / project-switch
+      // unmount instead relies on the most recent debounced output save
+      // (within ~1s of the last activity), which is already on disk; the
+      // App-level `onCloseRequested` handler covers full app quit and
+      // does an awaited flush via `flushAllScrollbacks` before destroy.
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
         resizeTimer = null;
