@@ -22,6 +22,9 @@ target/
 # Claude Code project-local state
 .claude/
 
+# Playwright MCP artifacts
+.playwright-mcp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

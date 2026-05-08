@@ -3,7 +3,7 @@ import { GitPullRequestClosed } from "lucide-react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { PullRequestDetail } from "../lib/types";
-import { Modal, ModalHeader } from "./ui";
+import { Modal, ModalHeader, TextSwap } from "./ui";
 
 interface ClosePullRequestDialogProps {
   open: boolean;
@@ -98,7 +98,7 @@ export function ClosePullRequestDialog({
               disabled={submitting}
               className="rounded-md bg-rose-500/20 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submitting ? "Closing…" : "Close PR"}
+              <TextSwap>{submitting ? "Closing…" : "Close PR"}</TextSwap>
             </button>
           </footer>
         </>
