@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CommitInfo,
   DiffPayload,
+  GeneratedCommitMessage,
   MemoryUsage,
+  MergeMethod,
   Project,
   PrStateFilter,
   PullRequestDetailListing,
@@ -92,6 +94,35 @@ export const api = {
     return invoke<PullRequestDetailListing>("get_pull_request_detail", {
       repoPath,
       number,
+    });
+  },
+  mergePullRequest(
+    repoPath: string,
+    number: number,
+    method: MergeMethod,
+    commitTitle: string | null,
+    commitBody: string | null,
+  ): Promise<void> {
+    return invoke<void>("merge_pull_request", {
+      repoPath,
+      number,
+      method,
+      commitTitle,
+      commitBody,
+    });
+  },
+  closePullRequest(repoPath: string, number: number): Promise<void> {
+    return invoke<void>("close_pull_request", { repoPath, number });
+  },
+  generatePrCommitMessage(
+    repoPath: string,
+    number: number,
+    method: MergeMethod,
+  ): Promise<GeneratedCommitMessage> {
+    return invoke<GeneratedCommitMessage>("generate_pr_commit_message", {
+      repoPath,
+      number,
+      method,
     });
   },
   getMemoryUsage(): Promise<MemoryUsage> {

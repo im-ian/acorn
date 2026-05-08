@@ -56,6 +56,9 @@ export function RightPanel() {
     repoPath: string;
     number: number;
   } | null>(null);
+  // Bumped from the PR detail modal after a merge/close so the PRs tab
+  // refetches without waiting for the next polling tick.
+  const [prListVersion, setPrListVersion] = useState(0);
 
   // Polling lives at the panel level (not inside TodosTab) so we can hide the
   // Todos tab when the active session has none — without requiring the tab to
@@ -134,6 +137,7 @@ export function RightPanel() {
           <PullRequestsTab
             repoPath={repoPath}
             onOpenDetail={(number) => setPrDetail({ repoPath, number })}
+            refreshKey={prListVersion}
           />
         ) : (
           <Empty msg="No project selected" />
@@ -150,6 +154,7 @@ export function RightPanel() {
         open={prDetail}
         cwd={repoPath ?? undefined}
         onClose={() => setPrDetail(null)}
+        onMutated={() => setPrListVersion((v) => v + 1)}
       />
     </aside>
   );
@@ -916,9 +921,12 @@ const PR_REFRESH_INTERVAL_MS = 60_000;
 function PullRequestsTab({
   repoPath,
   onOpenDetail,
+  refreshKey,
 }: {
   repoPath: string;
   onOpenDetail: (number: number) => void;
+  /** Bumped by the parent to force an out-of-band refetch (e.g. after a PR is merged via the modal). */
+  refreshKey: number;
 }) {
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const [listing, setListing] = useState<PullRequestListing | null>(null);
@@ -968,6 +976,22 @@ function PullRequestsTab({
       clearInterval(handle);
     };
   }, [fetchPrs]);
+
+  // Out-of-band refresh when the parent bumps `refreshKey` (e.g. PR merged via
+  // the detail modal). Skip the very first render since the effect above
+  // already kicks off the initial fetch.
+  const firstRefreshKeyRender = useRef(true);
+  useEffect(() => {
+    if (firstRefreshKeyRender.current) {
+      firstRefreshKeyRender.current = false;
+      return;
+    }
+    const signal = { cancelled: false };
+    void fetchPrs(signal);
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [refreshKey, fetchPrs]);
 
   async function copyText(text: string) {
     try {
