@@ -247,12 +247,19 @@ function DetailBody({
           label="Checks"
           badge={
             allChecksPassed ? (
-              <Check size={11} strokeWidth={3} className="text-emerald-400" />
+              <Check size={11} strokeWidth={3} className="text-emerald-300" />
             ) : allChecksFailed ? (
-              <X size={11} strokeWidth={3} className="text-rose-400" />
+              <X size={11} strokeWidth={3} className="text-rose-300" />
             ) : checksPartial ? (
               `${checkCounts.passed}/${totalChecks}`
             ) : null
+          }
+          badgeTone={
+            allChecksPassed
+              ? "success"
+              : allChecksFailed
+                ? "danger"
+                : "default"
           }
           active={tab === "checks"}
           onClick={() => onTab("checks")}
@@ -282,10 +289,13 @@ function DetailBody({
   );
 }
 
+type BadgeTone = "default" | "success" | "danger";
+
 interface DetailTabButtonProps {
   icon: React.ReactNode;
   label: string;
   badge?: React.ReactNode;
+  badgeTone?: BadgeTone;
   active: boolean;
   onClick: () => void;
 }
@@ -294,6 +304,7 @@ function DetailTabButton({
   icon,
   label,
   badge,
+  badgeTone = "default",
   active,
   onClick,
 }: DetailTabButtonProps) {
@@ -314,7 +325,13 @@ function DetailTabButton({
         <span
           className={cn(
             "flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-medium tabular-nums",
-            active ? "bg-accent/20 text-fg" : "bg-fg-muted/15 text-fg-muted",
+            badgeTone === "danger"
+              ? "bg-rose-500/20 text-rose-300"
+              : badgeTone === "success"
+                ? "bg-emerald-500/20 text-emerald-300"
+                : active
+                  ? "bg-accent/20 text-fg"
+                  : "bg-fg-muted/15 text-fg-muted",
           )}
         >
           {badge}
