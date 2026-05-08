@@ -451,16 +451,17 @@ function ProjectGroupView({
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
-        <span
-          draggable
-          onDragStart={onDragStart}
-          onClick={(e) => e.stopPropagation()}
-          aria-label="Drag to reorder project"
-          title="Drag to reorder"
-          className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
-        >
-          <GripVertical size={12} />
-        </span>
+        <Tooltip label="Drag to reorder" side="bottom">
+          <span
+            draggable
+            onDragStart={onDragStart}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Drag to reorder project"
+            className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
+          >
+            <GripVertical size={12} />
+          </span>
+        </Tooltip>
         <button
           type="button"
           onClick={(e) => {
@@ -581,7 +582,6 @@ function ProjectGroupView({
                   onAddSession(false);
                 }
               }}
-              title="Click to activate · double-click to add a session"
               className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
             >
               No sessions. Add one with{" "}

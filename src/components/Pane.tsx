@@ -239,7 +239,6 @@ function EmptyPane({
       }}
       role="button"
       tabIndex={0}
-      title="Double-click to start a new session"
     >
       <TerminalIcon size={28} className="opacity-40" />
       <p className="text-xs">Drop a tab here or double-click to start a session</p>
@@ -362,7 +361,6 @@ function TabStrip({
       */}
       <div
         className="min-w-[2.5rem] flex-1"
-        title="Double-click to open a new session in this project"
         onDoubleClick={(e) => {
           if (e.target !== e.currentTarget) return;
           onNewTab();

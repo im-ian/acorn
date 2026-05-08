@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { countStats, parseDiff } from "../lib/diff";
 import { openFileInEditor } from "../lib/editor";
 import type { DiffFile, DiffPayload } from "../lib/types";
+import { Tooltip } from "./Tooltip";
 import { joinPath } from "../lib/paths";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffLine, useHighlightedDiff } from "./DiffView";
@@ -121,42 +122,48 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               const dir = dirnameOf(entry.path);
               return (
                 <li key={entry.index}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedIndex(entry.index)}
-                    onContextMenu={(e) => {
-                      if (!cwd) return;
-                      e.preventDefault();
-                      setSelectedIndex(entry.index);
-                      setMenu({ x: e.clientX, y: e.clientY, entry });
-                    }}
-                    title={entry.path}
-                    className={cn(
-                      "flex w-full flex-col items-stretch gap-0.5 px-3 py-1.5 text-left font-mono text-xs transition",
-                      active
-                        ? "bg-bg-elevated text-fg"
-                        : "text-fg-muted hover:bg-bg-elevated/60 hover:text-fg",
-                    )}
+                  <Tooltip
+                    label={entry.path}
+                    side="right"
+                    multiline
+                    className="w-full"
                   >
-                    <span className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate">
-                        {basenameOf(entry.path)}
-                      </span>
-                      <span className="flex shrink-0 gap-1.5 text-[10px]">
-                        <span className="text-[oklch(72%_0.16_145)]">
-                          +{entry.add}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIndex(entry.index)}
+                      onContextMenu={(e) => {
+                        if (!cwd) return;
+                        e.preventDefault();
+                        setSelectedIndex(entry.index);
+                        setMenu({ x: e.clientX, y: e.clientY, entry });
+                      }}
+                      className={cn(
+                        "flex w-full flex-col items-stretch gap-0.5 px-3 py-1.5 text-left font-mono text-xs transition",
+                        active
+                          ? "bg-bg-elevated text-fg"
+                          : "text-fg-muted hover:bg-bg-elevated/60 hover:text-fg",
+                      )}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate">
+                          {basenameOf(entry.path)}
                         </span>
-                        <span className="text-[oklch(62%_0.22_25)]">
-                          -{entry.del}
+                        <span className="flex shrink-0 gap-1.5 text-[10px]">
+                          <span className="text-[oklch(72%_0.16_145)]">
+                            +{entry.add}
+                          </span>
+                          <span className="text-[oklch(62%_0.22_25)]">
+                            -{entry.del}
+                          </span>
                         </span>
                       </span>
-                    </span>
-                    {dir ? (
-                      <span className="block truncate text-[10px] text-fg-muted/70">
-                        {dir}
-                      </span>
-                    ) : null}
-                  </button>
+                      {dir ? (
+                        <span className="block truncate text-[10px] text-fg-muted/70">
+                          {dir}
+                        </span>
+                      ) : null}
+                    </button>
+                  </Tooltip>
                 </li>
               );
             })}
@@ -167,9 +174,9 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
       <Panel id="content" order={2} defaultSize={72} minSize={40}>
         <section className="flex h-full flex-col bg-bg">
           <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-bg-elevated px-3 py-2 font-mono text-xs">
-            <span className="min-w-0 truncate text-fg" title={selected.path}>
-              {selected.path}
-            </span>
+            <Tooltip label={selected.path} side="bottom" multiline>
+              <span className="min-w-0 truncate text-fg">{selected.path}</span>
+            </Tooltip>
             <span className="flex shrink-0 gap-2">
               <span className="text-[oklch(72%_0.16_145)]">
                 +{selected.add}

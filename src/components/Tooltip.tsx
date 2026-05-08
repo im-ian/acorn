@@ -1,12 +1,31 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 
 interface TooltipProps {
-  label: string;
+  /**
+   * Tooltip content. A string keeps the legacy single-line look; pass a
+   * `ReactNode` (e.g. multiple lines) and set `multiline` to switch the
+   * container to a wrappable layout.
+   */
+  label: ReactNode;
   /** Where the tooltip appears relative to the trigger. Default: "bottom". */
   side?: "top" | "bottom" | "left" | "right";
   /** Delay before showing on hover, in ms. Default: 250. */
   delay?: number;
+  /**
+   * Allow the tooltip to span multiple lines. The container drops
+   * `whitespace-nowrap`, applies a sensible max width, and respects
+   * embedded newlines (`whitespace-pre-line`). Use for "full name + extra
+   * info" hovers on truncated rows.
+   */
+  multiline?: boolean;
   children: ReactNode;
   className?: string;
 }
@@ -62,10 +81,12 @@ export function Tooltip({
   label,
   side = "bottom",
   delay = 250,
+  multiline = false,
   children,
   className,
 }: TooltipProps) {
   const triggerRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
   const showTimer = useRef<number | null>(null);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
 
@@ -108,6 +129,33 @@ export function Tooltip({
 
   useEffect(() => () => clearTimer(), [clearTimer]);
 
+  // Clamp the tooltip into the viewport AFTER it has been measured. The
+  // initial `computePosition` anchors at the trigger center, which can
+  // leave the bubble overflowing on the right (or above the top) when the
+  // trigger sits near a screen edge — e.g. the status bar or a sidebar.
+  useLayoutEffect(() => {
+    if (position === null) return;
+    const el = tooltipRef.current;
+    if (!el) return;
+    const PAD = 8;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let dx = 0;
+    let dy = 0;
+    if (rect.left < PAD) dx = PAD - rect.left;
+    else if (rect.right > vw - PAD) dx = vw - PAD - rect.right;
+    if (rect.top < PAD) dy = PAD - rect.top;
+    else if (rect.bottom > vh - PAD) dy = vh - PAD - rect.bottom;
+    if (dx !== 0 || dy !== 0) {
+      // Mutate the style imperatively so we don't trigger a re-render and
+      // re-clamp loop. The transform that originated the centering is
+      // preserved; we only adjust the absolute origin.
+      el.style.left = `${position.left + dx}px`;
+      el.style.top = `${position.top + dy}px`;
+    }
+  }, [position]);
+
   return (
     <>
       <span
@@ -124,6 +172,7 @@ export function Tooltip({
       {position !== null
         ? createPortal(
             <span
+              ref={tooltipRef}
               role="tooltip"
               style={{
                 position: "fixed",
@@ -132,7 +181,11 @@ export function Tooltip({
                 transform: position.transform,
                 zIndex: 9999,
               }}
-              className="pointer-events-none whitespace-nowrap rounded border border-border bg-bg-elevated px-2 py-0.5 text-[11px] font-normal text-fg shadow-md"
+              className={
+                multiline
+                  ? "pointer-events-none max-w-xs whitespace-pre-line break-words rounded border border-border bg-bg-elevated px-2 py-1 text-[11px] font-normal leading-snug text-fg shadow-md"
+                  : "pointer-events-none whitespace-nowrap rounded border border-border bg-bg-elevated px-2 py-0.5 text-[11px] font-normal text-fg shadow-md"
+              }
             >
               {label}
             </span>,

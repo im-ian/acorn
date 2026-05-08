@@ -4,6 +4,7 @@ import { cn } from "../lib/cn";
 import { countStats, parseDiff, type ParsedLine } from "../lib/diff";
 import { highlightDiff, langFromPath } from "../lib/highlight";
 import type { DiffFile, DiffPayload } from "../lib/types";
+import { Tooltip } from "./Tooltip";
 
 interface DiffViewProps {
   payload: DiffPayload;
@@ -65,15 +66,16 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
             </button>
           ) : null}
           {onExpand ? (
-            <button
-              type="button"
-              onClick={onExpand}
-              className="rounded p-1 transition hover:bg-bg-elevated hover:text-fg"
-              title="Open full diff"
-              aria-label="Open full diff"
-            >
-              <Maximize2 size={12} />
-            </button>
+            <Tooltip label="Open full diff" side="bottom">
+              <button
+                type="button"
+                onClick={onExpand}
+                className="rounded p-1 transition hover:bg-bg-elevated hover:text-fg"
+                aria-label="Open full diff"
+              >
+                <Maximize2 size={12} />
+              </button>
+            </Tooltip>
           ) : null}
         </span>
       </div>

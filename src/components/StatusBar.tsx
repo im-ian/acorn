@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { MemoryProcess } from "../lib/types";
 import { useAppStore } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
+import { Tooltip } from "./Tooltip";
 
 const MEMORY_POLL_MS = 2000;
 
@@ -118,37 +119,36 @@ export function StatusBar() {
         <span className="ml-auto flex min-w-0 items-center gap-3">
           {loading ? <span>working...</span> : null}
           {error ? (
-            <span className="truncate text-danger" title={error}>
-              error: {error}
-            </span>
+            <Tooltip label={error} side="top" multiline>
+              <span className="truncate text-danger">error: {error}</span>
+            </Tooltip>
           ) : null}
           {prAccount ? (
-            <span
-              className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted"
-              title={`PRs listed via gh account ${prAccount}`}
-            >
-              <GitHubMark />
-              {prAccount}
-            </span>
+            <Tooltip label={`PRs listed via gh account ${prAccount}`} side="top">
+              <span className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
+                <GitHubMark />
+                {prAccount}
+              </span>
+            </Tooltip>
           ) : null}
           {active && displayPath ? (
-            <span
-              className="truncate text-right text-fg-muted"
-              title={active.worktree_path}
-            >
-              {displayPath}
-            </span>
+            <Tooltip label={active.worktree_path} side="top" multiline>
+              <span className="truncate text-right text-fg-muted">
+                {displayPath}
+              </span>
+            </Tooltip>
           ) : null}
           <span className="text-fg-muted/50">|</span>
-          <button
-            type="button"
-            disabled={!memory}
-            onClick={() => setBreakdownOpen(true)}
-            title="Click to view per-process breakdown"
-            className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-          >
-            mem: {memory ? formatBytes(memory.bytes) : "–"}
-          </button>
+          <Tooltip label="Click to view per-process breakdown" side="top">
+            <button
+              type="button"
+              disabled={!memory}
+              onClick={() => setBreakdownOpen(true)}
+              className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              mem: {memory ? formatBytes(memory.bytes) : "–"}
+            </button>
+          </Tooltip>
         </span>
       </footer>
 
