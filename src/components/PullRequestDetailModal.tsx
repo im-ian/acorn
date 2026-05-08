@@ -157,6 +157,8 @@ function DetailBody({
   onClose: () => void;
 }) {
   const conversationCount = detail.comments.length + detail.reviews.length;
+  const checkCounts = summarizeChecks(detail.checks);
+  const fileCount = detail.diff.files.length;
 
   return (
     <>
@@ -223,21 +225,25 @@ function DetailBody({
         <DetailTabButton
           icon={<MessagesSquare size={13} />}
           label="Conversation"
-          badge={conversationCount}
+          badge={conversationCount > 0 ? conversationCount : null}
           active={tab === "conversation"}
           onClick={() => onTab("conversation")}
         />
         <DetailTabButton
           icon={<CheckCircle2 size={13} />}
           label="Checks"
-          badge={detail.checks.length}
+          badge={
+            detail.checks.length > 0 ? (
+              <ChecksBadge counts={checkCounts} />
+            ) : null
+          }
           active={tab === "checks"}
           onClick={() => onTab("checks")}
         />
         <DetailTabButton
           icon={<GitPullRequest size={13} />}
           label="Files"
-          badge={detail.diff.files.length}
+          badge={fileCount > 0 ? fileCount : null}
           active={tab === "files"}
           onClick={() => onTab("files")}
         />
@@ -262,7 +268,7 @@ function DetailBody({
 interface DetailTabButtonProps {
   icon: React.ReactNode;
   label: string;
-  badge: number;
+  badge?: React.ReactNode;
   active: boolean;
   onClick: () => void;
 }
@@ -287,10 +293,10 @@ function DetailTabButton({
     >
       {icon}
       {label}
-      {badge > 0 ? (
+      {badge != null && badge !== false ? (
         <span
           className={cn(
-            "rounded-full px-1.5 py-px text-[9px] font-medium tabular-nums",
+            "flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-medium tabular-nums",
             active ? "bg-accent/20 text-fg" : "bg-fg-muted/15 text-fg-muted",
           )}
         >
@@ -298,6 +304,55 @@ function DetailTabButton({
         </span>
       ) : null}
     </button>
+  );
+}
+
+interface CheckCounts {
+  passed: number;
+  failed: number;
+  pending: number;
+}
+
+function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
+  let passed = 0;
+  let failed = 0;
+  let pending = 0;
+  for (const c of checks) {
+    if (c.status.toUpperCase() !== "COMPLETED") {
+      pending += 1;
+      continue;
+    }
+    switch ((c.conclusion ?? "").toUpperCase()) {
+      case "SUCCESS":
+        passed += 1;
+        break;
+      case "FAILURE":
+      case "TIMED_OUT":
+      case "ACTION_REQUIRED":
+        failed += 1;
+        break;
+      default:
+        // NEUTRAL, SKIPPED, CANCELLED — do not count toward pass or fail.
+        break;
+    }
+  }
+  return { passed, failed, pending };
+}
+
+function ChecksBadge({ counts }: { counts: CheckCounts }) {
+  const { passed, failed, pending } = counts;
+  return (
+    <>
+      <span className="text-emerald-400">{passed}</span>
+      <span className="opacity-40">/</span>
+      <span className="text-rose-400">{failed}</span>
+      {pending > 0 ? (
+        <>
+          <span className="opacity-40">·</span>
+          <span className="text-fg-muted">{pending}</span>
+        </>
+      ) : null}
+    </>
   );
 }
 
