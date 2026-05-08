@@ -4,6 +4,7 @@ import { useUpdater } from "../lib/updater-store";
 import { Modal } from "./ui/Modal";
 import { ModalHeader } from "./ui/ModalHeader";
 import { Markdown } from "./ui/Markdown";
+import { TextSwap } from "./ui/TextSwap";
 
 interface WhatsNewModalProps {
   open: boolean;
@@ -80,7 +81,7 @@ export function WhatsNewModal({
           className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
         >
           <Download size={12} />
-          {busy ? "Installing…" : "Install & relaunch"}
+          <TextSwap>{busy ? "Installing…" : "Install & relaunch"}</TextSwap>
         </button>
       </footer>
     </Modal>
