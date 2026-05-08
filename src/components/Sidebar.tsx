@@ -447,7 +447,7 @@ function ProjectGroupView({
         }}
         aria-label={`Project ${project.name}`}
         className={cn(
-          "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
+          "group flex items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
@@ -722,7 +722,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
-          "group flex w-full cursor-pointer items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
+          "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
         )}
       >

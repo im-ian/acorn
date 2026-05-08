@@ -1066,7 +1066,7 @@ function PullRequestsTab({
                     onOpenDetail(pr.number);
                   }
                 }}
-                className="flex w-full cursor-pointer flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50 focus-visible:outline-none focus-visible:bg-bg-elevated/60"
+                className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50 focus-visible:outline-none focus-visible:bg-bg-elevated/60"
                 title={`${absoluteTime(toUnixSeconds(pr.updated_at))} · double-click to open`}
               >
                 <span className="flex w-full min-w-0 items-center gap-2">
