@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { Panel, PanelGroup } from "react-resizable-panels";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Panel,
+  PanelGroup,
+  type ImperativePanelHandle,
+} from "react-resizable-panels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "./App.css";
 import { Sidebar } from "./components/Sidebar";
@@ -17,6 +21,24 @@ import { Hotkeys, useHotkeys } from "./lib/hotkeys";
 import { startSessionNotificationWatcher } from "./lib/notifications";
 import { useSettings } from "./lib/settings";
 import { useAppStore } from "./store";
+
+const FOCUSABLE_SELECTOR =
+  "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
+
+function focusPanel(id: "sidebar" | "main" | "right") {
+  const panel = document.querySelector(
+    `[data-panel-id="${id}"]`,
+  ) as HTMLElement | null;
+  if (!panel) return;
+  // For the main pane, prefer xterm's hidden textarea so keystrokes route
+  // straight to the active terminal instead of the first toolbar button.
+  const target =
+    (panel.querySelector(
+      ".xterm-helper-textarea",
+    ) as HTMLElement | null) ??
+    (panel.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
+  target?.focus();
+}
 
 function App() {
   const refreshAll = useAppStore((s) => s.refreshAll);
@@ -38,6 +60,8 @@ function App() {
     ? sessions.filter((s) => s.repo_path === pendingProject.repo_path)
     : [];
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
+  const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
 
   useEffect(() => {
     refreshAll();
@@ -96,6 +120,46 @@ function App() {
       [Hotkeys.openPalette]: (e: KeyboardEvent) => {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      },
+      [Hotkeys.newSession]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("acorn:new-session"));
+      },
+      [Hotkeys.newIsolatedSession]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("acorn:new-isolated-session"));
+      },
+      [Hotkeys.addProject]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("acorn:add-project"));
+      },
+      [Hotkeys.focusSidebar]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        sidebarPanelRef.current?.expand();
+        focusPanel("sidebar");
+      },
+      [Hotkeys.focusMain]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusPanel("main");
+      },
+      [Hotkeys.focusRight]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        rightPanelRef.current?.expand();
+        focusPanel("right");
+      },
+      [Hotkeys.toggleSidebar]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        const panel = sidebarPanelRef.current;
+        if (!panel) return;
+        if (panel.isCollapsed()) panel.expand();
+        else panel.collapse();
+      },
+      [Hotkeys.toggleRightPanel]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        const panel = rightPanelRef.current;
+        if (!panel) return;
+        if (panel.isCollapsed()) panel.expand();
+        else panel.collapse();
       },
       [Hotkeys.clearTerminal]: (e: KeyboardEvent) => {
         const sessionId = useAppStore.getState().activeSessionId;
@@ -181,6 +245,7 @@ function App() {
       <div className="flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
+            ref={sidebarPanelRef}
             id="sidebar"
             order={1}
             defaultSize={18}
@@ -197,6 +262,7 @@ function App() {
           </Panel>
           <ResizeHandle />
           <Panel
+            ref={rightPanelRef}
             id="right"
             order={3}
             defaultSize={26}
