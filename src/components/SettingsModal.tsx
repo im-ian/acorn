@@ -638,7 +638,7 @@ function StorageSettings() {
               disabled={busy}
               className="rounded bg-danger px-2 py-1 text-[11px] font-medium text-white transition hover:bg-danger/90 disabled:opacity-50"
             >
-              {busy ? "Clearing…" : "Clear cache"}
+              <TextSwap>{busy ? "Clearing…" : "Clear cache"}</TextSwap>
             </button>
           </div>
         </div>

@@ -1,4 +1,8 @@
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import {
+  check,
+  type DownloadEvent,
+  type Update,
+} from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 
@@ -24,7 +28,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
  *     user's next manual launch.
  */
 
-export type { Update };
+export type { DownloadEvent, Update };
 
 /**
  * Check the configured update endpoint. Returns the `Update` handle when
@@ -55,16 +59,10 @@ export async function getCurrentVersion(): Promise<string> {
  */
 export async function installUpdate(
   update: Update,
-  onProgress?: (event: ProgressEvent) => void,
+  onProgress?: (event: DownloadEvent) => void,
 ): Promise<void> {
   await update.downloadAndInstall((event) => {
     onProgress?.(event);
   });
   await relaunch();
 }
-
-/** Re-exported `DownloadEvent` shape from the updater plugin. */
-export type ProgressEvent =
-  | { event: "Started"; data: { contentLength?: number } }
-  | { event: "Progress"; data: { chunkLength: number } }
-  | { event: "Finished" };
