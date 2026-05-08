@@ -857,7 +857,9 @@ function StagedTab({
               <span className="w-24 shrink-0 truncate text-fg-muted">
                 {f.status}
               </span>
-              <span className="truncate text-fg">{f.path}</span>
+              <Tooltip label={f.path} side="top" multiline>
+                <span className="truncate text-fg">{f.path}</span>
+              </Tooltip>
             </li>
           ))}
         </ul>
