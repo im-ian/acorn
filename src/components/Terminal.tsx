@@ -226,10 +226,16 @@ export function Terminal({
       const cell = getCellDims();
       compositionView.textContent = text;
       if (cell) {
-        const cursorX = term.buffer.active.cursorX;
-        const cursorY = term.buffer.active.cursorY;
-        compositionView.style.left = `${cursorX * cell.width}px`;
-        compositionView.style.top = `${cursorY * cell.height}px`;
+        const buf = term.buffer.active;
+        // `cursorY` is buffer-relative (includes scrollback); the
+        // composition overlay's CSS coords are viewport-relative, so
+        // subtract the viewport's scrollback offset (`viewportY`) to
+        // get the cursor's row inside the visible area. Without this,
+        // a session restored from a long scrollback positions the
+        // overlay thousands of pixels below the visible terminal.
+        const cursorViewportY = buf.cursorY - buf.viewportY;
+        compositionView.style.left = `${buf.cursorX * cell.width}px`;
+        compositionView.style.top = `${cursorViewportY * cell.height}px`;
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
       }
@@ -454,10 +460,11 @@ export function Terminal({
       }
       const cell = getCellDims();
       if (!cell) return;
-      const cursorX = term.buffer.active.cursorX;
-      const cursorY = term.buffer.active.cursorY;
-      compositionView.style.left = `${cursorX * cell.width}px`;
-      compositionView.style.top = `${cursorY * cell.height}px`;
+      const buf = term.buffer.active;
+      // See `showComposing` for why we subtract `viewportY` here.
+      const cursorViewportY = buf.cursorY - buf.viewportY;
+      compositionView.style.left = `${buf.cursorX * cell.width}px`;
+      compositionView.style.top = `${cursorViewportY * cell.height}px`;
     });
 
     // Custom event hook so a global hotkey (Cmd+K) can clear THIS terminal
@@ -639,7 +646,29 @@ export function Terminal({
         });
         if (disposed) return;
         if (saved && saved.length > 0) {
-          term.write(saved);
+          // Wait for the snapshot to fully drain into the buffer before
+          // we issue the post-restore mode reset, so the reset is not
+          // re-overwritten by trailing escape sequences in the snapshot.
+          await new Promise<void>((resolve) => term.write(saved, resolve));
+          if (disposed) return;
+          // Reset just the mode bits that actually break the next
+          // session: scroll region, auto-wrap, cursor visibility. We
+          // intentionally do NOT issue `\e[?1049l` (alt-screen exit)
+          // unless the snapshot left us inside the alt buffer — in
+          // xterm.js that sequence pushes the alt buffer contents into
+          // the normal buffer's scrollback when there is no matching
+          // entry, doubling the apparent scroll history.
+          if (term.buffer.active.type === "alternate") {
+            term.write("\x1b[?1049l");
+          }
+          term.write("\x1b[r");    // reset DECSTBM (full-screen scroll region)
+          term.write("\x1b[?7h");  // DECAWM auto-wrap on
+          term.write("\x1b[?25h"); // DECTCEM cursor visible
+          term.write("\x1b[!p");   // DECSTR soft reset (mop up the rest)
+          // Park the cursor on column 0 of a fresh row so the marker
+          // (and the about-to-spawn shell prompt) start from a known
+          // baseline regardless of where the snapshot left the cursor.
+          term.write("\r");
           term.write(
             `\r\n${ANSI_DIM}— restored from previous session —${ANSI_RESET}\r\n`,
           );
