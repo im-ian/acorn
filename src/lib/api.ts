@@ -118,11 +118,15 @@ export const api = {
     repoPath: string,
     number: number,
     method: MergeMethod,
+    command: string,
+    args: string[],
   ): Promise<GeneratedCommitMessage> {
     return invoke<GeneratedCommitMessage>("generate_pr_commit_message", {
       repoPath,
       number,
       method,
+      command,
+      args,
     });
   },
   getMemoryUsage(): Promise<MemoryUsage> {
