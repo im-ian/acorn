@@ -738,12 +738,14 @@ export function Terminal({
     };
   }, [isActive]);
 
+  // FitAddon subtracts padding from xterm.element, not its parent — keep the gutter on the outer wrapper so xterm's parent stays padding-free and rows don't overflow past the pane body.
   return (
     <div
-      ref={containerRef}
-      className="acorn-terminal h-full w-full"
+      className="relative h-full w-full"
       style={{ padding: "16px 8px", background: TERMINAL_BG }}
-    />
+    >
+      <div ref={containerRef} className="acorn-terminal h-full w-full" />
+    </div>
   );
 }
 
