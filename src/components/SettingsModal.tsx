@@ -5,7 +5,7 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { sendTestNotification } from "../lib/notifications";
 import { useUpdater } from "../lib/updater-store";
-import { Markdown } from "./ui/Markdown";
+import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
   type SelectedAgent,
@@ -679,10 +679,13 @@ function AboutSettings() {
   const check = useUpdater((s) => s.check);
   const install = useUpdater((s) => s.install);
   const init = useUpdater((s) => s.init);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
 
   useEffect(() => {
     void init();
   }, [init]);
+
+  const hasNotes = (available?.body?.trim().length ?? 0) > 0;
 
   return (
     <section className="space-y-4">
@@ -708,16 +711,25 @@ function AboutSettings() {
           </span>
         </div>
         {available ? (
-          <div className="space-y-2 border-t border-border bg-accent/10 px-3 py-2.5">
-            <div className="flex items-baseline justify-between gap-3">
-              <div className="space-y-0.5">
-                <div className="text-xs font-medium text-fg">
-                  Update available
-                </div>
-                <div className="text-[11px] text-fg-muted">
-                  Acorn {available.version} is ready to install.
-                </div>
+          <div className="flex items-baseline justify-between gap-3 border-t border-border bg-accent/10 px-3 py-2.5">
+            <div className="space-y-0.5">
+              <div className="text-xs font-medium text-fg">
+                Update available
               </div>
+              <div className="text-[11px] text-fg-muted">
+                Acorn {available.version} is ready to install.
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {hasNotes ? (
+                <button
+                  type="button"
+                  onClick={() => setWhatsNewOpen(true)}
+                  className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
+                >
+                  What&apos;s new
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void install()}
@@ -728,19 +740,6 @@ function AboutSettings() {
                 {busy ? "Installing…" : "Install & relaunch"}
               </button>
             </div>
-            {available.body && available.body.trim().length > 0 ? (
-              <details className="group">
-                <summary className="cursor-pointer text-[11px] text-fg-muted transition hover:text-fg">
-                  What&apos;s new
-                </summary>
-                <div className="mt-2 max-h-64 overflow-y-auto rounded border border-border bg-bg p-3">
-                  <Markdown
-                    content={available.body}
-                    className="text-[11px]"
-                  />
-                </div>
-              </details>
-            ) : null}
           </div>
         ) : null}
       </div>
@@ -762,6 +761,11 @@ function AboutSettings() {
           {busy ? "Checking…" : "Check for updates"}
         </button>
       </div>
+
+      <WhatsNewModal
+        open={whatsNewOpen}
+        onClose={() => setWhatsNewOpen(false)}
+      />
     </section>
   );
 }
