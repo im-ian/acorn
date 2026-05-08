@@ -578,10 +578,11 @@ function CheckStatusLabel({
   status: string;
   conclusion: string | null;
 }) {
-  const text =
+  const raw =
     status.toUpperCase() === "COMPLETED"
-      ? (conclusion ?? "completed").toLowerCase()
-      : status.toLowerCase();
+      ? (conclusion ?? "completed")
+      : status;
+  const text = raw.toLowerCase().replace(/_/g, " ");
   return (
     <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
   );
