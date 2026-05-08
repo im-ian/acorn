@@ -975,36 +975,42 @@ function PullRequestsTab({
         ) : (
           <ul className="text-xs">
             {listing.items.map((pr) => (
-              <li key={pr.number}>
-                <button
-                  type="button"
-                  onDoubleClick={() => onOpenDetail(pr.number)}
-                  onContextMenu={(e) => {
+              <li
+                key={pr.number}
+                role="button"
+                tabIndex={0}
+                onDoubleClick={() => onOpenDetail(pr.number)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, pr });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
                     e.preventDefault();
-                    setMenu({ x: e.clientX, y: e.clientY, pr });
-                  }}
-                  className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50"
-                  title={`${absoluteTime(toUnixSeconds(pr.updated_at))} · double-click to open`}
-                >
-                  <span className="flex w-full min-w-0 items-center gap-2">
-                    <span className="shrink-0 font-mono text-fg-muted">
-                      #{pr.number}
-                    </span>
-                    <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
-                    <span className="truncate text-fg">{pr.title}</span>
+                    onOpenDetail(pr.number);
+                  }
+                }}
+                className="flex w-full cursor-pointer flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50 focus-visible:outline-none focus-visible:bg-bg-elevated/60"
+                title={`${absoluteTime(toUnixSeconds(pr.updated_at))} · double-click to open`}
+              >
+                <span className="flex w-full min-w-0 items-center gap-2">
+                  <span className="shrink-0 font-mono text-fg-muted">
+                    #{pr.number}
                   </span>
-                  <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
-                    <span className="truncate">{pr.author}</span>
-                    <span className="opacity-50">·</span>
-                    <span className="truncate font-mono">
-                      {pr.head_branch} → {pr.base_branch}
-                    </span>
-                    <span className="opacity-50">·</span>
-                    <span className="font-mono">
-                      {relativeTime(toUnixSeconds(pr.updated_at))}
-                    </span>
+                  <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
+                  <span className="truncate text-fg">{pr.title}</span>
+                </span>
+                <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
+                  <span className="truncate">{pr.author}</span>
+                  <span className="opacity-50">·</span>
+                  <span className="truncate font-mono">
+                    {pr.head_branch} → {pr.base_branch}
                   </span>
-                </button>
+                  <span className="opacity-50">·</span>
+                  <span className="font-mono">
+                    {relativeTime(toUnixSeconds(pr.updated_at))}
+                  </span>
+                </span>
               </li>
             ))}
           </ul>
