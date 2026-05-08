@@ -97,3 +97,28 @@ async function fire(session: Session): Promise<void> {
     console.error("[notifications] sendNotification failed", err);
   }
 }
+
+/**
+ * Send a one-off "this is a test" system notification, surfaced from the
+ * Notifications settings tab so the user can confirm the OS-level
+ * permission and sound/visibility plumbing works without waiting for a
+ * real session-status transition. Returns the resolved status:
+ *
+ * - `"sent"`  — fire-and-forget succeeded
+ * - `"denied"` — the OS rejected (or the user dismissed) the permission prompt
+ * - `"error"` — `sendNotification` threw; details are logged to the console
+ */
+export async function sendTestNotification(): Promise<"sent" | "denied" | "error"> {
+  const ok = await ensurePermission();
+  if (!ok) return "denied";
+  try {
+    sendNotification({
+      title: "Acorn — test notification",
+      body: "If you can see this, system notifications are working.",
+    });
+    return "sent";
+  } catch (err) {
+    console.error("[notifications] test sendNotification failed", err);
+    return "error";
+  }
+}
