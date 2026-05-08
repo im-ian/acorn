@@ -72,6 +72,19 @@ pub struct PullRequestInfo {
     /// ISO-8601 timestamp from gh; the frontend formats it for display.
     pub updated_at: String,
     pub is_draft: bool,
+    /// Aggregate of status checks on the head sha, mirroring the detail
+    /// modal's badge logic. `None` when gh returned no rollup entries.
+    pub checks: Option<ChecksSummary>,
+}
+
+/// Pass / fail / pending counts derived from `statusCheckRollup`. NEUTRAL,
+/// SKIPPED, CANCELLED conclusions are intentionally excluded so an optional
+/// skipped job doesn't push a green PR into the partial bucket.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChecksSummary {
+    pub passed: u32,
+    pub failed: u32,
+    pub pending: u32,
 }
 
 /// One gh login that was probed during account resolution. `has_access` lets
@@ -100,6 +113,8 @@ struct GhPullRequest {
     updated_at: String,
     #[serde(rename = "isDraft", default)]
     is_draft: bool,
+    #[serde(rename = "statusCheckRollup", default)]
+    status_check_rollup: Option<Vec<GhCheck>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -290,7 +305,8 @@ fn run_pr_list(
             "--limit",
             &limit.to_string(),
             "--json",
-            "number,title,state,author,headRefName,baseRefName,url,updatedAt,isDraft",
+            "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
+             isDraft,statusCheckRollup",
         ])
         .output()
         .map_err(map_gh_spawn_error)?;
@@ -310,18 +326,60 @@ fn run_pr_list(
 
     Ok(raw
         .into_iter()
-        .map(|pr| PullRequestInfo {
-            number: pr.number,
-            title: pr.title,
-            state: pr.state,
-            author: pr.author.login.unwrap_or_else(|| "unknown".to_string()),
-            head_branch: pr.head_ref_name,
-            base_branch: pr.base_ref_name,
-            url: pr.url,
-            updated_at: pr.updated_at,
-            is_draft: pr.is_draft,
+        .map(|pr| {
+            let checks = pr.status_check_rollup.as_deref().and_then(|rollup| {
+                if rollup.is_empty() {
+                    None
+                } else {
+                    Some(summarize_checks(rollup))
+                }
+            });
+            PullRequestInfo {
+                number: pr.number,
+                title: pr.title,
+                state: pr.state,
+                author: pr.author.login.unwrap_or_else(|| "unknown".to_string()),
+                head_branch: pr.head_ref_name,
+                base_branch: pr.base_ref_name,
+                url: pr.url,
+                updated_at: pr.updated_at,
+                is_draft: pr.is_draft,
+                checks,
+            }
         })
         .collect())
+}
+
+/// Aggregate `statusCheckRollup` entries into pass/fail/pending counts.
+/// Mirrors the frontend's `summarizeChecks` so list and detail views agree.
+fn summarize_checks(checks: &[GhCheck]) -> ChecksSummary {
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    let mut pending = 0u32;
+    for c in checks {
+        let status = c.status.as_deref().unwrap_or("").to_ascii_uppercase();
+        if status != "COMPLETED" {
+            pending += 1;
+            continue;
+        }
+        match c
+            .conclusion
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "SUCCESS" => passed += 1,
+            "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" => failed += 1,
+            // NEUTRAL / SKIPPED / CANCELLED: no signal — excluded from totals.
+            _ => {}
+        }
+    }
+    ChecksSummary {
+        passed,
+        failed,
+        pending,
+    }
 }
 
 struct PickedAccount {

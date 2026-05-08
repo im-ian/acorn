@@ -77,6 +77,12 @@ export interface TodoItem {
 
 export type PrStateFilter = "open" | "closed" | "merged" | "all";
 
+export interface PullRequestChecksSummary {
+  passed: number;
+  failed: number;
+  pending: number;
+}
+
 export interface PullRequestInfo {
   number: number;
   title: string;
@@ -87,6 +93,8 @@ export interface PullRequestInfo {
   url: string;
   updated_at: string;
   is_draft: boolean;
+  /** Aggregate of head-sha checks. null when gh returned no rollup entries. */
+  checks: PullRequestChecksSummary | null;
 }
 
 export interface AccountSummary {
