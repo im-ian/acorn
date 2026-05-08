@@ -370,22 +370,120 @@ pub async fn pty_spawn<R: Runtime>(
     if state.pty.contains(&id) {
         return Ok(());
     }
-    // An empty/missing command means "use the user's default shell". This is
-    // how the frontend signals the "Terminal" startup mode from settings.
-    let resolved_command = match command {
-        Some(c) if !c.trim().is_empty() => c,
-        _ => std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+    // Resolve the actual (command, args) pair to spawn:
+    //
+    //   * Terminal mode  — frontend sends an empty/missing command, asking us
+    //     to drop the user into their interactive shell. Spawn $SHELL directly
+    //     so the prompt is the user's real shell.
+    //
+    //   * Agent / Custom mode — frontend sends e.g. `claude` with args. On
+    //     macOS GUI launches (Dock/Spotlight) the parent process inherits a
+    //     sanitized PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) and never sources
+    //     `~/.zshrc` / `~/.zprofile`, so binaries installed via Homebrew, npm,
+    //     bun, pnpm, pyenv, asdf, mise, etc. are invisible to spawn_command
+    //     and PTY creation fails with "No viable candidates found in PATH".
+    //
+    //     To fix this without acorn having to know each shell's rc-file
+    //     conventions, we wrap the target through the user's login+interactive
+    //     shell. The shell sources its rc files (picking up PATH, aliases,
+    //     env vars, shims) and then `exec`s the target — replacing itself
+    //     in-place so the PTY's child is the requested binary, not the shell.
+    let user_command_raw = match command {
+        Some(c) if !c.trim().is_empty() => Some(c),
+        _ => None,
+    };
+    let user_args = args.unwrap_or_default();
+    let (resolved_command, resolved_args) = match user_command_raw {
+        None => {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            (shell, user_args)
+        }
+        Some(user_command) => {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let mut script = String::from("exec ");
+            script.push_str(&shell_quote(&user_command));
+            for a in &user_args {
+                script.push(' ');
+                script.push_str(&shell_quote(a));
+            }
+            (shell, vec!["-l".to_string(), "-i".to_string(), "-c".to_string(), script])
+        }
     };
     state.pty.spawn(
         app,
         id,
         cwd,
         resolved_command,
-        args.unwrap_or_default(),
+        resolved_args,
         env.unwrap_or_default(),
         cols.unwrap_or(0),
         rows.unwrap_or(0),
     )
+}
+
+/// Quote `s` so a POSIX shell parses it as a single argument verbatim.
+/// Returns `s` unquoted when it is composed solely of safe characters that
+/// the shell would not interpret (alphanumerics and a small allow-list);
+/// otherwise wraps it in single quotes with embedded `'` escaped as `'\''`.
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let safe = s.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || matches!(b, b'_' | b'-' | b'/' | b'.' | b'=' | b':' | b',' | b'@' | b'+')
+    });
+    if safe {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+#[cfg(test)]
+mod shell_quote_tests {
+    use super::shell_quote;
+
+    #[test]
+    fn safe_inputs_pass_through() {
+        assert_eq!(shell_quote("claude"), "claude");
+        assert_eq!(shell_quote("--session-id"), "--session-id");
+        assert_eq!(shell_quote("a1b2-c3d4"), "a1b2-c3d4");
+        assert_eq!(shell_quote("/usr/local/bin/foo"), "/usr/local/bin/foo");
+        assert_eq!(shell_quote("KEY=value"), "KEY=value");
+    }
+
+    #[test]
+    fn empty_becomes_empty_quotes() {
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn space_triggers_quoting() {
+        assert_eq!(shell_quote("hello world"), "'hello world'");
+    }
+
+    #[test]
+    fn embedded_single_quote_is_escaped() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_metacharacters_are_quoted() {
+        assert_eq!(shell_quote("a;b"), "'a;b'");
+        assert_eq!(shell_quote("$HOME"), "'$HOME'");
+        assert_eq!(shell_quote("`ls`"), "'`ls`'");
+        assert_eq!(shell_quote("a|b"), "'a|b'");
+    }
 }
 
 #[tauri::command]
