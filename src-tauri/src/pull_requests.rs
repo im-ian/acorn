@@ -624,6 +624,10 @@ pub struct PullRequestDetail {
     pub additions: u64,
     pub deletions: u64,
     pub changed_files: u64,
+    /// `MERGEABLE` / `CONFLICTING` / `UNKNOWN`. Mirrors the GraphQL field exposed
+    /// by `gh pr view --json mergeable`. The frontend uses this to decide
+    /// whether to enable the merge button.
+    pub mergeable: Option<String>,
     pub comments: Vec<PullRequestComment>,
     pub reviews: Vec<PullRequestReview>,
     pub checks: Vec<PullRequestCheck>,
@@ -743,6 +747,7 @@ fn build_detail(
         additions: view.additions.unwrap_or(0),
         deletions: view.deletions.unwrap_or(0),
         changed_files: view.changed_files.unwrap_or(0),
+        mergeable: view.mergeable,
         comments,
         reviews,
         checks,
@@ -763,7 +768,7 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
             "--json",
             "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
              createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
-             comments,reviews,statusCheckRollup",
+             mergeable,comments,reviews,statusCheckRollup",
         ])
         .output()
         .map_err(map_gh_spawn_error)?;
@@ -835,6 +840,7 @@ struct GhPullRequestView {
     deletions: Option<u64>,
     #[serde(rename = "changedFiles")]
     changed_files: Option<u64>,
+    mergeable: Option<String>,
     comments: Option<Vec<GhComment>>,
     reviews: Option<Vec<GhReview>>,
     #[serde(rename = "statusCheckRollup")]
@@ -881,4 +887,315 @@ struct GhCheck {
     target_url: Option<String>,
     #[serde(rename = "workflowName")]
     workflow_name: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// PR mutations: merge / close / AI commit message
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeMethod {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl MergeMethod {
+    fn flag(self) -> &'static str {
+        match self {
+            MergeMethod::Squash => "--squash",
+            MergeMethod::Merge => "--merge",
+            MergeMethod::Rebase => "--rebase",
+        }
+    }
+
+    /// Squash and merge commits accept `--subject` / `--body` to override the
+    /// commit message. Rebase merges replay individual commits, so message
+    /// overrides are not applicable.
+    fn accepts_message_override(self) -> bool {
+        matches!(self, MergeMethod::Squash | MergeMethod::Merge)
+    }
+}
+
+pub fn merge_pull_request(
+    repo_path: &Path,
+    number: u64,
+    method: MergeMethod,
+    commit_title: Option<String>,
+    commit_body: Option<String>,
+) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_pr_merge(
+            &slug,
+            number,
+            token,
+            method,
+            commit_title.as_deref(),
+            commit_body.as_deref(),
+        )
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account has merge access to this repo.".to_string(),
+        )),
+    }
+}
+
+pub fn close_pull_request(repo_path: &Path, number: u64) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_pr_close(&slug, number, token)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account can close this PR.".to_string(),
+        )),
+    }
+}
+
+fn run_pr_merge(
+    slug: &str,
+    number: u64,
+    token: &str,
+    method: MergeMethod,
+    commit_title: Option<&str>,
+    commit_body: Option<&str>,
+) -> AppResult<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut cmd = Command::new("gh");
+    cmd.env("GH_TOKEN", token)
+        .env("GH_HOST", GH_HOST)
+        .args([
+            "pr",
+            "merge",
+            &number.to_string(),
+            "--repo",
+            slug,
+            method.flag(),
+        ]);
+
+    if method.accepts_message_override() {
+        if let Some(title) = commit_title {
+            if !title.trim().is_empty() {
+                cmd.args(["--subject", title]);
+            }
+        }
+        if let Some(body) = commit_body {
+            // Always pass --body even when empty so gh doesn't fall back to a
+            // user-config template on top of the supplied subject.
+            cmd.args(["--body", body]);
+        }
+    }
+
+    // gh's `--yes` confirmation flag was added in a recent release; older
+    // installs reject it as an unknown flag. Pipe a confirmation through
+    // stdin instead — it answers any "Continue with merge?" prompt without
+    // depending on a flag the local CLI may not have.
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(map_gh_spawn_error)?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(b"y\n");
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
+    let output = Command::new("gh")
+        .env("GH_TOKEN", token)
+        .env("GH_HOST", GH_HOST)
+        .args([
+            "pr",
+            "close",
+            &number.to_string(),
+            "--repo",
+            slug,
+        ])
+        .output()
+        .map_err(map_gh_spawn_error)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneratedCommitMessage {
+    pub title: String,
+    pub body: String,
+}
+
+/// Generate a squash/merge commit message by spawning a one-shot headless
+/// `claude` CLI invocation. The user must already have `claude` installed
+/// and authenticated; otherwise we surface a typed error so the frontend can
+/// guide them.
+pub fn generate_pr_commit_message(
+    repo_path: &Path,
+    number: u64,
+    method: MergeMethod,
+) -> AppResult<GeneratedCommitMessage> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    let context = match try_with_account(repo_path, &slug, |token| {
+        let view = run_pr_view(&slug, number, token)?;
+        let diff = run_pr_diff(&slug, number, token)?;
+        Ok((view, diff))
+    })? {
+        AccountOutcome::Ok { value, .. } => value,
+        AccountOutcome::NoAccess { .. } => {
+            return Err(AppError::Other(
+                "No logged-in gh account can read this PR.".to_string(),
+            ));
+        }
+    };
+
+    let (view, diff) = context;
+    let prompt = build_commit_message_prompt(method, &view, &diff);
+    let raw = run_claude_oneshot(&prompt)?;
+    Ok(parse_commit_message_response(&raw))
+}
+
+fn build_commit_message_prompt(
+    method: MergeMethod,
+    view: &GhPullRequestView,
+    diff: &str,
+) -> String {
+    let style = match method {
+        MergeMethod::Squash => {
+            "Write a single squash commit message. The first line is a short imperative subject (≤72 chars). \
+             Leave one blank line, then a concise body explaining the WHY (not the what)."
+        }
+        MergeMethod::Merge => {
+            "Write a merge commit message. The first line is a short imperative subject (≤72 chars). \
+             Leave one blank line, then a body explaining what this branch brings into the base."
+        }
+        MergeMethod::Rebase => {
+            // Rebase doesn't accept message overrides — but if the caller asks
+            // for a message anyway, give them something usable.
+            "Summarize the change as a single subject line (≤72 chars), no body."
+        }
+    };
+
+    // Cap diff size — claude has a context budget and the user can refine
+    // afterwards if details are missing.
+    const MAX_DIFF_BYTES: usize = 12_000;
+    let trimmed_diff = if diff.len() > MAX_DIFF_BYTES {
+        format!("{}\n…(diff truncated)…", &diff[..MAX_DIFF_BYTES])
+    } else {
+        diff.to_string()
+    };
+
+    format!(
+        "You are generating a git commit message for merging a pull request.\n\n\
+         {style}\n\n\
+         Output format (strict): the subject line ALONE on the first line, then a blank line, \
+         then the body. Do not wrap the message in code fences or backticks. Do not add \
+         commentary before or after.\n\n\
+         PR title: {title}\n\
+         PR description:\n{body}\n\n\
+         Diff:\n{diff}\n",
+        style = style,
+        title = view.title.as_deref().unwrap_or(""),
+        body = view.body.as_deref().unwrap_or(""),
+        diff = trimmed_diff,
+    )
+}
+
+fn parse_commit_message_response(raw: &str) -> GeneratedCommitMessage {
+    let trimmed = raw.trim_matches(|c: char| c.is_whitespace() || c == '`');
+    let mut lines = trimmed.lines();
+    let title = lines
+        .next()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let remaining: String = lines.collect::<Vec<_>>().join("\n");
+    let body = remaining.trim_start_matches('\n').trim().to_string();
+    GeneratedCommitMessage { title, body }
+}
+
+fn run_claude_oneshot(prompt: &str) -> AppResult<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new("claude")
+        .args(["-p", "--output-format", "text"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::Other(
+                    "`claude` CLI not found. Install Claude Code (https://docs.anthropic.com/claude/code) and run `claude login`.".to_string(),
+                )
+            } else {
+                AppError::Other(format!("failed to invoke claude: {e}"))
+            }
+        })?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| AppError::Other("claude stdin missing".to_string()))?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .map_err(|e| AppError::Other(format!("failed to write to claude: {e}")))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for claude: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("claude exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
