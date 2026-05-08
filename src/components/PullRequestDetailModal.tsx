@@ -26,7 +26,9 @@ import type {
   PullRequestDetailListing,
   PullRequestReview,
 } from "../lib/types";
+import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { DiffSplitView } from "./DiffSplitView";
+import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
 
 type DetailTab = "conversation" | "checks" | "files";
@@ -43,12 +45,18 @@ interface PullRequestDetailModalProps {
    */
   cwd?: string;
   onClose: () => void;
+  /**
+   * Notifies the parent that the PR's lifecycle changed (merged/closed) so
+   * the surrounding list can refetch.
+   */
+  onMutated?: () => void;
 }
 
 export function PullRequestDetailModal({
   open,
   cwd,
   onClose,
+  onMutated,
 }: PullRequestDetailModalProps) {
   const [listing, setListing] = useState<PullRequestDetailListing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +65,8 @@ export function PullRequestDetailModal({
   // the current listing visible while it resolves.
   const [reloadKey, setReloadKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
 
   useDialogShortcuts(open !== null, {
     onCancel: onClose,
@@ -71,6 +81,8 @@ export function PullRequestDetailModal({
       setTab("conversation");
       setRefreshing(false);
       setReloadKey(0);
+      setMergeDialogOpen(false);
+      setCloseDialogOpen(false);
       return;
     }
     setListing(null);
@@ -103,7 +115,16 @@ export function PullRequestDetailModal({
     setReloadKey((k) => k + 1);
   }, []);
 
+  const handleMutated = useCallback(() => {
+    setReloadKey((k) => k + 1);
+    onMutated?.();
+  }, [onMutated]);
+
+  const detail =
+    listing && listing.kind === "ok" ? listing.detail : null;
+
   return (
+    <>
     <Modal open={open !== null} onClose={onClose} variant="panel" size="5xl">
       {open ? (
         error ? (
@@ -139,10 +160,37 @@ export function PullRequestDetailModal({
             onClose={onClose}
             onRefresh={handleRefresh}
             refreshing={refreshing}
+            onOpenMerge={() => setMergeDialogOpen(true)}
+            onOpenClose={() => setCloseDialogOpen(true)}
           />
         )
       ) : null}
     </Modal>
+    {open && detail ? (
+      <>
+        <MergePullRequestDialog
+          open={mergeDialogOpen}
+          repoPath={open.repoPath}
+          detail={detail}
+          onClose={() => setMergeDialogOpen(false)}
+          onMerged={() => {
+            setMergeDialogOpen(false);
+            handleMutated();
+          }}
+        />
+        <ClosePullRequestDialog
+          open={closeDialogOpen}
+          repoPath={open.repoPath}
+          detail={detail}
+          onClose={() => setCloseDialogOpen(false)}
+          onClosed={() => {
+            setCloseDialogOpen(false);
+            handleMutated();
+          }}
+        />
+      </>
+    ) : null}
+    </>
   );
 }
 
@@ -172,6 +220,8 @@ function DetailBody({
   onClose,
   onRefresh,
   refreshing,
+  onOpenMerge,
+  onOpenClose,
 }: {
   detail: PullRequestDetail;
   account: string;
@@ -181,6 +231,8 @@ function DetailBody({
   onClose: () => void;
   onRefresh: () => void;
   refreshing: boolean;
+  onOpenMerge: () => void;
+  onOpenClose: () => void;
 }) {
   const conversationCount = detail.comments.length + detail.reviews.length;
   const checkCounts = summarizeChecks(detail.checks);
@@ -232,6 +284,22 @@ function DetailBody({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {detail.state.toUpperCase() === "OPEN" ? (
+            <>
+              <MergeActionButton
+                mergeable={detail.mergeable}
+                onClick={onOpenMerge}
+              />
+              <button
+                type="button"
+                onClick={onOpenClose}
+                className="rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition hover:bg-rose-500/25"
+              >
+                Close
+              </button>
+              <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+            </>
+          ) : null}
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
           <button
             type="button"
@@ -396,6 +464,39 @@ function summarizeChecks(checks: PullRequestCheck[]): CheckCounts {
     }
   }
   return { passed, failed, pending };
+}
+
+function MergeActionButton({
+  mergeable,
+  onClick,
+}: {
+  mergeable: string | null;
+  onClick: () => void;
+}) {
+  const upper = mergeable?.toUpperCase() ?? null;
+  const ready = upper === "MERGEABLE";
+  const conflicting = upper === "CONFLICTING";
+  const title = ready
+    ? "Merge"
+    : conflicting
+      ? "Cannot merge — conflicting branch"
+      : "Merge readiness still being determined…";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!ready}
+      title={title}
+      className={cn(
+        "rounded-md px-2.5 py-1 text-[11px] font-medium transition",
+        ready
+          ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+          : "cursor-not-allowed bg-bg-elevated text-fg-muted opacity-70",
+      )}
+    >
+      Merge
+    </button>
+  );
 }
 
 function PrStateGlyph({

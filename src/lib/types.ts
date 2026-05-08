@@ -141,6 +141,8 @@ export interface PullRequestDetail {
   additions: number;
   deletions: number;
   changed_files: number;
+  /** "MERGEABLE" | "CONFLICTING" | "UNKNOWN" — null when gh omits the field. */
+  mergeable: string | null;
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
   checks: PullRequestCheck[];
@@ -151,3 +153,10 @@ export type PullRequestDetailListing =
   | { kind: "ok"; account: string; detail: PullRequestDetail }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export type MergeMethod = "squash" | "merge" | "rebase";
+
+export interface GeneratedCommitMessage {
+  title: string;
+  body: string;
+}

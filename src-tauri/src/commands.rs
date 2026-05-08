@@ -9,7 +9,8 @@ use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::pull_requests::{
-    self, PrStateFilter, PullRequestDetailListing, PullRequestListing,
+    self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
+    PullRequestListing,
 };
 use crate::scrollback;
 use crate::session::{Project, Session, SessionStatus};
@@ -578,6 +579,37 @@ pub async fn get_pull_request_detail(
     number: u64,
 ) -> AppResult<PullRequestDetailListing> {
     pull_requests::get_pull_request_detail(&PathBuf::from(repo_path), number)
+}
+
+#[tauri::command]
+pub async fn merge_pull_request(
+    repo_path: String,
+    number: u64,
+    method: MergeMethod,
+    commit_title: Option<String>,
+    commit_body: Option<String>,
+) -> AppResult<()> {
+    pull_requests::merge_pull_request(
+        &PathBuf::from(repo_path),
+        number,
+        method,
+        commit_title,
+        commit_body,
+    )
+}
+
+#[tauri::command]
+pub async fn close_pull_request(repo_path: String, number: u64) -> AppResult<()> {
+    pull_requests::close_pull_request(&PathBuf::from(repo_path), number)
+}
+
+#[tauri::command]
+pub async fn generate_pr_commit_message(
+    repo_path: String,
+    number: u64,
+    method: MergeMethod,
+) -> AppResult<GeneratedCommitMessage> {
+    pull_requests::generate_pr_commit_message(&PathBuf::from(repo_path), number, method)
 }
 
 fn create_unique_worktree(
