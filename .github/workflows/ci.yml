@@ -13,6 +13,7 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.head_ref != 'demo/checks-all-fail'
     steps:
       - uses: actions/checkout@v4
 
@@ -40,3 +41,11 @@ jobs:
 
       - name: Build
         run: bun run build
+
+  demo-fail-all:
+    name: Demo Failing Job (intentional)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.head_ref == 'demo/checks-all-fail'
+    steps:
+      - name: Always fail
+        run: exit 1
