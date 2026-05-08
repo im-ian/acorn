@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GitMerge, Sparkles } from "lucide-react";
+import { GitMerge, Loader2, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
@@ -12,22 +12,22 @@ const METHOD_OPTIONS: ReadonlyArray<{
   label: string;
   hint: string;
 }> = [
-  {
-    value: "squash",
-    label: "Squash",
-    hint: "Combine into one commit on the base branch.",
-  },
-  {
-    value: "merge",
-    label: "Merge",
-    hint: "Create a merge commit preserving history.",
-  },
-  {
-    value: "rebase",
-    label: "Rebase",
-    hint: "Replay commits onto the base branch.",
-  },
-];
+    {
+      value: "squash",
+      label: "Squash",
+      hint: "Combine into one commit on the base branch.",
+    },
+    {
+      value: "merge",
+      label: "Merge",
+      hint: "Create a merge commit preserving history.",
+    },
+    {
+      value: "rebase",
+      label: "Rebase",
+      hint: "Replay commits onto the base branch.",
+    },
+  ];
 
 interface MergePullRequestDialogProps {
   open: boolean;
@@ -69,7 +69,7 @@ export function MergePullRequestDialog({
     },
     // Avoid Enter committing a destructive action when the user is composing
     // in the textarea — confirm only via the explicit button.
-    onConfirm: () => {},
+    onConfirm: () => { },
   });
 
   const acceptsMessage = method === "squash" || method === "merge";
@@ -157,19 +157,22 @@ export function MergePullRequestDialog({
             {acceptsMessage ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-fg-muted">Commit message</p>
+                  <p className="text-fg-muted">
+                    {generating ? "Generating commit message…" : "Commit message"}
+                  </p>
                   <button
                     type="button"
                     onClick={() => void handleGenerate()}
                     disabled={busy}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
-                    title="Generate via Claude"
+                    title={generating ? "Generating…" : "Generate with AI (Claude)"}
+                    aria-label={generating ? "Generating commit message" : "Generate commit message with AI"}
+                    className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <Sparkles
-                      size={11}
-                      className={cn(generating && "animate-pulse")}
-                    />
-                    {generating ? "Generating…" : "Generate with AI"}
+                    {generating ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={13} />
+                    )}
                   </button>
                 </div>
                 <input
