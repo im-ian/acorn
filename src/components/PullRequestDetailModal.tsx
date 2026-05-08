@@ -480,26 +480,30 @@ function MergeActionButton({
   const upper = mergeable?.toUpperCase() ?? null;
   const ready = upper === "MERGEABLE";
   const conflicting = upper === "CONFLICTING";
-  const title = ready
-    ? "Merge"
-    : conflicting
-      ? "Cannot merge — conflicting branch"
-      : "Merge readiness still being determined…";
+  const button = (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!ready}
+      className={cn(
+        "rounded-md px-2.5 py-1 text-[11px] font-medium transition",
+        ready
+          ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+          : "cursor-not-allowed bg-bg-elevated text-fg-muted opacity-70",
+      )}
+    >
+      Merge
+    </button>
+  );
+  if (ready) {
+    return button;
+  }
+  const title = conflicting
+    ? "Cannot merge — conflicting branch"
+    : "Merge readiness still being determined…";
   return (
     <Tooltip label={title} side="bottom">
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={!ready}
-        className={cn(
-          "rounded-md px-2.5 py-1 text-[11px] font-medium transition",
-          ready
-            ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
-            : "cursor-not-allowed bg-bg-elevated text-fg-muted opacity-70",
-        )}
-      >
-        Merge
-      </button>
+      {button}
     </Tooltip>
   );
 }
