@@ -16,6 +16,9 @@ dist-ssr
 # Cargo / Tauri build output
 target/
 
+# Stale Bun binary lockfile (project uses bun.lock as of Bun 1.2+)
+bun.lockb
+
 # Git worktrees
 .worktrees/
 
@@ -24,6 +27,11 @@ target/
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Playwright E2E artifacts
+test-results/
+playwright-report/
+.playwright/
 
 # Editor directories and files
 .vscode/*

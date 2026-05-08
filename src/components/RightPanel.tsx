@@ -316,7 +316,14 @@ function useSessionTodos(
       try {
         const result = await api.readSessionTodos(sessionId, cwd);
         if (cancelled) return;
-        setState({ todos: result, loaded: true, error: null });
+        // Defensive: the Rust contract returns Vec<TodoItem> (→ []), but a
+        // serialization edge or future error path that produces null would
+        // crash on the `todos.length` access elsewhere in this panel.
+        setState({
+          todos: Array.isArray(result) ? result : [],
+          loaded: true,
+          error: null,
+        });
       } catch (e) {
         if (cancelled) return;
         setState((prev) => ({ ...prev, loaded: true, error: String(e) }));

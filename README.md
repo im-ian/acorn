@@ -136,6 +136,15 @@ bun run tauri build
 
 > ⚠️ Acorn은 `claude` 바이너리가 `$PATH`에 있어야 기본 모드로 세션을 스폰합니다. 없는 경우 설정에서 시작 모드를 `terminal` 또는 `custom`으로 바꾸세요.
 
+### 테스트
+
+```bash
+bun run test       # Vitest (단위 / 로직)
+bun run test:e2e   # Playwright (UI 흐름, mock된 Tauri invoke)
+```
+
+기여 가이드와 테스트 작성 컨벤션은 [`CLAUDE.md`](CLAUDE.md) 참고.
+
 ---
 
 ## 아키텍처 한눈에
