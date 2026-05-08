@@ -4,6 +4,47 @@ const STORAGE_KEY = "acorn:settings:v1";
 
 export type SessionStartupMode = "claude" | "terminal" | "custom";
 
+/**
+ * AI CLI used by "Generate with AI" in the merge dialog. The actual command
+ * + argv is resolved via `resolveAiCommitCommand` so each provider's
+ * invocation conventions live in one place. All providers must follow the
+ * `stdin = prompt, stdout = response` convention.
+ */
+export type AiCommitProvider =
+  | "claude"
+  | "gemini"
+  | "ollama"
+  | "llm"
+  | "custom";
+
+export const AI_COMMIT_PROVIDER_OPTIONS: ReadonlyArray<{
+  value: AiCommitProvider;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "claude",
+    label: "Claude Code",
+    hint: "claude -p --output-format text",
+  },
+  { value: "gemini", label: "Gemini CLI", hint: "gemini -p" },
+  {
+    value: "ollama",
+    label: "Ollama (local)",
+    hint: "ollama run <model>",
+  },
+  {
+    value: "llm",
+    label: "Simon Willison's llm",
+    hint: "llm [-m <model>]",
+  },
+  {
+    value: "custom",
+    label: "Custom command",
+    hint: "Whitespace-separated, no shell expansion",
+  },
+];
+
 export type TerminalFontWeight =
   | 100
   | 200
@@ -66,6 +107,19 @@ export interface AcornSettings {
       completed: boolean;
     };
   };
+  commitMessage: {
+    /** Which AI CLI handles "Generate with AI" in the merge dialog. */
+    provider: AiCommitProvider;
+    /** Model name for `ollama run <model>`. Falls back to `llama3` when blank. */
+    ollamaModel: string;
+    /** Optional `-m <model>` arg for the `llm` CLI. Empty = use llm default. */
+    llmModel: string;
+    /**
+     * Used when `provider === "custom"`. Whitespace-separated; no shell
+     * expansion. Empty = fall back to claude.
+     */
+    customCommand: string;
+  };
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
@@ -93,6 +147,12 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       failed: true,
       completed: false,
     },
+  },
+  commitMessage: {
+    provider: "claude",
+    ollamaModel: "",
+    llmModel: "",
+    customCommand: "",
   },
 };
 
@@ -151,6 +211,10 @@ function loadSettings(): AcornSettings {
           ...(parsed.notifications?.events ?? {}),
         },
       },
+      commitMessage: {
+        ...DEFAULT_SETTINGS.commitMessage,
+        ...(parsed.commitMessage ?? {}),
+      },
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -179,6 +243,9 @@ interface SettingsState {
     patch: Partial<Omit<AcornSettings["notifications"], "events">> & {
       events?: Partial<AcornSettings["notifications"]["events"]>;
     },
+  ) => void;
+  patchCommitMessage: (
+    patch: Partial<AcornSettings["commitMessage"]>,
   ) => void;
   reset: () => void;
 }
@@ -240,6 +307,15 @@ export const useSettings = create<SettingsState>((set) => ({
       persist(next);
       return { settings: next };
     }),
+  patchCommitMessage: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        commitMessage: { ...s.settings.commitMessage, ...patch },
+      };
+      persist(next);
+      return { settings: next };
+    }),
   reset: () => {
     persist(DEFAULT_SETTINGS);
     set({ settings: DEFAULT_SETTINGS });
@@ -269,4 +345,56 @@ export function resolveStartupCommand(s: AcornSettings): {
     return { command: parts[0], args: parts.slice(1) };
   }
   return { command: "", args: [] };
+}
+
+/**
+ * Resolve the AI CLI invocation for the merge dialog's "Generate with AI"
+ * action. Each provider has its own argv convention; `custom` lets the user
+ * plug in anything that follows the standard `stdin = prompt, stdout =
+ * response` shape. The resolved value is sent to the Rust backend as
+ * `(command, args)` so the backend stays provider-agnostic.
+ */
+export function resolveAiCommitCommand(s: AcornSettings): {
+  command: string;
+  args: string[];
+} {
+  const c = s.commitMessage;
+  switch (c.provider) {
+    case "claude":
+      return { command: "claude", args: ["-p", "--output-format", "text"] };
+    case "gemini":
+      return { command: "gemini", args: ["-p"] };
+    case "ollama": {
+      const model = c.ollamaModel.trim() || "llama3";
+      return { command: "ollama", args: ["run", model] };
+    }
+    case "llm": {
+      const model = c.llmModel.trim();
+      return model
+        ? { command: "llm", args: ["-m", model] }
+        : { command: "llm", args: [] };
+    }
+    case "custom": {
+      const trimmed = c.customCommand.trim();
+      if (!trimmed) {
+        // Empty custom falls back to claude so the button still does
+        // something predictable rather than failing with "No AI command".
+        return { command: "claude", args: ["-p", "--output-format", "text"] };
+      }
+      const parts = trimmed.split(/\s+/);
+      return { command: parts[0], args: parts.slice(1) };
+    }
+  }
+}
+
+/**
+ * Human-friendly label for the currently configured AI provider — used in
+ * the merge dialog's tooltip ("Generate via Claude Code", "Generate via
+ * Ollama", etc.) so the user can see at a glance which CLI will run.
+ */
+export function aiCommitProviderLabel(s: AcornSettings): string {
+  const opt = AI_COMMIT_PROVIDER_OPTIONS.find(
+    (o) => o.value === s.commitMessage.provider,
+  );
+  return opt?.label ?? "AI";
 }

@@ -4,6 +4,11 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
+import {
+  aiCommitProviderLabel,
+  resolveAiCommitCommand,
+  useSettings,
+} from "../lib/settings";
 import type { MergeMethod, PullRequestDetail } from "../lib/types";
 import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader, TextSwap } from "./ui";
@@ -45,6 +50,7 @@ export function MergePullRequestDialog({
   onClose,
   onMerged,
 }: MergePullRequestDialogProps) {
+  const settings = useSettings((s) => s.settings);
   const [method, setMethod] = useState<MergeMethod>(() => loadLastMergeMethod());
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -100,10 +106,13 @@ export function MergePullRequestDialog({
     setGenerating(true);
     setError(null);
     try {
+      const { command, args } = resolveAiCommitCommand(settings);
       const result = await api.generatePrCommitMessage(
         repoPath,
         detail.number,
         method,
+        command,
+        args,
       );
       if (result.title.trim()) setTitle(result.title);
       setBody(result.body);
@@ -114,6 +123,7 @@ export function MergePullRequestDialog({
     }
   }
 
+  const providerLabel = aiCommitProviderLabel(settings);
   const busy = submitting || generating;
 
   return (
@@ -170,7 +180,10 @@ export function MergePullRequestDialog({
                       Generating…
                     </button>
                   ) : (
-                    <Tooltip label="Generate via Claude" side="top">
+                    <Tooltip
+                      label={`Generate via ${providerLabel}`}
+                      side="top"
+                    >
                       <button
                         key="gen-button-idle"
                         type="button"

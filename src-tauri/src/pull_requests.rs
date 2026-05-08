@@ -1119,14 +1119,26 @@ pub struct GeneratedCommitMessage {
 }
 
 /// Generate a squash/merge commit message by spawning a one-shot headless
-/// `claude` CLI invocation. The user must already have `claude` installed
-/// and authenticated; otherwise we surface a typed error so the frontend can
-/// guide them.
+/// AI CLI invocation. The provider command + args are resolved on the
+/// frontend (so each provider's invocation conventions live in one place,
+/// alongside the Settings UI) and passed in here. The CLI is expected to
+/// follow the standard `stdin = prompt, stdout = response` convention —
+/// `claude -p --output-format text`, `gemini -p`, `ollama run <model>`,
+/// `llm -m <model>`, or any user-supplied custom command all fit.
 pub fn generate_pr_commit_message(
     repo_path: &Path,
     number: u64,
     method: MergeMethod,
+    command: String,
+    args: Vec<String>,
 ) -> AppResult<GeneratedCommitMessage> {
+    if command.trim().is_empty() {
+        return Err(AppError::Other(
+            "No AI command configured. Open Settings → Commit message AI to pick a provider."
+                .to_string(),
+        ));
+    }
+
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Err(AppError::Other(
             "Origin remote is not a GitHub repository.".to_string(),
@@ -1148,7 +1160,7 @@ pub fn generate_pr_commit_message(
 
     let (view, diff) = context;
     let prompt = build_commit_message_prompt(method, &view, &diff);
-    let raw = run_claude_oneshot(&prompt)?;
+    let raw = run_ai_oneshot(&command, &args, &prompt)?;
     Ok(parse_commit_message_response(&raw))
 }
 
@@ -1211,23 +1223,27 @@ fn parse_commit_message_response(raw: &str) -> GeneratedCommitMessage {
     GeneratedCommitMessage { title, body }
 }
 
-fn run_claude_oneshot(prompt: &str) -> AppResult<String> {
+/// Provider-agnostic one-shot CLI invocation: `command` is spawned with
+/// `args`, the prompt is piped in via stdin, and stdout is returned. We
+/// surface a typed error when the binary is missing so the frontend can
+/// point the user at install instructions for the configured provider.
+fn run_ai_oneshot(command: &str, args: &[String], prompt: &str) -> AppResult<String> {
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = Command::new("claude")
-        .args(["-p", "--output-format", "text"])
+    let mut child = Command::new(command)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                AppError::Other(
-                    "`claude` CLI not found. Install Claude Code (https://docs.anthropic.com/claude/code) and run `claude login`.".to_string(),
-                )
+                AppError::Other(format!(
+                    "`{command}` not found. Install the configured AI CLI or change the provider in Settings → Commit message AI."
+                ))
             } else {
-                AppError::Other(format!("failed to invoke claude: {e}"))
+                AppError::Other(format!("failed to invoke {command}: {e}"))
             }
         })?;
 
@@ -1235,20 +1251,20 @@ fn run_claude_oneshot(prompt: &str) -> AppResult<String> {
         let stdin = child
             .stdin
             .as_mut()
-            .ok_or_else(|| AppError::Other("claude stdin missing".to_string()))?;
+            .ok_or_else(|| AppError::Other(format!("{command} stdin missing")))?;
         stdin
             .write_all(prompt.as_bytes())
-            .map_err(|e| AppError::Other(format!("failed to write to claude: {e}")))?;
+            .map_err(|e| AppError::Other(format!("failed to write to {command}: {e}")))?;
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|e| AppError::Other(format!("failed waiting for claude: {e}")))?;
+        .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
-            format!("claude exited with status {}", output.status)
+            format!("{command} exited with status {}", output.status)
         } else {
             stderr
         };

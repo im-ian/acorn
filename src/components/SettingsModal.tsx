@@ -3,6 +3,8 @@ import { useState } from "react";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import {
+  AI_COMMIT_PROVIDER_OPTIONS,
+  type AiCommitProvider,
   type SessionStartupMode,
   type TerminalFontWeight,
   TERMINAL_FONT_WEIGHTS,
@@ -19,13 +21,19 @@ import {
   TextInput,
 } from "./ui";
 
-type Tab = "terminal" | "sessions" | "editor" | "notifications";
+type Tab =
+  | "terminal"
+  | "sessions"
+  | "editor"
+  | "notifications"
+  | "pullRequests";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
   { id: "sessions", label: "Sessions" },
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
+  { id: "pullRequests", label: "Pull Requests" },
 ];
 
 export function SettingsModal() {
@@ -90,6 +98,8 @@ export function SettingsModal() {
             <SessionSettings />
           ) : tab === "editor" ? (
             <EditorSettings />
+          ) : tab === "pullRequests" ? (
+            <PullRequestSettings />
           ) : (
             <NotificationSettings />
           )}
@@ -318,6 +328,82 @@ function NotificationSettings() {
       </Field>
       <p className="text-[11px] text-fg-muted">
         macOS may ask once for permission the first time a notification fires.
+      </p>
+    </section>
+  );
+}
+
+function PullRequestSettings() {
+  const settings = useSettings((s) => s.settings);
+  const patchCommitMessage = useSettings((s) => s.patchCommitMessage);
+  const provider = settings.commitMessage.provider;
+
+  return (
+    <section className="space-y-4">
+      <Field
+        label="Commit message AI"
+        hint='Used by "Generate with AI" in the merge dialog. The CLI must follow the standard `stdin = prompt, stdout = response` convention.'
+      >
+        <div className="flex flex-col gap-1.5">
+          {AI_COMMIT_PROVIDER_OPTIONS.map((opt) => (
+            <RadioCard<AiCommitProvider>
+              key={opt.value}
+              name="commit-message-provider"
+              value={opt.value}
+              current={provider}
+              label={opt.label}
+              description={opt.hint}
+              onSelect={(v) => patchCommitMessage({ provider: v })}
+            />
+          ))}
+        </div>
+      </Field>
+      {provider === "ollama" ? (
+        <Field
+          label="Ollama model"
+          hint="Passed to `ollama run <model>`. Defaults to `llama3` when blank."
+        >
+          <TextInput
+            value={settings.commitMessage.ollamaModel}
+            onChange={(e) =>
+              patchCommitMessage({ ollamaModel: e.target.value })
+            }
+            placeholder="e.g. llama3:8b"
+          />
+        </Field>
+      ) : null}
+      {provider === "llm" ? (
+        <Field
+          label="llm model"
+          hint="Passed via `llm -m <model>`. Leave blank to use the llm-configured default."
+        >
+          <TextInput
+            value={settings.commitMessage.llmModel}
+            onChange={(e) =>
+              patchCommitMessage({ llmModel: e.target.value })
+            }
+            placeholder="e.g. gpt-4o-mini"
+          />
+        </Field>
+      ) : null}
+      {provider === "custom" ? (
+        <Field
+          label="Custom command"
+          hint="Whitespace-separated; no shell expansion. Falls back to claude when blank."
+        >
+          <TextInput
+            value={settings.commitMessage.customCommand}
+            onChange={(e) =>
+              patchCommitMessage({ customCommand: e.target.value })
+            }
+            placeholder="e.g. codex --short"
+          />
+        </Field>
+      ) : null}
+      <p className="text-[11px] text-fg-muted">
+        The selected provider's CLI must already be installed and
+        authenticated on this machine. The merge dialog falls back to a
+        clear error when the binary is missing.
       </p>
     </section>
   );
