@@ -115,6 +115,37 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Generate release notes
+        id: notes
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Generate the same auto-notes GitHub would compose from the
+          # tag, ahead of release creation, so they can be embedded into
+          # `latest.json` AND used as the release body. Falls back to a
+          # short "See release page" sentence if the API call fails
+          # (e.g. on the very first tag, before previous_tag_name has
+          # something to diff against).
+          if notes=$(gh api -X POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${REPO}/releases/generate-notes" \
+              -f "tag_name=${TAG}" \
+              --jq .body 2>/dev/null); then
+            :
+          else
+            notes="See https://github.com/${REPO}/releases/tag/${TAG}"
+          fi
+          # Persist to a file rather than $GITHUB_OUTPUT so newlines and
+          # markdown survive cleanly through later jq / action-gh-release
+          # consumers.
+          printf '%s' "$notes" > release_notes.md
+          echo "Notes preview (first 400 chars):"
+          head -c 400 release_notes.md || true
+          echo
+
       - name: Generate latest.json manifest
         env:
           REPO: ${{ github.repository }}
@@ -157,6 +188,7 @@ jobs:
 
           jq -n \
             --arg version "$VERSION" \
+            --rawfile notes release_notes.md \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg arm_url "$arm_url" \
             --arg arm_sig "$arm_sig_value" \
@@ -164,7 +196,7 @@ jobs:
             --arg x64_sig "$x64_sig_value" \
             '{
                version: $version,
-               notes: "See https://github.com/'"$REPO"'/releases/tag/'"$TAG"'",
+               notes: $notes,
                pub_date: $pub_date,
                platforms: {
                  "darwin-aarch64": { signature: $arm_sig, url: $arm_url },
@@ -179,7 +211,10 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
-          generate_release_notes: true
+          # Use the pre-generated notes (also embedded in latest.json)
+          # instead of letting the action regenerate them, so the
+          # release page and the updater banner show identical text.
+          body_path: release_notes.md
           files: |
             bundles/*.dmg
             bundles/*.app.tar.gz

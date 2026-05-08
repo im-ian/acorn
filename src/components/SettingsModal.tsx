@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { sendTestNotification } from "../lib/notifications";
 import { useUpdater } from "../lib/updater-store";
+import { Markdown } from "./ui/Markdown";
 import {
   AGENT_OPTIONS,
   type SelectedAgent,
@@ -707,24 +708,39 @@ function AboutSettings() {
           </span>
         </div>
         {available ? (
-          <div className="flex items-baseline justify-between gap-3 border-t border-border bg-accent/10 px-3 py-2.5">
-            <div className="space-y-0.5">
-              <div className="text-xs font-medium text-fg">
-                Update available
+          <div className="space-y-2 border-t border-border bg-accent/10 px-3 py-2.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-medium text-fg">
+                  Update available
+                </div>
+                <div className="text-[11px] text-fg-muted">
+                  Acorn {available.version} is ready to install.
+                </div>
               </div>
-              <div className="text-[11px] text-fg-muted">
-                Acorn {available.version} is ready to install.
-              </div>
+              <button
+                type="button"
+                onClick={() => void install()}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+              >
+                <Download size={11} />
+                {busy ? "Installing…" : "Install & relaunch"}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => void install()}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
-            >
-              <Download size={11} />
-              {busy ? "Installing…" : "Install & relaunch"}
-            </button>
+            {available.body && available.body.trim().length > 0 ? (
+              <details className="group">
+                <summary className="cursor-pointer text-[11px] text-fg-muted transition hover:text-fg">
+                  What&apos;s new
+                </summary>
+                <div className="mt-2 max-h-64 overflow-y-auto rounded border border-border bg-bg p-3">
+                  <Markdown
+                    content={available.body}
+                    className="text-[11px]"
+                  />
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
       </div>
