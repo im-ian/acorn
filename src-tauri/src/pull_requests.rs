@@ -973,6 +973,9 @@ fn run_pr_merge(
     commit_title: Option<&str>,
     commit_body: Option<&str>,
 ) -> AppResult<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
     let mut cmd = Command::new("gh");
     cmd.env("GH_TOKEN", token)
         .env("GH_HOST", GH_HOST)
@@ -983,9 +986,6 @@ fn run_pr_merge(
             "--repo",
             slug,
             method.flag(),
-            // Don't drop into the interactive editor; gh would otherwise prompt
-            // for a confirmation when the merge has nothing to override.
-            "--yes",
         ]);
 
     if method.accepts_message_override() {
@@ -1001,7 +1001,22 @@ fn run_pr_merge(
         }
     }
 
-    let output = cmd.output().map_err(map_gh_spawn_error)?;
+    // gh's `--yes` confirmation flag was added in a recent release; older
+    // installs reject it as an unknown flag. Pipe a confirmation through
+    // stdin instead — it answers any "Continue with merge?" prompt without
+    // depending on a flag the local CLI may not have.
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(map_gh_spawn_error)?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(b"y\n");
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
