@@ -1214,8 +1214,9 @@ function PrChecksBadge({
 
 function PrStateBadge({ state, isDraft }: { state: string; isDraft: boolean }) {
   const upper = state.toUpperCase();
-  const label = isDraft ? "DRAFT" : upper;
-  const tone = isDraft
+  const showDraft = isDraft && upper === "OPEN";
+  const label = showDraft ? "DRAFT" : upper;
+  const tone = showDraft
     ? "bg-fg-muted/15 text-fg-muted"
     : upper === "OPEN"
       ? "bg-emerald-500/15 text-emerald-400"
