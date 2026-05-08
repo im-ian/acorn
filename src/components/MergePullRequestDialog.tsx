@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GitMerge, Sparkle } from "lucide-react";
+import { GitMerge, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
@@ -165,7 +165,7 @@ export function MergePullRequestDialog({
                     className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
                     title="Generate via Claude"
                   >
-                    <Sparkle
+                    <Sparkles
                       size={11}
                       className={cn(generating && "animate-pulse")}
                     />
