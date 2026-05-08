@@ -978,13 +978,13 @@ function PullRequestsTab({
               <li key={pr.number}>
                 <button
                   type="button"
-                  onClick={() => onOpenDetail(pr.number)}
+                  onDoubleClick={() => onOpenDetail(pr.number)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setMenu({ x: e.clientX, y: e.clientY, pr });
                   }}
                   className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50"
-                  title={absoluteTime(toUnixSeconds(pr.updated_at))}
+                  title={`${absoluteTime(toUnixSeconds(pr.updated_at))} · double-click to open`}
                 >
                   <span className="flex w-full min-w-0 items-center gap-2">
                     <span className="shrink-0 font-mono text-fg-muted">
