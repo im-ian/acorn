@@ -5,6 +5,15 @@ export type SessionStatus =
   | "failed"
   | "completed";
 
+/**
+ * Per-session PTY startup mode persisted on the backend `Session` so the
+ * choice survives an app restart and is decoupled from the global
+ * `sessionStartup.mode` setting. `null` means "no per-session preference
+ * recorded yet" (legacy sessions); the Terminal falls back to the global
+ * setting in that case.
+ */
+export type SessionStartupMode = "agent" | "terminal" | "custom";
+
 export interface Session {
   id: string;
   name: string;
@@ -16,6 +25,7 @@ export interface Session {
   created_at: string;
   updated_at: string;
   last_message: string | null;
+  startup_mode: SessionStartupMode | null;
 }
 
 export interface Project {
