@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   Minus,
   Plus,
+  RefreshCw,
   X,
   XCircle,
 } from "lucide-react";
@@ -53,36 +54,55 @@ export function PullRequestDetailModal({
   const [listing, setListing] = useState<PullRequestDetailListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>("conversation");
+  // Bumped by the refresh button. Triggers a background refetch that keeps
+  // the current listing visible while it resolves.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useDialogShortcuts(open !== null, {
     onCancel: onClose,
     onConfirm: onClose,
   });
 
+  // Hard-clear stale data whenever the modal closes or switches PR.
   useEffect(() => {
     if (!open) {
       setListing(null);
       setError(null);
       setTab("conversation");
+      setRefreshing(false);
+      setReloadKey(0);
       return;
     }
-    let cancelled = false;
     setListing(null);
     setError(null);
+  }, [open]);
+
+  // Fetch on open and on every refresh bump.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setRefreshing(true);
     api
       .getPullRequestDetail(open.repoPath, open.number)
       .then((result) => {
         if (cancelled) return;
         setListing(result);
+        setRefreshing(false);
       })
       .catch((e) => {
         if (cancelled) return;
         setError(String(e));
+        setRefreshing(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, reloadKey]);
+
+  const handleRefresh = useCallback(() => {
+    setReloadKey((k) => k + 1);
+  }, []);
 
   return (
     <Modal open={open !== null} onClose={onClose} variant="panel" size="5xl">
@@ -118,6 +138,8 @@ export function PullRequestDetailModal({
             onTab={setTab}
             cwd={cwd}
             onClose={onClose}
+            onRefresh={handleRefresh}
+            refreshing={refreshing}
           />
         )
       ) : null}
@@ -149,6 +171,8 @@ function DetailBody({
   onTab,
   cwd,
   onClose,
+  onRefresh,
+  refreshing,
 }: {
   detail: PullRequestDetail;
   account: string;
@@ -156,6 +180,8 @@ function DetailBody({
   onTab: (t: DetailTab) => void;
   cwd?: string;
   onClose: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
 }) {
   const conversationCount = detail.comments.length + detail.reviews.length;
   const checkCounts = summarizeChecks(detail.checks);
@@ -207,6 +233,19 @@ function DetailBody({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+            title="Refresh"
+            aria-label="Refresh"
+          >
+            <RefreshCw
+              size={14}
+              className={cn(refreshing && "animate-spin")}
+            />
+          </button>
           <button
             type="button"
             onClick={() => void openUrl(detail.url)}
