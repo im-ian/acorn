@@ -89,12 +89,21 @@ export const useUpdater = create<UpdaterState>()(
         if (!update || get().busy) return;
         set({ busy: true, error: null });
         try {
-          await installUpdate(update);
-          // installUpdate triggers a relaunch — control rarely returns
-          // here. If it does (e.g. the install kicked off but the OS
-          // hasn't restarted us yet), keep busy=true so the UI stays
-          // disabled until the relaunch lands.
+          await installUpdate(update, (event) => {
+            // Log progress markers so a stuck download / install leaves
+            // a breadcrumb trail in the renderer console for debugging.
+            // We deliberately don't surface bytes-per-chunk to the UI —
+            // the banner is intentionally compact.
+            if (event.event === "Started" || event.event === "Finished") {
+              console.info("[updater]", event.event, event);
+            }
+          });
+          // installUpdate now ends with relaunch(), so control rarely
+          // returns here. If it does (e.g. the relaunch is briefly
+          // queued before the OS tears the process down), keep busy=true
+          // so the UI stays disabled until the relaunch lands.
         } catch (err) {
+          console.error("[updater] install failed", err);
           set({
             error: err instanceof Error ? err.message : String(err),
             busy: false,
