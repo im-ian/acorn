@@ -44,7 +44,7 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   },
   {
     value: "llm",
-    label: "Simon Willison's llm",
+    label: "llm CLI",
     oneshotHint: "llm [-m <model>]",
     interactiveHint: "llm chat [-m <model>]",
   },
