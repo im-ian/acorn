@@ -608,8 +608,16 @@ pub async fn generate_pr_commit_message(
     repo_path: String,
     number: u64,
     method: MergeMethod,
+    command: String,
+    args: Vec<String>,
 ) -> AppResult<GeneratedCommitMessage> {
-    pull_requests::generate_pr_commit_message(&PathBuf::from(repo_path), number, method)
+    pull_requests::generate_pr_commit_message(
+        &PathBuf::from(repo_path),
+        number,
+        method,
+        command,
+        args,
+    )
 }
 
 fn create_unique_worktree(
