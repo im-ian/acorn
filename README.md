@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/acorn.svg" width="120" height="120" alt="Acorn" />
+<img src="./assets/acorn.png" width="120" height="120" alt="Acorn" />
 
 # Acorn 🌰
 
