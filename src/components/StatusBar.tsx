@@ -108,20 +108,22 @@ export function StatusBar() {
     <>
       <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         <span>sessions: {sessions.length}</span>
-        {active ? (
-          <>
-            <span className="text-fg-muted/50">|</span>
-            <span>branch: {active.branch}</span>
-            <span className="text-fg-muted/50">|</span>
-            <span>status: {active.status}</span>
-          </>
-        ) : null}
         <span className="ml-auto flex min-w-0 items-center gap-3">
           {loading ? <span>working...</span> : null}
           {error ? (
             <Tooltip label={error} side="top" multiline>
               <span className="truncate text-danger">error: {error}</span>
             </Tooltip>
+          ) : null}
+          {active ? (
+            <>
+              <span>branch: {active.branch}</span>
+              <span className="text-fg-muted/50">|</span>
+              <span>status: {active.status}</span>
+              {prAccount || displayPath ? (
+                <span className="text-fg-muted/50">|</span>
+              ) : null}
+            </>
           ) : null}
           {prAccount ? (
             <Tooltip label={`PRs listed via gh account ${prAccount}`} side="top">
