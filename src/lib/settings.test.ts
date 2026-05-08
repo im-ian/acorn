@@ -18,11 +18,86 @@ describe("resolveStartupCommand", () => {
     });
   });
 
-  it("returns claude with no args for `claude` mode", () => {
-    expect(resolveStartupCommand(withStartup({ mode: "claude" }))).toEqual({
+  it("returns claude with no args for agent mode + claude selected", () => {
+    expect(
+      resolveStartupCommand({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, selected: "claude" },
+        sessionStartup: { ...DEFAULT_SETTINGS.sessionStartup, mode: "agent" },
+      }),
+    ).toEqual({
       command: "claude",
       args: [],
     });
+  });
+
+  it("returns gemini with no args for agent mode + gemini selected", () => {
+    expect(
+      resolveStartupCommand({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, selected: "gemini" },
+        sessionStartup: { ...DEFAULT_SETTINGS.sessionStartup, mode: "agent" },
+      }),
+    ).toEqual({
+      command: "gemini",
+      args: [],
+    });
+  });
+
+  it("falls back to llama3 for ollama agent with blank model", () => {
+    expect(
+      resolveStartupCommand({
+        ...DEFAULT_SETTINGS,
+        agents: {
+          ...DEFAULT_SETTINGS.agents,
+          selected: "ollama",
+          ollama: { model: "" },
+        },
+        sessionStartup: { ...DEFAULT_SETTINGS.sessionStartup, mode: "agent" },
+      }),
+    ).toEqual({ command: "ollama", args: ["run", "llama3"] });
+  });
+
+  it("uses configured ollama model when set", () => {
+    expect(
+      resolveStartupCommand({
+        ...DEFAULT_SETTINGS,
+        agents: {
+          ...DEFAULT_SETTINGS.agents,
+          selected: "ollama",
+          ollama: { model: "llama3:8b" },
+        },
+        sessionStartup: { ...DEFAULT_SETTINGS.sessionStartup, mode: "agent" },
+      }),
+    ).toEqual({ command: "ollama", args: ["run", "llama3:8b"] });
+  });
+
+  it("agent mode + custom selected uses agents.customCommand", () => {
+    expect(
+      resolveStartupCommand({
+        ...DEFAULT_SETTINGS,
+        agents: {
+          ...DEFAULT_SETTINGS.agents,
+          selected: "custom",
+          customCommand: "codex --reply",
+        },
+        sessionStartup: { ...DEFAULT_SETTINGS.sessionStartup, mode: "agent" },
+      }),
+    ).toEqual({ command: "codex", args: ["--reply"] });
+  });
+
+  it("agent mode + custom selected with blank command falls back to claude", () => {
+    expect(
+      resolveStartupCommand({
+        ...DEFAULT_SETTINGS,
+        agents: {
+          ...DEFAULT_SETTINGS.agents,
+          selected: "custom",
+          customCommand: "",
+        },
+        sessionStartup: { ...DEFAULT_SETTINGS.sessionStartup, mode: "agent" },
+      }),
+    ).toEqual({ command: "claude", args: [] });
   });
 
   it("falls back to $SHELL (empty command) when custom command is blank", () => {

@@ -3,11 +3,12 @@ import { useState } from "react";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import {
-  AI_COMMIT_PROVIDER_OPTIONS,
-  type AiCommitProvider,
+  AGENT_OPTIONS,
+  type SelectedAgent,
   type SessionStartupMode,
   type TerminalFontWeight,
   TERMINAL_FONT_WEIGHTS,
+  selectedAgentLabel,
   useSettings,
 } from "../lib/settings";
 import {
@@ -23,17 +24,17 @@ import {
 
 type Tab =
   | "terminal"
+  | "agents"
   | "sessions"
   | "editor"
-  | "notifications"
-  | "pullRequests";
+  | "notifications";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
+  { id: "agents", label: "Agents" },
   { id: "sessions", label: "Sessions" },
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
-  { id: "pullRequests", label: "Pull Requests" },
 ];
 
 export function SettingsModal() {
@@ -94,12 +95,12 @@ export function SettingsModal() {
         <div className="flex-1 overflow-y-auto p-4">
           {tab === "terminal" ? (
             <TerminalSettings />
+          ) : tab === "agents" ? (
+            <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
           ) : tab === "editor" ? (
             <EditorSettings />
-          ) : tab === "pullRequests" ? (
-            <PullRequestSettings />
           ) : (
             <NotificationSettings />
           )}
@@ -181,6 +182,7 @@ function SessionSettings() {
   const patchSessionStartup = useSettings((s) => s.patchSessionStartup);
   const patchSessions = useSettings((s) => s.patchSessions);
   const mode = settings.sessionStartup.mode;
+  const agentName = selectedAgentLabel(settings);
 
   return (
     <section className="space-y-4">
@@ -199,10 +201,10 @@ function SessionSettings() {
           />
           <RadioCard<SessionStartupMode>
             name="session-startup"
-            value="claude"
+            value="agent"
             current={mode}
-            label="Claude"
-            description="Launch the `claude` CLI in the session worktree."
+            label="Agent"
+            description={`Launch the agent selected under Agents — currently ${agentName}.`}
             onSelect={(v) => patchSessionStartup({ mode: v })}
           />
           <RadioCard<SessionStartupMode>
@@ -333,77 +335,85 @@ function NotificationSettings() {
   );
 }
 
-function PullRequestSettings() {
+function AgentSettings() {
   const settings = useSettings((s) => s.settings);
-  const patchCommitMessage = useSettings((s) => s.patchCommitMessage);
-  const provider = settings.commitMessage.provider;
+  const patchAgents = useSettings((s) => s.patchAgents);
+  const selected = settings.agents.selected;
 
   return (
     <section className="space-y-4">
-      <Field
-        label="Commit message AI"
-        hint='Used by "Generate with AI" in the merge dialog. The CLI must follow the standard `stdin = prompt, stdout = response` convention.'
-      >
+      <p className="rounded-md border border-border bg-bg-sidebar/40 px-3 py-2 text-[11px] text-fg-muted">
+        The selected agent powers every AI feature in acorn — the merge
+        dialog's <em>Generate with AI</em> button and Sessions startup's
+        <em> Agent</em> mode both run whichever CLI is picked here.
+      </p>
+      <Field label="Agent" hint="Choose which AI CLI acorn uses.">
         <div className="flex flex-col gap-1.5">
-          {AI_COMMIT_PROVIDER_OPTIONS.map((opt) => (
-            <RadioCard<AiCommitProvider>
+          {AGENT_OPTIONS.map((opt) => (
+            <RadioCard<SelectedAgent>
               key={opt.value}
-              name="commit-message-provider"
+              name="acorn-agent"
               value={opt.value}
-              current={provider}
+              current={selected}
               label={opt.label}
-              description={opt.hint}
-              onSelect={(v) => patchCommitMessage({ provider: v })}
+              description={`${opt.interactiveHint} · ${opt.oneshotHint}`}
+              onSelect={(v) => patchAgents({ selected: v })}
             />
           ))}
+          <RadioCard<SelectedAgent>
+            name="acorn-agent"
+            value="custom"
+            current={selected}
+            label="Custom command"
+            description="Use any CLI not in the list. Whitespace-separated; no shell expansion."
+            onSelect={(v) => patchAgents({ selected: v })}
+          />
         </div>
       </Field>
-      {provider === "ollama" ? (
+      {selected === "ollama" ? (
         <Field
           label="Ollama model"
           hint="Passed to `ollama run <model>`. Defaults to `llama3` when blank."
         >
           <TextInput
-            value={settings.commitMessage.ollamaModel}
+            value={settings.agents.ollama.model}
             onChange={(e) =>
-              patchCommitMessage({ ollamaModel: e.target.value })
+              patchAgents({ ollama: { model: e.target.value } })
             }
             placeholder="e.g. llama3:8b"
           />
         </Field>
       ) : null}
-      {provider === "llm" ? (
+      {selected === "llm" ? (
         <Field
           label="llm model"
-          hint="Passed via `llm -m <model>`. Leave blank to use the llm-configured default."
+          hint="Passed via `llm -m <model>` (and `llm chat -m <model>` for sessions). Blank uses the llm-configured default."
         >
           <TextInput
-            value={settings.commitMessage.llmModel}
-            onChange={(e) =>
-              patchCommitMessage({ llmModel: e.target.value })
-            }
+            value={settings.agents.llm.model}
+            onChange={(e) => patchAgents({ llm: { model: e.target.value } })}
             placeholder="e.g. gpt-4o-mini"
           />
         </Field>
       ) : null}
-      {provider === "custom" ? (
+      {selected === "custom" ? (
         <Field
           label="Custom command"
-          hint="Whitespace-separated; no shell expansion. Falls back to claude when blank."
+          hint="Used for both interactive sessions and one-shot AI generation. Falls back to Claude Code when blank."
         >
           <TextInput
-            value={settings.commitMessage.customCommand}
+            value={settings.agents.customCommand}
             onChange={(e) =>
-              patchCommitMessage({ customCommand: e.target.value })
+              patchAgents({ customCommand: e.target.value })
             }
-            placeholder="e.g. codex --short"
+            placeholder="e.g. codex --reply"
           />
         </Field>
       ) : null}
       <p className="text-[11px] text-fg-muted">
-        The selected provider's CLI must already be installed and
-        authenticated on this machine. The merge dialog falls back to a
-        clear error when the binary is missing.
+        The selected agent's CLI must already be installed and
+        authenticated on this machine. Surfaces a clear error when the
+        binary is missing.
       </p>
     </section>
   );
