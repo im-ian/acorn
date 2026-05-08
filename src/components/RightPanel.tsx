@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Check,
   Copy,
   ExternalLink,
   FileDiff,
@@ -8,6 +9,7 @@ import {
   Globe,
   ListTodo,
   Maximize2,
+  X,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup } from "react-resizable-panels";
@@ -22,6 +24,7 @@ import type {
   CommitInfo,
   DiffPayload,
   PrStateFilter,
+  PullRequestChecksSummary,
   PullRequestInfo,
   PullRequestListing,
   StagedFile,
@@ -1071,6 +1074,7 @@ function PullRequestsTab({
                     #{pr.number}
                   </span>
                   <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
+                  <PrChecksBadge checks={pr.checks} />
                   <span className="truncate text-fg">{pr.title}</span>
                 </span>
                 <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
@@ -1159,6 +1163,52 @@ function NoAccessBanner({
         that has access, or accept the invitation on github.com.
       </p>
     </div>
+  );
+}
+
+function PrChecksBadge({
+  checks,
+}: {
+  checks: PullRequestChecksSummary | null;
+}) {
+  if (!checks) return null;
+  // Effective total mirrors the PR detail modal: NEUTRAL/SKIPPED/CANCELLED
+  // are already excluded by the backend, so passed+failed+pending is what
+  // actually carries pass/fail signal.
+  const effective = checks.passed + checks.failed + checks.pending;
+  if (effective === 0) return null;
+
+  const allPassed = checks.passed === effective;
+  const allFailed = checks.failed === effective;
+
+  if (allPassed) {
+    return (
+      <span
+        className="flex shrink-0 items-center justify-center rounded-full bg-emerald-500/20 px-1 py-0.5 text-emerald-300"
+        title={`All ${effective} check${effective === 1 ? "" : "s"} passed`}
+      >
+        <Check size={10} strokeWidth={3} />
+      </span>
+    );
+  }
+  if (allFailed) {
+    return (
+      <span
+        className="flex shrink-0 items-center justify-center rounded-full bg-rose-500/20 px-1 py-0.5 text-rose-300"
+        title={`All ${effective} check${effective === 1 ? "" : "s"} failed`}
+      >
+        <X size={10} strokeWidth={3} />
+      </span>
+    );
+  }
+  // Partial: show passed/total in a muted pill, matching the modal tab style.
+  return (
+    <span
+      className="shrink-0 rounded-full bg-fg-muted/15 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-fg-muted"
+      title={`${checks.passed} passed, ${checks.failed} failed, ${checks.pending} pending`}
+    >
+      {checks.passed}/{effective}
+    </span>
   );
 }
 
