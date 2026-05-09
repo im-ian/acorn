@@ -156,4 +156,14 @@ export const api = {
   scrollbackOrphanClear(): Promise<number> {
     return invoke<number>("scrollback_orphan_clear");
   },
+  /**
+   * Drop the cached snapshot of the user's shell environment. The next PTY
+   * spawn re-runs `$SHELL -l -i -c` and re-captures locale / editor / pager
+   * vars from the user's dotfiles. Already-running sessions are unaffected
+   * because their environment was fixed at fork time — surface that fact to
+   * the user when invoking this.
+   */
+  reloadShellEnv(): Promise<void> {
+    return invoke<void>("pty_reload_shell_env");
+  },
 };

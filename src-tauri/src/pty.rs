@@ -115,6 +115,59 @@ impl PtyManager {
         // Set this *before* applying the user-provided env so a user can
         // still opt back in by passing `SHELL_SESSIONS_DISABLE=0`.
         cmd.env("SHELL_SESSIONS_DISABLE", "1");
+
+        // Layered env applied lowest-to-highest priority. Each layer skips
+        // keys that a higher-priority layer would overwrite, so the user's
+        // dotfile (C) wins over our locale guess (B) wins over our
+        // render-capability declaration (A) — and the caller's explicit
+        // `env` argument trumps everything. This mirrors how Terminal.app /
+        // iTerm2 inject TERM and LANG before the shell runs while still
+        // letting `~/.zshenv` override.
+        let shell_env = crate::shell_env::resolve();
+        let mut applied: std::collections::HashSet<String> = env.keys().cloned().collect();
+
+        // (A) Render capability — TERM advertises what xterm.js renders, so
+        // zsh's terminfo lookups (used by zsh-autosuggestions for cursor
+        // save/restore) and color-aware CLIs (claude, fzf, …) emit
+        // sequences we can actually paint. Without this, GUI-launched
+        // acorn inherits an empty TERM and color/redraw goes wrong.
+        const RENDER_CAPABILITY: &[(&str, &str)] = &[
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+        ];
+        for (k, v) in RENDER_CAPABILITY {
+            if !applied.contains(*k) && !shell_env.contains_key(*k) {
+                cmd.env(k, v);
+                applied.insert((*k).to_string());
+            }
+        }
+
+        // (B) System locale — Terminal.app's "Set locale environment
+        // variables on startup" injects LANG from the user's macOS
+        // Language & Region preference. We do the same so PTY children
+        // start with a UTF-8 locale even on a fresh macOS install with
+        // no LANG in any dotfile.
+        if !applied.contains("LANG") && !shell_env.contains_key("LANG") {
+            let lang = crate::shell_env::system_locale_lang()
+                .unwrap_or_else(|| "en_US.UTF-8".to_string());
+            cmd.env("LANG", &lang);
+            applied.insert("LANG".to_string());
+        }
+
+        // (C) Dotfile-set environment captured from the user's login shell
+        // (`~/.zshenv` / `~/.zprofile` / `~/.zshrc`). Honors anything the
+        // user explicitly exported — LANG, EDITOR, PAGER, TZ, etc. —
+        // without acorn having to know each shell's rc-file conventions.
+        for (k, v) in &shell_env {
+            if !applied.contains(k) {
+                cmd.env(k, v);
+                applied.insert(k.clone());
+            }
+        }
+
+        // (caller) Frontend-supplied env wins over everything above. Lets a
+        // future per-session settings UI (or a test harness) force-override
+        // any value we'd otherwise pick.
         for (k, v) in env {
             cmd.env(k, v);
         }

@@ -44,6 +44,11 @@ export const Hotkeys = {
   closeTab: "$mod+w",
   closeEmptyPane: "Escape",
   openSettings: "$mod+Comma",
+  // Mirrors Ghostty's "Reload Config" gesture. Dotfile env values
+  // (LANG, EDITOR, PAGER, …) are captured once on first PTY spawn and
+  // cached; this shortcut invalidates the cache so the next session
+  // picks up edits the user has made since.
+  reloadShellEnv: "$mod+Shift+Comma",
   // Tab / project navigation. Use literal Control (not $mod) — Cmd+Tab is
   // reserved by macOS for OS-level app switching.
   nextTab: "Control+Tab",

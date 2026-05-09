@@ -8,6 +8,7 @@ mod pull_requests;
 mod scrollback;
 mod session;
 mod session_status;
+mod shell_env;
 mod shell_util;
 mod state;
 mod todos;
@@ -157,6 +158,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::pty_reload_shell_env,
             commands::scrollback_save,
             commands::scrollback_load,
             commands::scrollback_delete,

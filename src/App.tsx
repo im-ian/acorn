@@ -18,10 +18,13 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { CommandPalette } from "./components/CommandPalette";
 import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
+import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { api } from "./lib/api";
 import { Hotkeys, useHotkeys } from "./lib/hotkeys";
 import { startSessionNotificationWatcher } from "./lib/notifications";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
+import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
 import { useAppStore } from "./store";
@@ -299,6 +302,22 @@ function App() {
         e.preventDefault();
         useSettings.getState().setOpen(true);
       },
+      [Hotkeys.reloadShellEnv]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        const show = useToasts.getState().show;
+        api
+          .reloadShellEnv()
+          .then(() => {
+            // Existing PTY children keep the env they forked with —
+            // surfacing this so the user knows why their already-open
+            // session didn't change.
+            show("Shell environment reloaded. Open a new session to apply.");
+          })
+          .catch((err: unknown) => {
+            console.error("[App] reloadShellEnv failed", err);
+            show("Failed to reload shell environment.");
+          });
+      },
       [Hotkeys.closeEmptyPane]: (e: KeyboardEvent) => {
         // Only collapse the focused pane when it's empty, so Escape stays
         // available for inputs, dialogs, and the command palette.
@@ -319,6 +338,7 @@ function App() {
   return (
     <div className="flex h-screen w-screen flex-col bg-bg text-fg">
       <UpdateBanner />
+      <ToastHost />
       <div className="flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel

@@ -9,10 +9,13 @@ import {
   Plus,
   RefreshCw,
   Sparkles,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import { useAppStore } from "../store";
+import { api } from "../lib/api";
 import { cn } from "../lib/cn";
+import { useToasts } from "../lib/toasts";
 import type { Session } from "../lib/types";
 
 interface CommandPaletteProps {
@@ -73,6 +76,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   function handleSetTab(tab: "todos" | "commits" | "staged" | "prs") {
     useAppStore.getState().setRightTab(tab);
     close();
+  }
+
+  async function handleReloadShellEnv() {
+    const show = useToasts.getState().show;
+    try {
+      await api.reloadShellEnv();
+      show("Shell environment reloaded. Open a new session to apply.");
+    } catch (err) {
+      console.error("[CommandPalette] reloadShellEnv failed", err);
+      show("Failed to reload shell environment.");
+    } finally {
+      close();
+    }
   }
 
   return (
@@ -178,6 +194,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             <GitPullRequest size={14} className="text-fg-muted" />
             <span>View Pull Requests</span>
+          </Command.Item>
+        </Command.Group>
+
+        <Command.Group heading="Terminal">
+          <Command.Item
+            value="reload-shell-env"
+            onSelect={() => void handleReloadShellEnv()}
+            keywords={["dotfile", "zshenv", "lang", "editor", "env", "locale"]}
+          >
+            <Terminal size={14} className="text-fg-muted" />
+            <span>Reload shell environment</span>
+            <span className="ml-auto truncate text-xs text-fg-muted/80">
+              ⇧⌘,
+            </span>
           </Command.Item>
         </Command.Group>
 
