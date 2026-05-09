@@ -435,6 +435,16 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
     state.pty.kill(&id)
 }
 
+/// Drop the cached snapshot of the user's shell environment. The next PTY
+/// spawn re-runs `$SHELL -l -i -c` and picks up dotfile edits the user has
+/// made since the last capture. Existing PTY children are unaffected —
+/// their environment is fixed at fork time, so the frontend should tell
+/// the user "restart sessions to apply".
+#[tauri::command]
+pub fn pty_reload_shell_env() {
+    crate::shell_env::invalidate();
+}
+
 #[tauri::command]
 pub async fn scrollback_save(
     state: State<'_, AppState>,
