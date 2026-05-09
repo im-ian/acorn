@@ -61,16 +61,41 @@ jobs:
           mkdir -p "$out"
           target="${{ matrix.target }}"
           bundle_dir="src-tauri/target/${target}/release/bundle"
-          # Copy DMG, updater tarball, and the updater signature side-file.
-          # The signature is what tauri's updater plugin verifies against
-          # `latest.json`'s `signature` field — it must travel with the
-          # tarball as a release asset.
+
+          # Tauri produces `.app.tar.gz` / `.app.tar.gz.sig` with a
+          # NON-arch-tagged name (the DMG is arch-tagged by tauri itself,
+          # the updater tarball is not). Both matrix jobs would then
+          # upload artifacts containing identically-named files. The
+          # publish job downloads both with `merge-multiple: true`,
+          # which collapses same-named files: the surviving `.tar.gz`
+          # and `.sig` can end up coming from DIFFERENT jobs, so the
+          # signature no longer matches the tarball bytes and Tauri's
+          # updater rejects the release with "signature verification
+          # failed". Fix: rename to include the arch suffix BEFORE
+          # uploading, so each arch's pair survives the merge intact.
+          case "$target" in
+            aarch64-*) suffix="aarch64" ;;
+            x86_64-*)  suffix="x86_64"  ;;
+            *)         suffix="$target" ;;
+          esac
+
+          # DMG (already arch-tagged by tauri — `Acorn_<ver>_<arch>.dmg`)
           find "${bundle_dir}/dmg" -name "*.dmg" -maxdepth 2 -print0 \
             | xargs -0 -I{} cp -v {} "$out/"
-          find "${bundle_dir}/macos" -name "*.app.tar.gz" -maxdepth 2 -print0 \
-            | xargs -0 -I{} cp -v {} "$out/"
-          find "${bundle_dir}/macos" -name "*.app.tar.gz.sig" -maxdepth 2 -print0 \
-            | xargs -0 -I{} cp -v {} "$out/"
+
+          # Updater tarball + signature, renamed to add the arch suffix.
+          # The publish job's `latest.json` generator already greps for
+          # `aarch64` / `x86_64` in the filename, so once the names are
+          # tagged here it picks the right pair per platform.
+          while IFS= read -r -d '' f; do
+            base=$(basename "$f" .app.tar.gz)
+            cp -v "$f" "$out/${base}_${suffix}.app.tar.gz"
+          done < <(find "${bundle_dir}/macos" -name "*.app.tar.gz" -maxdepth 2 -print0)
+          while IFS= read -r -d '' f; do
+            base=$(basename "$f" .app.tar.gz.sig)
+            cp -v "$f" "$out/${base}_${suffix}.app.tar.gz.sig"
+          done < <(find "${bundle_dir}/macos" -name "*.app.tar.gz.sig" -maxdepth 2 -print0)
+
           ls -la "$out/"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
