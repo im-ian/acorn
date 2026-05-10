@@ -27,8 +27,19 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and worktree checkout
+      //    directories. Without the worktree excludes, running `claude -w`
+      //    (or any tool that calls `git worktree add` under the project
+      //    root) checks out hundreds of files at once into
+      //    `.claude/worktrees/<name>/...` or `.acorn/worktrees/<name>/...`,
+      //    which Vite cannot reconcile via HMR and falls back to a full
+      //    page reload — showing as a white-flash "acorn restarted itself"
+      //    in dev. Production isn't affected because there's no dev server.
+      ignored: [
+        "**/src-tauri/**",
+        "**/.claude/worktrees/**",
+        "**/.acorn/worktrees/**",
+      ],
     },
   },
   test: {

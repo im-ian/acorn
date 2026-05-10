@@ -64,6 +64,27 @@ pub fn list_worktrees(repo_path: &Path) -> AppResult<Vec<String>> {
         .collect())
 }
 
+/// Like [`list_worktrees`] but returns absolute on-disk paths instead of
+/// names. Used by the post-PTY-exit "did claude just create a worktree?"
+/// detector — names alone aren't enough because we need to point a session
+/// at the new worktree's directory to respawn the child there.
+///
+/// Note: this only enumerates *linked* worktrees. The main repo checkout is
+/// excluded; libgit2's `worktrees()` only reports `.git/worktrees/<name>`
+/// entries. That matches what we want — `claude -w` always adds a linked
+/// worktree, never modifies the main one.
+pub fn list_worktree_paths(repo_path: &Path) -> AppResult<Vec<std::path::PathBuf>> {
+    let repo = ensure_repo(repo_path)?;
+    let names = repo.worktrees()?;
+    let mut paths = Vec::new();
+    for name in names.iter().flatten() {
+        if let Ok(wt) = repo.find_worktree(name) {
+            paths.push(wt.path().to_path_buf());
+        }
+    }
+    Ok(paths)
+}
+
 pub fn remove_worktree(repo_path: &Path, name: &str) -> AppResult<()> {
     let repo = ensure_repo(repo_path)?;
     let wt = repo.find_worktree(name)?;
