@@ -83,6 +83,7 @@ interface AppStateModel {
   ) => Promise<void>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
+  adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
   cycleTab: (direction: 1 | -1) => void;
@@ -667,6 +668,15 @@ export const useAppStore = create<AppStateModel>()(
   async renameSession(id, name) {
     try {
       await api.renameSession(id, name);
+      await get().refreshSessions();
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
+  },
+
+  async adoptSessionWorktree(id, worktreePath) {
+    try {
+      await api.updateSessionWorktree(id, worktreePath);
       await get().refreshSessions();
     } catch (e) {
       set({ error: errorMessage(e) });
