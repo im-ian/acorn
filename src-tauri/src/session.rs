@@ -240,6 +240,27 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    /// Re-point a session at a different on-disk worktree. Used when an in-PTY
+    /// command (notably `claude --worktree`) creates a fresh worktree and
+    /// exits — acorn adopts that worktree as the session's new home so the
+    /// user lands inside it on respawn instead of being kicked back to the
+    /// original cwd. Only the path moves; UUID, name, status, and metadata
+    /// are preserved so terminal/listener identity is stable across the
+    /// adoption.
+    pub fn update_worktree_path(
+        &self,
+        id: &Uuid,
+        worktree_path: std::path::PathBuf,
+    ) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        entry.worktree_path = worktree_path;
+        entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
     pub fn remove(&self, id: &Uuid) -> AppResult<Session> {
         self.inner
             .remove(id)

@@ -42,6 +42,10 @@ struct PtyHandle {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// When set, the reader task will exit on its next loop iteration.
     stop: Arc<AtomicBool>,
+    /// PID of the spawned PTY child. Captured at spawn time because the
+    /// `Child` handle moves into the wait thread. `None` if the platform
+    /// did not return one (portable-pty allows that).
+    pid: Option<u32>,
 }
 
 /// Manages all live PTY sessions for the application.
@@ -189,6 +193,7 @@ impl PtyManager {
             .try_clone_reader()
             .map_err(|e| AppError::Pty(format!("try_clone_reader failed: {e}")))?;
         let killer = child.clone_killer();
+        let pid = child.process_id();
 
         let stop = Arc::new(AtomicBool::new(false));
         let handle = Arc::new(PtyHandle {
@@ -196,6 +201,7 @@ impl PtyManager {
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
             stop: stop.clone(),
+            pid,
         });
 
         self.handles.insert(session_id, handle);
@@ -278,6 +284,15 @@ impl PtyManager {
     /// Returns true if a PTY is currently registered for the given session.
     pub fn contains(&self, session_id: &Uuid) -> bool {
         self.handles.contains_key(session_id)
+    }
+
+    /// PID of the immediate PTY child for a session, if known. Used by the
+    /// frontend to discover the actual current working directory of the
+    /// running process (and any descendants), so the right panel can follow
+    /// `claude --worktree` / interactive `cd` instead of staying pinned to
+    /// the cwd we set at spawn time.
+    pub fn child_pid(&self, session_id: &Uuid) -> Option<u32> {
+        self.handles.get(session_id).and_then(|h| h.pid)
     }
 }
 

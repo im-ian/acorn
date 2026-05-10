@@ -6,9 +6,12 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
+import { api } from "../lib/api";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import { resolveStartupCommand, useSettings } from "../lib/settings";
+import { useToasts } from "../lib/toasts";
 import type { SessionStartupMode } from "../lib/types";
+import { useAppStore } from "../store";
 
 interface TerminalProps {
   sessionId: string;
@@ -510,10 +513,27 @@ export function Terminal({
     resizeObserver.observe(container);
 
     let exited = false;
+    // Snapshot of linked worktrees taken right before each PTY spawn. On exit
+    // we re-fetch and compare; a fresh entry means the just-exited child
+    // (most often `claude --worktree`) added a worktree, and we adopt it as
+    // this session's new home instead of letting the user fall into the
+    // "press Enter to respawn in the same old cwd" dead end.
+    let worktreeSnapshot: Set<string> = new Set();
 
     async function spawnPty() {
       if (disposed) return;
       try {
+        // Capture the worktree set *before* the child can mutate it.
+        // Failure here is non-fatal — without a snapshot we just lose
+        // the adoption shortcut for this spawn cycle, and the press-Enter
+        // path takes over as before.
+        try {
+          const before = await api.gitWorktrees(cwd);
+          if (!disposed) worktreeSnapshot = new Set(before);
+        } catch (err) {
+          console.debug("[Terminal] worktree snapshot failed", err);
+        }
+        if (disposed) return;
         const startup = resolveStartupCommand(
           useSettings.getState().settings,
           startupMode,
@@ -603,10 +623,51 @@ export function Terminal({
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
           if (disposed) return;
-          exited = true;
-          term.write(
-            `\r\n${ANSI_DIM}[process exited — press Enter to restart]${ANSI_RESET}\r\n`,
-          );
+          // Did the just-exited child add a new worktree? Most common cause:
+          // user ran `claude --worktree` (or typed `claude -w`), which on
+          // its own *creates the worktree and exits without putting you
+          // inside it*. Without this branch the user sees a silent exit
+          // and ends up trapped at the press-Enter prompt in the original
+          // cwd, defeating the point. Adopt the new worktree so the next
+          // spawn — triggered by the cwd-prop change after the store update
+          // — lands inside it.
+          void (async () => {
+            let adoptedPath: string | null = null;
+            try {
+              const current = await api.gitWorktrees(cwd);
+              if (disposed) return;
+              const fresh = current.filter((p) => !worktreeSnapshot.has(p));
+              if (fresh.length > 0) {
+                // Pick the last (most recently appended in libgit2's
+                // enumeration) when the child added several in one run.
+                adoptedPath = fresh[fresh.length - 1];
+              }
+            } catch (err) {
+              console.warn(
+                "[Terminal] worktree adoption check failed",
+                err,
+              );
+            }
+            if (disposed) return;
+            if (adoptedPath) {
+              const name = adoptedPath.split("/").pop() || adoptedPath;
+              useToasts.getState().show(`Adopted new worktree: ${name}`);
+              await useAppStore
+                .getState()
+                .adoptSessionWorktree(sessionId, adoptedPath);
+              // The store now holds the new worktree_path; TerminalHost
+              // re-renders with the updated cwd prop, this entire effect
+              // tears down via cleanup, and a fresh mount spawns the PTY
+              // inside the new worktree. We deliberately do *not* mark
+              // `exited` or write the press-Enter prompt — that would
+              // briefly flash on the way out.
+              return;
+            }
+            exited = true;
+            term.write(
+              `\r\n${ANSI_DIM}[process exited — press Enter to restart]${ANSI_RESET}\r\n`,
+            );
+          })();
         });
         if (disposed) {
           unlistenExit();

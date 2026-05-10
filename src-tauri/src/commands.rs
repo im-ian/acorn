@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
@@ -283,6 +283,41 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
     Ok(updated)
 }
 
+/// Re-point a session at a new worktree directory and persist the change.
+/// Frontend invokes this after the PTY exits when it detects that an in-PTY
+/// command (typically `claude --worktree`) added a fresh git worktree —
+/// adopting it as the session's new home avoids the "command silently
+/// vanishes, you're stuck in the old cwd" dead end.
+#[tauri::command]
+pub fn update_session_worktree(
+    state: State<'_, AppState>,
+    id: String,
+    worktree_path: String,
+) -> AppResult<Session> {
+    let id = parse_id(&id)?;
+    let path = PathBuf::from(worktree_path);
+    if !path.exists() {
+        return Err(AppError::InvalidPath(path.display().to_string()));
+    }
+    let updated = state.sessions.update_worktree_path(&id, path)?;
+    persist(&state);
+    Ok(updated)
+}
+
+/// Enumerate every linked git worktree of the repo containing `repo_path`.
+/// Returns absolute paths so the caller can detect "what's new since I last
+/// looked" by simple set diff. The main checkout is intentionally excluded —
+/// it is never created or removed by the in-PTY commands we're watching for.
+#[tauri::command]
+pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
+    let path = PathBuf::from(repo_path);
+    let paths = crate::worktree::list_worktree_paths(&path)?;
+    Ok(paths
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
+}
+
 fn parse_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|e| AppError::Other(e.to_string()))
 }
@@ -443,6 +478,72 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
 #[tauri::command]
 pub fn pty_reload_shell_env() {
     crate::shell_env::invalidate();
+}
+
+/// Resolve the *live* working directory of a session's PTY tree.
+///
+/// We seed at the immediate PTY child (typically `$SHELL` or `claude`) and
+/// walk descendants, returning the cwd of the deepest descendant that exposes
+/// one. This catches both common drift cases:
+///
+///   * **Agent mode** — the PTY child *is* `claude`; on `--worktree` claude
+///     chdirs (or re-execs) into the new worktree and the immediate child's
+///     cwd updates directly.
+///   * **Terminal mode** — the PTY child is `$SHELL`; the user types
+///     `claude -w` and claude appears as a grandchild whose cwd reflects the
+///     freshly created worktree, while the shell's cwd is still the original
+///     project root.
+///
+/// Returns `None` if the session has no live PTY (not yet spawned, or
+/// already exited). The frontend then falls back to the session's recorded
+/// `worktree_path`.
+#[tauri::command]
+pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
+    let id = parse_id(&session_id)?;
+    let Some(root_pid) = state.pty.child_pid(&id) else {
+        return Ok(None);
+    };
+
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+    );
+
+    Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
+}
+
+/// BFS over `sys`, starting at `root`, returning the cwd of the deepest
+/// reachable descendant that has one. Falls back to `root`'s own cwd at
+/// depth 0 when no deeper descendant exposes a cwd. `None` if the root PID
+/// is gone from the table or has no readable cwd anywhere in the tree.
+fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
+    let mut frontier: Vec<(Pid, u32)> = vec![(root, 0)];
+    let mut best: Option<(u32, String)> = None;
+    let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();
+    while let Some((pid, depth)) = frontier.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        let Some(proc) = sys.process(pid) else { continue };
+        if let Some(cwd) = proc.cwd() {
+            let path = cwd.to_string_lossy().into_owned();
+            match &best {
+                None => best = Some((depth, path)),
+                Some((d, _)) if depth > *d => best = Some((depth, path)),
+                _ => {}
+            }
+        }
+        for (child_pid, child) in sys.processes() {
+            if child.parent() == Some(pid) && !visited.contains(child_pid) {
+                frontier.push((*child_pid, depth + 1));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 #[tauri::command]

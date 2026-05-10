@@ -54,7 +54,13 @@ export function RightPanel() {
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
   const active = sessions.find((s) => s.id === activeSessionId);
-  const repoPath = active?.worktree_path ?? activeProject ?? null;
+  // The session's recorded worktree path is what we set at spawn time. The
+  // PTY child (or any descendant) may have chdir'd since — most notably via
+  // `claude --worktree`, which silently moves the running session into a
+  // freshly created worktree. `useLiveRepoPath` asks the backend on demand
+  // and falls back to the recorded path when there's no live PTY.
+  const fallbackPath = active?.worktree_path ?? activeProject ?? null;
+  const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath, rightTab);
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
   const [prDetail, setPrDetail] = useState<{
     repoPath: string;
@@ -292,6 +298,56 @@ interface SessionTodosState {
   todos: TodoItem[];
   loaded: boolean;
   error: string | null;
+}
+
+/**
+ * Resolve the live working directory of a session's PTY tree, with the
+ * recorded `fallback` path as the immediate (and final) fallback. Re-resolves
+ * lazily — only on session change, tab change, and window refocus. Cost per
+ * resolve is one Tauri command + a single sysinfo refresh on the backend, so
+ * a few invocations per minute is essentially free; we deliberately do *not*
+ * poll on a timer.
+ */
+function useLiveRepoPath(
+  sessionId: string | null,
+  fallback: string | null,
+  rightTab: string,
+): string | null {
+  const [liveCwd, setLiveCwd] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setLiveCwd(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .ptyCwd(sessionId)
+      .then((cwd) => {
+        if (!cancelled) setLiveCwd(cwd);
+      })
+      .catch((err: unknown) => {
+        // Don't blow away a previously resolved path on a transient backend
+        // error — the static fallback will kick in only if liveCwd was never
+        // set in the first place. Logging stays at debug to avoid noise.
+        console.debug("[RightPanel] ptyCwd resolve failed", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, rightTab, tick]);
+
+  // Refocusing the app is a strong signal the user is about to look at the
+  // panel — re-resolve so a `claude --worktree` that happened while we were
+  // backgrounded is reflected immediately.
+  useEffect(() => {
+    const onFocus = () => setTick((t) => t + 1);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  return liveCwd ?? fallback;
 }
 
 function useSessionTodos(

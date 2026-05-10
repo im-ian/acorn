@@ -166,4 +166,30 @@ export const api = {
   reloadShellEnv(): Promise<void> {
     return invoke<void>("pty_reload_shell_env");
   },
+  /**
+   * Resolve the live cwd of a session's PTY tree. Returns `null` when the
+   * session has no live PTY (not opened yet, or already exited) — callers
+   * should fall back to the session's recorded `worktree_path`. Walks
+   * descendants and returns the deepest cwd, so `claude -w` (claude as a
+   * grandchild of the shell) is followed in addition to direct `cd`.
+   */
+  ptyCwd(sessionId: string): Promise<string | null> {
+    return invoke<string | null>("pty_cwd", { sessionId });
+  },
+  /**
+   * Re-point a session at a different worktree directory. Used after an
+   * in-PTY command creates a worktree and exits — adopting it lets the next
+   * spawn land inside the new worktree instead of the original cwd.
+   */
+  updateSessionWorktree(id: string, worktreePath: string): Promise<Session> {
+    return invoke<Session>("update_session_worktree", { id, worktreePath });
+  },
+  /**
+   * List absolute paths of every *linked* git worktree of the repo
+   * containing `repoPath`. Used to snapshot before a PTY command runs and
+   * diff after it exits, so we can detect a freshly-created worktree.
+   */
+  gitWorktrees(repoPath: string): Promise<string[]> {
+    return invoke<string[]>("git_worktrees", { repoPath });
+  },
 };
