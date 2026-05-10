@@ -633,7 +633,7 @@ function CommitsTab({
                       setMenu({ x: e.clientX, y: e.clientY, commit: c });
                     }}
                     className={cn(
-                      "flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-xs transition",
+                      "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left text-xs transition",
                       selected === c.sha
                         ? "bg-bg-elevated"
                         : "hover:bg-bg-elevated/50",
