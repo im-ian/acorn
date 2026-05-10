@@ -707,32 +707,56 @@ export function Terminal({
         });
         if (disposed) return;
         if (saved && saved.length > 0) {
-          // Wait for the snapshot to fully drain into the buffer before
-          // we issue the post-restore mode reset, so the reset is not
-          // re-overwritten by trailing escape sequences in the snapshot.
-          await new Promise<void>((resolve) => term.write(saved, resolve));
+          // Each step is awaited individually. Previously the mode
+          // resets and marker were fired without awaiting and `spawnPty`
+          // was called immediately after, so the new shell's first
+          // prompt could arrive via the pty:output listener while our
+          // own writes were still sitting in xterm's parser queue.
+          // Interleaving with the shell's prompt-redraw escape sequences
+          // intermittently parked the cursor at column 0 of the new
+          // prompt line and left input invisible (the user typed but
+          // echo landed off-screen). Strict serial drain makes the
+          // post-restore cursor position deterministic.
+          const writeAndDrain = (data: string): Promise<void> =>
+            new Promise<void>((resolve) => term.write(data, resolve));
+
+          await writeAndDrain(saved);
           if (disposed) return;
-          // Reset just the mode bits that actually break the next
-          // session: scroll region, auto-wrap, cursor visibility. We
-          // intentionally do NOT issue `\e[?1049l` (alt-screen exit)
-          // unless the snapshot left us inside the alt buffer — in
-          // xterm.js that sequence pushes the alt buffer contents into
-          // the normal buffer's scrollback when there is no matching
-          // entry, doubling the apparent scroll history.
+          // Only exit alt-screen if the snapshot actually left us in it
+          // — issuing `\x1b[?1049l` from the normal buffer pushes the
+          // alt buffer's contents into the normal buffer's scrollback,
+          // doubling the apparent history.
           if (term.buffer.active.type === "alternate") {
-            term.write("\x1b[?1049l");
+            await writeAndDrain("\x1b[?1049l");
+            if (disposed) return;
           }
-          term.write("\x1b[r");    // reset DECSTBM (full-screen scroll region)
-          term.write("\x1b[?7h");  // DECAWM auto-wrap on
-          term.write("\x1b[?25h"); // DECTCEM cursor visible
-          term.write("\x1b[!p");   // DECSTR soft reset (mop up the rest)
-          // Park the cursor on column 0 of a fresh row so the marker
-          // (and the about-to-spawn shell prompt) start from a known
-          // baseline regardless of where the snapshot left the cursor.
-          term.write("\r");
-          term.write(
+          // Targeted mode resets. We deliberately skip DECSTR (`\x1b[!p`)
+          // because its soft-reset coverage in xterm.js leaves
+          // bracketed-paste and mouse-tracking modes untouched — and
+          // those are exactly the modes a stale snapshot can leave
+          // enabled (zsh enables `?2004` per prompt; vim/claude enable
+          // `?1000`–`?1006`). When the new shell inherits an unexpected
+          // tracker, paste arrives wrapped in `\e[200~ … \e[201~` and
+          // mouse clicks emit escape sequences instead of focusing the
+          // pane — both of which read as "input is broken" to the user.
+          // Listing each mode explicitly makes the post-restore state
+          // deterministic regardless of what the snapshot ended in.
+          const RESETS =
+            "\x1b[r" +     // DECSTBM full-screen scroll region
+            "\x1b[?7h" +   // DECAWM auto-wrap on
+            "\x1b[?25h" +  // DECTCEM cursor visible
+            "\x1b[?2004l" + // bracketed paste off
+            "\x1b[?1000l" + // X11 mouse tracking off
+            "\x1b[?1002l" + // mouse btn-event tracking off
+            "\x1b[?1003l" + // mouse any-event tracking off
+            "\x1b[?1006l" + // SGR mouse mode off
+            "\r"; //          park cursor at column 0
+          await writeAndDrain(RESETS);
+          if (disposed) return;
+          await writeAndDrain(
             `\r\n${ANSI_DIM}— restored from previous session —${ANSI_RESET}\r\n`,
           );
+          if (disposed) return;
         }
       } catch (err) {
         console.warn("[Terminal] scrollback_load failed", err);
