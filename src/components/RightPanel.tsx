@@ -133,18 +133,30 @@ export function RightPanel() {
           )
         ) : rightTab === "commits" ? (
           repoPath ? (
-            <CommitsTab repoPath={repoPath} onExpand={setExpanded} />
+            // `key` forces a full remount on project switch so any in-flight
+            // git request from the previous repo cannot land its `setState`
+            // into the new repo's component (cross-project data leak).
+            <CommitsTab
+              key={repoPath}
+              repoPath={repoPath}
+              onExpand={setExpanded}
+            />
           ) : (
             <Empty msg="No project selected" />
           )
         ) : rightTab === "staged" ? (
           repoPath ? (
-            <StagedTab repoPath={repoPath} onExpand={setExpanded} />
+            <StagedTab
+              key={repoPath}
+              repoPath={repoPath}
+              onExpand={setExpanded}
+            />
           ) : (
             <Empty msg="No project selected" />
           )
         ) : repoPath ? (
           <PullRequestsTab
+            key={repoPath}
             repoPath={repoPath}
             onOpenDetail={(number) => setPrDetail({ repoPath, number })}
             refreshKey={prListVersion}
