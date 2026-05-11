@@ -41,6 +41,9 @@ const TERMINAL_BG = "#1f2326";
 const TERMINAL_THEME: ITheme = {
   background: TERMINAL_BG, foreground: "#ededed", cursor: "#ededed",
   cursorAccent: TERMINAL_BG, selectionBackground: "#3a3f44",
+  scrollbarSliderBackground: "rgba(255, 255, 255, 0.08)",
+  scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.16)",
+  scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.24)",
   black: TERMINAL_BG, red: "#e06c75", green: "#98c379", yellow: "#e5c07b",
   blue: "#61afef", magenta: "#c678dd", cyan: "#56b6c2", white: "#ededed",
   brightBlack: "#5c6370", brightRed: "#e06c75", brightGreen: "#98c379",
