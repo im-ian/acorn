@@ -8,7 +8,17 @@ const ACORN_DIR: &str = ".acorn";
 const EXCLUDE_ENTRY: &str = ".acorn/";
 
 pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
-    Repository::open(path).map_err(AppError::from)
+    // `discover` walks up from `path` to find the nearest `.git`, so callers
+    // can pass any subdirectory (e.g. a session's PTY cwd that drifted into
+    // `<repo>/src-tauri`) without the open failing. Also handles linked
+    // worktrees, where `.git` is a file pointing at the parent repo.
+    Repository::discover(path).map_err(|e| {
+        AppError::Other(format!(
+            "could not find git repository from '{}': {}",
+            path.display(),
+            e.message()
+        ))
+    })
 }
 
 pub fn worktree_root(repo_path: &Path) -> PathBuf {
@@ -103,4 +113,56 @@ pub fn current_branch(repo_path: &Path) -> AppResult<String> {
         .shorthand()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "HEAD".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-worktree-test-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn ensure_repo_discovers_from_subdirectory() {
+        let root = unique_temp_dir("subdir");
+        let repo = Repository::init(&root).expect("init repo");
+        // Drop borrow before recreating Repository via discover.
+        drop(repo);
+
+        let subdir = root.join("nested").join("deeper");
+        std::fs::create_dir_all(&subdir).expect("nested dirs");
+
+        let opened = ensure_repo(&subdir).expect("discover from subdir");
+        let workdir = opened.workdir().expect("workdir present");
+        assert_eq!(
+            workdir.canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_repo_errors_when_no_repo_in_ancestry() {
+        let root = unique_temp_dir("norepo");
+        let msg = match ensure_repo(&root) {
+            Ok(_) => panic!("expected discover failure outside any repo"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("could not find git repository from"),
+            "unexpected error message: {msg}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
