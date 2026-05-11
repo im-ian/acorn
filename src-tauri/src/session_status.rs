@@ -19,6 +19,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::error::AppResult;
+use crate::pty::ShellHint;
 use crate::session::SessionStatus;
 use crate::todos;
 
@@ -38,12 +39,20 @@ const TAIL_BYTES: u64 = 262_144;
 /// window). Without this fallback, polling momentarily reclassifies a live
 /// session as Idle, leaving the Sidebar dot stuck at Idle until claude
 /// emits another user/assistant line within the tail window — which for
-/// long sessions can be never. Sessions with no transcript on disk still
-/// resolve to Idle regardless of `previous`.
-pub fn detect(session_id: &str, previous: SessionStatus) -> AppResult<SessionStatus> {
+/// long sessions can be never.
+///
+/// `shell_hint` carries the descendant-process snapshot for shell-mode
+/// sessions (no transcript on disk). It is the only signal we have for
+/// terminal sessions, so when the transcript path is empty we map it
+/// directly to a status. `None` means "no live PTY" → Idle.
+pub fn detect(
+    session_id: &str,
+    previous: SessionStatus,
+    shell_hint: Option<ShellHint>,
+) -> AppResult<SessionStatus> {
     let path = match todos::locate_transcript_for(session_id)? {
         Some(p) => p,
-        None => return Ok(SessionStatus::Idle),
+        None => return Ok(map_shell_hint(shell_hint)),
     };
 
     let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -60,6 +69,14 @@ pub fn detect(session_id: &str, previous: SessionStatus) -> AppResult<SessionSta
         // Idle. The next poll that lands on a real turn line corrects it.
         None => previous,
     })
+}
+
+fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
+    match hint {
+        Some(ShellHint::Running) => SessionStatus::Running,
+        Some(ShellHint::NeedsInput) => SessionStatus::NeedsInput,
+        Some(ShellHint::Idle) | None => SessionStatus::Idle,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -231,6 +248,29 @@ mod tests {
         // the walker with nothing to classify.
         let tail = meta_lines().join("\n");
         assert_eq!(last_meaningful_kind(&tail, true), None);
+    }
+
+    #[test]
+    fn shell_hint_running_maps_to_running() {
+        assert_eq!(map_shell_hint(Some(ShellHint::Running)), SessionStatus::Running);
+    }
+
+    #[test]
+    fn shell_hint_needs_input_maps_to_needs_input() {
+        assert_eq!(
+            map_shell_hint(Some(ShellHint::NeedsInput)),
+            SessionStatus::NeedsInput,
+        );
+    }
+
+    #[test]
+    fn shell_hint_idle_maps_to_idle() {
+        assert_eq!(map_shell_hint(Some(ShellHint::Idle)), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn shell_hint_none_maps_to_idle() {
+        assert_eq!(map_shell_hint(None), SessionStatus::Idle);
     }
 
     #[test]
