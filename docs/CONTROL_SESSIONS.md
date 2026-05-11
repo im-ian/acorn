@@ -3,6 +3,12 @@
 > Status: early preview. The data model, hotkey, and `acorn-ipc` CLI ship in
 > Acorn 1.0.9. Expect rough edges; expect the protocol to bump if the wire
 > shape needs revision.
+>
+> **Platform support: macOS and Linux only.** The IPC transport is a Unix
+> domain socket, so the `acorn-ipc` binary and the in-app server do not
+> compile on Windows. Acorn itself runs on Windows; control sessions and
+> everything in this document do not. See [Limitations](#limitations) for
+> what porting would entail.
 
 A **control session** is an ordinary Acorn terminal that has been marked with
 `SessionKind::Control`. The mark gives the terminal — and any process running
@@ -185,7 +191,15 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
 
 ## Limitations
 
-- macOS and Linux only (Unix domain sockets).
+- **macOS and Linux only.** Both `acorn-ipc` and the in-app server import
+  `std::os::unix::net::{UnixListener, UnixStream}` directly (see
+  `src-tauri/src/ipc/server.rs` and `src-tauri/src/bin/acorn-ipc.rs`), so the
+  crate does not compile on Windows targets at all. Porting would mean
+  abstracting the transport — e.g. via the `interprocess` crate, which
+  unifies Unix domain sockets and Windows named pipes behind one API — and
+  finding a Windows-equivalent permission model for the `chmod 0600` step
+  (named-pipe SDDL ACLs). The PTY layer would also need an audit; nothing
+  in this stack tests that path on Windows.
 - The CLI does not currently auto-install. Use the Settings shortcut or
   symlink it manually.
 - `send-keys` does not interpret tmux-style escapes (`C-c`, `Enter`); pass
