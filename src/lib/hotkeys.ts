@@ -25,6 +25,10 @@ export const Hotkeys = {
   clearTerminal: "$mod+k",
   newSession: "$mod+t",
   newIsolatedSession: "$mod+Alt+t",
+  // "Control session" — extends the new-session family. Future PRs add the
+  // `acorn-ipc` CLI so this kind of session can drive sibling sessions; the
+  // hotkey lives next to the other terminal-creation bindings for symmetry.
+  newControlSession: "$mod+Alt+Shift+t",
   addProject: "$mod+Shift+n",
   focusSidebar: "$mod+1",
   focusMain: "$mod+2",

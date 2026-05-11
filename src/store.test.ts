@@ -67,6 +67,7 @@ function session(
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
     startup_mode: null,
+    kind: "regular",
     ...overrides,
   };
 }
@@ -548,5 +549,91 @@ describe("reorderProjects", () => {
     await useAppStore.getState().reorderProjects([REPO_B, REPO_A]);
     expect(useAppStore.getState().projects).toEqual(before);
     expect(useAppStore.getState().error).toBe("nope");
+  });
+});
+
+describe("createSession", () => {
+  // Each control-session test reaches into localStorage; clear it so
+  // an earlier test's "don't show again" flag does not leak forward.
+  const guideKey = "acorn:control-guide-dismissed-v1";
+
+  beforeEach(() => {
+    window.localStorage.removeItem(guideKey);
+  });
+
+  it("defaults the kind to regular when the caller omits it", async () => {
+    mockApi.createSession.mockResolvedValueOnce(session("new", REPO_A));
+    await useAppStore.getState().createSession("foo", REPO_A);
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "foo",
+      REPO_A,
+      false,
+      expect.anything(),
+      "regular",
+    );
+  });
+
+  it("forwards control kind to the backend", async () => {
+    mockApi.createSession.mockResolvedValueOnce(
+      session("ctl", REPO_A, { kind: "control" }),
+    );
+    await useAppStore
+      .getState()
+      .createSession("ctl", REPO_A, false, "control");
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "ctl",
+      REPO_A,
+      false,
+      expect.anything(),
+      "control",
+    );
+  });
+
+  it("emits the guide event the first time a control session is created", async () => {
+    const events: Event[] = [];
+    const listener = (e: Event) => events.push(e);
+    window.addEventListener("acorn:show-control-guide", listener);
+    try {
+      mockApi.createSession.mockResolvedValueOnce(
+        session("ctl", REPO_A, { kind: "control" }),
+      );
+      await useAppStore
+        .getState()
+        .createSession("ctl", REPO_A, false, "control");
+      expect(events).toHaveLength(1);
+    } finally {
+      window.removeEventListener("acorn:show-control-guide", listener);
+    }
+  });
+
+  it("suppresses the guide event when the dismissed flag is set", async () => {
+    window.localStorage.setItem(guideKey, "1");
+    const events: Event[] = [];
+    const listener = (e: Event) => events.push(e);
+    window.addEventListener("acorn:show-control-guide", listener);
+    try {
+      mockApi.createSession.mockResolvedValueOnce(
+        session("ctl", REPO_A, { kind: "control" }),
+      );
+      await useAppStore
+        .getState()
+        .createSession("ctl", REPO_A, false, "control");
+      expect(events).toHaveLength(0);
+    } finally {
+      window.removeEventListener("acorn:show-control-guide", listener);
+    }
+  });
+
+  it("does not emit the guide event for regular sessions", async () => {
+    const events: Event[] = [];
+    const listener = (e: Event) => events.push(e);
+    window.addEventListener("acorn:show-control-guide", listener);
+    try {
+      mockApi.createSession.mockResolvedValueOnce(session("reg", REPO_A));
+      await useAppStore.getState().createSession("reg", REPO_A);
+      expect(events).toHaveLength(0);
+    } finally {
+      window.removeEventListener("acorn:show-control-guide", listener);
+    }
   });
 });

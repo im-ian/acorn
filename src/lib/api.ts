@@ -10,6 +10,7 @@ import type {
   PullRequestDetailListing,
   PullRequestListing,
   Session,
+  SessionKind,
   SessionStartupMode,
   SessionStatus,
   StagedFile,
@@ -33,12 +34,14 @@ export const api = {
     repoPath: string,
     isolated = false,
     startupMode: SessionStartupMode | null = null,
+    kind: SessionKind = "regular",
   ): Promise<Session> {
     return invoke<Session>("create_session", {
       name,
       repoPath,
       isolated,
       startupMode,
+      kind,
     });
   },
   removeSession(id: string, removeWorktree = false): Promise<void> {

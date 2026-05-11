@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Command } from "cmdk";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
+  Bot,
   GitCommit,
   GitPullRequest,
   ListChecks,
@@ -47,6 +48,26 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       }
       const name = deriveSessionName(repoPath, sessionItems);
       await useAppStore.getState().createSession(name, repoPath);
+    } finally {
+      close();
+    }
+  }
+
+  async function handleNewControlSession() {
+    try {
+      const repoPath = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select a directory (control session)",
+      });
+      if (!repoPath || typeof repoPath !== "string") {
+        close();
+        return;
+      }
+      const name = deriveSessionName(repoPath, sessionItems, "control");
+      await useAppStore
+        .getState()
+        .createSession(name, repoPath, false, "control");
     } finally {
       close();
     }
@@ -139,6 +160,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Command.Item value="new-session" onSelect={handleNewSession}>
             <Plus size={14} className="text-accent" />
             <span>New session</span>
+          </Command.Item>
+          <Command.Item
+            value="new-control-session"
+            onSelect={handleNewControlSession}
+            keywords={["control", "ipc", "dispatcher", "orchestrator"]}
+          >
+            <Bot size={14} className="text-accent" />
+            <span>New control session</span>
           </Command.Item>
           <Command.Item value="refresh-sessions" onSelect={handleRefresh}>
             <RefreshCw size={14} className="text-fg-muted" />
@@ -233,10 +262,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
 }
 
-function deriveSessionName(repoPath: string, existing: Session[]): string {
-  const base =
+function deriveSessionName(
+  repoPath: string,
+  existing: Session[],
+  kind: "regular" | "control" = "regular",
+): string {
+  const folder =
     repoPath.split(/[\\/]/).filter(Boolean).pop() ??
     `session-${existing.length + 1}`;
+  // Mirror Sidebar.tsx's "control-" prefix so the kind is obvious from the
+  // name alone, even when the row's accessory icon is not in view.
+  const base = kind === "control" ? `control-${folder}` : folder;
   let candidate = base;
   let n = 2;
   const taken = new Set(existing.map((s) => s.name));

@@ -135,6 +135,19 @@ pub enum SessionStartupMode {
     Custom,
 }
 
+/// Distinguishes ordinary terminal sessions from "control" sessions, which
+/// will (in a follow-up PR) be allowed to drive other sessions in the same
+/// project via the `acorn-ipc` CLI. Orthogonal to `SessionStartupMode`:
+/// either kind can run any startup flavor. Defaults to `Regular` so existing
+/// persisted sessions without this field load cleanly.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionKind {
+    #[default]
+    Regular,
+    Control,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -150,6 +163,8 @@ pub struct Session {
     pub last_message: Option<String>,
     #[serde(default)]
     pub startup_mode: Option<SessionStartupMode>,
+    #[serde(default)]
+    pub kind: SessionKind,
 }
 
 impl Session {
@@ -160,6 +175,7 @@ impl Session {
         branch: String,
         isolated: bool,
         startup_mode: Option<SessionStartupMode>,
+        kind: SessionKind,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -174,6 +190,7 @@ impl Session {
             updated_at: now,
             last_message: None,
             startup_mode,
+            kind,
         }
     }
 }

@@ -16,6 +16,10 @@ import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { CommandPalette } from "./components/CommandPalette";
+import {
+  ControlSessionGuideModal,
+  CONTROL_GUIDE_DISMISSED_KEY,
+} from "./components/ControlSessionGuideModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
@@ -70,6 +74,7 @@ function App() {
     ? sessions.filter((s) => s.repo_path === pendingProject.repo_path)
     : [];
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
 
@@ -134,6 +139,17 @@ function App() {
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
   }, [pendingRemove, clearPendingRemove, removeSession]);
+
+  // Surface the one-time guide modal after the first control-session
+  // creation. The store dispatches `acorn:show-control-guide` only when the
+  // dismissed-flag is unset, so this handler can stay dumb and just open.
+  useEffect(() => {
+    const handler = () => setControlGuideOpen(true);
+    window.addEventListener("acorn:show-control-guide", handler);
+    return () => {
+      window.removeEventListener("acorn:show-control-guide", handler);
+    };
+  }, []);
 
   // The Tauri app menu fires `acorn:open-settings` when the user picks
   // "Settings..." from the macOS app menu (or hits its Cmd+, accelerator).
@@ -230,6 +246,10 @@ function App() {
       [Hotkeys.newIsolatedSession]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("acorn:new-isolated-session"));
+      },
+      [Hotkeys.newControlSession]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
       },
       [Hotkeys.addProject]: (e: KeyboardEvent) => {
         e.preventDefault();
@@ -433,6 +453,15 @@ function App() {
       <StatusBar />
       <TerminalHost />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <ControlSessionGuideModal
+        open={controlGuideOpen}
+        onClose={(dontShowAgain) => {
+          setControlGuideOpen(false);
+          if (dontShowAgain && typeof window !== "undefined") {
+            window.localStorage.setItem(CONTROL_GUIDE_DISMISSED_KEY, "1");
+          }
+        }}
+      />
       <SettingsModal />
       <RemoveSessionDialog
         session={pendingRemove}

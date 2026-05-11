@@ -1,4 +1,5 @@
 import {
+  Bot,
   ChevronRight,
   Copy,
   Files,
@@ -25,7 +26,7 @@ import {
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
-import type { Project, Session, SessionStatus } from "../lib/types";
+import type { Project, Session, SessionKind, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
 
@@ -206,33 +207,47 @@ export function Sidebar() {
   }
 
   const onNewSessionRef = useRef<
-    (isolated: boolean, repoOverride?: string) => Promise<void>
+    (
+      isolated: boolean,
+      kind: SessionKind,
+      repoOverride?: string,
+    ) => Promise<void>
   >(async () => {});
   const onAddProjectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     const newSession = () => {
       const project = useAppStore.getState().activeProject;
-      void onNewSessionRef.current(false, project ?? undefined);
+      void onNewSessionRef.current(false, "regular", project ?? undefined);
     };
     const newIsolated = () => {
       const project = useAppStore.getState().activeProject;
-      void onNewSessionRef.current(true, project ?? undefined);
+      void onNewSessionRef.current(true, "regular", project ?? undefined);
+    };
+    const newControl = () => {
+      const project = useAppStore.getState().activeProject;
+      void onNewSessionRef.current(false, "control", project ?? undefined);
     };
     const addProj = () => {
       void onAddProjectRef.current();
     };
     window.addEventListener("acorn:new-session", newSession);
     window.addEventListener("acorn:new-isolated-session", newIsolated);
+    window.addEventListener("acorn:new-control-session", newControl);
     window.addEventListener("acorn:add-project", addProj);
     return () => {
       window.removeEventListener("acorn:new-session", newSession);
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
+      window.removeEventListener("acorn:new-control-session", newControl);
       window.removeEventListener("acorn:add-project", addProj);
     };
   }, []);
 
-  async function onNewSession(isolated: boolean, repoOverride?: string) {
+  async function onNewSession(
+    isolated: boolean,
+    kind: SessionKind,
+    repoOverride?: string,
+  ) {
     try {
       const repoPath =
         repoOverride ??
@@ -241,11 +256,13 @@ export function Sidebar() {
           multiple: false,
           title: isolated
             ? "Select a git repository (isolated worktree)"
-            : "Select a directory",
+            : kind === "control"
+              ? "Select a directory (control session)"
+              : "Select a directory",
         }));
       if (!repoPath || typeof repoPath !== "string") return;
-      const name = suggestName(repoPath, sessions);
-      await createSession(name, repoPath, isolated);
+      const name = suggestName(repoPath, sessions, kind);
+      await createSession(name, repoPath, isolated, kind);
       setCollapsed((prev) => {
         if (!prev.has(repoPath)) return prev;
         const next = new Set(prev);
@@ -334,8 +351,8 @@ export function Sidebar() {
                 }}
                 onSelectSession={selectSession}
                 onRemoveSession={(s) => requestRemoveSession(s.id)}
-                onAddSession={(isolated) =>
-                  onNewSession(isolated, project.repoPath)
+                onAddSession={(isolated, kind) =>
+                  onNewSession(isolated, kind, project.repoPath)
                 }
                 onRemoveProject={() => requestRemoveProject(project.repoPath)}
               />
@@ -394,7 +411,7 @@ interface ProjectGroupViewProps {
   onActivate: () => void;
   onSelectSession: (id: string) => void;
   onRemoveSession: (s: Session) => void;
-  onAddSession: (isolated: boolean) => void;
+  onAddSession: (isolated: boolean, kind: SessionKind) => void;
   onRemoveProject: () => void;
 }
 
@@ -522,7 +539,7 @@ function ProjectGroupView({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onAddSession(false);
+              onAddSession(false, "regular");
             }}
             className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
             aria-label="New session in this project"
@@ -535,12 +552,25 @@ function ProjectGroupView({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onAddSession(true);
+              onAddSession(true, "regular");
             }}
             className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
             aria-label="New isolated session (worktree)"
           >
             <GitBranch size={12} />
+          </button>
+        </Tooltip>
+        <Tooltip label="New control session" side="bottom">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddSession(false, "control");
+            }}
+            className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+            aria-label="New control session in this project"
+          >
+            <Bot size={12} />
           </button>
         </Tooltip>
         <Tooltip label="Close project" side="bottom">
@@ -566,12 +596,17 @@ function ProjectGroupView({
           {
             label: "New session",
             icon: <Plus size={12} />,
-            onClick: () => onAddSession(false),
+            onClick: () => onAddSession(false, "regular"),
           },
           {
             label: "New isolated session",
             icon: <GitBranch size={12} />,
-            onClick: () => onAddSession(true),
+            onClick: () => onAddSession(true, "regular"),
+          },
+          {
+            label: "New control session",
+            icon: <Bot size={12} />,
+            onClick: () => onAddSession(false, "control"),
           },
           { type: "separator" },
           {
@@ -603,11 +638,11 @@ function ProjectGroupView({
               role="button"
               tabIndex={0}
               onClick={onActivate}
-              onDoubleClick={() => onAddSession(false)}
+              onDoubleClick={() => onAddSession(false, "regular")}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  onAddSession(false);
+                  onAddSession(false, "regular");
                 }
               }}
               className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
@@ -658,14 +693,15 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       n += 1;
     }
     try {
-      // Carry the source session's startup mode onto the duplicate so
-      // the duplicate respawns with the same kind of process, regardless
-      // of the current global default.
+      // Carry the source session's startup mode and kind onto the duplicate
+      // so the duplicate respawns with the same kind of process and (for
+      // control sessions) preserves its IPC-dispatch role.
       await api.createSession(
         next,
         session.repo_path,
         session.isolated,
         session.startup_mode,
+        session.kind,
       );
       await useAppStore.getState().refreshAll();
     } catch (err) {
@@ -790,6 +826,13 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
                 size={10}
                 className="shrink-0 text-fg-muted"
                 aria-label="isolated worktree"
+              />
+            ) : null}
+            {session.kind === "control" ? (
+              <Bot
+                size={10}
+                className="shrink-0 text-accent"
+                aria-label="control session"
               />
             ) : null}
           </span>
@@ -917,8 +960,15 @@ function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
-function suggestName(repoPath: string, existing: Session[]): string {
-  const base = basename(repoPath);
+function suggestName(
+  repoPath: string,
+  existing: Session[],
+  kind: SessionKind = "regular",
+): string {
+  // Control sessions get a "control-" prefix so they sort into a clearly
+  // distinct namespace at-a-glance, mirroring how `tmux` users name dedicated
+  // controller panes.
+  const base = kind === "control" ? `control-${basename(repoPath)}` : basename(repoPath);
   let candidate = base;
   let n = 2;
   const taken = new Set(existing.map((s) => s.name));
