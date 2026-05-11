@@ -133,11 +133,12 @@ export function PullRequestDetailModal({
             <div className="p-4 text-xs text-danger">{error}</div>
           </ModalShell>
         ) : !listing ? (
-          <ModalShell title={`#${open.number}`} onClose={onClose}>
-            <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-              Loading PR…
-            </div>
-          </ModalShell>
+          <DetailSkeleton
+            number={open.number}
+            onClose={onClose}
+            onRefresh={handleRefresh}
+            refreshing={refreshing}
+          />
         ) : listing.kind === "not_github" ? (
           <ModalShell title={`#${open.number}`} onClose={onClose}>
             <div className="p-4 text-xs text-fg-muted">
@@ -380,6 +381,132 @@ function DetailBody({
         ) : (
           <DiffSplitView payload={detail.diff} cwd={cwd} />
         )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * Loading placeholder that mirrors `DetailBody`'s layout — header line,
+ * meta line, body block, tab nav, and a stack of comment cards — so the
+ * modal doesn't reflow when real data lands. Refresh + close stay live
+ * during the fetch.
+ */
+function DetailSkeleton({
+  number,
+  onClose,
+  onRefresh,
+  refreshing,
+}: {
+  number: number;
+  onClose: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+}) {
+  return (
+    <>
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="h-3.5 w-3.5 shrink-0 animate-pulse rounded-full bg-fg-muted/20" />
+            <span className="font-mono text-xs text-fg-muted">#{number}</span>
+            <span className="h-3.5 w-[55%] animate-pulse rounded bg-fg-muted/15" />
+          </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-40 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-14 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </header>
+
+      <div
+        className="shrink-0 overflow-hidden border-b border-border bg-bg-sidebar/40 px-4 py-3"
+        style={{ height: BODY_HEIGHT_DEFAULT }}
+      >
+        <div className="flex flex-col gap-2">
+          <span className="h-3 w-[85%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[72%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[40%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="mt-2 h-3 w-[60%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[78%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[35%] animate-pulse rounded bg-fg-muted/10" />
+        </div>
+      </div>
+      <div
+        aria-hidden
+        className="h-1.5 shrink-0 border-b border-border bg-bg-sidebar/40"
+      />
+
+      <nav className="flex shrink-0 border-b border-border">
+        {[
+          { icon: <MessagesSquare size={13} />, w: "w-20" },
+          { icon: <CheckCircle2 size={13} />, w: "w-12" },
+          { icon: <GitPullRequest size={13} />, w: "w-10" },
+        ].map((tab, i) => (
+          <div
+            key={i}
+            className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs text-fg-muted/60"
+          >
+            {tab.icon}
+            <span
+              className={cn("h-2.5 animate-pulse rounded bg-fg-muted/15", tab.w)}
+            />
+          </div>
+        ))}
+      </nav>
+
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <ul className="flex h-full flex-col gap-3 overflow-y-auto px-4 py-3">
+          {[
+            { titleW: "w-24", bodyWidths: ["95%", "82%", "60%"] },
+            { titleW: "w-32", bodyWidths: ["70%", "45%"] },
+            { titleW: "w-20", bodyWidths: ["88%", "76%", "52%", "30%"] },
+          ].map((row, i) => (
+            <li
+              key={i}
+              className="rounded border border-border bg-bg-sidebar/40 p-3"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <span
+                  className={cn(
+                    "h-2.5 animate-pulse rounded bg-fg-muted/15",
+                    row.titleW,
+                  )}
+                />
+                <span className="h-2.5 w-14 animate-pulse rounded bg-fg-muted/10" />
+                <span className="h-2.5 w-20 animate-pulse rounded bg-fg-muted/10" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {row.bodyWidths.map((w, j) => (
+                  <span
+                    key={j}
+                    className="h-3 animate-pulse rounded bg-fg-muted/10"
+                    style={{ width: w }}
+                  />
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
     </>
   );
