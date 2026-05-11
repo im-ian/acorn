@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDownNarrowWide,
+  ArrowUpNarrowWide,
   Check,
   CheckCircle2,
   Circle,
@@ -743,6 +745,20 @@ function PrStateGlyph({
   return <GitPullRequest size={14} className="text-emerald-400" />;
 }
 
+type ConversationSort = "oldest" | "newest";
+
+const CONVERSATION_SORT_STORAGE_KEY = "acorn:pr-conversation-sort";
+
+function readStoredSort(): ConversationSort {
+  if (typeof window === "undefined") return "oldest";
+  try {
+    const raw = window.localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY);
+    return raw === "newest" ? "newest" : "oldest";
+  } catch {
+    return "oldest";
+  }
+}
+
 function ConversationPane({
   comments,
   reviews,
@@ -750,42 +766,94 @@ function ConversationPane({
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
 }) {
+  const [sort, setSort] = useState<ConversationSort>(() => readStoredSort());
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CONVERSATION_SORT_STORAGE_KEY, sort);
+    } catch {
+      // non-persistent preference is fine
+    }
+  }, [sort]);
+
   // Merge into a single chronological timeline. Keep `kind` along for the
   // ride so we can render reviews with their verdict badge.
   type Entry =
     | { kind: "comment"; ts: string; comment: PullRequestComment }
     | { kind: "review"; ts: string; review: PullRequestReview };
-  const entries: Entry[] = [
-    ...comments.map<Entry>((c) => ({
-      kind: "comment",
-      ts: c.created_at,
-      comment: c,
-    })),
-    ...reviews.map<Entry>((r) => ({
-      kind: "review",
-      ts: r.submitted_at,
-      review: r,
-    })),
-  ].sort((a, b) => a.ts.localeCompare(b.ts));
+  const entries: Entry[] = useMemo(() => {
+    const merged: Entry[] = [
+      ...comments.map<Entry>((c) => ({
+        kind: "comment",
+        ts: c.created_at,
+        comment: c,
+      })),
+      ...reviews.map<Entry>((r) => ({
+        kind: "review",
+        ts: r.submitted_at,
+        review: r,
+      })),
+    ];
+    merged.sort((a, b) =>
+      sort === "newest" ? b.ts.localeCompare(a.ts) : a.ts.localeCompare(b.ts),
+    );
+    return merged;
+  }, [comments, reviews, sort]);
+
+  const toolbar = (
+    <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
+      <SortToggle value={sort} onChange={setSort} />
+    </div>
+  );
 
   if (entries.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        No comments or reviews yet.
+      <div className="flex h-full flex-col">
+        {toolbar}
+        <div className="flex flex-1 items-center justify-center text-xs text-fg-muted">
+          No comments or reviews yet.
+        </div>
       </div>
     );
   }
 
   return (
-    <ul className="flex h-full flex-col gap-3 overflow-y-auto px-4 py-3">
-      {entries.map((entry, i) =>
-        entry.kind === "comment" ? (
-          <CommentBlock key={`c-${i}`} comment={entry.comment} />
-        ) : (
-          <ReviewBlock key={`r-${i}`} review={entry.review} />
-        ),
-      )}
-    </ul>
+    <div className="flex h-full flex-col">
+      {toolbar}
+      <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        {entries.map((entry, i) =>
+          entry.kind === "comment" ? (
+            <CommentBlock key={`c-${i}`} comment={entry.comment} />
+          ) : (
+            <ReviewBlock key={`r-${i}`} review={entry.review} />
+          ),
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function SortToggle({
+  value,
+  onChange,
+}: {
+  value: ConversationSort;
+  onChange: (next: ConversationSort) => void;
+}) {
+  const isOldest = value === "oldest";
+  const label = isOldest ? "Oldest first" : "Newest first";
+  const Icon = isOldest ? ArrowDownNarrowWide : ArrowUpNarrowWide;
+  return (
+    <Tooltip label="Toggle sort order" side="bottom">
+      <button
+        type="button"
+        onClick={() => onChange(isOldest ? "newest" : "oldest")}
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+      >
+        <Icon size={12} />
+        {label}
+      </button>
+    </Tooltip>
   );
 }
 
