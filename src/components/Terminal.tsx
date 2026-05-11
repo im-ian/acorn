@@ -598,6 +598,24 @@ export function Terminal({
     container.addEventListener("input", onInput, true);
     container.addEventListener("keydown", onKeydown, true);
 
+    // Block xterm.js's own compositionstart/update/end listeners on the
+    // helper textarea. xterm registers them in CoreBrowserTerminal.ts and
+    // its CompositionHelper.compositionend → _finalizeComposition →
+    // triggerDataEvent re-emits the textarea contents (the whole composed
+    // phrase) on top of the per-syllable PTY writes we already issued via
+    // `onInput`. The duplication surfaces when PTY output bursts, refresh,
+    // fit, or scroll cause the WKWebView IME stack to fire native
+    // compositionend even though our W3C InputEvent path is the source of
+    // truth. Stop the events at container capture phase so xterm's
+    // listeners never see them; our own onInput handler covers preview,
+    // partial commits, and final commit for both Family A and Family B.
+    const swallowComposition = (e: Event) => {
+      e.stopImmediatePropagation();
+    };
+    container.addEventListener("compositionstart", swallowComposition, true);
+    container.addEventListener("compositionupdate", swallowComposition, true);
+    container.addEventListener("compositionend", swallowComposition, true);
+
     const inputDisposable = term.onData((data: string) => {
       sendToPty(data);
     });
@@ -1018,6 +1036,9 @@ export function Terminal({
       resizeObserver.disconnect();
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
+      container.removeEventListener("compositionstart", swallowComposition, true);
+      container.removeEventListener("compositionupdate", swallowComposition, true);
+      container.removeEventListener("compositionend", swallowComposition, true);
       window.removeEventListener("acorn:terminal-clear", onClearRequested);
       inputDisposable.dispose();
       renderDisposable.dispose();
