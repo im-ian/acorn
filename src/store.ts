@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
 import { useSettings } from "./lib/settings";
-import type { Project, Session } from "./lib/types";
+import type { Project, Session, SessionKind } from "./lib/types";
 import {
   type Direction,
   type LayoutNode,
@@ -17,6 +17,13 @@ import {
 type RightTab = "todos" | "commits" | "staged" | "prs";
 
 const ROOT_PANE_ID: PaneId = "root";
+
+/**
+ * localStorage key gating the one-time control-session guide modal. Versioned
+ * so we can re-surface it after a substantive change to the control-session
+ * UX without colliding with the previous dismissed state.
+ */
+const CONTROL_GUIDE_DISMISSED_KEY = "acorn:control-guide-dismissed-v1";
 
 export interface PaneState {
   id: PaneId;
@@ -91,6 +98,7 @@ interface AppStateModel {
     name: string,
     repoPath: string,
     isolated?: boolean,
+    kind?: SessionKind,
   ) => Promise<void>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
@@ -694,7 +702,7 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
-  async createSession(name, repoPath, isolated = false) {
+  async createSession(name, repoPath, isolated = false, kind = "regular") {
     set({ loading: true, error: null });
     try {
       // Snapshot the current global startup mode onto the session so a
@@ -706,12 +714,22 @@ export const useAppStore = create<AppStateModel>()(
         repoPath,
         isolated,
         startupMode,
+        kind,
       );
       await get().refreshAll();
       // Focus the new session so Cmd+T (and any other entry point that goes
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
       get().selectSession(created.id);
+      // First-run guidance for control sessions. Gated on a localStorage
+      // flag so power users only see it once. App.tsx hosts the modal.
+      if (
+        kind === "control" &&
+        typeof window !== "undefined" &&
+        !window.localStorage.getItem(CONTROL_GUIDE_DISMISSED_KEY)
+      ) {
+        window.dispatchEvent(new CustomEvent("acorn:show-control-guide"));
+      }
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
     }

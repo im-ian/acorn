@@ -14,6 +14,15 @@ export type SessionStatus =
  */
 export type SessionStartupMode = "agent" | "terminal" | "custom";
 
+/**
+ * Distinguishes ordinary terminal sessions from "control" sessions. Control
+ * sessions are the entry point for the upcoming `acorn-ipc` CLI, which lets
+ * them dispatch commands to other sessions in the same project. Orthogonal
+ * to `SessionStartupMode` — either kind can run any startup flavor. Older
+ * persisted sessions without this field load as `"regular"` from the backend.
+ */
+export type SessionKind = "regular" | "control";
+
 export interface Session {
   id: string;
   name: string;
@@ -26,6 +35,7 @@ export interface Session {
   updated_at: string;
   last_message: string | null;
   startup_mode: SessionStartupMode | null;
+  kind: SessionKind;
 }
 
 export interface Project {
