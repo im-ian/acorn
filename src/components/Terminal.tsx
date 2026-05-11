@@ -199,6 +199,42 @@ export function Terminal({
       }, SCROLLBACK_SAVE_DEBOUNCE_MS);
     };
 
+    // Force a viewport repaint shortly after a PTY output burst goes idle.
+    //
+    // xterm's DOM renderer reuses per-row DOM elements and incrementally
+    // patches glyphs as the buffer changes. When a streaming TUI (Claude
+    // CLI, `htop`, `claude --print`) is interrupted mid-redraw — user
+    // presses Esc/Ctrl+C, or the stream simply stops — the parser settles
+    // but the last set of cell-diffs may never trigger a paint that
+    // overwrites stale glyphs left by an earlier wider line. The xterm
+    // buffer is correct (copy-to-clipboard yields clean text); only the
+    // DOM rendition is stale. Forcing `refresh(0, rows-1)` rebuilds every
+    // visible row from the buffer, which clears the leftover characters.
+    //
+    // Mid-burst paints already happen naturally as each chunk lands, so
+    // we only fire this when the stream goes quiet. 120ms after the last
+    // chunk: short enough that the stale frame is rarely visible, long
+    // enough to coalesce a Claude-CLI streaming burst (where natural
+    // gaps run ~10-60ms) into one refresh instead of one per chunk.
+    const VIEWPORT_REPAINT_IDLE_MS = 120;
+    let viewportRepaintTimer: number | null = null;
+    const scheduleViewportRepaint = () => {
+      if (disposed) return;
+      if (viewportRepaintTimer !== null) {
+        window.clearTimeout(viewportRepaintTimer);
+      }
+      viewportRepaintTimer = window.setTimeout(() => {
+        viewportRepaintTimer = null;
+        if (disposed) return;
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore — terminal may have been disposed between the timer
+          // firing and reaching the call.
+        }
+      }, VIEWPORT_REPAINT_IDLE_MS);
+    };
+
     const sendToPty = (data: string) => {
       if (data.length === 0) return;
       invoke("pty_write", {
@@ -703,6 +739,10 @@ export function Terminal({
               // Output landed in the buffer — schedule a debounced save
               // so the new content reaches disk ~1s after activity ends.
               scheduleScrollbackSave();
+              // Also schedule a viewport repaint once the burst goes quiet,
+              // so a TUI redraw interrupted mid-stream doesn't leave stale
+              // glyphs from a wider previous line painted on screen.
+              scheduleViewportRepaint();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -917,6 +957,10 @@ export function Terminal({
       if (scrollbackSaveTimer !== null) {
         window.clearTimeout(scrollbackSaveTimer);
         scrollbackSaveTimer = null;
+      }
+      if (viewportRepaintTimer !== null) {
+        window.clearTimeout(viewportRepaintTimer);
+        viewportRepaintTimer = null;
       }
       // No cleanup-time save: under React.StrictMode the cleanup of the
       // first dev mount fires while the buffer is still empty (load
