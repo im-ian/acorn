@@ -1,15 +1,49 @@
-import { memo } from "react";
+import { memo, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../../lib/cn";
+import { ImageLightbox } from "../ImageLightbox";
+
+// Sanitize schema for PR/comment markdown bodies — they routinely embed raw
+// HTML (image uploads, GitHub's `<img width="…">` snippets, details/summary).
+// Extend the rehype default with the attrs GitHub commonly uses.
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    img: [
+      ...(defaultSchema.attributes?.img ?? []),
+      "src",
+      "alt",
+      "title",
+      "width",
+      "height",
+      "loading",
+    ],
+    a: [
+      ...(defaultSchema.attributes?.a ?? []),
+      "href",
+      "title",
+      "target",
+      "rel",
+    ],
+  },
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    "details",
+    "summary",
+  ],
+};
 
 interface MarkdownProps {
   content: string;
   className?: string;
 }
 
-const components: Components = {
+const baseComponents: Components = {
   a({ href, children, ...rest }) {
     return (
       <a
@@ -130,16 +164,8 @@ const components: Components = {
       </td>
     );
   },
-  img({ src, alt }) {
-    return (
-      <img
-        src={typeof src === "string" ? src : undefined}
-        alt={alt ?? ""}
-        className="my-2 max-w-full rounded border border-border"
-        loading="lazy"
-      />
-    );
-  },
+  // img is overridden per-instance in MarkdownImpl so it can hook into the
+  // lightbox state.
   input({ type, checked, disabled }) {
     if (type === "checkbox") {
       return (
@@ -157,12 +183,47 @@ const components: Components = {
 };
 
 function MarkdownImpl({ content, className }: MarkdownProps) {
+  const [lightbox, setLightbox] = useState<
+    { src: string; alt?: string } | null
+  >(null);
+
+  const components = useMemo<Components>(
+    () => ({
+      ...baseComponents,
+      img({ src, alt, width, height }) {
+        const url = typeof src === "string" ? src : undefined;
+        return (
+          <img
+            src={url}
+            alt={alt ?? ""}
+            width={width}
+            height={height}
+            loading="lazy"
+            onClick={() => {
+              if (!url) return;
+              setLightbox({ src: url, alt: alt ?? undefined });
+            }}
+            className="my-2 max-w-full cursor-zoom-in rounded border border-border transition hover:opacity-90"
+          />
+        );
+      },
+    }),
+    [],
+  );
+
   return (
-    <div className={cn("text-[11.5px] leading-relaxed text-fg", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {content}
-      </ReactMarkdown>
-    </div>
+    <>
+      <div className={cn("text-[11.5px] leading-relaxed text-fg", className)}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
+          components={components}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+      <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
+    </>
   );
 }
 
