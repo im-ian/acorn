@@ -144,11 +144,10 @@ export const api = {
   },
   detectSessionStatuses(
     ids: string[],
-  ): Promise<{ id: string; status: SessionStatus }[]> {
-    return invoke<{ id: string; status: SessionStatus }[]>(
-      "detect_session_statuses",
-      { ids },
-    );
+  ): Promise<{ id: string; status: SessionStatus; branch: string | null }[]> {
+    return invoke<
+      { id: string; status: SessionStatus; branch: string | null }[]
+    >("detect_session_statuses", { ids });
   },
   scrollbackOrphanSize(): Promise<number> {
     return invoke<number>("scrollback_orphan_size");

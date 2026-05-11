@@ -433,8 +433,8 @@ describe("pollSessionStatuses", () => {
       [session("a1", REPO_A), session("a2", REPO_A, { status: "running" })],
     );
     mockApi.detectSessionStatuses.mockResolvedValueOnce([
-      { id: "a1", status: "needs_input" },
-      { id: "a2", status: "running" }, // unchanged
+      { id: "a1", status: "needs_input", branch: null },
+      { id: "a2", status: "running", branch: null }, // unchanged
     ]);
     await useAppStore.getState().pollSessionStatuses();
     const sessions = useAppStore.getState().sessions;
