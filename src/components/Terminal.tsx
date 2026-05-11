@@ -97,7 +97,18 @@ export function Terminal({
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 5000,
-      convertEol: true,
+      // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
+      // the parser sees it. A real shell already emits `\r\n` for line
+      // breaks, but interactive plugins (zsh-autosuggestions, prompt
+      // redraws) also emit bare `\n` as "move cursor down one row, keep
+      // column" — bracketed by `\e7`/`\e8` (DECSC/DECRC) save/restore. With
+      // `convertEol: true` that bare LF gains a phantom CR, so the cursor
+      // jumps to column 0 mid-redraw; the following save/restore pair lands
+      // at the wrong x and subsequent shell echo overwrites previously
+      // rendered cells (e.g. the prompt user "jthefloor" renders as
+      // "rhefloor"). PTY output is the only writer here, so `false` is the
+      // correct setting.
+      convertEol: false,
     });
 
     const fitAddon = new FitAddon();
