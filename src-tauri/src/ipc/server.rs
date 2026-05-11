@@ -44,6 +44,13 @@ use crate::worktree;
 /// the IPC `select-session` command. Kept in lockstep with the listener
 /// wired up in `src/components/Sidebar.tsx`'s sibling for `acorn:*` events.
 const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
+/// Fired whenever an IPC handler mutates the persisted session list
+/// (`new-session`, `kill-session`). The frontend listens and re-fetches
+/// via `list_sessions` so a control-session-driven mutation surfaces in
+/// the sidebar without the user clicking anything. Payload is the
+/// affected session's id as a string, mostly for debugging — the
+/// frontend ignores the value today and just triggers a full refresh.
+const SESSIONS_CHANGED_EVENT: &str = "acorn:ipc-sessions-changed";
 
 /// Spawn the IPC server on a dedicated background thread. Returns
 /// immediately; failures during bind are logged but do not crash boot —
@@ -195,13 +202,13 @@ fn dispatch<R: Runtime>(
             max_bytes,
         } => handle_read_buffer(&source, &target_session_id, max_bytes, state),
         Request::NewSession { name, isolated } => {
-            handle_new_session(&source, name, isolated, state)
+            handle_new_session(&source, name, isolated, app, state)
         }
         Request::SelectSession { target_session_id } => {
             handle_select_session(&source, &target_session_id, app, state)
         }
         Request::KillSession { target_session_id } => {
-            handle_kill_session(&source, &target_session_id, state)
+            handle_kill_session(&source, &target_session_id, app, state)
         }
     }
 }
@@ -336,10 +343,11 @@ fn handle_read_buffer(
     }
 }
 
-fn handle_new_session(
+fn handle_new_session<R: Runtime>(
     source: &Session,
     name: String,
     isolated: bool,
+    app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
     if name.trim().is_empty() {
@@ -381,12 +389,19 @@ fn handle_new_session(
         .unwrap_or("project")
         .to_string();
     state.projects.ensure(repo, basename);
-    // Best-effort persist + frontend nudge. The frontend already
-    // re-fetches the session list on `acorn:ipc-state-changed`, so a
-    // momentary mismatch between disk and memory before the next event
-    // arrives is benign.
     if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
         tracing::warn!(error = %err, "ipc: persist sessions after new-session failed");
+    }
+    // Nudge the frontend so the new session appears in the sidebar
+    // without the user clicking around. Best-effort: a failed emit
+    // leaves the backend state correct, the user can still reach the
+    // session via the next app reload or a manual refresh.
+    if let Err(err) = app.emit(SESSIONS_CHANGED_EVENT, inserted.id.to_string()) {
+        tracing::warn!(
+            error = %err,
+            event = SESSIONS_CHANGED_EVENT,
+            "ipc: sessions-changed emit failed",
+        );
     }
     Response::SessionCreated {
         session_id: inserted.id.to_string(),
@@ -412,9 +427,10 @@ fn handle_select_session<R: Runtime>(
     Response::Ack
 }
 
-fn handle_kill_session(
+fn handle_kill_session<R: Runtime>(
     source: &Session,
     target_id: &str,
+    app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
     let target = match resolve_target(source, target_id, &state.sessions) {
@@ -436,6 +452,13 @@ fn handle_kill_session(
     }
     if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
         tracing::warn!(error = %err, "ipc: persist after kill-session failed");
+    }
+    if let Err(err) = app.emit(SESSIONS_CHANGED_EVENT, target.id.to_string()) {
+        tracing::warn!(
+            error = %err,
+            event = SESSIONS_CHANGED_EVENT,
+            "ipc: sessions-changed emit failed",
+        );
     }
     Response::Ack
 }

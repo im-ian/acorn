@@ -175,6 +175,34 @@ function App() {
     };
   }, []);
 
+  // The IPC server fires `acorn:ipc-sessions-changed` after a control
+  // session creates or kills a sibling. Without this listener those
+  // mutations would land in the backend and on disk but never surface
+  // in the sidebar — the user would only see them after the next app
+  // restart. Refresh from the source of truth (`list_sessions`) so we
+  // do not have to trust event payload shape across versions.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>("acorn:ipc-sessions-changed", () => {
+      useAppStore.getState().refreshSessions();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach ipc-sessions-changed listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Drain every live terminal's scrollback to disk before the window is
   // destroyed, so a normal app quit never loses output that the
   // debounced output-driven save has not yet flushed. We block the
