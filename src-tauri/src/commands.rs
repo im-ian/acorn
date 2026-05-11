@@ -13,7 +13,7 @@ use crate::pull_requests::{
     PullRequestListing,
 };
 use crate::scrollback;
-use crate::session::{Project, Session, SessionStartupMode, SessionStatus};
+use crate::session::{Project, Session, SessionKind, SessionStartupMode, SessionStatus};
 use crate::session_status;
 use crate::shell_util::shell_quote;
 use crate::state::AppState;
@@ -188,6 +188,7 @@ pub async fn create_session(
     repo_path: String,
     isolated: Option<bool>,
     startup_mode: Option<SessionStartupMode>,
+    kind: Option<SessionKind>,
 ) -> AppResult<Session> {
     let repo = PathBuf::from(&repo_path);
     if !repo.exists() {
@@ -210,6 +211,7 @@ pub async fn create_session(
         branch,
         isolated,
         startup_mode,
+        kind.unwrap_or_default(),
     );
     let inserted = state.sessions.insert(session);
     state.projects.ensure(repo.clone(), project_basename(&repo));
