@@ -334,36 +334,27 @@ export function Terminal({
       compositionView.textContent = "";
     };
 
-    // macOS WKWebView delivers Korean IME via two different inputType
-    // families depending on system/IME mode. We support both:
+    // macOS WKWebView delivers Korean IME through W3C InputEvents on the
+    // helper textarea. Three preview event shapes feed our overlay, one
+    // event finalises the commit:
     //
-    // Family A — composition-clean (W3C spec):
-    //   insertCompositionText / deleteCompositionText / insertFromComposition
-    //   `ev.data` on commit holds the full composed syllable.
+    //   insertCompositionText   preview (ev.data = current composed text)
+    //   insertReplacementText   preview (trailing char being recomposed)
+    //   insertText  (IME flag)  preview + per-syllable diff-commit
+    //   insertFromComposition   final commit (ev.data = full syllable)
     //
-    // Family B — replacement-based:
-    //   insertText (start of new syllable / committing previous trailing)
-    //   insertReplacementText (composing in progress, replacing trailing)
-    //   No clean commit event — we infer commits from textarea diff.
-    //
-    // For Family B we maintain `sentPrefix` so we know which characters
-    // were already forwarded to the PTY. The `lastKeyCode229` flag
-    // differentiates an IME-driven `insertText` from a plain ASCII one.
+    // macOS sometimes mixes shapes within a single composition (preview
+    // arrives as `insertText`/`insertReplacementText`, commit arrives as
+    // `insertFromComposition`). The keydown terminator path also needs to
+    // flush, because plain-shape IMEs never fire `insertFromComposition`.
+    // To stay correct under either delivery, we keep a single `composing`
+    // flag and route every commit (terminator-keydown OR
+    // insertFromComposition) through one idempotent `commitComposition()`.
+    // The flag guards against double-emit when both fire for the same
+    // syllable.
     let sentPrefix = "";
     let lastKeyCode229 = false;
-    // Tracks which IME event family is currently driving composition.
-    // Set to "A" when `insertCompositionText` fires (Family A IME — clean
-    // commit via `insertFromComposition`). Set to "B" when
-    // `insertReplacementText` / IME-flavored `insertText` fires (no commit
-    // event; commits are inferred from textarea diffs).
-    //
-    // We need this to suppress the keydown-driven `flushTrailing` on
-    // terminator keys (space/Enter/…): Family A will deliver the commit via
-    // its own `insertFromComposition` shortly after the keydown, so flushing
-    // the textarea preview here would double-emit the syllable (the bug:
-    // "는 는 강강 격 격 강력력 력"). Family B has no such follow-up event, so
-    // it still needs the flush.
-    let compositionFamily: "A" | "B" | null = null;
+    let composing = false;
     // Hangul jamo, Hangul syllables, Hiragana, Katakana, CJK ideographs.
     // Used to recognise IME-driven `insertText` events even when the
     // accompanying `keydown` (with keyCode 229) hasn't fired yet — on
@@ -371,18 +362,24 @@ export function Terminal({
     const CJK_DATA_RE =
       /[ᄀ-ᇿ㄰-㆏가-힯぀-ゟ゠-ヿ一-鿿]/;
 
-    const flushTrailing = () => {
+    // Idempotent commit. Sends whatever sits past `sentPrefix` in the
+    // helper textarea (the unflushed trailing syllable), then resets state.
+    // `explicit` overrides the textarea slice — used by
+    // `insertFromComposition` when WKWebView delivers the syllable as
+    // `ev.data` rather than leaving it in the textarea.
+    const commitComposition = (explicit?: string) => {
+      if (!composing) return;
       const ta = container.querySelector<HTMLTextAreaElement>(
         ".xterm-helper-textarea",
       );
-      if (!ta) return;
-      const value = ta.value;
-      if (value.length > sentPrefix.length) {
-        sendToPty(value.slice(sentPrefix.length));
-      }
+      const tail = ta && ta.value.length > sentPrefix.length
+        ? ta.value.slice(sentPrefix.length)
+        : "";
+      const data = tail || explicit || "";
+      if (data) sendToPty(data);
+      if (ta) ta.value = "";
       sentPrefix = "";
-      ta.value = "";
-      compositionFamily = null;
+      composing = false;
       hideComposing();
     };
 
@@ -392,28 +389,22 @@ export function Terminal({
         ".xterm-helper-textarea",
       );
       switch (ev.inputType) {
-        // Family A — composition-clean
         case "insertCompositionText":
-          compositionFamily = "A";
+          composing = true;
           showComposing(ev.data ?? "");
           ev.stopImmediatePropagation();
           return;
+
         case "deleteCompositionText":
-          compositionFamily = "A";
-          ev.stopImmediatePropagation();
-          return;
-        case "insertFromComposition":
-          if (ev.data) sendToPty(ev.data);
-          compositionFamily = null;
-          hideComposing();
+          // Preview clear preceding a commit. No-op.
           ev.stopImmediatePropagation();
           return;
 
-        // Family B — replacement-based
         case "insertReplacementText": {
-          // In-syllable replacement; trailing char being recomposed.
-          // Don't commit; show preview of trailing.
-          compositionFamily = "B";
+          // Trailing char being recomposed in place. Preview only — never
+          // commit here, the next insertText / insertFromComposition /
+          // terminator-keydown carries the commit.
+          composing = true;
           if (ta) {
             // Stale sentPrefix detection: if textarea no longer starts
             // with the prefix we tracked, a non-IME keystroke (Space,
@@ -424,6 +415,7 @@ export function Terminal({
           ev.stopImmediatePropagation();
           return;
         }
+
         case "insertText": {
           // Plain ASCII vs IME first-jamo. We treat it as IME when EITHER
           // a keyCode-229 keydown was just observed OR `ev.data` itself is
@@ -439,11 +431,11 @@ export function Terminal({
             // sentPrefix or the next IME insertText will re-emit it as
             // part of its committed-prefix diff.
             hideComposing();
-            compositionFamily = null;
+            composing = false;
             if (ta) sentPrefix = ta.value;
             return;
           }
-          compositionFamily = "B";
+          composing = true;
           if (!ta) return;
           const value = ta.value;
           const newCharLen = ev.data?.length ?? 0;
@@ -464,6 +456,15 @@ export function Terminal({
           ev.stopImmediatePropagation();
           return;
         }
+
+        case "insertFromComposition":
+          // Final commit from composition-clean IME path. Idempotent —
+          // if a terminator-keydown already flushed this syllable,
+          // `composing` is false and this is a no-op.
+          commitComposition(ev.data ?? undefined);
+          ev.stopImmediatePropagation();
+          return;
+
         default:
           hideComposing();
           return;
@@ -535,23 +536,17 @@ export function Terminal({
         return;
       }
       // Non-IME key. If we just left IME mode (last keydown was 229),
-      // flush whatever Korean syllable is mid-composition so it lands in
+      // commit whatever Korean syllable is mid-composition so it lands in
       // the PTY before this key's effect (space, Enter, English…).
-      // Otherwise leave the textarea alone — xterm's own keypress handler
-      // will emit the printable char, and we sync sentPrefix to the
-      // textarea length so the next IME insertText diff treats those
-      // already-emitted chars as committed.
       //
-      // Family A skip: Family A IME (`insertCompositionText` driven)
-      // delivers the commit through a follow-up `insertFromComposition`
-      // event after this keydown. Calling `flushTrailing` here would
-      // emit the preview from the textarea AND then `insertFromComposition`
-      // would emit the same syllable a second time — the intermittent
-      // doubling bug ("는 는", "강강", "강력력 력"). The intermittent feel
-      // comes from macOS Korean IME flipping between Family A and Family B
-      // event shapes based on input mode / pending state.
-      if (lastKeyCode229 && compositionFamily !== "A") {
-        flushTrailing();
+      // `commitComposition()` is idempotent: even if WKWebView follows up
+      // with its own `insertFromComposition` event for the same syllable
+      // (some IME modes do this), the second call no-ops because
+      // `composing` is already false. That removes the previous Family
+      // A/B branching and the double-emit it leaked when macOS flipped
+      // event shapes mid-composition ("한글 한글", "강강", "는 는").
+      if (lastKeyCode229 && composing) {
+        commitComposition();
       }
       lastKeyCode229 = false;
       const ta = container.querySelector<HTMLTextAreaElement>(
@@ -608,7 +603,7 @@ export function Terminal({
     // compositionend even though our W3C InputEvent path is the source of
     // truth. Stop the events at container capture phase so xterm's
     // listeners never see them; our own onInput handler covers preview,
-    // partial commits, and final commit for both Family A and Family B.
+    // partial commits, and final commit through `commitComposition()`.
     const swallowComposition = (e: Event) => {
       e.stopImmediatePropagation();
     };
