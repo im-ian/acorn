@@ -224,6 +224,12 @@ jobs:
           else
             notes="See https://github.com/${REPO}/releases/tag/${TAG}"
           fi
+          # Strip GitHub's provenance HTML comment
+          # (`<!-- Release notes generated using configuration in
+          # .github/release.yml at vX.Y.Z -->`). It is purely informational
+          # — not parsed back by the regenerate API — and renders as
+          # literal text in Acorn's in-app "What's new" modal.
+          notes=$(printf '%s' "$notes" | sed -E '/^[[:space:]]*<!--.*-->[[:space:]]*$/d')
           # Persist to a file rather than $GITHUB_OUTPUT so newlines and
           # markdown survive cleanly through later jq / action-gh-release
           # consumers.
