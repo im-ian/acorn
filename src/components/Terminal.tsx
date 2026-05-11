@@ -246,13 +246,18 @@ export function Terminal({
       compositionView.textContent = text;
       if (cell) {
         const buf = term.buffer.active;
-        // `cursorY` is buffer-relative (includes scrollback); the
-        // composition overlay's CSS coords are viewport-relative, so
-        // subtract the viewport's scrollback offset (`viewportY`) to
-        // get the cursor's row inside the visible area. Without this,
-        // a session restored from a long scrollback positions the
-        // overlay thousands of pixels below the visible terminal.
-        const cursorViewportY = buf.cursorY - buf.viewportY;
+        // xterm's visible cursor row = `baseY + cursorY - viewportY`
+        // (mirrors xterm's own `Buffer.ts`: `absoluteY = ybase + y;
+        // relativeY = absoluteY - ydisp`). `cursorY` is the cursor's
+        // offset within the current page (0..rows-1), `baseY` is the
+        // buffer line where that page starts, and `viewportY` is the
+        // buffer line currently shown at the top of the viewport (they
+        // diverge when the user scrolls into scrollback). Subtracting
+        // `viewportY` alone — without adding `baseY` — leaves a session
+        // with non-empty scrollback computing `cursorY - viewportY ≈
+        // -ybase`, parking the overlay thousands of pixels above the
+        // visible terminal so the preview vanishes off-screen.
+        const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
         compositionView.style.left = `${buf.cursorX * cell.width}px`;
         compositionView.style.top = `${cursorViewportY * cell.height}px`;
         compositionView.style.minHeight = `${cell.height}px`;
@@ -532,8 +537,8 @@ export function Terminal({
       const cell = getCellDims();
       if (!cell) return;
       const buf = term.buffer.active;
-      // See `showComposing` for why we subtract `viewportY` here.
-      const cursorViewportY = buf.cursorY - buf.viewportY;
+      // See `showComposing` for the full derivation of this formula.
+      const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
       compositionView.style.left = `${buf.cursorX * cell.width}px`;
       compositionView.style.top = `${cursorViewportY * cell.height}px`;
     };
