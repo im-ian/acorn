@@ -66,14 +66,23 @@ enum Command {
         /// UUID of the target session.
         #[arg(short = 't', long = "target")]
         target: String,
-        /// Literal data to send (UTF-8). Pass `\n` for a newline, etc.
-        /// Mutually exclusive with `--raw-base64`.
+        /// Literal data to send (UTF-8). Forwarded byte-for-byte; the
+        /// terminal's line discipline is responsible for any
+        /// interpretation. Mutually exclusive with `--raw-base64`.
         #[arg(short = 'd', long = "data")]
         data: Option<String>,
         /// Pre-encoded base64 bytes. Overrides `--data` when set.
         #[arg(long = "raw-base64")]
         raw_base64: Option<String>,
-        /// Append a `\n` after the data. Convenient for one-shot commands.
+        /// Append a carriage return (`\r`, 0x0D) after the data — the
+        /// same byte a real keyboard sends when you press Enter. The
+        /// TTY line discipline then translates it to a line submission
+        /// (in cooked mode) or passes it through (in raw mode), which
+        /// is what callers usually want. Note: this is *not* `\n`
+        /// (0x0A); a literal newline would be inserted into the input
+        /// buffer instead of submitting the line, so a one-shot
+        /// "type a command and press Enter" would just type the
+        /// command across two lines and never run it.
         #[arg(long)]
         enter: bool,
     },
@@ -180,13 +189,13 @@ fn build_request(cmd: &Command) -> Result<Request, String> {
                 (None, Some(d)) => {
                     let mut bytes = d.as_bytes().to_vec();
                     if *enter {
-                        bytes.push(b'\n');
+                        bytes.push(b'\r');
                     }
                     base64::engine::general_purpose::STANDARD.encode(&bytes)
                 }
                 (None, None) => {
                     if *enter {
-                        base64::engine::general_purpose::STANDARD.encode(b"\n")
+                        base64::engine::general_purpose::STANDARD.encode(b"\r")
                     } else {
                         return Err(
                             "send-keys needs --data, --raw-base64, or --enter".to_string()
@@ -325,6 +334,86 @@ fn map_error_exit(code: ErrorCode) -> u8 {
         ErrorCode::OutOfScope => 4,
         ErrorCode::Invalid => 5,
         ErrorCode::Internal => 6,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+
+    fn decode(b64: &str) -> Vec<u8> {
+        STANDARD.decode(b64).expect("valid base64")
+    }
+
+    fn send_keys_request(
+        data: Option<&str>,
+        raw_base64: Option<&str>,
+        enter: bool,
+    ) -> Result<Request, String> {
+        build_request(&Command::SendKeys {
+            target: "00000000-0000-0000-0000-000000000001".to_string(),
+            data: data.map(str::to_string),
+            raw_base64: raw_base64.map(str::to_string),
+            enter,
+        })
+    }
+
+    #[test]
+    fn enter_flag_appends_carriage_return_not_newline() {
+        // Regression guard: a real keyboard Enter sends CR (0x0D), which
+        // the TTY line discipline interprets as "submit this line". LF
+        // (0x0A) is a *content* newline — the shell appends it to the
+        // line buffer instead of running the command. The user-visible
+        // symptom is "the text shows up but Enter doesn't fire".
+        let req = send_keys_request(Some("ls"), None, true).expect("build");
+        let Request::SendKeys { data_b64, .. } = req else {
+            panic!("expected SendKeys");
+        };
+        let bytes = decode(&data_b64);
+        assert_eq!(bytes, b"ls\r");
+        assert!(!bytes.contains(&b'\n'), "must not append LF");
+    }
+
+    #[test]
+    fn enter_only_sends_lone_carriage_return() {
+        let req = send_keys_request(None, None, true).expect("build");
+        let Request::SendKeys { data_b64, .. } = req else {
+            panic!("expected SendKeys");
+        };
+        assert_eq!(decode(&data_b64), b"\r");
+    }
+
+    #[test]
+    fn data_alone_is_forwarded_verbatim_with_no_terminator() {
+        // --data without --enter must not silently add a line submission;
+        // callers that want one are expected to pass --enter explicitly.
+        let req = send_keys_request(Some("hello"), None, false).expect("build");
+        let Request::SendKeys { data_b64, .. } = req else {
+            panic!("expected SendKeys");
+        };
+        assert_eq!(decode(&data_b64), b"hello");
+    }
+
+    #[test]
+    fn raw_base64_wins_over_data() {
+        // Documented precedence: when both are set, --raw-base64 takes
+        // the wire payload verbatim and --enter is ignored on this path
+        // (the caller already controls the bytes).
+        let payload = STANDARD.encode(b"\x03"); // Ctrl-C
+        let req = send_keys_request(Some("ignored"), Some(&payload), true).expect("build");
+        let Request::SendKeys { data_b64, .. } = req else {
+            panic!("expected SendKeys");
+        };
+        assert_eq!(decode(&data_b64), b"\x03");
+    }
+
+    #[test]
+    fn missing_inputs_returns_error() {
+        let result = send_keys_request(None, None, false);
+        let msg = result.expect_err("should reject no-op invocation");
+        assert!(msg.contains("--data"), "error should mention --data");
+        assert!(msg.contains("--enter"), "error should mention --enter");
     }
 }
 
