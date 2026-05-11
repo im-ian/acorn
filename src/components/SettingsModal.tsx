@@ -284,6 +284,22 @@ function SessionSettings() {
           Show confirmation dialog
         </label>
       </Field>
+      <Field
+        label="Close tab when the process exits"
+        hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={settings.sessions.closeOnExit}
+            onChange={(e) =>
+              patchSessions({ closeOnExit: e.target.checked })
+            }
+            className="accent-[var(--color-accent)]"
+          />
+          Auto-close on exit
+        </label>
+      </Field>
     </section>
   );
 }

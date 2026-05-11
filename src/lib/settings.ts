@@ -152,6 +152,13 @@ export interface AcornSettings {
      * matters. Set false to skip the prompt for plain sessions.
      */
     confirmRemove: boolean;
+    /**
+     * When the session's PTY process exits (e.g. user typed `exit`), close
+     * the session tab automatically instead of showing the
+     * "[process exited — press Enter to restart]" prompt. The worktree is
+     * preserved either way; only the in-app tab is affected.
+     */
+    closeOnExit: boolean;
   };
   editor: {
     /**
@@ -207,6 +214,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   sessions: {
     confirmRemove: true,
+    closeOnExit: false,
   },
   editor: {
     command: "",
