@@ -633,6 +633,19 @@ pub async fn detect_session_statuses(
     state: State<'_, AppState>,
     ids: Vec<String>,
 ) -> AppResult<Vec<SessionStatusEntry>> {
+    // One process-table snapshot covers every session in this poll; cwd
+    // refresh isn't needed here (we only walk parent→child edges to ask
+    // "does this PTY tree have any descendant?").
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new(),
+    );
+    let children = build_children_map(&sys);
+
     Ok(ids
         .into_iter()
         .map(|id| {
@@ -646,7 +659,13 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
-            let status = session_status::detect(&id, previous).unwrap_or(previous);
+            let shell_hint = parsed_id.and_then(|uuid| {
+                let root = state.pty.child_pid(&uuid)?;
+                let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                state.pty.update_shell_state(&uuid, has_child_now)
+            });
+            let status =
+                session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
             let branch = session
                 .as_ref()
                 .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
@@ -659,6 +678,28 @@ pub async fn detect_session_statuses(
             SessionStatusEntry { id, status, branch }
         })
         .collect())
+}
+
+/// One pass over `sys.processes()` that yields parent→children adjacency.
+/// Built once per poll so the per-session BFS does not rescan the whole
+/// table for every PTY root.
+fn build_children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
+    let mut map: HashMap<Pid, Vec<Pid>> = HashMap::new();
+    for (pid, proc) in sys.processes() {
+        if let Some(parent) = proc.parent() {
+            map.entry(parent).or_default().push(*pid);
+        }
+    }
+    map
+}
+
+/// `true` if any descendant of `root` exists in the children map. The root
+/// itself does not count — we only care about commands launched *under* the
+/// PTY shell, which is what flips Idle ↔ Running for terminal sessions.
+fn has_live_descendant(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> bool {
+    children
+        .get(&root)
+        .is_some_and(|direct| !direct.is_empty())
 }
 
 #[tauri::command]

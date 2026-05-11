@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -31,6 +32,24 @@ use crate::error::{AppError, AppResult};
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const READ_BUFFER_SIZE: usize = 4096;
+/// How long a "just-finished a command" cue lingers as `NeedsInput` on the
+/// Sidebar dot before we let it fall back to `Idle`. Long enough to actually
+/// catch the user's eye after a transient command (`ls`, `git status`),
+/// short enough that an abandoned shell does not look perpetually pending.
+const NEEDS_INPUT_STICKY: Duration = Duration::from_secs(5);
+
+/// Coarse classification of a shell-mode session's liveness, derived purely
+/// from "does the PTY child have any descendant processes right now?".
+/// Mirrors the `SessionStatus` variants the Sidebar dot already knows how to
+/// render — we keep this enum private to the backend so the
+/// transcript-driven detector can map it without leaking shell-specific
+/// vocabulary into the public session status type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellHint {
+    Running,
+    NeedsInput,
+    Idle,
+}
 
 /// Per-session PTY state held by the manager.
 struct PtyHandle {
@@ -46,6 +65,14 @@ struct PtyHandle {
     /// `Child` handle moves into the wait thread. `None` if the platform
     /// did not return one (portable-pty allows that).
     pid: Option<u32>,
+    /// Whether the previous liveness poll observed a live descendant of the
+    /// PTY child. The Idle→Running and Running→NeedsInput edges drive the
+    /// Sidebar status dot for shell-mode sessions.
+    had_child: AtomicBool,
+    /// Deadline for the post-command "still waiting on you" cue. Set when the
+    /// last descendant exits, cleared on the next user keystroke or when the
+    /// deadline passes.
+    needs_input_until: Mutex<Option<Instant>>,
 }
 
 /// Manages all live PTY sessions for the application.
@@ -202,6 +229,8 @@ impl PtyManager {
             killer: Mutex::new(killer),
             stop: stop.clone(),
             pid,
+            had_child: AtomicBool::new(false),
+            needs_input_until: Mutex::new(None),
         });
 
         self.handles.insert(session_id, handle);
@@ -241,6 +270,11 @@ impl PtyManager {
         writer
             .flush()
             .map_err(|e| AppError::Pty(format!("flush failed: {e}")))?;
+        // The user typed — they've moved on from the previous "command just
+        // exited" cue, so suppress the sticky NeedsInput before the next
+        // liveness poll lands.
+        drop(writer);
+        *handle.needs_input_until.lock() = None;
         Ok(())
     }
 
@@ -293,6 +327,52 @@ impl PtyManager {
     /// the cwd we set at spawn time.
     pub fn child_pid(&self, session_id: &Uuid) -> Option<u32> {
         self.handles.get(session_id).and_then(|h| h.pid)
+    }
+
+    /// Per-poll state machine for shell-mode liveness. The caller has just
+    /// computed `has_child_now` from a process-table snapshot; we fold it
+    /// against the previous observation and the sticky NeedsInput deadline
+    /// to produce the hint the Sidebar dot should show.
+    ///
+    /// Returns `None` when the session has no live PTY (e.g. exited between
+    /// the snapshot and this call) — the caller should treat that as Idle.
+    pub fn update_shell_state(
+        &self,
+        session_id: &Uuid,
+        has_child_now: bool,
+    ) -> Option<ShellHint> {
+        let handle = self.handles.get(session_id)?.clone();
+        let had_child = handle.had_child.swap(has_child_now, Ordering::SeqCst);
+        let mut sticky = handle.needs_input_until.lock();
+        let hint = if has_child_now {
+            *sticky = None;
+            ShellHint::Running
+        } else if had_child {
+            // Just transitioned from "child running" → "no child"; arm the
+            // sticky window so a quick command surfaces NeedsInput before
+            // the next poll erases the signal.
+            *sticky = Some(Instant::now() + NEEDS_INPUT_STICKY);
+            ShellHint::NeedsInput
+        } else {
+            match *sticky {
+                Some(deadline) if Instant::now() < deadline => ShellHint::NeedsInput,
+                _ => {
+                    *sticky = None;
+                    ShellHint::Idle
+                }
+            }
+        };
+        Some(hint)
+    }
+
+    /// Drop the sticky NeedsInput cue, if any. Exposed so callers other than
+    /// `write` (e.g. a future "user focused the terminal" hook) can also
+    /// dismiss the cue without typing.
+    #[allow(dead_code)]
+    pub fn clear_needs_input(&self, session_id: &Uuid) {
+        if let Some(handle) = self.handles.get(session_id) {
+            *handle.needs_input_until.lock() = None;
+        }
     }
 }
 
