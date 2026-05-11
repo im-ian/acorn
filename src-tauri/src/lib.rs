@@ -107,12 +107,28 @@ pub fn run() {
             });
 
             let state = app.state::<AppState>();
-            for session in persistence::load_sessions().unwrap_or_default() {
+            let (sessions_loaded, sessions_clean) = persistence::load_sessions_with_status()
+                .unwrap_or_else(|err| {
+                    tracing::warn!("session path resolution failed at boot: {err}");
+                    (Vec::new(), false)
+                });
+            for session in sessions_loaded {
                 state.sessions.insert(session);
             }
-            for project in persistence::load_projects().unwrap_or_default() {
+            let (projects_loaded, projects_clean) = persistence::load_projects_with_status()
+                .unwrap_or_else(|err| {
+                    tracing::warn!("project path resolution failed at boot: {err}");
+                    (Vec::new(), false)
+                });
+            for project in projects_loaded {
                 state.projects.insert(project);
             }
+            state
+                .sessions_loaded_cleanly
+                .store(sessions_clean, std::sync::atomic::Ordering::SeqCst);
+            state
+                .projects_loaded_cleanly
+                .store(projects_clean, std::sync::atomic::Ordering::SeqCst);
             // Backfill projects from sessions if any sessions reference a path
             // that has no project entry (e.g. older versions that did not
             // persist projects).
@@ -127,18 +143,26 @@ pub fn run() {
             }
             // Drop scrollback files for sessions that no longer exist (e.g.
             // removed while the app was offline, or pre-feature debris).
+            // Skip when the session load was unclean — otherwise a transient
+            // disk failure would silently delete every scrollback file on the
+            // way to a fully empty session list.
             let live_ids: Vec<String> = state
                 .sessions
                 .list()
                 .iter()
                 .map(|s| s.id.to_string())
                 .collect();
-            if let Err(err) = scrollback::prune_orphans(&live_ids) {
+            if live_ids.is_empty() && !sessions_clean {
+                tracing::warn!(
+                    "skipping scrollback prune: session load was unclean and no live ids"
+                );
+            } else if let Err(err) = scrollback::prune_orphans(&live_ids) {
                 tracing::warn!("scrollback prune at boot failed: {err}");
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::load_status,
             commands::list_sessions,
             commands::create_session,
             commands::remove_session,

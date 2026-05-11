@@ -16,7 +16,15 @@ import type {
   TodoItem,
 } from "./types";
 
+export interface LoadStatus {
+  sessionsClean: boolean;
+  projectsClean: boolean;
+}
+
 export const api = {
+  loadStatus(): Promise<LoadStatus> {
+    return invoke<LoadStatus>("load_status");
+  },
   listSessions(): Promise<Session[]> {
     return invoke<Session[]>("list_sessions");
   },
