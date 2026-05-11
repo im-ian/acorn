@@ -2,7 +2,6 @@ import {
   ChevronRight,
   Copy,
   Files,
-  FolderGit2,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -511,7 +510,6 @@ function ProjectGroupView({
           />
         </button>
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <FolderGit2 size={12} className="shrink-0 text-fg-muted" />
           <span className="truncate text-sm font-medium text-fg">
             {project.name}
           </span>
@@ -734,7 +732,6 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Remove",
       icon: <Trash2 size={12} />,
       onClick: onRemove,
-      danger: true,
     },
   ];
 
