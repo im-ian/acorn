@@ -620,11 +620,20 @@ pub async fn detect_session_statuses(
     Ok(ids
         .into_iter()
         .map(|id| {
-            let status = session_status::detect(&id).unwrap_or(SessionStatus::Idle);
+            // Hand the detector the in-memory previous status so it can
+            // preserve a live session's classification when the tail buffer
+            // happens to land on a run of meta-only lines (see
+            // `session_status::detect` for the full rationale).
+            let parsed_id = Uuid::parse_str(&id).ok();
+            let previous = parsed_id
+                .and_then(|uuid| state.sessions.get(&uuid).ok())
+                .map(|s| s.status)
+                .unwrap_or(SessionStatus::Idle);
+            let status = session_status::detect(&id, previous).unwrap_or(previous);
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
-            if let Ok(uuid) = Uuid::parse_str(&id) {
+            if let Some(uuid) = parsed_id {
                 let _ = state.sessions.refresh_status(&uuid, status);
             }
             SessionStatusEntry { id, status }
