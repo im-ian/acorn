@@ -4,6 +4,7 @@ version = "1.0.8"
 description = "Acorn — orchestrate parallel Claude Code sessions across isolated git worktrees"
 authors = ["im-ian"]
 edition = "2021"
+default-run = "acorn"
 
 [lib]
 name = "acorn_lib"
