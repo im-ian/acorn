@@ -27,6 +27,7 @@ import type {
   PullRequestReview,
 } from "../lib/types";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
@@ -266,7 +267,11 @@ function DetailBody({
             </h3>
           </div>
           <p className="mt-1 truncate text-[11px] text-fg-muted">
-            <span className="font-mono">{detail.author}</span>
+            <AuthorTag
+              login={detail.author}
+              size={16}
+              nameClass="text-[11px] text-fg-muted"
+            />
             <span className="opacity-50"> · </span>
             <span className="font-mono">
               {detail.head_branch} → {detail.base_branch}
@@ -486,10 +491,10 @@ function DetailSkeleton({
               className="rounded border border-border bg-bg-sidebar/40 p-3"
             >
               <div className="mb-2 flex items-center gap-2">
-                <span className="h-[18px] w-[18px] shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
+                <span className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
                 <span
                   className={cn(
-                    "h-2.5 animate-pulse rounded bg-fg-muted/15",
+                    "h-3 animate-pulse rounded bg-fg-muted/15",
                     row.titleW,
                   )}
                 />
@@ -787,9 +792,12 @@ function ConversationPane({
 function CommentBlock({ comment }: { comment: PullRequestComment }) {
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-muted">
-        <AuthorAvatar login={comment.author} />
-        <span className="font-mono text-fg">{comment.author}</span>
+      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
+        <AuthorTag
+          login={comment.author}
+          size={28}
+          nameClass="text-[12.5px] font-semibold tracking-tight"
+        />
         <span className="opacity-60">commented</span>
         <span className="font-mono opacity-60">
           {formatTimestamp(comment.created_at)}
@@ -809,9 +817,12 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
 function ReviewBlock({ review }: { review: PullRequestReview }) {
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-muted">
-        <AuthorAvatar login={review.author} />
-        <span className="font-mono text-fg">{review.author}</span>
+      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
+        <AuthorTag
+          login={review.author}
+          size={28}
+          nameClass="text-[12.5px] font-semibold tracking-tight"
+        />
         <ReviewStateBadge state={review.state} />
         <span className="font-mono opacity-60">
           {formatTimestamp(review.submitted_at)}
@@ -836,18 +847,91 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
  * the `[bot]` suffix is stripped. Falls back invisibly via `alt=""` on
  * load failure so the timeline stays clean.
  */
-function AuthorAvatar({ login }: { login: string }) {
+function AuthorAvatar({
+  login,
+  size = 24,
+  className,
+}: {
+  login: string;
+  size?: number;
+  className?: string;
+}) {
   const slug = login.replace(/\[bot\]$/, "");
   if (!slug) return null;
+  const pixelSize = Math.max(40, size * 2);
   return (
     <img
-      src={`https://github.com/${encodeURIComponent(slug)}.png?size=40`}
+      src={`https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`}
       alt=""
-      width={18}
-      height={18}
+      title={login}
+      width={size}
+      height={size}
       loading="lazy"
-      className="h-[18px] w-[18px] shrink-0 rounded-full bg-bg-elevated"
+      style={{ width: size, height: size }}
+      className={cn(
+        "shrink-0 rounded-full bg-bg-elevated align-middle",
+        className,
+      )}
     />
+  );
+}
+
+/**
+ * Avatar + login pair with a right-click context menu offering "Open
+ * GitHub profile". Used in the modal header and in each conversation
+ * block. Strips the `[bot]` suffix when building the profile URL so it
+ * resolves for bot accounts like `dependabot[bot]`.
+ */
+function AuthorTag({
+  login,
+  size = 24,
+  nameClass,
+  avatarOnly = false,
+}: {
+  login: string;
+  size?: number;
+  nameClass?: string;
+  /** When true, render only the avatar (no inline username text). */
+  avatarOnly?: boolean;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const slug = login.replace(/\[bot\]$/, "");
+  const profileUrl = slug ? `https://github.com/${slug}` : null;
+
+  const items: ContextMenuItem[] = profileUrl
+    ? [
+        {
+          label: "Open GitHub profile",
+          icon: <ExternalLink size={12} />,
+          onClick: () => void openUrl(profileUrl),
+        },
+      ]
+    : [];
+
+  return (
+    <>
+      <span
+        onContextMenu={(e) => {
+          if (!profileUrl) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        className="inline-flex shrink-0 items-center gap-1.5 align-middle"
+      >
+        <AuthorAvatar login={login} size={size} />
+        {avatarOnly ? null : (
+          <span className={cn("font-mono text-fg", nameClass)}>{login}</span>
+        )}
+      </span>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={items}
+        onClose={() => setMenu(null)}
+      />
+    </>
   );
 }
 
