@@ -241,7 +241,42 @@ function App() {
         else panel.collapse();
       },
       [Hotkeys.clearTerminal]: (e: KeyboardEvent) => {
-        const sessionId = useAppStore.getState().activeSessionId;
+        // Prefer the terminal whose helper textarea currently owns DOM
+        // focus over `state.activeSessionId`. The store's `focusedPaneId`
+        // only updates on a mouse-down inside a pane, but typing into an
+        // xterm (or pressing a hotkey while the helper textarea has
+        // focus) does not — so Cmd+K would otherwise clear whichever
+        // pane the user last clicked, not the terminal they are actually
+        // working in. Walking up from `document.activeElement` to the
+        // nearest `[data-acorn-terminal-slot]` resolves the terminal the
+        // user is really looking at.
+        let sessionId: string | null = null;
+        const focused = document.activeElement as HTMLElement | null;
+        const slot = focused?.closest<HTMLElement>(
+          "[data-acorn-terminal-slot]",
+        );
+        if (slot?.dataset.acornTerminalSlot) {
+          sessionId = slot.dataset.acornTerminalSlot;
+        }
+        // Fall back to the store when focus is elsewhere (sidebar,
+        // command palette, an empty pane after a split, etc.). Scan all
+        // panes so a freshly-split empty pane doesn't silently no-op the
+        // hotkey.
+        if (!sessionId) {
+          const s = useAppStore.getState();
+          sessionId = s.activeSessionId;
+          if (!sessionId && s.activeProject) {
+            const ws = s.workspaces[s.activeProject];
+            if (ws) {
+              for (const pane of Object.values(ws.panes)) {
+                if (pane.activeSessionId) {
+                  sessionId = pane.activeSessionId;
+                  break;
+                }
+              }
+            }
+          }
+        }
         if (!sessionId) return;
         e.preventDefault();
         window.dispatchEvent(
