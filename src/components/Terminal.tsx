@@ -342,6 +342,19 @@ export function Terminal({
     // differentiates an IME-driven `insertText` from a plain ASCII one.
     let sentPrefix = "";
     let lastKeyCode229 = false;
+    // Tracks which IME event family is currently driving composition.
+    // Set to "A" when `insertCompositionText` fires (Family A IME — clean
+    // commit via `insertFromComposition`). Set to "B" when
+    // `insertReplacementText` / IME-flavored `insertText` fires (no commit
+    // event; commits are inferred from textarea diffs).
+    //
+    // We need this to suppress the keydown-driven `flushTrailing` on
+    // terminator keys (space/Enter/…): Family A will deliver the commit via
+    // its own `insertFromComposition` shortly after the keydown, so flushing
+    // the textarea preview here would double-emit the syllable (the bug:
+    // "는 는 강강 격 격 강력력 력"). Family B has no such follow-up event, so
+    // it still needs the flush.
+    let compositionFamily: "A" | "B" | null = null;
     // Hangul jamo, Hangul syllables, Hiragana, Katakana, CJK ideographs.
     // Used to recognise IME-driven `insertText` events even when the
     // accompanying `keydown` (with keyCode 229) hasn't fired yet — on
@@ -360,6 +373,7 @@ export function Terminal({
       }
       sentPrefix = "";
       ta.value = "";
+      compositionFamily = null;
       hideComposing();
     };
 
@@ -371,14 +385,17 @@ export function Terminal({
       switch (ev.inputType) {
         // Family A — composition-clean
         case "insertCompositionText":
+          compositionFamily = "A";
           showComposing(ev.data ?? "");
           ev.stopImmediatePropagation();
           return;
         case "deleteCompositionText":
+          compositionFamily = "A";
           ev.stopImmediatePropagation();
           return;
         case "insertFromComposition":
           if (ev.data) sendToPty(ev.data);
+          compositionFamily = null;
           hideComposing();
           ev.stopImmediatePropagation();
           return;
@@ -387,6 +404,7 @@ export function Terminal({
         case "insertReplacementText": {
           // In-syllable replacement; trailing char being recomposed.
           // Don't commit; show preview of trailing.
+          compositionFamily = "B";
           if (ta) {
             // Stale sentPrefix detection: if textarea no longer starts
             // with the prefix we tracked, a non-IME keystroke (Space,
@@ -412,9 +430,11 @@ export function Terminal({
             // sentPrefix or the next IME insertText will re-emit it as
             // part of its committed-prefix diff.
             hideComposing();
+            compositionFamily = null;
             if (ta) sentPrefix = ta.value;
             return;
           }
+          compositionFamily = "B";
           if (!ta) return;
           const value = ta.value;
           const newCharLen = ev.data?.length ?? 0;
@@ -512,7 +532,16 @@ export function Terminal({
       // will emit the printable char, and we sync sentPrefix to the
       // textarea length so the next IME insertText diff treats those
       // already-emitted chars as committed.
-      if (lastKeyCode229) {
+      //
+      // Family A skip: Family A IME (`insertCompositionText` driven)
+      // delivers the commit through a follow-up `insertFromComposition`
+      // event after this keydown. Calling `flushTrailing` here would
+      // emit the preview from the textarea AND then `insertFromComposition`
+      // would emit the same syllable a second time — the intermittent
+      // doubling bug ("는 는", "강강", "강력력 력"). The intermittent feel
+      // comes from macOS Korean IME flipping between Family A and Family B
+      // event shapes based on input mode / pending state.
+      if (lastKeyCode229 && compositionFamily !== "A") {
         flushTrailing();
       }
       lastKeyCode229 = false;
