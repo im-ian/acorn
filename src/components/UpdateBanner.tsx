@@ -19,6 +19,7 @@ import { WhatsNewModal } from "./WhatsNewModal";
 export function UpdateBanner(): ReactElement | null {
   const should = useUpdater(selectShouldNotify);
   const update = useUpdater((s) => s.available);
+  const currentVersion = useUpdater((s) => s.currentVersion);
   const busy = useUpdater((s) => s.busy);
   const error = useUpdater((s) => s.error);
   const install = useUpdater((s) => s.install);
@@ -81,6 +82,13 @@ export function UpdateBanner(): ReactElement | null {
       <WhatsNewModal
         open={whatsNewOpen}
         onClose={() => setWhatsNewOpen(false)}
+        version={update.version}
+        body={update.body ?? ""}
+        currentVersion={currentVersion}
+        showInstall
+        busy={busy}
+        error={error}
+        onInstall={() => void install()}
       />
     </>
   );
