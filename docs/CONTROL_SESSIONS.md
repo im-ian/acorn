@@ -1,0 +1,167 @@
+# Control sessions
+
+> Status: early preview. The data model, hotkey, and `acorn-ipc` CLI ship in
+> Acorn 1.0.9. Expect rough edges; expect the protocol to bump if the wire
+> shape needs revision.
+
+A **control session** is an ordinary Acorn terminal that has been marked with
+`SessionKind::Control`. The mark gives the terminal — and any process running
+inside it, including agents like Claude or Codex — permission to drive its
+sibling sessions over a Unix-socket protocol called `acorn-ipc`.
+
+The mental model is tmux's *control mode*: one pane acts as the dispatcher,
+the others are workers. Acorn just leans on the system process tree instead
+of multiplexing over a single PTY.
+
+## Creating a control session
+
+Three entry points:
+
+- Hotkey: `⌘⌥⇧T` (mac) / `Ctrl+Alt+Shift+T` (others). Creates the session in
+  whatever project is currently active.
+- Sidebar: hover a project header → click the `Bot` icon.
+- Command palette: `⌘P` → `New control session`.
+
+The first time you create one, Acorn shows a one-time guide. You can re-open
+it from Settings → Sessions → "Control sessions" or by clearing
+`localStorage["acorn:control-guide-dismissed-v1"]`.
+
+A control session shows a small `Bot` accessory icon next to its name in the
+sidebar — that's the visual signal that this terminal can do more than a
+regular shell.
+
+## The `acorn-ipc` CLI
+
+When Acorn spawns a control session it injects two env vars into the PTY:
+
+| Env var             | Source                            |
+| ------------------- | --------------------------------- |
+| `ACORN_SESSION_ID`  | The session's UUID                |
+| `ACORN_IPC_SOCKET`  | Path to the in-app IPC socket     |
+
+The `acorn-ipc` binary reads those two vars, so commands run straight from
+the shell without flags.
+
+### Install
+
+The `acorn-ipc` binary is built from the same Cargo crate as the app
+itself, as a separate `[[bin]]` target. The release pipeline does **not**
+yet copy it into the `.app` bundle (tracked as a follow-up), so for the
+1.0.9 preview you install it from a local checkout:
+
+```sh
+git clone https://github.com/im-ian/acorn
+cd acorn
+cargo build --release --bin acorn-ipc
+sudo ln -sf "$(pwd)/target/release/acorn-ipc" /usr/local/bin/acorn-ipc
+```
+
+Settings → Sessions → "Control sessions" shows the resolved binary path
+Acorn currently sees (it looks for `acorn-ipc` next to the running app
+binary; once the release bundle ships the CLI, that lookup will succeed
+out of the box) and a one-click "Copy install command" for whatever shim
+location your system has on `$PATH`.
+
+To verify:
+
+```sh
+acorn-ipc --help
+```
+
+### Commands
+
+```text
+acorn-ipc list-sessions
+acorn-ipc send-keys     -t <uuid> --data "ls\n"          # or --enter
+acorn-ipc read-buffer   -t <uuid> [--max-bytes N]
+acorn-ipc new-session   <name> [--isolated]
+acorn-ipc select-session -t <uuid>
+acorn-ipc kill-session  -t <uuid>
+```
+
+Add `--json` to any command to get machine-readable output. Each command
+exits non-zero with a stable code on error:
+
+| Exit | Meaning                                                            |
+| ---- | ------------------------------------------------------------------ |
+| 2    | Unauthorized — source session missing, not a control session, etc. |
+| 3    | Target session not found                                           |
+| 4    | Target session belongs to a different project                      |
+| 5    | Invalid request shape / arguments                                  |
+| 6    | Internal — PTY write failed, persistence failed, etc.              |
+
+### Examples
+
+Send a command to every regular sibling and wait for output:
+
+```sh
+for id in $(acorn-ipc list-sessions --json | jq -r '.sessions[] | select(.kind == "regular") | .id'); do
+  acorn-ipc send-keys -t "$id" --data "git status" --enter
+  sleep 1
+  acorn-ipc read-buffer -t "$id" --max-bytes 4096
+  echo "---"
+done
+```
+
+Spin up a fresh isolated worktree and focus it:
+
+```sh
+new_id=$(acorn-ipc new-session "patch-bot" --isolated)
+acorn-ipc select-session -t "$new_id"
+```
+
+## Security model
+
+- The socket file is created with mode `0600`, so only the user the Acorn
+  app is running as can connect.
+- Every request carries the source session's UUID. The server rejects any
+  request whose source is missing, expired, or whose `SessionKind` is not
+  `Control`.
+- Target lookups are scoped to the source's project (`repo_path`).
+  Cross-project requests surface a distinct `OutOfScope` error so the CLI
+  can give an accurate diagnostic instead of a misleading "not found".
+- `kill-session` refuses to kill the source control session itself, so a
+  badly-written agent can't accidentally remove the only seat it has.
+
+There is currently no inter-process whitelist beyond the env-var handshake.
+If a control session leaks its `ACORN_SESSION_ID` to a child it does not
+trust, that child can use it. Treat the env var like a credential.
+
+## Wire protocol
+
+JSON, newline-delimited, one request → one response per connection. Wire
+version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
+
+```jsonc
+// Request
+{
+  "protocol_version": 1,
+  "source_session_id": "…uuid…",
+  "request": { "kind": "send-keys", "target_session_id": "…", "data_b64": "…" }
+}
+
+// Response
+{ "kind": "ack" }
+// or
+{ "kind": "error", "code": "out-of-scope", "message": "…" }
+```
+
+## Troubleshooting
+
+| Symptom                                              | Likely cause                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------------------- |
+| `ACORN_SESSION_ID is unset`                          | Running `acorn-ipc` from a non-control session                        |
+| `connect: No such file or directory`                 | App not running, or socket path overridden                            |
+| Exit 2 inside a control session                      | Session was removed in the UI; env still pointing at a stale UUID     |
+| Exit 4 even though both sessions look right          | Sessions belong to different `repo_path`s; check Sidebar grouping     |
+| `read-buffer` returns `truncated` for short sessions | Bytes still in flight to xterm but cleared by `clear`/`reset` already |
+
+## Limitations
+
+- macOS and Linux only (Unix domain sockets).
+- The CLI does not currently auto-install. Use the Settings shortcut or
+  symlink it manually.
+- `send-keys` does not interpret tmux-style escapes (`C-c`, `Enter`); pass
+  literal bytes via `--data` or pre-encoded base64 via `--raw-base64`.
+- Audit logging is `tracing::info!`-level only; there is no on-disk audit
+  file yet.

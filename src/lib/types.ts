@@ -87,6 +87,18 @@ export interface MemoryUsage {
   processes: MemoryProcess[];
 }
 
+export interface AcornIpcShim {
+  path: string;
+  exists: boolean;
+}
+
+export interface AcornIpcStatus {
+  bundled_path: string;
+  bundled_exists: boolean;
+  socket_path: string;
+  shim_paths: AcornIpcShim[];
+}
+
 export type TodoStatus = "pending" | "in_progress" | "completed";
 
 export interface TodoItem {
