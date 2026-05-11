@@ -336,4 +336,181 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     const writes = await getWrites(page);
     expect(writes).toContain("\x05");
   });
+
+  test("Two sequential Korean syllables (안 → 녕) each commit exactly once", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // Real macOS Korean 2-set IME chains compositions without a terminator
+    // when the next jamo cannot legally join the current syllable. The first
+    // syllable commits via `insertFromComposition`, then a fresh
+    // composition starts with the next jamo. Tests that `sentPrefix` and
+    // `composing` reset cleanly so the second syllable doesn't see stale
+    // state from the first.
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "안",
+        taValue: "안",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "안",
+        taValue: "",
+      },
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "녕",
+        taValue: "녕",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "녕",
+        taValue: "",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.filter((w) => w === "안").length).toBe(1);
+    expect(writes.filter((w) => w === "녕").length).toBe(1);
+    // Order matters — 안 must arrive before 녕.
+    const joined = writes.join("");
+    expect(joined.indexOf("안")).toBeLessThan(joined.indexOf("녕"));
+    // No coalesced doubles from stale sentPrefix leaking the prior syllable
+    // into the next composition's textarea-tail slice.
+    expect(joined).not.toContain("안녕안");
+    expect(joined).not.toContain("녕녕");
+  });
+
+  test("있 → space → 안 — syllable + terminator + next composition all clean", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // The exact shape the original bug surfaced in: a syllable, the space
+    // that triggered the duplicate, then another syllable. The post-space
+    // composition must start fresh (sentPrefix="", composing=false) and
+    // emit "안" exactly once with no residue from "있".
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertText",
+        data: "있",
+        taValue: "있",
+      },
+      // Space terminator under IME — commits "있" via terminator path.
+      { type: "keydown", key: " ", keyCode: 229 },
+      // Family A follow-up that the bug abused.
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "있",
+        taValue: "",
+      },
+      // Fresh composition begins.
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertText",
+        data: "안",
+        taValue: "안",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "안",
+        taValue: "",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.filter((w) => w === "있").length).toBe(1);
+    expect(writes.filter((w) => w === "안").length).toBe(1);
+    const joined = writes.join("");
+    // Critical: the post-space composition's textarea-tail slice would
+    // re-emit "있" if sentPrefix wasn't reset by the prior commit.
+    expect(joined).not.toContain("있있");
+    expect(joined).not.toContain("있안있");
+    expect(joined.indexOf("있")).toBeLessThan(joined.indexOf("안"));
+  });
+
+  test("Composition resumes cleanly after a non-IME insertText (있Abc shape)", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    // The "있Abc" scenario: user commits Korean syllable, then types ASCII,
+    // then comes back to Korean. After ASCII, sentPrefix tracks the textarea
+    // tail. A fresh IME composition must slice past sentPrefix so the next
+    // syllable doesn't drag the ASCII prefix into its commit.
+    //
+    // We assert only what our handler controls (the IME path's pty_write
+    // calls). ASCII characters that xterm emits via its own keydown path
+    // duplicate noisily under synthetic events and are not part of this
+    // contract — the regression we care about is the IME path NOT re-emitting
+    // "있" or pulling "Abc" into the next Hangul commit.
+    await runIme(page, [
+      // Compose + commit "있".
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "있",
+        taValue: "있",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "있",
+        taValue: "",
+      },
+      // Plain ASCII run — our handler must enter the non-IME branch and
+      // advance sentPrefix to match the textarea so a later IME composition
+      // slices from the right offset.
+      { type: "keydown", key: "A", keyCode: 65 },
+      { type: "input", inputType: "insertText", data: "A", taValue: "A" },
+      { type: "keydown", key: "b", keyCode: 66 },
+      { type: "input", inputType: "insertText", data: "b", taValue: "Ab" },
+      { type: "keydown", key: "c", keyCode: 67 },
+      { type: "input", inputType: "insertText", data: "c", taValue: "Abc" },
+      // Resume Korean — fresh composition appended to the existing tail.
+      { type: "keydown", key: "Process", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertCompositionText",
+        data: "한",
+        taValue: "Abc한",
+      },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "한",
+        taValue: "Abc",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    // The two Hangul syllables on the IME path must each commit exactly once.
+    expect(writes.filter((w) => w === "있").length).toBe(1);
+    expect(writes.filter((w) => w === "한").length).toBe(1);
+    // sentPrefix-regression markers: the next Hangul commit must not drag
+    // the ASCII prefix into its emit, and must not re-emit "있".
+    expect(writes).not.toContain("Abc한");
+    expect(writes).not.toContain("있Abc");
+    expect(writes).not.toContain("있Abc한");
+  });
 });
