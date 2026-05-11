@@ -756,6 +756,14 @@ export function Terminal({
               // briefly flash on the way out.
               return;
             }
+            // User opted into auto-close: drop the session tab now instead
+            // of writing the press-Enter prompt. The worktree is preserved
+            // (removeSession(id, false)); only the in-app tab disappears.
+            if (useSettings.getState().settings.sessions.closeOnExit) {
+              exited = true;
+              void useAppStore.getState().removeSession(sessionId, false);
+              return;
+            }
             exited = true;
             term.write(
               `\r\n${ANSI_DIM}[process exited — press Enter to restart]${ANSI_RESET}\r\n`,
