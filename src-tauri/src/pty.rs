@@ -11,7 +11,7 @@
 //!   * `pty:output:{session_id}` — payload `{ "data": "<base64>" }`
 //!   * `pty:exit:{session_id}` — payload `{ "code": Option<i32> }`
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,6 +32,12 @@ use crate::error::{AppError, AppResult};
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const READ_BUFFER_SIZE: usize = 4096;
+/// Hard cap on the per-session in-memory tail buffer used by the
+/// `acorn-ipc read-buffer` command. Sized to roughly match xterm.js's
+/// configured scrollback so the buffer the CLI can read mirrors what the
+/// user sees in the terminal. The frontend already persists its own
+/// scrollback to disk on a debounce; this ring lives purely in RAM.
+const TAIL_BUFFER_CAP: usize = 4 * 1024 * 1024;
 /// How long a "just-finished a command" cue lingers as `NeedsInput` on the
 /// Sidebar dot before we let it fall back to `Idle`. Long enough to actually
 /// catch the user's eye after a transient command (`ls`, `git status`),
@@ -73,6 +79,12 @@ struct PtyHandle {
     /// last descendant exits, cleared on the next user keystroke or when the
     /// deadline passes.
     needs_input_until: Mutex<Option<Instant>>,
+    /// Rolling tail of raw PTY output bytes. Appended by `read_loop` before
+    /// the bytes are base64-encoded and emitted to the frontend; consumed
+    /// out of band by `tail_bytes` for the IPC `read-buffer` command.
+    /// Capped at `TAIL_BUFFER_CAP` — older bytes are dropped from the
+    /// front when the cap is hit.
+    tail_buf: Mutex<VecDeque<u8>>,
 }
 
 /// Manages all live PTY sessions for the application.
@@ -231,16 +243,24 @@ impl PtyManager {
             pid,
             had_child: AtomicBool::new(false),
             needs_input_until: Mutex::new(None),
+            tail_buf: Mutex::new(VecDeque::with_capacity(READ_BUFFER_SIZE)),
         });
 
-        self.handles.insert(session_id, handle);
+        self.handles.insert(session_id, Arc::clone(&handle));
 
         let app_for_reader = app.clone();
         let stop_for_reader = stop.clone();
+        let handle_for_reader = Arc::clone(&handle);
         std::thread::Builder::new()
             .name(format!("acorn-pty-read-{session_id}"))
             .spawn(move || {
-                read_loop(app_for_reader, session_id, reader, stop_for_reader);
+                read_loop(
+                    app_for_reader,
+                    session_id,
+                    reader,
+                    stop_for_reader,
+                    handle_for_reader,
+                );
             })
             .map_err(|e| AppError::Pty(format!("spawn reader thread: {e}")))?;
 
@@ -374,6 +394,27 @@ impl PtyManager {
             *handle.needs_input_until.lock() = None;
         }
     }
+
+    /// Snapshot up to `max_bytes` of the most recent PTY output for the
+    /// given session. Returns `Some((bytes, truncated))` when a PTY exists
+    /// for the session (`truncated` indicates whether the underlying tail
+    /// buffer held more bytes than were returned), or `None` when the
+    /// session has no live PTY. Pure read — does not drain the buffer.
+    pub fn tail_bytes(
+        &self,
+        session_id: &Uuid,
+        max_bytes: usize,
+    ) -> Option<(Vec<u8>, bool)> {
+        let handle = self.handles.get(session_id)?.clone();
+        let buf = handle.tail_buf.lock();
+        let total = buf.len();
+        let take = max_bytes.min(total);
+        // Take the *tail* of the ring, since that is the freshest output
+        // the user (and any agent reading via IPC) would expect to see.
+        let start = total - take;
+        let slice: Vec<u8> = buf.iter().skip(start).copied().collect();
+        Some((slice, total > take))
+    }
 }
 
 fn read_loop<R: Runtime>(
@@ -381,6 +422,7 @@ fn read_loop<R: Runtime>(
     session_id: Uuid,
     mut reader: Box<dyn Read + Send>,
     stop: Arc<AtomicBool>,
+    handle: Arc<PtyHandle>,
 ) {
     let event = format!("pty:output:{session_id}");
     let mut buf = [0u8; READ_BUFFER_SIZE];
@@ -391,6 +433,7 @@ fn read_loop<R: Runtime>(
         match reader.read(&mut buf) {
             Ok(0) => break, // EOF — child closed the slave
             Ok(n) => {
+                push_tail(&handle.tail_buf, &buf[..n]);
                 let payload = OutputPayload {
                     data: base64_encode(&buf[..n]),
                 };
@@ -405,6 +448,25 @@ fn read_loop<R: Runtime>(
             }
         }
     }
+}
+
+/// Append `chunk` to the per-session tail ring buffer, evicting bytes from
+/// the front when the cap is exceeded so the buffer can never grow past
+/// `TAIL_BUFFER_CAP` bytes. Pure data movement — `Mutex` is the only
+/// synchronization point, no allocation in the steady state once the
+/// buffer has reached its cap.
+fn push_tail(tail: &Mutex<VecDeque<u8>>, chunk: &[u8]) {
+    let mut buf = tail.lock();
+    let overflow = buf.len() + chunk.len();
+    if overflow > TAIL_BUFFER_CAP {
+        let drop_n = overflow - TAIL_BUFFER_CAP;
+        if drop_n >= buf.len() {
+            buf.clear();
+        } else {
+            buf.drain(..drop_n);
+        }
+    }
+    buf.extend(chunk.iter().copied());
 }
 
 fn wait_loop<R: Runtime>(
@@ -500,5 +562,32 @@ mod tests {
             base64_encode(b"hello world"),
             "aGVsbG8gd29ybGQ="
         );
+    }
+
+    #[test]
+    fn push_tail_keeps_recent_bytes_when_cap_exceeded() {
+        let tail: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
+        // Push twice the cap; expect exactly TAIL_BUFFER_CAP bytes left,
+        // and those bytes should be the tail half of what we pushed.
+        let cap = TAIL_BUFFER_CAP;
+        let chunk_a = vec![1u8; cap];
+        let chunk_b = vec![2u8; cap];
+        push_tail(&tail, &chunk_a);
+        push_tail(&tail, &chunk_b);
+        let buf = tail.lock();
+        assert_eq!(buf.len(), cap);
+        // After eviction the buffer should be all 2s — the older 1s were
+        // dropped because they fell off the front.
+        assert!(buf.iter().all(|&b| b == 2));
+    }
+
+    #[test]
+    fn push_tail_handles_chunks_smaller_than_cap() {
+        let tail: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
+        push_tail(&tail, b"hello");
+        push_tail(&tail, b" world");
+        let buf = tail.lock();
+        let collected: Vec<u8> = buf.iter().copied().collect();
+        assert_eq!(&collected, b"hello world");
     }
 }

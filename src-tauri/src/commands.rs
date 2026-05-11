@@ -468,13 +468,31 @@ pub async fn pty_spawn<R: Runtime>(
             )
         }
     };
+    // Inject IPC env vars for control sessions so the user's shell (and any
+    // agent it launches) can address the running app via the `acorn-ipc`
+    // CLI without per-session configuration. Only control sessions get the
+    // env; regular sessions stay sandboxed from the IPC surface.
+    let mut effective_env = env.unwrap_or_default();
+    if let Ok(session) = state.sessions.get(&id) {
+        if session.kind == SessionKind::Control {
+            effective_env
+                .entry("ACORN_SESSION_ID".to_string())
+                .or_insert_with(|| session.id.to_string());
+            if let Ok(socket) = crate::ipc::socket_path::resolve() {
+                effective_env
+                    .entry("ACORN_IPC_SOCKET".to_string())
+                    .or_insert_with(|| socket.display().to_string());
+            }
+        }
+    }
+
     state.pty.spawn(
         app,
         id,
         cwd,
         resolved_command,
         resolved_args,
-        env.unwrap_or_default(),
+        effective_env,
         cols.unwrap_or(0),
         rows.unwrap_or(0),
     )
@@ -892,7 +910,10 @@ pub async fn generate_pr_commit_message(
     )
 }
 
-fn create_unique_worktree(repo: &std::path::Path, base: &str) -> AppResult<(String, PathBuf)> {
+pub(crate) fn create_unique_worktree(
+    repo: &std::path::Path,
+    base: &str,
+) -> AppResult<(String, PathBuf)> {
     let root = worktree::worktree_root(repo);
     let mut candidate = base.to_string();
     let mut n = 2;
@@ -915,7 +936,7 @@ fn create_unique_worktree(repo: &std::path::Path, base: &str) -> AppResult<(Stri
     }
 }
 
-fn sanitize_worktree_name(name: &str) -> String {
+pub(crate) fn sanitize_worktree_name(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '-' || c == '_' {
