@@ -9,6 +9,21 @@ edition = "2021"
 name = "acorn_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Companion CLI that talks to the running Acorn app over a Unix domain
+# socket. Built from the same crate so the protocol types in `ipc::proto`
+# stay in lockstep between the in-process server and the out-of-process
+# client without a third workspace member.
+[[bin]]
+name = "acorn-ipc"
+path = "src/bin/acorn-ipc.rs"
+
+# Existing Tauri entry binary — Cargo defaults `name = "acorn"` based on the
+# package name, but once we add a second `[[bin]]` we must spell both out so
+# Cargo does not auto-discover the new bin as the only target.
+[[bin]]
+name = "acorn"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -39,6 +54,7 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 base64 = "0.22"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2"
+clap = { version = "4", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

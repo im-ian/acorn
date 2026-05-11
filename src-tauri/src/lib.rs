@@ -2,6 +2,7 @@ mod cli_resolver;
 mod commands;
 mod error;
 mod git_ops;
+mod ipc;
 mod persistence;
 mod pty;
 mod pull_requests;
@@ -159,6 +160,10 @@ pub fn run() {
             } else if let Err(err) = scrollback::prune_orphans(&live_ids) {
                 tracing::warn!("scrollback prune at boot failed: {err}");
             }
+            // Start the IPC server in the background. It owns its own
+            // listener thread; if bind fails it logs and the app keeps
+            // running with IPC disabled.
+            ipc::server::start(app.handle().clone(), state.inner().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
