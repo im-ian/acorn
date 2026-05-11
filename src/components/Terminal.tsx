@@ -647,12 +647,22 @@ export function Terminal({
             : [...startup.args, "--session-id", sessionId];
         }
         if (disposed) return;
+        // Pass the post-fit xterm dimensions so the PTY starts in sync with
+        // what the renderer will paint. Otherwise the PTY falls back to
+        // 80x24 and zsh-autosuggestions / prompt redraws compute wrap
+        // positions for a wider line than xterm renders, leaving the cursor
+        // and echoed characters offset from where the shell believes they
+        // are. The earlier `fit()`-driven `onResize` cannot fix this — it
+        // fires before `pty_spawn` and `pty_resize` errors out with
+        // "no pty for session".
         await invoke("pty_spawn", {
           sessionId,
           cwd,
           command: startup.command,
           args,
           env: {},
+          cols: term.cols,
+          rows: term.rows,
         });
         if (disposed) {
           // Cleanup ran mid-spawn — the pty just got created has no UI.
