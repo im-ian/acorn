@@ -43,8 +43,16 @@ be able to orchestrate siblings *immediately*, not only after a user has
 explained the protocol. Acorn ships that priming through three layers
 that fire automatically every time a control-session PTY spawns:
 
-1. **Env vars.** `ACORN_SESSION_ID` and `ACORN_IPC_SOCKET` are exported
-   into the PTY's environment.
+1. **PTY environment.** Three pieces of state are injected into the
+   control session's PTY before any user code runs:
+   - `ACORN_SESSION_ID` — this session's UUID, so `acorn-ipc` knows who
+     is asking.
+   - `ACORN_IPC_SOCKET` — the canonical IPC socket path.
+   - `PATH` — the directory containing the bundled `acorn-ipc` binary is
+     prepended (de-duplicated), so the agent can invoke `acorn-ipc` by
+     name without the user installing a shim. Regular sessions do not
+     receive this prefix, keeping the IPC surface invisible outside
+     control sessions.
 2. **Per-agent CLI flag.** For agents Acorn recognises, the spawn argv is
    augmented so the primer lands in the agent's system prompt before its
    first turn:
@@ -77,16 +85,24 @@ the shell without flags.
 
 ### Install
 
-The `acorn-ipc` binary is built from the same Cargo crate as the app
-itself, as a separate `[[bin]]` target. The release pipeline does **not**
-yet copy it into the `.app` bundle (tracked as a follow-up), so for the
-1.0.9 preview you install it from a local checkout:
+`acorn-ipc` ships inside the Acorn `.app` bundle (Tauri's `externalBin`
+mechanism — see `src-tauri/tauri.conf.json`). Inside a control session
+PTY there is **nothing to install**: the bundled binary's directory is
+prepended to `PATH`, so `acorn-ipc list-sessions` works out of the box.
+
+You only need a system-wide install when you want to call `acorn-ipc`
+from **outside** a control session (debugging from your own shell, an
+external script, a Makefile, …). In that case use the Settings shortcut
+under Sessions → "Control sessions", which generates a single-line
+`ln -sf` command pointing at the bundled binary. The Copy button lands
+the command on your clipboard; paste it into a terminal and run it.
+
+If you are building from source rather than installing a release, the
+sidecar is staged for you when you run `tauri build`. For a dev loop:
 
 ```sh
-git clone https://github.com/im-ian/acorn
-cd acorn
-cargo build --release --bin acorn-ipc
-sudo ln -sf "$(pwd)/target/release/acorn-ipc" /usr/local/bin/acorn-ipc
+cargo build --bin acorn-ipc   # one-time; run again after IPC changes
+bun run tauri dev
 ```
 
 Settings → Sessions → "Control sessions" shows the resolved binary path

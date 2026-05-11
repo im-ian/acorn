@@ -558,6 +558,22 @@ pub async fn pty_spawn<R: Runtime>(
                     .entry("ACORN_IPC_SOCKET".to_string())
                     .or_insert_with(|| socket.display().to_string());
             }
+            // Make the bundled `acorn-ipc` CLI resolvable from inside this
+            // PTY without the user installing a PATH shim. Prepending — not
+            // replacing — keeps the user's existing PATH intact for every
+            // other binary; the dedup in `prepend_to_path` prevents the
+            // entry from accumulating across reconnects.
+            if let Some(bin_dir) = crate::ipc::cli_path::bundled_cli_dir() {
+                let existing = effective_env
+                    .get("PATH")
+                    .cloned()
+                    .or_else(|| std::env::var("PATH").ok())
+                    .unwrap_or_default();
+                effective_env.insert(
+                    "PATH".to_string(),
+                    crate::ipc::cli_path::prepend_to_path(&bin_dir, &existing),
+                );
+            }
             // Prime any agent we know how to talk to. The primer also lands
             // in a worktree-local marker file as a fallback for agents we
             // don't have a flag for (Codex, Gemini CLI, …) — those still
