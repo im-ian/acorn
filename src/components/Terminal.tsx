@@ -379,17 +379,24 @@ export function Terminal({
       // when the user has uncommitted IME state. If we treat such a key
       // as IME, the subsequent `input` event takes the IME branch and
       // re-emits the terminator on top of xterm's own keypress emit,
-      // producing duplicate spaces / Enters. Detect ASCII-printable keys
-      // and fall through to the non-IME path instead.
+      // producing duplicate spaces / Enters. Detect ONLY true terminator
+      // keys (named non-printable keys + actual whitespace) and fall
+      // through to the non-IME path. Letter/digit/punctuation keys keep
+      // 229 → IME path because Korean 2-set IME reports them with
+      // `ev.key` set to the underlying ASCII (e.g. shift+ㅅ → key="T"),
+      // and treating those as terminators flushes mid-syllable —
+      // dropping the second jamo of double consonants like ㅆ in `있`.
       if (ev.keyCode === 229) {
-        const isAsciiTerminator =
-          ev.key.length === 1 && ev.key.charCodeAt(0) < 0x80;
-        if (!isAsciiTerminator) {
+        const TERMINATOR_KEYS = new Set([
+          "Enter", "Tab", "Escape", "Backspace", " ", "Spacebar",
+        ]);
+        const isTerminator = TERMINATOR_KEYS.has(ev.key);
+        if (!isTerminator) {
           lastKeyCode229 = true;
           ev.stopImmediatePropagation();
           return;
         }
-        // ASCII terminator under IME — treat as non-IME; the previous
+        // Terminator under IME — treat as non-IME; the previous
         // syllable still needs flushing, which happens below because
         // `lastKeyCode229` remains true from the prior real IME keydown.
       }
