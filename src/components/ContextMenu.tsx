@@ -7,7 +7,6 @@ interface ContextMenuButton {
   label: string;
   icon?: React.ReactNode;
   onClick: () => void;
-  danger?: boolean;
   disabled?: boolean;
 }
 
@@ -109,9 +108,7 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
                   "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
                   item.disabled
                     ? "cursor-not-allowed text-fg-muted/50"
-                    : item.danger
-                      ? "text-danger hover:bg-danger/15"
-                      : "text-fg hover:bg-bg-sidebar",
+                    : "text-fg hover:bg-bg-sidebar",
                 )}
               >
                 {item.icon ? (

@@ -94,6 +94,7 @@ export function Terminal({
       fontSize: initialSettings.terminal.fontSize,
       fontWeight: initialSettings.terminal.fontWeight,
       fontWeightBold: initialSettings.terminal.fontWeightBold,
+      lineHeight: initialSettings.terminal.lineHeight,
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 5000,
@@ -151,6 +152,10 @@ export function Terminal({
       }
       if (next.fontWeightBold !== previous.fontWeightBold) {
         term.options.fontWeightBold = next.fontWeightBold;
+        changed = true;
+      }
+      if (next.lineHeight !== previous.lineHeight) {
+        term.options.lineHeight = next.lineHeight;
         changed = true;
       }
       if (changed) {

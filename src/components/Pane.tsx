@@ -515,7 +515,6 @@ function TabItem({
     {
       label: "Close All",
       onClick: onCloseAll,
-      danger: true,
     },
   ];
 
@@ -747,7 +746,6 @@ function buildPaneMenuItems({
       icon: <X size={12} />,
       onClick: onClose,
       disabled: totalPanes <= 1,
-      danger: true,
     },
   ];
 }

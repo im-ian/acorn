@@ -8,6 +8,7 @@ import { useUpdater } from "../lib/updater-store";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
+  PR_REFRESH_INTERVAL_OPTIONS,
   type SelectedAgent,
   type SessionStartupMode,
   type TerminalFontWeight,
@@ -15,6 +16,7 @@ import {
   selectedAgentLabel,
   useSettings,
 } from "../lib/settings";
+import type { PrStateFilter } from "../lib/types";
 import {
   CheckboxRow,
   Field,
@@ -31,6 +33,8 @@ type Tab =
   | "terminal"
   | "agents"
   | "sessions"
+  | "pull-requests"
+  | "appearance"
   | "editor"
   | "notifications"
   | "storage"
@@ -40,6 +44,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
   { id: "agents", label: "Agents" },
   { id: "sessions", label: "Sessions" },
+  { id: "pull-requests", label: "Pull Requests" },
+  { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
   { id: "storage", label: "Storage" },
@@ -108,6 +114,10 @@ export function SettingsModal() {
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
+          ) : tab === "pull-requests" ? (
+            <PullRequestsSettings />
+          ) : tab === "appearance" ? (
+            <AppearanceSettings />
           ) : tab === "editor" ? (
             <EditorSettings />
           ) : tab === "notifications" ? (
@@ -163,6 +173,19 @@ function TerminalSettings() {
         <WeightSelect
           value={settings.terminal.fontWeightBold}
           onChange={(v) => patchTerminal({ fontWeightBold: v })}
+        />
+      </Field>
+      <Field
+        label="Line height"
+        hint="Cell-height multiplier. 1.00 packs rows flush; raise for more vertical breathing room. Range 1.00–2.00."
+      >
+        <Stepper
+          value={settings.terminal.lineHeight}
+          min={1.0}
+          max={2.0}
+          step={0.05}
+          format={(n) => n.toFixed(2)}
+          onChange={(n) => patchTerminal({ lineHeight: n })}
         />
       </Field>
     </section>
@@ -260,6 +283,88 @@ function SessionSettings() {
           />
           Show confirmation dialog
         </label>
+      </Field>
+    </section>
+  );
+}
+
+function PullRequestsSettings() {
+  const settings = useSettings((s) => s.settings);
+  const patchPullRequests = useSettings((s) => s.patchPullRequests);
+
+  return (
+    <section className="space-y-4">
+      <Field
+        label="Default tab"
+        hint="Filter pre-selected when the PRs panel first opens for a repo. Switching tabs by hand still works as before."
+      >
+        <Select
+          value={settings.pullRequests.defaultState}
+          onChange={(e) =>
+            patchPullRequests({
+              defaultState: e.target.value as PrStateFilter,
+            })
+          }
+          className="w-48"
+        >
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+          <option value="merged">Merged</option>
+          <option value="all">All</option>
+        </Select>
+      </Field>
+      <Field
+        label="Refresh interval"
+        hint="How often the PRs tab auto-refetches from gh. Lower values feel snappier but spend more API budget."
+      >
+        <Select
+          value={settings.pullRequests.refreshIntervalMs}
+          onChange={(e) =>
+            patchPullRequests({
+              refreshIntervalMs: Number(e.target.value),
+            })
+          }
+          className="w-48"
+        >
+          {PR_REFRESH_INTERVAL_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <p className="text-[11px] text-fg-muted">
+        Manual refresh (the icon in the PRs tab) always works regardless of
+        this interval.
+      </p>
+    </section>
+  );
+}
+
+function AppearanceSettings() {
+  const settings = useSettings((s) => s.settings);
+  const patchStatusBar = useSettings((s) => s.patchStatusBar);
+
+  return (
+    <section className="space-y-4">
+      <Field
+        label="Status bar"
+        hint="Choose which optional badges show in the bottom status bar."
+      >
+        <div className="flex flex-col gap-1">
+          <CheckboxRow
+            label="GitHub account"
+            description="The `gh` account used to list pull requests for the active repo."
+            checked={settings.statusBar.showGithubAccount}
+            onChange={(v) => patchStatusBar({ showGithubAccount: v })}
+          />
+          <CheckboxRow
+            label="Memory usage"
+            description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
+            checked={settings.statusBar.showMemory}
+            onChange={(v) => patchStatusBar({ showMemory: v })}
+          />
+        </div>
       </Field>
     </section>
   );

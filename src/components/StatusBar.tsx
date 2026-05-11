@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { homeDir } from "@tauri-apps/api/path";
 import { api } from "../lib/api";
+import { useSettings } from "../lib/settings";
 import type { MemoryProcess } from "../lib/types";
 import { useAppStore } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
@@ -47,10 +48,19 @@ function formatBytes(bytes: number): string {
   return `${fixed} ${units[i]}`;
 }
 
-function useMemoryUsage(intervalMs: number): MemorySnapshot | null {
+function useMemoryUsage(
+  intervalMs: number,
+  enabled: boolean,
+): MemorySnapshot | null {
   const [snapshot, setSnapshot] = useState<MemorySnapshot | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      // Drop any stale reading when the user hides the memory readout so
+      // the breakdown modal cannot reopen with an outdated process list.
+      setSnapshot(null);
+      return;
+    }
     let cancelled = false;
     const tick = async () => {
       try {
@@ -68,7 +78,7 @@ function useMemoryUsage(intervalMs: number): MemorySnapshot | null {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [intervalMs]);
+  }, [intervalMs, enabled]);
 
   return snapshot;
 }
@@ -93,8 +103,12 @@ export function StatusBar() {
   const { sessions, activeSessionId, activeProject, error, loading } =
     useAppStore();
   const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
+  const showGithubAccount = useSettings(
+    (s) => s.settings.statusBar.showGithubAccount,
+  );
+  const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
-  const memory = useMemoryUsage(MEMORY_POLL_MS);
+  const memory = useMemoryUsage(MEMORY_POLL_MS, showMemory);
   const home = useHomeDir();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const displayPath = active ? tildify(active.worktree_path, home) : null;
@@ -127,7 +141,7 @@ export function StatusBar() {
               <span className="truncate text-danger">error: {error}</span>
             </Tooltip>
           ) : null}
-          {prAccount ? (
+          {showGithubAccount && prAccount ? (
             <Tooltip label={`PRs listed via gh account ${prAccount}`} side="top">
               <span className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
                 <GitHubMark />
@@ -151,22 +165,26 @@ export function StatusBar() {
               </Tooltip>
             </>
           ) : null}
-          <span className="text-fg-muted/50">|</span>
-          <Tooltip label="Click to view per-process breakdown" side="top">
-            <button
-              type="button"
-              disabled={!memory}
-              onClick={() => setBreakdownOpen(true)}
-              className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-            >
-              memory: {memory ? formatBytes(memory.bytes) : "–"}
-            </button>
-          </Tooltip>
+          {showMemory ? (
+            <>
+              <span className="text-fg-muted/50">|</span>
+              <Tooltip label="Click to view per-process breakdown" side="top">
+                <button
+                  type="button"
+                  disabled={!memory}
+                  onClick={() => setBreakdownOpen(true)}
+                  className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+                >
+                  memory: {memory ? formatBytes(memory.bytes) : "–"}
+                </button>
+              </Tooltip>
+            </>
+          ) : null}
         </span>
       </footer>
 
       <MemoryBreakdownModal
-        open={breakdownOpen && memory !== null}
+        open={showMemory && breakdownOpen && memory !== null}
         totalBytes={memory?.bytes ?? 0}
         processes={memory?.processes ?? []}
         onClose={() => setBreakdownOpen(false)}
