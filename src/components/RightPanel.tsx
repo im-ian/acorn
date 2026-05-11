@@ -665,7 +665,7 @@ function CommitsTab({
       <Panel id="commits-list" order={1} defaultSize={50} minSize={20}>
         <div
           ref={scrollRef}
-          className="h-full overflow-y-auto"
+          className="h-full overflow-x-hidden overflow-y-auto"
         >
         <div
           style={{ height: virtualizer.getTotalSize(), position: "relative" }}
@@ -723,8 +723,8 @@ function CommitsTab({
                           {c.short_sha}
                         </span>
                       </Tooltip>
-                      <Tooltip label={c.summary} side="top" multiline>
-                        <span className="truncate text-fg">{c.summary}</span>
+                      <Tooltip label={c.summary} side="top" multiline className="flex! min-w-0 flex-1">
+                        <span className="min-w-0 flex-1 truncate text-fg">{c.summary}</span>
                       </Tooltip>
                     </span>
                     <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
@@ -916,7 +916,7 @@ function StagedTab({
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
-        <ul className="h-full overflow-y-auto">
+        <ul className="h-full overflow-x-hidden overflow-y-auto">
           {files.map((f) => (
             <li
               key={f.path}
@@ -933,8 +933,8 @@ function StagedTab({
               <span className="w-24 shrink-0 truncate text-fg-muted">
                 {f.status}
               </span>
-              <Tooltip label={f.path} side="top" multiline>
-                <span className="truncate text-fg">{f.path}</span>
+              <Tooltip label={f.path} side="top" multiline className="flex! min-w-0 flex-1">
+                <span className="min-w-0 flex-1 truncate text-fg">{f.path}</span>
               </Tooltip>
             </li>
           ))}
@@ -1127,7 +1127,7 @@ function PullRequestsTab({
           className="ml-auto"
         />
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto">
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
         ) : !listing ? (
@@ -1163,8 +1163,8 @@ function PullRequestsTab({
                     #{pr.number}
                   </span>
                   <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
-                  <Tooltip label={pr.title} side="top" multiline>
-                    <span className="truncate text-fg">{pr.title}</span>
+                  <Tooltip label={pr.title} side="top" multiline className="flex! min-w-0 flex-1">
+                    <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
                   </Tooltip>
                 </span>
                 <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">

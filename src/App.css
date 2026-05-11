@@ -20,17 +20,13 @@
   background-color: transparent !important;
 }
 
-.acorn-terminal .xterm-viewport::-webkit-scrollbar {
-  width: 8px;
+.acorn-terminal .xterm-scrollable-element > .scrollbar.vertical {
+  width: 6px !important;
 }
 
-.acorn-terminal .xterm-viewport::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.08);
+.acorn-terminal .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  width: 6px !important;
   border-radius: 4px;
-}
-
-.acorn-terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.16);
 }
 
 * {
@@ -71,6 +67,10 @@ textarea,
 .acorn-terminal,
 .acorn-terminal * {
   cursor: text;
+}
+
+.acorn-terminal .xterm-viewport {
+  cursor: default;
 }
 
 .acorn-selectable {
