@@ -37,6 +37,28 @@ fn project_basename(repo_path: &std::path::Path) -> String {
         .to_string()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadStatus {
+    pub sessions_clean: bool,
+    pub projects_clean: bool,
+}
+
+/// Report whether boot-time persistence loads were clean. Frontend consults
+/// this once at startup to decide whether the empty-list reconcile path is
+/// safe (clean = true) or a likely sign of disk corruption (clean = false).
+#[tauri::command]
+pub fn load_status(state: State<'_, AppState>) -> LoadStatus {
+    LoadStatus {
+        sessions_clean: state
+            .sessions_loaded_cleanly
+            .load(std::sync::atomic::Ordering::SeqCst),
+        projects_clean: state
+            .projects_loaded_cleanly
+            .load(std::sync::atomic::Ordering::SeqCst),
+    }
+}
+
 #[tauri::command]
 pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
     state

@@ -71,7 +71,11 @@ function App() {
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
 
   useEffect(() => {
-    refreshAll();
+    // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
+    // first reconcile can run. If the backend reports sessions.json failed
+    // to load (corrupt/IO error), the guard prevents the empty session list
+    // from zeroing out the persisted layout.
+    void useAppStore.getState().loadInitialStatus().then(() => refreshAll());
   }, [refreshAll]);
 
   // Auto-update: check once on startup, then every 24h. Both calls are
