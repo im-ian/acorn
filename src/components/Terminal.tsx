@@ -327,7 +327,13 @@ export function Terminal({
         case "insertReplacementText": {
           // In-syllable replacement; trailing char being recomposed.
           // Don't commit; show preview of trailing.
-          if (ta) showComposing(ta.value.slice(sentPrefix.length));
+          if (ta) {
+            // Stale sentPrefix detection: if textarea no longer starts
+            // with the prefix we tracked, a non-IME keystroke (Space,
+            // Ctrl+C, …) reset the textarea between compositions.
+            if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
+            showComposing(ta.value.slice(sentPrefix.length));
+          }
           ev.stopImmediatePropagation();
           return;
         }
@@ -352,6 +358,14 @@ export function Terminal({
           if (!ta) return;
           const value = ta.value;
           const newCharLen = ev.data?.length ?? 0;
+          // Stale sentPrefix from a prior non-IME commit (e.g. Space
+          // committed "있 " then Ctrl+C cleared the line) leaves
+          // sentPrefix pointing past the start of this fresh composition.
+          // Detect mismatch and reset so slice() doesn't produce an
+          // empty preview, dropping the first jamo.
+          if (!value.startsWith(sentPrefix)) {
+            sentPrefix = value.slice(0, Math.max(0, value.length - newCharLen));
+          }
           const committedEnd = value.length - newCharLen;
           if (committedEnd > sentPrefix.length) {
             sendToPty(value.slice(sentPrefix.length, committedEnd));
@@ -387,6 +401,25 @@ export function Terminal({
       // and treating those as terminators flushes mid-syllable —
       // dropping the second jamo of double consonants like ㅆ in `있`.
       if (ev.keyCode === 229) {
+        const ta229 = container.querySelector<HTMLTextAreaElement>(
+          ".xterm-helper-textarea",
+        );
+        const hasComposition = !!ta229?.value;
+        // Backspace inside active IME composition is internal IME
+        // editing — the `input` event already updated the preview
+        // (e.g. "있" → "이"). Don't flush, don't let xterm emit \x7f,
+        // or the committed "이" would race with the backspace and
+        // leave the line in a broken state.
+        //
+        // Backspace WITHOUT composition (Korean input mode but nothing
+        // being composed) must behave like a normal backspace and
+        // reach the PTY, so it's left in TERMINATOR_KEYS below.
+        if (ev.key === "Backspace" && hasComposition) {
+          if (ta229) showComposing(ta229.value.slice(sentPrefix.length));
+          lastKeyCode229 = true;
+          ev.stopImmediatePropagation();
+          return;
+        }
         const TERMINATOR_KEYS = new Set([
           "Enter", "Tab", "Escape", "Backspace", " ", "Spacebar",
         ]);
@@ -399,6 +432,18 @@ export function Terminal({
         // Terminator under IME — treat as non-IME; the previous
         // syllable still needs flushing, which happens below because
         // `lastKeyCode229` remains true from the prior real IME keydown.
+      }
+      // Modifier-only keystrokes (Shift/Ctrl/Alt/Meta) are part of a
+      // chord, not a real key. They must NOT flush mid-composition or
+      // clear `lastKeyCode229` — Korean 2-set IME emits Shift before
+      // the second jamo of double consonants like ㅆ, and flushing here
+      // would commit the prior syllable (e.g. "이") before ㅆ has a
+      // chance to combine into "있".
+      const MODIFIER_KEYS = new Set([
+        "Shift", "Control", "Alt", "Meta", "CapsLock",
+      ]);
+      if (MODIFIER_KEYS.has(ev.key)) {
+        return;
       }
       // Non-IME key. If we just left IME mode (last keydown was 229),
       // flush whatever Korean syllable is mid-composition so it lands in
