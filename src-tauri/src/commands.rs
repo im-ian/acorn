@@ -655,16 +655,21 @@ pub async fn detect_session_statuses(
     state: State<'_, AppState>,
     ids: Vec<String>,
 ) -> AppResult<Vec<SessionStatusEntry>> {
-    // One process-table snapshot covers every session in this poll; cwd
-    // refresh isn't needed here (we only walk parent→child edges to ask
-    // "does this PTY tree have any descendant?").
+    // One process-table snapshot covers every session in this poll. cwd is
+    // refreshed because the live PTY descendant cwd drives branch detection
+    // — a non-isolated session whose terminal `cd`'d into a git worktree
+    // (or whose Claude Code invocation used `-w` to spawn one) has a HEAD
+    // distinct from the recorded `worktree_path` (which is the project
+    // root). Without this, the StatusBar/Sidebar branch stays pinned to the
+    // project root's branch regardless of `git checkout` performed inside
+    // the PTY.
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::new()),
     );
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::new(),
+        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
     );
     let children = build_children_map(&sys);
 
@@ -688,9 +693,20 @@ pub async fn detect_session_statuses(
             });
             let status =
                 session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
-            let branch = session
-                .as_ref()
-                .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
+            // Branch source priority:
+            //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
+            //     performed inside the terminal (and `claude -w` worktrees)
+            //  2. recorded session worktree_path — fallback when no live PTY
+            //     or descendant cwd lies outside any git repo
+            let live_cwd_branch = parsed_id
+                .and_then(|uuid| state.pty.child_pid(&uuid))
+                .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
+                .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
+            let branch = live_cwd_branch.or_else(|| {
+                session
+                    .as_ref()
+                    .and_then(|s| worktree::current_branch(&s.worktree_path).ok())
+            });
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
