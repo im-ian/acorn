@@ -5,7 +5,9 @@ import {
   ExternalLink,
   FileDiff,
   GitCommit,
+  GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
   Globe,
   ListTodo,
   Maximize2,
@@ -26,14 +28,17 @@ import type {
   DiffPayload,
   PrStateFilter,
   PullRequestChecksSummary,
+  PullRequestDetail,
   PullRequestInfo,
   PullRequestListing,
   StagedFile,
   TodoItem,
 } from "../lib/types";
+import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
+import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
@@ -1030,6 +1035,17 @@ function PullRequestsTab({
     y: number;
     pr: PullRequestInfo;
   } | null>(null);
+  const [mergeFor, setMergeFor] = useState<{
+    number: number;
+    detail: PullRequestDetail;
+  } | null>(null);
+  const [closeFor, setCloseFor] = useState<{
+    number: number;
+    detail: PullRequestDetail;
+  } | null>(null);
+  // Bumped on every detail fetch / dialog dismiss so stale getPullRequestDetail
+  // responses can't open a dialog after the user moved on.
+  const dialogEpochRef = useRef(0);
   const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
 
   const fetchPrs = useCallback(
@@ -1100,6 +1116,38 @@ function PullRequestsTab({
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  async function loadDetailFor(pr: PullRequestInfo): Promise<PullRequestDetail | null> {
+    const epoch = ++dialogEpochRef.current;
+    try {
+      const listing = await api.getPullRequestDetail(repoPath, pr.number);
+      if (epoch !== dialogEpochRef.current) return null;
+      if (listing.kind !== "ok") {
+        setError(
+          listing.kind === "not_github"
+            ? "Origin remote is not a GitHub repository."
+            : `No access to ${listing.slug}.`,
+        );
+        return null;
+      }
+      return listing.detail;
+    } catch (e) {
+      if (epoch === dialogEpochRef.current) setError(String(e));
+      return null;
+    }
+  }
+
+  async function openMergeFor(pr: PullRequestInfo) {
+    const detail = await loadDetailFor(pr);
+    if (!detail) return;
+    setMergeFor({ number: pr.number, detail });
+  }
+
+  async function openCloseFor(pr: PullRequestInfo) {
+    const detail = await loadDetailFor(pr);
+    if (!detail) return;
+    setCloseFor({ number: pr.number, detail });
   }
 
   return (
@@ -1236,10 +1284,55 @@ function PullRequestsTab({
                     void copyText(menu.pr.head_branch);
                   },
                 },
+                { type: "separator" },
+                {
+                  label: "Merge…",
+                  icon: <GitMerge size={12} />,
+                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
+                  onClick: () => {
+                    void openMergeFor(menu.pr);
+                  },
+                },
+                {
+                  label: "Close…",
+                  icon: <GitPullRequestClosed size={12} />,
+                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
+                  onClick: () => {
+                    void openCloseFor(menu.pr);
+                  },
+                },
               ] satisfies ContextMenuItem[])
             : []
         }
         onClose={() => setMenu(null)}
+      />
+      <MergePullRequestDialog
+        open={mergeFor !== null}
+        repoPath={repoPath}
+        detail={mergeFor?.detail ?? null}
+        onClose={() => {
+          dialogEpochRef.current += 1;
+          setMergeFor(null);
+        }}
+        onMerged={() => {
+          dialogEpochRef.current += 1;
+          setMergeFor(null);
+          void fetchPrs();
+        }}
+      />
+      <ClosePullRequestDialog
+        open={closeFor !== null}
+        repoPath={repoPath}
+        detail={closeFor?.detail ?? null}
+        onClose={() => {
+          dialogEpochRef.current += 1;
+          setCloseFor(null);
+        }}
+        onClosed={() => {
+          dialogEpochRef.current += 1;
+          setCloseFor(null);
+          void fetchPrs();
+        }}
       />
     </div>
   );
