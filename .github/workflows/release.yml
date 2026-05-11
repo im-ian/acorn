@@ -67,6 +67,28 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
 
+      # Probe the GHA cache backend before trusting sccache. When the
+      # Azure Edge layer behind `artifactcache.actions.githubusercontent.com`
+      # has a regional incident (seen 2026-05-11), sccache exits 2 on its
+      # very first `rustc -vV` probe and aborts the whole build. Run that
+      # probe ourselves with `continue-on-error: true` so a backend outage
+      # leaves the build slower (no cache) but still successful instead of
+      # red.
+      - name: Probe sccache GHA backend
+        id: sccache_probe
+        continue-on-error: true
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          sccache --start-server
+          echo "ok=1" >> "$GITHUB_OUTPUT"
+
+      - name: Enable sccache for this job
+        if: steps.sccache_probe.outputs.ok == '1'
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
       - name: Install JS deps
         run: bun install --frozen-lockfile
 
@@ -74,11 +96,10 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # sccache wiring. CARGO_INCREMENTAL must be off — incremental
-          # compilation is incompatible with sccache and silently
-          # disables caching.
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
+          # CARGO_INCREMENTAL must be off — incremental compilation is
+          # incompatible with sccache and silently disables caching.
+          # RUSTC_WRAPPER / SCCACHE_GHA_ENABLED are set above when the
+          # GHA cache backend is reachable (see "Probe sccache GHA backend").
           CARGO_INCREMENTAL: "0"
         # `--profile release-ci` swaps fat LTO + codegen-units=1 for
         # thin LTO + codegen-units=16 (defined in src-tauri/Cargo.toml).
