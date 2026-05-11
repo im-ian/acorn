@@ -352,14 +352,17 @@ export const useAppStore = create<AppStateModel>()(
     if (ids.length === 0) return;
     try {
       const updates = await api.detectSessionStatuses(ids);
-      const map = new Map(updates.map((u) => [u.id, u.status]));
+      const map = new Map(updates.map((u) => [u.id, u]));
       set((s) => {
         let changed = false;
         const nextSessions = s.sessions.map((sess) => {
-          const next = map.get(sess.id);
-          if (next && next !== sess.status) {
+          const update = map.get(sess.id);
+          if (!update) return sess;
+          const nextStatus = update.status;
+          const nextBranch = update.branch ?? sess.branch;
+          if (nextStatus !== sess.status || nextBranch !== sess.branch) {
             changed = true;
-            return { ...sess, status: next };
+            return { ...sess, status: nextStatus, branch: nextBranch };
           }
           return sess;
         });
