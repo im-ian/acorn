@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
 import { useSettings } from "./lib/settings";
 import type { Project, Session, SessionKind } from "./lib/types";
+import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
 import {
   type Direction,
   type LayoutNode,
@@ -17,13 +18,6 @@ import {
 type RightTab = "todos" | "commits" | "staged" | "prs";
 
 const ROOT_PANE_ID: PaneId = "root";
-
-/**
- * localStorage key gating the one-time control-session guide modal. Versioned
- * so we can re-surface it after a substantive change to the control-session
- * UX without colliding with the previous dismissed state.
- */
-const CONTROL_GUIDE_DISMISSED_KEY = "acorn:control-guide-dismissed-v1";
 
 export interface PaneState {
   id: PaneId;
