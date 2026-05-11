@@ -1,38 +1,58 @@
 import {
   isPermissionGranted,
+  onAction,
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { useSettings } from "./settings";
 import type { Session, SessionStatus } from "./types";
 
-const NOTIFY_LABEL: Record<SessionStatus, string> = {
-  idle: "is idle",
-  running: "is running",
-  needs_input: "needs your input",
-  failed: "failed",
-  completed: "completed",
+// Notification body copy keyed by the status the session transitioned *into*.
+// The watcher only fires on transitions to `needs_input` / `failed` /
+// `completed`, so `idle` / `running` entries are placeholders that never get
+// surfaced — kept to keep the record exhaustive.
+const STATUS_SENTENCE: Record<SessionStatus, string> = {
+  idle: "Session is idle.",
+  running: "Session is running.",
+  needs_input: "Awaiting your next input.",
+  failed: "Session failed.",
+  completed: "Session complete.",
 };
 
-let permissionPromise: Promise<boolean> | null = null;
+// Cached OS permission result for the steady-state notification path. Reused
+// across session-status transitions so we don't pay the IPC round-trip on
+// every fire. `null` means "never checked"; subsequent transitions skip the
+// check once it has resolved. The test-notification path deliberately bypasses
+// this and refreshes the cache so a stale value (e.g. user toggled permission
+// in System Settings since boot) gets corrected the moment the user asks
+// "does this actually work?".
+let cachedPermission: boolean | null = null;
+
+async function checkPermission(): Promise<boolean> {
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) {
+      const result = await requestPermission();
+      granted = result === "granted";
+    }
+    return granted;
+  } catch (err) {
+    console.error("[notifications] permission check failed", err);
+    return false;
+  }
+}
 
 async function ensurePermission(): Promise<boolean> {
-  if (permissionPromise) return permissionPromise;
-  permissionPromise = (async () => {
-    try {
-      let granted = await isPermissionGranted();
-      if (!granted) {
-        const result = await requestPermission();
-        granted = result === "granted";
-      }
-      return granted;
-    } catch (err) {
-      console.error("[notifications] permission check failed", err);
-      return false;
-    }
-  })();
-  return permissionPromise;
+  if (cachedPermission !== null) return cachedPermission;
+  cachedPermission = await checkPermission();
+  return cachedPermission;
+}
+
+async function refreshPermission(): Promise<boolean> {
+  cachedPermission = await checkPermission();
+  return cachedPermission;
 }
 
 function shouldNotifyTransition(prev: SessionStatus, next: SessionStatus): {
@@ -74,7 +94,7 @@ export function startSessionNotificationWatcher(): () => void {
       if (prev === undefined) continue;
       const { notify, key } = shouldNotifyTransition(prev, s.status);
       if (!notify || !key || !settings.events[key]) continue;
-      void fire(s);
+      void fire(s, s.status);
     }
 
     // Drop entries for sessions that no longer exist so the map stays bounded.
@@ -85,17 +105,60 @@ export function startSessionNotificationWatcher(): () => void {
   });
 }
 
-async function fire(session: Session): Promise<void> {
+function projectNameFor(session: Session): string {
+  const projects = useAppStore.getState().projects;
+  const match = projects.find((p) => p.repo_path === session.repo_path);
+  if (match) return match.name;
+  return session.repo_path.split("/").pop() || session.repo_path;
+}
+
+async function fire(
+  session: Session,
+  next: SessionStatus,
+): Promise<void> {
   const ok = await ensurePermission();
   if (!ok) return;
   try {
     sendNotification({
-      title: `Acorn — ${session.name}`,
-      body: NOTIFY_LABEL[session.status],
+      title: `${projectNameFor(session)} — ${session.name}`,
+      body: STATUS_SENTENCE[next],
+      extra: { sessionId: session.id },
     });
   } catch (err) {
     console.error("[notifications] sendNotification failed", err);
   }
+}
+
+/**
+ * Registers a listener that fires when the user clicks a session-status
+ * notification we sent. Each notification carries the originating session id
+ * in its `extra` payload so the handler can route focus directly to that
+ * session — bringing the app window forward, switching workspaces if the
+ * session lives in a different project, and selecting the tab.
+ *
+ * Returns a cleanup function. Designed to run once at app boot. The Tauri
+ * plugin only delivers click events while a listener is attached, so the
+ * caller must keep this registration alive for the lifetime of the app.
+ */
+export async function startNotificationClickHandler(): Promise<() => void> {
+  let disposed = false;
+  const listener = await onAction((notification) => {
+    if (disposed) return;
+    const sessionId =
+      typeof notification.extra?.sessionId === "string"
+        ? notification.extra.sessionId
+        : null;
+    if (!sessionId) return;
+    const win = getCurrentWindow();
+    void win.show();
+    void win.unminimize();
+    void win.setFocus();
+    useAppStore.getState().selectSession(sessionId);
+  });
+  return () => {
+    disposed = true;
+    listener.unregister();
+  };
 }
 
 /**
@@ -109,7 +172,7 @@ async function fire(session: Session): Promise<void> {
  * - `"error"` — `sendNotification` threw; details are logged to the console
  */
 export async function sendTestNotification(): Promise<"sent" | "denied" | "error"> {
-  const ok = await ensurePermission();
+  const ok = await refreshPermission();
   if (!ok) return "denied";
   try {
     sendNotification({
