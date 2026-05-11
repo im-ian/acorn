@@ -5,6 +5,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
@@ -116,7 +117,15 @@ export function Terminal({
     });
 
     const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
+    // Hand link clicks to the OS so URLs open in the user's default browser
+    // instead of trying to navigate the Tauri WebView (which is gated by the
+    // app's CSP and would either fail or replace the app shell).
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      event.preventDefault();
+      void openUrl(uri).catch((err: unknown) => {
+        console.error("failed to open terminal link", uri, err);
+      });
+    });
     const serializeAddon = new SerializeAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
