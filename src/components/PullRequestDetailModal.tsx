@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDownNarrowWide,
+  ArrowUpNarrowWide,
   Check,
   CheckCircle2,
   Circle,
@@ -27,6 +29,7 @@ import type {
   PullRequestReview,
 } from "../lib/types";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
@@ -133,11 +136,12 @@ export function PullRequestDetailModal({
             <div className="p-4 text-xs text-danger">{error}</div>
           </ModalShell>
         ) : !listing ? (
-          <ModalShell title={`#${open.number}`} onClose={onClose}>
-            <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-              Loading PR…
-            </div>
-          </ModalShell>
+          <DetailSkeleton
+            number={open.number}
+            onClose={onClose}
+            onRefresh={handleRefresh}
+            refreshing={refreshing}
+          />
         ) : listing.kind === "not_github" ? (
           <ModalShell title={`#${open.number}`} onClose={onClose}>
             <div className="p-4 text-xs text-fg-muted">
@@ -265,7 +269,11 @@ function DetailBody({
             </h3>
           </div>
           <p className="mt-1 truncate text-[11px] text-fg-muted">
-            <span className="font-mono">{detail.author}</span>
+            <AuthorTag
+              login={detail.author}
+              size={16}
+              nameClass="text-[11px] text-fg-muted"
+            />
             <span className="opacity-50"> · </span>
             <span className="font-mono">
               {detail.head_branch} → {detail.base_branch}
@@ -380,6 +388,139 @@ function DetailBody({
         ) : (
           <DiffSplitView payload={detail.diff} cwd={cwd} />
         )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * Loading placeholder that mirrors `DetailBody`'s layout — header line,
+ * meta line, body block, tab nav, and a stack of comment cards — so the
+ * modal doesn't reflow when real data lands. Refresh + close stay live
+ * during the fetch.
+ */
+function DetailSkeleton({
+  number,
+  onClose,
+  onRefresh,
+  refreshing,
+}: {
+  number: number;
+  onClose: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+}) {
+  return (
+    <>
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="h-3.5 w-3.5 shrink-0 animate-pulse rounded-full bg-fg-muted/20" />
+            <span className="font-mono text-xs text-fg-muted">#{number}</span>
+            <span className="h-3.5 w-[55%] animate-pulse rounded bg-fg-muted/15" />
+          </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-40 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-14 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </header>
+
+      <div
+        className="shrink-0 overflow-hidden border-b border-border bg-bg-sidebar/40 px-4 py-3"
+        style={{ height: BODY_HEIGHT_DEFAULT }}
+      >
+        <div className="flex flex-col gap-2">
+          <span className="h-3 w-[85%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[72%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[40%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="mt-2 h-3 w-[60%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[78%] animate-pulse rounded bg-fg-muted/10" />
+          <span className="h-3 w-[35%] animate-pulse rounded bg-fg-muted/10" />
+        </div>
+      </div>
+      <div
+        aria-hidden
+        className="h-1.5 shrink-0 border-b border-border bg-bg-sidebar/40"
+      />
+
+      <nav className="flex shrink-0 border-b border-border">
+        {[
+          { icon: <MessagesSquare size={13} />, w: "w-20" },
+          { icon: <CheckCircle2 size={13} />, w: "w-12" },
+          { icon: <GitPullRequest size={13} />, w: "w-10" },
+        ].map((tab, i) => (
+          <div
+            key={i}
+            className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs text-fg-muted/60"
+          >
+            {tab.icon}
+            <span
+              className={cn("h-2.5 animate-pulse rounded bg-fg-muted/15", tab.w)}
+            />
+          </div>
+        ))}
+      </nav>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
+          <div className="flex items-center gap-1 px-1.5 py-0.5">
+            <span className="h-3 w-3 shrink-0 animate-pulse rounded-sm bg-fg-muted/15" />
+            <span className="h-2.5 w-16 animate-pulse rounded bg-fg-muted/15" />
+          </div>
+        </div>
+        <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+          {[
+            { titleW: "w-24", bodyWidths: ["95%", "82%", "60%"] },
+            { titleW: "w-32", bodyWidths: ["70%", "45%"] },
+            { titleW: "w-20", bodyWidths: ["88%", "76%", "52%", "30%"] },
+          ].map((row, i) => (
+            <li
+              key={i}
+              className="rounded border border-border bg-bg-sidebar/40 p-3"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <span className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
+                <span
+                  className={cn(
+                    "h-3 animate-pulse rounded bg-fg-muted/15",
+                    row.titleW,
+                  )}
+                />
+                <span className="h-2.5 w-14 animate-pulse rounded bg-fg-muted/10" />
+                <span className="h-2.5 w-20 animate-pulse rounded bg-fg-muted/10" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {row.bodyWidths.map((w, j) => (
+                  <span
+                    key={j}
+                    className="h-3 animate-pulse rounded bg-fg-muted/10"
+                    style={{ width: w }}
+                  />
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
     </>
   );
@@ -610,6 +751,20 @@ function PrStateGlyph({
   return <GitPullRequest size={14} className="text-emerald-400" />;
 }
 
+type ConversationSort = "oldest" | "newest";
+
+const CONVERSATION_SORT_STORAGE_KEY = "acorn:pr-conversation-sort";
+
+function readStoredSort(): ConversationSort {
+  if (typeof window === "undefined") return "oldest";
+  try {
+    const raw = window.localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY);
+    return raw === "newest" ? "newest" : "oldest";
+  } catch {
+    return "oldest";
+  }
+}
+
 function ConversationPane({
   comments,
   reviews,
@@ -617,50 +772,106 @@ function ConversationPane({
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
 }) {
+  const [sort, setSort] = useState<ConversationSort>(() => readStoredSort());
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CONVERSATION_SORT_STORAGE_KEY, sort);
+    } catch {
+      // non-persistent preference is fine
+    }
+  }, [sort]);
+
   // Merge into a single chronological timeline. Keep `kind` along for the
   // ride so we can render reviews with their verdict badge.
   type Entry =
     | { kind: "comment"; ts: string; comment: PullRequestComment }
     | { kind: "review"; ts: string; review: PullRequestReview };
-  const entries: Entry[] = [
-    ...comments.map<Entry>((c) => ({
-      kind: "comment",
-      ts: c.created_at,
-      comment: c,
-    })),
-    ...reviews.map<Entry>((r) => ({
-      kind: "review",
-      ts: r.submitted_at,
-      review: r,
-    })),
-  ].sort((a, b) => a.ts.localeCompare(b.ts));
+  const entries: Entry[] = useMemo(() => {
+    const merged: Entry[] = [
+      ...comments.map<Entry>((c) => ({
+        kind: "comment",
+        ts: c.created_at,
+        comment: c,
+      })),
+      ...reviews.map<Entry>((r) => ({
+        kind: "review",
+        ts: r.submitted_at,
+        review: r,
+      })),
+    ];
+    merged.sort((a, b) =>
+      sort === "newest" ? b.ts.localeCompare(a.ts) : a.ts.localeCompare(b.ts),
+    );
+    return merged;
+  }, [comments, reviews, sort]);
+
+  const toolbar = (
+    <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
+      <SortToggle value={sort} onChange={setSort} />
+    </div>
+  );
 
   if (entries.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        No comments or reviews yet.
+      <div className="flex h-full flex-col">
+        {toolbar}
+        <div className="flex flex-1 items-center justify-center text-xs text-fg-muted">
+          No comments or reviews yet.
+        </div>
       </div>
     );
   }
 
   return (
-    <ul className="flex h-full flex-col gap-3 overflow-y-auto px-4 py-3">
-      {entries.map((entry, i) =>
-        entry.kind === "comment" ? (
-          <CommentBlock key={`c-${i}`} comment={entry.comment} />
-        ) : (
-          <ReviewBlock key={`r-${i}`} review={entry.review} />
-        ),
-      )}
-    </ul>
+    <div className="flex h-full flex-col">
+      {toolbar}
+      <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        {entries.map((entry, i) =>
+          entry.kind === "comment" ? (
+            <CommentBlock key={`c-${i}`} comment={entry.comment} />
+          ) : (
+            <ReviewBlock key={`r-${i}`} review={entry.review} />
+          ),
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function SortToggle({
+  value,
+  onChange,
+}: {
+  value: ConversationSort;
+  onChange: (next: ConversationSort) => void;
+}) {
+  const isOldest = value === "oldest";
+  const label = isOldest ? "Oldest first" : "Newest first";
+  const Icon = isOldest ? ArrowDownNarrowWide : ArrowUpNarrowWide;
+  return (
+    <Tooltip label="Toggle sort order" side="bottom">
+      <button
+        type="button"
+        onClick={() => onChange(isOldest ? "newest" : "oldest")}
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+      >
+        <Icon size={12} />
+        {label}
+      </button>
+    </Tooltip>
   );
 }
 
 function CommentBlock({ comment }: { comment: PullRequestComment }) {
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-muted">
-        <span className="font-mono text-fg">{comment.author}</span>
+      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
+        <AuthorTag
+          login={comment.author}
+          size={28}
+          nameClass="text-[12.5px] font-semibold tracking-tight"
+        />
         <span className="opacity-60">commented</span>
         <span className="font-mono opacity-60">
           {formatTimestamp(comment.created_at)}
@@ -680,8 +891,12 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
 function ReviewBlock({ review }: { review: PullRequestReview }) {
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-muted">
-        <span className="font-mono text-fg">{review.author}</span>
+      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
+        <AuthorTag
+          login={review.author}
+          size={28}
+          nameClass="text-[12.5px] font-semibold tracking-tight"
+        />
         <ReviewStateBadge state={review.state} />
         <span className="font-mono opacity-60">
           {formatTimestamp(review.submitted_at)}
@@ -697,6 +912,100 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * Inline 18px GitHub avatar. Uses the public `github.com/{login}.png`
+ * endpoint — no API token needed and it works for `[bot]` accounts when
+ * the `[bot]` suffix is stripped. Falls back invisibly via `alt=""` on
+ * load failure so the timeline stays clean.
+ */
+function AuthorAvatar({
+  login,
+  size = 24,
+  className,
+}: {
+  login: string;
+  size?: number;
+  className?: string;
+}) {
+  const slug = login.replace(/\[bot\]$/, "");
+  if (!slug) return null;
+  const pixelSize = Math.max(40, size * 2);
+  return (
+    <img
+      src={`https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`}
+      alt=""
+      title={login}
+      width={size}
+      height={size}
+      loading="lazy"
+      style={{ width: size, height: size }}
+      className={cn(
+        "shrink-0 rounded-full bg-bg-elevated align-middle",
+        className,
+      )}
+    />
+  );
+}
+
+/**
+ * Avatar + login pair with a right-click context menu offering "Open
+ * GitHub profile". Used in the modal header and in each conversation
+ * block. Strips the `[bot]` suffix when building the profile URL so it
+ * resolves for bot accounts like `dependabot[bot]`.
+ */
+function AuthorTag({
+  login,
+  size = 24,
+  nameClass,
+  avatarOnly = false,
+}: {
+  login: string;
+  size?: number;
+  nameClass?: string;
+  /** When true, render only the avatar (no inline username text). */
+  avatarOnly?: boolean;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const slug = login.replace(/\[bot\]$/, "");
+  const profileUrl = slug ? `https://github.com/${slug}` : null;
+
+  const items: ContextMenuItem[] = profileUrl
+    ? [
+        {
+          label: "Open GitHub profile",
+          icon: <ExternalLink size={12} />,
+          onClick: () => void openUrl(profileUrl),
+        },
+      ]
+    : [];
+
+  return (
+    <>
+      <span
+        onContextMenu={(e) => {
+          if (!profileUrl) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        className="inline-flex shrink-0 items-center gap-1.5 align-middle"
+      >
+        <AuthorAvatar login={login} size={size} />
+        {avatarOnly ? null : (
+          <span className={cn("font-mono text-fg", nameClass)}>{login}</span>
+        )}
+      </span>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={items}
+        onClose={() => setMenu(null)}
+      />
+    </>
   );
 }
 

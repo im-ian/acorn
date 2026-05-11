@@ -24,6 +24,10 @@ export function useDialogShortcuts(
     if (!open) return;
 
     function onKey(e: KeyboardEvent) {
+      // A higher overlay (e.g. ImageLightbox) is on top — let it own the
+      // keyboard shortcuts until it dismisses.
+      if (document.body.dataset.acornImagePreviewOpen === "1") return;
+
       if (e.key === "Escape") {
         if (!onCancel) return;
         e.preventDefault();
