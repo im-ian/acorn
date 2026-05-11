@@ -481,8 +481,14 @@ function DetailSkeleton({
         ))}
       </nav>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <ul className="flex h-full flex-col gap-3 overflow-y-auto px-4 py-3">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
+          <div className="flex items-center gap-1 px-1.5 py-0.5">
+            <span className="h-3 w-3 shrink-0 animate-pulse rounded-sm bg-fg-muted/15" />
+            <span className="h-2.5 w-16 animate-pulse rounded bg-fg-muted/15" />
+          </div>
+        </div>
+        <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
           {[
             { titleW: "w-24", bodyWidths: ["95%", "82%", "60%"] },
             { titleW: "w-32", bodyWidths: ["70%", "45%"] },
