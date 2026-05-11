@@ -20,6 +20,79 @@ use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
 
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct AcornIpcStatus {
+    /// Filesystem path to the `acorn-ipc` binary that ships next to the
+    /// running app. Empty when we couldn't resolve `current_exe` — should
+    /// never happen in a packaged build but is handled gracefully for dev.
+    pub bundled_path: String,
+    /// True when the bundled binary actually exists at `bundled_path`. False
+    /// in dev mode before `cargo build --bin acorn-ipc` has run.
+    pub bundled_exists: bool,
+    /// Canonical Unix-socket path used by the IPC server.
+    pub socket_path: String,
+    /// Common shim locations the user might have installed to. Each entry
+    /// includes whether the file is present so the Settings UI can show a
+    /// "Installed" / "Not installed" badge without round-tripping back to
+    /// the backend on every render.
+    pub shim_paths: Vec<AcornIpcShim>,
+}
+
+#[derive(Serialize)]
+pub struct AcornIpcShim {
+    pub path: String,
+    pub exists: bool,
+}
+
+/// Inspect the runtime environment for the `acorn-ipc` CLI: where the
+/// app-bundled binary lives, whether it exists yet, and whether the user
+/// has already installed a shim into one of the standard `$PATH` locations.
+/// Used by the Sessions tab's "Control sessions" section to render an
+/// install hint with a copyable shell command.
+#[tauri::command]
+pub fn get_acorn_ipc_status() -> AcornIpcStatus {
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("acorn-ipc")));
+    let bundled_path = bundled
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let bundled_exists = bundled.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let socket_path = crate::ipc::socket_path::resolve().unwrap_or_default();
+    let shim_paths = standard_shim_paths()
+        .into_iter()
+        .map(|p| AcornIpcShim {
+            exists: p.exists(),
+            path: p.display().to_string(),
+        })
+        .collect();
+    AcornIpcStatus {
+        bundled_path,
+        bundled_exists,
+        socket_path: socket_path.display().to_string(),
+        shim_paths,
+    }
+}
+
+/// Locations a user might symlink the CLI into, in priority order. The
+/// first one that exists is the canonical install for this user. Kept
+/// macOS/Linux-only because the IPC server is Unix-socket based — Windows
+/// is not supported yet.
+fn standard_shim_paths() -> Vec<PathBuf> {
+    let mut out = vec![
+        PathBuf::from("/usr/local/bin/acorn-ipc"),
+        PathBuf::from("/opt/homebrew/bin/acorn-ipc"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        out.push(PathBuf::from(&home).join(".local/bin/acorn-ipc"));
+        out.push(PathBuf::from(&home).join("bin/acorn-ipc"));
+    }
+    out
+}
+
 fn persist(state: &AppState) {
     if let Err(e) = persistence::save_sessions(&state.sessions.list()) {
         tracing::warn!("failed to persist sessions: {e}");

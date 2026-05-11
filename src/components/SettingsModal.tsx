@@ -305,7 +305,138 @@ function SessionSettings() {
           Auto-close on exit
         </label>
       </Field>
+      <ControlSessionInstallSection />
     </section>
+  );
+}
+
+function ControlSessionInstallSection() {
+  const [status, setStatus] = useState<
+    import("../lib/types").AcornIpcStatus | null
+  >(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await api.getAcornIpcStatus();
+      setStatus(next);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (error) {
+    return (
+      <Field
+        label="Control sessions (acorn-ipc CLI)"
+        hint="Could not query install status."
+      >
+        <p className="text-[11px] text-danger">{error}</p>
+      </Field>
+    );
+  }
+
+  if (!status) {
+    return (
+      <Field
+        label="Control sessions (acorn-ipc CLI)"
+        hint="Loading install status…"
+      >
+        <p className="text-[11px] text-fg-muted">…</p>
+      </Field>
+    );
+  }
+
+  const activeShim = status.shim_paths.find((s) => s.exists) ?? null;
+  const installTarget =
+    status.shim_paths[0]?.path ?? "/usr/local/bin/acorn-ipc";
+  const installCommand = status.bundled_path
+    ? `sudo ln -sf "${status.bundled_path}" "${installTarget}"`
+    : "";
+
+  async function copyInstallCommand() {
+    if (!installCommand) return;
+    try {
+      await navigator.clipboard.writeText(installCommand);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can fail in dev when the webview is unfocused. Fall back
+      // to leaving the command visible so the user can select it.
+    }
+  }
+
+  return (
+    <Field
+      label="Control sessions (acorn-ipc CLI)"
+      hint="Control sessions can dispatch commands to siblings via the acorn-ipc CLI. The CLI ships next to the app; symlink it into your $PATH to use it from any terminal."
+    >
+      <div className="space-y-2">
+        <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
+          <div className="flex items-center justify-between">
+            <span className="text-fg-muted">Bundled binary</span>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                status.bundled_exists
+                  ? "bg-accent/15 text-accent"
+                  : "bg-warning/15 text-warning",
+              )}
+            >
+              {status.bundled_exists ? "found" : "missing"}
+            </span>
+          </div>
+          <code className="mt-1 block truncate font-mono text-fg">
+            {status.bundled_path || "(unknown)"}
+          </code>
+        </div>
+        <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
+          <div className="flex items-center justify-between">
+            <span className="text-fg-muted">Installed shim</span>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                activeShim
+                  ? "bg-accent/15 text-accent"
+                  : "bg-bg-elevated text-fg-muted",
+              )}
+            >
+              {activeShim ? "installed" : "not installed"}
+            </span>
+          </div>
+          <code className="mt-1 block truncate font-mono text-fg">
+            {activeShim ? activeShim.path : installTarget}
+          </code>
+        </div>
+        {!activeShim && status.bundled_exists ? (
+          <div className="flex items-center gap-2">
+            <code className="flex-1 overflow-x-auto rounded-md border border-border bg-bg px-2 py-1 font-mono text-[11px] text-fg">
+              {installCommand}
+            </code>
+            <button
+              type="button"
+              onClick={() => void copyInstallCommand()}
+              className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90"
+            >
+              <TextSwap>{copied ? "Copied" : "Copy"}</TextSwap>
+            </button>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="text-[11px] text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+        >
+          Re-check
+        </button>
+      </div>
+    </Field>
   );
 }
 

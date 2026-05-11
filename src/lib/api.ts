@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AcornIpcStatus,
   CommitInfo,
   DiffPayload,
   GeneratedCommitMessage,
@@ -149,6 +150,15 @@ export const api = {
   },
   getMemoryUsage(): Promise<MemoryUsage> {
     return invoke<MemoryUsage>("get_memory_usage");
+  },
+  /**
+   * Inspect the runtime environment for the `acorn-ipc` CLI: bundled binary
+   * location and presence, the IPC socket path, and which of the common
+   * `$PATH` shim locations already have a copy/symlink installed. Used by
+   * the Sessions → Control sessions settings section.
+   */
+  getAcornIpcStatus(): Promise<AcornIpcStatus> {
+    return invoke<AcornIpcStatus>("get_acorn_ipc_status");
   },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });

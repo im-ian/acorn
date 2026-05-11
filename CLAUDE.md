@@ -36,6 +36,7 @@ Two recurring traps in E2E:
 ## Code conventions
 
 - **Custom window events use the `acorn:` prefix** (`acorn:new-session`, `acorn:add-project`, `acorn:terminal-clear`). When adding a global event, follow this convention so listener wiring stays greppable.
+- **Sessions have a `kind`** (`SessionKind`): `regular` or `control`. Control sessions get `ACORN_SESSION_ID` + `ACORN_IPC_SOCKET` injected into their PTY env and can drive siblings via the `acorn-ipc` CLI. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md). When touching session creation flow, preserve the kind through every path (api wrapper → Tauri command → `Session::new` → persistence).
 - **Keyboard shortcuts** are defined as `Hotkeys` constants in `src/lib/hotkeys.ts` and use `tinykeys` with `$mod` for the platform-primary modifier (Cmd on macOS, Ctrl elsewhere). Don't hardcode `Meta+` or `Control+` at call sites.
 - **Local persistence** (UI state like collapsed groups, dismissed update version) goes in `localStorage` under the `acorn:` key prefix. Don't reach for it from inside pure logic — keep it at the component / store edge.
 - **Logic stuck inside a component** that wants a unit test should be extracted to `src/lib/`. Don't try to test it through the rendered component. Example: `Sidebar.tsx`'s `buildProjectGroups` could move out if it grows.

@@ -205,6 +205,7 @@ pub fn run() {
             commands::read_session_todos,
             commands::detect_session_statuses,
             commands::get_memory_usage,
+            commands::get_acorn_ipc_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
