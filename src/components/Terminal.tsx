@@ -464,7 +464,7 @@ export function Terminal({
     // term.write); without this, the preview stays painted at the previous
     // cursor cell and visually appears one column to the left of the new
     // cursor until the user types again.
-    const renderDisposable = term.onRender(() => {
+    const repositionComposing = () => {
       if (!compositionView || !compositionView.classList.contains("active")) {
         return;
       }
@@ -475,7 +475,17 @@ export function Terminal({
       const cursorViewportY = buf.cursorY - buf.viewportY;
       compositionView.style.left = `${buf.cursorX * cell.width}px`;
       compositionView.style.top = `${cursorViewportY * cell.height}px`;
-    });
+    };
+    const renderDisposable = term.onRender(repositionComposing);
+    // PTY output that arrives while the user is mid-composition can scroll
+    // the viewport or move the prompt to a new row without producing an
+    // `onRender` event whose painted region overlaps the cursor cell — the
+    // overlay then stays pinned to the old screen coords and visually drifts
+    // away from the live prompt. `onScroll` fires on viewport shifts and
+    // `onCursorMove` fires when the shell redraws its prompt at a new row;
+    // both feed the same recompute so the overlay tracks the cursor.
+    const scrollDisposable = term.onScroll(repositionComposing);
+    const cursorMoveDisposable = term.onCursorMove(repositionComposing);
 
     // Custom event hook so a global hotkey (Cmd+K) can clear THIS terminal
     // without needing a cross-component ref registry. The dispatcher passes
@@ -842,6 +852,8 @@ export function Terminal({
       window.removeEventListener("acorn:terminal-clear", onClearRequested);
       inputDisposable.dispose();
       renderDisposable.dispose();
+      scrollDisposable.dispose();
+      cursorMoveDisposable.dispose();
       resizeDisposable.dispose();
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
