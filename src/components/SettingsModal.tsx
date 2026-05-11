@@ -1,9 +1,14 @@
-import { Download, RefreshCcw, Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { Download, RefreshCcw, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { sendTestNotification } from "../lib/notifications";
+import {
+  fetchLatestReleaseNotes,
+  fetchReleaseNotes,
+  type ReleaseNotes,
+} from "../lib/releases";
 import { useUpdater } from "../lib/updater-store";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
@@ -792,6 +797,21 @@ function formatRelative(ts: number | null): string {
   return `${Math.floor(diff / 86_400_000)} d ago`;
 }
 
+type WhatsNewSource =
+  | { kind: "update"; version: string; body: string; htmlUrl?: string }
+  | {
+      kind: "current";
+      version: string;
+      body: string;
+      htmlUrl: string;
+      /**
+       * True when the running version doesn't have its own public
+       * release and we're showing the latest published one as a
+       * fallback. Surfaces a subtitle hint in the modal.
+       */
+      isFallback: boolean;
+    };
+
 function AboutSettings() {
   const currentVersion = useUpdater((s) => s.currentVersion);
   const available = useUpdater((s) => s.available);
@@ -801,13 +821,68 @@ function AboutSettings() {
   const check = useUpdater((s) => s.check);
   const install = useUpdater((s) => s.install);
   const init = useUpdater((s) => s.init);
-  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewSource, setWhatsNewSource] = useState<WhatsNewSource | null>(
+    null,
+  );
+  const [currentNotes, setCurrentNotes] = useState<ReleaseNotes | null>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesError, setNotesError] = useState<string | null>(null);
 
   useEffect(() => {
     void init();
   }, [init]);
 
   const hasNotes = (available?.body?.trim().length ?? 0) > 0;
+
+  const openCurrentNotes = useCallback(async () => {
+    if (!currentVersion) return;
+    setNotesError(null);
+    // Cache: skip the fetch if we already have notes for this version.
+    if (currentNotes && currentNotes.version === currentVersion) {
+      setWhatsNewSource({
+        kind: "current",
+        version: currentNotes.version,
+        body: currentNotes.body,
+        htmlUrl: currentNotes.htmlUrl,
+        isFallback: false,
+      });
+      return;
+    }
+    setNotesLoading(true);
+    try {
+      const notes = await fetchReleaseNotes(currentVersion);
+      if (notes !== null) {
+        setCurrentNotes(notes);
+        setWhatsNewSource({
+          kind: "current",
+          version: notes.version,
+          body: notes.body,
+          htmlUrl: notes.htmlUrl,
+          isFallback: false,
+        });
+        return;
+      }
+      // The running version doesn't have its own public release (e.g. a
+      // private hotfix that was overwritten, a locally bumped dev build,
+      // or a pre-release tag). Fall back to the latest published release
+      // so the user still sees something meaningful instead of an empty
+      // placeholder.
+      const latest = await fetchLatestReleaseNotes();
+      setWhatsNewSource({
+        kind: "current",
+        version: latest.version,
+        body: latest.body,
+        htmlUrl: latest.htmlUrl,
+        isFallback: true,
+      });
+    } catch (err) {
+      setNotesError(
+        err instanceof Error ? err.message : "Failed to fetch release notes",
+      );
+    } finally {
+      setNotesLoading(false);
+    }
+  }, [currentVersion, currentNotes]);
 
   return (
     <section className="space-y-4">
@@ -843,10 +918,16 @@ function AboutSettings() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {hasNotes ? (
+              {hasNotes && available ? (
                 <button
                   type="button"
-                  onClick={() => setWhatsNewOpen(true)}
+                  onClick={() =>
+                    setWhatsNewSource({
+                      kind: "update",
+                      version: available.version,
+                      body: available.body ?? "",
+                    })
+                  }
                   className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
                 >
                   What&apos;s new
@@ -874,7 +955,28 @@ function AboutSettings() {
         </p>
       ) : null}
 
-      <div className="flex justify-end">
+      {notesError ? (
+        <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+          {notesError}
+        </p>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => void openCurrentNotes()}
+          disabled={!currentVersion || notesLoading}
+          className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
+        >
+          <Sparkles size={11} className={notesLoading ? "animate-pulse" : ""} />
+          <TextSwap>
+            {notesLoading
+              ? "Loading…"
+              : currentVersion
+                ? `What's new in ${currentVersion}`
+                : "What's new"}
+          </TextSwap>
+        </button>
         <button
           type="button"
           onClick={() => void check()}
@@ -887,8 +989,23 @@ function AboutSettings() {
       </div>
 
       <WhatsNewModal
-        open={whatsNewOpen}
-        onClose={() => setWhatsNewOpen(false)}
+        open={whatsNewSource !== null}
+        onClose={() => setWhatsNewSource(null)}
+        version={whatsNewSource?.version ?? ""}
+        body={whatsNewSource?.body ?? ""}
+        currentVersion={currentVersion}
+        showInstall={whatsNewSource?.kind === "update"}
+        busy={busy}
+        error={whatsNewSource?.kind === "update" ? error : null}
+        onInstall={
+          whatsNewSource?.kind === "update" ? () => void install() : undefined
+        }
+        htmlUrl={
+          whatsNewSource?.kind === "current" ? whatsNewSource.htmlUrl : undefined
+        }
+        isFallback={
+          whatsNewSource?.kind === "current" ? whatsNewSource.isFallback : false
+        }
       />
     </section>
   );
