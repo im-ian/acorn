@@ -83,7 +83,13 @@ jobs:
         # `--profile release-ci` swaps fat LTO + codegen-units=1 for
         # thin LTO + codegen-units=16 (defined in src-tauri/Cargo.toml).
         # Output lands in target/<arch>/release-ci/ instead of release/.
-        run: bun run tauri build --target ${{ matrix.target }} --profile release-ci --bundles app dmg updater
+        #
+        # @tauri-apps/cli 2.10+ removed the top-level `--profile` flag and
+        # the `updater` bundle value. Pass `--profile` to cargo via `--`,
+        # and rely on `bundle.createUpdaterArtifacts: true` in
+        # tauri.conf.json to emit the updater tarball alongside the app
+        # bundle automatically.
+        run: bun run tauri build --target ${{ matrix.target }} --bundles app dmg -- --profile release-ci
 
       - name: Stage release artifacts
         id: stage
