@@ -39,7 +39,17 @@ fn project_basename(repo_path: &std::path::Path) -> String {
 
 #[tauri::command]
 pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
-    state.sessions.list()
+    state
+        .sessions
+        .list()
+        .into_iter()
+        .map(|mut s| {
+            if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
+                s.branch = branch;
+            }
+            s
+        })
+        .collect()
 }
 
 static MEMORY_PROBE: Mutex<Option<System>> = Mutex::new(None);
@@ -162,7 +172,6 @@ pub async fn create_session(
         return Err(AppError::InvalidPath(repo_path));
     }
 
-    let branch = worktree::current_branch(&repo).unwrap_or_else(|_| "main".to_string());
     let isolated = isolated.unwrap_or(false);
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
@@ -171,6 +180,7 @@ pub async fn create_session(
     } else {
         repo.clone()
     };
+    let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let session = Session::new(
         name,
         repo.clone(),
@@ -610,6 +620,12 @@ pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Ve
 pub struct SessionStatusEntry {
     pub id: String,
     pub status: SessionStatus,
+    /// Current branch read live from the session's worktree on each poll.
+    /// `None` when the worktree has no readable HEAD (e.g. detached, or
+    /// path was deleted out from under acorn). Lets the frontend reflect
+    /// `git checkout` performed inside the session without requiring a
+    /// manual refresh.
+    pub branch: Option<String>,
 }
 
 #[tauri::command]
@@ -625,18 +641,22 @@ pub async fn detect_session_statuses(
             // happens to land on a run of meta-only lines (see
             // `session_status::detect` for the full rationale).
             let parsed_id = Uuid::parse_str(&id).ok();
-            let previous = parsed_id
-                .and_then(|uuid| state.sessions.get(&uuid).ok())
+            let session = parsed_id.and_then(|uuid| state.sessions.get(&uuid).ok());
+            let previous = session
+                .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
             let status = session_status::detect(&id, previous).unwrap_or(previous);
+            let branch = session
+                .as_ref()
+                .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
             if let Some(uuid) = parsed_id {
                 let _ = state.sessions.refresh_status(&uuid, status);
             }
-            SessionStatusEntry { id, status }
+            SessionStatusEntry { id, status, branch }
         })
         .collect())
 }
