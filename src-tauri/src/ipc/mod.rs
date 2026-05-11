@@ -5,6 +5,7 @@
 //! binary (`src/bin/acorn-ipc.rs`), so they intentionally avoid any
 //! Tauri- or runtime-specific types.
 
+pub mod primer;
 pub mod proto;
 pub mod server;
 pub mod socket_path;

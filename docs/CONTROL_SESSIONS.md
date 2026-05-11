@@ -30,6 +30,33 @@ A control session shows a small `Bot` accessory icon next to its name in the
 sidebar — that's the visual signal that this terminal can do more than a
 regular shell.
 
+## Agent priming
+
+The point of a control session is that the agent running inside it should
+be able to orchestrate siblings *immediately*, not only after a user has
+explained the protocol. Acorn ships that priming through three layers
+that fire automatically every time a control-session PTY spawns:
+
+1. **Env vars.** `ACORN_SESSION_ID` and `ACORN_IPC_SOCKET` are exported
+   into the PTY's environment.
+2. **Per-agent CLI flag.** For agents Acorn recognises, the spawn argv is
+   augmented so the primer lands in the agent's system prompt before its
+   first turn:
+   - **Claude Code** — `--append-system-prompt "<primer>"`
+   - **llm CLI** — `-s "<primer>"` (inserted after `chat` when present)
+   - **Codex / Gemini / Ollama / Custom** — no flag injected (those CLIs
+     don't have a stable inline-system-prompt convention); fall back to
+     layer 3.
+3. **Worktree marker file.** A `.acorn-control.md` is written to the
+   session's cwd on every spawn (overwritten each time so the substituted
+   session id is current). Agents that read project docs find it; humans
+   can `cat` it. Safe to commit-ignore.
+
+The primer text itself is generated server-side and lists every
+`acorn-ipc` subcommand with the current session id and socket path
+pre-substituted, so the agent can copy-paste examples without further
+work.
+
 ## The `acorn-ipc` CLI
 
 When Acorn spawns a control session it injects two env vars into the PTY:
@@ -165,3 +192,7 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
   literal bytes via `--data` or pre-encoded base64 via `--raw-base64`.
 - Audit logging is `tracing::info!`-level only; there is no on-disk audit
   file yet.
+- Inline agent priming only covers Claude Code and the `llm` CLI today.
+  Codex, Gemini, Ollama, and Custom commands rely on the
+  `.acorn-control.md` marker file. PRs welcome that wire each agent's
+  native flag.
