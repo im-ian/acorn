@@ -701,18 +701,17 @@ export const useAppStore = create<AppStateModel>()(
       // later change to `sessionStartup.mode` does not retroactively swap
       // how this session respawns after an app restart.
       const startupMode = useSettings.getState().settings.sessionStartup.mode;
-      await api.createSession(name, repoPath, isolated, startupMode);
+      const created = await api.createSession(
+        name,
+        repoPath,
+        isolated,
+        startupMode,
+      );
       await get().refreshAll();
-      // Ensure the project of the new session is active so its tab shows up.
-      set((s) => {
-        if (s.workspaces[repoPath] && s.activeProject !== repoPath) {
-          return {
-            activeProject: repoPath,
-            ...mirrorActive(s.workspaces, repoPath),
-          };
-        }
-        return s;
-      });
+      // Focus the new session so Cmd+T (and any other entry point that goes
+      // through the store) immediately surfaces it in its pane instead of
+      // silently appending behind the existing active tab.
+      get().selectSession(created.id);
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
     }
