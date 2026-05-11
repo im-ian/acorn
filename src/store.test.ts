@@ -6,6 +6,10 @@ import type { Project, Session, SessionStatus } from "./lib/types";
 vi.mock("./lib/api", () => {
   return {
     api: {
+      loadStatus: vi.fn(async () => ({
+        sessionsClean: true,
+        projectsClean: true,
+      })),
       listSessions: vi.fn(async () => [] as Session[]),
       listProjects: vi.fn(async () => [] as Project[]),
       detectSessionStatuses: vi.fn(
@@ -88,6 +92,7 @@ function resetStore(): void {
       error: null,
       pendingRemoveId: null,
       pendingRemoveProject: null,
+      sessionsLoadedCleanly: true,
     },
     false,
   );
@@ -108,6 +113,10 @@ beforeEach(() => {
   // intact, which can leak between tests under some runtimes.
   vi.resetAllMocks();
   // Re-establish the safe defaults that resetAllMocks just wiped.
+  mockApi.loadStatus.mockResolvedValue({
+    sessionsClean: true,
+    projectsClean: true,
+  });
   mockApi.listSessions.mockResolvedValue([]);
   mockApi.listProjects.mockResolvedValue([]);
   mockApi.detectSessionStatuses.mockResolvedValue([]);
@@ -423,6 +432,48 @@ describe("reconcile via refreshSessions", () => {
     await useAppStore.getState().refreshSessions();
     const s = useAppStore.getState();
     expect(s.panes[s.focusedPaneId].sessionIds.sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("does NOT wipe persisted sessionIds when load_status reports unclean", async () => {
+    // Seed: persisted layout with two sessions in one pane.
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    expect(
+      useAppStore.getState().panes[useAppStore.getState().focusedPaneId]
+        .sessionIds.sort(),
+    ).toEqual(["a1", "a2"]);
+
+    // Simulate boot-time corruption: backend returns empty + reports unclean.
+    mockApi.loadStatus.mockResolvedValueOnce({
+      sessionsClean: false,
+      projectsClean: true,
+    });
+    mockApi.listSessions.mockResolvedValueOnce([]);
+    await useAppStore.getState().loadInitialStatus();
+    await useAppStore.getState().refreshSessions();
+
+    // Pane retains the original ids — guard prevented wipe.
+    const s = useAppStore.getState();
+    expect(s.sessions).toEqual([]);
+    expect(s.sessionsLoadedCleanly).toBe(false);
+    expect(s.panes[s.focusedPaneId].sessionIds.sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("clears the wipe guard once backend returns at least one session", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.loadStatus.mockResolvedValueOnce({
+      sessionsClean: false,
+      projectsClean: true,
+    });
+    await useAppStore.getState().loadInitialStatus();
+    expect(useAppStore.getState().sessionsLoadedCleanly).toBe(false);
+
+    mockApi.listSessions.mockResolvedValueOnce([session("a1", REPO_A)]);
+    await useAppStore.getState().refreshSessions();
+    // Non-empty result → guard armed off → subsequent empty wipes work.
+    expect(useAppStore.getState().sessionsLoadedCleanly).toBe(true);
   });
 });
 

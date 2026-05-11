@@ -63,6 +63,17 @@ interface AppStateModel {
   pendingRemoveId: string | null;
   pendingRemoveProject: string | null;
 
+  /**
+   * Set to false at boot if the backend reports that `sessions.json` failed
+   * to load (file existed but could not be read or parsed). When false,
+   * `reconcileWorkspace` refuses to wipe a pane's `sessionIds` on the basis
+   * of an empty backend list — protecting layouts from being destroyed by a
+   * transient disk failure or a schema-incompatible build run from another
+   * worktree. Cleared (set back to true) once the user takes any action that
+   * results in a non-empty backend session list.
+   */
+  sessionsLoadedCleanly: boolean;
+  loadInitialStatus: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   refreshAll: () => Promise<void>;
@@ -151,11 +162,26 @@ function mirrorActive(
  * Reconcile a single project's pane state with that project's session list.
  * New sessions land in the focused pane. Removed sessions are dropped.
  * Empty non-only panes are collapsed.
+ *
+ * `allowEmptyWipe` is the safety knob for the boot-time disk-corruption
+ * scenario. When `false` and `sessions` is empty *while the workspace still
+ * remembers session ids*, this function returns the workspace unchanged
+ * rather than zeroing every pane's `sessionIds`. This avoids the cascade
+ * where a transient `sessions.json` read failure (or a schema-incompatible
+ * build from another worktree) erases the persisted layout permanently.
  */
 function reconcileWorkspace(
   ws: ProjectWorkspace,
   sessions: Session[],
+  allowEmptyWipe = true,
 ): ProjectWorkspace {
+  if (
+    !allowEmptyWipe &&
+    sessions.length === 0 &&
+    Object.values(ws.panes).some((p) => p.sessionIds.length > 0)
+  ) {
+    return ws;
+  }
   const knownIds = new Set(sessions.map((s) => s.id));
   const validPaneIds = new Set(listPaneIds(ws.layout));
 
@@ -218,6 +244,7 @@ function reconcileWorkspaces(
   projects: Project[],
   workspaces: Record<string, ProjectWorkspace>,
   activeProject: string | null,
+  allowEmptyWipe = true,
 ): {
   workspaces: Record<string, ProjectWorkspace>;
   activeProject: string | null;
@@ -233,7 +260,11 @@ function reconcileWorkspaces(
   const newWorkspaces: Record<string, ProjectWorkspace> = {};
   for (const [repoPath, projSessions] of Object.entries(byProject)) {
     const existing = workspaces[repoPath] ?? emptyWorkspace();
-    newWorkspaces[repoPath] = reconcileWorkspace(existing, projSessions);
+    newWorkspaces[repoPath] = reconcileWorkspace(
+      existing,
+      projSessions,
+      allowEmptyWipe,
+    );
   }
 
   // Resolve active project: keep current if still valid; else first project
@@ -296,21 +327,47 @@ export const useAppStore = create<AppStateModel>()(
   error: null,
   pendingRemoveId: null,
   pendingRemoveProject: null,
+  sessionsLoadedCleanly: true,
+
+  async loadInitialStatus() {
+    try {
+      const status = await api.loadStatus();
+      set({ sessionsLoadedCleanly: status.sessionsClean });
+      if (!status.sessionsClean) {
+        console.warn(
+          "[store] backend reports sessions.json failed to load; pane wipe guard active",
+        );
+      }
+    } catch (e) {
+      // Treat status RPC failure as "assume unclean" so we err on the side
+      // of preserving the persisted layout. The user can still recover by
+      // creating sessions, which clears the guard automatically.
+      console.warn("[store] load_status RPC failed", e);
+      set({ sessionsLoadedCleanly: false });
+    }
+  },
 
   async refreshSessions() {
     set({ loading: true, error: null });
     try {
       const sessions = await api.listSessions();
       set((s) => {
+        const allowEmptyWipe = s.sessionsLoadedCleanly;
         const reconciled = reconcileWorkspaces(
           sessions,
           s.projects,
           s.workspaces,
           s.activeProject,
+          allowEmptyWipe,
         );
+        // Once the backend returns any sessions we trust subsequent empty
+        // results to be intentional (user removed them all). Drop the guard.
+        const nextSessionsLoadedCleanly =
+          s.sessionsLoadedCleanly || sessions.length > 0;
         return {
           sessions,
           loading: false,
+          sessionsLoadedCleanly: nextSessionsLoadedCleanly,
           workspaces: reconciled.workspaces,
           activeProject: reconciled.activeProject,
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
@@ -325,11 +382,13 @@ export const useAppStore = create<AppStateModel>()(
     try {
       const projects = await api.listProjects();
       set((s) => {
+        const allowEmptyWipe = s.sessionsLoadedCleanly;
         const reconciled = reconcileWorkspaces(
           s.sessions,
           projects,
           s.workspaces,
           s.activeProject,
+          allowEmptyWipe,
         );
         return {
           projects,
