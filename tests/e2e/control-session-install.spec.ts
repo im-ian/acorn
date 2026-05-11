@@ -28,15 +28,24 @@ test.describe("control session: settings install section", () => {
       modal.getByText(/Control sessions \(acorn-ipc CLI\)/i),
     ).toBeVisible();
 
-    // Bundled binary status badge reflects the mock.
-    await expect(modal.getByText("found")).toBeVisible();
+    // Bundled binary status badge reflects the mock. Match the badge
+    // exactly so we do not collide with the install-command line that
+    // also includes the path. Strict-mode mandates a single match.
+    await expect(modal.getByText("found", { exact: true })).toBeVisible();
+    // The bundled path appears verbatim in its own `<code>` element. Using
+    // `exact: true` keeps it from matching the install command, where the
+    // path is embedded inside `sudo ln -sf "..."`.
     await expect(
-      modal.getByText("/Applications/Acorn.app/Contents/MacOS/acorn-ipc"),
+      modal.getByText("/Applications/Acorn.app/Contents/MacOS/acorn-ipc", {
+        exact: true,
+      }),
     ).toBeVisible();
 
     // Install card surfaces the "not installed" badge and the symlink
     // command. The command target is the first shim path (`/usr/local/bin/...`).
-    await expect(modal.getByText("not installed")).toBeVisible();
+    await expect(
+      modal.getByText("not installed", { exact: true }),
+    ).toBeVisible();
     await expect(
       modal.getByText(
         /sudo ln -sf "\/Applications\/Acorn\.app\/Contents\/MacOS\/acorn-ipc"/,
@@ -63,7 +72,9 @@ test.describe("control session: settings install section", () => {
     const modal = page.getByRole("dialog", { name: /Settings/i });
     await modal.getByRole("button", { name: "Sessions", exact: true }).click();
 
-    await expect(modal.getByText("installed")).toBeVisible();
+    // Match the badge text exactly so we don't collide with the
+    // "Installed shim" label that lives in the same card.
+    await expect(modal.getByText("installed", { exact: true })).toBeVisible();
     // The install command block is suppressed when a shim is already in place,
     // so the `sudo ln -sf` text must NOT be visible.
     await expect(
@@ -87,7 +98,7 @@ test.describe("control session: settings install section", () => {
     const modal = page.getByRole("dialog", { name: /Settings/i });
     await modal.getByRole("button", { name: "Sessions", exact: true }).click();
 
-    await expect(modal.getByText("missing")).toBeVisible();
+    await expect(modal.getByText("missing", { exact: true })).toBeVisible();
     // No install command should render when the binary is absent — there
     // is nothing to symlink to.
     await expect(modal.getByText(/sudo ln -sf/)).toHaveCount(0);
