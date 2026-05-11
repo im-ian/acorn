@@ -22,7 +22,10 @@ import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { api } from "./lib/api";
 import { Hotkeys, useHotkeys } from "./lib/hotkeys";
-import { startSessionNotificationWatcher } from "./lib/notifications";
+import {
+  startNotificationClickHandler,
+  startSessionNotificationWatcher,
+} from "./lib/notifications";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
@@ -90,6 +93,22 @@ function App() {
 
   useEffect(() => {
     return startSessionNotificationWatcher();
+  }, []);
+
+  useEffect(() => {
+    let dispose: (() => void) | null = null;
+    let cancelled = false;
+    void startNotificationClickHandler().then((d) => {
+      if (cancelled) {
+        d();
+        return;
+      }
+      dispose = d;
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
   }, []);
 
   // Periodically probe each session's transcript JSONL to infer live status
