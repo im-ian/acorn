@@ -486,6 +486,7 @@ function DetailSkeleton({
               className="rounded border border-border bg-bg-sidebar/40 p-3"
             >
               <div className="mb-2 flex items-center gap-2">
+                <span className="h-[18px] w-[18px] shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
                 <span
                   className={cn(
                     "h-2.5 animate-pulse rounded bg-fg-muted/15",
@@ -787,6 +788,7 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-muted">
+        <AuthorAvatar login={comment.author} />
         <span className="font-mono text-fg">{comment.author}</span>
         <span className="opacity-60">commented</span>
         <span className="font-mono opacity-60">
@@ -808,6 +810,7 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-muted">
+        <AuthorAvatar login={review.author} />
         <span className="font-mono text-fg">{review.author}</span>
         <ReviewStateBadge state={review.state} />
         <span className="font-mono opacity-60">
@@ -824,6 +827,27 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * Inline 18px GitHub avatar. Uses the public `github.com/{login}.png`
+ * endpoint — no API token needed and it works for `[bot]` accounts when
+ * the `[bot]` suffix is stripped. Falls back invisibly via `alt=""` on
+ * load failure so the timeline stays clean.
+ */
+function AuthorAvatar({ login }: { login: string }) {
+  const slug = login.replace(/\[bot\]$/, "");
+  if (!slug) return null;
+  return (
+    <img
+      src={`https://github.com/${encodeURIComponent(slug)}.png?size=40`}
+      alt=""
+      width={18}
+      height={18}
+      loading="lazy"
+      className="h-[18px] w-[18px] shrink-0 rounded-full bg-bg-elevated"
+    />
   );
 }
 

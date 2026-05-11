@@ -1,8 +1,41 @@
 import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../../lib/cn";
+
+// Sanitize schema for PR/comment markdown bodies — they routinely embed raw
+// HTML (image uploads, GitHub's `<img width="…">` snippets, details/summary).
+// Extend the rehype default with the attrs GitHub commonly uses.
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    img: [
+      ...(defaultSchema.attributes?.img ?? []),
+      "src",
+      "alt",
+      "title",
+      "width",
+      "height",
+      "loading",
+    ],
+    a: [
+      ...(defaultSchema.attributes?.a ?? []),
+      "href",
+      "title",
+      "target",
+      "rel",
+    ],
+  },
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    "details",
+    "summary",
+  ],
+};
 
 interface MarkdownProps {
   content: string;
@@ -130,11 +163,13 @@ const components: Components = {
       </td>
     );
   },
-  img({ src, alt }) {
+  img({ src, alt, width, height }) {
     return (
       <img
         src={typeof src === "string" ? src : undefined}
         alt={alt ?? ""}
+        width={width}
+        height={height}
         className="my-2 max-w-full rounded border border-border"
         loading="lazy"
       />
@@ -159,7 +194,11 @@ const components: Components = {
 function MarkdownImpl({ content, className }: MarkdownProps) {
   return (
     <div className={cn("text-[11.5px] leading-relaxed text-fg", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
+        components={components}
+      >
         {content}
       </ReactMarkdown>
     </div>
