@@ -57,7 +57,25 @@ export const AGENT_OPTIONS: ReadonlyArray<{
 ];
 
 export type { SessionStartupMode } from "./types";
-import type { SessionStartupMode } from "./types";
+import type { PrStateFilter, SessionStartupMode } from "./types";
+
+/**
+ * Allowed PRs-tab refresh intervals shown in the Settings UI. Picked to
+ * cover the common cases ("snappy", "default", "background-quiet") without
+ * exposing a free-form numeric field where users could accidentally hammer
+ * `gh` with sub-second polling.
+ */
+export const PR_REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
+  value: number;
+  label: string;
+}> = [
+  { value: 15_000, label: "15 seconds" },
+  { value: 30_000, label: "30 seconds" },
+  { value: 60_000, label: "1 minute (default)" },
+  { value: 120_000, label: "2 minutes" },
+  { value: 300_000, label: "5 minutes" },
+  { value: 600_000, label: "10 minutes" },
+];
 
 export type TerminalFontWeight =
   | 100
@@ -91,6 +109,12 @@ export interface AcornSettings {
     fontSize: number;
     fontWeight: TerminalFontWeight;
     fontWeightBold: TerminalFontWeight;
+    /**
+     * xterm.js cell-height multiplier. 1.0 packs rows flush; 1.2–1.4 adds
+     * vertical breathing room for fonts whose intrinsic metrics feel
+     * cramped. Range 1.0–2.0 keeps the cursor / link hit boxes sensible.
+     */
+    lineHeight: number;
   };
   /**
    * The single AI agent acorn uses everywhere: Sessions startup (when
@@ -145,6 +169,21 @@ export interface AcornSettings {
       completed: boolean;
     };
   };
+  /**
+   * Toggles for the bottom status bar items. Disabling `showMemory`
+   * also short-circuits the memory polling loop in the StatusBar, so it
+   * actually reduces the work acorn does — not just hides the readout.
+   */
+  statusBar: {
+    showGithubAccount: boolean;
+    showMemory: boolean;
+  };
+  pullRequests: {
+    /** Tab pre-selected when the PRs panel first mounts for a repo. */
+    defaultState: PrStateFilter;
+    /** Auto-refresh cadence for the PRs tab in milliseconds. */
+    refreshIntervalMs: number;
+  };
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
@@ -154,6 +193,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontSize: 12,
     fontWeight: 400,
     fontWeightBold: 700,
+    lineHeight: 1.0,
   },
   agents: {
     selected: "claude",
@@ -179,6 +219,14 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       completed: false,
     },
   },
+  statusBar: {
+    showGithubAccount: true,
+    showMemory: true,
+  },
+  pullRequests: {
+    defaultState: "open",
+    refreshIntervalMs: 60_000,
+  },
 };
 
 const VALID_WEIGHTS = new Set<TerminalFontWeight>([
@@ -192,6 +240,36 @@ const VALID_AGENTS = new Set<AgentProvider>([
   "llm",
   "codex",
 ]);
+
+const VALID_PR_STATES = new Set<PrStateFilter>([
+  "open",
+  "closed",
+  "merged",
+  "all",
+]);
+
+const VALID_PR_INTERVALS = new Set<number>(
+  PR_REFRESH_INTERVAL_OPTIONS.map((o) => o.value),
+);
+
+function normalizeLineHeight(v: unknown, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  // Clamp to the same range the Stepper enforces in the UI so a hand-
+  // edited localStorage value can't make the terminal unusable.
+  return Math.max(1.0, Math.min(2.0, v));
+}
+
+function normalizePrState(v: unknown, fallback: PrStateFilter): PrStateFilter {
+  if (typeof v === "string" && VALID_PR_STATES.has(v as PrStateFilter)) {
+    return v as PrStateFilter;
+  }
+  return fallback;
+}
+
+function normalizePrInterval(v: unknown, fallback: number): number {
+  if (typeof v === "number" && VALID_PR_INTERVALS.has(v)) return v;
+  return fallback;
+}
 
 function normalizeWeight(
   v: unknown,
@@ -299,6 +377,10 @@ function loadSettings(): AcornSettings {
           terminalRaw.fontWeightBold,
           DEFAULT_SETTINGS.terminal.fontWeightBold,
         ),
+        lineHeight: normalizeLineHeight(
+          (terminalRaw as { lineHeight?: unknown }).lineHeight,
+          DEFAULT_SETTINGS.terminal.lineHeight,
+        ),
       },
       agents: {
         selected,
@@ -327,6 +409,20 @@ function loadSettings(): AcornSettings {
           ...DEFAULT_SETTINGS.notifications.events,
           ...(parsed.notifications?.events ?? {}),
         },
+      },
+      statusBar: {
+        ...DEFAULT_SETTINGS.statusBar,
+        ...(parsed.statusBar ?? {}),
+      },
+      pullRequests: {
+        defaultState: normalizePrState(
+          parsed.pullRequests?.defaultState,
+          DEFAULT_SETTINGS.pullRequests.defaultState,
+        ),
+        refreshIntervalMs: normalizePrInterval(
+          parsed.pullRequests?.refreshIntervalMs,
+          DEFAULT_SETTINGS.pullRequests.refreshIntervalMs,
+        ),
       },
     };
   } catch {
@@ -365,6 +461,8 @@ interface SettingsState {
       events?: Partial<AcornSettings["notifications"]["events"]>;
     },
   ) => void;
+  patchStatusBar: (patch: Partial<AcornSettings["statusBar"]>) => void;
+  patchPullRequests: (patch: Partial<AcornSettings["pullRequests"]>) => void;
   reset: () => void;
 }
 
@@ -438,6 +536,24 @@ export const useSettings = create<SettingsState>((set) => ({
           ...rest,
           events,
         },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchStatusBar: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        statusBar: { ...s.settings.statusBar, ...patch },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchPullRequests: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        pullRequests: { ...s.settings.pullRequests, ...patch },
       };
       persist(next);
       return { settings: next };

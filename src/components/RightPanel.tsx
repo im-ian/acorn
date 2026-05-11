@@ -18,6 +18,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
+import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
 import type {
   AccountSummary,
@@ -1004,8 +1005,6 @@ const PR_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
   { value: "all", label: "All" },
 ];
 
-const PR_REFRESH_INTERVAL_MS = 60_000;
-
 function PullRequestsTab({
   repoPath,
   onOpenDetail,
@@ -1016,7 +1015,13 @@ function PullRequestsTab({
   /** Bumped by the parent to force an out-of-band refetch (e.g. after a PR is merged via the modal). */
   refreshKey: number;
 }) {
-  const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
+  const defaultPrState = useSettings(
+    (s) => s.settings.pullRequests.defaultState,
+  );
+  const refreshIntervalMs = useSettings(
+    (s) => s.settings.pullRequests.refreshIntervalMs,
+  );
+  const [stateFilter, setStateFilter] = useState<PrStateFilter>(defaultPrState);
   const [listing, setListing] = useState<PullRequestListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1058,12 +1063,12 @@ function PullRequestsTab({
     void fetchPrs(signal);
     const handle = setInterval(() => {
       void fetchPrs(signal);
-    }, PR_REFRESH_INTERVAL_MS);
+    }, refreshIntervalMs);
     return () => {
       signal.cancelled = true;
       clearInterval(handle);
     };
-  }, [fetchPrs]);
+  }, [fetchPrs, refreshIntervalMs]);
 
   // Out-of-band refresh when the parent bumps `refreshKey` (e.g. PR merged via
   // the detail modal). Skip the very first render since the effect above
