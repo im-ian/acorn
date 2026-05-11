@@ -73,6 +73,17 @@ textarea,
   cursor: text;
 }
 
+.acorn-selectable {
+  cursor: text;
+}
+
+.acorn-selectable a,
+.acorn-selectable button,
+.acorn-selectable [role="button"],
+.acorn-selectable summary {
+  cursor: pointer;
+}
+
 /*
  * WKWebView (used by Tauri on macOS) blocks HTML5 drag on arbitrary elements
  * unless `-webkit-user-drag: element` is set. The body rule above disables
