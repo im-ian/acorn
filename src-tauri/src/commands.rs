@@ -39,7 +39,17 @@ fn project_basename(repo_path: &std::path::Path) -> String {
 
 #[tauri::command]
 pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
-    state.sessions.list()
+    state
+        .sessions
+        .list()
+        .into_iter()
+        .map(|mut s| {
+            if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
+                s.branch = branch;
+            }
+            s
+        })
+        .collect()
 }
 
 static MEMORY_PROBE: Mutex<Option<System>> = Mutex::new(None);
@@ -162,7 +172,6 @@ pub async fn create_session(
         return Err(AppError::InvalidPath(repo_path));
     }
 
-    let branch = worktree::current_branch(&repo).unwrap_or_else(|_| "main".to_string());
     let isolated = isolated.unwrap_or(false);
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
@@ -171,6 +180,7 @@ pub async fn create_session(
     } else {
         repo.clone()
     };
+    let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let session = Session::new(
         name,
         repo.clone(),
