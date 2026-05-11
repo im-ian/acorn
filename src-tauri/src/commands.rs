@@ -629,7 +629,11 @@ pub async fn detect_session_statuses(
                 .and_then(|uuid| state.sessions.get(&uuid).ok())
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
-            let status = session_status::detect(&id, previous).unwrap_or(previous);
+            // Shell sessions have no Claude transcript — fall back to PTY
+            // output recency for liveness. `None` = no live PTY → Idle.
+            let last_pty_output = parsed_id.and_then(|uuid| state.pty.last_output_at(&uuid));
+            let status = session_status::detect(&id, previous, last_pty_output)
+                .unwrap_or(previous);
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).

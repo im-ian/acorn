@@ -17,6 +17,7 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::time::{Duration, Instant};
 
 use crate::error::AppResult;
 use crate::session::SessionStatus;
@@ -27,8 +28,15 @@ use crate::todos;
 // response can be many KB on a single line.
 const TAIL_BYTES: u64 = 262_144;
 
+/// Window during which a shell session counts as `Running` after its PTY
+/// last emitted bytes. Polling runs every 1s on the frontend, so 2.5s
+/// gives at least two polls of stable `Running` after each output burst
+/// before flipping back to `Idle`.
+const PTY_ACTIVE_THRESHOLD: Duration = Duration::from_millis(2500);
+
 /// Locate the JSONL transcript via `todos::locate_transcript` and infer the
-/// session's status from its tail.
+/// session's status from its tail. Falls back to PTY output recency when
+/// the session has no Claude transcript (i.e. plain shell sessions).
 ///
 /// `previous` is the last status the caller observed for this session. It is
 /// only consulted when the transcript file exists but the tail buffer is
@@ -38,12 +46,20 @@ const TAIL_BYTES: u64 = 262_144;
 /// window). Without this fallback, polling momentarily reclassifies a live
 /// session as Idle, leaving the Sidebar dot stuck at Idle until claude
 /// emits another user/assistant line within the tail window — which for
-/// long sessions can be never. Sessions with no transcript on disk still
-/// resolve to Idle regardless of `previous`.
-pub fn detect(session_id: &str, previous: SessionStatus) -> AppResult<SessionStatus> {
+/// long sessions can be never.
+///
+/// `last_pty_output` is the most recent instant the session's PTY reader
+/// saw bytes. Used as the activity signal for shell sessions, which never
+/// produce a Claude transcript and would otherwise be perma-`Idle`. `None`
+/// means the session has no live PTY (process exited, or never spawned).
+pub fn detect(
+    session_id: &str,
+    previous: SessionStatus,
+    last_pty_output: Option<Instant>,
+) -> AppResult<SessionStatus> {
     let path = match todos::locate_transcript_for(session_id)? {
         Some(p) => p,
-        None => return Ok(SessionStatus::Idle),
+        None => return Ok(pty_status(last_pty_output)),
     };
 
     let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -60,6 +76,16 @@ pub fn detect(session_id: &str, previous: SessionStatus) -> AppResult<SessionSta
         // Idle. The next poll that lands on a real turn line corrects it.
         None => previous,
     })
+}
+
+/// Map PTY output recency to a status for sessions without a Claude
+/// transcript. Recent output → `Running`, otherwise `Idle`. `None`
+/// (no PTY) is also `Idle`.
+fn pty_status(last_pty_output: Option<Instant>) -> SessionStatus {
+    match last_pty_output {
+        Some(t) if t.elapsed() < PTY_ACTIVE_THRESHOLD => SessionStatus::Running,
+        _ => SessionStatus::Idle,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -246,5 +272,21 @@ mod tests {
             last_meaningful_kind(&tail, true),
             Some(LastKind::User),
         );
+    }
+
+    #[test]
+    fn pty_status_none_means_idle() {
+        assert_eq!(pty_status(None), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn pty_status_recent_output_is_running() {
+        assert_eq!(pty_status(Some(Instant::now())), SessionStatus::Running);
+    }
+
+    #[test]
+    fn pty_status_old_output_is_idle() {
+        let stale = Instant::now() - PTY_ACTIVE_THRESHOLD - Duration::from_millis(100);
+        assert_eq!(pty_status(Some(stale)), SessionStatus::Idle);
     }
 }

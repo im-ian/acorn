@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -42,6 +43,11 @@ struct PtyHandle {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// When set, the reader task will exit on its next loop iteration.
     stop: Arc<AtomicBool>,
+    /// Last instant the reader saw bytes from the PTY. Updated on every
+    /// non-empty read so `session_status::detect` can report shell sessions
+    /// (which have no Claude transcript) as `Running` while there's recent
+    /// output, and `Idle` once the PTY has been quiet for a threshold.
+    last_output: Arc<Mutex<Instant>>,
     /// PID of the spawned PTY child. Captured at spawn time because the
     /// `Child` handle moves into the wait thread. `None` if the platform
     /// did not return one (portable-pty allows that).
@@ -196,11 +202,13 @@ impl PtyManager {
         let pid = child.process_id();
 
         let stop = Arc::new(AtomicBool::new(false));
+        let last_output = Arc::new(Mutex::new(Instant::now()));
         let handle = Arc::new(PtyHandle {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
             stop: stop.clone(),
+            last_output: last_output.clone(),
             pid,
         });
 
@@ -208,10 +216,17 @@ impl PtyManager {
 
         let app_for_reader = app.clone();
         let stop_for_reader = stop.clone();
+        let last_output_for_reader = last_output.clone();
         std::thread::Builder::new()
             .name(format!("acorn-pty-read-{session_id}"))
             .spawn(move || {
-                read_loop(app_for_reader, session_id, reader, stop_for_reader);
+                read_loop(
+                    app_for_reader,
+                    session_id,
+                    reader,
+                    stop_for_reader,
+                    last_output_for_reader,
+                );
             })
             .map_err(|e| AppError::Pty(format!("spawn reader thread: {e}")))?;
 
@@ -286,6 +301,14 @@ impl PtyManager {
         self.handles.contains_key(session_id)
     }
 
+    /// Most recent instant the PTY reader saw output bytes for a session.
+    /// `None` when no PTY is registered (session was killed or never spawned).
+    pub fn last_output_at(&self, session_id: &Uuid) -> Option<Instant> {
+        self.handles
+            .get(session_id)
+            .map(|h| *h.last_output.lock())
+    }
+
     /// PID of the immediate PTY child for a session, if known. Used by the
     /// frontend to discover the actual current working directory of the
     /// running process (and any descendants), so the right panel can follow
@@ -301,6 +324,7 @@ fn read_loop<R: Runtime>(
     session_id: Uuid,
     mut reader: Box<dyn Read + Send>,
     stop: Arc<AtomicBool>,
+    last_output: Arc<Mutex<Instant>>,
 ) {
     let event = format!("pty:output:{session_id}");
     let mut buf = [0u8; READ_BUFFER_SIZE];
@@ -311,6 +335,7 @@ fn read_loop<R: Runtime>(
         match reader.read(&mut buf) {
             Ok(0) => break, // EOF — child closed the slave
             Ok(n) => {
+                *last_output.lock() = Instant::now();
                 let payload = OutputPayload {
                     data: base64_encode(&buf[..n]),
                 };
