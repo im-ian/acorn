@@ -17,6 +17,7 @@ import {
   type SelectedAgent,
   type SessionStartupMode,
   type TerminalFontWeight,
+  type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
   selectedAgentLabel,
   useSettings,
@@ -194,9 +195,37 @@ function TerminalSettings() {
           onChange={(n) => patchTerminal({ lineHeight: n })}
         />
       </Field>
+      <Field
+        label="Open links on"
+        hint="How to follow URLs that xterm detects in terminal output."
+      >
+        <div className="flex flex-col gap-1.5">
+          <RadioCard<TerminalLinkActivation>
+            name="terminal-link-activation"
+            value="click"
+            current={settings.terminal.linkActivation}
+            label="Click (default)"
+            description="A single mouse click opens the URL in your default browser."
+            onSelect={(v) => patchTerminal({ linkActivation: v })}
+          />
+          <RadioCard<TerminalLinkActivation>
+            name="terminal-link-activation"
+            value="modifier-click"
+            current={settings.terminal.linkActivation}
+            label={`${MODIFIER_LABEL}-click`}
+            description={`Hold ${MODIFIER_LABEL} while clicking to open. Stops stray clicks on output containing URLs from yanking focus to the browser.`}
+            onSelect={(v) => patchTerminal({ linkActivation: v })}
+          />
+        </div>
+      </Field>
     </section>
   );
 }
+
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /Mac|iP(hone|od|ad)/.test(navigator.platform);
+const MODIFIER_LABEL = IS_MAC ? "⌘" : "Ctrl";
 
 interface WeightSelectProps {
   value: TerminalFontWeight;
