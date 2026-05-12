@@ -40,7 +40,11 @@ import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
-import { useSettings } from "../lib/settings";
+import {
+  useSettings,
+  type AcornSettings,
+  type SessionTitleSource,
+} from "../lib/settings";
 import {
   planChevronClick,
   planTitleClick,
@@ -304,7 +308,7 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
-      <header className="flex items-center justify-between gap-2 px-3 py-3">
+      <header className="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
         <h2 className="text-sm font-medium tracking-tight text-fg-muted">
           Projects
         </h2>
@@ -775,6 +779,12 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
   const sessions = useAppStore((s) => s.sessions);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const metadataText = composeSessionMetadata(session, sessionDisplay.metadata);
+  const hoverDetails = sessionDisplay.showDetailsOnHover
+    ? buildSessionHoverDetails(session)
+    : null;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -901,6 +911,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
+        title={hoverDetails ?? undefined}
         className={cn(
           "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
@@ -917,49 +928,28 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         >
           <GripVertical size={10} />
         </span>
-        <span
-          className={cn(
-            "mt-1.5 size-1.5 shrink-0 rounded-full",
-            STATUS_DOT[session.status],
-          )}
-        />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1">
-            {editing ? (
-              <RenameInput
-                initial={session.name}
-                onSubmit={async (next) => {
-                  setEditing(false);
-                  if (next && next !== session.name) {
-                    await renameSession(session.id, next);
-                  }
-                }}
-                onCancel={() => setEditing(false)}
-              />
-            ) : (
-              <span className="truncate text-[13px] font-medium text-fg">
-                {session.name}
-              </span>
+        {sessionDisplay.icons.statusDot ? (
+          <span
+            className={cn(
+              "mt-1.5 size-1.5 shrink-0 rounded-full",
+              STATUS_DOT[session.status],
             )}
-            {session.isolated ? (
-              <GitBranch
-                size={10}
-                className="shrink-0 text-fg-muted"
-                aria-label="isolated worktree"
-              />
-            ) : null}
-            {session.kind === "control" ? (
-              <Bot
-                size={10}
-                className="shrink-0 text-accent"
-                aria-label="control session"
-              />
-            ) : null}
-          </span>
-          <span className="block truncate text-[11px] text-fg-muted">
-            {session.branch} · {STATUS_LABEL[session.status]}
-          </span>
-        </span>
+          />
+        ) : null}
+        <SessionRowLabel
+          editing={editing}
+          session={session}
+          titleText={titleText}
+          metadataText={metadataText}
+          showKindIcons={sessionDisplay.icons.sessionKind}
+          onSubmitRename={async (next) => {
+            setEditing(false);
+            if (next && next !== session.name) {
+              await renameSession(session.id, next);
+            }
+          }}
+          onCancelRename={() => setEditing(false)}
+        />
         <span
           role="button"
           aria-label="Remove session"
@@ -989,6 +979,65 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       />
     </li>
   );
+}
+
+interface SessionRowLabelProps {
+  editing: boolean;
+  session: Session;
+  titleText: string;
+  metadataText: string;
+  showKindIcons: boolean;
+  onSubmitRename: (value: string) => void | Promise<void>;
+  onCancelRename: () => void;
+}
+
+function SessionRowLabel({
+  editing,
+  session,
+  titleText,
+  metadataText,
+  showKindIcons,
+  onSubmitRename,
+  onCancelRename,
+}: SessionRowLabelProps) {
+  const body = (
+    <span className="min-w-0 flex-1">
+      <span className="flex items-center gap-1">
+        {editing ? (
+          <RenameInput
+            initial={session.name}
+            onSubmit={onSubmitRename}
+            onCancel={onCancelRename}
+          />
+        ) : (
+          <span className="truncate text-[13px] font-medium text-fg">
+            {titleText}
+          </span>
+        )}
+        {showKindIcons && session.isolated ? (
+          <GitBranch
+            size={10}
+            className="shrink-0 text-fg-muted"
+            aria-label="isolated worktree"
+          />
+        ) : null}
+        {showKindIcons && session.kind === "control" ? (
+          <Bot
+            size={10}
+            className="shrink-0 text-accent"
+            aria-label="control session"
+          />
+        ) : null}
+      </span>
+      {metadataText ? (
+        <span className="block truncate text-[11px] text-fg-muted">
+          {metadataText}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  return body;
 }
 
 async function copyToClipboard(text: string): Promise<void> {
@@ -1080,6 +1129,47 @@ function buildProjectGroups(
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function resolveSessionTitle(
+  session: Session,
+  source: SessionTitleSource,
+): string {
+  switch (source) {
+    case "workingDirectory":
+      return basename(session.worktree_path) || session.name;
+    case "branch":
+      return session.branch || session.name;
+    case "name":
+    default:
+      return session.name;
+  }
+}
+
+function composeSessionMetadata(
+  session: Session,
+  metadata: AcornSettings["sessionDisplay"]["metadata"],
+): string {
+  const parts: string[] = [];
+  if (metadata.branch && session.branch) parts.push(session.branch);
+  if (metadata.workingDirectory) {
+    const dir = basename(session.worktree_path);
+    if (dir) parts.push(dir);
+  }
+  if (metadata.status) parts.push(STATUS_LABEL[session.status]);
+  return parts.join(" · ");
+}
+
+function buildSessionHoverDetails(session: Session): string {
+  const lines = [
+    `Name: ${session.name}`,
+    `Branch: ${session.branch || "(detached)"}`,
+    `Working directory: ${session.worktree_path}`,
+    `Status: ${STATUS_LABEL[session.status]}`,
+  ];
+  if (session.kind === "control") lines.push("Kind: Control session");
+  if (session.isolated) lines.push("Isolated worktree");
+  return lines.join("\n");
 }
 
 function suggestName(
