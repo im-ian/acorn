@@ -4,7 +4,7 @@ import { classifyDropZone } from "./dnd";
 const RECT = { left: 0, top: 0, width: 100, height: 100 };
 
 describe("classifyDropZone", () => {
-  it("returns center when pointer is past the 25% edge threshold on all sides", () => {
+  it("returns center when pointer is past the edge threshold on all sides", () => {
     expect(classifyDropZone({ x: 50, y: 50 }, RECT)).toEqual({ kind: "center" });
   });
 
@@ -40,9 +40,22 @@ describe("classifyDropZone", () => {
     });
   });
 
-  it("respects the 25% threshold boundary as center", () => {
-    // 25% in from the left = relX 0.25, distLeft 0.25 → still center.
-    expect(classifyDropZone({ x: 25, y: 50 }, RECT)).toEqual({ kind: "center" });
+  it("treats the threshold boundary as center (not edge)", () => {
+    // 100x100 rect → edge band = min(64px, 40% × 100) = 40px. distLeft = 40
+    // is the exact boundary, so it should classify as center.
+    expect(classifyDropZone({ x: 40, y: 50 }, RECT)).toEqual({ kind: "center" });
+  });
+
+  it("clamps edge band to 40% of the smaller dimension on narrow panes", () => {
+    // 50px wide × 200px tall pane. Horizontal threshold = min(64, 20) = 20px.
+    // distLeft = 21 sits just outside the edge band → center.
+    const narrow = { left: 0, top: 0, width: 50, height: 200 };
+    expect(classifyDropZone({ x: 21, y: 100 }, narrow)).toEqual({ kind: "center" });
+    expect(classifyDropZone({ x: 5, y: 100 }, narrow)).toEqual({
+      kind: "edge",
+      direction: "horizontal",
+      side: "before",
+    });
   });
 
   it("handles non-zero rect origin", () => {
