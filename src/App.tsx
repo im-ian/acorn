@@ -34,31 +34,11 @@ import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
+import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
-
-/**
- * Pluck a `tab` field out of an open-settings event payload regardless of
- * whether it arrived as a string, `{tab}` object, or anything else.
- * Returns `null` when no useable tab id can be extracted so the caller
- * falls back to the default `setOpen(true)` behavior.
- */
-function extractTabFromEvent(detail: unknown): string | null {
-  if (typeof detail === "string" && detail.length > 0) {
-    return detail;
-  }
-  if (
-    detail !== null &&
-    typeof detail === "object" &&
-    "tab" in detail &&
-    typeof (detail as { tab: unknown }).tab === "string"
-  ) {
-    return (detail as { tab: string }).tab;
-  }
-  return null;
-}
 
 function focusPanel(id: "sidebar" | "main" | "right") {
   const panel = document.querySelector(
