@@ -103,14 +103,22 @@ fn connect_one(path: &PathBuf) -> io::Result<interprocess::local_socket::Stream>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// macOS / Linux: `sockaddr_un::sun_path` is 104 bytes (mac) / 108
+    /// (linux). The default `std::env::temp_dir()` on macOS resolves to
+    /// `/var/folders/qb/.../T/` which leaves only ~20-30 chars for the
+    /// suffix before we overflow. `/tmp` keeps us comfortably under.
+    fn short_tmp_root() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
+
     #[test]
     fn bind_creates_and_cleanup_removes() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("acorn-sock-{}", uuid::Uuid::new_v4()));
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-sk-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         unsafe { std::env::set_var(super::super::paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
 
@@ -132,8 +140,9 @@ mod tests {
 
     #[test]
     fn bind_reclaims_stale_socket_file() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("acorn-sock-stale-{}", uuid::Uuid::new_v4()));
+        let _g = ENV_LOCK.lock();
+        let tmp =
+            short_tmp_root().join(format!("acn-stale-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         unsafe { std::env::set_var(super::super::paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
 

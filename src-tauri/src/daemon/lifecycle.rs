@@ -157,15 +157,23 @@ fn io_other(err: nix::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
-    // Same env-mutation lock as the paths module.
+    // Same env-mutation lock as the paths module. parking_lot's Mutex
+    // does not poison on a panicking holder so one crashed test does
+    // not cascade.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Short tmp root to dodge `sockaddr_un` length limits when the
+    /// same dir is reused for socket-bearing tests.
+    fn short_tmp_root() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
 
     #[test]
     fn pid_lock_acquires_when_file_missing() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("acorn-pid-{}", uuid::Uuid::new_v4()));
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-pid-{}", uuid::Uuid::new_v4().simple()));
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
         match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(path) => {
@@ -183,8 +191,9 @@ mod tests {
 
     #[test]
     fn pid_lock_reclaims_stale_file() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("acorn-pid-stale-{}", uuid::Uuid::new_v4()));
+        let _g = ENV_LOCK.lock();
+        let tmp =
+            short_tmp_root().join(format!("acn-pid-stale-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
         // Pre-write a guaranteed-dead PID. `1` is `launchd` on macOS and

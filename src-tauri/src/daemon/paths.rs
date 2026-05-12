@@ -115,17 +115,27 @@ pub fn crash_dir() -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     // Serialize env mutation across tests in this module so concurrent
-    // `cargo test` runs do not race on `ACORN_DATA_DIR`. Pulled out of
-    // the helper crate to keep the test module self-contained.
+    // `cargo test` runs do not race on `ACORN_DATA_DIR`. parking_lot's
+    // Mutex does not poison on panic, so a test that crashes holding
+    // the lock does not cascade into the rest of the module.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Pick a short root for test data dirs. macOS's default temp_dir()
+    /// returns `/var/folders/qb/xxxxxxxx/T/` which already eats ~50 chars
+    /// before our suffix; combined with `daemon-stream.sock` (18 chars)
+    /// we'd overflow the 104-byte `sockaddr_un` cap on real socket
+    /// binds. `/tmp` is always short and writable on macOS / Linux.
+    fn short_tmp_root() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
 
     #[test]
     fn override_redirects_data_dir() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("acorn-test-{}", uuid::Uuid::new_v4()));
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-{}", uuid::Uuid::new_v4().simple()));
         // SAFETY: serialised against other env mutations in this module
         // via ENV_LOCK; outside processes are not affected.
         unsafe { std::env::set_var(ENV_DATA_DIR_OVERRIDE, &tmp) };
@@ -140,8 +150,8 @@ mod tests {
 
     #[test]
     fn socket_override_independent_of_data_dir() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let custom = std::env::temp_dir().join("custom-daemon.sock");
+        let _g = ENV_LOCK.lock();
+        let custom = short_tmp_root().join("acorn-custom.sock");
         // SAFETY: serialised via ENV_LOCK.
         unsafe { std::env::set_var(ENV_DAEMON_SOCKET_OVERRIDE, &custom) };
         let p = control_socket_path().unwrap();

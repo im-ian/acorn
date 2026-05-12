@@ -564,11 +564,24 @@ pub async fn pty_spawn<R: Runtime>(
                     .entry("ACORN_IPC_SOCKET".to_string())
                     .or_insert_with(|| socket.display().to_string());
             }
-            // Make the bundled `acorn-ipc` CLI resolvable from inside this
-            // PTY without the user installing a PATH shim. Prepending — not
-            // replacing — keeps the user's existing PATH intact for every
-            // other binary; the dedup in `prepend_to_path` prevents the
-            // entry from accumulating across reconnects.
+            // Daemon socket for the new `acornd` CLI. Coexists with the
+            // legacy `ACORN_IPC_SOCKET` during rollout: scripts that
+            // call `acorn-ipc` still find the in-process server, while
+            // newer agents using `acornd` discover the daemon. Sprint 4
+            // removes the legacy entry once `pty_spawn` itself routes
+            // through the daemon.
+            if let Ok(daemon_sock) = crate::daemon::paths::control_socket_path() {
+                effective_env
+                    .entry("ACORN_DAEMON_SOCKET".to_string())
+                    .or_insert_with(|| daemon_sock.display().to_string());
+            }
+            // Make the bundled `acorn-ipc` AND `acornd` CLIs resolvable
+            // from inside this PTY without the user installing a PATH
+            // shim. Both binaries ship in the same directory, so a
+            // single prepend covers both. Prepending — not replacing —
+            // keeps the user's existing PATH intact for every other
+            // binary; dedup in `prepend_to_path` prevents the entry
+            // from accumulating across reconnects.
             if let Some(bin_dir) = crate::ipc::cli_path::bundled_cli_dir() {
                 let existing = effective_env
                     .get("PATH")
