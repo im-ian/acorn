@@ -101,9 +101,17 @@ If you are building from source rather than installing a release, the
 sidecar is staged for you when you run `tauri build`. For a dev loop:
 
 ```sh
-cargo build --bin acorn-ipc   # one-time; run again after IPC changes
+bun run build:sidecar   # one-time; run again after IPC changes
 bun run tauri dev
 ```
+
+`bun run build:sidecar` shells out to `src-tauri/scripts/build-sidecar.sh`
+which both compiles `acorn-ipc` *and* stages it at
+`src-tauri/binaries/acorn-ipc-<target-triple>`, the path Tauri's
+`externalBin` existence check requires before `tauri dev` / `tauri build`
+will even start. Plain `cargo build --bin acorn-ipc` skips the staging
+step, so the build fails with
+`resource path 'binaries/acorn-ipc-...' doesn't exist`.
 
 Settings → Sessions → "Control sessions" shows the resolved binary path
 Acorn currently sees (it looks for `acorn-ipc` next to the running app

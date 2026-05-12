@@ -142,9 +142,12 @@ xattr -dr com.apple.quarantine /Applications/Acorn.app
 
 ```bash
 bun install
+bun run build:sidecar  # acorn-ipc 사이드카 빌드 (최초 1회 + IPC 변경 시)
 bun run tauri dev      # 개발 모드
 bun run tauri build    # 프로덕션 빌드
 ```
+
+> ℹ️ `bun run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/acorn-ipc-...' doesn't exist` 에러로 빌드가 실패합니다. `bun run build:sidecar`가 호스트 타깃에 맞는 바이너리를 빌드하고 올바른 위치에 stage합니다.
 
 > ⚠️ 기본 세션 시작 명령은 `claude` CLI입니다. `$PATH`에 없거나 다른 에이전트를 쓰고 싶다면 Settings → Sessions에서 `codex` / `gemini` / `ollama` / `llm` / `$SHELL` / 임의의 커스텀 명령으로 전환하세요.
 

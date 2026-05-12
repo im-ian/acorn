@@ -54,6 +54,7 @@ Two recurring traps in E2E:
 
 ```sh
 bun install
+bun run build:sidecar  # stage acorn-ipc — required for fresh checkouts / worktrees
 bun run tauri dev      # full app (Rust + Vite)
 bun run dev            # Vite only — frontend in browser, no Tauri
 bun run test           # Vitest
@@ -61,6 +62,8 @@ bun run test:e2e       # Playwright
 bun run typecheck
 bun run build          # tsc + vite build
 ```
+
+`src-tauri/binaries/acorn-ipc-<target-triple>` is `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without it, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `bun run build:sidecar` once per worktree (and again after any IPC change); plain `cargo build --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
 
 ## When in doubt
 
