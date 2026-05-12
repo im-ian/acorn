@@ -257,22 +257,11 @@ export function Terminal({
       });
     };
 
-    // CJK IME workaround for WKWebView (Tauri/macOS).
-    //
-    // WKWebView delivers IME activity through W3C InputEvents on the
-    // helper textarea, NOT compositionstart/update/end. The relevant
-    // inputTypes:
-    //   - `insertCompositionText` → composition preview is updating
-    //                                (e.g. ㅇ → 아 → 안 as user types)
-    //   - `deleteCompositionText` → preview is being cleared just before
-    //                                a commit lands
-    //   - `insertFromComposition` → final commit; `ev.data` is the
-    //                                fully-composed text (the syllable)
-    //
-    // xterm.js v6 only handles plain `insertText`; the W3C composition
-    // input types are dropped, so Korean/Japanese/Chinese commits never
-    // reach the PTY. We process them ourselves and surface a live
-    // preview by reusing xterm's hidden `.composition-view` element.
+    // CJK IME path. xterm.js's built-in handler only processes plain
+    // `insertText`, so Korean/Japanese/Chinese commits delivered as
+    // W3C composition InputEvents on the helper textarea never reach
+    // the PTY. We intercept those events ourselves and render the
+    // live preview through xterm's hidden `.composition-view` element.
     const compositionView = container.querySelector<HTMLElement>(
       ".composition-view",
     );
@@ -334,24 +323,20 @@ export function Terminal({
       compositionView.textContent = "";
     };
 
-    // macOS WKWebView delivers Korean IME through W3C InputEvents on the
-    // helper textarea. Three preview event shapes feed our overlay, one
-    // event finalises the commit:
+    // WKWebView delivers a single Korean syllable across a mix of
+    // input types within one composition:
     //
-    //   insertCompositionText   preview (ev.data = current composed text)
-    //   insertReplacementText   preview (trailing char being recomposed)
+    //   insertCompositionText   preview (ev.data = composed text)
+    //   insertReplacementText   preview when trailing char recomposes
     //   insertText  (IME flag)  preview + per-syllable diff-commit
     //   insertFromComposition   final commit (ev.data = full syllable)
     //
-    // macOS sometimes mixes shapes within a single composition (preview
-    // arrives as `insertText`/`insertReplacementText`, commit arrives as
-    // `insertFromComposition`). The keydown terminator path also needs to
-    // flush, because plain-shape IMEs never fire `insertFromComposition`.
-    // To stay correct under either delivery, we keep a single `composing`
-    // flag and route every commit (terminator-keydown OR
-    // insertFromComposition) through one idempotent `commitComposition()`.
-    // The flag guards against double-emit when both fire for the same
-    // syllable.
+    // Terminator keys (space/Enter/…) may finalize without firing
+    // `insertFromComposition` at all. To stay correct under any
+    // delivery, one `composing` flag routes every commit
+    // (terminator-keydown OR insertFromComposition) through a single
+    // idempotent `commitComposition()` — a second call for the same
+    // syllable becomes a no-op.
     let sentPrefix = "";
     let lastKeyCode229 = false;
     let composing = false;
@@ -417,19 +402,17 @@ export function Terminal({
         }
 
         case "insertText": {
-          // Plain ASCII vs IME first-jamo. We treat it as IME when EITHER
-          // a keyCode-229 keydown was just observed OR `ev.data` itself is
-          // a CJK character. WKWebView occasionally fires `input` before
-          // the corresponding keydown, so the flag alone is unreliable
-          // for the very first jamo of a session.
+          // Distinguish plain ASCII from an IME first-jamo: treat as
+          // IME when a keyCode-229 keydown was just observed OR
+          // `ev.data` is a CJK character. The data check covers the
+          // first jamo of a session when WKWebView fires `input`
+          // before the corresponding keydown.
           const isIme =
             lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
           if (!isIme) {
-            // Plain ASCII char that xterm's keypress already emitted to
-            // the PTY. The browser still appends it to the helper textarea
-            // though (input is non-cancelable), so we must advance
-            // sentPrefix or the next IME insertText will re-emit it as
-            // part of its committed-prefix diff.
+            // Plain ASCII. xterm's keypress already emitted it; we
+            // only advance `sentPrefix` so the next IME insertText
+            // diff doesn't re-emit it as part of its committed prefix.
             hideComposing();
             composing = false;
             if (ta) sentPrefix = ta.value;
@@ -439,11 +422,10 @@ export function Terminal({
           if (!ta) return;
           const value = ta.value;
           const newCharLen = ev.data?.length ?? 0;
-          // Stale sentPrefix from a prior non-IME commit (e.g. Space
-          // committed "있 " then Ctrl+C cleared the line) leaves
-          // sentPrefix pointing past the start of this fresh composition.
-          // Detect mismatch and reset so slice() doesn't produce an
-          // empty preview, dropping the first jamo.
+          // If textarea no longer starts with our tracked prefix, a
+          // non-IME keystroke (Space, Ctrl+C, …) reset the textarea
+          // between compositions. Reset so the slice below doesn't
+          // drop the first jamo of the fresh composition.
           if (!value.startsWith(sentPrefix)) {
             sentPrefix = value.slice(0, Math.max(0, value.length - newCharLen));
           }
@@ -473,37 +455,33 @@ export function Terminal({
 
     const onKeydown = (e: Event) => {
       const ev = e as KeyboardEvent;
-      // keyCode 229 = IME composing key. xterm's keydown handler reacts
-      // to this with a `_handleAnyTextareaChanges` setTimeout that would
-      // emit duplicate text. Stop it at capture phase, AND remember it so
-      // a following `insertText` is treated as IME first-jamo (Family B).
+      // keyCode 229 = IME composing key. xterm's keydown reacts to
+      // 229 with a `_handleAnyTextareaChanges` setTimeout that would
+      // emit duplicate text — swallow at capture, and remember the
+      // flag so a following `insertText` is recognised as an IME
+      // jamo when its CJK-data check is ambiguous.
       //
-      // EXCEPT: macOS reports keyCode 229 even for the terminator
-      // keystroke that finalizes the composition (space, Enter, etc.)
-      // when the user has uncommitted IME state. If we treat such a key
-      // as IME, the subsequent `input` event takes the IME branch and
-      // re-emits the terminator on top of xterm's own keypress emit,
-      // producing duplicate spaces / Enters. Detect ONLY true terminator
-      // keys (named non-printable keys + actual whitespace) and fall
-      // through to the non-IME path. Letter/digit/punctuation keys keep
-      // 229 → IME path because Korean 2-set IME reports them with
-      // `ev.key` set to the underlying ASCII (e.g. shift+ㅅ → key="T"),
-      // and treating those as terminators flushes mid-syllable —
-      // dropping the second jamo of double consonants like ㅆ in `있`.
+      // macOS reports 229 even for the terminator keystroke that
+      // finalizes the composition (space, Enter, …) when IME state
+      // is uncommitted. Those must NOT take the IME path or the
+      // follow-up `input` event re-emits the terminator on top of
+      // xterm's keypress emit. Detect named non-printable keys +
+      // actual whitespace as terminators and fall through to the
+      // plain path. Letter/digit/punctuation keys keep the IME
+      // path because the Korean 2-set IME reports them with
+      // `ev.key` set to underlying ASCII (e.g. shift+ㅅ → key="T"),
+      // and treating those as terminators flushes mid-syllable.
       if (ev.keyCode === 229) {
         const ta229 = container.querySelector<HTMLTextAreaElement>(
           ".xterm-helper-textarea",
         );
         const hasComposition = !!ta229?.value;
-        // Backspace inside active IME composition is internal IME
-        // editing — the `input` event already updated the preview
-        // (e.g. "있" → "이"). Don't flush, don't let xterm emit \x7f,
-        // or the committed "이" would race with the backspace and
-        // leave the line in a broken state.
-        //
-        // Backspace WITHOUT composition (Korean input mode but nothing
-        // being composed) must behave like a normal backspace and
-        // reach the PTY, so it's left in TERMINATOR_KEYS below.
+        // Backspace inside active composition is internal IME
+        // editing (e.g. "있" → "이"); the `input` event already
+        // updated the preview. Suppress xterm's \x7f emit so the
+        // committed glyph doesn't race the backspace into the line.
+        // Backspace WITHOUT composition falls through to the plain
+        // path via TERMINATOR_KEYS below.
         if (ev.key === "Backspace" && hasComposition) {
           if (ta229) showComposing(ta229.value.slice(sentPrefix.length));
           lastKeyCode229 = true;
@@ -519,32 +497,26 @@ export function Terminal({
           ev.stopImmediatePropagation();
           return;
         }
-        // Terminator under IME — treat as non-IME; the previous
-        // syllable still needs flushing, which happens below because
-        // `lastKeyCode229` remains true from the prior real IME keydown.
+        // Terminator under IME falls through; the prior syllable
+        // still needs flushing, which happens below because
+        // `lastKeyCode229` remains true from the real IME keydown.
       }
-      // Modifier-only keystrokes (Shift/Ctrl/Alt/Meta) are part of a
-      // chord, not a real key. They must NOT flush mid-composition or
-      // clear `lastKeyCode229` — Korean 2-set IME emits Shift before
-      // the second jamo of double consonants like ㅆ, and flushing here
-      // would commit the prior syllable (e.g. "이") before ㅆ has a
-      // chance to combine into "있".
+      // Modifier-only keystrokes are part of a chord, not a real
+      // key. Must NOT flush mid-composition or clear lastKeyCode229
+      // — Korean 2-set IME emits Shift before the second jamo of
+      // a double consonant, and flushing here would commit the
+      // prior syllable before the second jamo can combine.
       const MODIFIER_KEYS = new Set([
         "Shift", "Control", "Alt", "Meta", "CapsLock",
       ]);
       if (MODIFIER_KEYS.has(ev.key)) {
         return;
       }
-      // Non-IME key. If we just left IME mode (last keydown was 229),
-      // commit whatever Korean syllable is mid-composition so it lands in
-      // the PTY before this key's effect (space, Enter, English…).
-      //
-      // `commitComposition()` is idempotent: even if WKWebView follows up
-      // with its own `insertFromComposition` event for the same syllable
-      // (some IME modes do this), the second call no-ops because
-      // `composing` is already false. That removes the previous Family
-      // A/B branching and the double-emit it leaked when macOS flipped
-      // event shapes mid-composition ("한글 한글", "강강", "는 는").
+      // Non-IME key after IME activity. Commit any mid-composition
+      // syllable so it lands in the PTY before this key's effect
+      // (space, Enter, English letter, …). Idempotent — a follow-up
+      // `insertFromComposition` for the same syllable hits the
+      // composing===false guard and is a no-op.
       if (lastKeyCode229 && composing) {
         commitComposition();
       }
@@ -593,17 +565,35 @@ export function Terminal({
     container.addEventListener("input", onInput, true);
     container.addEventListener("keydown", onKeydown, true);
 
-    // Block xterm.js's own compositionstart/update/end listeners on the
-    // helper textarea. xterm registers them in CoreBrowserTerminal.ts and
-    // its CompositionHelper.compositionend → _finalizeComposition →
-    // triggerDataEvent re-emits the textarea contents (the whole composed
-    // phrase) on top of the per-syllable PTY writes we already issued via
-    // `onInput`. The duplication surfaces when PTY output bursts, refresh,
-    // fit, or scroll cause the WKWebView IME stack to fire native
-    // compositionend even though our W3C InputEvent path is the source of
-    // truth. Stop the events at container capture phase so xterm's
-    // listeners never see them; our own onInput handler covers preview,
-    // partial commits, and final commit through `commitComposition()`.
+    // Own the paste path. xterm's built-in listener emits the
+    // pasted text but only calls `stopPropagation()` — it never
+    // `preventDefault()`s, so the browser's default action still
+    // re-inserts the text into the helper textarea. That residue
+    // collides with the IME composition tracker, which on the next
+    // terminator keystroke would slice it out of the textarea as
+    // an "uncommitted preview" and re-emit it to the PTY.
+    //
+    // Intercept at capture phase: read clipboardData ourselves and
+    // hand it to `term.paste()`, which routes through xterm's
+    // onData (with bracketed-paste wrapping intact when the PTY
+    // enabled the mode) and clears the textarea. `preventDefault`
+    // blocks the browser reinsertion; `stopImmediatePropagation`
+    // blocks xterm's listener so the data emits exactly once.
+    const onPaste = (e: Event) => {
+      const ev = e as ClipboardEvent;
+      const text = ev.clipboardData?.getData("text/plain") ?? "";
+      if (text) term.paste(text);
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    };
+    container.addEventListener("paste", onPaste, true);
+
+    // Swallow xterm's compositionstart/update/end. Its compositionend
+    // handler re-emits the entire textarea contents on top of the
+    // per-syllable PTY writes our `onInput` path already issued,
+    // duplicating the composed phrase. Our `onInput` covers preview,
+    // partial commits, and final commit through `commitComposition()`,
+    // so xterm's path is pure duplication.
     const swallowComposition = (e: Event) => {
       e.stopImmediatePropagation();
     };
@@ -1031,6 +1021,7 @@ export function Terminal({
       resizeObserver.disconnect();
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
+      container.removeEventListener("paste", onPaste, true);
       container.removeEventListener("compositionstart", swallowComposition, true);
       container.removeEventListener("compositionupdate", swallowComposition, true);
       container.removeEventListener("compositionend", swallowComposition, true);
