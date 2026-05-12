@@ -1,6 +1,5 @@
 //! Size-bounded log file rotation for the daemon.
 //!
-//! Q14 / Q25 decisions:
 //! * `daemon.log` ≤ 10 MB before rotation
 //! * Up to 3 prior files retained (`daemon.log.1`, `.2`, `.3`)
 //! * Older rotations are deleted, not gzipped — debugging convenience
@@ -18,7 +17,9 @@ use std::sync::Mutex;
 
 use super::paths;
 
-/// 10 MB rotation threshold — matches the Q25 decision.
+/// 10 MB rotation threshold. Three rotations × 10 MB ≈ 40 MB worst-case
+/// disk footprint, which is well under the noise floor of an Acorn
+/// install and still long enough to capture multi-day usage.
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 /// Keep three rotations (`.1`, `.2`, `.3`); older files are deleted on
 /// the next rotation.

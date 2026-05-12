@@ -1,9 +1,8 @@
 //! Daemon-side session registry.
 //!
-//! Per Q8 of the design: the Acorn app's `sessions.json` remains the
-//! source-of-truth for rich session metadata (name, branch, ordering,
-//! status, claude_session_id, etc.). The daemon keeps the *minimum*
-//! identity it needs to:
+//! The Acorn app's `sessions.json` is the source-of-truth for rich
+//! session metadata (name, branch, ordering, status, etc.). The daemon
+//! keeps only the *minimum* identity it needs to:
 //!
 //! 1. Spawn a new PTY when asked.
 //! 2. Tell the app what PTYs it currently holds (so the app can reconcile
@@ -47,7 +46,7 @@ pub struct DaemonSession {
     /// Branch label for telemetry. Not used in any decision logic.
     pub branch: Option<String>,
     /// Agent runtime classification. Drives the resume strategy registry
-    /// (Q7 — Claude Code uses `--session-id <uuid>`; aider uses cwd-local
+    /// (Claude Code uses `--session-id <uuid>`; aider uses cwd-local
     /// `.aider.chat.history.md`; etc.).
     pub agent_kind: Option<AgentKind>,
     /// Resume token paired with `agent_kind`. For Claude Code this is

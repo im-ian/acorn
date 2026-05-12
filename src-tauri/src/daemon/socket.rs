@@ -1,15 +1,14 @@
 //! Cross-platform local-socket abstraction wrapping the `interprocess` crate.
 //!
-//! Q11 / Q24 decisions in one place:
-//!
 //! * **Control socket** and **stream socket** are bound to two separate
 //!   filesystem paths (Unix) / named pipes (Windows). Splitting them
 //!   prevents head-of-line blocking — a multi-MB scrollback dump on the
 //!   stream socket cannot starve a `ListSessions` RPC on the control
 //!   socket.
-//! * **`interprocess` crate** is used so the same code path works on
-//!   macOS (`AF_UNIX`) and Windows (named pipes). macOS-only MVP per
-//!   Q1, but the Windows branch is wired now to avoid a v2 rewrite.
+//! * **`interprocess`** crate is used so the same code path works on
+//!   macOS (`AF_UNIX`) and Windows (named pipes). The current build
+//!   targets macOS, but `interprocess` keeps the Windows path one
+//!   `cfg!()` away rather than a rewrite.
 //! * Pre-bind cleanup: stale socket files left behind by an abnormal
 //!   exit are removed before `bind()`. The PID-file singleton check has
 //!   already verified that no other daemon owns the path.

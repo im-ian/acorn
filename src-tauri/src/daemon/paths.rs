@@ -8,14 +8,15 @@
 //! ~/Library/Application Support/io.im-ian.acorn/
 //! ├── sessions.json           (app-owned, untouched by the daemon)
 //! ├── projects.json           (app-owned)
-//! ├── ipc.sock                (legacy in-process IPC — to be removed in Sprint 3)
+//! ├── ipc.sock                (in-process IPC socket for the legacy CLI)
 //! ├── daemon.sock             (daemon control socket)
-//! ├── daemon-stream.sock      (daemon stream socket — split per Q24)
+//! ├── daemon-stream.sock      (daemon stream socket — split from control to
+//! │                            avoid head-of-line blocking under burst load)
 //! ├── daemon.pid              (lockfile; presence implies daemon claim)
 //! ├── daemon.log              (current log; rotated to .1 / .2 on size)
 //! ├── daemon.log.1
 //! ├── daemon.log.2
-//! ├── daemon-sessions.json    (daemon-side minimal metadata, Q8)
+//! ├── daemon-sessions.json    (daemon-side minimal session metadata)
 //! └── crashes/
 //!     └── <utc-timestamp>.log (panic / abnormal-exit captures)
 //! ```
@@ -99,8 +100,8 @@ pub fn log_file_path() -> std::io::Result<PathBuf> {
 
 /// Daemon-side session metadata persistence path. Distinct from the
 /// app's `sessions.json` so the two stores cannot accidentally clobber
-/// each other — daemon-as-rich-SoT migration would consolidate later
-/// (out of scope for this PR; see Q-design doc).
+/// each other. The app remains the rich source-of-truth; this file
+/// only carries what the daemon needs to reconcile on next boot.
 pub fn daemon_sessions_path() -> std::io::Result<PathBuf> {
     Ok(data_dir()?.join("daemon-sessions.json"))
 }

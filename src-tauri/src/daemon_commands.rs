@@ -3,11 +3,10 @@
 //! Naming policy: every command in this module is prefixed `daemon_` so
 //! the frontend can grep for the entire daemon surface in `api.ts`
 //! without ambiguity against the legacy in-process commands in
-//! `commands.rs`. The legacy commands stay live during the rollout —
-//! `commands::pty_spawn` keeps working when the user has the toggle
-//! disabled (Q16 killswitch). Sprint 4 will introduce the "if daemon
-//! enabled, prefer daemon path" branch inside `commands::pty_spawn`
-//! so frontend call sites do not have to know.
+//! `commands.rs`. The legacy commands stay live alongside this surface;
+//! `commands::pty_spawn` is the seam where a future change will route
+//! to the daemon when the user has the killswitch on. Frontend call
+//! sites do not have to know which side served them.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -162,10 +161,10 @@ pub fn daemon_list_sessions(
         .collect())
 }
 
-/// Frontend → daemon spawn proxy. Used by `commands::pty_spawn` (Sprint
-/// 4) when the killswitch is on, and directly by tests via the daemon
-/// path. Returns the session UUID the daemon assigned (always equal to
-/// `session_id` when supplied).
+/// Frontend → daemon spawn proxy. Invoked by the legacy `pty_spawn`
+/// command once daemon-routed spawning lands, and directly by tests
+/// that exercise the daemon path. Returns the session UUID the daemon
+/// assigned (always equal to `session_id` when supplied).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn daemon_spawn_session(

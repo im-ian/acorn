@@ -1,9 +1,10 @@
 //! Panic / abnormal-exit capture for the daemon.
 //!
-//! Q27 decision: daemon crash → auto-respawn by the app AND a crash log is
-//! written so the user (or a future bug report) can see what failed without
-//! sifting through the rotating `daemon.log`. Crash files are timestamped
-//! UTC so multiple crashes in the same session do not overwrite each other.
+//! On daemon crash the app auto-respawns and a crash log is written so
+//! the user (or a future bug report) can see what failed without
+//! sifting through the rotating `daemon.log`. Crash files are
+//! timestamped UTC so multiple crashes in the same session do not
+//! overwrite each other.
 //!
 //! What we capture:
 //! * The Rust panic message (`panic_info.payload()`).

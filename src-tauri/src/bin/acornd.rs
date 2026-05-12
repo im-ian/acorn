@@ -11,10 +11,10 @@
 //! acornd shutdown           # CLI: ask daemon to quit gracefully
 //! ```
 //!
-//! Future subcommands (`create-tab`, `send-keys`, `select-session`, etc.)
-//! will land in Sprint 3 alongside the `acorn-ipc` removal. For now this
-//! binary establishes the surface and the daemon serve path; the CLI
-//! gestures here are the minimum needed for app probes / smoke tests.
+//! The CLI subcommands cover the operations the daemon protocol exposes
+//! directly. Operations that require coordination with the running
+//! Acorn app (e.g. focus a tab in the UI) stay on the legacy
+//! `acorn-ipc` CLI for now.
 
 use std::io;
 use std::process::ExitCode;

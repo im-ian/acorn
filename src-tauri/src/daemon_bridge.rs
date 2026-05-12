@@ -3,10 +3,10 @@
 //!
 //! * Daemon spawn lifecycle (probe → spawn detached → wait for socket
 //!   to come up → cache a persistent `ControlConn`).
-//! * Settings-gated routing — when `useDaemon` is OFF (Q16 killswitch),
-//!   every helper short-circuits to `Err(BridgeError::Disabled)` so the
-//!   caller can fall back to the legacy in-process PTY path.
-//! * Auto-respawn on connection failure (Q27) up to `MAX_SPAWN_RETRIES`
+//! * Settings-gated routing — when the user has the daemon disabled,
+//!   every helper short-circuits to `Err(BridgeError::Disabled)` so
+//!   the caller can fall back to the legacy in-process PTY path.
+//! * Auto-respawn on connection failure up to `MAX_SPAWN_RETRIES`
 //!   before surfacing the error to the user.
 //!
 //! Threading: the cached `ControlConn` is wrapped in a `Mutex` so the
@@ -41,8 +41,9 @@ use crate::daemon::{client, lifecycle, paths};
 const SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Maximum daemon (re)spawn attempts before the bridge gives up and
-/// requires the user to investigate. Matches Q27 "5 retries before
-/// surface error".
+/// surfaces the failure to the user. Five is enough to absorb a
+/// transient `bind()` race on a stale socket file without hiding a
+/// real "daemon binary is missing" misconfiguration.
 const MAX_SPAWN_RETRIES: u32 = 5;
 
 #[derive(Debug)]
@@ -108,8 +109,9 @@ pub struct DaemonBridge {
 impl DaemonBridge {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            // Default ON per Q16. Settings toggle flips this at runtime
-            // via `set_enabled`.
+            // Default ON so a fresh install gets persistent sessions
+            // out of the box. The Settings toggle flips this at
+            // runtime via `set_enabled`.
             enabled: AtomicBool::new(true),
             conn: Mutex::new(None),
             binary_path: Mutex::new(None),

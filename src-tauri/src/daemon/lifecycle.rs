@@ -14,7 +14,7 @@
 //!    leader and cannot accidentally re-acquire a controlling TTY), and
 //!    only then exec's the daemon proper. Result: when the user quits
 //!    the Acorn app, SIGTERM to the app's group does NOT reach the
-//!    daemon — matching the Q2 "explicit quit only" lifetime.
+//!    daemon. The daemon only exits on an explicit `Shutdown` RPC.
 //!
 //! 3. **Probe** — used by the app's pre-spawn check ("is a daemon already
 //!    running on the canonical socket?"). Just a `connect()` attempt with
@@ -73,10 +73,10 @@ fn is_process_alive(pid: u32) -> bool {
 
 #[cfg(not(unix))]
 fn is_process_alive(_pid: u32) -> bool {
-    // Windows support lands with the cross-platform `interprocess`
-    // wiring; until then conservatively report "alive" so the caller
-    // refuses to start a second daemon. macOS-only MVP (Q1) cannot
-    // observe this branch.
+    // Conservative on non-Unix: report "alive" so the caller refuses
+    // to start a second daemon. The current macOS-only build never
+    // hits this branch; the stub keeps the function buildable when
+    // Windows support is added later.
     true
 }
 

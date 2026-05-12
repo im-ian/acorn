@@ -564,12 +564,13 @@ pub async fn pty_spawn<R: Runtime>(
                     .entry("ACORN_IPC_SOCKET".to_string())
                     .or_insert_with(|| socket.display().to_string());
             }
-            // Daemon socket for the new `acornd` CLI. Coexists with the
-            // legacy `ACORN_IPC_SOCKET` during rollout: scripts that
-            // call `acorn-ipc` still find the in-process server, while
-            // newer agents using `acornd` discover the daemon. Sprint 4
-            // removes the legacy entry once `pty_spawn` itself routes
-            // through the daemon.
+            // Daemon socket for the `acornd` CLI. Coexists with
+            // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
+            // the in-process server, while `acornd <subcommand>`
+            // reaches the daemon. The two transports manage different
+            // session graphs today (daemon vs in-process); they
+            // converge when `pty_spawn` itself routes through the
+            // daemon.
             if let Ok(daemon_sock) = crate::daemon::paths::control_socket_path() {
                 effective_env
                     .entry("ACORN_DAEMON_SOCKET".to_string())

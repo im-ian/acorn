@@ -283,7 +283,7 @@ function readKillswitch(): boolean {
   try {
     const raw = window.localStorage.getItem(KILLSWITCH_KEY);
     if (raw === null) {
-      // Q16: default ON for new installs.
+      // Default ON so new installs land on the persistent path.
       return true;
     }
     return raw === "true";

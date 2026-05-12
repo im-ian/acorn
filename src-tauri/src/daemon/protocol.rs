@@ -113,8 +113,8 @@ pub enum ControlPayload {
     ListSessions,
     /// Create a new PTY-backed session. The daemon allocates a UUID,
     /// records minimal metadata, spawns the PTY, and returns the new id.
-    /// Acorn-app integration: app merges this id into its own DB on
-    /// receipt (reconciliation per Q8 decision).
+    /// The app merges this id into its own DB on receipt so the two
+    /// stores stay in sync without a cross-process transaction.
     SpawnSession {
         spec: SpawnSpec,
     },
@@ -138,7 +138,8 @@ pub enum ControlPayload {
         max_bytes: Option<usize>,
     },
     /// Kill a session. Drops the PTY child and marks the session as
-    /// `dead` (retained in metadata for ghost UI per Q7).
+    /// `dead`. Metadata is retained so the app can render a ghost row
+    /// and offer "resume from disk" before the user opts to forget.
     KillSession {
         target_session_id: Uuid,
     },
@@ -158,10 +159,11 @@ pub enum ControlPayload {
     Shutdown,
 }
 
-/// Spec for a new PTY session, mirrored from the existing `pty_spawn`
-/// Tauri command so the migration is lossless. The daemon will copy these
-/// values into its own session metadata so the orphan/ghost reconcile
-/// logic (Q8) can hand them back to the app on next attach.
+/// Spec for a new PTY session. Mirrors the shape of the Acorn app's
+/// `pty_spawn` Tauri command so the app hands the same payload to
+/// either path. The daemon copies these values into its own session
+/// metadata so the orphan/ghost reconcile logic can hand them back on
+/// next attach.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpawnSpec {
     /// Caller-suggested session id. If `None`, the daemon allocates a
@@ -204,7 +206,7 @@ pub struct SpawnSpec {
     pub branch: Option<String>,
     /// Resume token for agent-aware recovery. For Claude Code this is
     /// the `--session-id <uuid>` value the daemon will inject into argv.
-    /// Strategy registry (Q7) dispatches on `agent_kind`.
+    /// The resume strategy registry dispatches on `agent_kind`.
     #[serde(default)]
     pub agent_resume_token: Option<String>,
     /// Agent classification — drives the resume strategy registry. `None`
@@ -420,9 +422,10 @@ mod tests {
 
     #[test]
     fn additive_optional_fields_load_legacy_hello() {
-        // Legacy hello frame without source_session_id / client_name —
-        // simulates an older client. Must parse successfully so future
-        // minor-version bumps stay non-breaking (Q15).
+        // Hello frame without source_session_id / client_name —
+        // simulates a client built against an earlier minor version.
+        // Must parse successfully so additive minor-version bumps stay
+        // non-breaking.
         let s = r#"{"protocol_version_major":1,"protocol_version_minor":0,"role":"control-one-shot"}"#;
         let parsed: Hello = serde_json::from_str(s).unwrap();
         assert_eq!(parsed.protocol_version_major, 1);

@@ -1,7 +1,9 @@
 //! Per-session scrollback ring buffer kept in RAM by the daemon.
 //!
-//! Sized to match Acorn's xterm.js `scrollback: 5000` setting (Q9 decision):
-//! whichever of `LINE_CAP` rows or `BYTE_CAP` bytes is reached first triggers
+//! Sized to match Acorn's xterm.js `scrollback: 5000` setting so the
+//! daemon's replay on reattach is never shorter than what the user
+//! could already scroll back to in the live terminal: whichever of
+//! `LINE_CAP` rows or `BYTE_CAP` bytes is reached first triggers
 //! eviction of the oldest bytes. Newlines are counted, not parsed — escape
 //! sequences (`\x1b[…`) pass through verbatim so a stream replay reproduces
 //! the user's exact prior screen state on reattach.

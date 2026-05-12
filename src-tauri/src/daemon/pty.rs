@@ -11,14 +11,15 @@
 //!
 //! 2. **Lifetime tied to the registry, not to a Tauri AppHandle.** When
 //!    the PTY exits, the wait thread marks the session dead in the
-//!    `SessionRegistry` but does NOT remove it — ghost UI is the app's
-//!    decision (Q7), not the daemon's.
+//!    `SessionRegistry` but does NOT remove it. Whether to render a
+//!    ghost or hide the session is the app's choice; the daemon just
+//!    preserves the truth.
 //!
-//! 3. **Argv augmentation hook.** For control sessions with a known
-//!    `agent_kind`, the spawn helper rewrites the argv to inject the
-//!    appropriate resume token (e.g. Claude Code's `--session-id <uuid>`)
-//!    so a daemon restart can recreate the agent's prior context (Q7
-//!    strategy registry). Unknown agents pass through unmodified.
+//! 3. **Argv augmentation hook.** For sessions with a known
+//!    `agent_kind`, the spawn helper rewrites argv to inject the
+//!    appropriate resume token (e.g. Claude Code's `--session-id
+//!    <uuid>`) so a daemon restart recreates the agent's prior
+//!    context. Unknown agents pass through unmodified.
 
 use std::io::Read;
 use std::sync::Arc;
@@ -158,9 +159,9 @@ impl PtyManager {
 
         self.handles.insert(session_id, Arc::clone(&handle));
 
-        // Register the daemon-side session metadata. The app DB still
-        // owns the rich form (Q8); this is just what the daemon needs
-        // for reconciliation.
+        // Register the daemon-side session metadata. The app DB owns
+        // the rich form; this is the minimum the daemon needs for
+        // reconciliation.
         let mut session = DaemonSession::new(session_id, spec.name.clone(), spec.kind, spec.cwd.clone());
         session.repo_path = spec.repo_path.clone();
         session.branch = spec.branch.clone();
@@ -270,8 +271,10 @@ impl PtyManager {
 }
 
 /// Resume-strategy dispatcher. Folds the `agent_kind` + `agent_resume_token`
-/// pair onto the argv that will actually be exec'd. Keeps a single seam
-/// for registry growth (Q7: "claude first, others added as docs verified").
+/// pair onto the argv that will actually be exec'd. Single seam for
+/// registry growth — Claude Code is implemented today; aider / llm /
+/// open-interpreter / codex are passthrough until their resume
+/// protocols are verified end-to-end.
 fn apply_resume_strategy(
     command: &str,
     args: &[String],
@@ -303,9 +306,10 @@ fn apply_resume_strategy(
             new_args.extend(args.iter().cloned());
             (command.to_string(), new_args)
         }
-        // Other agents: documented Sprint 1+; for now passthrough so
-        // we don't ship a half-implemented strategy. Each new agent
-        // gets its own match arm + a docs link in the PR.
+        // Other agents passthrough. Each new agent's resume protocol
+        // gets verified end-to-end before earning its own match arm —
+        // shipping a half-implemented strategy that silently breaks
+        // resume is worse than no strategy at all.
         AgentKind::Aider
         | AgentKind::Llm
         | AgentKind::OpenInterpreter
