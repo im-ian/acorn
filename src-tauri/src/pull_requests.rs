@@ -1030,10 +1030,9 @@ fn run_pr_merge(
         }
     }
 
-    // gh's `--yes` confirmation flag was added in a recent release; older
-    // installs reject it as an unknown flag. Pipe a confirmation through
-    // stdin instead — it answers any "Continue with merge?" prompt without
-    // depending on a flag the local CLI may not have.
+    // Older `gh` releases reject `--yes` as an unknown flag. Pipe a
+    // confirmation through stdin instead — it answers any "Continue with
+    // merge?" prompt without depending on a flag the local CLI may not have.
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

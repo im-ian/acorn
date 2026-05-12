@@ -10,9 +10,9 @@ import { createPortal } from "react-dom";
 
 interface TooltipProps {
   /**
-   * Tooltip content. A string keeps the legacy single-line look; pass a
-   * `ReactNode` (e.g. multiple lines) and set `multiline` to switch the
-   * container to a wrappable layout.
+   * Tooltip content. A string renders single-line; pass a `ReactNode`
+   * (e.g. multiple lines) and set `multiline` to switch the container to a
+   * wrappable layout.
    */
   label: ReactNode;
   /** Where the tooltip appears relative to the trigger. Default: "bottom". */

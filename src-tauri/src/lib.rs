@@ -142,8 +142,7 @@ pub fn run() {
                     .to_string();
                 state.projects.ensure(session.repo_path.clone(), name);
             }
-            // Drop scrollback files for sessions that no longer exist (e.g.
-            // removed while the app was offline, or pre-feature debris).
+            // Drop scrollback files that no longer have a matching session.
             // Skip when the session load was unclean — otherwise a transient
             // disk failure would silently delete every scrollback file on the
             // way to a fully empty session list.

@@ -970,11 +970,10 @@ function AboutSettings() {
         });
         return;
       }
-      // The running version doesn't have its own public release (e.g. a
-      // private hotfix that was overwritten, a locally bumped dev build,
-      // or a pre-release tag). Fall back to the latest published release
-      // so the user still sees something meaningful instead of an empty
-      // placeholder.
+      // The running version has no matching public release (locally bumped
+      // dev build, pre-release tag, or unpublished build). Fall back to the
+      // latest published release so the user still sees something meaningful
+      // instead of an empty placeholder.
       const latest = await fetchLatestReleaseNotes();
       setWhatsNewSource({
         kind: "current",

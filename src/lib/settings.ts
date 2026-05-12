@@ -326,8 +326,8 @@ function loadSettings(): AcornSettings {
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
 
-    // Sessions startup migration: legacy `mode === "claude"` collapses
-    // into the new agent-mode + global selected agent.
+    // `mode === "claude"` from older storage maps to agent mode with the
+    // global selected agent.
     const startupRaw = (parsed.sessionStartup ?? {}) as {
       mode?: string;
       customCommand?: string;
@@ -341,10 +341,9 @@ function loadSettings(): AcornSettings {
         ? startupRaw.mode
         : DEFAULT_SETTINGS.sessionStartup.mode;
 
-    // Agents migration: prefer existing `agents` block, otherwise lift
-    // values from the v1 `commitMessage` block, otherwise fall back to
-    // a Claude default. Legacy `mode === "claude"` also seeds
-    // `selected` if nothing else has set it.
+    // Prefer the `agents` block; fall back to values stored under the older
+    // `commitMessage` shape, then to the Claude default. `mode === "claude"`
+    // from older storage seeds `selected` when nothing else has set it.
     const agentsRaw = (parsed.agents ?? {}) as {
       selected?: string;
       customCommand?: string;
