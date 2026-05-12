@@ -1,5 +1,6 @@
 mod cli_resolver;
 mod commands;
+pub mod daemon;
 mod error;
 mod git_ops;
 mod ipc;
