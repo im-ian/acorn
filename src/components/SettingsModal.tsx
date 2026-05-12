@@ -68,20 +68,24 @@ export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
   const reset = useSettings((s) => s.reset);
+  const pendingTab = useSettings((s) => s.pendingTab);
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
   // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
-  // jump there on next render and clear the flag so subsequent opens
-  // restore the user's manual tab choice.
+  // jump there on the next render and clear the flag so subsequent
+  // opens restore the user's manual tab choice. Subscribing to
+  // `pendingTab` (not just `open`) makes the deep-link work even when
+  // the modal is already open — without it the effect would only fire
+  // on the open-flag transition and a repeat click would no-op.
   useEffect(() => {
-    if (!open) return;
+    if (!open || pendingTab === null) return;
     const pending = consumePendingTab();
     if (pending && TAB_IDS.has(pending)) {
       setTab(pending as Tab);
     }
-  }, [open, consumePendingTab]);
+  }, [open, pendingTab, consumePendingTab]);
 
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step.
