@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { homeDir } from "@tauri-apps/api/path";
+import { Bot, Loader2 } from "lucide-react";
 import { api } from "../lib/api";
+import { cn } from "../lib/cn";
 import { useSettings } from "../lib/settings";
 import type { MemoryProcess } from "../lib/types";
 import { useAppStore } from "../store";
@@ -122,7 +124,10 @@ export function StatusBar() {
     <>
       <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         {/* Left: aggregate counters about acorn itself — total sessions and
-            the active session's lifecycle status. */}
+            the active session's lifecycle status. The IPC button sits first
+            so the user can recover from a dead control-session socket
+            without leaving the main view. */}
+        <IpcStatusButton />
         <span>sessions: {sessions.length}</span>
         {active ? (
           <>
@@ -190,5 +195,85 @@ export function StatusBar() {
         onClose={() => setBreakdownOpen(false)}
       />
     </>
+  );
+}
+
+// Bottom-bar IPC indicator + restart trigger. The badge reflects the in-app
+// listener thread state (authoritative for "can I still accept new
+// connections?"); clicking always cycles the listener so users can recover
+// from a stale socket file even when the thread itself is happy.
+function IpcStatusButton() {
+  const [running, setRunning] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const status = await api.getAcornIpcStatus();
+      setRunning(status.server_running);
+    } catch {
+      // Probe failure is a strong "the backend is unhappy" signal; surface
+      // it as down so the badge is honest rather than stuck on the last
+      // known good state.
+      setRunning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const handleClick = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setLastError(null);
+    try {
+      await api.ipcRestart();
+      await refresh();
+    } catch (err) {
+      setLastError(err instanceof Error ? err.message : String(err));
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, refresh]);
+
+  const tooltip = busy
+    ? "Restarting IPC server…"
+    : lastError
+      ? `IPC restart failed: ${lastError}`
+      : running === null
+        ? "IPC status: loading"
+        : running
+          ? "IPC server: running — click to restart"
+          : "IPC server: down — click to restart";
+
+  return (
+    <Tooltip label={tooltip} side="top" multiline>
+      <button
+        type="button"
+        onClick={() => void handleClick()}
+        disabled={busy}
+        className={cn(
+          "flex h-5 items-center gap-1 rounded px-1.5 transition",
+          "hover:bg-bg-elevated disabled:cursor-default disabled:hover:bg-transparent",
+          running === null
+            ? "text-fg-muted"
+            : running
+              ? "text-accent"
+              : "text-danger",
+        )}
+        aria-label="Restart IPC server"
+      >
+        {busy ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : (
+          <Bot size={12} />
+        )}
+        <span className="text-[10px]">
+          ipc: {running === null ? "…" : running ? "on" : "off"}
+        </span>
+      </button>
+    </Tooltip>
   );
 }

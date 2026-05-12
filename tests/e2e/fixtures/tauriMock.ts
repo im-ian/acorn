@@ -50,6 +50,16 @@ export const tauriMockSource = `
     }
     if (cmd === 'scrollback_orphan_size') return Promise.resolve(0);
     if (cmd === 'scrollback_orphan_clear') return Promise.resolve(0);
+    if (cmd === 'get_acorn_ipc_status') {
+      return Promise.resolve({
+        bundled_path: '',
+        bundled_exists: false,
+        socket_path: '',
+        server_running: false,
+        shim_paths: [],
+      });
+    }
+    if (cmd === 'ipc_restart') return Promise.resolve(undefined);
     if (cmd === 'reorder_projects') return Promise.resolve([]);
     if (cmd === 'reorder_sessions') return Promise.resolve([]);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);

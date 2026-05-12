@@ -22,9 +22,12 @@
 //! handler code linear and reuses the existing blocking PTY pool without
 //! a runtime hop.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -52,17 +55,38 @@ const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
 /// frontend ignores the value today and just triggers a full refresh.
 const SESSIONS_CHANGED_EVENT: &str = "acorn:ipc-sessions-changed";
 
-/// Spawn the IPC server on a dedicated background thread. Returns
-/// immediately; failures during bind are logged but do not crash boot —
-/// the rest of the app remains usable even if IPC cannot start (e.g.
-/// the socket file is held open by a previous crash that left a stale
-/// inode behind).
-pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) {
+/// Shutdown signal for an active IPC listener. The listener thread polls
+/// `running` between non-blocking `accept` attempts; flipping it to false
+/// causes the thread to exit within ~`ACCEPT_POLL_INTERVAL_MS`. Stored in
+/// `AppState` so `ipc_restart` can swap a fresh listener in place.
+pub struct IpcServerHandle {
+    pub running: Arc<AtomicBool>,
+}
+
+impl IpcServerHandle {
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub fn signal_stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Poll cadence for the accept loop. Trades a tiny amount of idle CPU for a
+/// fast restart: the listener notices a stop signal within this window.
+const ACCEPT_POLL_INTERVAL_MS: u64 = 100;
+
+/// Spawn the IPC server on a dedicated background thread. Returns the
+/// shutdown handle on success, or `None` if bind failed (rest of the app
+/// remains usable). The listener is non-blocking and polls its `running`
+/// flag so `ipc_restart` can stop it without process-level signals.
+pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServerHandle> {
     let path = match socket_path::resolve() {
         Ok(p) => p,
         Err(err) => {
             tracing::warn!(error = %err, "ipc: could not resolve socket path; server disabled");
-            return;
+            return None;
         }
     };
     if let Some(parent) = path.parent() {
@@ -72,7 +96,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) {
                 path = %parent.display(),
                 "ipc: could not create socket parent dir; server disabled",
             );
-            return;
+            return None;
         }
     }
     // Best-effort cleanup of any previous socket inode. We do not block on
@@ -86,9 +110,19 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) {
                 path = %path.display(),
                 "ipc: bind failed; server disabled",
             );
-            return;
+            return None;
         }
     };
+    if let Err(err) = listener.set_nonblocking(true) {
+        // Required for the shutdown poll. Bail rather than fall back to
+        // blocking accept — a blocking listener could never honour a stop
+        // signal and would leak its thread on every restart.
+        tracing::warn!(
+            error = %err,
+            "ipc: set_nonblocking failed; server disabled",
+        );
+        return None;
+    }
     if let Err(err) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
         // Tighten on best-effort. If chmod fails we keep going — it just
         // means the socket is more permissive than ideal, not that the
@@ -101,19 +135,36 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) {
     }
     tracing::info!(path = %path.display(), "ipc: listening");
 
-    std::thread::Builder::new()
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_thread = running.clone();
+    let spawn_result = std::thread::Builder::new()
         .name("acorn-ipc-listener".to_string())
-        .spawn(move || run_listener(listener, app, state))
-        .map(|_| ())
-        .unwrap_or_else(|err| {
+        .spawn(move || run_listener(listener, app, state, running_for_thread));
+    match spawn_result {
+        Ok(_) => Some(IpcServerHandle { running }),
+        Err(err) => {
             tracing::warn!(error = %err, "ipc: listener thread failed to start");
-        });
+            None
+        }
+    }
 }
 
-fn run_listener<R: Runtime>(listener: UnixListener, app: AppHandle<R>, state: AppState) {
-    for incoming in listener.incoming() {
-        match incoming {
-            Ok(stream) => {
+fn run_listener<R: Runtime>(
+    listener: UnixListener,
+    app: AppHandle<R>,
+    state: AppState,
+    running: Arc<AtomicBool>,
+) {
+    while running.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                // Accepted streams inherit the listener's non-blocking flag,
+                // but the per-connection handler does blocking reads/writes.
+                // Restoring blocking mode here keeps the handler code simple.
+                if let Err(err) = stream.set_nonblocking(false) {
+                    tracing::warn!(error = %err, "ipc: stream set_blocking failed");
+                    continue;
+                }
                 let app = app.clone();
                 let state = state.clone();
                 std::thread::Builder::new()
@@ -128,11 +179,15 @@ fn run_listener<R: Runtime>(listener: UnixListener, app: AppHandle<R>, state: Ap
                         tracing::warn!(error = %err, "ipc: conn thread spawn failed");
                     });
             }
+            Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(ACCEPT_POLL_INTERVAL_MS));
+            }
             Err(err) => {
                 tracing::warn!(error = %err, "ipc: accept failed");
             }
         }
     }
+    tracing::info!("ipc: listener stopped");
 }
 
 fn handle_connection<R: Runtime>(

@@ -161,8 +161,10 @@ pub fn run() {
             }
             // Start the IPC server in the background. It owns its own
             // listener thread; if bind fails it logs and the app keeps
-            // running with IPC disabled.
-            ipc::server::start(app.handle().clone(), state.inner().clone());
+            // running with IPC disabled. The returned handle lets
+            // `ipc_restart` cycle the listener without process restart.
+            let handle = ipc::server::start(app.handle().clone(), state.inner().clone());
+            *state.ipc_handle.lock() = handle;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -207,6 +209,7 @@ pub fn run() {
             commands::detect_session_statuses,
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
+            commands::ipc_restart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,6 +1,9 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
+use crate::ipc::server::IpcServerHandle;
 use crate::pty::PtyManager;
 use crate::session::{ProjectStore, SessionStore};
 
@@ -16,6 +19,10 @@ pub struct AppState {
     /// persisted layout. Defaults to true (clean) for fresh installs.
     pub sessions_loaded_cleanly: Arc<AtomicBool>,
     pub projects_loaded_cleanly: Arc<AtomicBool>,
+    /// Shutdown handle for the currently running IPC listener thread.
+    /// `None` when bind failed at boot. `ipc_restart` swaps in a new handle
+    /// after signaling the previous listener to exit.
+    pub ipc_handle: Arc<Mutex<Option<IpcServerHandle>>>,
 }
 
 impl AppState {
@@ -26,6 +33,7 @@ impl AppState {
             pty: PtyManager::new(),
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
+            ipc_handle: Arc::new(Mutex::new(None)),
         }
     }
 }
