@@ -556,22 +556,6 @@ function AppearanceSettings() {
               patchSessionDisplay({ metadata: { status: v } })
             }
           />
-          <CheckboxRow
-            label="Last activity"
-            description="Relative timestamp from the session's last update (e.g. 2m ago)."
-            checked={sessionDisplay.metadata.lastActivity}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { lastActivity: v } })
-            }
-          />
-          <CheckboxRow
-            label="Last message"
-            description="First line of the agent's last message, truncated."
-            checked={sessionDisplay.metadata.lastMessage}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { lastMessage: v } })
-            }
-          />
         </div>
       </Field>
       <Field

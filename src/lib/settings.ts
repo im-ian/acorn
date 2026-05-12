@@ -251,10 +251,6 @@ export interface AcornSettings {
       branch: boolean;
       workingDirectory: boolean;
       status: boolean;
-      /** Relative timestamp (e.g. "2 min ago") derived from updated_at. */
-      lastActivity: boolean;
-      /** First line of the session's last_message snapshot, truncated. */
-      lastMessage: boolean;
     };
     /**
      * Inline icon toggles. Status dot is the colored bullet at row start;
@@ -323,8 +319,6 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       branch: true,
       workingDirectory: false,
       status: true,
-      lastActivity: false,
-      lastMessage: false,
     },
     icons: {
       statusDot: true,

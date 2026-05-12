@@ -1157,29 +1157,7 @@ function composeSessionMetadata(
     if (dir) parts.push(dir);
   }
   if (metadata.status) parts.push(STATUS_LABEL[session.status]);
-  if (metadata.lastActivity) {
-    const rel = formatRelativeTime(session.updated_at);
-    if (rel) parts.push(rel);
-  }
-  if (metadata.lastMessage && session.last_message) {
-    const preview = session.last_message
-      .split(/\r?\n/)[0]
-      ?.trim()
-      .slice(0, 60);
-    if (preview) parts.push(preview);
-  }
   return parts.join(" · ");
-}
-
-function formatRelativeTime(iso: string): string | null {
-  const ts = Date.parse(iso);
-  if (Number.isNaN(ts)) return null;
-  const diff = Date.now() - ts;
-  if (diff < 0) return "just now";
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function buildSessionHoverDetails(session: Session): string {
