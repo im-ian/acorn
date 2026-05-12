@@ -596,7 +596,7 @@ export function Terminal({
     container.addEventListener("input", onInput, true);
     container.addEventListener("keydown", onKeydown, true);
 
-    // Own the paste path. xterm's built-in listener emits the
+    // Own the paste path for text. xterm's built-in listener emits the
     // pasted text but only calls `stopPropagation()` — it never
     // `preventDefault()`s, so the browser's default action still
     // re-inserts the text into the helper textarea. That residue
@@ -610,9 +610,21 @@ export function Terminal({
     // enabled the mode) and clears the textarea. `preventDefault`
     // blocks the browser reinsertion; `stopImmediatePropagation`
     // blocks xterm's listener so the data emits exactly once.
+    //
+    // Skip this path when the clipboard carries an image-only
+    // payload (macOS screencapture, copy-image-from-browser). The
+    // WKWebView's native paste relays the underlying NSPasteboard
+    // image to the running CLI (Claude Code surfaces it as
+    // `[Image #N]`), which only works if we let the default
+    // action proceed. Text-mixed payloads still take the owned
+    // path because the textarea residue + IME race outweighs the
+    // image relay there.
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
-      const text = ev.clipboardData?.getData("text/plain") ?? "";
+      const cd = ev.clipboardData;
+      const text = cd?.getData("text/plain") ?? "";
+      const hasFiles = (cd?.files?.length ?? 0) > 0;
+      if (!text && hasFiles) return;
       if (text) term.paste(text);
       ev.preventDefault();
       ev.stopImmediatePropagation();
