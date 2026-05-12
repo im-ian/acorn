@@ -11,7 +11,13 @@ import {
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
-import { useMemo, useRef, useState, useEffect } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  useEffect,
+  type CSSProperties,
+} from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
@@ -528,6 +534,11 @@ function TabItem({
         role="button"
         tabIndex={0}
         draggable={!editing}
+        style={
+          !editing
+            ? ({ WebkitUserDrag: "element" } as CSSProperties)
+            : undefined
+        }
         onDragStart={(e) => {
           setTabDragPayload(e, { sessionId: tab.id, fromPaneId: paneId });
         }}
@@ -555,7 +566,7 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border pl-3 pr-1 text-xs transition",
+          "group relative flex shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-xs transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
