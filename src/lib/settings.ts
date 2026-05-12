@@ -251,6 +251,19 @@ export interface AcornSettings {
       branch: boolean;
       workingDirectory: boolean;
       status: boolean;
+      /** Relative timestamp (e.g. "2 min ago") derived from updated_at. */
+      lastActivity: boolean;
+      /** First line of the session's last_message snapshot, truncated. */
+      lastMessage: boolean;
+    };
+    /**
+     * Inline icon toggles. Status dot is the colored bullet at row start;
+     * sessionKind covers the isolated-worktree (GitBranch) and control
+     * (Bot) glyphs trailing the title.
+     */
+    icons: {
+      statusDot: boolean;
+      sessionKind: boolean;
     };
     /**
      * When true, hovering a row pops a tooltip with every available
@@ -310,6 +323,12 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       branch: true,
       workingDirectory: false,
       status: true,
+      lastActivity: false,
+      lastMessage: false,
+    },
+    icons: {
+      statusDot: true,
+      sessionKind: true,
     },
     showDetailsOnHover: true,
   },
@@ -549,6 +568,10 @@ function loadSettings(): AcornSettings {
           ...DEFAULT_SETTINGS.sessionDisplay.metadata,
           ...(parsed.sessionDisplay?.metadata ?? {}),
         },
+        icons: {
+          ...DEFAULT_SETTINGS.sessionDisplay.icons,
+          ...(parsed.sessionDisplay?.icons ?? {}),
+        },
         showDetailsOnHover:
           typeof parsed.sessionDisplay?.showDetailsOnHover === "boolean"
             ? parsed.sessionDisplay.showDetailsOnHover
@@ -594,8 +617,11 @@ interface SettingsState {
   patchStatusBar: (patch: Partial<AcornSettings["statusBar"]>) => void;
   patchPullRequests: (patch: Partial<AcornSettings["pullRequests"]>) => void;
   patchSessionDisplay: (
-    patch: Partial<Omit<AcornSettings["sessionDisplay"], "metadata">> & {
+    patch: Partial<
+      Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
+    > & {
       metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
+      icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
     },
   ) => void;
   reset: () => void;
@@ -698,13 +724,17 @@ export const useSettings = create<SettingsState>((set) => ({
       const metadata = patch.metadata
         ? { ...s.settings.sessionDisplay.metadata, ...patch.metadata }
         : s.settings.sessionDisplay.metadata;
-      const { metadata: _ignored, ...rest } = patch;
+      const icons = patch.icons
+        ? { ...s.settings.sessionDisplay.icons, ...patch.icons }
+        : s.settings.sessionDisplay.icons;
+      const { metadata: _m, icons: _i, ...rest } = patch;
       const next: AcornSettings = {
         ...s.settings,
         sessionDisplay: {
           ...s.settings.sessionDisplay,
           ...rest,
           metadata,
+          icons,
         },
       };
       persist(next);

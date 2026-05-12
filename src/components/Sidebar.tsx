@@ -911,6 +911,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
+        title={hoverDetails ?? undefined}
         className={cn(
           "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
@@ -927,18 +928,20 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         >
           <GripVertical size={10} />
         </span>
-        <span
-          className={cn(
-            "mt-1.5 size-1.5 shrink-0 rounded-full",
-            STATUS_DOT[session.status],
-          )}
-        />
+        {sessionDisplay.icons.statusDot ? (
+          <span
+            className={cn(
+              "mt-1.5 size-1.5 shrink-0 rounded-full",
+              STATUS_DOT[session.status],
+            )}
+          />
+        ) : null}
         <SessionRowLabel
           editing={editing}
           session={session}
           titleText={titleText}
           metadataText={metadataText}
-          hoverDetails={hoverDetails}
+          showKindIcons={sessionDisplay.icons.sessionKind}
           onSubmitRename={async (next) => {
             setEditing(false);
             if (next && next !== session.name) {
@@ -983,7 +986,7 @@ interface SessionRowLabelProps {
   session: Session;
   titleText: string;
   metadataText: string;
-  hoverDetails: string | null;
+  showKindIcons: boolean;
   onSubmitRename: (value: string) => void | Promise<void>;
   onCancelRename: () => void;
 }
@@ -993,7 +996,7 @@ function SessionRowLabel({
   session,
   titleText,
   metadataText,
-  hoverDetails,
+  showKindIcons,
   onSubmitRename,
   onCancelRename,
 }: SessionRowLabelProps) {
@@ -1011,14 +1014,14 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
-        {session.isolated ? (
+        {showKindIcons && session.isolated ? (
           <GitBranch
             size={10}
             className="shrink-0 text-fg-muted"
             aria-label="isolated worktree"
           />
         ) : null}
-        {session.kind === "control" ? (
+        {showKindIcons && session.kind === "control" ? (
           <Bot
             size={10}
             className="shrink-0 text-accent"
@@ -1034,14 +1037,7 @@ function SessionRowLabel({
     </span>
   );
 
-  // Tooltip swallows pointer events on the trigger; while renaming we
-  // need clean focus on the input, so skip the wrapper entirely.
-  if (!hoverDetails || editing) return body;
-  return (
-    <Tooltip label={hoverDetails} side="right" multiline>
-      {body}
-    </Tooltip>
-  );
+  return body;
 }
 
 async function copyToClipboard(text: string): Promise<void> {
@@ -1161,7 +1157,29 @@ function composeSessionMetadata(
     if (dir) parts.push(dir);
   }
   if (metadata.status) parts.push(STATUS_LABEL[session.status]);
+  if (metadata.lastActivity) {
+    const rel = formatRelativeTime(session.updated_at);
+    if (rel) parts.push(rel);
+  }
+  if (metadata.lastMessage && session.last_message) {
+    const preview = session.last_message
+      .split(/\r?\n/)[0]
+      ?.trim()
+      .slice(0, 60);
+    if (preview) parts.push(preview);
+  }
   return parts.join(" · ");
+}
+
+function formatRelativeTime(iso: string): string | null {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return null;
+  const diff = Date.now() - ts;
+  if (diff < 0) return "just now";
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function buildSessionHoverDetails(session: Session): string {

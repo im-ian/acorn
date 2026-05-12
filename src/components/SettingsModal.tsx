@@ -556,6 +556,45 @@ function AppearanceSettings() {
               patchSessionDisplay({ metadata: { status: v } })
             }
           />
+          <CheckboxRow
+            label="Last activity"
+            description="Relative timestamp from the session's last update (e.g. 2m ago)."
+            checked={sessionDisplay.metadata.lastActivity}
+            onChange={(v) =>
+              patchSessionDisplay({ metadata: { lastActivity: v } })
+            }
+          />
+          <CheckboxRow
+            label="Last message"
+            description="First line of the agent's last message, truncated."
+            checked={sessionDisplay.metadata.lastMessage}
+            onChange={(v) =>
+              patchSessionDisplay({ metadata: { lastMessage: v } })
+            }
+          />
+        </div>
+      </Field>
+      <Field
+        label="Inline icons"
+        hint="Glyphs that decorate each session row. Hide to make the list denser."
+      >
+        <div className="flex flex-col gap-1">
+          <CheckboxRow
+            label="Status dot"
+            description="Colored bullet at the row start. Redundant when Status is enabled in metadata."
+            checked={sessionDisplay.icons.statusDot}
+            onChange={(v) =>
+              patchSessionDisplay({ icons: { statusDot: v } })
+            }
+          />
+          <CheckboxRow
+            label="Session kind icons"
+            description="Branch glyph for isolated worktrees and bot glyph for control sessions."
+            checked={sessionDisplay.icons.sessionKind}
+            onChange={(v) =>
+              patchSessionDisplay({ icons: { sessionKind: v } })
+            }
+          />
         </div>
       </Field>
       <Field
