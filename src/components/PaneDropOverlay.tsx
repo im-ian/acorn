@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/cn";
 import {
   classifyDropZone,
@@ -26,7 +26,11 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
 
-  if (!dragging) return null;
+  // Clear any lingering highlight when the drag ends without a dragleave
+  // event firing on this overlay (e.g., dropped on a sibling pane).
+  useEffect(() => {
+    if (!dragging && zone) setZone(null);
+  }, [dragging, zone]);
 
   function computeZone(e: React.DragEvent): DropZone | null {
     const el = containerRef.current;
@@ -38,10 +42,17 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
     );
   }
 
+  // Always mount so the very first dragenter into a pane body is captured;
+  // toggle pointer-events so the overlay only intercepts events while a tab
+  // drag is actually in progress.
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 z-20"
+      className={
+        dragging
+          ? "absolute inset-0 z-20"
+          : "pointer-events-none absolute inset-0 z-20"
+      }
       onDragEnter={(e) => {
         if (!isTabDrag(e)) return;
         e.preventDefault();
