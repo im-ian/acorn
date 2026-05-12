@@ -16,6 +16,26 @@ import {
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type CollisionDetection,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -48,20 +68,14 @@ const STATUS_LABEL: Record<SessionStatus, string> = {
 
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 
+const PROJECT_DRAG_PREFIX = "project:";
+const SESSION_DRAG_PREFIX = "session:";
+
 interface ProjectGroup {
   repoPath: string;
   name: string;
   sessions: Session[];
 }
-
-type DropPosition = "before" | "after";
-
-interface ProjectDropTarget {
-  repoPath: string;
-  position: DropPosition;
-}
-
-const PROJECT_DRAG_MIME = "application/x-acorn-project";
 
 export function Sidebar() {
   const {
@@ -76,10 +90,10 @@ export function Sidebar() {
     requestRemoveProject,
     addProject,
     reorderProjects,
+    reorderSessions,
   } = useAppStore();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
-  const [draggingProject, setDraggingProject] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<ProjectDropTarget | null>(null);
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
 
   useEffect(() => {
     saveCollapsed(collapsed);
@@ -90,76 +104,15 @@ export function Sidebar() {
     [projects, sessions],
   );
 
-  function onProjectDragStart(e: React.DragEvent, repoPath: string) {
-    setDraggingProject(repoPath);
-    try {
-      e.dataTransfer.setData(PROJECT_DRAG_MIME, repoPath);
-      e.dataTransfer.setData("text/plain", repoPath);
-    } catch {
-      // Some webviews block setData during dragstart; module-level state
-      // (`draggingProject`) covers this fallback.
-    }
-    e.dataTransfer.effectAllowed = "move";
-  }
-
-  function onProjectDragOver(
-    e: React.DragEvent,
-    repoPath: string,
-  ) {
-    if (draggingProject === null) return;
-    if (draggingProject === repoPath) {
-      // Hovering over self — clear any preview.
-      if (dropTarget !== null) setDropTarget(null);
-      return;
-    }
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const position: DropPosition =
-      e.clientY - rect.top < rect.height / 2 ? "before" : "after";
-    if (
-      dropTarget?.repoPath !== repoPath ||
-      dropTarget.position !== position
-    ) {
-      setDropTarget({ repoPath, position });
-    }
-  }
-
-  function onProjectDragLeave() {
-    // Defer clearing — another sibling's dragover will fire immediately.
-    // We rely on the next dragover or dragend to update state.
-  }
-
-  async function onProjectDrop(e: React.DragEvent) {
-    if (draggingProject === null || dropTarget === null) {
-      setDraggingProject(null);
-      setDropTarget(null);
-      return;
-    }
-    e.preventDefault();
-    const sourcePath = draggingProject;
-    const target = dropTarget;
-    setDraggingProject(null);
-    setDropTarget(null);
-
-    const currentOrder = projectGroups.map((p) => p.repoPath);
-    const without = currentOrder.filter((p) => p !== sourcePath);
-    const targetIndex = without.indexOf(target.repoPath);
-    if (targetIndex < 0) return;
-    const insertAt = target.position === "before" ? targetIndex : targetIndex + 1;
-    const next = [
-      ...without.slice(0, insertAt),
-      sourcePath,
-      ...without.slice(insertAt),
-    ];
-    if (arraysEqual(next, currentOrder)) return;
-    await reorderProjects(next);
-  }
-
-  function onProjectDragEnd() {
-    setDraggingProject(null);
-    setDropTarget(null);
-  }
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // 5px movement avoids hijacking clicks on the project header / session row.
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   function expandProject(repoPath: string) {
     setCollapsed((prev) => {
@@ -277,6 +230,78 @@ export function Sidebar() {
   onNewSessionRef.current = onNewSession;
   onAddProjectRef.current = onAddProject;
 
+  const projectIds = useMemo(
+    () => projectGroups.map((p) => projectDragId(p.repoPath)),
+    [projectGroups],
+  );
+
+  // Scoped collision detection: only consider droppables sharing the active
+  // item's namespace. Without this, dragging a project over an expanded
+  // project's child session row makes `over.id` resolve to the session,
+  // which gets dropped on the floor by onDragEnd.
+  const scopedCollision: CollisionDetection = (args) => {
+    const activeId = String(args.active.id);
+    const prefix = activeId.startsWith(PROJECT_DRAG_PREFIX)
+      ? PROJECT_DRAG_PREFIX
+      : SESSION_DRAG_PREFIX;
+    const filtered = args.droppableContainers.filter((c) =>
+      String(c.id).startsWith(prefix),
+    );
+    return closestCenter({ ...args, droppableContainers: filtered });
+  };
+
+  function onDragStart(event: DragStartEvent) {
+    setActiveDragId(String(event.active.id));
+  }
+
+  function onDragEnd(event: DragEndEvent) {
+    setActiveDragId(null);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+
+    if (
+      activeId.startsWith(PROJECT_DRAG_PREFIX) &&
+      overId.startsWith(PROJECT_DRAG_PREFIX)
+    ) {
+      const currentOrder = projectGroups.map((p) => p.repoPath);
+      const fromIdx = currentOrder.indexOf(
+        activeId.slice(PROJECT_DRAG_PREFIX.length),
+      );
+      const toIdx = currentOrder.indexOf(
+        overId.slice(PROJECT_DRAG_PREFIX.length),
+      );
+      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+      const next = arrayMove(currentOrder, fromIdx, toIdx);
+      void reorderProjects(next);
+      return;
+    }
+
+    if (
+      activeId.startsWith(SESSION_DRAG_PREFIX) &&
+      overId.startsWith(SESSION_DRAG_PREFIX)
+    ) {
+      const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
+      const overSid = overId.slice(SESSION_DRAG_PREFIX.length);
+      const activeSession = sessions.find((s) => s.id === activeSid);
+      const overSession = sessions.find((s) => s.id === overSid);
+      if (!activeSession || !overSession) return;
+      // Cross-project drops are not supported yet — silently ignore.
+      if (activeSession.repo_path !== overSession.repo_path) return;
+      const group = projectGroups.find(
+        (g) => g.repoPath === activeSession.repo_path,
+      );
+      if (!group) return;
+      const ids = group.sessions.map((s) => s.id);
+      const fromIdx = ids.indexOf(activeSid);
+      const toIdx = ids.indexOf(overSid);
+      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+      const next = arrayMove(ids, fromIdx, toIdx);
+      void reorderSessions(activeSession.repo_path, next);
+    }
+  }
+
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
       <header className="flex items-center justify-between gap-2 px-3 py-3">
@@ -298,76 +323,162 @@ export function Sidebar() {
         {projectGroups.length === 0 ? (
           <EmptyState />
         ) : (
-          <ul
-            className="flex flex-col divide-y divide-border/40 [&>li]:py-1.5 [&>li:first-child]:pt-0.5 [&>li:last-child]:pb-0.5"
-            onDrop={onProjectDrop}
-            onDragOver={(e) => {
-              if (draggingProject !== null) e.preventDefault();
-            }}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={scopedCollision}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            onDragCancel={() => setActiveDragId(null)}
           >
-            {projectGroups.map((project) => (
-              <ProjectGroupView
-                key={project.repoPath}
-                project={project}
-                collapsed={collapsed.has(project.repoPath)}
-                activeSessionId={activeSessionId}
-                isActiveProject={activeProject === project.repoPath}
-                isDragging={draggingProject === project.repoPath}
-                dropIndicator={
-                  dropTarget?.repoPath === project.repoPath
-                    ? dropTarget.position
-                    : null
-                }
-                onDragStart={(e) => onProjectDragStart(e, project.repoPath)}
-                onDragOver={(e) => onProjectDragOver(e, project.repoPath)}
-                onDragLeave={onProjectDragLeave}
-                onDragEnd={onProjectDragEnd}
-                onTitleClick={() =>
-                  applyClickPlan(
-                    planTitleClick({
-                      wasActive: activeProject === project.repoPath,
-                      wasCollapsed: collapsed.has(project.repoPath),
-                    }),
-                    project,
-                  )
-                }
-                onChevronClick={() =>
-                  applyClickPlan(
-                    planChevronClick({
-                      wasActive: activeProject === project.repoPath,
-                      wasCollapsed: collapsed.has(project.repoPath),
-                    }),
-                    project,
-                  )
-                }
-                onActivate={() => {
-                  setActiveProject(project.repoPath);
-                  expandProject(project.repoPath);
-                  const target = pickSessionToActivate(
-                    project.sessions,
-                    activeSessionId,
-                  );
-                  if (target) selectSession(target);
-                }}
-                onSelectSession={selectSession}
-                onRemoveSession={(s) => requestRemoveSession(s.id)}
-                onAddSession={(isolated, kind) =>
-                  onNewSession(isolated, kind, project.repoPath)
-                }
-                onRemoveProject={() => requestRemoveProject(project.repoPath)}
-              />
-            ))}
-          </ul>
+            <SortableContext
+              items={projectIds}
+              strategy={verticalListSortingStrategy}
+            >
+              <ul className="flex flex-col divide-y divide-border/40 [&>li]:py-1.5 [&>li:first-child]:pt-0.5 [&>li:last-child]:pb-0.5">
+                {projectGroups.map((project) => (
+                  <ProjectGroupView
+                    key={project.repoPath}
+                    project={project}
+                    collapsed={collapsed.has(project.repoPath)}
+                    activeSessionId={activeSessionId}
+                    isActiveProject={activeProject === project.repoPath}
+                    onTitleClick={() =>
+                      applyClickPlan(
+                        planTitleClick({
+                          wasActive: activeProject === project.repoPath,
+                          wasCollapsed: collapsed.has(project.repoPath),
+                        }),
+                        project,
+                      )
+                    }
+                    onChevronClick={() =>
+                      applyClickPlan(
+                        planChevronClick({
+                          wasActive: activeProject === project.repoPath,
+                          wasCollapsed: collapsed.has(project.repoPath),
+                        }),
+                        project,
+                      )
+                    }
+                    onActivate={() => {
+                      setActiveProject(project.repoPath);
+                      expandProject(project.repoPath);
+                      const target = pickSessionToActivate(
+                        project.sessions,
+                        activeSessionId,
+                      );
+                      if (target) selectSession(target);
+                    }}
+                    onSelectSession={selectSession}
+                    onRemoveSession={(s) => requestRemoveSession(s.id)}
+                    onAddSession={(isolated, kind) =>
+                      onNewSession(isolated, kind, project.repoPath)
+                    }
+                    onRemoveProject={() =>
+                      requestRemoveProject(project.repoPath)
+                    }
+                  />
+                ))}
+              </ul>
+            </SortableContext>
+            <DragOverlay dropAnimation={null}>
+              {activeDragId
+                ? renderDragOverlay(activeDragId, projectGroups, sessions)
+                : null}
+            </DragOverlay>
+          </DndContext>
         )}
       </div>
     </aside>
   );
 }
 
+function renderDragOverlay(
+  activeDragId: string,
+  projectGroups: ProjectGroup[],
+  sessions: Session[],
+): React.ReactNode {
+  if (activeDragId.startsWith(PROJECT_DRAG_PREFIX)) {
+    const repoPath = activeDragId.slice(PROJECT_DRAG_PREFIX.length);
+    const group = projectGroups.find((g) => g.repoPath === repoPath);
+    if (!group) return null;
+    return <ProjectHeaderPreview name={group.name} count={group.sessions.length} />;
+  }
+  if (activeDragId.startsWith(SESSION_DRAG_PREFIX)) {
+    const sid = activeDragId.slice(SESSION_DRAG_PREFIX.length);
+    const session = sessions.find((s) => s.id === sid);
+    if (!session) return null;
+    return <SessionRowPreview session={session} />;
+  }
+  return null;
+}
+
+function ProjectHeaderPreview({
+  name,
+  count,
+}: {
+  name: string;
+  count: number;
+}) {
+  return (
+    <div className="flex items-center gap-1 rounded-md bg-bg-elevated/95 px-1 py-1.5 shadow-lg ring-1 ring-border/60">
+      <span className="flex shrink-0 items-center text-fg-muted/60">
+        <GripVertical size={12} />
+      </span>
+      <span className="flex shrink-0 items-center justify-center rounded p-1 text-fg-muted">
+        <ChevronRight size={14} />
+      </span>
+      <span className="flex min-w-0 items-center gap-1.5 pr-2">
+        <span className="truncate text-sm font-medium text-fg">{name}</span>
+        <span className="ml-1 shrink-0 rounded bg-bg-elevated/80 px-1 text-[10px] text-fg-muted">
+          {count}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function SessionRowPreview({ session }: { session: Session }) {
+  return (
+    <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
+      <span className="mt-1 flex shrink-0 items-center text-fg-muted/60">
+        <GripVertical size={10} />
+      </span>
+      <span
+        className={cn(
+          "mt-1.5 size-1.5 shrink-0 rounded-full",
+          STATUS_DOT[session.status],
+        )}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1">
+          <span className="truncate text-[13px] font-medium text-fg">
+            {session.name}
+          </span>
+          {session.isolated ? (
+            <GitBranch size={10} className="shrink-0 text-fg-muted" />
+          ) : null}
+        </span>
+        <span className="block truncate text-[11px] text-fg-muted">
+          {session.branch} · {STATUS_LABEL[session.status]}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function projectDragId(repoPath: string): string {
+  return `${PROJECT_DRAG_PREFIX}${repoPath}`;
+}
+
+function sessionDragId(id: string): string {
+  return `${SESSION_DRAG_PREFIX}${id}`;
+}
+
 /**
  * Choose which session to activate when the user clicks a project header.
  * If the already-active session belongs to this project, keep it. Otherwise
- * fall back to the first listed session (backend lists newest-first).
+ * fall back to the first listed session.
  * Returns null when the project has no sessions.
  */
 function pickSessionToActivate(
@@ -384,25 +495,11 @@ function pickSessionToActivate(
   return projectSessions[0]?.id ?? null;
 }
 
-function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
 interface ProjectGroupViewProps {
   project: ProjectGroup;
   collapsed: boolean;
   activeSessionId: string | null;
   isActiveProject: boolean;
-  isDragging: boolean;
-  dropIndicator: "before" | "after" | null;
-  onDragStart: (e: React.DragEvent) => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDragLeave: (e: React.DragEvent) => void;
-  onDragEnd: (e: React.DragEvent) => void;
   /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
   onTitleClick: () => void;
   /** Chevron click: activate + toggle expand. */
@@ -420,12 +517,6 @@ function ProjectGroupView({
   collapsed,
   activeSessionId,
   isActiveProject,
-  isDragging,
-  dropIndicator,
-  onDragStart,
-  onDragOver,
-  onDragLeave,
-  onDragEnd,
   onTitleClick,
   onChevronClick,
   onActivate,
@@ -434,8 +525,26 @@ function ProjectGroupView({
   onAddSession,
   onRemoveProject,
 }: ProjectGroupViewProps) {
-  const rowRef = useRef<HTMLLIElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: projectDragId(project.repoPath) });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  const sessionIds = useMemo(
+    () => project.sessions.map((s) => sessionDragId(s.id)),
+    [project.sessions],
+  );
 
   async function copyText(text: string) {
     try {
@@ -455,27 +564,10 @@ function ProjectGroupView({
 
   return (
     <li
-      ref={rowRef}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDragEnd={onDragEnd}
-      className={cn(
-        "relative",
-        isDragging && "opacity-40",
-      )}
+      ref={setNodeRef}
+      style={style}
+      className={cn("relative", isDragging && "opacity-40")}
     >
-      {dropIndicator === "before" ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-1 -top-px h-0.5 rounded bg-accent"
-        />
-      ) : null}
-      {dropIndicator === "after" ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-1 -bottom-px h-0.5 rounded bg-accent"
-        />
-      ) : null}
       <div
         role="button"
         tabIndex={0}
@@ -499,8 +591,9 @@ function ProjectGroupView({
       >
         <Tooltip label="Drag to reorder" side="bottom">
           <span
-            draggable
-            onDragStart={onDragStart}
+            ref={setActivatorNodeRef}
+            {...attributes}
+            {...listeners}
             onClick={(e) => e.stopPropagation()}
             aria-label="Drag to reorder project"
             className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
@@ -520,10 +613,7 @@ function ProjectGroupView({
         >
           <ChevronRight
             size={14}
-            className={cn(
-              "transition-transform",
-              !collapsed && "rotate-90",
-            )}
+            className={cn("transition-transform", !collapsed && "rotate-90")}
           />
         </button>
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -632,37 +722,42 @@ function ProjectGroupView({
         ]}
       />
       {!collapsed ? (
-        <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
-          {project.sessions.length === 0 ? (
-            <li
-              role="button"
-              tabIndex={0}
-              onClick={onActivate}
-              onDoubleClick={() => onAddSession(false, "regular")}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onAddSession(false, "regular");
-                }
-              }}
-              className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
-            >
-              No sessions. Add one with{" "}
-              <Plus size={10} className="inline" /> or{" "}
-              <GitBranch size={10} className="inline" />, or double-click here.
-            </li>
-          ) : (
-            project.sessions.map((session) => (
-              <SessionRow
-                key={session.id}
-                session={session}
-                active={session.id === activeSessionId}
-                onSelect={() => onSelectSession(session.id)}
-                onRemove={() => onRemoveSession(session)}
-              />
-            ))
-          )}
-        </ul>
+        <SortableContext
+          items={sessionIds}
+          strategy={verticalListSortingStrategy}
+        >
+          <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
+            {project.sessions.length === 0 ? (
+              <li
+                role="button"
+                tabIndex={0}
+                onClick={onActivate}
+                onDoubleClick={() => onAddSession(false, "regular")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onAddSession(false, "regular");
+                  }
+                }}
+                className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
+              >
+                No sessions. Add one with{" "}
+                <Plus size={10} className="inline" /> or{" "}
+                <GitBranch size={10} className="inline" />, or double-click here.
+              </li>
+            ) : (
+              project.sessions.map((session) => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  active={session.id === activeSessionId}
+                  onSelect={() => onSelectSession(session.id)}
+                  onRemove={() => onRemoveSession(session)}
+                />
+              ))
+            )}
+          </ul>
+        </SortableContext>
       ) : null}
     </li>
   );
@@ -682,6 +777,20 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
   const editorConfigured = editorCommand.trim().length > 0;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sessionDragId(session.id) });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
 
   async function duplicate() {
     const base = session.name;
@@ -772,7 +881,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
   ];
 
   return (
-    <li>
+    <li ref={setNodeRef} style={style}>
       <div
         role="button"
         tabIndex={0}
@@ -795,8 +904,19 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         className={cn(
           "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
+          isDragging && "opacity-40",
         )}
       >
+        <span
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          onClick={(e) => e.stopPropagation()}
+          aria-label="Drag to reorder session"
+          className="invisible mt-1 flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
+        >
+          <GripVertical size={10} />
+        </span>
         <span
           className={cn(
             "mt-1.5 size-1.5 shrink-0 rounded-full",
@@ -948,10 +1068,12 @@ function buildProjectGroups(
     group.sessions.push(session);
   }
   for (const group of map.values()) {
-    group.sessions.sort(
-      (a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-    );
+    group.sessions.sort((a, b) => {
+      const ap = a.position ?? Number.POSITIVE_INFINITY;
+      const bp = b.position ?? Number.POSITIVE_INFINITY;
+      if (ap !== bp) return ap - bp;
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
   }
   return Array.from(map.values());
 }

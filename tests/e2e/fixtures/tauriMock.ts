@@ -50,6 +50,8 @@ export const tauriMockSource = `
     }
     if (cmd === 'scrollback_orphan_size') return Promise.resolve(0);
     if (cmd === 'scrollback_orphan_clear') return Promise.resolve(0);
+    if (cmd === 'reorder_projects') return Promise.resolve([]);
+    if (cmd === 'reorder_sessions') return Promise.resolve([]);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);
   }
