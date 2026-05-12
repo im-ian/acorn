@@ -11,7 +11,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use base64::Engine;
@@ -115,10 +115,32 @@ enum Command {
         #[arg(short = 't', long = "target")]
         target: String,
     },
+    /// Report IPC reachability: socket path, file presence, and whether
+    /// the in-app server accepts connections. No `ACORN_SESSION_ID`
+    /// required — `status` is the only command that works before the
+    /// control-session env has been set up.
+    Status,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    let socket_path = match cli.socket.clone() {
+        Some(p) => p,
+        None => match socket_path::resolve() {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("acorn-ipc: could not resolve socket path: {err}");
+                return ExitCode::from(map_error_exit(ErrorCode::Internal));
+            }
+        },
+    };
+
+    // `status` is the one command that runs without an authorized source —
+    // it is a pure connectivity probe, so we handle it before the auth gate.
+    if matches!(cli.command, Command::Status) {
+        return run_status(&socket_path, cli.json);
+    }
 
     let source = match cli
         .source
@@ -133,17 +155,6 @@ fn main() -> ExitCode {
             );
             return ExitCode::from(map_error_exit(ErrorCode::Unauthorized));
         }
-    };
-
-    let socket_path = match cli.socket.clone() {
-        Some(p) => p,
-        None => match socket_path::resolve() {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("acorn-ipc: could not resolve socket path: {err}");
-                return ExitCode::from(map_error_exit(ErrorCode::Internal));
-            }
-        },
     };
 
     let json = cli.json;
@@ -222,7 +233,62 @@ fn build_request(cmd: &Command) -> Result<Request, String> {
         Command::KillSession { target } => Request::KillSession {
             target_session_id: target.clone(),
         },
+        Command::Status => {
+            // Routed before `build_request` in `main`. Reaching here means
+            // the dispatch chain is wired wrong, not a user error.
+            return Err("status is handled out-of-band; this is a bug".to_string());
+        }
     })
+}
+
+/// Probe the IPC socket and print a short reachability report. Connection
+/// failure is *not* a CLI error — the whole point of `status` is to surface
+/// down servers, so we exit 0 in both branches and let callers parse the
+/// output (or the `reachable` JSON field).
+fn run_status(socket_path: &Path, json: bool) -> ExitCode {
+    let exists = socket_path.exists();
+    let (reachable, error) = match UnixStream::connect(socket_path) {
+        Ok(stream) => {
+            // Close immediately — the server treats every connection as a
+            // single request and would otherwise wait for one.
+            drop(stream);
+            (true, None)
+        }
+        Err(err) => (false, Some(err.to_string())),
+    };
+    let source_env = std::env::var(ENV_SESSION_ID).ok().filter(|s| !s.is_empty());
+    if json {
+        let payload = serde_json::json!({
+            "socket_path": socket_path.display().to_string(),
+            "socket_file_exists": exists,
+            "reachable": reachable,
+            "error": error,
+            "protocol_version": PROTOCOL_VERSION,
+            "source_session_id_env": source_env,
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => println!("{s}"),
+            Err(err) => {
+                eprintln!("acorn-ipc: failed to encode status: {err}");
+                return ExitCode::from(map_error_exit(ErrorCode::Internal));
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+    println!("socket:           {}", socket_path.display());
+    println!("socket file:      {}", if exists { "present" } else { "missing" });
+    if reachable {
+        println!("reachable:        yes");
+    } else {
+        let reason = error.as_deref().unwrap_or("unknown");
+        println!("reachable:        no ({reason})");
+    }
+    println!("protocol version: {PROTOCOL_VERSION}");
+    println!(
+        "source env:       {}",
+        source_env.as_deref().unwrap_or("(unset)")
+    );
+    ExitCode::SUCCESS
 }
 
 fn send(path: &std::path::Path, envelope: &Envelope) -> Result<Response, String> {

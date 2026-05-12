@@ -163,6 +163,15 @@ export const api = {
   getAcornIpcStatus(): Promise<AcornIpcStatus> {
     return invoke<AcornIpcStatus>("get_acorn_ipc_status");
   },
+  /**
+   * Stop the in-process IPC listener and spawn a fresh one. Used when the
+   * socket has gone stale (e.g. file removed under the running app) so the
+   * user can recover without restarting the whole app. Resolves on success;
+   * rejects with the backend's error string if rebind fails.
+   */
+  ipcRestart(): Promise<void> {
+    return invoke<void>("ipc_restart");
+  },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
   },
