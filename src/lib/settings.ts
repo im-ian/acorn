@@ -96,6 +96,35 @@ export type TerminalFontWeight =
  */
 export type TerminalLinkActivation = "click" | "modifier-click";
 
+/**
+ * Which field acorn shows as the primary line of a sidebar session row.
+ * Mirrors Warp's "Pane title as" picker — `name` is the editable session
+ * name (default), the other two surface git/repo metadata directly.
+ */
+export type SessionTitleSource = "name" | "workingDirectory" | "branch";
+
+export const SESSION_TITLE_OPTIONS: ReadonlyArray<{
+  value: SessionTitleSource;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "name",
+    label: "Session name",
+    description: "The editable name you give each session (default).",
+  },
+  {
+    value: "workingDirectory",
+    label: "Working directory",
+    description: "Worktree directory basename.",
+  },
+  {
+    value: "branch",
+    label: "Branch",
+    description: "Active git branch.",
+  },
+];
+
 export const TERMINAL_FONT_WEIGHTS: ReadonlyArray<{
   value: TerminalFontWeight;
   label: string;
@@ -205,6 +234,40 @@ export interface AcornSettings {
     /** Auto-refresh cadence for the PRs tab in milliseconds. */
     refreshIntervalMs: number;
   };
+  /**
+   * Sidebar session-row presentation. Mirrors Warp's "View as / Pane
+   * title as / Additional metadata / Show details on hover" panel so
+   * users can pick what each session shows at a glance.
+   */
+  sessionDisplay: {
+    /** Which field becomes the bold first line of the row. */
+    title: SessionTitleSource;
+    /**
+     * Secondary metadata shown beneath the title. Each toggle is
+     * independent; status falls back to "Idle" so the row never goes
+     * blank when everything is off.
+     */
+    metadata: {
+      branch: boolean;
+      workingDirectory: boolean;
+      status: boolean;
+    };
+    /**
+     * Inline icon toggles. Status dot is the colored bullet at row start;
+     * sessionKind covers the isolated-worktree (GitBranch) and control
+     * (Bot) glyphs trailing the title.
+     */
+    icons: {
+      statusDot: boolean;
+      sessionKind: boolean;
+    };
+    /**
+     * When true, hovering a row pops a tooltip with every available
+     * field (name, working directory, branch, status) regardless of
+     * which ones the row itself shows.
+     */
+    showDetailsOnHover: boolean;
+  };
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
@@ -249,6 +312,19 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   pullRequests: {
     defaultState: "open",
     refreshIntervalMs: 60_000,
+  },
+  sessionDisplay: {
+    title: "name",
+    metadata: {
+      branch: true,
+      workingDirectory: false,
+      status: true,
+    },
+    icons: {
+      statusDot: true,
+      sessionKind: true,
+    },
+    showDetailsOnHover: true,
   },
 };
 
@@ -299,6 +375,25 @@ function normalizePrState(v: unknown, fallback: PrStateFilter): PrStateFilter {
 
 function normalizePrInterval(v: unknown, fallback: number): number {
   if (typeof v === "number" && VALID_PR_INTERVALS.has(v)) return v;
+  return fallback;
+}
+
+const VALID_SESSION_TITLE_SOURCES = new Set<SessionTitleSource>([
+  "name",
+  "workingDirectory",
+  "branch",
+]);
+
+function normalizeSessionTitle(
+  v: unknown,
+  fallback: SessionTitleSource,
+): SessionTitleSource {
+  if (
+    typeof v === "string" &&
+    VALID_SESSION_TITLE_SOURCES.has(v as SessionTitleSource)
+  ) {
+    return v as SessionTitleSource;
+  }
   return fallback;
 }
 
@@ -458,6 +553,24 @@ function loadSettings(): AcornSettings {
           DEFAULT_SETTINGS.pullRequests.refreshIntervalMs,
         ),
       },
+      sessionDisplay: {
+        title: normalizeSessionTitle(
+          parsed.sessionDisplay?.title,
+          DEFAULT_SETTINGS.sessionDisplay.title,
+        ),
+        metadata: {
+          ...DEFAULT_SETTINGS.sessionDisplay.metadata,
+          ...(parsed.sessionDisplay?.metadata ?? {}),
+        },
+        icons: {
+          ...DEFAULT_SETTINGS.sessionDisplay.icons,
+          ...(parsed.sessionDisplay?.icons ?? {}),
+        },
+        showDetailsOnHover:
+          typeof parsed.sessionDisplay?.showDetailsOnHover === "boolean"
+            ? parsed.sessionDisplay.showDetailsOnHover
+            : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
+      },
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -497,6 +610,14 @@ interface SettingsState {
   ) => void;
   patchStatusBar: (patch: Partial<AcornSettings["statusBar"]>) => void;
   patchPullRequests: (patch: Partial<AcornSettings["pullRequests"]>) => void;
+  patchSessionDisplay: (
+    patch: Partial<
+      Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
+    > & {
+      metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
+      icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
+    },
+  ) => void;
   reset: () => void;
 }
 
@@ -588,6 +709,27 @@ export const useSettings = create<SettingsState>((set) => ({
       const next: AcornSettings = {
         ...s.settings,
         pullRequests: { ...s.settings.pullRequests, ...patch },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchSessionDisplay: (patch) =>
+    set((s) => {
+      const metadata = patch.metadata
+        ? { ...s.settings.sessionDisplay.metadata, ...patch.metadata }
+        : s.settings.sessionDisplay.metadata;
+      const icons = patch.icons
+        ? { ...s.settings.sessionDisplay.icons, ...patch.icons }
+        : s.settings.sessionDisplay.icons;
+      const { metadata: _m, icons: _i, ...rest } = patch;
+      const next: AcornSettings = {
+        ...s.settings,
+        sessionDisplay: {
+          ...s.settings.sessionDisplay,
+          ...rest,
+          metadata,
+          icons,
+        },
       };
       persist(next);
       return { settings: next };
