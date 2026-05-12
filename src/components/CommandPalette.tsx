@@ -112,6 +112,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }
   }
 
+  async function handleRestartIpc() {
+    const show = useToasts.getState().show;
+    try {
+      await api.ipcRestart();
+      show("IPC server restarted.");
+    } catch (err) {
+      console.error("[CommandPalette] ipcRestart failed", err);
+      const message = err instanceof Error ? err.message : String(err);
+      show(`Failed to restart IPC server: ${message}`);
+    } finally {
+      close();
+    }
+  }
+
   return (
     <Command.Dialog
       open={open}
@@ -237,6 +251,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⇧⌘,
             </span>
+          </Command.Item>
+        </Command.Group>
+
+        <Command.Group heading="IPC">
+          <Command.Item
+            value="restart-ipc"
+            onSelect={() => void handleRestartIpc()}
+            keywords={[
+              "ipc",
+              "control",
+              "socket",
+              "acorn-ipc",
+              "restart",
+              "reload",
+              "server",
+            ]}
+          >
+            <Bot size={14} className="text-accent" />
+            <span>Restart IPC server</span>
           </Command.Item>
         </Command.Group>
 
