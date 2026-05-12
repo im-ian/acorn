@@ -130,3 +130,9 @@ describe("resolveStartupCommand", () => {
     ).toEqual({ command: "bash", args: ["-lc", "echo"] });
   });
 });
+
+describe("terminal.linkActivation default", () => {
+  it("defaults to plain click so xterm's stock behaviour is preserved", () => {
+    expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
+  });
+});
