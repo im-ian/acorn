@@ -74,6 +74,9 @@ export const api = {
   reorderProjects(order: string[]): Promise<Project[]> {
     return invoke<Project[]>("reorder_projects", { order });
   },
+  reorderSessions(repoPath: string, order: string[]): Promise<Session[]> {
+    return invoke<Session[]>("reorder_sessions", { repoPath, order });
+  },
   listCommits(repoPath: string, offset = 0, limit = 50): Promise<CommitInfo[]> {
     return invoke<CommitInfo[]>("list_commits", { repoPath, offset, limit });
   },

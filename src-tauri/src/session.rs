@@ -165,6 +165,12 @@ pub struct Session {
     pub startup_mode: Option<SessionStartupMode>,
     #[serde(default)]
     pub kind: SessionKind,
+    /// User-defined display order within the project group. `None` means the
+    /// session has never been reordered — the frontend falls back to
+    /// `updated_at DESC` for these. Once any session in a project is dragged,
+    /// every session in that project gets an explicit position.
+    #[serde(default)]
+    pub position: Option<i64>,
 }
 
 impl Session {
@@ -191,6 +197,7 @@ impl Session {
             last_message: None,
             startup_mode,
             kind,
+            position: None,
         }
     }
 }
@@ -283,5 +290,42 @@ impl SessionStore {
             .remove(id)
             .map(|(_, v)| v)
             .ok_or_else(|| AppError::SessionNotFound(id.to_string()))
+    }
+
+    /// Assign explicit positions (0..N) to the sessions listed in `order`,
+    /// scoped to a single project (`repo_path`). Sessions belonging to the
+    /// same project but missing from `order` keep their existing position
+    /// where set, otherwise get appended after the explicit ones. Sessions
+    /// from other projects are untouched. Unknown ids in `order` are ignored.
+    pub fn reorder(&self, repo_path: &std::path::Path, order: &[Uuid]) {
+        let mut seen = std::collections::HashSet::new();
+        let mut pos: i64 = 0;
+        for id in order {
+            if let Some(mut entry) = self.inner.get_mut(id) {
+                if entry.repo_path != repo_path {
+                    continue;
+                }
+                entry.position = Some(pos);
+                pos += 1;
+                seen.insert(*id);
+            }
+        }
+        let mut remaining: Vec<(Uuid, Option<i64>, DateTime<Utc>)> = self
+            .inner
+            .iter()
+            .filter(|r| r.value().repo_path == repo_path && !seen.contains(r.key()))
+            .map(|r| (*r.key(), r.value().position, r.value().updated_at))
+            .collect();
+        remaining.sort_by(|a, b| {
+            let ap = a.1.unwrap_or(i64::MAX);
+            let bp = b.1.unwrap_or(i64::MAX);
+            ap.cmp(&bp).then_with(|| b.2.cmp(&a.2))
+        });
+        for (id, _, _) in remaining {
+            if let Some(mut entry) = self.inner.get_mut(&id) {
+                entry.position = Some(pos);
+                pos += 1;
+            }
+        }
     }
 }

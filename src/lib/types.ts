@@ -36,6 +36,7 @@ export interface Session {
   last_message: string | null;
   startup_mode: SessionStartupMode | null;
   kind: SessionKind;
+  position: number | null;
 }
 
 export interface Project {

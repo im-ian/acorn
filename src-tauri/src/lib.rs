@@ -177,6 +177,7 @@ pub fn run() {
             commands::add_project,
             commands::remove_project,
             commands::reorder_projects,
+            commands::reorder_sessions,
             commands::list_commits,
             commands::list_staged,
             commands::commit_diff,
