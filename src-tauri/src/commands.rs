@@ -33,6 +33,10 @@ pub struct AcornIpcStatus {
     pub bundled_exists: bool,
     /// Canonical Unix-socket path used by the IPC server.
     pub socket_path: String,
+    /// True when the in-process IPC listener is currently running. Read
+    /// directly from the shutdown handle in `AppState`, so this is
+    /// authoritative — no socket round-trip needed.
+    pub server_running: bool,
     /// Common shim locations the user might have installed to. Each entry
     /// includes whether the file is present so the Settings UI can show a
     /// "Installed" / "Not installed" badge without round-tripping back to
@@ -52,7 +56,7 @@ pub struct AcornIpcShim {
 /// Used by the Sessions tab's "Control sessions" section to render an
 /// install hint with a copyable shell command.
 #[tauri::command]
-pub fn get_acorn_ipc_status() -> AcornIpcStatus {
+pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
     let bundled = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("acorn-ipc")));
@@ -62,6 +66,12 @@ pub fn get_acorn_ipc_status() -> AcornIpcStatus {
         .unwrap_or_default();
     let bundled_exists = bundled.as_ref().map(|p| p.exists()).unwrap_or(false);
     let socket_path = crate::ipc::socket_path::resolve().unwrap_or_default();
+    let server_running = state
+        .ipc_handle
+        .lock()
+        .as_ref()
+        .map(|h| h.is_running())
+        .unwrap_or(false);
     let shim_paths = standard_shim_paths()
         .into_iter()
         .map(|p| AcornIpcShim {
@@ -73,7 +83,31 @@ pub fn get_acorn_ipc_status() -> AcornIpcStatus {
         bundled_path,
         bundled_exists,
         socket_path: socket_path.display().to_string(),
+        server_running,
         shim_paths,
+    }
+}
+
+/// Stop the running IPC listener (if any) and spawn a fresh one. Used by
+/// the Settings → Control sessions "Restart" button when the socket has
+/// gone stale (e.g. socket file removed under the app's feet). The signal
+/// → poll → exit cycle takes up to `ACCEPT_POLL_INTERVAL_MS`; we wait
+/// twice that before rebinding so the previous listener has dropped its
+/// file descriptor.
+#[tauri::command]
+pub fn ipc_restart<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> Result<(), String> {
+    let previous = state.ipc_handle.lock().take();
+    if let Some(handle) = previous {
+        handle.signal_stop();
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let new_handle = crate::ipc::server::start(app.clone(), state.inner().clone());
+    let started = new_handle.is_some();
+    *state.ipc_handle.lock() = new_handle;
+    if started {
+        Ok(())
+    } else {
+        Err("ipc server failed to start; see app logs for details".to_string())
     }
 }
 

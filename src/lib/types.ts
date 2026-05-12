@@ -96,6 +96,7 @@ export interface AcornIpcStatus {
   bundled_path: string;
   bundled_exists: boolean;
   socket_path: string;
+  server_running: boolean;
   shim_paths: AcornIpcShim[];
 }
 
