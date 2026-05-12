@@ -154,6 +154,25 @@ pub struct Session {
     /// every session in that project gets an explicit position.
     #[serde(default)]
     pub position: Option<i64>,
+    /// Identifier the `acornd` daemon uses for this session's live PTY.
+    /// `None` while the session is using the legacy in-process PTY path,
+    /// or while the daemon has not yet spawned a child for it. Stored so
+    /// the app can route follow-up ops (write/resize/kill) to the right
+    /// daemon registry entry; survives serialization so reattach after
+    /// an Acorn-app restart finds the matching live session.
+    ///
+    /// BC: older `sessions.json` files without this field load with
+    /// `daemon_session_id == None`, which is the legacy in-process
+    /// behavior and the natural "ghost" indicator for the daemon-mode
+    /// reconciliation path.
+    #[serde(default)]
+    pub daemon_session_id: Option<Uuid>,
+    /// Deterministic resume token persisted across (re)spawns. For Claude
+    /// Code this is the `--session-id <uuid>` value the daemon injects so
+    /// the agent's JSONL chat history remains reachable after a crash.
+    /// `None` for sessions whose agent has no known resume protocol.
+    #[serde(default)]
+    pub agent_resume_token: Option<String>,
 }
 
 impl Session {
@@ -179,6 +198,8 @@ impl Session {
             last_message: None,
             kind,
             position: None,
+            daemon_session_id: None,
+            agent_resume_token: None,
         }
     }
 }
@@ -232,6 +253,38 @@ impl SessionStore {
         if entry.status != status {
             entry.status = status;
         }
+        Ok(entry.clone())
+    }
+
+    /// Attach a daemon session id to an existing session record. Used after
+    /// the app proxies a spawn through `acornd` and the daemon hands back
+    /// the live PTY id. Idempotent: passing `None` detaches.
+    pub fn set_daemon_session_id(
+        &self,
+        id: &Uuid,
+        daemon_id: Option<Uuid>,
+    ) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        entry.daemon_session_id = daemon_id;
+        Ok(entry.clone())
+    }
+
+    /// Persist the resume token chosen for this session's agent (e.g.
+    /// Claude Code's `--session-id`). Called once at first spawn; the
+    /// daemon re-injects this on every respawn.
+    pub fn set_agent_resume_token(
+        &self,
+        id: &Uuid,
+        token: Option<String>,
+    ) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        entry.agent_resume_token = token;
         Ok(entry.clone())
     }
 

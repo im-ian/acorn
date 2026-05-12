@@ -124,10 +124,12 @@ export function StatusBar() {
     <>
       <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         {/* Left: aggregate counters about acorn itself — total sessions and
-            the active session's lifecycle status. The IPC button sits first
-            so the user can recover from a dead control-session socket
-            without leaving the main view. */}
+            the active session's lifecycle status. The IPC and daemon
+            buttons sit first so the user can recover from a dead
+            control-session socket or a stopped daemon without leaving
+            the main view. */}
         <IpcStatusButton />
+        <DaemonStatusButton />
         <span>sessions: {sessions.length}</span>
         {active ? (
           <>
@@ -272,6 +274,91 @@ function IpcStatusButton() {
         )}
         <span className="text-[10px]">
           ipc: {running === null ? "…" : running ? "on" : "off"}
+        </span>
+      </button>
+    </Tooltip>
+  );
+}
+
+// Bottom-bar `acornd` daemon indicator. Mirrors `IpcStatusButton` but for
+// the out-of-process daemon. Clicking opens the Settings → Background
+// sessions panel rather than restarting in place — the daemon owns
+// every live PTY, so an accidental restart click would kill every
+// session and is too destructive for a one-tap action.
+function DaemonStatusButton() {
+  const [status, setStatus] = useState<{
+    running: boolean;
+    enabled: boolean;
+    sessions: number | null;
+  } | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const snap = await api.daemonStatus();
+      setStatus({
+        running: snap.running,
+        enabled: snap.enabled,
+        sessions: snap.session_count_alive,
+      });
+    } catch {
+      setStatus({ running: false, enabled: true, sessions: null });
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    // Poll every 5s; cheap enough (a single Unix socket round-trip) and
+    // keeps the indicator honest if the user kills the daemon from the
+    // terminal.
+    const id = window.setInterval(() => void refresh(), 5_000);
+    return () => window.clearInterval(id);
+  }, [refresh]);
+
+  const handleClick = useCallback(() => {
+    // Open Settings → Background sessions. The Settings modal listens
+    // for `acorn:open-settings` and selects the requested tab when an
+    // explicit hash is appended.
+    window.dispatchEvent(
+      new CustomEvent("acorn:open-settings", { detail: { tab: "background-sessions" } }),
+    );
+  }, []);
+
+  const label = status === null
+    ? "daemon status: loading"
+    : !status.enabled
+      ? "daemon disabled — click to open settings"
+      : status.running
+        ? `daemon: running${status.sessions !== null ? ` (${status.sessions} sessions)` : ""} — click for settings`
+        : "daemon: down — click to open settings";
+
+  return (
+    <Tooltip label={label} side="top" multiline>
+      <button
+        type="button"
+        onClick={handleClick}
+        className={cn(
+          "flex h-5 items-center gap-1 rounded px-1.5 transition",
+          "hover:bg-bg-elevated",
+          status === null
+            ? "text-fg-muted"
+            : !status.enabled
+              ? "text-fg-muted"
+              : status.running
+                ? "text-accent"
+                : "text-danger",
+        )}
+        aria-label="Open daemon settings"
+      >
+        <Bot size={12} />
+        <span className="text-[10px]">
+          daemon:{" "}
+          {status === null
+            ? "…"
+            : !status.enabled
+              ? "off"
+              : status.running
+                ? "on"
+                : "down"}
         </span>
       </button>
     </Tooltip>

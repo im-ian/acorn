@@ -1,6 +1,8 @@
 mod cli_resolver;
 mod commands;
 pub mod daemon;
+mod daemon_bridge;
+mod daemon_commands;
 mod error;
 mod git_ops;
 mod ipc;
@@ -166,6 +168,28 @@ pub fn run() {
             // `ipc_restart` cycle the listener without process restart.
             let handle = ipc::server::start(app.handle().clone(), state.inner().clone());
             *state.ipc_handle.lock() = handle;
+
+            // Resolve and cache the `acornd` binary location now so the
+            // bridge does not pay the lookup cost on every spawn. In
+            // bundled mode the binary lives at
+            // `Contents/MacOS/acornd`; in `bun run tauri dev` it sits
+            // at `target/debug/acornd`. Cache failure (binary missing)
+            // is non-fatal — the bridge will surface a `BinaryNotFound`
+            // error on the first daemon-routed call so the user sees
+            // exactly which path was searched.
+            let acornd_hint = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("acornd")));
+            state.daemon_bridge.cache_binary_path(acornd_hint);
+            // Probe the daemon at boot. If `useDaemon` is on (default)
+            // and a daemon is already running from a previous session,
+            // we'll reuse it; if not, the first `daemon_*` Tauri call
+            // will spawn it lazily. We do NOT spawn here to keep app
+            // startup fast — the lazy path adds at most a single
+            // socket probe to the first session creation.
+            if let Err(err) = crate::daemon_bridge::boot_probe() {
+                tracing::warn!("daemon boot probe failed: {err}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -210,6 +234,16 @@ pub fn run() {
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
+            daemon_commands::daemon_status,
+            daemon_commands::daemon_set_enabled,
+            daemon_commands::daemon_restart,
+            daemon_commands::daemon_shutdown,
+            daemon_commands::daemon_list_sessions,
+            daemon_commands::daemon_spawn_session,
+            daemon_commands::daemon_send_input,
+            daemon_commands::daemon_resize,
+            daemon_commands::daemon_kill_session,
+            daemon_commands::daemon_forget_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
