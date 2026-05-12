@@ -14,8 +14,10 @@ import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
   PR_REFRESH_INTERVAL_OPTIONS,
+  SESSION_TITLE_OPTIONS,
   type SelectedAgent,
   type SessionStartupMode,
+  type SessionTitleSource,
   type TerminalFontWeight,
   type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
@@ -502,9 +504,76 @@ function PullRequestsSettings() {
 function AppearanceSettings() {
   const settings = useSettings((s) => s.settings);
   const patchStatusBar = useSettings((s) => s.patchStatusBar);
+  const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
+  const sessionDisplay = settings.sessionDisplay;
 
   return (
     <section className="space-y-4">
+      <Field
+        label="Session title"
+        hint="Which field becomes the bold first line of each sidebar session row."
+      >
+        <div className="flex flex-col gap-1.5">
+          {SESSION_TITLE_OPTIONS.map((opt) => (
+            <RadioCard<SessionTitleSource>
+              key={opt.value}
+              name="acorn-session-title"
+              value={opt.value}
+              current={sessionDisplay.title}
+              label={opt.label}
+              description={opt.description}
+              onSelect={(v) => patchSessionDisplay({ title: v })}
+            />
+          ))}
+        </div>
+      </Field>
+      <Field
+        label="Additional metadata"
+        hint="Secondary line under the title. Toggle off everything for a single-line row."
+      >
+        <div className="flex flex-col gap-1">
+          <CheckboxRow
+            label="Branch"
+            description="Active git branch."
+            checked={sessionDisplay.metadata.branch}
+            onChange={(v) =>
+              patchSessionDisplay({ metadata: { branch: v } })
+            }
+          />
+          <CheckboxRow
+            label="Working directory"
+            description="Worktree directory basename."
+            checked={sessionDisplay.metadata.workingDirectory}
+            onChange={(v) =>
+              patchSessionDisplay({ metadata: { workingDirectory: v } })
+            }
+          />
+          <CheckboxRow
+            label="Status"
+            description="Idle / Running / Needs input / Failed / Completed."
+            checked={sessionDisplay.metadata.status}
+            onChange={(v) =>
+              patchSessionDisplay({ metadata: { status: v } })
+            }
+          />
+        </div>
+      </Field>
+      <Field
+        label="Show details on hover"
+        hint="Pop a tooltip with every field when hovering a session row, regardless of which fields the row itself shows."
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={sessionDisplay.showDetailsOnHover}
+            onChange={(e) =>
+              patchSessionDisplay({ showDetailsOnHover: e.target.checked })
+            }
+            className="accent-[var(--color-accent)]"
+          />
+          Enable hover tooltip
+        </label>
+      </Field>
       <Field
         label="Status bar"
         hint="Choose which optional badges show in the bottom status bar."
