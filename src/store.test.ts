@@ -93,6 +93,7 @@ function resetStore(): void {
       activeSessionId: null,
       rightTab: "commits",
       prAccountByRepo: {},
+      pendingTerminalInput: {},
       loading: false,
       error: null,
       pendingRemoveId: null,
@@ -672,5 +673,66 @@ describe("reorderSessions", () => {
     await useAppStore.getState().reorderSessions(REPO_A, ["s2", "s1"]);
     expect(useAppStore.getState().sessions).toEqual(before);
     expect(useAppStore.getState().error).toBe("boom");
+  });
+});
+
+describe("pendingTerminalInput", () => {
+  it("queues and consumes a command for a session id", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "gh auth login");
+    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toBe(
+      "gh auth login",
+    );
+    const consumed = consumePendingTerminalInput("sess-1");
+    expect(consumed).toBe("gh auth login");
+    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toBeUndefined();
+  });
+
+  it("returns null and is a no-op when no command is queued", () => {
+    const consumed = useAppStore
+      .getState()
+      .consumePendingTerminalInput("nope");
+    expect(consumed).toBeNull();
+  });
+
+  it("overwrites a previously queued command for the same session", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "first");
+    setPendingTerminalInput("sess-1", "second");
+    expect(consumePendingTerminalInput("sess-1")).toBe("second");
+  });
+
+  it("does not cross-contaminate session ids", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "one");
+    setPendingTerminalInput("sess-2", "two");
+    expect(consumePendingTerminalInput("sess-1")).toBe("one");
+    expect(useAppStore.getState().pendingTerminalInput["sess-2"]).toBe("two");
+  });
+});
+
+describe("createSession returns the created session", () => {
+  it("resolves to the api result on success so callers can react with the new id", async () => {
+    const created: Session = session("new-id", REPO_A);
+    mockApi.createSession.mockResolvedValueOnce(created);
+    await seed([project(REPO_A, 0)], []);
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    const result = await useAppStore
+      .getState()
+      .createSession("new-id", REPO_A);
+    expect(result?.id).toBe("new-id");
+  });
+
+  it("resolves to null when the api call fails", async () => {
+    mockApi.createSession.mockRejectedValueOnce(new Error("nope"));
+    const result = await useAppStore
+      .getState()
+      .createSession("x", REPO_A);
+    expect(result).toBeNull();
+    expect(useAppStore.getState().error).toBe("nope");
   });
 });

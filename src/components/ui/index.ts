@@ -9,3 +9,4 @@ export { RadioCard } from "./RadioCard";
 export { Markdown } from "./Markdown";
 export { RefreshButton } from "./RefreshButton";
 export { TextSwap } from "./TextSwap";
+export { CommandHint } from "./CommandHint";
