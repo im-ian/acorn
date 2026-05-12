@@ -259,6 +259,11 @@ impl SessionStore {
     /// Attach a daemon session id to an existing session record. Used after
     /// the app proxies a spawn through `acornd` and the daemon hands back
     /// the live PTY id. Idempotent: passing `None` detaches.
+    ///
+    /// `dead_code` until the daemon-routed `pty_spawn` cutover lands —
+    /// retained so the BC-compat persistence schema has a setter the
+    /// cutover can call without another schema migration.
+    #[allow(dead_code)]
     pub fn set_daemon_session_id(
         &self,
         id: &Uuid,
@@ -275,6 +280,10 @@ impl SessionStore {
     /// Persist the resume token chosen for this session's agent (e.g.
     /// Claude Code's `--session-id`). Called once at first spawn; the
     /// daemon re-injects this on every respawn.
+    ///
+    /// `dead_code` until the daemon-routed `pty_spawn` cutover wires
+    /// resume-strategy detection through this setter.
+    #[allow(dead_code)]
     pub fn set_agent_resume_token(
         &self,
         id: &Uuid,

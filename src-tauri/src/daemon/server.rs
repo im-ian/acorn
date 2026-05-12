@@ -24,13 +24,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use interprocess::TryClone;
-use interprocess::local_socket::Stream;
-use interprocess::local_socket::traits::ListenerExt as _ListenerExt;
+use interprocess::local_socket::{ListenerNonblockingMode, Stream};
+use interprocess::local_socket::traits::Listener as _ListenerTrait;
 
 use super::protocol::{
-    AgentKind, ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult,
-    ErrorCode, Hello, PROTOCOL_VERSION_MAJOR, SessionKind, SessionSummary, StatusSnapshot,
-    StreamAttach, StreamFrame,
+    ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, ErrorCode,
+    Hello, PROTOCOL_VERSION_MAJOR, SessionSummary, StatusSnapshot, StreamAttach, StreamFrame,
 };
 use super::pty::PtyManager;
 use super::session::SessionRegistry;
@@ -90,53 +89,60 @@ impl Daemon {
     }
 
     fn run_control_accept(self: Arc<Self>, listener: interprocess::local_socket::Listener) {
-        for incoming in listener.incoming() {
-            if self.shutdown_flag.load(Ordering::SeqCst) {
-                break;
+        self.accept_loop(listener, "control", |me, conn| {
+            if let Err(err) = me.handle_control_conn(conn) {
+                tracing::warn!(error = %err, "control conn error");
             }
-            match incoming {
-                Ok(conn) => {
-                    let me = Arc::clone(&self);
-                    std::thread::Builder::new()
-                        .name(format!("acornd-control-{}", me.alloc_seq()))
-                        .spawn(move || {
-                            if let Err(err) = me.handle_control_conn(conn) {
-                                tracing::warn!(error = %err, "control conn error");
-                            }
-                        })
-                        .ok();
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "control accept error");
-                    break;
-                }
-            }
-        }
+        });
     }
 
     fn run_stream_accept(self: Arc<Self>, listener: interprocess::local_socket::Listener) {
-        for incoming in listener.incoming() {
+        self.accept_loop(listener, "stream", |me, conn| {
+            if let Err(err) = me.handle_stream_conn(conn) {
+                tracing::warn!(error = %err, "stream conn error");
+            }
+        });
+    }
+
+    /// Shared poll-based accept loop. Using non-blocking accept with a
+    /// short sleep (instead of `listener.incoming()`) is what lets the
+    /// daemon honor the shutdown flag: a blocking `incoming()` does not
+    /// return until the next connection arrives, so a `Shutdown` RPC
+    /// would leave the accept threads parked forever after their last
+    /// client closed. 50 ms is short enough that `acornd shutdown`
+    /// feels instant and long enough that the loop is not a busy-spin
+    /// (~20 syscalls per second per socket).
+    fn accept_loop<F>(self: Arc<Self>, listener: interprocess::local_socket::Listener, kind: &'static str, handle: F)
+    where
+        F: Fn(Arc<Self>, Stream) + Send + Sync + 'static,
+    {
+        if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
+            tracing::warn!(error = %err, kind, "failed to set listener non-blocking; falling back to blocking accept");
+        }
+        let handle = Arc::new(handle);
+        loop {
             if self.shutdown_flag.load(Ordering::SeqCst) {
                 break;
             }
-            match incoming {
+            match listener.accept() {
                 Ok(conn) => {
                     let me = Arc::clone(&self);
+                    let h = handle.clone();
                     std::thread::Builder::new()
-                        .name(format!("acornd-stream-{}", me.alloc_seq()))
-                        .spawn(move || {
-                            if let Err(err) = me.handle_stream_conn(conn) {
-                                tracing::warn!(error = %err, "stream conn error");
-                            }
-                        })
+                        .name(format!("acornd-{kind}-{}", me.alloc_seq()))
+                        .spawn(move || h(me, conn))
                         .ok();
                 }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
                 Err(err) => {
-                    tracing::warn!(error = %err, "stream accept error");
+                    tracing::warn!(error = %err, kind, "accept error");
                     break;
                 }
             }
         }
+        tracing::info!(kind, "accept loop exiting");
     }
 
     fn alloc_seq(&self) -> u64 {
@@ -205,8 +211,11 @@ impl Daemon {
             if matches!(resp.payload, ControlResult::Error { .. }) && !persistent {
                 return Ok(());
             }
-            if matches!(req_payload_kind(&resp), Some("shutdown-ack")) {
-                self.shutdown_flag.store(true, Ordering::SeqCst);
+            // `Shutdown` is the one payload that sets the global flag
+            // inside `dispatch` AND closes this connection so the
+            // client knows the daemon will not accept further requests.
+            // The accept loops then exit on their next poll.
+            if self.shutdown_flag.load(Ordering::SeqCst) {
                 return Ok(());
             }
             if !persistent {
@@ -512,17 +521,6 @@ fn io_error_to_code(err: &io::Error) -> ErrorCode {
     }
 }
 
-/// Tag check used by the control-conn loop to detect a shutdown ack —
-/// we close the connection after replying so the client knows the
-/// daemon won't accept further requests.
-fn req_payload_kind(_resp: &ControlResponse) -> Option<&'static str> {
-    // Reserved for future per-response post-actions. Currently no
-    // payload triggers an additional close-after-reply beyond what
-    // the shutdown flag itself causes. Keeping the indirection so a
-    // future Q26 "force-close all clients" message has a hook.
-    None
-}
-
 /// Minimal base64 encode/decode local to the daemon so the binary does
 /// not pull in the `base64` crate's full feature surface. Kept in sync
 /// with `crate::pty::base64_encode` semantics (RFC 4648).
@@ -601,12 +599,10 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-#[allow(dead_code)]
-fn _quiet_unused_imports(_: AgentKind, _: SessionKind) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::protocol::SessionKind;
 
     #[test]
     fn base64_roundtrip() {
