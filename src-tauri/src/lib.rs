@@ -181,15 +181,34 @@ pub fn run() {
                 .ok()
                 .and_then(|p| p.parent().map(|d| d.join("acornd")));
             state.daemon_bridge.cache_binary_path(acornd_hint);
-            // Probe the daemon at boot. If `useDaemon` is on (default)
-            // and a daemon is already running from a previous session,
-            // we'll reuse it; if not, the first `daemon_*` Tauri call
-            // will spawn it lazily. We do NOT spawn here to keep app
-            // startup fast — the lazy path adds at most a single
-            // socket probe to the first session creation.
-            if let Err(err) = crate::daemon_bridge::boot_probe() {
-                tracing::warn!("daemon boot probe failed: {err}");
-            }
+            // Eagerly spawn the daemon on a background thread so the
+            // StatusBar indicator goes green within the first poll
+            // cycle. The status probe alone is passive (it never
+            // spawns) and the rest of the lazy-spawn path lives behind
+            // active calls like `list_sessions` / `spawn` — those
+            // never fire from StatusBar polling, so without this the
+            // daemon stays down for the entire app session until the
+            // user manually clicks something that routes through it.
+            //
+            // Off the main thread because `ensure_connection` waits up
+            // to ~5 s for the freshly-spawned daemon's socket to come
+            // up; blocking the Tauri setup would visibly stall app
+            // startup on cold machines. On daemon-binary-missing the
+            // background thread logs a warning and exits — the
+            // killswitch UI surfaces the same error if the user opens
+            // the Background sessions tab.
+            let bridge_for_boot = state.daemon_bridge.clone();
+            std::thread::Builder::new()
+                .name("acorn-daemon-boot".into())
+                .spawn(move || {
+                    if !bridge_for_boot.is_enabled() {
+                        return;
+                    }
+                    if let Err(err) = bridge_for_boot.ensure_connection() {
+                        tracing::warn!(error = %err, "daemon boot spawn failed");
+                    }
+                })
+                .ok();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

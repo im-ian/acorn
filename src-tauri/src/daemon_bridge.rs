@@ -32,7 +32,7 @@ use crate::daemon::protocol::{
     AgentKind, ControlPayload, ControlResult, SessionKind, SessionSummary, SpawnSpec,
     StatusSnapshot,
 };
-use crate::daemon::{client, lifecycle, paths};
+use crate::daemon::{client, paths};
 
 /// How long the bridge waits for `acornd` to become reachable after
 /// spawning it. Conservative because the first launch on a cold disk
@@ -397,26 +397,6 @@ fn base64_encode(input: &[u8]) -> String {
         _ => unreachable!(),
     }
     out
-}
-
-/// Probe whether the daemon is reachable without going through the
-/// persistent conn — used by the StatusBar indicator's periodic poll.
-/// Cheaper than `status()` because it answers `false` quickly when the
-/// daemon is not running (no spawn attempt, no retry).
-pub fn quick_probe() -> bool {
-    client::probe_status()
-        .map(|snap| snap.is_some())
-        .unwrap_or(false)
-}
-
-/// Best-effort check that a daemon is alive when the user has
-/// `useDaemon` enabled but the app is starting fresh. Currently a thin
-/// wrapper over `lifecycle::probe_daemon` plus the `probe_status` round
-/// trip — kept separate so future expansion (e.g. version match check)
-/// has a single seam.
-pub fn boot_probe() -> io::Result<bool> {
-    lifecycle::probe_daemon()
-        .and_then(|present| if present { Ok(quick_probe()) } else { Ok(false) })
 }
 
 /// Convenience: peek at the data dir without going through the daemon
