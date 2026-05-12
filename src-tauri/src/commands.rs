@@ -317,6 +317,22 @@ pub fn reorder_projects(state: State<'_, AppState>, order: Vec<String>) -> AppRe
 }
 
 #[tauri::command]
+pub fn reorder_sessions(
+    state: State<'_, AppState>,
+    repo_path: String,
+    order: Vec<String>,
+) -> AppResult<Vec<Session>> {
+    let path = PathBuf::from(&repo_path);
+    let ids: Vec<Uuid> = order
+        .into_iter()
+        .filter_map(|s| Uuid::parse_str(&s).ok())
+        .collect();
+    state.sessions.reorder(&path, &ids);
+    persist(&state);
+    Ok(state.sessions.list())
+}
+
+#[tauri::command]
 pub async fn remove_project(
     state: State<'_, AppState>,
     repo_path: String,

@@ -104,6 +104,7 @@ interface AppStateModel {
   addProject: (repoPath: string) => Promise<void>;
   removeProject: (repoPath: string, removeWorktrees?: boolean) => Promise<void>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
+  reorderSessions: (repoPath: string, orderedIds: string[]) => Promise<void>;
   requestRemoveProject: (repoPath: string) => void;
   clearPendingRemoveProject: () => void;
   setRightTab: (tab: RightTab) => void;
@@ -810,6 +811,24 @@ export const useAppStore = create<AppStateModel>()(
       set({ projects: updated });
     } catch (e) {
       set({ projects: previous, error: errorMessage(e) });
+    }
+  },
+
+  async reorderSessions(repoPath, orderedIds) {
+    const previous = get().sessions;
+    const indexOf = new Map<string, number>();
+    orderedIds.forEach((id, i) => indexOf.set(id, i));
+    const optimistic = previous.map((s) => {
+      if (s.repo_path !== repoPath) return s;
+      const pos = indexOf.get(s.id);
+      return pos === undefined ? s : { ...s, position: pos };
+    });
+    set({ sessions: optimistic });
+    try {
+      const updated = await api.reorderSessions(repoPath, orderedIds);
+      set({ sessions: updated });
+    } catch (e) {
+      set({ sessions: previous, error: errorMessage(e) });
     }
   },
 

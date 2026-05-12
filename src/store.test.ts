@@ -29,6 +29,9 @@ vi.mock("./lib/api", () => {
           position: i,
         })),
       ),
+      reorderSessions: vi.fn(async (_repoPath: string, _ids: string[]) =>
+        [] as Session[],
+      ),
     },
   };
 });
@@ -68,6 +71,7 @@ function session(
     last_message: null,
     startup_mode: null,
     kind: "regular",
+    position: null,
     ...overrides,
   };
 }
@@ -635,5 +639,38 @@ describe("createSession", () => {
     } finally {
       window.removeEventListener("acorn:show-control-guide", listener);
     }
+  });
+});
+
+describe("reorderSessions", () => {
+  it("optimistically assigns positions and commits server-returned sessions", async () => {
+    const s1 = session("s1", REPO_A);
+    const s2 = session("s2", REPO_A);
+    const s3 = session("s3", REPO_B);
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], [s1, s2, s3]);
+
+    mockApi.reorderSessions.mockResolvedValueOnce([
+      { ...s2, position: 0 },
+      { ...s1, position: 1 },
+      s3,
+    ]);
+
+    await useAppStore.getState().reorderSessions(REPO_A, ["s2", "s1"]);
+    const result = useAppStore.getState().sessions;
+    expect(result.find((s) => s.id === "s2")?.position).toBe(0);
+    expect(result.find((s) => s.id === "s1")?.position).toBe(1);
+    expect(result.find((s) => s.id === "s3")?.position).toBeNull();
+    expect(mockApi.reorderSessions).toHaveBeenCalledWith(REPO_A, ["s2", "s1"]);
+  });
+
+  it("rolls back sessions on failure", async () => {
+    const s1 = session("s1", REPO_A);
+    const s2 = session("s2", REPO_A);
+    await seed([project(REPO_A, 0)], [s1, s2]);
+    const before = useAppStore.getState().sessions;
+    mockApi.reorderSessions.mockRejectedValueOnce(new Error("boom"));
+    await useAppStore.getState().reorderSessions(REPO_A, ["s2", "s1"]);
+    expect(useAppStore.getState().sessions).toEqual(before);
+    expect(useAppStore.getState().error).toBe("boom");
   });
 });
