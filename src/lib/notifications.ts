@@ -11,8 +11,8 @@ import type { Session, SessionStatus } from "./types";
 
 // Notification body copy keyed by the status the session transitioned *into*.
 // The watcher only fires on transitions to `needs_input` / `failed` /
-// `completed`, so `idle` / `running` entries are placeholders that never get
-// surfaced — kept to keep the record exhaustive.
+// `completed`; `idle` / `running` entries are placeholders so the record
+// stays exhaustive against `SessionStatus`.
 const STATUS_SENTENCE: Record<SessionStatus, string> = {
   idle: "Session is idle.",
   running: "Session is running.",

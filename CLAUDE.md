@@ -41,6 +41,7 @@ Two recurring traps in E2E:
 - **Local persistence** (UI state like collapsed groups, dismissed update version) goes in `localStorage` under the `acorn:` key prefix. Don't reach for it from inside pure logic — keep it at the component / store edge.
 - **Logic stuck inside a component** that wants a unit test should be extracted to `src/lib/`. Don't try to test it through the rendered component. Example: `Sidebar.tsx`'s `buildProjectGroups` could move out if it grows.
 - **`src/lib/api.ts` is the only place that calls `invoke()` from app code.** New backend commands get a wrapper there with explicit types. Components import from `api`, not from `@tauri-apps/api/core`.
+- **Comments describe current state only.** No history accumulation, no "previously/legacy/v1/PR #N" framing, no WHAT restatement. Present-tense WHY only — see [`docs/COMMENTS.md`](docs/COMMENTS.md).
 
 ## Things that go wrong if you forget
 
@@ -63,5 +64,5 @@ bun run build          # tsc + vite build
 
 ## When in doubt
 
-- Reading: `docs/TESTING.md`, `docs/E2E_TESTING.md`, `docs/PR_LABELS.md`.
+- Reading: `docs/TESTING.md`, `docs/E2E_TESTING.md`, `docs/PR_LABELS.md`, `docs/COMMENTS.md`.
 - Patterns: search `src/` first for similar code already in the repo. Match its shape.

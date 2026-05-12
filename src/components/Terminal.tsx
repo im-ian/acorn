@@ -19,9 +19,8 @@ interface TerminalProps {
   cwd: string;
   /**
    * Per-session startup mode persisted on `Session.startup_mode`. `null`
-   * (or omitted) means the session has no recorded preference (legacy
-   * sessions created before this field existed) — the spawn falls back
-   * to the global `sessionStartup.mode` setting in that case.
+   * (or omitted) means no per-session preference is recorded; the spawn
+   * falls back to the global `sessionStartup.mode` setting.
    */
   startupMode?: SessionStartupMode | null;
   /**

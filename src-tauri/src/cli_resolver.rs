@@ -9,11 +9,11 @@
 //! `Command::new("gh")`. The result is the "`gh` CLI not found" error users
 //! see in the PRs tab when launching from Dock/Spotlight/Finder.
 //!
-//! PR #51 fixed this for long-lived PTY sessions by wrapping every spawn in
-//! `$SHELL -l -i -c 'exec <cmd>'`. That trade-off is fine for one-shot agent
-//! sessions but would add 50–200ms of shell startup *per* gh invocation, and
-//! the multi-account picker in `pull_requests.rs` makes 5–10 gh calls per
-//! refresh — enough to feel sluggish.
+//! PTY sessions handle this by wrapping every spawn in
+//! `$SHELL -l -i -c 'exec <cmd>'`, which is fine for one-shot agent sessions
+//! but would add 50–200ms of shell startup *per* gh invocation. The
+//! multi-account picker in `pull_requests.rs` makes 5–10 gh calls per refresh
+//! — enough to feel sluggish.
 //!
 //! Instead we resolve `<name>` to an absolute path (`/opt/homebrew/bin/gh`,
 //! `~/.local/bin/gh`, etc.) once via the user shell, cache it, and then spawn
@@ -123,7 +123,7 @@ pub fn spawn_error(name: &str, e: std::io::Error) -> AppError {
 /// Run `$SHELL -l -i -c 'command -v <name>'` and parse stdout for the
 /// resolved absolute path. The shell sources rc files (so PATH from
 /// Homebrew/npm/asdf/etc. is loaded) before running `command -v`, mirroring
-/// the rc-loading approach in `commands.rs::pty_spawn` (PR #51).
+/// the rc-loading approach in `commands.rs::pty_spawn`.
 fn shell_resolve(name: &str) -> AppResult<PathBuf> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     // Wrap `command -v` in an exclusive marker so we can pull the path out
@@ -227,7 +227,6 @@ mod tests {
 
     #[test]
     fn invalidate_is_a_noop_for_uncached_name() {
-        // Should not panic or error when the name was never cached.
         invalidate("acorn-test-never-existed");
     }
 
