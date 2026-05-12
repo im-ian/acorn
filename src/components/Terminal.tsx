@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactElement } from "react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -147,9 +148,16 @@ export function Terminal({
       });
     });
     const serializeAddon = new SerializeAddon();
+    const unicode11Addon = new Unicode11Addon();
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.loadAddon(serializeAddon);
+    term.loadAddon(unicode11Addon);
+    // xterm.js defaults to Unicode 6 width tables that treat most emoji as
+    // width 1. The glyph then overflows its cell and adjacent cells overwrite
+    // it, producing the half-rendered / crammed look. Unicode 11 tables mark
+    // modern emoji as width 2 so cell allocation matches the glyph footprint.
+    term.unicode.activeVersion = "11";
     termRef.current = term;
     fitRef.current = fitAddon;
 
