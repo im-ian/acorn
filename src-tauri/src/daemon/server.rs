@@ -25,7 +25,9 @@ use std::time::Instant;
 
 use interprocess::TryClone;
 use interprocess::local_socket::{ListenerNonblockingMode, Stream};
-use interprocess::local_socket::traits::Listener as _ListenerTrait;
+use interprocess::local_socket::traits::{
+    Listener as _ListenerTrait, Stream as _StreamTrait,
+};
 
 use super::protocol::{
     ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, ErrorCode,
@@ -126,6 +128,16 @@ impl Daemon {
             }
             match listener.accept() {
                 Ok(conn) => {
+                    // `ListenerNonblockingMode::Accept` only nominally
+                    // splits "non-blocking accept, blocking stream",
+                    // but interprocess's macOS impl propagates the
+                    // listener's non-blocking flag onto accepted
+                    // streams (kqueue inherits it on accept). Reset
+                    // here so the BufReader in `handle_control_conn`
+                    // does not return `WouldBlock` on the first read.
+                    if let Err(err) = conn.set_nonblocking(false) {
+                        tracing::warn!(error = %err, kind, "failed to clear stream non-blocking flag");
+                    }
                     let me = Arc::clone(&self);
                     let h = handle.clone();
                     std::thread::Builder::new()
