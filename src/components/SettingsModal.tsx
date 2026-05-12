@@ -10,6 +10,7 @@ import {
   type ReleaseNotes,
 } from "../lib/releases";
 import { useUpdater } from "../lib/updater-store";
+import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
@@ -40,6 +41,7 @@ type Tab =
   | "terminal"
   | "agents"
   | "sessions"
+  | "background-sessions"
   | "pull-requests"
   | "appearance"
   | "editor"
@@ -51,6 +53,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
   { id: "agents", label: "Agents" },
   { id: "sessions", label: "Sessions" },
+  { id: "background-sessions", label: "Background sessions" },
   { id: "pull-requests", label: "Pull Requests" },
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
@@ -59,11 +62,26 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "about", label: "About" },
 ];
 
+const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
+
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
   const reset = useSettings((s) => s.reset);
+  const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
+
+  // When the store reports a pending tab (e.g. StatusBar daemon button
+  // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
+  // jump there on next render and clear the flag so subsequent opens
+  // restore the user's manual tab choice.
+  useEffect(() => {
+    if (!open) return;
+    const pending = consumePendingTab();
+    if (pending && TAB_IDS.has(pending)) {
+      setTab(pending as Tab);
+    }
+  }, [open, consumePendingTab]);
 
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step.
@@ -121,6 +139,8 @@ export function SettingsModal() {
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
+          ) : tab === "background-sessions" ? (
+            <BackgroundSessionsSettings />
           ) : tab === "pull-requests" ? (
             <PullRequestsSettings />
           ) : tab === "appearance" ? (

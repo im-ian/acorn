@@ -39,6 +39,27 @@ import { useAppStore } from "./store";
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
 
+/**
+ * Pluck a `tab` field out of an open-settings event payload regardless of
+ * whether it arrived as a string, `{tab}` object, or anything else.
+ * Returns `null` when no useable tab id can be extracted so the caller
+ * falls back to the default `setOpen(true)` behavior.
+ */
+function extractTabFromEvent(detail: unknown): string | null {
+  if (typeof detail === "string" && detail.length > 0) {
+    return detail;
+  }
+  if (
+    detail !== null &&
+    typeof detail === "object" &&
+    "tab" in detail &&
+    typeof (detail as { tab: unknown }).tab === "string"
+  ) {
+    return (detail as { tab: string }).tab;
+  }
+  return null;
+}
+
 function focusPanel(id: "sidebar" | "main" | "right") {
   const panel = document.querySelector(
     `[data-panel-id="${id}"]`,
@@ -85,6 +106,30 @@ function App() {
     // from zeroing out the persisted layout.
     void useAppStore.getState().loadInitialStatus().then(() => refreshAll());
   }, [refreshAll]);
+
+  // Sync the daemon killswitch from localStorage into the backend on
+  // boot. The backend defaults to ENABLED (Q16), and the frontend
+  // localStorage entry is the canonical "user's last choice". On a
+  // fresh install neither side has a value yet — both default to
+  // enabled and stay aligned. On a returning install the user may
+  // have disabled the daemon before quitting; this push keeps the
+  // backend honest so the first daemon-routed call short-circuits
+  // correctly.
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem("acorn:daemon-enabled");
+    } catch {
+      // localStorage blocked — fall back to the backend default.
+    }
+    if (raw === null) return;
+    const enabled = raw === "true";
+    void import("./lib/api").then(({ api }) => {
+      void api.daemonSetEnabled(enabled).catch((err) => {
+        console.warn("[App] daemon killswitch sync failed", err);
+      });
+    });
+  }, []);
 
   // Auto-update: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level
@@ -153,11 +198,20 @@ function App() {
 
   // The Tauri app menu fires `acorn:open-settings` when the user picks
   // "Settings..." from the macOS app menu (or hits its Cmd+, accelerator).
+  // The same event name is also dispatched as a DOM CustomEvent from
+  // inside the app (StatusBar daemon button uses this) — we listen on
+  // both transports because Tauri events do not flow through `window`
+  // and `window.dispatchEvent` does not reach Tauri listeners.
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
-    listen<unknown>("acorn:open-settings", () => {
-      useSettings.getState().setOpen(true);
+    listen<unknown>("acorn:open-settings", (event) => {
+      const tab = extractTabFromEvent(event.payload);
+      if (tab) {
+        useSettings.getState().openTab(tab);
+      } else {
+        useSettings.getState().setOpen(true);
+      }
     })
       .then((fn) => {
         if (cancelled) {
@@ -169,9 +223,23 @@ function App() {
       .catch((err) => {
         console.error("[App] failed to attach settings listener", err);
       });
+
+    // DOM bridge — components inside the React tree dispatch this to
+    // request a specific tab without going through the Tauri event bus.
+    const domHandler = (e: Event) => {
+      const tab = extractTabFromEvent((e as CustomEvent).detail);
+      if (tab) {
+        useSettings.getState().openTab(tab);
+      } else {
+        useSettings.getState().setOpen(true);
+      }
+    };
+    window.addEventListener("acorn:open-settings", domHandler);
+
     return () => {
       cancelled = true;
       unlisten?.();
+      window.removeEventListener("acorn:open-settings", domHandler);
     };
   }, []);
 
