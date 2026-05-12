@@ -196,6 +196,7 @@ pub fn run() {
             commands::pty_kill,
             commands::pty_reload_shell_env,
             commands::pty_cwd,
+            commands::pty_repo_root,
             commands::update_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,

@@ -200,6 +200,15 @@ export const api = {
     return invoke<string | null>("pty_cwd", { sessionId });
   },
   /**
+   * Like {@link ptyCwd}, but resolves the cwd to its enclosing git repo's
+   * working directory. Returns `null` when the PTY has no live cwd or that
+   * cwd is outside any git repo (e.g. inside a Cargo registry dir). Callers
+   * should fall back to the session's recorded `worktree_path` on `null`.
+   */
+  ptyRepoRoot(sessionId: string): Promise<string | null> {
+    return invoke<string | null>("pty_repo_root", { sessionId });
+  },
+  /**
    * Re-point a session at a different worktree directory. Used after an
    * in-PTY command creates a worktree and exits — adopting it lets the next
    * spawn land inside the new worktree instead of the original cwd.
