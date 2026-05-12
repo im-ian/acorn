@@ -59,6 +59,14 @@ interface AppStateModel {
    *  by repo path. Populated by the PRs tab; consumed by the StatusBar to
    *  surface "which identity am I acting as for this repo". In-memory only. */
   prAccountByRepo: Record<string, string>;
+  /**
+   * One-shot command to write into a session's PTY immediately after its
+   * shell finishes spawning. Used by `CommandRunDialog` to launch a freshly
+   * created session that then executes a fixed command (e.g. `gh auth login`).
+   * Terminal.tsx consumes and clears the entry inside the `pty_spawn`
+   * resolver, so the value is in-memory only and never persisted.
+   */
+  pendingTerminalInput: Record<string, string>;
   loading: boolean;
   error: string | null;
   pendingRemoveId: string | null;
@@ -93,7 +101,7 @@ interface AppStateModel {
     repoPath: string,
     isolated?: boolean,
     kind?: SessionKind,
-  ) => Promise<void>;
+  ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
@@ -109,6 +117,10 @@ interface AppStateModel {
   clearPendingRemoveProject: () => void;
   setRightTab: (tab: RightTab) => void;
   setPrAccountForRepo: (repoPath: string, login: string | null) => void;
+  /** Queue a command for the next successful `pty_spawn` of `sessionId`. */
+  setPendingTerminalInput: (sessionId: string, command: string) => void;
+  /** Atomically read and remove the queued command for `sessionId`. */
+  consumePendingTerminalInput: (sessionId: string) => string | null;
 }
 
 let paneCounter = 0;
@@ -326,6 +338,7 @@ export const useAppStore = create<AppStateModel>()(
 
   rightTab: "commits",
   prAccountByRepo: {},
+  pendingTerminalInput: {},
   loading: false,
   error: null,
   pendingRemoveId: null,
@@ -725,8 +738,10 @@ export const useAppStore = create<AppStateModel>()(
       ) {
         window.dispatchEvent(new CustomEvent("acorn:show-control-guide"));
       }
+      return created;
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
+      return null;
     }
   },
 
@@ -857,6 +872,26 @@ export const useAppStore = create<AppStateModel>()(
         prAccountByRepo: { ...s.prAccountByRepo, [repoPath]: login },
       };
     });
+  },
+
+  setPendingTerminalInput(sessionId, command) {
+    set((s) => ({
+      pendingTerminalInput: {
+        ...s.pendingTerminalInput,
+        [sessionId]: command,
+      },
+    }));
+  },
+
+  consumePendingTerminalInput(sessionId) {
+    const queued = get().pendingTerminalInput[sessionId];
+    if (!queued) return null;
+    set((s) => {
+      if (!(sessionId in s.pendingTerminalInput)) return s;
+      const { [sessionId]: _, ...rest } = s.pendingTerminalInput;
+      return { pendingTerminalInput: rest };
+    });
+    return queued;
   },
     }),
     {
