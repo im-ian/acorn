@@ -319,37 +319,40 @@ interface SessionTodosState {
 }
 
 /**
- * Resolve the live working directory of a session's PTY tree, with the
- * recorded `fallback` path as the immediate (and final) fallback. Re-resolves
- * lazily — only on session change, tab change, and window refocus. Cost per
- * resolve is one Tauri command + a single sysinfo refresh on the backend, so
- * a few invocations per minute is essentially free; we deliberately do *not*
- * poll on a timer.
+ * Resolve the live working directory of a session's PTY tree to the git
+ * repo it sits inside, with the recorded `fallback` path as the immediate
+ * (and final) fallback. Backed by `pty_repo_root`, which does the
+ * `Repository::discover` walk server-side and returns `null` when the cwd
+ * lies outside any git repo — so a user `cd`-ing into e.g. a Cargo registry
+ * dir doesn't push a non-repo path into git commands and produce a
+ * persistent "could not find git repository from '<…>'" banner. Re-resolves
+ * lazily on session change, tab change, and window refocus; deliberately
+ * not polled on a timer.
  */
 function useLiveRepoPath(
   sessionId: string | null,
   fallback: string | null,
   rightTab: string,
 ): string | null {
-  const [liveCwd, setLiveCwd] = useState<string | null>(null);
+  const [liveRepo, setLiveRepo] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!sessionId) {
-      setLiveCwd(null);
+      setLiveRepo(null);
       return;
     }
     let cancelled = false;
     api
-      .ptyCwd(sessionId)
-      .then((cwd) => {
-        if (!cancelled) setLiveCwd(cwd);
+      .ptyRepoRoot(sessionId)
+      .then((repo) => {
+        if (!cancelled) setLiveRepo(repo);
       })
       .catch((err: unknown) => {
         // Don't blow away a previously resolved path on a transient backend
-        // error — the static fallback will kick in only if liveCwd was never
+        // error — the static fallback will kick in only if liveRepo was never
         // set in the first place. Logging stays at debug to avoid noise.
-        console.debug("[RightPanel] ptyCwd resolve failed", err);
+        console.debug("[RightPanel] ptyRepoRoot resolve failed", err);
       });
     return () => {
       cancelled = true;
@@ -365,7 +368,7 @@ function useLiveRepoPath(
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  return liveCwd ?? fallback;
+  return liveRepo ?? fallback;
 }
 
 function useSessionTodos(

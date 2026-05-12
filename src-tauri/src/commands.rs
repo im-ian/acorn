@@ -708,6 +708,34 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
     Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
 }
 
+/// Like [`pty_cwd`], but resolves the cwd to its enclosing git repository's
+/// working directory via `Repository::discover`. Returns `None` whenever
+/// either the PTY has no live cwd or that cwd lies outside any git repo —
+/// the latter happens routinely when the user `cd`s into a Cargo registry
+/// source dir or any other non-repo path.
+///
+/// Callers (currently `RightPanel`'s live-repo resolver) use the returned
+/// path verbatim as the `repo_path` argument to git commands. The frontend
+/// falls back to the session's recorded `worktree_path` on `None`, which
+/// avoids a persistent "could not find git repository from '<cargo-dir>'"
+/// banner appearing inside the panel any time the PTY drifts outside a
+/// repo.
+#[tauri::command]
+pub fn pty_repo_root(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<String>> {
+    let Some(cwd) = pty_cwd(state, session_id)? else {
+        return Ok(None);
+    };
+    let Ok(repo) = git2::Repository::discover(&cwd) else {
+        return Ok(None);
+    };
+    Ok(repo
+        .workdir()
+        .map(|p| p.to_string_lossy().into_owned()))
+}
+
 /// BFS over `sys`, starting at `root`, returning the cwd of the deepest
 /// reachable descendant that has one. Falls back to `root`'s own cwd at
 /// depth 0 when no deeper descendant exposes a cwd. `None` if the root PID
