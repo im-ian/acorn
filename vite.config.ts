@@ -1,10 +1,13 @@
 /// <reference types="vitest/config" />
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+const projectRoot: string = process.cwd();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -27,18 +30,16 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri` and worktree checkout
-      //    directories. Without the worktree excludes, running `claude -w`
-      //    (or any tool that calls `git worktree add` under the project
-      //    root) checks out hundreds of files at once into
-      //    `.claude/worktrees/<name>/...` or `.acorn/worktrees/<name>/...`,
-      //    which Vite cannot reconcile via HMR and falls back to a full
-      //    page reload — showing as a white-flash "acorn restarted itself"
-      //    in dev. Production isn't affected because there's no dev server.
+      // Anchor worktree ignores to the Vite root (cwd of the running dev
+      // server) instead of globbing anywhere. The dev server protects its
+      // own root from the `git worktree add` file burst (which would
+      // otherwise force a full reload), but when the dev server IS itself
+      // running inside a worktree, the unrooted `**/.claude/worktrees/**`
+      // also matched the worktree's own `src/` and killed HMR.
       ignored: [
         "**/src-tauri/**",
-        "**/.claude/worktrees/**",
-        "**/.acorn/worktrees/**",
+        resolve(projectRoot, ".claude/worktrees") + "/**",
+        resolve(projectRoot, ".acorn/worktrees") + "/**",
       ],
     },
   },
