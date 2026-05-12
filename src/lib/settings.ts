@@ -88,6 +88,14 @@ export type TerminalFontWeight =
   | 800
   | 900;
 
+/**
+ * How the terminal activates links. `click` opens on a plain mouse click;
+ * `modifier-click` requires the platform-primary modifier (Cmd on macOS,
+ * Ctrl elsewhere) so a stray click on a URL in shell output does not yank
+ * focus to the browser.
+ */
+export type TerminalLinkActivation = "click" | "modifier-click";
+
 export const TERMINAL_FONT_WEIGHTS: ReadonlyArray<{
   value: TerminalFontWeight;
   label: string;
@@ -115,6 +123,12 @@ export interface AcornSettings {
      * cramped. Range 1.0–2.0 keeps the cursor / link hit boxes sensible.
      */
     lineHeight: number;
+    /**
+     * Gesture required to follow a URL in terminal output. Plain click is
+     * the xterm default; modifier-click matches iTerm2 / Terminal.app so a
+     * stray click on output containing a URL doesn't steal focus.
+     */
+    linkActivation: TerminalLinkActivation;
   };
   /**
    * The single AI agent acorn uses everywhere: Sessions startup (when
@@ -201,6 +215,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeight: 400,
     fontWeightBold: 700,
     lineHeight: 1.0,
+    linkActivation: "click",
   },
   agents: {
     selected: "claude",
@@ -259,6 +274,14 @@ const VALID_PR_STATES = new Set<PrStateFilter>([
 const VALID_PR_INTERVALS = new Set<number>(
   PR_REFRESH_INTERVAL_OPTIONS.map((o) => o.value),
 );
+
+function normalizeLinkActivation(
+  v: unknown,
+  fallback: TerminalLinkActivation,
+): TerminalLinkActivation {
+  if (v === "click" || v === "modifier-click") return v;
+  return fallback;
+}
 
 function normalizeLineHeight(v: unknown, fallback: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
@@ -387,6 +410,10 @@ function loadSettings(): AcornSettings {
         lineHeight: normalizeLineHeight(
           (terminalRaw as { lineHeight?: unknown }).lineHeight,
           DEFAULT_SETTINGS.terminal.lineHeight,
+        ),
+        linkActivation: normalizeLinkActivation(
+          (terminalRaw as { linkActivation?: unknown }).linkActivation,
+          DEFAULT_SETTINGS.terminal.linkActivation,
         ),
       },
       agents: {

@@ -9,7 +9,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
-import { resolveStartupCommand, useSettings } from "../lib/settings";
+import {
+  resolveStartupCommand,
+  useSettings,
+  type TerminalLinkActivation,
+} from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import type { SessionStartupMode } from "../lib/types";
 import { useAppStore } from "../store";
@@ -54,6 +58,16 @@ const TERMINAL_THEME: ITheme = {
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
+
+// macOS uses Cmd (metaKey); other platforms use Ctrl. Matches the
+// platform-primary modifier `tinykeys` resolves `$mod` to.
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /Mac|iP(hone|od|ad)/.test(navigator.platform);
+
+function modifierHeld(event: MouseEvent): boolean {
+  return IS_MAC ? event.metaKey : event.ctrlKey;
+}
 
 function decodeBase64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64);
@@ -116,11 +130,18 @@ export function Terminal({
     });
 
     const fitAddon = new FitAddon();
+    // Tracks the current link-activation setting so the addon callback below
+    // sees live changes without rebuilding the terminal.
+    let linkActivation: TerminalLinkActivation =
+      initialSettings.terminal.linkActivation;
     // Hand link clicks to the OS so URLs open in the user's default browser
     // instead of trying to navigate the Tauri WebView (which is gated by the
-    // app's CSP and would either fail or replace the app shell).
+    // app's CSP and would either fail or replace the app shell). When the user
+    // opts into modifier-click activation, plain clicks are swallowed so a
+    // stray click on a URL in shell output doesn't steal focus.
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       event.preventDefault();
+      if (linkActivation === "modifier-click" && !modifierHeld(event)) return;
       void openUrl(uri).catch((err: unknown) => {
         console.error("failed to open terminal link", uri, err);
       });
@@ -168,6 +189,9 @@ export function Terminal({
       if (next.lineHeight !== previous.lineHeight) {
         term.options.lineHeight = next.lineHeight;
         changed = true;
+      }
+      if (next.linkActivation !== previous.linkActivation) {
+        linkActivation = next.linkActivation;
       }
       if (changed) {
         try {
