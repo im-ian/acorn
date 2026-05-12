@@ -8,18 +8,17 @@ export type SessionStatus =
 /**
  * Per-session PTY startup mode persisted on the backend `Session` so the
  * choice survives an app restart and is decoupled from the global
- * `sessionStartup.mode` setting. `null` means "no per-session preference
- * recorded yet" (legacy sessions); the Terminal falls back to the global
- * setting in that case.
+ * `sessionStartup.mode` setting. `null` means no per-session preference is
+ * recorded and the Terminal falls back to the global setting.
  */
 export type SessionStartupMode = "agent" | "terminal" | "custom";
 
 /**
  * Distinguishes ordinary terminal sessions from "control" sessions. Control
- * sessions are the entry point for the upcoming `acorn-ipc` CLI, which lets
- * them dispatch commands to other sessions in the same project. Orthogonal
- * to `SessionStartupMode` — either kind can run any startup flavor. Older
- * persisted sessions without this field load as `"regular"` from the backend.
+ * sessions are the entry point for the `acorn-ipc` CLI, which lets them
+ * dispatch commands to other sessions in the same project. Orthogonal to
+ * `SessionStartupMode` — either kind can run any startup flavor. Persisted
+ * sessions without this field load as `"regular"` from the backend.
  */
 export type SessionKind = "regular" | "control";
 

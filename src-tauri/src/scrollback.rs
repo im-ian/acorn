@@ -79,8 +79,7 @@ pub fn delete(session_id: &str) -> AppResult<()> {
 }
 
 /// Remove scrollback files for any session id not present in `keep`.
-/// Called at boot to evict files belonging to sessions that were deleted
-/// while the app was offline (or before this feature existed).
+/// Called at boot to evict files left behind by sessions that no longer exist.
 pub fn prune_orphans<I, S>(keep: I) -> AppResult<usize>
 where
     I: IntoIterator<Item = S>,
