@@ -761,7 +761,10 @@ export function Terminal({
         const queued = useAppStore
           .getState()
           .consumePendingTerminalInput(sessionId);
-        if (queued) {
+        // Cleanup can run between consume and write under StrictMode's
+        // mount/cleanup/mount sequence. Re-check `disposed` so we do not
+        // pty_write into a session whose PTY has already been killed.
+        if (queued && !disposed) {
           const payload = encodeStringToBase64(queued + "\r");
           invoke("pty_write", { sessionId, data: payload }).catch(
             (err: unknown) => {

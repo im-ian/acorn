@@ -884,14 +884,19 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   consumePendingTerminalInput(sessionId) {
-    const queued = get().pendingTerminalInput[sessionId];
-    if (!queued) return null;
+    // Read and clear inside one `set` so concurrent consumers cannot both
+    // observe the same value before either of them clears it. Captures the
+    // resolved value via closure rather than as the `set` return so the
+    // function can still surface it to its caller.
+    let consumed: string | null = null;
     set((s) => {
-      if (!(sessionId in s.pendingTerminalInput)) return s;
+      const queued = s.pendingTerminalInput[sessionId];
+      if (!queued) return s;
+      consumed = queued;
       const { [sessionId]: _, ...rest } = s.pendingTerminalInput;
       return { pendingTerminalInput: rest };
     });
-    return queued;
+    return consumed;
   },
     }),
     {
