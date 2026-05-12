@@ -42,7 +42,7 @@ import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
-import { RefreshButton } from "./ui";
+import { CommandHint, RefreshButton } from "./ui";
 
 interface ExpandedDiff {
   payload: DiffPayload;
@@ -1183,7 +1183,11 @@ function PullRequestsTab({
         ) : listing.kind === "not_github" ? (
           <Empty msg="Origin remote is not a GitHub repository." />
         ) : listing.kind === "no_access" ? (
-          <NoAccessBanner slug={listing.slug} accounts={listing.accounts} />
+          <NoAccessBanner
+            slug={listing.slug}
+            accounts={listing.accounts}
+            repoPath={repoPath}
+          />
         ) : listing.items.length === 0 ? (
           <Empty msg={`No ${stateFilter} pull requests.`} />
         ) : (
@@ -1341,9 +1345,11 @@ function PullRequestsTab({
 function NoAccessBanner({
   slug,
   accounts,
+  repoPath,
 }: {
   slug: string;
   accounts: AccountSummary[];
+  repoPath: string;
 }) {
   const tried = accounts.map((a) => `@${a.login}`).join(", ");
   return (
@@ -1359,9 +1365,11 @@ function NoAccessBanner({
       ) : (
         <p>No accounts authenticated against github.com.</p>
       )}
-      <p className="opacity-70">
-        Run <code className="font-mono">gh auth login</code> with an account
-        that has access, or accept the invitation on github.com.
+      <p className="flex flex-wrap items-center gap-1.5 opacity-70">
+        Run
+        <CommandHint command="gh auth login" repoPath={repoPath} />
+        with an account that has access, or accept the invitation on
+        github.com.
       </p>
     </div>
   );

@@ -753,6 +753,25 @@ export function Terminal({
           return;
         }
         exited = false;
+        // CommandRunDialog may have queued a one-shot command for this
+        // session (e.g. `gh auth login` launched from the NoAccessBanner).
+        // Drain the queue once the PTY is alive — the shell buffers the
+        // bytes until its prompt is ready, so a small startup delay is
+        // tolerable without coordinating with the prompt-ready signal.
+        const queued = useAppStore
+          .getState()
+          .consumePendingTerminalInput(sessionId);
+        // Cleanup can run between consume and write under StrictMode's
+        // mount/cleanup/mount sequence. Re-check `disposed` so we do not
+        // pty_write into a session whose PTY has already been killed.
+        if (queued && !disposed) {
+          const payload = encodeStringToBase64(queued + "\r");
+          invoke("pty_write", { sessionId, data: payload }).catch(
+            (err: unknown) => {
+              console.error("[Terminal] pending pty_write failed", err);
+            },
+          );
+        }
       } catch (err) {
         if (!disposed) {
           term.write(

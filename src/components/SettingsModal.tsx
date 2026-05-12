@@ -24,6 +24,7 @@ import {
 import type { PrStateFilter } from "../lib/types";
 import {
   CheckboxRow,
+  CommandHint,
   Field,
   Modal,
   ModalHeader,
@@ -315,7 +316,6 @@ function ControlSessionInstallSection() {
     import("../lib/types").AcornIpcStatus | null
   >(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -360,18 +360,6 @@ function ControlSessionInstallSection() {
     ? `sudo ln -sf "${status.bundled_path}" "${installTarget}"`
     : "";
 
-  async function copyInstallCommand() {
-    if (!installCommand) return;
-    try {
-      await navigator.clipboard.writeText(installCommand);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard can fail in dev when the webview is unfocused. Fall back
-      // to leaving the command visible so the user can select it.
-    }
-  }
-
   return (
     <Field
       label="Control sessions (acorn-ipc CLI)"
@@ -414,19 +402,8 @@ function ControlSessionInstallSection() {
             {activeShim ? activeShim.path : installTarget}
           </code>
         </div>
-        {!activeShim && status.bundled_exists ? (
-          <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-md border border-border bg-bg px-2 py-1 font-mono text-[11px] text-fg">
-              {installCommand}
-            </code>
-            <button
-              type="button"
-              onClick={() => void copyInstallCommand()}
-              className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90"
-            >
-              <TextSwap>{copied ? "Copied" : "Copy"}</TextSwap>
-            </button>
-          </div>
+        {!activeShim && status.bundled_exists && installCommand ? (
+          <CommandHint command={installCommand} repoPath={null} />
         ) : null}
         <button
           type="button"
