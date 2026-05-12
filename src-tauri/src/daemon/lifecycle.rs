@@ -64,8 +64,18 @@ pub fn release_pid_lock(path: &PathBuf) {
 #[cfg(unix)]
 fn is_process_alive(pid: u32) -> bool {
     // `kill -0` semantics: signal-0 does no work but performs the
-    // permission/existence check. `Pid` from libc accepts i32 — UI tests
-    // never spawn PIDs that overflow.
+    // permission/existence check. Two edge cases need guarding before
+    // we cast to the `i32` `Pid::from_raw` wants:
+    //   * `pid == 0` is the calling process group — `kill(0, ...)`
+    //     signals every process in our group, which would say "alive"
+    //     for a stale pidfile that happens to read "0".
+    //   * `pid > i32::MAX` overflows on cast to a negative `pid_t`.
+    //     `kill(-1, 0)` has the special meaning "any process the
+    //     caller can signal", which also returns success and would
+    //     mis-report a corrupt pidfile as a live daemon.
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
     kill(Pid::from_raw(pid as i32), None).is_ok()
