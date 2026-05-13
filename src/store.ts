@@ -81,8 +81,19 @@ interface AppStateModel {
    * results in a non-empty backend session list.
    */
   sessionsLoadedCleanly: boolean;
+  /**
+   * Session ids whose *live* PTY cwd resolves inside a linked git worktree
+   * (`.git` is a file). Separate from `Session.in_worktree`, which only
+   * reflects the recorded `worktree_path` at spawn / adoption time — this
+   * map catches the user typing `cd /some/other/worktree` interactively.
+   * Populated event-driven (after `refreshSessions` and on window focus),
+   * never on an interval, so the batched probe stays cheap.
+   */
+  liveInWorktree: Record<string, boolean>;
   loadInitialStatus: () => Promise<void>;
   refreshSessions: () => Promise<void>;
+  /** Re-probe every session's live cwd in one batched backend call. */
+  refreshLiveInWorktree: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   refreshAll: () => Promise<void>;
   /** Probe session liveness via JSONL transcripts; updates session statuses
@@ -343,6 +354,7 @@ export const useAppStore = create<AppStateModel>()(
   pendingRemoveId: null,
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
+  liveInWorktree: {},
 
   async loadInitialStatus() {
     try {
@@ -388,8 +400,22 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
         };
       });
+      void get().refreshLiveInWorktree();
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
+    }
+  },
+
+  async refreshLiveInWorktree() {
+    try {
+      const map = await api.ptyInWorktreeAll();
+      // Components do `s.liveInWorktree[id]`; null would crash that access.
+      // Backend returns an object in practice, but the mock fallback path
+      // (and any future RPC that returns null on degraded states) needs the
+      // guard to keep the store contract intact.
+      set({ liveInWorktree: map ?? {} });
+    } catch (e) {
+      console.debug("[store] refreshLiveInWorktree failed", e);
     }
   },
 

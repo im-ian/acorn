@@ -310,13 +310,20 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
         .sessions
         .list()
         .into_iter()
-        .map(|mut s| {
-            if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
-                s.branch = branch;
-            }
-            s
-        })
+        .map(enrich_session)
         .collect()
+}
+
+/// Attach derived fields (`branch`, `in_worktree`) computed from the
+/// session's current on-disk state. Pure: never mutates the persisted
+/// store. Called on every Session leaving the backend so the frontend
+/// sees fresh values without a second round-trip.
+fn enrich_session(mut s: Session) -> Session {
+    if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
+        s.branch = branch;
+    }
+    s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
+    s
 }
 
 static MEMORY_PROBE: Mutex<Option<System>> = Mutex::new(None);
@@ -459,7 +466,7 @@ pub async fn create_session(
     let inserted = state.sessions.insert(session);
     state.projects.ensure(repo.clone(), project_basename(&repo));
     persist(&state);
-    Ok(inserted)
+    Ok(enrich_session(inserted))
 }
 
 #[tauri::command]
@@ -499,7 +506,7 @@ pub fn reorder_sessions(
         .collect();
     state.sessions.reorder(&path, &ids);
     persist(&state);
-    Ok(state.sessions.list())
+    Ok(state.sessions.list().into_iter().map(enrich_session).collect())
 }
 
 #[tauri::command]
@@ -573,7 +580,7 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
     }
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
-    Ok(updated)
+    Ok(enrich_session(updated))
 }
 
 /// Re-point a session at a new worktree directory and persist the change.
@@ -594,7 +601,7 @@ pub fn update_session_worktree(
     }
     let updated = state.sessions.update_worktree_path(&id, path)?;
     persist(&state);
-    Ok(updated)
+    Ok(enrich_session(updated))
 }
 
 #[derive(Serialize, Default)]
@@ -1236,6 +1243,55 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
         }
     }
     best.map(|(_, p)| p)
+}
+
+/// Batched live-cwd → "is linked worktree" probe for every session that has
+/// a live PTY. Single system process refresh, one descendant walk per
+/// session — ~20-30ms regardless of session count, vs. that cost × N when
+/// callers loop `pty_cwd` per session.
+///
+/// Key invariant: a session id appears in the map **iff** it currently has a
+/// live PTY. The value is `true` when its live cwd resolves inside a linked
+/// worktree, `false` otherwise. Absence means "no live PTY — fall back to
+/// the session's recorded `worktree_path` / `isolated` flags". Conflating
+/// "no live PTY" with "live but not in a worktree" would let a stale static
+/// signal override the fresh live one (e.g. user `cd`s out of an adopted
+/// worktree).
+#[tauri::command]
+pub fn pty_in_worktree_all(state: State<'_, AppState>) -> HashMap<String, bool> {
+    let sessions = state.sessions.list();
+    let pids: Vec<(Uuid, u32)> = sessions
+        .iter()
+        .filter_map(|s| state.pty.child_pid(&s.id).map(|pid| (s.id, pid)))
+        .collect();
+    if pids.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+    );
+
+    let mut out = HashMap::with_capacity(pids.len());
+    for (id, pid) in pids {
+        let in_worktree = match deepest_descendant_cwd(&sys, Pid::from_u32(pid)) {
+            Some(cwd) => match git2::Repository::discover(&cwd) {
+                Ok(repo) => repo
+                    .workdir()
+                    .map(worktree::is_linked_worktree_root)
+                    .unwrap_or(false),
+                Err(_) => false,
+            },
+            None => false,
+        };
+        out.insert(id.to_string(), in_worktree);
+    }
+    out
 }
 
 #[tauri::command]
