@@ -395,7 +395,7 @@ fn is_image_path(path: &str) -> bool {
     )
 }
 
-fn image_mime(path: &str) -> &'static str {
+pub(crate) fn image_mime(path: &str) -> &'static str {
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|s| s.to_str())
@@ -414,7 +414,7 @@ fn image_mime(path: &str) -> &'static str {
     }
 }
 
-fn encode_data_uri(bytes: &[u8], path: &str) -> String {
+pub(crate) fn encode_data_uri(bytes: &[u8], path: &str) -> String {
     use base64::Engine as _;
     format!(
         "data:{};base64,{}",
