@@ -1150,6 +1150,11 @@ function usePrRowActions(
                 },
                 { type: "separator" },
                 {
+                  label: "Copy reference",
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(`#${menu.pr.number}`),
+                },
+                {
                   label: "Copy URL",
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(menu.pr.url),
@@ -1158,11 +1163,6 @@ function usePrRowActions(
                   label: `Copy branch (${menu.pr.head_branch})`,
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(menu.pr.head_branch),
-                },
-                {
-                  label: "Copy reference",
-                  icon: <Copy size={12} />,
-                  onClick: () => void copyText(`#${menu.pr.number}`),
                 },
                 { type: "separator" },
                 {
