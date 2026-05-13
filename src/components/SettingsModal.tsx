@@ -1,8 +1,22 @@
-import { Download, RefreshCcw, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Download,
+  FolderOpen,
+  ImagePlus,
+  RefreshCcw,
+  Settings as SettingsIcon,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
+import {
+  importBackgroundImage,
+  removeBackgroundImage,
+  type BackgroundFit,
+} from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import { CURATED_MONOSPACE_FONTS } from "../lib/fonts";
 import { sendTestNotification } from "../lib/notifications";
 import {
   fetchLatestReleaseNotes,
@@ -17,11 +31,13 @@ import {
   SESSION_TITLE_OPTIONS,
   type SelectedAgent,
   type SessionTitleSource,
+  type AcornSettings,
   type TerminalFontWeight,
   type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
+import { revealThemesFolder, useThemes } from "../lib/themes";
 import type { PrStateFilter } from "../lib/types";
 import {
   CheckboxRow,
@@ -146,15 +162,9 @@ function TerminalSettings() {
 
   return (
     <section className="space-y-4">
-      <Field
-        label="Font family"
-        hint="Comma-separated stack. First family that resolves wins."
-      >
-        <TextInput
-          value={settings.terminal.fontFamily}
-          onChange={(e) => patchTerminal({ fontFamily: e.target.value })}
-        />
-      </Field>
+      <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px] text-fg-muted">
+        Font family is selected in <strong>Appearance → Terminal font</strong>.
+      </div>
       <Field label="Font size" hint="In CSS pixels. Range 8–32.">
         <Stepper
           value={settings.terminal.fontSize}
@@ -465,10 +475,290 @@ function AppearanceSettings() {
   const settings = useSettings((s) => s.settings);
   const patchStatusBar = useSettings((s) => s.patchStatusBar);
   const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
+  const patchAppearance = useSettings((s) => s.patchAppearance);
   const sessionDisplay = settings.sessionDisplay;
+  const appearance = settings.appearance;
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-6">
+      <ThemeSection
+        themeId={appearance.themeId}
+        onChange={(themeId) => patchAppearance({ themeId })}
+      />
+      <BackgroundSection
+        state={appearance.background}
+        onChange={(background) => patchAppearance({ background })}
+      />
+      <FontSection
+        slots={appearance.fontSlots}
+        onChange={(fontSlots) => patchAppearance({ fontSlots })}
+      />
+      <SessionDisplaySection
+        sessionDisplay={sessionDisplay}
+        patch={patchSessionDisplay}
+      />
+      <StatusBarSection
+        statusBar={settings.statusBar}
+        patch={patchStatusBar}
+      />
+    </section>
+  );
+}
+
+function ThemeSection({
+  themeId,
+  onChange,
+}: {
+  themeId: string;
+  onChange: (id: string) => void;
+}) {
+  const themes = useThemes((s) => s.themes);
+  const refresh = useThemes((s) => s.refresh);
+
+  return (
+    <Field
+      label="Theme"
+      hint="Built-in palettes and valid CSS files from the themes folder."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={themeId}
+          onChange={(e) => onChange(e.target.value)}
+          className="min-w-[14rem]"
+        >
+          {themes.map((theme) => (
+            <option key={theme.id} value={theme.id}>
+              {theme.label}
+              {theme.source === "user" ? " (custom)" : ""}
+            </option>
+          ))}
+        </Select>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
+          title="Rescan themes folder"
+        >
+          <RefreshCcw size={12} /> Refresh
+        </button>
+        <button
+          type="button"
+          onClick={() => void revealThemesFolder()}
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
+        >
+          <FolderOpen size={12} /> Reveal folder
+        </button>
+      </div>
+    </Field>
+  );
+}
+
+type BackgroundSettings = AcornSettings["appearance"]["background"];
+
+function BackgroundSection({
+  state,
+  onChange,
+}: {
+  state: BackgroundSettings;
+  onChange: (patch: Partial<BackgroundSettings>) => void;
+}) {
+  const [pickError, setPickError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    setPickError(null);
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await importBackgroundImage(file.name, bytes);
+      onChange({
+        relativePath: result.relativePath,
+        fileName: result.fileName,
+        applyToApp: true,
+      });
+    } catch (err) {
+      setPickError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const remove = async () => {
+    if (state.relativePath) {
+      await removeBackgroundImage(state.relativePath).catch(() => {});
+    }
+    onChange({
+      relativePath: null,
+      fileName: null,
+      applyToApp: false,
+      applyToTerminal: false,
+    });
+  };
+
+  return (
+    <Field
+      label="Background image"
+      hint="One image can be applied to the app area, terminal area, or both."
+    >
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => void handleFileChange(event)}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg transition hover:bg-bg-elevated"
+          >
+            <ImagePlus size={12} /> {state.relativePath ? "Replace" : "Pick image"}
+          </button>
+          <span className="min-w-0 truncate text-[11px] text-fg-muted">
+            {state.fileName ?? "No image selected"}
+          </span>
+          {state.relativePath ? (
+            <button
+              type="button"
+              onClick={() => void remove()}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-danger"
+            >
+              <Trash2 size={12} /> Remove
+            </button>
+          ) : null}
+        </div>
+        {pickError ? (
+          <div className="text-[11px] text-danger">{pickError}</div>
+        ) : null}
+        <div className="flex flex-col gap-1">
+          <CheckboxRow
+            label="Apply to app background"
+            checked={state.applyToApp}
+            disabled={!state.relativePath}
+            onChange={(checked) => onChange({ applyToApp: checked })}
+          />
+          <CheckboxRow
+            label="Apply to terminal background"
+            checked={state.applyToTerminal}
+            disabled={!state.relativePath}
+            onChange={(checked) => onChange({ applyToTerminal: checked })}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[11px] font-medium text-fg-muted">Fit</span>
+          <div className="flex flex-wrap gap-1.5">
+            {(["cover", "contain", "tile"] as BackgroundFit[]).map((fit) => (
+              <RadioCard<BackgroundFit>
+                key={fit}
+                name="acorn-bg-fit"
+                value={fit}
+                current={state.fit}
+                label={fit[0].toUpperCase() + fit.slice(1)}
+                onSelect={(value) => onChange({ fit: value })}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Opacity" hint="0 is transparent, 100 is opaque.">
+            <Stepper
+              value={Math.round(state.opacity * 100)}
+              min={0}
+              max={100}
+              step={5}
+              unit="%"
+              onChange={(value) => onChange({ opacity: value / 100 })}
+            />
+          </Field>
+          <Field label="Blur">
+            <Stepper
+              value={state.blur}
+              min={0}
+              max={24}
+              step={1}
+              unit="px"
+              onChange={(value) => onChange({ blur: value })}
+            />
+          </Field>
+        </div>
+      </div>
+    </Field>
+  );
+}
+
+type FontSlots = AcornSettings["appearance"]["fontSlots"];
+
+function FontSection({
+  slots,
+  onChange,
+}: {
+  slots: FontSlots;
+  onChange: (slots: FontSlots) => void;
+}) {
+  const setSlot = (index: 0 | 1 | 2, value: string) => {
+    const next: FontSlots = [...slots] as FontSlots;
+    const font = value === "" ? null : value;
+    if (index === 0) {
+      if (!font) return;
+      next[0] = font;
+    } else {
+      next[index] = font;
+    }
+    onChange(next);
+  };
+
+  const renderSlot = (index: 0 | 1 | 2, label: string, required: boolean) => (
+    <Field key={index} label={label}>
+      <Select
+        value={slots[index] ?? ""}
+        onChange={(e) => setSlot(index, e.target.value)}
+        className="min-w-[14rem]"
+      >
+        {!required ? <option value="">— Skip</option> : null}
+        {CURATED_MONOSPACE_FONTS.map((font) => (
+          <option key={font} value={font}>
+            {font}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  );
+
+  return (
+    <Field
+      label="Terminal font"
+      hint="Fallback order for terminal text. A generic monospace fallback is appended automatically."
+    >
+      <div className="space-y-2">
+        {renderSlot(0, "Primary", true)}
+        {renderSlot(1, "Secondary", false)}
+        {renderSlot(2, "Tertiary", false)}
+      </div>
+    </Field>
+  );
+}
+
+function SessionDisplaySection({
+  sessionDisplay,
+  patch,
+}: {
+  sessionDisplay: AcornSettings["sessionDisplay"];
+  patch: (
+    patch: Partial<
+      Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
+    > & {
+      metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
+      icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
+    },
+  ) => void;
+}) {
+  return (
+    <>
       <Field
         label="Session title"
         hint="Which field becomes the bold first line of each sidebar session row."
@@ -482,7 +772,7 @@ function AppearanceSettings() {
               current={sessionDisplay.title}
               label={opt.label}
               description={opt.description}
-              onSelect={(v) => patchSessionDisplay({ title: v })}
+              onSelect={(v) => patch({ title: v })}
             />
           ))}
         </div>
@@ -496,25 +786,19 @@ function AppearanceSettings() {
             label="Branch"
             description="Active git branch."
             checked={sessionDisplay.metadata.branch}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { branch: v } })
-            }
+            onChange={(v) => patch({ metadata: { branch: v } })}
           />
           <CheckboxRow
             label="Working directory"
             description="Worktree directory basename."
             checked={sessionDisplay.metadata.workingDirectory}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { workingDirectory: v } })
-            }
+            onChange={(v) => patch({ metadata: { workingDirectory: v } })}
           />
           <CheckboxRow
             label="Status"
             description="Idle / Running / Needs input / Failed / Completed."
             checked={sessionDisplay.metadata.status}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { status: v } })
-            }
+            onChange={(v) => patch({ metadata: { status: v } })}
           />
         </div>
       </Field>
@@ -527,17 +811,13 @@ function AppearanceSettings() {
             label="Status dot"
             description="Colored bullet at the row start. Redundant when Status is enabled in metadata."
             checked={sessionDisplay.icons.statusDot}
-            onChange={(v) =>
-              patchSessionDisplay({ icons: { statusDot: v } })
-            }
+            onChange={(v) => patch({ icons: { statusDot: v } })}
           />
           <CheckboxRow
             label="Session kind icons"
             description="Branch glyph for isolated worktrees and bot glyph for control sessions."
             checked={sessionDisplay.icons.sessionKind}
-            onChange={(v) =>
-              patchSessionDisplay({ icons: { sessionKind: v } })
-            }
+            onChange={(v) => patch({ icons: { sessionKind: v } })}
           />
         </div>
       </Field>
@@ -549,34 +829,43 @@ function AppearanceSettings() {
           <input
             type="checkbox"
             checked={sessionDisplay.showDetailsOnHover}
-            onChange={(e) =>
-              patchSessionDisplay({ showDetailsOnHover: e.target.checked })
-            }
+            onChange={(e) => patch({ showDetailsOnHover: e.target.checked })}
             className="accent-[var(--color-accent)]"
           />
           Enable hover tooltip
         </label>
       </Field>
-      <Field
-        label="Status bar"
-        hint="Choose which optional badges show in the bottom status bar."
-      >
-        <div className="flex flex-col gap-1">
-          <CheckboxRow
-            label="GitHub account"
-            description="The `gh` account used to list pull requests for the active repo."
-            checked={settings.statusBar.showGithubAccount}
-            onChange={(v) => patchStatusBar({ showGithubAccount: v })}
-          />
-          <CheckboxRow
-            label="Memory usage"
-            description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
-            checked={settings.statusBar.showMemory}
-            onChange={(v) => patchStatusBar({ showMemory: v })}
-          />
-        </div>
-      </Field>
-    </section>
+    </>
+  );
+}
+
+function StatusBarSection({
+  statusBar,
+  patch,
+}: {
+  statusBar: AcornSettings["statusBar"];
+  patch: (patch: Partial<AcornSettings["statusBar"]>) => void;
+}) {
+  return (
+    <Field
+      label="Status bar"
+      hint="Choose which optional badges show in the bottom status bar."
+    >
+      <div className="flex flex-col gap-1">
+        <CheckboxRow
+          label="GitHub account"
+          description="The `gh` account used to list pull requests for the active repo."
+          checked={statusBar.showGithubAccount}
+          onChange={(v) => patch({ showGithubAccount: v })}
+        />
+        <CheckboxRow
+          label="Memory usage"
+          description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
+          checked={statusBar.showMemory}
+          onChange={(v) => patch({ showMemory: v })}
+        />
+      </div>
+    </Field>
   );
 }
 

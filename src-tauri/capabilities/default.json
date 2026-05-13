@@ -19,7 +19,11 @@
     {
       "identifier": "fs:scope",
       "allow": [
+        "$APPLOCALDATA/backgrounds",
+        "$APPLOCALDATA/backgrounds/*",
         "$APPLOCALDATA/backgrounds/**/*",
+        "$APPLOCALDATA/themes",
+        "$APPLOCALDATA/themes/*",
         "$APPLOCALDATA/themes/**/*"
       ]
     },
