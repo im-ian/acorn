@@ -15,6 +15,7 @@ import { LayoutRenderer } from "./components/LayoutRenderer";
 import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
+import { AcornRain } from "./components/AcornRain";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -529,6 +530,7 @@ function App() {
       <StatusBar />
       <TerminalHost />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <AcornRain />
       <ControlSessionGuideModal
         open={controlGuideOpen}
         onClose={(dontShowAgain) => {
