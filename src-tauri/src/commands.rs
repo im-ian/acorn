@@ -1,6 +1,11 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
@@ -13,7 +18,7 @@ use crate::pull_requests::{
     PullRequestListing,
 };
 use crate::scrollback;
-use crate::session::{Project, Session, SessionKind, SessionStatus};
+use crate::session::{AiAgent, AiAgentStatus, Project, Session, SessionKind, SessionStatus};
 use crate::session_status;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
@@ -94,7 +99,10 @@ pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
 /// twice that before rebinding so the previous listener has dropped its
 /// file descriptor.
 #[tauri::command]
-pub fn ipc_restart<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> Result<(), String> {
+pub fn ipc_restart<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let previous = state.ipc_handle.lock().take();
     if let Some(handle) = previous {
         handle.signal_stop();
@@ -125,6 +133,131 @@ fn standard_shim_paths() -> Vec<PathBuf> {
     }
     out
 }
+
+fn app_data_dir() -> AppResult<PathBuf> {
+    let app_name = if cfg!(debug_assertions) {
+        "acorn-dev"
+    } else {
+        "acorn"
+    };
+    let project_dirs = directories::ProjectDirs::from("io", "im-ian", app_name)
+        .ok_or_else(|| AppError::Other("could not resolve project data directory".to_string()))?;
+    Ok(project_dirs.data_dir().to_path_buf())
+}
+
+fn ensure_ai_agent_shims() -> AppResult<PathBuf> {
+    let dir = app_data_dir()?.join("shims");
+    std::fs::create_dir_all(&dir)?;
+    write_executable_shim(&dir.join("claude"), CLAUDE_SHIM)?;
+    write_executable_shim(&dir.join("gemini"), GEMINI_SHIM)?;
+    Ok(dir)
+}
+
+fn write_executable_shim(path: &Path, body: &str) -> AppResult<()> {
+    if std::fs::read_to_string(path).ok().as_deref() != Some(body) {
+        std::fs::write(path, body)?;
+    }
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+const CLAUDE_SHIM: &str = r#"#!/bin/sh
+# Acorn claude shim: pins Claude Code's session id to the Acorn pane id.
+case "$0" in
+    */*) SHIM_DIR=${0%/*} ;;
+    *) SHIM_DIR=. ;;
+esac
+
+NEW_PATH=""
+old_ifs="$IFS"
+IFS=':'
+for entry in $PATH; do
+    [ -z "$entry" ] && continue
+    [ "$entry" = "$SHIM_DIR" ] && continue
+    if [ -z "$NEW_PATH" ]; then
+        NEW_PATH="$entry"
+    else
+        NEW_PATH="$NEW_PATH:$entry"
+    fi
+done
+IFS="$old_ifs"
+PATH="$NEW_PATH"
+export PATH
+
+REAL="$(command -v claude 2>/dev/null || true)"
+if [ -z "$REAL" ] || [ "$REAL" = "$0" ]; then
+    echo "acorn shim: real 'claude' not found on PATH" >&2
+    exit 127
+fi
+
+if [ -n "$ACORN_RESUME_TOKEN" ]; then
+    has_session_id=0
+    has_name=0
+    for arg in "$@"; do
+        case "$arg" in
+            --session-id|--session-id=*|-r|--resume|--resume=*|-c|--continue) has_session_id=1 ;;
+            -n|--name|--name=*) has_name=1 ;;
+        esac
+    done
+    if [ "$has_session_id" -eq 0 ] && [ "$has_name" -eq 0 ]; then
+        exec "$REAL" --session-id "$ACORN_RESUME_TOKEN" --name "acorn-$ACORN_RESUME_TOKEN" "$@"
+    fi
+    if [ "$has_session_id" -eq 0 ]; then
+        exec "$REAL" --session-id "$ACORN_RESUME_TOKEN" "$@"
+    fi
+fi
+
+exec "$REAL" "$@"
+"#;
+
+const GEMINI_SHIM: &str = r#"#!/bin/sh
+# Acorn gemini shim: pins Gemini CLI's session id to the Acorn pane id.
+case "$0" in
+    */*) SHIM_DIR=${0%/*} ;;
+    *) SHIM_DIR=. ;;
+esac
+
+NEW_PATH=""
+old_ifs="$IFS"
+IFS=':'
+for entry in $PATH; do
+    [ -z "$entry" ] && continue
+    [ "$entry" = "$SHIM_DIR" ] && continue
+    if [ -z "$NEW_PATH" ]; then
+        NEW_PATH="$entry"
+    else
+        NEW_PATH="$NEW_PATH:$entry"
+    fi
+done
+IFS="$old_ifs"
+PATH="$NEW_PATH"
+export PATH
+
+REAL="$(command -v gemini 2>/dev/null || true)"
+if [ -z "$REAL" ] || [ "$REAL" = "$0" ]; then
+    echo "acorn shim: real 'gemini' not found on PATH" >&2
+    exit 127
+fi
+
+if [ -n "$ACORN_RESUME_TOKEN" ]; then
+    has_session_id=0
+    for arg in "$@"; do
+        case "$arg" in
+            --session-id|--session-id=*|-r|--resume|--resume=*|--list-sessions|--delete-session|--delete-session=*) has_session_id=1; break ;;
+        esac
+    done
+    if [ "$has_session_id" -eq 0 ]; then
+        exec "$REAL" --session-id "$ACORN_RESUME_TOKEN" "$@"
+    fi
+fi
+
+exec "$REAL" "$@"
+"#;
 
 fn persist(state: &AppState) {
     if let Err(e) = persistence::save_sessions(&state.sessions.list()) {
@@ -181,6 +314,13 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
 }
 
 static MEMORY_PROBE: Mutex<Option<System>> = Mutex::new(None);
+
+fn process_probe_refresh_kind() -> ProcessRefreshKind {
+    ProcessRefreshKind::new()
+        .with_cwd(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+}
 
 #[derive(serde::Serialize)]
 pub struct MemoryProcess {
@@ -554,6 +694,31 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
     if let Ok(session) = state.sessions.get(&id) {
+        effective_env
+            .entry("ACORN_RESUME_TOKEN".to_string())
+            .or_insert_with(|| session.id.to_string());
+        if let Ok(data_dir) = app_data_dir() {
+            effective_env
+                .entry("ACORN_AGENT_STATE_DIR".to_string())
+                .or_insert_with(|| {
+                    data_dir
+                        .join("agent-state")
+                        .join(session.id.to_string())
+                        .display()
+                        .to_string()
+                });
+        }
+        if let Ok(shim_dir) = ensure_ai_agent_shims() {
+            let existing = effective_env
+                .get("PATH")
+                .cloned()
+                .or_else(|| std::env::var("PATH").ok())
+                .unwrap_or_default();
+            effective_env.insert(
+                "PATH".to_string(),
+                crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
+            );
+        }
         if session.kind == SessionKind::Control {
             effective_env
                 .entry("ACORN_SESSION_ID".to_string())
@@ -588,11 +753,7 @@ pub async fn pty_spawn<R: Runtime>(
             // resolves to a recognised agent binary.
             let primer = crate::ipc::primer::primer_for(&session, &socket);
             let flavor = crate::ipc::primer::AgentFlavor::detect(&resolved_command);
-            primed_args = crate::ipc::primer::inject_primer_args(
-                flavor,
-                primed_args,
-                &primer,
-            );
+            primed_args = crate::ipc::primer::inject_primer_args(flavor, primed_args, &primer);
             write_control_marker(&cwd, &primer);
         }
     }
@@ -683,14 +844,9 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
         return Ok(None);
     };
 
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
-    );
+    let refresh_kind = process_probe_refresh_kind();
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh_kind));
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
 
     Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
 }
@@ -708,19 +864,14 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
 /// banner appearing inside the panel any time the PTY drifts outside a
 /// repo.
 #[tauri::command]
-pub fn pty_repo_root(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<Option<String>> {
+pub fn pty_repo_root(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
     let Some(cwd) = pty_cwd(state, session_id)? else {
         return Ok(None);
     };
     let Ok(repo) = git2::Repository::discover(&cwd) else {
         return Ok(None);
     };
-    Ok(repo
-        .workdir()
-        .map(|p| p.to_string_lossy().into_owned()))
+    Ok(repo.workdir().map(|p| p.to_string_lossy().into_owned()))
 }
 
 /// BFS over `sys`, starting at `root`, returning the cwd of the deepest
@@ -735,7 +886,9 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
         if !visited.insert(pid) {
             continue;
         }
-        let Some(proc) = sys.process(pid) else { continue };
+        let Some(proc) = sys.process(pid) else {
+            continue;
+        };
         if let Some(cwd) = proc.cwd() {
             let path = cwd.to_string_lossy().into_owned();
             match &best {
@@ -823,6 +976,8 @@ pub struct SessionStatusEntry {
     /// `git checkout` performed inside the session without requiring a
     /// manual refresh.
     pub branch: Option<String>,
+    pub active_agent: Option<AiAgent>,
+    pub agent_status: Option<AiAgentStatus>,
 }
 
 #[tauri::command]
@@ -838,14 +993,9 @@ pub async fn detect_session_statuses(
     // root). Without this, the StatusBar/Sidebar branch stays pinned to the
     // project root's branch regardless of `git checkout` performed inside
     // the PTY.
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
-    );
+    let refresh_kind = process_probe_refresh_kind();
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh_kind));
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
     let children = build_children_map(&sys);
 
     Ok(ids
@@ -861,22 +1011,25 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
+            let root_pid = parsed_id.and_then(|uuid| state.pty.child_pid(&uuid));
             let shell_hint = parsed_id.and_then(|uuid| {
-                let root = state.pty.child_pid(&uuid)?;
+                let root = root_pid?;
                 let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
                 state.pty.update_shell_state(&uuid, has_child_now)
             });
-            let status =
+            let detected_status =
                 session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
             //     performed inside the terminal (and `claude -w` worktrees)
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
-            let live_cwd_branch = parsed_id
-                .and_then(|uuid| state.pty.child_pid(&uuid))
-                .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
-                .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
+            let live_descendant_cwd = parsed_id
+                .and(root_pid)
+                .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)));
+            let live_cwd_branch = live_descendant_cwd
+                .as_deref()
+                .and_then(|p| worktree::current_branch(std::path::Path::new(p)).ok());
             let branch = live_cwd_branch.or_else(|| {
                 session
                     .as_ref()
@@ -885,10 +1038,46 @@ pub async fn detect_session_statuses(
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
+            let tail_text = parsed_id.and_then(|uuid| {
+                let (tail, _) = state.pty.tail_bytes(&uuid, 64 * 1024)?;
+                Some(String::from_utf8_lossy(&tail).into_owned())
+            });
+            let detected_agent =
+                root_pid.and_then(|pid| detect_ai_agent(&sys, &children, Pid::from_u32(pid)));
+            let active_agent = detected_agent
+                .map(|d| d.agent)
+                .or_else(|| tail_text.as_deref().and_then(classify_ai_agent_tail));
+            let codex_started_at = detected_agent.and_then(|d| {
+                if d.agent != AiAgent::Codex {
+                    return None;
+                }
+                sys.process(d.pid)
+                    .map(|proc| UNIX_EPOCH + Duration::from_secs(proc.start_time()))
+            });
+            let codex_cwd = live_descendant_cwd
+                .as_deref()
+                .map(Path::new)
+                .or_else(|| session.as_ref().map(|s| s.worktree_path.as_path()));
+            let agent_status = active_agent.and_then(|agent| {
+                classify_ai_agent_status_for_session(
+                    agent,
+                    &id,
+                    detected_status,
+                    codex_cwd,
+                    codex_started_at,
+                )
+            });
+            let status = detected_status;
             if let Some(uuid) = parsed_id {
                 let _ = state.sessions.refresh_status(&uuid, status);
             }
-            SessionStatusEntry { id, status, branch }
+            SessionStatusEntry {
+                id,
+                status,
+                branch,
+                active_agent,
+                agent_status,
+            }
         })
         .collect())
 }
@@ -910,9 +1099,517 @@ fn build_children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
 /// itself does not count — we only care about commands launched *under* the
 /// PTY shell, which is what flips Idle ↔ Running for terminal sessions.
 fn has_live_descendant(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> bool {
-    children
-        .get(&root)
-        .is_some_and(|direct| !direct.is_empty())
+    children.get(&root).is_some_and(|direct| !direct.is_empty())
+}
+
+#[derive(Clone, Copy)]
+struct DetectedAiAgent {
+    agent: AiAgent,
+    pid: Pid,
+}
+
+fn detect_ai_agent(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> Option<DetectedAiAgent> {
+    let mut frontier = children.get(&root).cloned().unwrap_or_default();
+    while let Some(pid) = frontier.pop() {
+        if let Some(proc) = sys.process(pid) {
+            let name = process_display_name(proc);
+            let command_line = process_command_line(proc);
+            if let Some(agent) = classify_ai_agent(&name, &command_line) {
+                return Some(DetectedAiAgent { agent, pid });
+            }
+        }
+        if let Some(next) = children.get(&pid) {
+            frontier.extend(next);
+        }
+    }
+    None
+}
+
+fn classify_ai_agent(name: &str, command_line: &str) -> Option<AiAgent> {
+    let name = basename_lower(name);
+    let argv: Vec<String> = command_line
+        .split_whitespace()
+        .map(|arg| arg.to_ascii_lowercase())
+        .collect();
+    let first_arg = argv
+        .first()
+        .map(|arg| basename_lower(arg))
+        .unwrap_or_default();
+    match name.as_str() {
+        "claude" | "claude-code" => Some(AiAgent::Claude),
+        "codex" => Some(AiAgent::Codex),
+        "gemini" | "gemini-cli" => Some(AiAgent::Gemini),
+        "ollama" => Some(AiAgent::Ollama),
+        _ => match first_arg.as_str() {
+            "claude" | "claude-code" => Some(AiAgent::Claude),
+            "codex" => Some(AiAgent::Codex),
+            "gemini" | "gemini-cli" => Some(AiAgent::Gemini),
+            "ollama" => Some(AiAgent::Ollama),
+            _ => classify_ai_agent_argv(&argv),
+        },
+    }
+}
+
+fn classify_ai_agent_argv(argv: &[String]) -> Option<AiAgent> {
+    for arg in argv {
+        match basename_lower(arg).as_str() {
+            "claude" | "claude-code" => return Some(AiAgent::Claude),
+            "codex" => return Some(AiAgent::Codex),
+            "gemini" | "gemini-cli" => return Some(AiAgent::Gemini),
+            "ollama" => return Some(AiAgent::Ollama),
+            _ => {}
+        }
+        if arg.contains("claude-code") || arg.contains("@anthropic-ai/claude-code") {
+            return Some(AiAgent::Claude);
+        }
+        if arg.contains("@google/gemini-cli")
+            || arg.contains("gemini-cli")
+            || arg.contains("google-gemini")
+        {
+            return Some(AiAgent::Gemini);
+        }
+        if arg.contains("@openai/codex") || arg.contains("openai-codex") {
+            return Some(AiAgent::Codex);
+        }
+    }
+    None
+}
+
+fn classify_ai_agent_tail(tail: &str) -> Option<AiAgent> {
+    let lower = normalize_terminal_text(tail);
+    if lower.contains("gemini cli") || lower.contains("type your message or @path/to/file") {
+        return Some(AiAgent::Gemini);
+    }
+    if lower.contains("claude code") {
+        return Some(AiAgent::Claude);
+    }
+    if lower.contains("codex") && lower.contains("openai") {
+        return Some(AiAgent::Codex);
+    }
+    if lower.contains("ollama") {
+        return Some(AiAgent::Ollama);
+    }
+    None
+}
+
+fn classify_ai_agent_status_for_session(
+    agent: AiAgent,
+    session_id: &str,
+    detected_status: SessionStatus,
+    codex_cwd: Option<&Path>,
+    codex_started_at: Option<SystemTime>,
+) -> Option<AiAgentStatus> {
+    match agent {
+        AiAgent::Claude if claude_transcript_exists(session_id) => {
+            Some(map_session_status_to_agent_status(detected_status))
+        }
+        AiAgent::Codex => codex_cwd
+            .and_then(|cwd| codex_status_for_cwd(cwd, codex_started_at))
+            .or(Some(AiAgentStatus::Open)),
+        AiAgent::Claude | AiAgent::Gemini | AiAgent::Ollama => Some(AiAgentStatus::Open),
+    }
+}
+
+fn codex_status_for_cwd(cwd: &Path, started_at: Option<SystemTime>) -> Option<AiAgentStatus> {
+    let root = codex_sessions_root()?;
+    let transcript = find_latest_codex_transcript(&root, cwd, started_at)?;
+    codex_transcript_status(&transcript)
+}
+
+fn codex_sessions_root() -> Option<PathBuf> {
+    let home = directories::UserDirs::new()?;
+    Some(home.home_dir().join(".codex").join("sessions"))
+}
+
+fn find_latest_codex_transcript(
+    root: &Path,
+    cwd: &Path,
+    started_at: Option<SystemTime>,
+) -> Option<PathBuf> {
+    let mut candidates: Vec<(SystemTime, PathBuf)> = Vec::new();
+    collect_codex_transcripts(root, 0, &mut candidates);
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let earliest = started_at.and_then(|t| t.checked_sub(Duration::from_secs(30)));
+    for (modified, path) in candidates.into_iter().take(200) {
+        if earliest.is_some_and(|min| modified < min) {
+            continue;
+        }
+        if codex_transcript_cwd_matches(&path, cwd) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn collect_codex_transcripts(dir: &Path, depth: u8, out: &mut Vec<(SystemTime, PathBuf)>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_codex_transcripts(&path, depth + 1, out);
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        out.push((modified, path));
+    }
+}
+
+fn codex_transcript_cwd_matches(path: &Path, cwd: &Path) -> bool {
+    let Some(recorded) = codex_transcript_cwd(path) else {
+        return false;
+    };
+    paths_match(Path::new(&recorded), cwd)
+}
+
+fn codex_transcript_cwd(path: &Path) -> Option<String> {
+    let text = read_head(path, 256 * 1024).ok()?;
+    for line in text.lines() {
+        let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if line_type != "session_meta" && line_type != "turn_context" {
+            continue;
+        }
+        if let Some(cwd) = v
+            .get("payload")
+            .and_then(|p| p.get("cwd"))
+            .and_then(|c| c.as_str())
+        {
+            return Some(cwd.to_string());
+        }
+    }
+    None
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn codex_transcript_status(path: &Path) -> Option<AiAgentStatus> {
+    let tail = read_tail(path, 256 * 1024).ok()?;
+    codex_transcript_status_from_str(&tail)
+}
+
+fn codex_transcript_status_from_str(tail: &str) -> Option<AiAgentStatus> {
+    for line in tail.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let payload_type = v
+            .get("payload")
+            .and_then(|p| p.get("type"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        match (line_type, payload_type) {
+            ("event_msg", "task_complete") => return Some(AiAgentStatus::Idle),
+            ("event_msg", "task_started" | "user_message" | "agent_message") => {
+                return Some(AiAgentStatus::Running);
+            }
+            ("response_item", "message" | "reasoning" | "function_call") => {
+                return Some(AiAgentStatus::Running);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn read_head(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let mut f = File::open(path)?;
+    let mut buf = Vec::with_capacity(max_bytes as usize);
+    f.by_ref().take(max_bytes).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn read_tail(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let mut f = File::open(path)?;
+    let len = f.metadata()?.len();
+    let start = len.saturating_sub(max_bytes);
+    f.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::with_capacity(max_bytes.min(len) as usize);
+    f.read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn claude_transcript_exists(session_id: &str) -> bool {
+    todos::locate_transcript_for(session_id)
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+fn map_session_status_to_agent_status(status: SessionStatus) -> AiAgentStatus {
+    match status {
+        SessionStatus::Idle | SessionStatus::Completed => AiAgentStatus::Idle,
+        SessionStatus::Running => AiAgentStatus::Running,
+        SessionStatus::NeedsInput => AiAgentStatus::NeedsInput,
+        SessionStatus::Failed => AiAgentStatus::Open,
+    }
+}
+
+fn normalize_terminal_text(input: &str) -> String {
+    let without_escape = strip_ansi_like_sequences(input);
+    without_escape.to_ascii_lowercase()
+}
+
+fn strip_ansi_like_sequences(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') | Some('P') | Some('^') | Some('_') | Some('X') => {
+                    chars.next();
+                    let mut prev_esc = false;
+                    for c in chars.by_ref() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if prev_esc && c == '\\' {
+                            break;
+                        }
+                        prev_esc = c == '\u{1b}';
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+            continue;
+        }
+        if ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t' {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn basename_lower(value: &str) -> String {
+    std::path::Path::new(value)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(value)
+        .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_probe_refreshes_argv_exe_and_cwd() {
+        let kind = process_probe_refresh_kind();
+        assert_eq!(kind.cmd(), UpdateKind::Always);
+        assert_eq!(kind.exe(), UpdateKind::Always);
+        assert_eq!(kind.cwd(), UpdateKind::Always);
+    }
+
+    #[test]
+    fn generated_shims_pin_claude_and_gemini_sessions() {
+        assert!(CLAUDE_SHIM.contains("--session-id \"$ACORN_RESUME_TOKEN\""));
+        assert!(CLAUDE_SHIM.contains("--name \"acorn-$ACORN_RESUME_TOKEN\""));
+        assert!(GEMINI_SHIM.contains("--session-id \"$ACORN_RESUME_TOKEN\""));
+    }
+
+    #[test]
+    fn classify_ai_agent_matches_known_processes() {
+        assert_eq!(
+            classify_ai_agent("claude", "claude -p hi"),
+            Some(AiAgent::Claude)
+        );
+        assert_eq!(classify_ai_agent("codex", "codex"), Some(AiAgent::Codex));
+        assert_eq!(
+            classify_ai_agent("gemini", "gemini -p hi"),
+            Some(AiAgent::Gemini)
+        );
+        assert_eq!(
+            classify_ai_agent("gemini-cli", "gemini-cli"),
+            Some(AiAgent::Gemini)
+        );
+        assert_eq!(
+            classify_ai_agent("ollama", "ollama run llama3"),
+            Some(AiAgent::Ollama),
+        );
+    }
+
+    #[test]
+    fn classify_ai_agent_matches_node_wrapped_clis() {
+        assert_eq!(
+            classify_ai_agent(
+                "node",
+                "node /opt/homebrew/lib/node_modules/@google/gemini-cli/dist/index.js",
+            ),
+            Some(AiAgent::Gemini),
+        );
+        assert_eq!(
+            classify_ai_agent(
+                "node",
+                "node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+            ),
+            Some(AiAgent::Claude),
+        );
+        assert_eq!(
+            classify_ai_agent(
+                "node",
+                "node /Users/me/.npm/_npx/123/node_modules/@openai/codex/bin/codex.js",
+            ),
+            Some(AiAgent::Codex),
+        );
+    }
+
+    #[test]
+    fn classify_ai_agent_ignores_non_agent_processes() {
+        assert_eq!(classify_ai_agent("zsh", "-zsh"), None);
+        assert_eq!(classify_ai_agent("node", "node vite"), None);
+        assert_eq!(classify_ai_agent("vim", "vim src/App.tsx"), None);
+    }
+
+    #[test]
+    fn classify_ai_agent_tail_matches_interactive_screens() {
+        assert_eq!(
+            classify_ai_agent_tail("Gemini CLI v0.41.2\n> Type your message or @path/to/file"),
+            Some(AiAgent::Gemini),
+        );
+    }
+
+    #[test]
+    fn classify_gemini_status_is_presence_only() {
+        assert_eq!(
+            classify_ai_agent_status_for_session(
+                AiAgent::Gemini,
+                "unused-session-id",
+                SessionStatus::Running,
+                None,
+                None,
+            ),
+            Some(AiAgentStatus::Open),
+        );
+    }
+
+    #[test]
+    fn classify_codex_status_is_presence_only_without_session_mapping() {
+        assert_eq!(
+            classify_ai_agent_status_for_session(
+                AiAgent::Codex,
+                "unused-session-id",
+                SessionStatus::Running,
+                None,
+                None,
+            ),
+            Some(AiAgentStatus::Open),
+        );
+    }
+
+    #[test]
+    fn codex_transcript_status_maps_running_and_idle_turns() {
+        let running = r#"
+{"timestamp":"2026-05-13T10:00:00.000Z","type":"session_meta","payload":{"cwd":"/tmp/repo","id":"abc"}}
+{"timestamp":"2026-05-13T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-05-13T10:00:02.000Z","type":"event_msg","payload":{"type":"user_message"}}
+"#;
+        assert_eq!(
+            codex_transcript_status_from_str(running),
+            Some(AiAgentStatus::Running),
+        );
+
+        let idle = format!(
+            "{running}{}",
+            r#"{"timestamp":"2026-05-13T10:00:03.000Z","type":"event_msg","payload":{"type":"task_complete"}}"#
+        );
+        assert_eq!(
+            codex_transcript_status_from_str(&idle),
+            Some(AiAgentStatus::Idle),
+        );
+    }
+
+    #[test]
+    fn finds_latest_codex_transcript_for_matching_cwd() {
+        let root =
+            std::env::temp_dir().join(format!("acorn-codex-status-test-{}", uuid::Uuid::new_v4()));
+        let day = root.join("2026").join("05").join("13");
+        std::fs::create_dir_all(&day).unwrap();
+        let older = day.join("rollout-2026-05-13T10-00-00-old.jsonl");
+        let newer = day.join("rollout-2026-05-13T10-01-00-new.jsonl");
+        std::fs::write(
+            &older,
+            r#"{"type":"session_meta","payload":{"cwd":"/tmp/repo"}}"#,
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(
+            &newer,
+            r#"{"type":"session_meta","payload":{"cwd":"/tmp/repo"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_latest_codex_transcript(&root, std::path::Path::new("/tmp/repo"), None),
+            Some(newer)
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ignores_codex_transcripts_for_other_cwds() {
+        let root =
+            std::env::temp_dir().join(format!("acorn-codex-status-test-{}", uuid::Uuid::new_v4()));
+        let day = root.join("2026").join("05").join("13");
+        std::fs::create_dir_all(&day).unwrap();
+        let transcript = day.join("rollout-2026-05-13T10-00-00-other.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"session_meta","payload":{"cwd":"/tmp/other"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_latest_codex_transcript(&root, std::path::Path::new("/tmp/repo"), None),
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 #[tauri::command]
@@ -1073,4 +1770,3 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .trim_matches('-')
         .to_string()
 }
-

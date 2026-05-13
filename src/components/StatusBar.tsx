@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { homeDir } from "@tauri-apps/api/path";
 import { Bot, Loader2 } from "lucide-react";
 import { api } from "../lib/api";
+import { sessionStatusLabel } from "../lib/ai-agent";
 import { cn } from "../lib/cn";
 import { useSettings } from "../lib/settings";
 import type { MemoryProcess } from "../lib/types";
@@ -132,7 +133,7 @@ export function StatusBar() {
         {active ? (
           <>
             <span className="text-fg-muted/50">|</span>
-            <span>status: {active.status}</span>
+            <span>status: {sessionStatusLabel(active)}</span>
           </>
         ) : null}
 

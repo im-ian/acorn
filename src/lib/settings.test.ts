@@ -6,3 +6,10 @@ describe("terminal.linkActivation default", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
   });
 });
+
+describe("sessions AI defaults", () => {
+  it("auto-renames AI tabs by default while keeping the setting user-toggleable", () => {
+    expect(DEFAULT_SETTINGS.sessions.autoRenameAiTabs).toBe(true);
+    expect(DEFAULT_SETTINGS.sessions.includeAiPromptInTabName).toBe(true);
+  });
+});

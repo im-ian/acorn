@@ -34,18 +34,15 @@ import {
 } from "../lib/editor";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
+import {
+  aiAgentLabel,
+  sessionStatusDotClass,
+} from "../lib/ai-agent";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
-import type { Session, SessionStatus } from "../lib/types";
-
-const STATUS_DOT: Record<SessionStatus, string> = {
-  idle: "bg-fg-muted",
-  running: "bg-accent animate-pulse",
-  needs_input: "bg-warning",
-  failed: "bg-danger",
-  completed: "bg-accent/60",
-};
+import { AiAgentIcon } from "./AiAgentIcon";
+import type { Session } from "../lib/types";
 
 interface PaneProps {
   paneId: PaneId;
@@ -607,9 +604,21 @@ function TabItem({
         <span
           className={cn(
             "pointer-events-none size-1.5 rounded-full",
-            STATUS_DOT[tab.status],
+            sessionStatusDotClass(tab),
           )}
         />
+        {tab.active_agent ? (
+          <span
+            title={aiAgentLabel(tab.active_agent)}
+            className="pointer-events-none inline-flex shrink-0 items-center gap-1 rounded bg-bg-elevated px-1 py-0.5 text-[10px] font-medium leading-none text-fg ring-1 ring-border/60"
+            aria-label={`${aiAgentLabel(tab.active_agent)} active`}
+          >
+            <AiAgentIcon
+              agent={tab.active_agent}
+              className="size-4 shrink-0"
+            />
+          </span>
+        ) : null}
         {editing ? (
           <TabRenameInput
             initial={tab.name}

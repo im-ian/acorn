@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
+  AiAgent,
+  AiAgentStatus,
   CommitInfo,
   DiffPayload,
   GeneratedCommitMessage,
@@ -173,9 +175,23 @@ export const api = {
   },
   detectSessionStatuses(
     ids: string[],
-  ): Promise<{ id: string; status: SessionStatus; branch: string | null }[]> {
+  ): Promise<
+    {
+      id: string;
+      status: SessionStatus;
+      branch: string | null;
+      active_agent?: AiAgent | null;
+      agent_status?: AiAgentStatus | null;
+    }[]
+  > {
     return invoke<
-      { id: string; status: SessionStatus; branch: string | null }[]
+      {
+        id: string;
+        status: SessionStatus;
+        branch: string | null;
+        active_agent?: AiAgent | null;
+        agent_status?: AiAgentStatus | null;
+      }[]
     >("detect_session_statuses", { ids });
   },
   scrollbackOrphanSize(): Promise<number> {

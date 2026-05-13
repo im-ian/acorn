@@ -286,6 +286,26 @@ function SessionSettings() {
           Auto-close on exit
         </label>
       </Field>
+      <Field
+        label="Auto-name AI tabs"
+        hint="When a pane is running Codex, Claude, Gemini, or Ollama, rename the session tab from the agent and latest submitted prompt."
+      >
+        <div className="flex flex-col gap-1">
+          <CheckboxRow
+            label="Rename tabs for AI sessions"
+            description="Updates the session name when a known AI CLI is detected."
+            checked={settings.sessions.autoRenameAiTabs}
+            onChange={(v) => patchSessions({ autoRenameAiTabs: v })}
+          />
+          <CheckboxRow
+            label="Include prompt snippet"
+            description="Adds the latest submitted prompt after the agent name."
+            checked={settings.sessions.includeAiPromptInTabName}
+            disabled={!settings.sessions.autoRenameAiTabs}
+            onChange={(v) => patchSessions({ includeAiPromptInTabName: v })}
+          />
+        </div>
+      </Field>
       <ControlSessionInstallSection />
     </section>
   );

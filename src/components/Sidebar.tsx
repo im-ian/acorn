@@ -46,29 +46,19 @@ import {
   type SessionTitleSource,
 } from "../lib/settings";
 import {
+  aiAgentLabel,
+  sessionStatusDotClass,
+  sessionStatusLabel,
+} from "../lib/ai-agent";
+import {
   planChevronClick,
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
-import type { Project, Session, SessionKind, SessionStatus } from "../lib/types";
+import type { Project, Session, SessionKind } from "../lib/types";
+import { AiAgentIcon } from "./AiAgentIcon";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { Tooltip } from "./Tooltip";
-
-const STATUS_DOT: Record<SessionStatus, string> = {
-  idle: "bg-fg-muted",
-  running: "bg-accent animate-pulse",
-  needs_input: "bg-warning",
-  failed: "bg-danger",
-  completed: "bg-accent/60",
-};
-
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  idle: "Idle",
-  running: "Running",
-  needs_input: "Needs input",
-  failed: "Failed",
-  completed: "Completed",
-};
 
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 
@@ -451,7 +441,7 @@ function SessionRowPreview({ session }: { session: Session }) {
       <span
         className={cn(
           "mt-1.5 size-1.5 shrink-0 rounded-full",
-          STATUS_DOT[session.status],
+          sessionStatusDotClass(session),
         )}
       />
       <span className="min-w-0 flex-1">
@@ -464,7 +454,7 @@ function SessionRowPreview({ session }: { session: Session }) {
           ) : null}
         </span>
         <span className="block truncate text-[11px] text-fg-muted">
-          {session.branch} · {STATUS_LABEL[session.status]}
+          {session.branch} · {sessionStatusLabel(session)}
         </span>
       </span>
     </div>
@@ -930,9 +920,21 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           <span
             className={cn(
               "mt-1.5 size-1.5 shrink-0 rounded-full",
-              STATUS_DOT[session.status],
+              sessionStatusDotClass(session),
             )}
           />
+        ) : null}
+        {session.active_agent ? (
+          <span
+            title={aiAgentLabel(session.active_agent)}
+            className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded bg-bg-elevated px-1 py-0.5 text-[10px] font-medium leading-none text-fg ring-1 ring-border/60"
+            aria-label={`${aiAgentLabel(session.active_agent)} active`}
+          >
+            <AiAgentIcon
+              agent={session.active_agent}
+              className="size-4 shrink-0"
+            />
+          </span>
         ) : null}
         <SessionRowLabel
           editing={editing}
@@ -1154,7 +1156,7 @@ function composeSessionMetadata(
     const dir = basename(session.worktree_path);
     if (dir) parts.push(dir);
   }
-  if (metadata.status) parts.push(STATUS_LABEL[session.status]);
+  if (metadata.status) parts.push(sessionStatusLabel(session));
   return parts.join(" · ");
 }
 
@@ -1163,7 +1165,7 @@ function buildSessionHoverDetails(session: Session): string {
     `Name: ${session.name}`,
     `Branch: ${session.branch || "(detached)"}`,
     `Working directory: ${session.worktree_path}`,
-    `Status: ${STATUS_LABEL[session.status]}`,
+    `Status: ${sessionStatusLabel(session)}`,
   ];
   if (session.kind === "control") lines.push("Kind: Control session");
   if (session.isolated) lines.push("Isolated worktree");
