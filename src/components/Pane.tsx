@@ -72,6 +72,22 @@ export function Pane({ paneId }: PaneProps) {
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  // Pane body hosts the active session's Terminal via a portal target
+  // `appendChild`-moved in by TerminalHost. The terminal is rendered at App
+  // level, so its React fiber tree is a sibling of every pane — React
+  // synthetic `onMouseDown` on this pane never fires for clicks inside the
+  // terminal. Without this listener, clicking into a terminal leaves
+  // `focusedPaneId` pointing at the previously focused pane, and split / tab
+  // shortcuts (Cmd+Shift+D, Cmd+W, …) act on the wrong pane.
+  useEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+    const handler = () => setFocusedPane(paneId);
+    node.addEventListener("mousedown", handler);
+    return () => node.removeEventListener("mousedown", handler);
+  }, [paneId, setFocusedPane]);
 
   const tabs = useMemo<Session[]>(() => {
     if (!pane) return [];
@@ -166,6 +182,7 @@ export function Pane({ paneId }: PaneProps) {
         />
       ) : null}
       <div
+        ref={bodyRef}
         className="relative min-h-0 flex-1"
         data-pane-body={paneId}
         onContextMenu={(e) => {

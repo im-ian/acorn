@@ -736,8 +736,39 @@ export const useAppStore = create<AppStateModel>()(
 
   async removeSession(id, removeWorktree = false) {
     try {
+      // Track which project + pane held this session so we can collapse the
+      // pane after reconcile if removing the tab leaves it empty. We only
+      // collapse panes that *became* empty as a side effect of this close —
+      // pre-existing empty panes (e.g. a split waiting for a drop target)
+      // stay untouched.
+      const before = get();
+      let owning: { repoPath: string; paneId: PaneId } | null = null;
+      for (const [repoPath, ws] of Object.entries(before.workspaces)) {
+        for (const [pid, p] of Object.entries(ws.panes)) {
+          if (p.sessionIds.includes(id)) {
+            owning = { repoPath, paneId: pid as PaneId };
+            break;
+          }
+        }
+        if (owning) break;
+      }
+
       await api.removeSession(id, removeWorktree);
       await get().refreshAll();
+
+      if (!owning) return;
+      const after = get();
+      const ws = after.workspaces[owning.repoPath];
+      if (!ws) return;
+      const pane = ws.panes[owning.paneId];
+      if (!pane) return;
+      if (pane.sessionIds.length > 0) return;
+      if (Object.keys(ws.panes).length <= 1) return;
+      // Only auto-collapse for the currently active workspace's panes —
+      // closePane operates on the active workspace, so applying it to a
+      // background project would silently misfire.
+      if (after.activeProject !== owning.repoPath) return;
+      get().closePane(owning.paneId);
     } catch (e) {
       set({ error: errorMessage(e) });
     }
