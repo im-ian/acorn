@@ -97,6 +97,19 @@ pub fn remove_worktree(repo_path: &Path, name: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Returns `true` when `path` is the root of a *linked* git worktree.
+/// Linked worktrees mark their root with a `.git` *file* (pointing at the
+/// parent repo's `worktrees/<name>` admin dir) instead of a `.git` directory.
+/// Cheap: a single stat, no libgit2 open. Used to surface a worktree
+/// indicator on session tabs regardless of how the worktree was created
+/// (Acorn's "new isolated session" button, `claude -w` adoption, or a
+/// repo that was already a worktree when added as a project).
+pub fn is_linked_worktree_root(path: &Path) -> bool {
+    std::fs::metadata(path.join(".git"))
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+}
+
 pub fn current_branch(repo_path: &Path) -> AppResult<String> {
     let repo = ensure_repo(repo_path)?;
     let head = repo.head()?;

@@ -462,7 +462,7 @@ function SessionRowPreview({ session }: { session: Session }) {
           <span className="truncate text-[13px] font-medium text-fg">
             {session.name}
           </span>
-          {session.isolated ? (
+          {session.isolated || session.in_worktree ? (
             <GitBranch size={10} className="shrink-0 text-fg-muted" />
           ) : null}
         </span>
@@ -1033,6 +1033,13 @@ function SessionRowLabel({
   onSubmitRename,
   onCancelRename,
 }: SessionRowLabelProps) {
+  // Live cwd wins when a PTY is alive — a recorded worktree path doesn't
+  // describe where the user is *now*. Static flags (`isolated` / static
+  // `in_worktree`) only apply as fallback when the session has no live PTY,
+  // in which case `liveInWorktree[id]` is `undefined`.
+  const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
+  const inWorktree =
+    liveInWorktree ?? (session.isolated || session.in_worktree);
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex items-center gap-1">
@@ -1047,11 +1054,11 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
-        {showKindIcons && session.isolated ? (
+        {showKindIcons && inWorktree ? (
           <GitBranch
             size={10}
             className="shrink-0 text-fg-muted"
-            aria-label="isolated worktree"
+            aria-label="worktree"
           />
         ) : null}
         {showKindIcons && session.kind === "control" ? (
