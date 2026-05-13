@@ -32,6 +32,19 @@ use crate::error::{AppError, AppResult};
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const READ_BUFFER_SIZE: usize = 4096;
+
+/// Render-capability env we advertise to the child shell so zsh's terminfo
+/// lookups (used by zsh-autosuggestions for cursor save/restore) and
+/// color-aware CLIs (claude, fzf, …) emit sequences xterm.js can paint.
+/// Treated as a non-empty contract: leaving either of these empty
+/// collapses zsh to dumb terminfo (no `el`, no cursor moves, no
+/// truecolor), which surfaces as plugin redraw artifacts, prompt parser
+/// leaks, broken Backspace render, and color-aware CLIs falling back to
+/// plain output.
+const RENDER_CAPABILITY: &[(&str, &str)] = &[
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+];
 /// Hard cap on the per-session in-memory tail buffer used by the
 /// `acorn-ipc read-buffer` command. Sized to roughly match xterm.js's
 /// configured scrollback so the buffer the CLI can read mirrors what the
@@ -174,10 +187,6 @@ impl PtyManager {
         // save/restore) and color-aware CLIs (claude, fzf, …) emit
         // sequences we can actually paint. Without this, GUI-launched
         // acorn inherits an empty TERM and color/redraw goes wrong.
-        const RENDER_CAPABILITY: &[(&str, &str)] = &[
-            ("TERM", "xterm-256color"),
-            ("COLORTERM", "truecolor"),
-        ];
         for (k, v) in RENDER_CAPABILITY {
             if !applied.contains(*k) && !shell_env.contains_key(*k) {
                 cmd.env(k, v);
@@ -213,6 +222,20 @@ impl PtyManager {
         // any value we'd otherwise pick.
         for (k, v) in env {
             cmd.env(k, v);
+        }
+
+        // Refuse to let `TERM` / `COLORTERM` reach the child as an empty
+        // string. Earlier layers can deposit empties — a caller-supplied
+        // `env: { TERM: "" }`, or `CommandBuilder`'s base env inheriting
+        // an empty `TERM` from launchd-launched Acorn. Empty `TERM`
+        // collapses zsh's terminfo lookup to dumb (no `el`, no cursor
+        // moves, no truecolor), which surfaces downstream as plugin
+        // redraw artifacts, prompt parser leaks, broken Backspace render,
+        // and color-aware CLIs falling back to plain output.
+        for (k, v) in RENDER_CAPABILITY {
+            if cmd.get_env(*k).map_or(true, |s| s.is_empty()) {
+                cmd.env(k, v);
+            }
         }
 
         let child = pair
@@ -589,5 +612,70 @@ mod tests {
         let buf = tail.lock();
         let collected: Vec<u8> = buf.iter().copied().collect();
         assert_eq!(&collected, b"hello world");
+    }
+
+    /// Replays the spawn-time backstop against an isolated `CommandBuilder`
+    /// so this test covers the exact predicate `spawn()` runs on the
+    /// final-layer env, without having to actually fork a child.
+    fn apply_render_capability_backstop(cmd: &mut CommandBuilder) {
+        for (k, v) in RENDER_CAPABILITY {
+            if cmd.get_env(*k).map_or(true, |s| s.is_empty()) {
+                cmd.env(k, v);
+            }
+        }
+    }
+
+    #[test]
+    fn render_capability_backstop_fills_missing_keys() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        apply_render_capability_backstop(&mut cmd);
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|s| s.to_str()),
+            Some("xterm-256color"),
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|s| s.to_str()),
+            Some("truecolor"),
+        );
+    }
+
+    #[test]
+    fn render_capability_backstop_overrides_empty_string() {
+        // Reproduces the bug shape: a layer wrote `TERM=""` to the child
+        // env. Without the backstop, zsh would inherit empty TERM and
+        // collapse terminfo to dumb.
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("TERM", "");
+        cmd.env("COLORTERM", "");
+        apply_render_capability_backstop(&mut cmd);
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|s| s.to_str()),
+            Some("xterm-256color"),
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|s| s.to_str()),
+            Some("truecolor"),
+        );
+    }
+
+    #[test]
+    fn render_capability_backstop_preserves_caller_nonempty() {
+        // A caller (test harness, future per-session UI) that explicitly
+        // wants a non-default TERM should not be clobbered by the backstop.
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("TERM", "screen-256color");
+        cmd.env("COLORTERM", "24bit");
+        apply_render_capability_backstop(&mut cmd);
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|s| s.to_str()),
+            Some("screen-256color"),
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|s| s.to_str()),
+            Some("24bit"),
+        );
     }
 }
