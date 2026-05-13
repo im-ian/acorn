@@ -1,5 +1,9 @@
 import { useEffect, useRef, type ReactElement } from "react";
-import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
+import {
+  Terminal as XTerm,
+  type IBuffer,
+  type ITheme,
+} from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -16,6 +20,7 @@ import {
 } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
 import { useAppStore } from "../store";
+import { StickyUserPrompt } from "./StickyUserPrompt";
 
 interface TerminalProps {
   sessionId: string;
@@ -51,6 +56,108 @@ const TERMINAL_THEME: ITheme = {
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
+
+// Custom event the sticky-prompt banner listens to. Fired whenever the user
+// scrolls the terminal so the banner can swap to the prompt "in scope" at
+// the top of the viewport, then revert to the JSONL-latest prompt when the
+// user scrolls back to live tail.
+const CONTEXT_PROMPT_EVENT = "acorn:context-prompt";
+
+interface ContextPromptDetail {
+  sessionId: string;
+  /** Prompt text to pin, or `null` to revert to JSONL-latest. */
+  prompt: string | null;
+}
+
+// Markers Claude TUI uses to introduce a user turn. v2.1.x renders `›`
+// (U+203A); older versions used `>`; `❯` shows up in some shell-prompt
+// theming. Matching any of these lets the scroll-aware banner cope with
+// claude version churn without code changes.
+const PROMPT_MARKER_RE = /^[›>❯]\s+/u;
+// Lines that look like the *start* of an assistant turn or another
+// claude UI element — used to bound the continuation walk so a long
+// stream of assistant output doesn't get spliced into the pinned prompt.
+const TURN_BOUNDARY_RE = /^[●○*✱⏺·]\s/u;
+const BOX_DRAWING_RE = /^[\s│╭╮╰╯─┃┏┓┗┛━]+/u;
+
+/**
+ * Walk xterm buffer rows upwards from `startY` to find the nearest
+ * user-prompt marker line, then walk down to collect the rest of the
+ * prompt body (continuation rows are either xterm wrap-continuations
+ * or indented rows beneath the marker). The result is the full prompt
+ * text the user typed, joined with `\n` between hard-wrapped rows so
+ * the banner's `whitespace-pre-wrap` styling preserves line breaks.
+ *
+ * Returns `null` when no prompt line is reachable above the start row —
+ * e.g. user scrolled past the top of scrollback, or the buffer contains
+ * raw shell output rather than a claude conversation.
+ */
+function scanForContextPrompt(buf: IBuffer, startY: number): string | null {
+  // Max walk distance. Bounded so a terminal with a massive scrollback
+  // (claude conversations easily push tens of thousands of rows) doesn't
+  // freeze the UI on every scroll event. 5000 rows ≈ the default xterm
+  // scrollback limit (`scrollback: 5000` in this file).
+  const MAX_WALK = 5000;
+  const MAX_CONTINUATION = 200;
+  const limit = Math.max(0, startY - MAX_WALK);
+  for (let y = startY; y >= limit; y--) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const raw = line.translateToString(true);
+    const stripped = raw.replace(BOX_DRAWING_RE, "");
+    const match = stripped.match(PROMPT_MARKER_RE);
+    if (!match) continue;
+    const headBody = stripped
+      .slice(match[0].length)
+      .replace(/\s*[│┃]?\s*$/u, "")
+      .trim();
+    if (headBody.length === 0) continue;
+    const parts: string[] = [headBody];
+    for (let yy = y + 1; yy <= y + MAX_CONTINUATION; yy++) {
+      const cont = buf.getLine(yy);
+      if (!cont) break;
+      const contRaw = cont.translateToString(true);
+      // Use the raw line (not the box-stripped form) to detect "blank-ish"
+      // continuation gutters that still belong to the same turn.
+      const trimmedTail = contRaw.replace(/\s+$/u, "");
+      const contStripped = trimmedTail.replace(BOX_DRAWING_RE, "");
+      // Hit the next prompt marker → previous user turn ended.
+      if (PROMPT_MARKER_RE.test(contStripped)) break;
+      // Hit an assistant or other turn-class marker.
+      if (TURN_BOUNDARY_RE.test(contStripped)) break;
+      // An xterm wrap-continuation row is unambiguously the same logical
+      // line, so always accept it.
+      if (cont.isWrapped) {
+        const wrapBody = contStripped.replace(/\s*[│┃]?\s*$/u, "");
+        if (wrapBody.length > 0) parts.push(wrapBody);
+        continue;
+      }
+      // Hard-wrapped continuation rows in claude's TUI keep a leading
+      // indent (so the body lines up under the `> ` marker). Accept
+      // rows whose first non-whitespace column matches the marker's,
+      // and bail on anything that looks like a new gutter / divider.
+      if (trimmedTail.length === 0) {
+        // Single blank row inside a long pasted prompt is part of the
+        // same turn (the user pressed Enter twice). Treat as line
+        // break, keep collecting.
+        parts.push("");
+        continue;
+      }
+      if (/^\s{2,}/u.test(contRaw) && contStripped.length > 0) {
+        parts.push(contStripped.replace(/\s*[│┃]?\s*$/u, ""));
+        continue;
+      }
+      break;
+    }
+    // Strip trailing blank-string entries the loop may have collected
+    // before hitting the boundary.
+    while (parts.length > 0 && parts[parts.length - 1] === "") {
+      parts.pop();
+    }
+    return parts.join("\n");
+  }
+  return null;
+}
 
 // macOS uses Cmd (metaKey); other platforms use Ctrl. Matches the
 // platform-primary modifier `tinykeys` resolves `$mod` to.
@@ -667,6 +774,59 @@ export function Terminal({
     const scrollDisposable = term.onScroll(repositionComposing);
     const cursorMoveDisposable = term.onCursorMove(repositionComposing);
 
+    // Sticky-prompt detection. The banner above the terminal pins the
+    // most recent user-prompt line found in xterm's rendered buffer
+    // at-or-above the topmost-visible row. Detection is buffer-only —
+    // a Cmd+K clear empties the buffer and the dispatch naturally
+    // settles to `null`, hiding the banner without any side-channel
+    // bookkeeping. Triggers:
+    //   - scroll          (user navigates scrollback)
+    //   - PTY output      (a new turn just landed)
+    //   - terminal clear  (buffer wiped)
+    // All three coalesce through a single rAF so a flurry of events
+    // emits one buffer scan + one dispatch per animation frame.
+    //
+    // The Experiments → "Pin last user prompt" toggle short-circuits
+    // every dispatch when off, AND emits a one-shot `null` so a banner
+    // already showing from a prior render disappears immediately.
+    let contextDispatchPending = false;
+    let lastDispatchedContext: string | null | undefined = undefined;
+    const dispatchContextPrompt = () => {
+      contextDispatchPending = false;
+      if (disposed) return;
+      const enabled =
+        useSettings.getState().settings.experiments.stickyPrompt;
+      const next = enabled
+        ? scanForContextPrompt(term.buffer.active, term.buffer.active.viewportY)
+        : null;
+      if (next === lastDispatchedContext) return;
+      lastDispatchedContext = next;
+      window.dispatchEvent(
+        new CustomEvent<ContextPromptDetail>(CONTEXT_PROMPT_EVENT, {
+          detail: { sessionId, prompt: next },
+        }),
+      );
+    };
+    const scheduleContextDispatch = () => {
+      if (contextDispatchPending || disposed) return;
+      contextDispatchPending = true;
+      requestAnimationFrame(dispatchContextPrompt);
+    };
+    const contextScrollDisposable = term.onScroll(scheduleContextDispatch);
+    // Initial dispatch so the banner reflects whatever was restored from
+    // scrollback before the first scroll/output event fires.
+    scheduleContextDispatch();
+    // Toggle off mid-session must hide the banner without waiting for
+    // the next scroll/output event; toggle back on rescans the buffer.
+    const unsubStickyToggle = useSettings.subscribe((state, prev) => {
+      if (
+        state.settings.experiments.stickyPrompt !==
+        prev.settings.experiments.stickyPrompt
+      ) {
+        scheduleContextDispatch();
+      }
+    });
+
     // Custom event hook so a global hotkey (Cmd+K) can clear THIS terminal
     // without needing a cross-component ref registry. The dispatcher passes
     // the target sessionId in `detail.sessionId`; terminals match against
@@ -675,6 +835,11 @@ export function Terminal({
       const detail = (e as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
       term.clear();
+      // Sticky-prompt banner watches the buffer for `> ` lines; after a
+      // clear there are none, so explicitly schedule a dispatch so the
+      // banner picks up the now-empty state without waiting for the
+      // next scroll/output event.
+      scheduleContextDispatch();
       // Also redraw the shell prompt so the user sees a clean state.
       sendToPty("\x0c");
     };
@@ -810,6 +975,10 @@ export function Terminal({
               // so a TUI redraw interrupted mid-stream doesn't leave stale
               // glyphs from a wider previous line painted on screen.
               scheduleViewportRepaint();
+              // A new prompt row may have just been rendered. Rescan the
+              // buffer so the sticky banner picks it up in the same frame
+              // (instead of waiting for the user's next scroll).
+              scheduleContextDispatch();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -1053,6 +1222,8 @@ export function Terminal({
       renderDisposable.dispose();
       scrollDisposable.dispose();
       cursorMoveDisposable.dispose();
+      contextScrollDisposable.dispose();
+      unsubStickyToggle();
       resizeDisposable.dispose();
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
@@ -1118,13 +1289,21 @@ export function Terminal({
     };
   }, [isActive]);
 
-  // FitAddon subtracts padding from xterm.element, not its parent — keep the gutter on the outer wrapper so xterm's parent stays padding-free and rows don't overflow past the pane body.
+  // FitAddon subtracts padding from xterm.element, not its parent — keep the
+  // gutter on the outer wrapper so xterm's parent stays padding-free and rows
+  // don't overflow past the pane body. The pinned-prompt banner overlays the
+  // top edge as an `absolute` element so it never changes the terminal's
+  // computed dimensions — a flex layout that shrunk the xterm container
+  // mid-render fired SIGWINCH at claude's TUI and shredded its box-drawing
+  // characters into half-rendered lines.
   return (
     <div
       className="relative h-full w-full"
       style={{ padding: "16px 8px", background: TERMINAL_BG }}
     >
       <div ref={containerRef} className="acorn-terminal h-full w-full" />
+      {/* Pinned-prompt overlay. */}
+      <StickyUserPrompt sessionId={sessionId} />
     </div>
   );
 }
