@@ -16,6 +16,7 @@ import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
+import { ClaudeResumeModal } from "./components/ClaudeResumeModal";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -25,7 +26,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { api } from "./lib/api";
+import { api, type ClaudeResumeCandidate } from "./lib/api";
 import {
   Hotkeys,
   shouldUseTinykeysToggleMultiInputFallback,
@@ -105,6 +106,11 @@ function App() {
     : [];
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const [resumeCandidate, setResumeCandidate] = useState<{
+    sessionId: string;
+    candidate: ClaudeResumeCandidate;
+  } | null>(null);
 
   const toggleMultiInput = useCallback(() => {
     const enabled = useAppStore.getState().toggleMultiInput();
@@ -147,6 +153,42 @@ function App() {
     appearance.background.applyToApp,
     appearance.background.applyToTerminal,
   ]);
+
+  // Probe the focused session for a "이전 Claude 대화" candidate. The
+  // backend already gates on (no claude.id, acknowledged, or claude
+  // currently running) so a `null` reply is the common case. We
+  // intentionally fire on every change of `activeSessionId` — including
+  // back-and-forth focus moves — because the user may have started a
+  // new claude in between, and the dedup is the `claude.id` ↔
+  // `claude.id.acknowledged` comparison the backend performs.
+  useEffect(() => {
+    if (!activeSessionId) {
+      setResumeCandidate(null);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .getClaudeResumeCandidate(activeSessionId)
+      .then((candidate) => {
+        if (cancelled) return;
+        if (candidate) {
+          setResumeCandidate({ sessionId: activeSessionId, candidate });
+        } else {
+          setResumeCandidate((prev) =>
+            prev?.sessionId === activeSessionId ? null : prev,
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(
+          "[App] getClaudeResumeCandidate failed",
+          err,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
@@ -686,6 +728,11 @@ function App() {
         }}
       />
       <SettingsModal />
+      <ClaudeResumeModal
+        sessionId={resumeCandidate?.sessionId ?? ""}
+        candidate={resumeCandidate?.candidate ?? null}
+        onDismiss={() => setResumeCandidate(null)}
+      />
       <RemoveSessionDialog
         session={pendingRemove}
         onClose={(choice) => {

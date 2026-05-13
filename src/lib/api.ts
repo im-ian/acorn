@@ -350,7 +350,61 @@ export const api = {
   daemonListSessions(): Promise<DaemonSessionSummary[]> {
     return invoke<DaemonSessionSummary[]>("daemon_list_sessions");
   },
+  /**
+   * Resolve the "이전 Claude 대화 있음" candidate for a session. The shim
+   * writes `claude.id` after every fresh bare-flag claude run, and the
+   * app surfaces it via this command on session focus. Returns `null`
+   * when there is nothing to offer — no claude has run, the user already
+   * dismissed the modal for this UUID, or claude is actively running in
+   * the PTY tree (in which case the modal would be redundant).
+   */
+  getClaudeResumeCandidate(
+    sessionId: string,
+  ): Promise<ClaudeResumeCandidate | null> {
+    return invoke<ClaudeResumeCandidate | null>(
+      "get_claude_resume_candidate",
+      { sessionId },
+    );
+  },
+  /**
+   * Mark the current `claude.id` as seen. All three modal buttons call
+   * this so the modal does not pop again for the same UUID; only a new
+   * JSONL appearing under a different UUID reactivates it.
+   */
+  acknowledgeClaudeResume(sessionId: string): Promise<void> {
+    return invoke<void>("acknowledge_claude_resume", { sessionId });
+  },
+  /**
+   * Write raw bytes to a session's PTY master (i.e. as if the user
+   * typed them). The backend handles routing — daemon-managed sessions
+   * go through the control socket, in-process sessions go through the
+   * direct PTY handle. Caller is responsible for terminating commands
+   * with `\n` if they want them to execute; otherwise the bytes land
+   * on the shell's line buffer untouched.
+   */
+  ptyWrite(sessionId: string, data: string): Promise<void> {
+    const encoded = encodeStringToBase64(data);
+    return invoke<void>("pty_write", { sessionId, data: encoded });
+  },
 };
+
+function encodeStringToBase64(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+export interface ClaudeResumeCandidate {
+  /** JSONL transcript UUID the user is being offered to resume. */
+  uuid: string;
+  /** Unix seconds of the transcript file's mtime. `0` when unknown. */
+  lastActivityUnix: number;
+  /** Single-line preview of the last assistant text, truncated. */
+  preview: string | null;
+}
 
 export interface DaemonStatus {
   running: boolean;
