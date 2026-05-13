@@ -573,7 +573,10 @@ function TabItem({
         )}
       >
         <span
-          className={cn("size-1.5 rounded-full", STATUS_DOT[tab.status])}
+          className={cn(
+            "pointer-events-none size-1.5 rounded-full",
+            STATUS_DOT[tab.status],
+          )}
         />
         {editing ? (
           <TabRenameInput
@@ -587,12 +590,14 @@ function TabItem({
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <span className="max-w-[12rem] truncate">{tab.name}</span>
+          <span className="pointer-events-none max-w-[12rem] truncate">
+            {tab.name}
+          </span>
         )}
         {tab.isolated ? (
           <GitBranch
             size={10}
-            className="text-fg-muted"
+            className="pointer-events-none text-fg-muted"
             aria-label="isolated"
           />
         ) : null}
