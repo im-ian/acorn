@@ -5,7 +5,6 @@ import {
   sanitizeFontFamilyName,
   type CuratedMonospaceFont,
 } from "./fonts";
-import { BUILT_IN_THEMES } from "./themes";
 
 const STORAGE_KEY = "acorn:settings:v1";
 
@@ -383,7 +382,6 @@ const VALID_PR_INTERVALS = new Set<number>(
 );
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
-const VALID_THEME_IDS = new Set<string>(BUILT_IN_THEMES.map((t) => t.id));
 
 function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
   if (typeof v === "string" && VALID_BG_FITS.has(v as BackgroundFit)) {
@@ -403,7 +401,12 @@ function clampBlur(v: unknown, fallback: number): number {
 }
 
 function normalizeThemeId(v: unknown, fallback: string): string {
-  if (typeof v === "string" && VALID_THEME_IDS.has(v)) {
+  // Accept any non-empty string so a persisted user-theme id survives a
+  // restart. User themes load asynchronously via `useThemes.refresh()` after
+  // `loadSettings()` runs, so they are not in the built-in set at this
+  // point. `App.tsx` already falls back to `themes[0]` when the requested
+  // id isn't in the merged registry at apply time.
+  if (typeof v === "string" && v.trim().length > 0) {
     return v;
   }
   return fallback;

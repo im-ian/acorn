@@ -132,10 +132,29 @@ describe("appearance settings migration", () => {
     );
   });
 
-  it("rejects unknown themeId and falls back to default", async () => {
+  it("preserves user-theme ids that are not in the built-in set", async () => {
+    // User themes load asynchronously after settings load, so the stored id
+    // may legitimately not be in `BUILT_IN_THEMES`. Earlier behavior rejected
+    // every non-builtin id and silently swapped to the default — clobbering
+    // the user's selection on every restart. The applier in `App.tsx`
+    // handles missing-id at apply time by falling back to `themes[0]`.
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ appearance: { themeId: "not-real" } }),
+      JSON.stringify({ appearance: { themeId: "my-custom-theme" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.themeId).toBe(
+      "my-custom-theme",
+    );
+  });
+
+  it("falls back to default themeId when stored value is empty or not a string", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { themeId: "" } }),
     );
 
     vi.resetModules();
