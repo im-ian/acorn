@@ -135,33 +135,6 @@ fn persist(state: &AppState) {
     }
 }
 
-/// Return the session's `agent_resume_token`, minting + persisting one
-/// if absent. Called at every PTY spawn so the token reaches the PTY
-/// env regardless of whether the session row was migrated in from an
-/// older `sessions.json` (where the field is `None`). The token is a
-/// fresh UUID — claude's `--session-id` accepts any UUID; reusing it
-/// across spawns is what makes its JSONL conversation file persist.
-///
-/// Returns the raw token. Caller is responsible for injecting it into
-/// the PTY env (`ACORN_RESUME_TOKEN`). Persistence failures are
-/// logged but not surfaced — a spawn shouldn't fail just because the
-/// disk write hiccuped, and the in-memory value is still usable for
-/// the lifetime of this app run.
-fn ensure_resume_token(state: &AppState, id: &uuid::Uuid) -> String {
-    if let Ok(session) = state.sessions.get(id) {
-        if let Some(token) = session.agent_resume_token {
-            return token;
-        }
-    }
-    let token = uuid::Uuid::new_v4().to_string();
-    if let Err(err) = state.sessions.set_agent_resume_token(id, Some(token.clone())) {
-        tracing::warn!(%id, error = %err, "persist agent_resume_token failed");
-        return token;
-    }
-    persist(state);
-    token
-}
-
 fn project_basename(repo_path: &std::path::Path) -> String {
     repo_path
         .file_name()
@@ -584,14 +557,16 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
-    // Every session gets a stable resume token + the agent shims on
-    // PATH so user-invoked `claude` / `codex` inside the terminal
-    // participate in Acorn's persistence. The token is minted once
-    // per session and persisted; if the user never runs claude, the
-    // token sits unused — no harm. `ACORN_AGENT_STATE_DIR` is the
-    // per-session scratch directory the codex shim uses to track the
-    // "first run vs resume" marker.
-    let resume_token = ensure_resume_token(&state, &id);
+    // The Acorn session UUID is the resume token: it doubles as
+    // claude's `--session-id`, which makes claude's JSONL transcript
+    // file (`~/.claude/projects/<repo-slug>/<resume-token>.jsonl`)
+    // discoverable by `session_status::detect` — that resolver looks
+    // up the file by Acorn's session id verbatim. Minting a separate
+    // UUID would break that lookup and leave status detection stuck
+    // on the descendant-process fallback. `ACORN_AGENT_STATE_DIR` is
+    // the per-session scratch directory the codex shim uses to track
+    // the "first run vs resume" marker.
+    let resume_token = id.to_string();
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
         .or_insert_with(|| resume_token.clone());
@@ -760,12 +735,11 @@ fn spawn_via_daemon<R: Runtime>(
         .unwrap_or(command);
     let agent_kind = detect_agent_kind(user_command_basename, args);
 
-    // `pty_spawn` mints the resume token before reaching this helper,
-    // so the row's `agent_resume_token` is always populated by now.
-    // The daemon stamps it onto its own session record so reconcile
-    // can re-attach across an Acorn-app restart without re-querying
-    // the app DB.
-    let resume_token = session.as_ref().and_then(|s| s.agent_resume_token.clone());
+    // The resume token == Acorn session UUID; we stamp it onto the
+    // daemon's session record (mirrors the env var the shim consumes
+    // inside the PTY) so a future daemon-side reconcile can recover
+    // the same identity without consulting the app DB.
+    let resume_token = Some(id.to_string());
 
     // Fast path: daemon already owns this PTY. Acorn restart re-enters
     // `pty_spawn` here; attach the stream and return. Pid comes from
