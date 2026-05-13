@@ -589,14 +589,35 @@ function CommitsTab({
       .filter((sha) => !(sha in commitLogins));
     if (missing.length === 0) return;
     let cancelled = false;
+    // Mark every attempted sha in `commitLogins` (resolved or not) so this
+    // effect doesn't re-fire forever for unknown authors. Without this, the
+    // `missing` filter keeps matching the same shas — backend returns only
+    // the subset with a known login, and `setCommitLogins` always produces
+    // a fresh object reference, which retriggers the effect via the
+    // `commitLogins` dep.
+    const settle = (map: Record<string, string | null>) => {
+      setCommitLogins((prev) => {
+        const next: Record<string, string | null> = { ...prev };
+        for (const sha of missing) {
+          if (!(sha in next)) next[sha] = null;
+        }
+        for (const [sha, login] of Object.entries(map)) {
+          next[sha] = login;
+        }
+        return next;
+      });
+    };
     api
       .resolveCommitLogins(repoPath, missing)
       .then((map) => {
         if (cancelled) return;
-        setCommitLogins((prev) => ({ ...prev, ...map }));
+        settle(map);
       })
       .catch(() => {
-        // No gh access / network failure — leave rows without avatars.
+        // No gh access / network failure — record null entries so we don't
+        // retry the same shas every render.
+        if (cancelled) return;
+        settle({});
       });
     return () => {
       cancelled = true;
