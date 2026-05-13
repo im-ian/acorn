@@ -266,6 +266,13 @@ export function Pane({ paneId }: PaneProps) {
           setPaneMenu({ x: e.clientX, y: e.clientY });
         }}
       >
+        {isFocused ? (
+          <span
+            aria-hidden
+            data-active-pane-indicator={paneId}
+            className="pointer-events-none absolute left-0 top-0 z-10 h-10 w-0.5 rounded-r bg-accent/80"
+          />
+        ) : null}
         {/*
           The actual <Terminal> for the active session lives in <TerminalHost>
           at App level. It is portaled into a per-session target div which
