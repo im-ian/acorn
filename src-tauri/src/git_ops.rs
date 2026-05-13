@@ -12,6 +12,10 @@ pub struct CommitInfo {
     pub author: String,
     pub timestamp: i64,
     pub summary: String,
+    /// Commit message body — everything after the first-line headline. Empty
+    /// when the commit has no body. Surfaced so the RightPanel commits view
+    /// can render the description (with markdown / images) alongside the diff.
+    pub body: String,
     pub pushed: bool,
 }
 
@@ -189,6 +193,7 @@ pub fn list_commits(
             author: author.name().unwrap_or("?").to_string(),
             timestamp: commit.time().seconds(),
             summary: commit.summary().unwrap_or("").to_string(),
+            body: commit.body().unwrap_or("").to_string(),
             pushed: pushed_set.contains(&oid),
         });
     }
@@ -390,7 +395,7 @@ fn is_image_path(path: &str) -> bool {
     )
 }
 
-fn image_mime(path: &str) -> &'static str {
+pub(crate) fn image_mime(path: &str) -> &'static str {
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|s| s.to_str())
@@ -409,7 +414,7 @@ fn image_mime(path: &str) -> &'static str {
     }
 }
 
-fn encode_data_uri(bytes: &[u8], path: &str) -> String {
+pub(crate) fn encode_data_uri(bytes: &[u8], path: &str) -> String {
     use base64::Engine as _;
     format!(
         "data:{};base64,{}",
