@@ -950,8 +950,10 @@ function FontSection({
             >
               <span
                 className={cn(
-                  "absolute top-0.5 h-2.5 w-2.5 rounded-full bg-fg transition",
-                  fontScope === "all" ? "left-3" : "left-0.5",
+                  "absolute top-0.5 h-2.5 w-2.5 rounded-full transition",
+                  fontScope === "all"
+                    ? "left-3 bg-on-accent"
+                    : "left-0.5 bg-fg",
                 )}
               />
             </span>
