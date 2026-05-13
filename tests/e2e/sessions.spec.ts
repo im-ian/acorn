@@ -147,10 +147,11 @@ test.describe("sessions: list rendering", () => {
     await expect(
       page.getByRole("button", { name: /^plain main · Idle$/ }),
     ).toBeVisible();
-    // Scope to the sidebar — the tab strip in the main pane renders the
-    // same icon, so a global count would conflate the two surfaces.
+    // Scope to the sidebar and use exact match — the tab strip renders the
+    // same icon, and the parent button's accessible name also contains
+    // "worktree" so a non-exact substring match double-counts.
     await expect(
-      page.locator('aside').getByLabel("worktree"),
+      page.locator('aside').getByLabel("worktree", { exact: true }),
     ).toHaveCount(1);
   });
 });
