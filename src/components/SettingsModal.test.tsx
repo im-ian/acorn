@@ -1,0 +1,187 @@
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  listSystemFonts: vi.fn<() => Promise<string[]>>(),
+}));
+
+vi.mock("../lib/api", () => ({
+  api: {
+    listSystemFonts: mocks.listSystemFonts,
+  },
+}));
+
+vi.mock("../lib/background", () => ({
+  importBackgroundImage: vi.fn(),
+  removeBackgroundImage: vi.fn(),
+}));
+
+vi.mock("../lib/notifications", () => ({
+  sendTestNotification: vi.fn(),
+}));
+
+vi.mock("../lib/releases", () => ({
+  fetchLatestReleaseNotes: vi.fn(),
+  fetchReleaseNotes: vi.fn(),
+}));
+
+vi.mock("../lib/themes", () => ({
+  BUILT_IN_THEMES: [
+    {
+      css: "",
+      id: "acorn-dark",
+      label: "Acorn Dark",
+      mode: "dark",
+      source: "builtin",
+    },
+  ],
+  revealThemesFolder: vi.fn(),
+  useThemes: (selector: (state: unknown) => unknown) =>
+    selector({
+      refresh: vi.fn(),
+      themes: [
+        {
+          css: "",
+          id: "acorn-dark",
+          label: "Acorn Dark",
+          mode: "dark",
+          source: "builtin",
+        },
+      ],
+    }),
+}));
+
+vi.mock("../lib/updater-store", () => ({
+  useUpdater: () => ({
+    available: null,
+    busy: false,
+    check: vi.fn(),
+    clearError: vi.fn(),
+    currentVersion: "1.0.0",
+    dismiss: vi.fn(),
+    error: null,
+    init: vi.fn(),
+    install: vi.fn(),
+  }),
+}));
+
+import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
+import { SettingsModal } from "./SettingsModal";
+
+function cloneSettings() {
+  return structuredClone(DEFAULT_SETTINGS);
+}
+
+function openAppearanceTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) => element.textContent === "Appearance",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Appearance tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function fontInputs(): HTMLInputElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>(
+      'input[placeholder="Search or type a font"], input[placeholder="Optional fallback"]',
+    ),
+  );
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  if (!setter) throw new Error("Input value setter not found");
+  act(() => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+describe("SettingsModal font controls", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT?: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
+    mocks.listSystemFonts.mockResolvedValue([]);
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+      patchAppearance: vi.fn(),
+    });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => root?.unmount());
+    }
+    root = null;
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  it("keeps font typing local until blur so primary can be cleared and replaced", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const [primary] = fontInputs();
+    const patchAppearance = useSettings.getState().patchAppearance;
+
+    setInputValue(primary, "");
+    expect(primary.value).toBe("");
+    expect(patchAppearance).not.toHaveBeenCalled();
+
+    setInputValue(primary, "Berkeley Mono");
+    expect(primary.value).toBe("Berkeley Mono");
+    expect(patchAppearance).not.toHaveBeenCalled();
+
+    act(() => {
+      primary.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+
+    expect(patchAppearance).toHaveBeenCalledWith({
+      fontSlots: ["Berkeley Mono", "Fira Code", "Menlo"],
+    });
+  });
+
+  it("caps system font suggestions instead of rendering every installed font", async () => {
+    mocks.listSystemFonts.mockResolvedValue(
+      Array.from({ length: 500 }, (_, index) => `System Font ${index}`),
+    );
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const firstDatalist = document.querySelector("datalist");
+    expect(firstDatalist?.querySelectorAll("option").length).toBeLessThanOrEqual(
+      40,
+    );
+  });
+});

@@ -692,6 +692,13 @@ function BackgroundSection({
 }
 
 type FontSlots = AcornSettings["appearance"]["fontSlots"];
+type FontSlotDrafts = [string, string, string];
+
+const FONT_SUGGESTION_LIMIT = 40;
+
+function draftsFromFontSlots(slots: FontSlots): FontSlotDrafts {
+  return [slots[0] ?? "", slots[1] ?? "", slots[2] ?? ""];
+}
 
 function FontSection({
   slots,
@@ -703,12 +710,19 @@ function FontSection({
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<FontSlotDrafts>(() =>
+    draftsFromFontSlots(slots),
+  );
 
-  const fontOptions = useMemo(() => {
+  const allFontOptions = useMemo(() => {
     return Array.from(new Set([...CURATED_MONOSPACE_FONTS, ...systemFonts])).sort(
       (a, b) => a.localeCompare(b),
     );
   }, [systemFonts]);
+
+  useEffect(() => {
+    setDrafts(draftsFromFontSlots(slots));
+  }, [slots]);
 
   const refreshSystemFonts = useCallback(async () => {
     setLoading(true);
@@ -726,44 +740,78 @@ function FontSection({
     void refreshSystemFonts();
   }, [refreshSystemFonts]);
 
-  const setSlot = (index: 0 | 1 | 2, value: string) => {
+  const optionsForDraft = useCallback(
+    (value: string) => {
+      const query = value.trim().toLocaleLowerCase();
+      const options = query
+        ? allFontOptions.filter((font) =>
+            font.toLocaleLowerCase().includes(query),
+          )
+        : allFontOptions;
+      return options.slice(0, FONT_SUGGESTION_LIMIT);
+    },
+    [allFontOptions],
+  );
+
+  const setDraft = (index: 0 | 1 | 2, value: string) => {
+    setDrafts((current) => {
+      const next: FontSlotDrafts = [...current] as FontSlotDrafts;
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const commitSlot = (index: 0 | 1 | 2, value: string) => {
     const next: FontSlots = [...slots] as FontSlots;
     const font = value.trim() === "" ? null : value.trim();
     if (index === 0) {
-      if (!font) return;
+      if (!font) {
+        setDraft(0, slots[0]);
+        return;
+      }
       next[0] = font;
     } else {
       next[index] = font;
     }
+    setDrafts(draftsFromFontSlots(next));
     onChange(next);
   };
 
   const renderSlot = (index: 0 | 1 | 2, label: string, required: boolean) => {
     const listId = `acorn-font-slot-${index}`;
+    const value = drafts[index];
     return (
-    <Field key={index} label={label}>
-      <TextInput
-        list={listId}
-        value={slots[index] ?? ""}
-        onChange={(e) => setSlot(index, e.target.value)}
-        placeholder={required ? "Search or type a font" : "Optional fallback"}
-        className="min-w-[14rem]"
-      />
-      <datalist id={listId}>
-        {fontOptions.map((font) => (
-          <option key={font} value={font} />
-        ))}
-      </datalist>
-      {!required && slots[index] ? (
-        <button
-          type="button"
-          onClick={() => setSlot(index, "")}
-          className="mt-1 text-[11px] text-fg-muted transition hover:text-fg"
-        >
-          Clear
-        </button>
-      ) : null}
-    </Field>
+      <Field key={index} label={label}>
+        <TextInput
+          list={listId}
+          value={value}
+          onBlur={() => commitSlot(index, value)}
+          onChange={(e) => setDraft(index, e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            } else if (e.key === "Escape") {
+              setDrafts(draftsFromFontSlots(slots));
+            }
+          }}
+          placeholder={required ? "Search or type a font" : "Optional fallback"}
+          className="min-w-[14rem]"
+        />
+        <datalist id={listId}>
+          {optionsForDraft(value).map((font) => (
+            <option key={font} value={font} />
+          ))}
+        </datalist>
+        {!required && value ? (
+          <button
+            type="button"
+            onClick={() => commitSlot(index, "")}
+            className="mt-1 text-[11px] text-fg-muted transition hover:text-fg"
+          >
+            Clear
+          </button>
+        ) : null}
+      </Field>
     );
   };
 
