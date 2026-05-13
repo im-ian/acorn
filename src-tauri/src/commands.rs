@@ -1018,6 +1018,15 @@ pub async fn close_pull_request(repo_path: String, number: u64) -> AppResult<()>
 }
 
 #[tauri::command]
+pub async fn update_pull_request_body(
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    pull_requests::update_pull_request_body(&PathBuf::from(repo_path), number, &body)
+}
+
+#[tauri::command]
 pub async fn generate_pr_commit_message(
     repo_path: String,
     number: u64,

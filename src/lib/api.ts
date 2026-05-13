@@ -132,6 +132,17 @@ export const api = {
   closePullRequest(repoPath: string, number: number): Promise<void> {
     return invoke<void>("close_pull_request", { repoPath, number });
   },
+  updatePullRequestBody(
+    repoPath: string,
+    number: number,
+    body: string,
+  ): Promise<void> {
+    return invoke<void>("update_pull_request_body", {
+      repoPath,
+      number,
+      body,
+    });
+  },
   generatePrCommitMessage(
     repoPath: string,
     number: number,
