@@ -3,22 +3,21 @@
 //! installing anything.
 //!
 //! Every Acorn PTY gets the shim directory prepended onto `PATH`. The
-//! shim binaries themselves are tiny POSIX shell scripts bundled with
-//! the app via `include_str!`, materialised once per data dir at app
-//! start.
+//! shim scripts are POSIX shell, bundled into the binary via
+//! `include_str!`, materialised once per data dir at app start.
 //!
-//! ## Per-agent strategy
-//!
-//! - **claude** — accepts `--session-id <uuid>` as a deterministic
-//!   create-or-resume key. Acorn mints a stable UUID per session and
-//!   exports it as `ACORN_RESUME_TOKEN`; the shim forwards it on
-//!   every claude invocation. Persisted on `Session.agent_resume_token`.
-//! - **codex** — no deterministic id flag; `codex resume --last` is
-//!   the closest equivalent and is cwd-scoped. The shim tracks a
-//!   per-Acorn-session marker file under `ACORN_AGENT_STATE_DIR`. The
-//!   first zero-arg `codex` invocation lets codex mint a fresh
-//!   session and drops the marker; subsequent zero-arg invocations
-//!   exec `codex resume --last`. Non-default invocations passthrough.
+//! Per-agent strategy:
+//! - **claude** — accepts `--session-id <uuid>`. Acorn exports its
+//!   own session UUID as `ACORN_RESUME_TOKEN`; the shim forwards
+//!   it. Reusing the Acorn UUID (rather than minting a fresh one)
+//!   keeps the JSONL transcript filename aligned with what
+//!   `session_status::detect` looks up.
+//! - **codex** — no deterministic id flag. The shim snapshots
+//!   `$CODEX_HOME/sessions/.../rollout-*.jsonl` before/after the
+//!   first zero-arg run, extracts the trailing UUID from the new
+//!   rollout filename, and stores it under `$ACORN_AGENT_STATE_DIR/
+//!   codex.id`. Subsequent zero-arg invocations exec
+//!   `codex resume <uuid>`. Any flag/subcommand passes through.
 
 use std::fs;
 use std::io;
@@ -59,10 +58,9 @@ fn ensure_shim_dir_at(base: &Path) -> io::Result<PathBuf> {
 }
 
 /// Per-Acorn-session scratch directory used by agent shims to track
-/// state that needs to outlive a single shim invocation (today: the
-/// codex "has been run before" marker). Exported into the PTY env as
-/// `ACORN_AGENT_STATE_DIR` so shims do not need to know Acorn's data
-/// dir layout.
+/// state that outlives a single shim invocation (today: the captured
+/// codex session UUID under `codex.id`). Exported into the PTY env
+/// as `ACORN_AGENT_STATE_DIR`.
 pub fn ensure_session_state_dir(session_id: uuid::Uuid) -> io::Result<PathBuf> {
     ensure_session_state_dir_at(&crate::daemon::paths::data_dir()?, session_id)
 }

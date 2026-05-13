@@ -557,15 +557,14 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
-    // The Acorn session UUID is the resume token: it doubles as
-    // claude's `--session-id`, which makes claude's JSONL transcript
-    // file (`~/.claude/projects/<repo-slug>/<resume-token>.jsonl`)
-    // discoverable by `session_status::detect` — that resolver looks
-    // up the file by Acorn's session id verbatim. Minting a separate
-    // UUID would break that lookup and leave status detection stuck
-    // on the descendant-process fallback. `ACORN_AGENT_STATE_DIR` is
-    // the per-session scratch directory the codex shim uses to track
-    // the "first run vs resume" marker.
+    // The Acorn session UUID doubles as the resume token. claude's
+    // `--session-id` names the JSONL transcript at
+    // `~/.claude/projects/<repo-slug>/<id>.jsonl`, and
+    // `session_status::detect` looks the file up by Acorn's session
+    // id verbatim — minting a separate UUID would break that lookup
+    // and leave status detection on the descendant-process fallback.
+    // `ACORN_AGENT_STATE_DIR` is the per-session scratch directory
+    // the codex shim writes its captured `codex.id` into.
     let resume_token = id.to_string();
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
@@ -687,18 +686,13 @@ pub async fn pty_spawn<R: Runtime>(
 
 /// Route a `pty_spawn` through the daemon. Three cases:
 ///
-/// 1. **Already attached** — `stream_registry.contains(id)` would have
-///    short-circuited at the top of `pty_spawn`; redundant guard here
-///    catches the race where two callers hit this helper concurrently.
+/// 1. **Already attached** — short-circuit; redundant guard catches
+///    races where two callers hit this helper concurrently.
 /// 2. **Daemon already has an alive session** under this UUID (Acorn
-///    just restarted; the daemon kept the PTY alive across the restart)
-///    — skip spawn, just open a stream attachment. Scrollback replay
-///    is on so the user sees the same screen contents the daemon
-///    captured.
-/// 3. **No live session** — fresh spawn through `daemon_bridge`, then
-///    attach the stream. Persists `daemon_session_id` and (for Claude
-///    Code) the `--session-id` resume token onto the session row so
-///    the next restart can repeat case 2.
+///    just restarted) — skip spawn, open a stream attachment with
+///    scrollback replay so the user sees the daemon's last screen.
+/// 3. **No live session** — fresh daemon spawn, attach the stream,
+///    persist `daemon_session_id` so the next restart hits case 2.
 fn spawn_via_daemon<R: Runtime>(
     app: &AppHandle<R>,
     state: &State<'_, AppState>,
@@ -729,16 +723,16 @@ fn spawn_via_daemon<R: Runtime>(
     let repo_path = session.as_ref().map(|s| s.repo_path.clone());
     let branch = session.as_ref().map(|s| s.branch.clone());
 
-    let user_command_basename = std::path::Path::new(command)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(command);
-    let agent_kind = detect_agent_kind(user_command_basename, args);
+    // `pty_spawn` always launches `$SHELL`, never an agent binary
+    // directly, so the daemon's per-agent resume strategy registry
+    // has nothing to react to here. The shim layer in the PTY is
+    // what specialises behaviour by agent.
+    let agent_kind: Option<crate::daemon::protocol::AgentKind> = None;
 
-    // The resume token == Acorn session UUID; we stamp it onto the
-    // daemon's session record (mirrors the env var the shim consumes
-    // inside the PTY) so a future daemon-side reconcile can recover
-    // the same identity without consulting the app DB.
+    // The resume token == Acorn session UUID; stamped onto the
+    // daemon's session record (mirrors the PTY env var the shim
+    // reads) so a future daemon-side reconcile can recover identity
+    // without consulting the app DB.
     let resume_token = Some(id.to_string());
 
     // Fast path: daemon already owns this PTY. Acorn restart re-enters
@@ -785,24 +779,6 @@ fn spawn_via_daemon<R: Runtime>(
 
     crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, true)
         .map_err(|e| format!("daemon stream attach failed: {e}"))
-}
-
-/// Map an agent's command basename onto the daemon's `AgentKind` enum so
-/// the resume-strategy registry can pick the right argv augmentation
-/// (Claude Code → `--session-id <uuid>`, others → passthrough today).
-fn detect_agent_kind(
-    basename: &str,
-    _args: &[String],
-) -> Option<crate::daemon::protocol::AgentKind> {
-    use crate::daemon::protocol::AgentKind;
-    match basename {
-        "claude" => Some(AgentKind::ClaudeCode),
-        "aider" => Some(AgentKind::Aider),
-        "llm" => Some(AgentKind::Llm),
-        "interpreter" => Some(AgentKind::OpenInterpreter),
-        "codex" => Some(AgentKind::Codex),
-        _ => None,
-    }
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session

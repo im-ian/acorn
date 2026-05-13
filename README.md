@@ -66,6 +66,19 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
   - 사이드바의 **유휴 / 입력 대기 / 작업 중** 라이브 상태 표시
   - 우측 패널의 todo 리스트
 
+### 💾 에이전트 대화 영속화 (PATH shim)
+- 각 PTY의 `PATH` 앞에 Acorn 번들 shim 디렉토리가 prepend됨 — 사용자가 별도 설치할 게 없음
+- **claude** — Acorn 세션 UUID를 `--session-id`로 자동 주입 → JSONL이 세션과 1:1 매칭, Acorn 재시작 후 같은 셸에서 `claude` 다시 치면 **이전 대화 그대로 복원**
+- **codex** — codex가 자체 발급한 세션 UUID를 첫 실행 후 캡처해 저장 → 이후 `codex` 호출 시 `codex resume <uuid>`로 자동 라우팅
+- 옵션이나 서브커맨드를 명시한 호출(`codex resume`, `claude --help` 등)은 그대로 통과
+- 다른 에이전트(`aider` / `gemini` / `ollama` / `llm`)는 미지원 — shim 없이 그냥 실행
+
+### 🛏️ Background sessions — acornd 데몬 (preview)
+- 별도 백그라운드 데몬(`acornd`)이 PTY를 보유 → **Acorn 앱을 종료·재시작해도 세션 그대로 유지**
+- 기본 ON. Settings → Sessions → Background sessions에서 끄면 in-process로 폴백(앱 종료 시 세션 같이 종료 — 기존 동작)
+- Settings 패널에서 상태/세션 리스트 확인, 재시작·종료 제어
+- 상태 표시줄의 ⚡ 아이콘으로 IPC + 데몬 상태를 한 번에 확인 (드롭다운)
+
 ### 🛰️ Control session — 에이전트가 형제 세션을 조작 (preview)
 - 한 control session에서 같은 프로젝트의 다른 세션들을 조작하는 오케스트레이션 좌석
 - 시작: `⌘⌥⇧T` 또는 커맨드 팔레트 → **New control session** (사이드바에 🤖 아이콘)
@@ -140,12 +153,12 @@ xattr -dr com.apple.quarantine /Applications/Acorn.app
 
 ```bash
 bun install
-bun run build:sidecar  # acorn-ipc 사이드카 빌드 (최초 1회 + IPC 변경 시)
+bun run build:sidecar  # acorn-ipc + acornd 사이드카 빌드 (최초 1회 + IPC/daemon 변경 시)
 bun run tauri dev      # 개발 모드
 bun run tauri build    # 프로덕션 빌드
 ```
 
-> ℹ️ `bun run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/acorn-ipc-...' doesn't exist` 에러로 빌드가 실패합니다. `bun run build:sidecar`가 호스트 타깃에 맞는 바이너리를 빌드하고 올바른 위치에 stage합니다.
+> ℹ️ `bun run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>`, `acornd-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/...' doesn't exist` 에러로 빌드가 실패합니다. `bun run build:sidecar`가 호스트 타깃에 맞는 두 바이너리를 빌드하고 올바른 위치에 stage합니다.
 
 ### 테스트
 

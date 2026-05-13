@@ -6,16 +6,12 @@ import { cn } from "../lib/cn";
 import { CheckboxRow, Field } from "./ui";
 
 /**
- * Settings tab content for the `acornd` daemon — live status, killswitch
- * toggle, restart / quit affordances, and a listing of every PTY the
- * daemon currently tracks.
- *
- * Persisted state:
- * * Killswitch lives in `localStorage` under `acorn:daemon-enabled` (the
- *   convention for UI state per CLAUDE.md). Backend reflects the
- *   runtime-active value via `api.daemonSetEnabled`.
- * * Tab UI does not re-fetch on every render — a 3-second polling
- *   interval keeps the indicator honest without flooding the daemon.
+ * Settings panel for the `acornd` daemon — live status, killswitch
+ * toggle, restart / quit affordances, and the daemon's tracked PTY
+ * list. The killswitch is persisted in `localStorage` under
+ * `acorn:daemon-enabled` (UI-state convention per CLAUDE.md);
+ * `api.daemonSetEnabled` mirrors the runtime-active value into the
+ * backend.
  */
 export function BackgroundSessionsSettings() {
   const [enabled, setEnabledLocal] = useState<boolean>(() => readKillswitch());

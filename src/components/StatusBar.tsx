@@ -273,9 +273,8 @@ function ServicesStatusButton() {
   useEffect(() => {
     void refreshIpc();
     void refreshDaemon();
-    // Daemon socket round-trip every 5s; IPC probe piggy-backs on the
-    // same cadence. The dropdown re-fetches on open so the visible
-    // list is fresh even between ticks.
+    // Daemon socket round-trip every 5s; IPC probe piggy-backs on
+    // the same cadence so both reads share one tick budget.
     const id = window.setInterval(() => {
       void refreshIpc();
       void refreshDaemon();
@@ -532,10 +531,9 @@ function ServiceRow({
   onAction,
   error,
 }: ServiceRowProps) {
-  // Stack the label/description on their own lines and put the action
-  // on a second row underneath. Putting the button inline with the
-  // text squeezed the status text on a 256px-wide dropdown to two
-  // wrapped lines for the common "running · N sessions" case.
+  // Two stacked rows: text on top, action button right-aligned below.
+  // Inline action next to the text wraps "running · N sessions" on
+  // the 256px dropdown.
   return (
     <div className="flex flex-col gap-1 px-2.5 py-2">
       <div className="flex items-start gap-2">
