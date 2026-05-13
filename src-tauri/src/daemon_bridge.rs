@@ -265,6 +265,18 @@ impl DaemonBridge {
         }
     }
 
+    /// Lightweight check: does the daemon currently hold an alive PTY
+    /// for `id`? Used by `commands::pty_spawn` to decide between a
+    /// re-spawn (no entry / dead entry) and a stream-attach (still
+    /// alive). Returns `false` on any bridge error — the caller will
+    /// then re-spawn, which is the conservative outcome.
+    pub fn is_alive(&self, id: Uuid) -> bool {
+        match self.list_sessions() {
+            Ok(sessions) => sessions.iter().any(|s| s.id == id && s.alive),
+            Err(_) => false,
+        }
+    }
+
     pub fn spawn(
         &self,
         session_id: Uuid,

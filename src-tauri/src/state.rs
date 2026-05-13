@@ -4,6 +4,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::daemon_bridge::DaemonBridge;
+use crate::daemon_stream::StreamRegistry;
 use crate::ipc::server::IpcServerHandle;
 use crate::pty::PtyManager;
 use crate::session::{ProjectStore, SessionStore};
@@ -29,6 +30,12 @@ pub struct AppState {
     /// constructed; calls short-circuit cleanly when the user has the
     /// daemon disabled in Settings.
     pub daemon_bridge: Arc<DaemonBridge>,
+    /// Per-session stream attachments to the daemon. Populated by the
+    /// daemon path of `pty_spawn` and drained by `pty_kill`. Lookup is
+    /// the "is this session daemon-managed and currently attached?"
+    /// check the dispatch helpers use to decide between daemon and
+    /// in-process routing on subsequent calls.
+    pub stream_registry: Arc<StreamRegistry>,
 }
 
 impl AppState {
@@ -41,6 +48,7 @@ impl AppState {
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             ipc_handle: Arc::new(Mutex::new(None)),
             daemon_bridge: DaemonBridge::new(),
+            stream_registry: StreamRegistry::new(),
         }
     }
 }

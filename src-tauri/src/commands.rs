@@ -541,7 +541,10 @@ pub async fn pty_spawn<R: Runtime>(
     if !cwd.exists() {
         return Err(AppError::InvalidPath(cwd.display().to_string()));
     }
-    if state.pty.contains(&id) {
+    // Either an in-process PTY or a daemon-side stream attachment for
+    // this session already exists — caller hit `pty_spawn` twice (e.g.
+    // StrictMode double mount), nothing to do.
+    if state.pty.contains(&id) || state.stream_registry.contains(&id) {
         return Ok(());
     }
     // Sessions always spawn the user's interactive `$SHELL`.
@@ -611,6 +614,30 @@ pub async fn pty_spawn<R: Runtime>(
         }
     }
 
+    // Daemon path — when the killswitch is on, route through `acornd`
+    // so the PTY survives an Acorn app close. The in-process branch
+    // below is kept verbatim as the fallback for users who flip the
+    // toggle off (or for environments where the daemon binary is
+    // missing / refusing to start).
+    if state.daemon_bridge.is_enabled() {
+        match spawn_via_daemon(
+            &app,
+            &state,
+            id,
+            &cwd,
+            &resolved_command,
+            &primed_args,
+            &effective_env,
+            cols.unwrap_or(0),
+            rows.unwrap_or(0),
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                tracing::warn!(%id, error = %err, "daemon spawn failed; falling back to in-process PTY");
+            }
+        }
+    }
+
     state.pty.spawn(
         app,
         id,
@@ -621,6 +648,132 @@ pub async fn pty_spawn<R: Runtime>(
         cols.unwrap_or(0),
         rows.unwrap_or(0),
     )
+}
+
+/// Route a `pty_spawn` through the daemon. Three cases:
+///
+/// 1. **Already attached** — `stream_registry.contains(id)` would have
+///    short-circuited at the top of `pty_spawn`; redundant guard here
+///    catches the race where two callers hit this helper concurrently.
+/// 2. **Daemon already has an alive session** under this UUID (Acorn
+///    just restarted; the daemon kept the PTY alive across the restart)
+///    — skip spawn, just open a stream attachment. Scrollback replay
+///    is on so the user sees the same screen contents the daemon
+///    captured.
+/// 3. **No live session** — fresh spawn through `daemon_bridge`, then
+///    attach the stream. Persists `daemon_session_id` and (for Claude
+///    Code) the `--session-id` resume token onto the session row so
+///    the next restart can repeat case 2.
+fn spawn_via_daemon<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    id: uuid::Uuid,
+    cwd: &std::path::Path,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let bridge = &state.daemon_bridge;
+    let registry = state.stream_registry.clone();
+
+    if registry.contains(&id) {
+        return Ok(());
+    }
+
+    // Resolve the session row's persisted daemon metadata. Missing
+    // session is treated as a new spawn — control sessions get their
+    // own env/argv augmentation up-stack, so this branch only handles
+    // the daemon ↔ stream wiring.
+    let session = state.sessions.get(&id).ok();
+    let session_kind = session
+        .as_ref()
+        .map(|s| s.kind)
+        .unwrap_or(SessionKind::Regular);
+    let repo_path = session.as_ref().map(|s| s.repo_path.clone());
+    let branch = session.as_ref().map(|s| s.branch.clone());
+
+    let user_command_basename = std::path::Path::new(command)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(command);
+    let agent_kind = detect_agent_kind(user_command_basename, args);
+
+    // Reuse the persisted resume token when present so the agent's
+    // session history (e.g. claude's JSONL) stays addressable across
+    // restarts. Mint a fresh UUID for Claude Code on first spawn.
+    let mut resume_token = session.as_ref().and_then(|s| s.agent_resume_token.clone());
+    if resume_token.is_none()
+        && matches!(agent_kind, Some(crate::daemon::protocol::AgentKind::ClaudeCode))
+    {
+        resume_token = Some(uuid::Uuid::new_v4().to_string());
+    }
+
+    // Fast path: daemon already owns this PTY. Acorn restart re-enters
+    // `pty_spawn` here; attach the stream and return.
+    if bridge.is_alive(id) {
+        crate::daemon_stream::attach(app.clone(), registry.clone(), id, true)
+            .map_err(|e| format!("daemon stream attach failed: {e}"))?;
+        return Ok(());
+    }
+
+    let kind = match session_kind {
+        SessionKind::Regular => crate::daemon::protocol::SessionKind::Regular,
+        SessionKind::Control => crate::daemon::protocol::SessionKind::Control,
+    };
+
+    bridge
+        .spawn(
+            id,
+            id.to_string(),
+            cwd.to_path_buf(),
+            command.to_string(),
+            args.to_vec(),
+            env.clone(),
+            cols,
+            rows,
+            kind,
+            repo_path,
+            branch,
+            agent_kind,
+            resume_token.clone(),
+        )
+        .map_err(|e| format!("daemon spawn failed: {e}"))?;
+
+    // Persist the daemon binding so next-restart's reconcile picks
+    // this row up. Failures are non-fatal — the user can still use the
+    // session, they just lose persistence across one restart.
+    if let Err(err) = state.sessions.set_daemon_session_id(&id, Some(id)) {
+        tracing::warn!(%id, error = %err, "persist daemon_session_id failed");
+    }
+    if resume_token.is_some() {
+        if let Err(err) = state.sessions.set_agent_resume_token(&id, resume_token) {
+            tracing::warn!(%id, error = %err, "persist agent_resume_token failed");
+        }
+    }
+    persist(state);
+
+    crate::daemon_stream::attach(app.clone(), registry, id, true)
+        .map_err(|e| format!("daemon stream attach failed: {e}"))
+}
+
+/// Map an agent's command basename onto the daemon's `AgentKind` enum so
+/// the resume-strategy registry can pick the right argv augmentation
+/// (Claude Code → `--session-id <uuid>`, others → passthrough today).
+fn detect_agent_kind(
+    basename: &str,
+    _args: &[String],
+) -> Option<crate::daemon::protocol::AgentKind> {
+    use crate::daemon::protocol::AgentKind;
+    match basename {
+        "claude" => Some(AgentKind::ClaudeCode),
+        "aider" => Some(AgentKind::Aider),
+        "llm" => Some(AgentKind::Llm),
+        "interpreter" => Some(AgentKind::OpenInterpreter),
+        "codex" => Some(AgentKind::Codex),
+        _ => None,
+    }
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session
@@ -649,6 +802,16 @@ fn write_control_marker(cwd: &std::path::Path, primer: &str) {
 pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
+    // Daemon-managed sessions route stdin through the control socket.
+    // Keystrokes are small; one RPC round-trip per keystroke is well
+    // under the typing-feedback threshold and avoids managing a second
+    // socket on the app side just for input.
+    if state.stream_registry.contains(&id) {
+        return state
+            .daemon_bridge
+            .send_input(id, &bytes)
+            .map_err(|e| AppError::Pty(e.to_string()));
+    }
     state.pty.write(&id, &bytes)
 }
 
@@ -660,12 +823,33 @@ pub fn pty_resize(
     rows: u16,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        return state
+            .daemon_bridge
+            .resize(id, cols, rows)
+            .map_err(|e| AppError::Pty(e.to_string()));
+    }
     state.pty.resize(&id, cols, rows)
 }
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        // Order: tell the daemon to terminate the PTY first, then
+        // release the stream attachment. The daemon's wait thread
+        // emits an `Exit` frame the stream pump turns into a Tauri
+        // event, so the frontend sees the same exit signal it would
+        // get from an in-process kill. Drop the attachment after to
+        // free the entry in `stream_registry` even if the daemon
+        // already disconnected first.
+        let result = state
+            .daemon_bridge
+            .kill(id)
+            .map_err(|e| AppError::Pty(e.to_string()));
+        state.stream_registry.drop_attachment(&id);
+        return result;
+    }
     state.pty.kill(&id)
 }
 

@@ -3,6 +3,7 @@ mod commands;
 pub mod daemon;
 mod daemon_bridge;
 mod daemon_commands;
+mod daemon_stream;
 mod error;
 mod git_ops;
 mod ipc;
