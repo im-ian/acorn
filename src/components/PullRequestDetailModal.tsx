@@ -159,7 +159,6 @@ export function PullRequestDetailModal({
         ) : (
           <DetailBody
             detail={listing.detail}
-            account={listing.account}
             tab={tab}
             onTab={setTab}
             cwd={cwd}
@@ -219,7 +218,6 @@ function ModalShell({
 
 function DetailBody({
   detail,
-  account,
   tab,
   onTab,
   cwd,
@@ -230,7 +228,6 @@ function DetailBody({
   onOpenClose,
 }: {
   detail: PullRequestDetail;
-  account: string;
   tab: DetailTab;
   onTab: (t: DetailTab) => void;
   cwd?: string;
@@ -289,10 +286,6 @@ function DetailBody({
             </span>
             <span className="opacity-50"> · </span>
             <span>{detail.changed_files} files</span>
-            <span className="opacity-50"> · </span>
-            <Tooltip label={`Listed via gh account ${account}`} side="bottom">
-              <span>@{account}</span>
-            </Tooltip>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
