@@ -7,6 +7,7 @@ import {
   Circle,
   Clock,
   ExternalLink,
+  GitCommit,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -24,6 +25,7 @@ import { useDialogShortcuts } from "../lib/dialog";
 import type {
   PullRequestCheck,
   PullRequestComment,
+  PullRequestCommit,
   PullRequestDetail,
   PullRequestDetailListing,
   PullRequestReview,
@@ -36,7 +38,7 @@ import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
 import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
 
-type DetailTab = "conversation" | "checks" | "files";
+type DetailTab = "conversation" | "commits" | "checks" | "files";
 
 interface PullRequestDetailModalProps {
   /**
@@ -320,6 +322,7 @@ function DetailBody({
     effectiveChecks > 0 && !allChecksPassed && !allChecksFailed;
   const totalChecks = effectiveChecks;
   const fileCount = detail.diff.files.length;
+  const commitCount = detail.commits.length;
 
   return (
     <>
@@ -414,6 +417,13 @@ function DetailBody({
           onClick={() => onTab("conversation")}
         />
         <DetailTabButton
+          icon={<GitCommit size={13} />}
+          label="Commits"
+          badge={commitCount > 0 ? commitCount : null}
+          active={tab === "commits"}
+          onClick={() => onTab("commits")}
+        />
+        <DetailTabButton
           icon={<CheckCircle2 size={13} />}
           label="Checks"
           badge={
@@ -450,6 +460,8 @@ function DetailBody({
             comments={detail.comments}
             reviews={detail.reviews}
           />
+        ) : tab === "commits" ? (
+          <CommitsPane commits={detail.commits} prUrl={detail.url} />
         ) : tab === "checks" ? (
           <ChecksPane checks={detail.checks} />
         ) : (
@@ -533,6 +545,7 @@ function DetailSkeleton({
       <nav className="flex shrink-0 border-b border-border">
         {[
           { icon: <MessagesSquare size={13} />, w: "w-20" },
+          { icon: <GitCommit size={13} />, w: "w-14" },
           { icon: <CheckCircle2 size={13} />, w: "w-12" },
           { icon: <GitPullRequest size={13} />, w: "w-10" },
         ].map((tab, i) => (
@@ -1062,6 +1075,125 @@ function ReviewStateBadge({ state }: { state: string }) {
       {label}
     </span>
   );
+}
+
+function CommitsPane({
+  commits,
+  prUrl,
+}: {
+  commits: PullRequestCommit[];
+  prUrl: string;
+}) {
+  if (commits.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+        No commits in this pull request.
+      </div>
+    );
+  }
+  return (
+    <ul className="flex h-full flex-col overflow-y-auto text-xs">
+      {commits.map((c) => (
+        <CommitRow key={c.oid} commit={c} prUrl={prUrl} />
+      ))}
+    </ul>
+  );
+}
+
+function CommitRow({
+  commit,
+  prUrl,
+}: {
+  commit: PullRequestCommit;
+  prUrl: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shortOid = commit.oid.slice(0, 7);
+  const hasBody = commit.message_body.trim().length > 0;
+  const commitUrl = buildCommitUrl(prUrl, commit.oid);
+  const primaryAuthor = commit.authors[0];
+
+  return (
+    <li className="border-b border-border/40">
+      <div className="flex items-start gap-2 px-3 py-2">
+        <GitCommit size={13} className="mt-[3px] shrink-0 text-fg-muted" />
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => hasBody && setExpanded((v) => !v)}
+            disabled={!hasBody}
+            className={cn(
+              "block w-full truncate text-left text-fg",
+              hasBody
+                ? "cursor-pointer hover:text-accent"
+                : "cursor-default",
+            )}
+            title={commit.message_headline}
+          >
+            {commit.message_headline || "(no message)"}
+          </button>
+          <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-fg-muted">
+            {primaryAuthor ? (
+              <AuthorTag
+                login={primaryAuthor.login ?? primaryAuthor.name ?? "unknown"}
+                size={16}
+                nameClass="text-[10.5px] text-fg-muted"
+              />
+            ) : null}
+            {commit.authors.length > 1 ? (
+              <span className="opacity-70">
+                +{commit.authors.length - 1}
+              </span>
+            ) : null}
+            <span className="opacity-50">·</span>
+            <span className="font-mono opacity-70">
+              {formatTimestamp(commit.committed_date)}
+            </span>
+          </div>
+          {expanded && hasBody ? (
+            <pre className="acorn-selectable mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-bg-sidebar/40 px-2 py-1.5 font-mono text-[11px] text-fg">
+              {commit.message_body}
+            </pre>
+          ) : null}
+        </div>
+        <Tooltip label="Copy SHA" side="top">
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(commit.oid);
+            }}
+            className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            {shortOid}
+          </button>
+        </Tooltip>
+        {commitUrl ? (
+          <Tooltip label="Open commit on GitHub" side="top">
+            <button
+              type="button"
+              onClick={() => void openUrl(commitUrl)}
+              className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <ExternalLink size={11} />
+            </button>
+          </Tooltip>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * `detail.url` is the PR URL (`.../pull/N`). Rewrite to the standalone
+ * commit page (`.../commit/{sha}`); returns null when the PR URL is empty
+ * or unrecognized so the link button can be skipped instead of opening a
+ * broken target.
+ */
+function buildCommitUrl(prUrl: string, oid: string): string | null {
+  if (!prUrl || !oid) return null;
+  const m = prUrl.match(/^(.*)\/pull\/\d+(?:\/.*)?$/);
+  if (!m) return null;
+  return `${m[1]}/commit/${oid}`;
 }
 
 function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {

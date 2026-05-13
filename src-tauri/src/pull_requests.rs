@@ -638,6 +638,25 @@ pub struct PullRequestReview {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PullRequestCommitAuthor {
+    pub name: String,
+    pub email: String,
+    /// GitHub login when gh resolved one. None for unattributed commits
+    /// (e.g. authored locally with an email not linked to any account).
+    pub login: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestCommit {
+    /// Full SHA — the UI shortens it for display but the link target needs the full id.
+    pub oid: String,
+    pub message_headline: String,
+    pub message_body: String,
+    pub committed_date: String,
+    pub authors: Vec<PullRequestCommitAuthor>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PullRequestCheck {
     pub name: String,
     /// `QUEUED` / `IN_PROGRESS` / `COMPLETED` / `PENDING` (status checks).
@@ -676,6 +695,7 @@ pub struct PullRequestDetail {
     pub comments: Vec<PullRequestComment>,
     pub reviews: Vec<PullRequestReview>,
     pub checks: Vec<PullRequestCheck>,
+    pub commits: Vec<PullRequestCommit>,
     pub diff: DiffPayload,
 }
 
@@ -768,6 +788,28 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         })
         .collect();
 
+    let commits = view
+        .commits
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| PullRequestCommit {
+            oid: c.oid.unwrap_or_default(),
+            message_headline: c.message_headline.unwrap_or_default(),
+            message_body: c.message_body.unwrap_or_default(),
+            committed_date: c.committed_date.unwrap_or_default(),
+            authors: c
+                .authors
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| PullRequestCommitAuthor {
+                    name: a.name.unwrap_or_default(),
+                    email: a.email.unwrap_or_default(),
+                    login: a.login,
+                })
+                .collect(),
+        })
+        .collect();
+
     PullRequestDetail {
         number,
         title: view.title.unwrap_or_default(),
@@ -792,6 +834,7 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         comments,
         reviews,
         checks,
+        commits,
         diff: crate::unified_diff::parse_unified_diff(&diff_text),
     }
 }
@@ -808,7 +851,7 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
             "--json",
             "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
                  createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
-                 mergeable,comments,reviews,statusCheckRollup",
+                 mergeable,comments,reviews,statusCheckRollup,commits",
         ]);
     })?;
 
@@ -878,6 +921,26 @@ struct GhPullRequestView {
     reviews: Option<Vec<GhReview>>,
     #[serde(rename = "statusCheckRollup")]
     status_check_rollup: Option<Vec<GhCheck>>,
+    commits: Option<Vec<GhCommit>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhCommit {
+    oid: Option<String>,
+    #[serde(rename = "messageHeadline")]
+    message_headline: Option<String>,
+    #[serde(rename = "messageBody")]
+    message_body: Option<String>,
+    #[serde(rename = "committedDate")]
+    committed_date: Option<String>,
+    authors: Option<Vec<GhCommitAuthor>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhCommitAuthor {
+    name: Option<String>,
+    email: Option<String>,
+    login: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
