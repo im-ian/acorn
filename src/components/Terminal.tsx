@@ -740,13 +740,10 @@ export function Terminal({
         // fires before `pty_spawn` and `pty_resize` errors out with
         // "no pty for session".
         //
-        // Empty command tells the backend to drop into $SHELL — sessions
-        // are always plain terminals.
+        // Sessions always drop into $SHELL on the backend.
         await invoke("pty_spawn", {
           sessionId,
           cwd,
-          command: "",
-          args: [],
           env: {},
           cols: term.cols,
           rows: term.rows,

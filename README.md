@@ -69,7 +69,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 ### 🛰️ Control session — 에이전트가 형제 세션을 조작 (preview)
 - 한 control session에서 같은 프로젝트의 다른 세션들을 조작하는 오케스트레이션 좌석
 - 시작: `⌘⌥⇧T` 또는 커맨드 팔레트 → **New control session** (사이드바에 🤖 아이콘)
-- 안에서 띄운 에이전트는 자동으로 priming됨 — `ACORN_SESSION_ID` / `ACORN_IPC_SOCKET` 환경변수 + 에이전트별 시스템 프롬프트 주입(Claude Code는 `--append-system-prompt`, `llm`은 `-s`) + 인식하지 못한 에이전트는 `<cwd>/.acorn-control.md` 마커 파일로 fallback
+- 안에서 띄운 에이전트는 자동으로 priming됨 — `ACORN_SESSION_ID` / `ACORN_IPC_SOCKET` 환경변수 + `<cwd>/.acorn-control.md` 마커 파일로 IPC 프로토콜과 사용 가능한 명령들이 안내됨
 - 번들된 `acorn-ipc` CLI가 PTY의 PATH에 자동 prepend → **control session 안에선 설치 단계 없이 바로 사용 가능**
 - 6가지 명령: `list-sessions`, `send-keys`, `read-buffer`, `new-session`, `select-session`, `kill-session`
 - 권한: control session만 발신 가능, 같은 프로젝트 내부로 스코프 제한 (`Unauthorized` / `OutOfScope`)

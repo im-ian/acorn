@@ -3,11 +3,12 @@ import { create } from "zustand";
 const STORAGE_KEY = "acorn:settings:v1";
 
 /**
- * Catalog of AI agents acorn knows how to spawn. The user picks ONE
- * `selected` agent under Settings → Agents; that choice powers every AI
- * feature in the app (currently the merge dialog's "Generate with AI"
- * button). Each agent has its own one-shot stdin/stdout invocation
- * convention, captured in `agentOneshotCommand` below.
+ * Catalog of AI agents acorn knows how to invoke for one-shot tasks.
+ * The user picks ONE `selected` agent under Settings → Agents; that
+ * choice powers every AI feature in the app (currently the merge
+ * dialog's "Generate with AI" button). Each agent has its own one-shot
+ * stdin/stdout invocation convention, captured in `agentOneshotCommand`
+ * below.
  */
 export type AgentProvider = "claude" | "gemini" | "ollama" | "llm" | "codex";
 

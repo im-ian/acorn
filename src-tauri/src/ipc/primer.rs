@@ -1,17 +1,20 @@
 //! Generates the "control session primer" — a short system-prompt blurb
-//! that teaches an agent spawned inside a control session about the
+//! that teaches an agent invoked inside a control session about the
 //! `acorn-ipc` CLI, its env vars, and the commands it can issue.
 //!
-//! The primer is injected two ways at PTY spawn time:
+//! The primer is delivered two ways at PTY spawn time:
 //!
-//!   1. Per-agent CLI flag, when the spawn command is one Acorn knows how
-//!      to prime (Claude Code's `--append-system-prompt`, llm CLI's `-s`).
-//!      This is the strongest signal because it lands directly in the
-//!      agent's system prompt before the conversation starts.
-//!   2. A `<cwd>/.acorn-control.md` marker file written unconditionally
+//!   1. A `<cwd>/.acorn-control.md` marker file written unconditionally
 //!      for every control session. Agents that read project-local docs
 //!      (Claude Code follows CLAUDE.md, Aider follows .aider config, …)
 //!      can discover it; humans `cat`-ing the file get the same content.
+//!      This is the primary delivery channel because Acorn always spawns
+//!      `$SHELL` — the user invokes the agent from inside.
+//!   2. Per-agent CLI flag injection, kept as a dormant fallback: if
+//!      `$SHELL` itself ever resolves to a recognised agent (Claude
+//!      Code's `--append-system-prompt`, llm CLI's `-s`) the primer is
+//!      threaded into argv at spawn time. For ordinary shells the
+//!      `AgentFlavor::Unknown` branch is a no-op.
 
 use std::path::Path;
 

@@ -15,7 +15,6 @@ use crate::pull_requests::{
 use crate::scrollback;
 use crate::session::{Project, Session, SessionKind, SessionStatus};
 use crate::session_status;
-use crate::shell_util::shell_quote;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
@@ -533,8 +532,6 @@ pub async fn pty_spawn<R: Runtime>(
     state: State<'_, AppState>,
     session_id: String,
     cwd: String,
-    command: Option<String>,
-    args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     cols: Option<u16>,
     rows: Option<u16>,
@@ -547,48 +544,9 @@ pub async fn pty_spawn<R: Runtime>(
     if state.pty.contains(&id) {
         return Ok(());
     }
-    // Resolve the actual (command, args) pair to spawn:
-    //
-    //   * Terminal mode  — frontend sends an empty/missing command, asking us
-    //     to drop the user into their interactive shell. Spawn $SHELL directly
-    //     so the prompt is the user's real shell.
-    //
-    //   * Agent / Custom mode — frontend sends e.g. `claude` with args. On
-    //     macOS GUI launches (Dock/Spotlight) the parent process inherits a
-    //     sanitized PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) and never sources
-    //     `~/.zshrc` / `~/.zprofile`, so binaries installed via Homebrew, npm,
-    //     bun, pnpm, pyenv, asdf, mise, etc. are invisible to spawn_command
-    //     and PTY creation fails with "No viable candidates found in PATH".
-    //
-    //     To fix this without acorn having to know each shell's rc-file
-    //     conventions, we wrap the target through the user's login+interactive
-    //     shell. The shell sources its rc files (picking up PATH, aliases,
-    //     env vars, shims) and then `exec`s the target — replacing itself
-    //     in-place so the PTY's child is the requested binary, not the shell.
-    let user_command_raw = match command {
-        Some(c) if !c.trim().is_empty() => Some(c),
-        _ => None,
-    };
-    let user_args = args.unwrap_or_default();
-    let (resolved_command, resolved_args) = match user_command_raw {
-        None => {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-            (shell, user_args)
-        }
-        Some(user_command) => {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-            let mut script = String::from("exec ");
-            script.push_str(&shell_quote(&user_command));
-            for a in &user_args {
-                script.push(' ');
-                script.push_str(&shell_quote(a));
-            }
-            (
-                shell,
-                vec!["-l".to_string(), "-i".to_string(), "-c".to_string(), script],
-            )
-        }
-    };
+    // Sessions always spawn the user's interactive `$SHELL`.
+    let resolved_command = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let resolved_args: Vec<String> = Vec::new();
     // Inject IPC env vars for control sessions so the user's shell (and any
     // agent it launches) can address the running app via the `acorn-ipc`
     // CLI without per-session configuration. Only control sessions get the
@@ -706,17 +664,11 @@ pub fn pty_reload_shell_env() {
 
 /// Resolve the *live* working directory of a session's PTY tree.
 ///
-/// We seed at the immediate PTY child (typically `$SHELL` or `claude`) and
-/// walk descendants, returning the cwd of the deepest descendant that exposes
-/// one. This catches both common drift cases:
-///
-///   * **Agent mode** — the PTY child *is* `claude`; on `--worktree` claude
-///     chdirs (or re-execs) into the new worktree and the immediate child's
-///     cwd updates directly.
-///   * **Terminal mode** — the PTY child is `$SHELL`; the user types
-///     `claude -w` and claude appears as a grandchild whose cwd reflects the
-///     freshly created worktree, while the shell's cwd is still the original
-///     project root.
+/// The PTY child is always `$SHELL`; we walk descendants and return the
+/// cwd of the deepest descendant that exposes one. This catches the
+/// common drift case where the user types e.g. `claude -w` and the agent
+/// chdirs into a freshly created worktree as a grandchild, while the
+/// shell's own cwd is still the original project root.
 ///
 /// Returns `None` if the session has no live PTY (not yet spawned, or
 /// already exited). The frontend then falls back to the session's recorded
