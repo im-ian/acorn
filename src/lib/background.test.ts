@@ -27,6 +27,7 @@ import {
   clearBackgroundVars,
   importBackgroundImage,
 } from "./background";
+import { buildXtermTheme } from "./terminalTheme";
 import appCss from "../App.css?raw";
 import terminalSource from "../components/Terminal.tsx?raw";
 import tauriConfigRaw from "../../src-tauri/tauri.conf.json?raw";
@@ -171,10 +172,21 @@ describe("background overlay CSS", () => {
 
   it("lets the xterm renderer show the terminal background image", () => {
     expect(terminalSource).toContain("allowTransparency: true");
-    expect(terminalSource).toContain(
-      'background: useTransparentBackground ? "rgba(0, 0, 0, 0)"',
-    );
     expect(terminalSource).toContain("nextBackground.applyToTerminal");
+
+    const transparentTheme = buildXtermTheme({
+      mode: "dark",
+      readVar: () => null,
+      useTransparentBackground: true,
+    });
+    expect(transparentTheme.background).toBe("rgba(0, 0, 0, 0)");
+
+    const opaqueTheme = buildXtermTheme({
+      mode: "dark",
+      readVar: () => null,
+      useTransparentBackground: false,
+    });
+    expect(opaqueTheme.background).not.toBe("rgba(0, 0, 0, 0)");
   });
 
   it("does not paint a second terminal image when the app background is active", () => {

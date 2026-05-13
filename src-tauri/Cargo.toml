@@ -10,17 +10,26 @@ default-run = "acorn"
 name = "acorn_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# Companion CLI that talks to the running Acorn app over a Unix domain
-# socket. Built from the same crate so the protocol types in `ipc::proto`
-# stay in lockstep between the in-process server and the out-of-process
-# client without a third workspace member.
+# Legacy companion CLI — talks to the in-process IPC server inside the running
+# Acorn app over a Unix domain socket. Replaced by `acornd` (which subsumes
+# both the daemon process and the CLI surface). Retained during the daemon
+# rollout so existing control sessions keep working; removed in Sprint 3.
 [[bin]]
 name = "acorn-ipc"
 path = "src/bin/acorn-ipc.rs"
 
-# Existing Tauri entry binary — Cargo defaults `name = "acorn"` based on the
-# package name, but once we add a second `[[bin]]` we must spell both out so
-# Cargo does not auto-discover the new bin as the only target.
+# Background daemon that owns persistent PTY sessions across Acorn app
+# launches. Also doubles as the CLI surface used inside control sessions
+# (e.g. `acornd create-tab`) — both modes share the same IPC protocol types
+# defined in `daemon::protocol`. Default invocation (no subcommand or
+# `acornd serve`) runs the daemon foreground; subcommands like `status`,
+# `list-sessions`, etc. dial the running daemon as a client.
+[[bin]]
+name = "acornd"
+path = "src/bin/acornd.rs"
+
+# Tauri entry binary — Cargo defaults to the package name, but with multiple
+# `[[bin]]` targets we must spell each out so Cargo does not collapse them.
 [[bin]]
 name = "acorn"
 path = "src/main.rs"
@@ -56,6 +65,19 @@ base64 = "0.22"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2"
 clap = { version = "4", features = ["derive"] }
+# Cross-platform local IPC abstraction. Wraps Unix domain sockets on
+# macOS/Linux and named pipes on Windows behind a single API so the daemon
+# socket layer doesn't fork on `#[cfg(unix)]` vs `#[cfg(windows)]`. The
+# `tokio` feature is intentionally NOT enabled here: the daemon's accept
+# loop is a small synchronous thread per socket — pulling tokio's async
+# runtime into the daemon binary would dwarf the work it actually does.
+interprocess = "2"
+
+[target.'cfg(unix)'.dependencies]
+# `setsid()` and `getpid()` wrappers for detaching the daemon from the
+# spawning Acorn app's process group. Feature-flagged to only what we use
+# so the build stays lean.
+nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
 
 [profile.release]
 opt-level = 3

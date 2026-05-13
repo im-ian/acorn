@@ -680,7 +680,10 @@ pub async fn pty_spawn<R: Runtime>(
     if !cwd.exists() {
         return Err(AppError::InvalidPath(cwd.display().to_string()));
     }
-    if state.pty.contains(&id) {
+    // Either an in-process PTY or a daemon-side stream attachment for
+    // this session already exists — caller hit `pty_spawn` twice (e.g.
+    // StrictMode double mount), nothing to do.
+    if state.pty.contains(&id) || state.stream_registry.contains(&id) {
         return Ok(());
     }
     // Sessions always spawn the user's interactive `$SHELL`.
@@ -692,6 +695,40 @@ pub async fn pty_spawn<R: Runtime>(
     // env; regular sessions stay sandboxed from the IPC surface.
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
+
+    // The Acorn session UUID doubles as the resume token. claude's
+    // `--session-id` names the JSONL transcript at
+    // `~/.claude/projects/<repo-slug>/<id>.jsonl`, and
+    // `session_status::detect` looks the file up by Acorn's session
+    // id verbatim — minting a separate UUID would break that lookup
+    // and leave status detection on the descendant-process fallback.
+    // `ACORN_AGENT_STATE_DIR` is the per-session scratch directory
+    // the codex shim writes its captured `codex.id` into.
+    let resume_token = id.to_string();
+    effective_env
+        .entry("ACORN_RESUME_TOKEN".to_string())
+        .or_insert_with(|| resume_token.clone());
+    if let Ok(state_dir) = crate::agent_shim::ensure_session_state_dir(id) {
+        effective_env
+            .entry("ACORN_AGENT_STATE_DIR".to_string())
+            .or_insert_with(|| state_dir.display().to_string());
+    } else {
+        tracing::warn!(%id, "agent state dir setup failed; codex shim will skip resume tracking");
+    }
+    if let Ok(shim_dir) = crate::agent_shim::ensure_shim_dir() {
+        let existing = effective_env
+            .get("PATH")
+            .cloned()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_default();
+        effective_env.insert(
+            "PATH".to_string(),
+            crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
+        );
+    } else {
+        tracing::warn!(%id, "agent shim dir setup failed; claude/codex resume helpers will not be active");
+    }
+
     if let Ok(session) = state.sessions.get(&id) {
         if session.kind == SessionKind::Control {
             effective_env
@@ -703,11 +740,25 @@ pub async fn pty_spawn<R: Runtime>(
                     .entry("ACORN_IPC_SOCKET".to_string())
                     .or_insert_with(|| socket.display().to_string());
             }
-            // Make the bundled `acorn-ipc` CLI resolvable from inside this
-            // PTY without the user installing a PATH shim. Prepending — not
-            // replacing — keeps the user's existing PATH intact for every
-            // other binary; the dedup in `prepend_to_path` prevents the
-            // entry from accumulating across reconnects.
+            // Daemon socket for the `acornd` CLI. Coexists with
+            // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
+            // the in-process server, while `acornd <subcommand>`
+            // reaches the daemon. The two transports manage different
+            // session graphs today (daemon vs in-process); they
+            // converge when `pty_spawn` itself routes through the
+            // daemon.
+            if let Ok(daemon_sock) = crate::daemon::paths::control_socket_path() {
+                effective_env
+                    .entry("ACORN_DAEMON_SOCKET".to_string())
+                    .or_insert_with(|| daemon_sock.display().to_string());
+            }
+            // Make the bundled `acorn-ipc` AND `acornd` CLIs resolvable
+            // from inside this PTY without the user installing a PATH
+            // shim. Both binaries ship in the same directory, so a
+            // single prepend covers both. Prepending — not replacing —
+            // keeps the user's existing PATH intact for every other
+            // binary; dedup in `prepend_to_path` prevents the entry
+            // from accumulating across reconnects.
             if let Some(bin_dir) = crate::ipc::cli_path::bundled_cli_dir() {
                 let existing = effective_env
                     .get("PATH")
@@ -736,6 +787,30 @@ pub async fn pty_spawn<R: Runtime>(
         }
     }
 
+    // Daemon path — when the killswitch is on, route through `acornd`
+    // so the PTY survives an Acorn app close. The in-process branch
+    // below is kept verbatim as the fallback for users who flip the
+    // toggle off (or for environments where the daemon binary is
+    // missing / refusing to start).
+    if state.daemon_bridge.is_enabled() {
+        match spawn_via_daemon(
+            &app,
+            &state,
+            id,
+            &cwd,
+            &resolved_command,
+            &primed_args,
+            &effective_env,
+            cols.unwrap_or(0),
+            rows.unwrap_or(0),
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                tracing::warn!(%id, error = %err, "daemon spawn failed; falling back to in-process PTY");
+            }
+        }
+    }
+
     state.pty.spawn(
         app,
         id,
@@ -746,6 +821,103 @@ pub async fn pty_spawn<R: Runtime>(
         cols.unwrap_or(0),
         rows.unwrap_or(0),
     )
+}
+
+/// Route a `pty_spawn` through the daemon. Three cases:
+///
+/// 1. **Already attached** — short-circuit; redundant guard catches
+///    races where two callers hit this helper concurrently.
+/// 2. **Daemon already has an alive session** under this UUID (Acorn
+///    just restarted) — skip spawn, open a stream attachment with
+///    scrollback replay so the user sees the daemon's last screen.
+/// 3. **No live session** — fresh daemon spawn, attach the stream,
+///    persist `daemon_session_id` so the next restart hits case 2.
+fn spawn_via_daemon<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    id: uuid::Uuid,
+    cwd: &std::path::Path,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let bridge = &state.daemon_bridge;
+    let registry = state.stream_registry.clone();
+
+    if registry.contains(&id) {
+        return Ok(());
+    }
+
+    // Resolve the session row's persisted daemon metadata. Missing
+    // session is treated as a new spawn — control sessions get their
+    // own env/argv augmentation up-stack, so this branch only handles
+    // the daemon ↔ stream wiring.
+    let session = state.sessions.get(&id).ok();
+    let session_kind = session
+        .as_ref()
+        .map(|s| s.kind)
+        .unwrap_or(SessionKind::Regular);
+    let repo_path = session.as_ref().map(|s| s.repo_path.clone());
+    let branch = session.as_ref().map(|s| s.branch.clone());
+
+    // `pty_spawn` always launches `$SHELL`, never an agent binary
+    // directly, so the daemon's per-agent resume strategy registry
+    // has nothing to react to here. The shim layer in the PTY is
+    // what specialises behaviour by agent.
+    let agent_kind: Option<crate::daemon::protocol::AgentKind> = None;
+
+    // The resume token == Acorn session UUID; stamped onto the
+    // daemon's session record (mirrors the PTY env var the shim
+    // reads) so a future daemon-side reconcile can recover identity
+    // without consulting the app DB.
+    let resume_token = Some(id.to_string());
+
+    // Fast path: daemon already owns this PTY. Acorn restart re-enters
+    // `pty_spawn` here; attach the stream and return. Pid comes from
+    // the daemon's session registry so status polling has a process
+    // tree to walk without an extra round-trip on every poll.
+    if bridge.is_alive(id) {
+        let pid = bridge.session_pid(id);
+        crate::daemon_stream::attach(app.clone(), registry.clone(), id, pid, true)
+            .map_err(|e| format!("daemon stream attach failed: {e}"))?;
+        return Ok(());
+    }
+
+    let kind = match session_kind {
+        SessionKind::Regular => crate::daemon::protocol::SessionKind::Regular,
+        SessionKind::Control => crate::daemon::protocol::SessionKind::Control,
+    };
+
+    let outcome = bridge
+        .spawn(
+            id,
+            id.to_string(),
+            cwd.to_path_buf(),
+            command.to_string(),
+            args.to_vec(),
+            env.clone(),
+            cols,
+            rows,
+            kind,
+            repo_path,
+            branch,
+            agent_kind,
+            resume_token.clone(),
+        )
+        .map_err(|e| format!("daemon spawn failed: {e}"))?;
+
+    // Persist the daemon binding so next-restart's reconcile picks
+    // this row up. Failures are non-fatal — the user can still use the
+    // session, they just lose persistence across one restart.
+    if let Err(err) = state.sessions.set_daemon_session_id(&id, Some(id)) {
+        tracing::warn!(%id, error = %err, "persist daemon_session_id failed");
+    }
+    persist(state);
+
+    crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, true)
+        .map_err(|e| format!("daemon stream attach failed: {e}"))
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session
@@ -774,6 +946,16 @@ fn write_control_marker(cwd: &std::path::Path, primer: &str) {
 pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
+    // Daemon-managed sessions route stdin through the control socket.
+    // Keystrokes are small; one RPC round-trip per keystroke is well
+    // under the typing-feedback threshold and avoids managing a second
+    // socket on the app side just for input.
+    if state.stream_registry.contains(&id) {
+        return state
+            .daemon_bridge
+            .send_input(id, &bytes)
+            .map_err(|e| AppError::Pty(e.to_string()));
+    }
     state.pty.write(&id, &bytes)
 }
 
@@ -785,12 +967,33 @@ pub fn pty_resize(
     rows: u16,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        return state
+            .daemon_bridge
+            .resize(id, cols, rows)
+            .map_err(|e| AppError::Pty(e.to_string()));
+    }
     state.pty.resize(&id, cols, rows)
 }
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        // Order: tell the daemon to terminate the PTY first, then
+        // release the stream attachment. The daemon's wait thread
+        // emits an `Exit` frame the stream pump turns into a Tauri
+        // event, so the frontend sees the same exit signal it would
+        // get from an in-process kill. Drop the attachment after to
+        // free the entry in `stream_registry` even if the daemon
+        // already disconnected first.
+        let result = state
+            .daemon_bridge
+            .kill(id)
+            .map_err(|e| AppError::Pty(e.to_string()));
+        state.stream_registry.drop_attachment(&id);
+        return result;
+    }
     state.pty.kill(&id)
 }
 
@@ -1000,10 +1203,22 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
+            // Routing-aware pid lookup. Daemon-managed sessions live
+            // in `stream_registry` (their root pid was captured from
+            // the daemon at spawn / attach); legacy in-process sessions
+            // live in `state.pty`. Each side drives its own shell-state
+            // machine because the sticky NeedsInput deadline is
+            // per-attachment, not global.
             let shell_hint = parsed_id.and_then(|uuid| {
-                let root = state.pty.child_pid(&uuid)?;
-                let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
-                state.pty.update_shell_state(&uuid, has_child_now)
+                if state.stream_registry.contains(&uuid) {
+                    let root = state.stream_registry.pid(&uuid)?;
+                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                    state.stream_registry.update_shell_state(&uuid, has_child_now)
+                } else {
+                    let root = state.pty.child_pid(&uuid)?;
+                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                    state.pty.update_shell_state(&uuid, has_child_now)
+                }
             });
             let status =
                 session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
@@ -1013,7 +1228,12 @@ pub async fn detect_session_statuses(
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
             let live_cwd_branch = parsed_id
-                .and_then(|uuid| state.pty.child_pid(&uuid))
+                .and_then(|uuid| {
+                    state
+                        .stream_registry
+                        .pid(&uuid)
+                        .or_else(|| state.pty.child_pid(&uuid))
+                })
                 .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
                 .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
             let branch = live_cwd_branch.or_else(|| {
@@ -1135,6 +1355,22 @@ pub async fn get_pull_request_detail(
 }
 
 #[tauri::command]
+pub async fn get_pull_request_commit_diff(
+    repo_path: String,
+    sha: String,
+) -> AppResult<DiffPayload> {
+    pull_requests::get_pull_request_commit_diff(&PathBuf::from(repo_path), &sha)
+}
+
+#[tauri::command]
+pub async fn resolve_commit_logins(
+    repo_path: String,
+    shas: Vec<String>,
+) -> AppResult<std::collections::HashMap<String, Option<String>>> {
+    pull_requests::resolve_commit_logins(&PathBuf::from(repo_path), shas)
+}
+
+#[tauri::command]
 pub async fn merge_pull_request(
     repo_path: String,
     number: u64,
@@ -1154,6 +1390,15 @@ pub async fn merge_pull_request(
 #[tauri::command]
 pub async fn close_pull_request(repo_path: String, number: u64) -> AppResult<()> {
     pull_requests::close_pull_request(&PathBuf::from(repo_path), number)
+}
+
+#[tauri::command]
+pub async fn update_pull_request_body(
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    pull_requests::update_pull_request_body(&PathBuf::from(repo_path), number, &body)
 }
 
 #[tauri::command]

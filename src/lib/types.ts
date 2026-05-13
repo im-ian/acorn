@@ -39,8 +39,10 @@ export interface CommitInfo {
   sha: string;
   short_sha: string;
   author: string;
+  author_email: string;
   timestamp: number;
   summary: string;
+  body: string;
   pushed: boolean;
 }
 
@@ -144,6 +146,22 @@ export interface PullRequestReview {
   submitted_at: string;
 }
 
+export interface PullRequestCommitAuthor {
+  name: string;
+  email: string;
+  /** GitHub login when resolvable, otherwise null. */
+  login: string | null;
+}
+
+export interface PullRequestCommit {
+  /** Full SHA — UI shortens for display but full id is needed for the GitHub link. */
+  oid: string;
+  message_headline: string;
+  message_body: string;
+  committed_date: string;
+  authors: PullRequestCommitAuthor[];
+}
+
 export interface PullRequestCheck {
   name: string;
   /** QUEUED | IN_PROGRESS | COMPLETED | PENDING */
@@ -177,6 +195,7 @@ export interface PullRequestDetail {
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
   checks: PullRequestCheck[];
+  commits: PullRequestCommit[];
   diff: DiffPayload;
 }
 

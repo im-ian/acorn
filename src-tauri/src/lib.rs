@@ -1,5 +1,10 @@
+mod agent_shim;
 mod cli_resolver;
 mod commands;
+pub mod daemon;
+mod daemon_bridge;
+mod daemon_commands;
+mod daemon_stream;
 mod error;
 mod git_ops;
 mod ipc;
@@ -85,6 +90,23 @@ pub fn run() {
                 .paste()
                 .select_all()
                 .build()?;
+            // Dev-only Reload (Cmd+R) so frontend edits that don't HMR cleanly
+            // can be re-bootstrapped without restarting the whole Tauri host.
+            // The release menu omits it on purpose — Acorn ships as a single
+            // long-lived app and an accidental Cmd+R would drop every PTY's
+            // in-memory state.
+            #[cfg(debug_assertions)]
+            let reload_item = MenuItemBuilder::new("Reload")
+                .id("reload")
+                .accelerator("CmdOrCtrl+R")
+                .build(app)?;
+            #[cfg(debug_assertions)]
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&reload_item)
+                .separator()
+                .fullscreen()
+                .build()?;
+            #[cfg(not(debug_assertions))]
             let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
@@ -103,6 +125,14 @@ pub fn run() {
                 if event.id() == "settings" {
                     if let Err(err) = handle.emit("acorn:open-settings", ()) {
                         tracing::warn!("failed to emit open-settings: {err}");
+                    }
+                }
+                #[cfg(debug_assertions)]
+                if event.id() == "reload" {
+                    if let Some(window) = handle.get_webview_window("main") {
+                        if let Err(err) = window.eval("window.location.reload()") {
+                            tracing::warn!("failed to reload webview: {err}");
+                        }
                     }
                 }
             });
@@ -165,6 +195,47 @@ pub fn run() {
             // `ipc_restart` cycle the listener without process restart.
             let handle = ipc::server::start(app.handle().clone(), state.inner().clone());
             *state.ipc_handle.lock() = handle;
+
+            // Resolve and cache the `acornd` binary location now so the
+            // bridge does not pay the lookup cost on every spawn. In
+            // bundled mode the binary lives at
+            // `Contents/MacOS/acornd`; in `bun run tauri dev` it sits
+            // at `target/debug/acornd`. Cache failure (binary missing)
+            // is non-fatal — the bridge will surface a `BinaryNotFound`
+            // error on the first daemon-routed call so the user sees
+            // exactly which path was searched.
+            let acornd_hint = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("acornd")));
+            state.daemon_bridge.cache_binary_path(acornd_hint);
+            // Eagerly spawn the daemon on a background thread so the
+            // StatusBar indicator goes green within the first poll
+            // cycle. The status probe alone is passive (it never
+            // spawns) and the rest of the lazy-spawn path lives behind
+            // active calls like `list_sessions` / `spawn` — those
+            // never fire from StatusBar polling, so without this the
+            // daemon stays down for the entire app session until the
+            // user manually clicks something that routes through it.
+            //
+            // Off the main thread because `ensure_connection` waits up
+            // to ~5 s for the freshly-spawned daemon's socket to come
+            // up; blocking the Tauri setup would visibly stall app
+            // startup on cold machines. On daemon-binary-missing the
+            // background thread logs a warning and exits — the
+            // killswitch UI surfaces the same error if the user opens
+            // the Background sessions tab.
+            let bridge_for_boot = state.daemon_bridge.clone();
+            std::thread::Builder::new()
+                .name("acorn-daemon-boot".into())
+                .spawn(move || {
+                    if !bridge_for_boot.is_enabled() {
+                        return;
+                    }
+                    if let Err(err) = bridge_for_boot.ensure_connection() {
+                        tracing::warn!(error = %err, "daemon boot spawn failed");
+                    }
+                })
+                .ok();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -187,8 +258,11 @@ pub fn run() {
             commands::staged_diff,
             commands::list_pull_requests,
             commands::get_pull_request_detail,
+            commands::get_pull_request_commit_diff,
+            commands::resolve_commit_logins,
             commands::merge_pull_request,
             commands::close_pull_request,
+            commands::update_pull_request_body,
             commands::generate_pr_commit_message,
             commands::pty_spawn,
             commands::pty_write,
@@ -210,6 +284,16 @@ pub fn run() {
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
             commands::list_system_fonts,
+            daemon_commands::daemon_status,
+            daemon_commands::daemon_set_enabled,
+            daemon_commands::daemon_restart,
+            daemon_commands::daemon_shutdown,
+            daemon_commands::daemon_list_sessions,
+            daemon_commands::daemon_spawn_session,
+            daemon_commands::daemon_send_input,
+            daemon_commands::daemon_resize,
+            daemon_commands::daemon_kill_session,
+            daemon_commands::daemon_forget_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

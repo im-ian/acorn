@@ -638,6 +638,25 @@ pub struct PullRequestReview {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PullRequestCommitAuthor {
+    pub name: String,
+    pub email: String,
+    /// GitHub login when gh resolved one. None for unattributed commits
+    /// (e.g. authored locally with an email not linked to any account).
+    pub login: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestCommit {
+    /// Full SHA — the UI shortens it for display but the link target needs the full id.
+    pub oid: String,
+    pub message_headline: String,
+    pub message_body: String,
+    pub committed_date: String,
+    pub authors: Vec<PullRequestCommitAuthor>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PullRequestCheck {
     pub name: String,
     /// `QUEUED` / `IN_PROGRESS` / `COMPLETED` / `PENDING` (status checks).
@@ -676,6 +695,7 @@ pub struct PullRequestDetail {
     pub comments: Vec<PullRequestComment>,
     pub reviews: Vec<PullRequestReview>,
     pub checks: Vec<PullRequestCheck>,
+    pub commits: Vec<PullRequestCommit>,
     pub diff: DiffPayload,
 }
 
@@ -704,17 +724,51 @@ pub fn get_pull_request_detail(
     match try_with_account(repo_path, &slug, |token| {
         let view = run_pr_view(&slug, number, token)?;
         let diff_text = run_pr_diff(&slug, number, token)?;
-        Ok((view, diff_text))
+        let mut detail = build_detail(number, view, diff_text);
+        // The unified diff `gh pr diff` returns reduces binary changes to a
+        // "Binary files ... differ" line. Enrich image entries with actual
+        // bytes fetched from the head/base refs so the renderer can show
+        // before/after previews instead of that placeholder text.
+        let head = detail.head_branch.clone();
+        let base = detail.base_branch.clone();
+        enrich_image_previews_against_refs(&slug, &head, &base, token, &mut detail.diff);
+        Ok(detail)
     })? {
         AccountOutcome::Ok {
             account,
-            value: (view, diff_text),
-        } => {
-            let detail = build_detail(number, view, diff_text);
-            Ok(PullRequestDetailListing::Ok { account, detail })
-        }
+            value: detail,
+        } => Ok(PullRequestDetailListing::Ok { account, detail }),
         AccountOutcome::NoAccess { accounts } => {
             Ok(PullRequestDetailListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+/// Image enrichment variant used for the overall PR diff. Resolves the
+/// "new" side at the PR's head ref and the "old" side at the base ref.
+fn enrich_image_previews_against_refs(
+    slug: &str,
+    head_ref: &str,
+    base_ref: &str,
+    token: &str,
+    payload: &mut crate::git_ops::DiffPayload,
+) {
+    for file in &mut payload.files {
+        if !file.is_image {
+            continue;
+        }
+        if let Some(path) = file.new_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, head_ref, &path, token) {
+                file.new_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        if let Some(path) = file.old_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, base_ref, &path, token) {
+                file.old_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        if file.new_image.is_some() || file.old_image.is_some() {
+            file.patch.clear();
         }
     }
 }
@@ -768,6 +822,28 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         })
         .collect();
 
+    let commits = view
+        .commits
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| PullRequestCommit {
+            oid: c.oid.unwrap_or_default(),
+            message_headline: c.message_headline.unwrap_or_default(),
+            message_body: c.message_body.unwrap_or_default(),
+            committed_date: c.committed_date.unwrap_or_default(),
+            authors: c
+                .authors
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| PullRequestCommitAuthor {
+                    name: a.name.unwrap_or_default(),
+                    email: a.email.unwrap_or_default(),
+                    login: a.login,
+                })
+                .collect(),
+        })
+        .collect();
+
     PullRequestDetail {
         number,
         title: view.title.unwrap_or_default(),
@@ -792,6 +868,7 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         comments,
         reviews,
         checks,
+        commits,
         diff: crate::unified_diff::parse_unified_diff(&diff_text),
     }
 }
@@ -808,7 +885,7 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
             "--json",
             "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
                  createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
-                 mergeable,comments,reviews,statusCheckRollup",
+                 mergeable,comments,reviews,statusCheckRollup,commits",
         ]);
     })?;
 
@@ -824,6 +901,208 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
 
     serde_json::from_slice(&output.stdout)
         .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))
+}
+
+pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "origin remote is not a GitHub repository".into(),
+        ));
+    };
+    match try_with_account(repo_path, &slug, |token| {
+        let diff_text = run_commit_diff(&slug, sha, token)?;
+        let mut payload = crate::unified_diff::parse_unified_diff(&diff_text);
+        // GitHub's `application/vnd.github.diff` reduces binary changes to a
+        // single "Binary files ... differ" sentinel line. Re-fetch the actual
+        // image bytes via the contents API so the renderer can show before /
+        // after previews instead of leaking that sentinel into the patch body.
+        enrich_image_previews(&slug, sha, token, &mut payload);
+        Ok(payload)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(format!(
+            "no logged-in gh account can access {slug}"
+        ))),
+    }
+}
+
+/// Map of git OID → GitHub login for commits in a repo. Resolves the
+/// missing chunk in one batched GraphQL call against `repository.object`
+/// nodes, then caches `(slug, sha) → Option<login>` so subsequent calls
+/// (re-paging, modal re-opens) are free.
+///
+/// `None` in the returned map means the commit exists on GitHub but its
+/// author email didn't resolve to a user account; missing keys mean we
+/// couldn't reach GitHub at all (no gh account with access, network
+/// failure, etc.) and the caller should not display an avatar.
+pub fn resolve_commit_logins(
+    repo_path: &Path,
+    shas: Vec<String>,
+) -> AppResult<HashMap<String, Option<String>>> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(HashMap::new());
+    };
+
+    let cache = commit_login_cache();
+    let mut result: HashMap<String, Option<String>> = HashMap::new();
+    let mut needed: Vec<String> = Vec::new();
+    {
+        let lock = cache
+            .lock()
+            .map_err(|_| AppError::Other("commit-login cache poisoned".into()))?;
+        for sha in &shas {
+            let key = (slug.clone(), sha.clone());
+            if let Some(login) = lock.get(&key) {
+                result.insert(sha.clone(), login.clone());
+            } else {
+                needed.push(sha.clone());
+            }
+        }
+    }
+    if needed.is_empty() {
+        return Ok(result);
+    }
+
+    let (owner, name) = slug
+        .split_once('/')
+        .ok_or_else(|| AppError::Other(format!("invalid slug: {slug}")))?;
+    let mut query = String::from("query{repository(owner:\"");
+    query.push_str(owner);
+    query.push_str("\",name:\"");
+    query.push_str(name);
+    query.push_str("\"){");
+    for (i, sha) in needed.iter().enumerate() {
+        query.push_str(&format!(
+            "c{i}:object(oid:\"{sha}\"){{...on Commit{{author{{user{{login}}}}}}}}",
+        ));
+    }
+    query.push_str("}}");
+
+    match try_with_account(repo_path, &slug, |token| {
+        let output = cli_resolver::run("gh", |cmd| {
+            cmd.env("GH_TOKEN", token)
+                .env("GH_HOST", GH_HOST)
+                .args(["api", "graphql", "-f", &format!("query={query}")]);
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(AppError::Other(if stderr.is_empty() {
+                format!("gh graphql exited with {}", output.status)
+            } else {
+                stderr
+            }));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|e| AppError::Other(format!("gh graphql parse: {e}")))?;
+        let mut out: HashMap<String, Option<String>> = HashMap::new();
+        if let Some(repo) = v.pointer("/data/repository").and_then(|x| x.as_object()) {
+            for (i, sha) in needed.iter().enumerate() {
+                let key = format!("c{i}");
+                let login = repo
+                    .get(&key)
+                    .and_then(|c| c.pointer("/author/user/login"))
+                    .and_then(|l| l.as_str())
+                    .map(|s| s.to_string());
+                out.insert(sha.clone(), login);
+            }
+        }
+        Ok(out)
+    })? {
+        AccountOutcome::Ok { value, .. } => {
+            if let Ok(mut lock) = cache.lock() {
+                for (sha, login) in value.iter() {
+                    lock.insert((slug.clone(), sha.clone()), login.clone());
+                }
+            }
+            result.extend(value);
+            Ok(result)
+        }
+        AccountOutcome::NoAccess { .. } => Ok(result),
+    }
+}
+
+fn commit_login_cache() -> &'static Mutex<HashMap<(String, String), Option<String>>> {
+    use std::sync::OnceLock;
+    static CELL: OnceLock<Mutex<HashMap<(String, String), Option<String>>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// For every image file in `payload`, fetch the actual blob bytes from
+/// GitHub at `sha` (new side) and `sha^` (old side) and encode them as
+/// `data:` URIs. Misses (deleted file → no `new_path`, parent fetch
+/// failures, files too large for the contents API, etc.) are tolerated:
+/// the renderer falls back to a "no preview available" placeholder.
+fn enrich_image_previews(
+    slug: &str,
+    sha: &str,
+    token: &str,
+    payload: &mut crate::git_ops::DiffPayload,
+) {
+    let parent = format!("{sha}^");
+    for file in &mut payload.files {
+        if !file.is_image {
+            continue;
+        }
+        if let Some(path) = file.new_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, sha, &path, token) {
+                file.new_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        if let Some(path) = file.old_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, &parent, &path, token) {
+                file.old_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        // Once a preview is attached the renderer no longer needs the
+        // "Binary files ... differ" placeholder lurking in the patch body.
+        if file.new_image.is_some() || file.old_image.is_some() {
+            file.patch.clear();
+        }
+    }
+}
+
+fn fetch_raw_blob(slug: &str, git_ref: &str, path: &str, token: &str) -> AppResult<Vec<u8>> {
+    let endpoint = format!("repos/{slug}/contents/{path}?ref={git_ref}");
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw",
+            &endpoint,
+        ]);
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(output.stdout)
+}
+
+fn run_commit_diff(slug: &str, sha: &str, token: &str) -> AppResult<String> {
+    let endpoint = format!("repos/{slug}/commits/{sha}");
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "api",
+            "-H",
+            "Accept: application/vnd.github.diff",
+            &endpoint,
+        ]);
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
@@ -878,6 +1157,26 @@ struct GhPullRequestView {
     reviews: Option<Vec<GhReview>>,
     #[serde(rename = "statusCheckRollup")]
     status_check_rollup: Option<Vec<GhCheck>>,
+    commits: Option<Vec<GhCommit>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhCommit {
+    oid: Option<String>,
+    #[serde(rename = "messageHeadline")]
+    message_headline: Option<String>,
+    #[serde(rename = "messageBody")]
+    message_body: Option<String>,
+    #[serde(rename = "committedDate")]
+    committed_date: Option<String>,
+    authors: Option<Vec<GhCommitAuthor>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhCommitAuthor {
+    name: Option<String>,
+    email: Option<String>,
+    login: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -996,6 +1295,23 @@ pub fn close_pull_request(repo_path: &Path, number: u64) -> AppResult<()> {
     }
 }
 
+pub fn update_pull_request_body(repo_path: &Path, number: u64, body: &str) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_pr_edit_body(&slug, number, token, body)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account can edit this PR.".to_string(),
+        )),
+    }
+}
+
 fn run_pr_merge(
     slug: &str,
     number: u64,
@@ -1074,6 +1390,56 @@ fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
             .env("GH_HOST", GH_HOST)
             .args(["pr", "close", &number_s, "--repo", slug]);
     })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+/// Pipe the new body via stdin (`--body-file -`) to dodge shell escaping
+/// pitfalls — bodies routinely contain backticks, `$`, and other characters
+/// that would need defensive quoting if passed as `--body "..."`.
+fn run_pr_edit_body(slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let gh_path = cli_resolver::resolve("gh")?;
+    let mut cmd = Command::new(&gh_path);
+    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+        "pr",
+        "edit",
+        &number.to_string(),
+        "--repo",
+        slug,
+        "--body-file",
+        "-",
+    ]);
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                cli_resolver::invalidate("gh");
+            }
+            cli_resolver::spawn_error("gh", e)
+        })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(body.as_bytes())
+            .map_err(|e| AppError::Other(format!("failed writing body to gh: {e}")))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {

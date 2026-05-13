@@ -213,6 +213,8 @@ export interface AcornSettings {
    * actually reduces the work acorn does — not just hides the readout.
    */
   statusBar: {
+    showSessionCount: boolean;
+    showSessionStatus: boolean;
     showGithubAccount: boolean;
     showMemory: boolean;
   };
@@ -267,6 +269,20 @@ export interface AcornSettings {
     background: BackgroundState;
     fontSlots: [string, string | null, string | null];
   };
+  /**
+   * Opt-in toggles for unfinished features. Anything under here is
+   * unstable on purpose — the contract is "we keep the toggle, the
+   * implementation can churn".
+   */
+  experiments: {
+    /**
+     * Pins the most recent user-prompt line from the claude TUI to the
+     * top of the terminal so the user keeps it in view while reading
+     * the assistant's reply. Detection is buffer-driven, so Cmd+K
+     * naturally clears the banner along with the rest of the scrollback.
+     */
+    stickyPrompt: boolean;
+  };
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
@@ -303,6 +319,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
   },
   statusBar: {
+    showSessionCount: true,
+    showSessionStatus: true,
     showGithubAccount: true,
     showMemory: true,
   },
@@ -336,6 +354,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       applyToTerminal: false,
     },
     fontSlots: ["JetBrains Mono", "Fira Code", "Menlo"],
+  },
+  experiments: {
+    stickyPrompt: false,
   },
 };
 
@@ -663,6 +684,14 @@ function loadSettings(): AcornSettings {
             : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
       },
       appearance,
+      experiments: {
+        ...DEFAULT_SETTINGS.experiments,
+        ...(parsed.experiments ?? {}),
+        stickyPrompt:
+          typeof parsed.experiments?.stickyPrompt === "boolean"
+            ? parsed.experiments.stickyPrompt
+            : DEFAULT_SETTINGS.experiments.stickyPrompt,
+      },
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -680,7 +709,17 @@ function persist(value: AcornSettings): void {
 interface SettingsState {
   settings: AcornSettings;
   open: boolean;
+  /// Tab the modal should land on the next time it opens. Consumed once
+  /// by SettingsModal on mount/open, then reset to null. Lets the
+  /// StatusBar daemon button deep-link to the Background sessions tab
+  /// without exposing the modal's internal Tab union outside the store.
+  pendingTab: string | null;
   setOpen: (v: boolean) => void;
+  /// Open settings AND land on a specific tab. The tab id is the same
+  /// string the modal uses internally; unknown ids fall back to the
+  /// default tab.
+  openTab: (tab: string) => void;
+  consumePendingTab: () => string | null;
   patchTerminal: (patch: Partial<AcornSettings["terminal"]>) => void;
   patchAgents: (
     patch: Partial<{
@@ -715,13 +754,23 @@ interface SettingsState {
       fontSlots?: AcornSettings["appearance"]["fontSlots"];
     },
   ) => void;
+  patchExperiments: (patch: Partial<AcornSettings["experiments"]>) => void;
   reset: () => void;
 }
 
-export const useSettings = create<SettingsState>((set) => ({
+export const useSettings = create<SettingsState>((set, get) => ({
   settings: loadSettings(),
   open: false,
+  pendingTab: null,
   setOpen: (v) => set({ open: v }),
+  openTab: (tab) => set({ open: true, pendingTab: tab }),
+  consumePendingTab: () => {
+    const t = get().pendingTab;
+    if (t !== null) {
+      set({ pendingTab: null });
+    }
+    return t;
+  },
   patchTerminal: (patch) =>
     set((s) => {
       const next: AcornSettings = {
@@ -845,6 +894,15 @@ export const useSettings = create<SettingsState>((set) => ({
           ...s.settings.terminal,
           fontFamily: fontStackFromSlots(fontSlots, "monospace"),
         },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchExperiments: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        experiments: { ...s.settings.experiments, ...patch },
       };
       persist(next);
       return { settings: next };

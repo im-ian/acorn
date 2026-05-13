@@ -1,8 +1,9 @@
 import { useMemo } from "react";
-import { Command } from "cmdk";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Command, useCommandState } from "cmdk";
 import {
   Bot,
+  FolderPlus,
+  GitBranch,
   GitCommit,
   GitPullRequest,
   ListChecks,
@@ -12,12 +13,12 @@ import {
   Sparkles,
   Terminal,
   Trash2,
+  Trees,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useToasts } from "../lib/toasts";
-import type { Session } from "../lib/types";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -35,42 +36,29 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     onOpenChange(false);
   }
 
-  async function handleNewSession() {
-    try {
-      const repoPath = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Select a git repository",
-      });
-      if (!repoPath || typeof repoPath !== "string") {
-        close();
-        return;
-      }
-      const name = deriveSessionName(repoPath, sessionItems);
-      await useAppStore.getState().createSession(name, repoPath);
-    } finally {
-      close();
-    }
+  // Session-creation actions delegate to Sidebar via window events so the
+  // palette matches the hotkey path: when a project is active, Sidebar reuses
+  // its repoPath and skips the directory picker. Duplicating the dialog/create
+  // logic here previously made these items ignore activeProject and always
+  // prompt for a directory, which felt like a project-import flow.
+  function handleNewSession() {
+    window.dispatchEvent(new CustomEvent("acorn:new-session"));
+    close();
   }
 
-  async function handleNewControlSession() {
-    try {
-      const repoPath = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Select a directory (control session)",
-      });
-      if (!repoPath || typeof repoPath !== "string") {
-        close();
-        return;
-      }
-      const name = deriveSessionName(repoPath, sessionItems, "control");
-      await useAppStore
-        .getState()
-        .createSession(name, repoPath, false, "control");
-    } finally {
-      close();
-    }
+  function handleNewIsolatedSession() {
+    window.dispatchEvent(new CustomEvent("acorn:new-isolated-session"));
+    close();
+  }
+
+  function handleNewControlSession() {
+    window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
+    close();
+  }
+
+  function handleAddProject() {
+    window.dispatchEvent(new CustomEvent("acorn:add-project"));
+    close();
   }
 
   async function handleRefresh() {
@@ -110,6 +98,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     } finally {
       close();
     }
+  }
+
+  function handleShakeTree() {
+    window.dispatchEvent(new CustomEvent("acorn:shake-tree"));
+    close();
   }
 
   async function handleRestartIpc() {
@@ -174,6 +167,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Command.Item value="new-session" onSelect={handleNewSession}>
             <Plus size={14} className="text-accent" />
             <span>New session</span>
+            <span className="ml-auto truncate text-xs text-fg-muted/80">
+              ⌘T
+            </span>
+          </Command.Item>
+          <Command.Item
+            value="new-isolated-session"
+            onSelect={handleNewIsolatedSession}
+            keywords={["worktree", "isolated", "branch"]}
+          >
+            <GitBranch size={14} className="text-accent" />
+            <span>New isolated session</span>
+            <span className="ml-auto truncate text-xs text-fg-muted/80">
+              ⌥⌘T
+            </span>
           </Command.Item>
           <Command.Item
             value="new-control-session"
@@ -182,6 +189,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             <Bot size={14} className="text-accent" />
             <span>New control session</span>
+            <span className="ml-auto truncate text-xs text-fg-muted/80">
+              ⌥⇧⌘T
+            </span>
+          </Command.Item>
+          <Command.Item
+            value="add-project"
+            onSelect={handleAddProject}
+            keywords={["project", "import", "repository", "repo", "folder"]}
+          >
+            <FolderPlus size={14} className="text-accent" />
+            <span>Add project</span>
+            <span className="ml-auto truncate text-xs text-fg-muted/80">
+              ⇧⌘N
+            </span>
           </Command.Item>
           <Command.Item value="refresh-sessions" onSelect={handleRefresh}>
             <RefreshCw size={14} className="text-fg-muted" />
@@ -273,6 +294,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           </Command.Item>
         </Command.Group>
 
+        <ShakeTreeItem onSelect={handleShakeTree} />
+
         {sessionItems.length > 0 ? (
           <Command.Group heading="Danger zone">
             {sessionItems.map((session) => (
@@ -294,23 +317,38 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     </Command.Dialog>
   );
 }
+// Hidden palette entry. Only renders when the user has typed at least 2
+// characters and the query matches one of the easter-egg trigger words.
+const SHAKE_TRIGGERS = [
+  "shake",
+  "tree",
+  "shake tree",
+  "나무",
+  "흔들",
+  "나무 흔들기",
+  "acorn",
+  "rain",
+  "easter",
+  "도토리",
+];
 
-function deriveSessionName(
-  repoPath: string,
-  existing: Session[],
-  kind: "regular" | "control" = "regular",
-): string {
-  const folder =
-    repoPath.split(/[\\/]/).filter(Boolean).pop() ??
-    `session-${existing.length + 1}`;
-  // Mirror Sidebar.tsx's "control-" prefix so the kind is obvious from the
-  // name alone, even when the row's accessory icon is not in view.
-  const base = kind === "control" ? `control-${folder}` : folder;
-  let candidate = base;
-  let n = 2;
-  const taken = new Set(existing.map((s) => s.name));
-  while (taken.has(candidate)) {
-    candidate = `${base}-${n++}`;
-  }
-  return candidate;
+function ShakeTreeItem({ onSelect }: { onSelect: () => void }) {
+  const search = useCommandState(
+    (state: { search: string }) => state.search,
+  ) as string | undefined;
+  const q = (search ?? "").toLowerCase().trim();
+  const visible =
+    q.length >= 2 &&
+    SHAKE_TRIGGERS.some((t) => t.startsWith(q) || q.includes(t));
+  if (!visible) return null;
+  return (
+    <Command.Item
+      value="shake-tree-acorn-rain"
+      onSelect={onSelect}
+      keywords={SHAKE_TRIGGERS}
+    >
+      <Trees size={14} className="text-accent" />
+      <span>Shake the tree</span>
+    </Command.Item>
+  );
 }

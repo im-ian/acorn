@@ -29,6 +29,7 @@ import {
   type ReleaseNotes,
 } from "../lib/releases";
 import { useUpdater } from "../lib/updater-store";
+import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
@@ -66,6 +67,7 @@ type Tab =
   | "editor"
   | "notifications"
   | "storage"
+  | "experiments"
   | "about";
 
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -77,14 +79,34 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
   { id: "storage", label: "Storage" },
+  { id: "experiments", label: "Experiments" },
   { id: "about", label: "About" },
 ];
+
+const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
 
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
   const reset = useSettings((s) => s.reset);
+  const pendingTab = useSettings((s) => s.pendingTab);
+  const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
+
+  // When the store reports a pending tab (e.g. StatusBar daemon button
+  // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
+  // jump there on the next render and clear the flag so subsequent
+  // opens restore the user's manual tab choice. Subscribing to
+  // `pendingTab` (not just `open`) makes the deep-link work even when
+  // the modal is already open — without it the effect would only fire
+  // on the open-flag transition and a repeat click would no-op.
+  useEffect(() => {
+    if (!open || pendingTab === null) return;
+    const pending = consumePendingTab();
+    if (pending && TAB_IDS.has(pending)) {
+      setTab(pending as Tab);
+    }
+  }, [open, pendingTab, consumePendingTab]);
 
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step.
@@ -152,6 +174,8 @@ export function SettingsModal() {
             <NotificationSettings />
           ) : tab === "storage" ? (
             <StorageSettings />
+          ) : tab === "experiments" ? (
+            <ExperimentsSettings />
           ) : (
             <AboutSettings />
           )}
@@ -268,41 +292,73 @@ function SessionSettings() {
   const patchSessions = useSettings((s) => s.patchSessions);
 
   return (
-    <section className="space-y-4">
-      <Field
-        label="Confirm before removing a session"
-        hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+    <section className="space-y-6">
+      <div className="space-y-4">
+        <Field
+          label="Confirm before removing a session"
+          hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.confirmRemove}
+              onChange={(e) =>
+                patchSessions({ confirmRemove: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Show confirmation dialog
+          </label>
+        </Field>
+        <Field
+          label="Close tab when the process exits"
+          hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.closeOnExit}
+              onChange={(e) =>
+                patchSessions({ closeOnExit: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Auto-close on exit
+          </label>
+        </Field>
+        <ControlSessionInstallSection />
+      </div>
+      <SettingsGroup
+        title="Background sessions"
+        description="The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
       >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.confirmRemove}
-            onChange={(e) =>
-              patchSessions({ confirmRemove: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Show confirmation dialog
-        </label>
-      </Field>
-      <Field
-        label="Close tab when the process exits"
-        hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.closeOnExit}
-            onChange={(e) =>
-              patchSessions({ closeOnExit: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Auto-close on exit
-        </label>
-      </Field>
-      <ControlSessionInstallSection />
+        <BackgroundSessionsSettings />
+      </SettingsGroup>
     </section>
+  );
+}
+
+function SettingsGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-3 border-t border-border pt-5">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+          {title}
+        </h3>
+        {description ? (
+          <p className="mt-0.5 text-[11px] text-fg-muted/80">{description}</p>
+        ) : null}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -1026,6 +1082,18 @@ function StatusBarSection({
     >
       <div className="flex flex-col gap-1">
         <CheckboxRow
+          label="Session count"
+          description="Total number of sessions across the active project (`sessions: N`)."
+          checked={statusBar.showSessionCount}
+          onChange={(v) => patch({ showSessionCount: v })}
+        />
+        <CheckboxRow
+          label="Active session status"
+          description="Lifecycle state of the active session (Idle / Running / Needs input / Failed / Completed)."
+          checked={statusBar.showSessionStatus}
+          onChange={(v) => patch({ showSessionStatus: v })}
+        />
+        <CheckboxRow
           label="GitHub account"
           description="The `gh` account used to list pull requests for the active repo."
           checked={statusBar.showGithubAccount}
@@ -1461,6 +1529,27 @@ type WhatsNewSource =
        */
       isFallback: boolean;
     };
+
+function ExperimentsSettings() {
+  const experiments = useSettings((s) => s.settings.experiments);
+  const patchExperiments = useSettings((s) => s.patchExperiments);
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
+        <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
+        Unfinished features. Behaviour may change between releases; the toggles
+        themselves are stable.
+      </div>
+      <CheckboxRow
+        checked={experiments.stickyPrompt}
+        onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
+        label="Pin last user prompt above terminal"
+        description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
+      />
+    </section>
+  );
+}
 
 function AboutSettings() {
   const currentVersion = useUpdater((s) => s.currentVersion);

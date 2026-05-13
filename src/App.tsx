@@ -15,6 +15,7 @@ import { LayoutRenderer } from "./components/LayoutRenderer";
 import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
+import { AcornRain } from "./components/AcornRain";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -30,12 +31,14 @@ import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
+import { findFocusedSessionId } from "./lib/focus";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
+import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
 
 const FOCUSABLE_SELECTOR =
@@ -121,6 +124,56 @@ function App() {
     void useAppStore.getState().loadInitialStatus().then(() => refreshAll());
   }, [refreshAll]);
 
+  // Keep `focusedPaneId` synced with the terminal whose helper textarea
+  // currently owns DOM focus. The pane body's mousedown listener handles
+  // the click-into-terminal case; this `focusin` syncer covers
+  // keyboard-driven focus moves (Tab cycling, programmatic .focus(),
+  // workspace switches) so every focus-dependent hotkey — Cmd+T, Cmd+W,
+  // Cmd+Shift+D, Cmd+]/[ — targets the pane the user is actually
+  // working in.
+  useEffect(() => {
+    const handler = () => {
+      const sid = findFocusedSessionId();
+      if (!sid) return;
+      const state = useAppStore.getState();
+      if (!state.activeProject) return;
+      const ws = state.workspaces[state.activeProject];
+      if (!ws) return;
+      for (const [pid, pane] of Object.entries(ws.panes)) {
+        if (pane.sessionIds.includes(sid)) {
+          if (ws.focusedPaneId !== pid) state.setFocusedPane(pid);
+          return;
+        }
+      }
+    };
+    document.addEventListener("focusin", handler);
+    return () => document.removeEventListener("focusin", handler);
+  }, []);
+
+  // Sync the daemon killswitch from localStorage into the backend on
+  // boot. The backend defaults to ENABLED (Q16), and the frontend
+  // localStorage entry is the canonical "user's last choice". On a
+  // fresh install neither side has a value yet — both default to
+  // enabled and stay aligned. On a returning install the user may
+  // have disabled the daemon before quitting; this push keeps the
+  // backend honest so the first daemon-routed call short-circuits
+  // correctly.
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem("acorn:daemon-enabled");
+    } catch {
+      // localStorage blocked — fall back to the backend default.
+    }
+    if (raw === null) return;
+    const enabled = raw === "true";
+    void import("./lib/api").then(({ api }) => {
+      void api.daemonSetEnabled(enabled).catch((err) => {
+        console.warn("[App] daemon killswitch sync failed", err);
+      });
+    });
+  }, []);
+
   // Auto-update: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level
   // `<UpdateBanner />`. Manual recheck stays available in Settings.
@@ -188,11 +241,20 @@ function App() {
 
   // The Tauri app menu fires `acorn:open-settings` when the user picks
   // "Settings..." from the macOS app menu (or hits its Cmd+, accelerator).
+  // The same event name is also dispatched as a DOM CustomEvent from
+  // inside the app (StatusBar daemon button uses this) — we listen on
+  // both transports because Tauri events do not flow through `window`
+  // and `window.dispatchEvent` does not reach Tauri listeners.
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
-    listen<unknown>("acorn:open-settings", () => {
-      useSettings.getState().setOpen(true);
+    listen<unknown>("acorn:open-settings", (event) => {
+      const tab = extractTabFromEvent(event.payload);
+      if (tab) {
+        useSettings.getState().openTab(tab);
+      } else {
+        useSettings.getState().setOpen(true);
+      }
     })
       .then((fn) => {
         if (cancelled) {
@@ -204,9 +266,23 @@ function App() {
       .catch((err) => {
         console.error("[App] failed to attach settings listener", err);
       });
+
+    // DOM bridge — components inside the React tree dispatch this to
+    // request a specific tab without going through the Tauri event bus.
+    const domHandler = (e: Event) => {
+      const tab = extractTabFromEvent((e as CustomEvent).detail);
+      if (tab) {
+        useSettings.getState().openTab(tab);
+      } else {
+        useSettings.getState().setOpen(true);
+      }
+    };
+    window.addEventListener("acorn:open-settings", domHandler);
+
     return () => {
       cancelled = true;
       unlisten?.();
+      window.removeEventListener("acorn:open-settings", domHandler);
     };
   }, []);
 
@@ -348,22 +424,12 @@ function App() {
       },
       [Hotkeys.clearTerminal]: (e: KeyboardEvent) => {
         // Prefer the terminal whose helper textarea currently owns DOM
-        // focus over `state.activeSessionId`. The store's `focusedPaneId`
-        // only updates on a mouse-down inside a pane, but typing into an
-        // xterm (or pressing a hotkey while the helper textarea has
-        // focus) does not — so Cmd+K would otherwise clear whichever
-        // pane the user last clicked, not the terminal they are actually
-        // working in. Walking up from `document.activeElement` to the
-        // nearest `[data-acorn-terminal-slot]` resolves the terminal the
-        // user is really looking at.
-        let sessionId: string | null = null;
-        const focused = document.activeElement as HTMLElement | null;
-        const slot = focused?.closest<HTMLElement>(
-          "[data-acorn-terminal-slot]",
-        );
-        if (slot?.dataset.acornTerminalSlot) {
-          sessionId = slot.dataset.acornTerminalSlot;
-        }
+        // focus over `state.activeSessionId`. The app-level `focusin`
+        // listener keeps `focusedPaneId` synced for clicks, but a hotkey
+        // pressed *while* an xterm has focus has no intervening event
+        // that would have re-synced — so resolve the real target via
+        // `document.activeElement` walk.
+        let sessionId = findFocusedSessionId();
         // Fall back to the store when focus is elsewhere (sidebar,
         // command palette, an empty pane after a split, etc.). Scan all
         // panes so a freshly-split empty pane doesn't silently no-op the
@@ -521,6 +587,7 @@ function App() {
       </div>
       <TerminalHost />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <AcornRain />
       <ControlSessionGuideModal
         open={controlGuideOpen}
         onClose={(dontShowAgain) => {
