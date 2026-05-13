@@ -584,15 +584,24 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
-    // Every session gets a stable resume token + the `claude` shim on
-    // PATH so user-invoked `claude` inside the terminal participates in
-    // Acorn's persistence (`--session-id $ACORN_RESUME_TOKEN`). The
-    // token is minted once per session and persisted; if the user never
-    // runs claude, the token sits unused — no harm.
+    // Every session gets a stable resume token + the agent shims on
+    // PATH so user-invoked `claude` / `codex` inside the terminal
+    // participate in Acorn's persistence. The token is minted once
+    // per session and persisted; if the user never runs claude, the
+    // token sits unused — no harm. `ACORN_AGENT_STATE_DIR` is the
+    // per-session scratch directory the codex shim uses to track the
+    // "first run vs resume" marker.
     let resume_token = ensure_resume_token(&state, &id);
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
         .or_insert_with(|| resume_token.clone());
+    if let Ok(state_dir) = crate::agent_shim::ensure_session_state_dir(id) {
+        effective_env
+            .entry("ACORN_AGENT_STATE_DIR".to_string())
+            .or_insert_with(|| state_dir.display().to_string());
+    } else {
+        tracing::warn!(%id, "agent state dir setup failed; codex shim will skip resume tracking");
+    }
     if let Ok(shim_dir) = crate::agent_shim::ensure_shim_dir() {
         let existing = effective_env
             .get("PATH")
@@ -604,7 +613,7 @@ pub async fn pty_spawn<R: Runtime>(
             crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
         );
     } else {
-        tracing::warn!(%id, "agent shim dir setup failed; claude resume token will not be auto-injected");
+        tracing::warn!(%id, "agent shim dir setup failed; claude/codex resume helpers will not be active");
     }
 
     if let Ok(session) = state.sessions.get(&id) {
