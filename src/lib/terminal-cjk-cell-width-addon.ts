@@ -5,6 +5,7 @@ interface WidthCache {
 
 interface DomRenderer {
   _rowContainer?: HTMLElement;
+  _rowElements?: HTMLElement[];
   _rowFactory?: { defaultSpacing?: number };
   _setDefaultSpacing?: () => void;
   _widthCache?: WidthCache;
@@ -17,6 +18,9 @@ interface DomRenderer {
       cell?: {
         width?: number;
       };
+      canvas?: {
+        width?: number;
+      };
     };
   };
 }
@@ -25,6 +29,7 @@ interface TerminalInternals {
   options: {
     fontFamily?: string;
   };
+  cols?: number;
   rows?: number;
   refresh?: (start: number, end: number) => void;
   _core?: {
@@ -42,7 +47,6 @@ interface TerminalInternals {
 const CJK_FONT_RE = /(?:D2Coding|Sarasa|CJK|Noto Sans Mono CJK)/i;
 const CJK_OR_WIDE_RE =
   /[\u1100-\u11ff\u2e80-\u303f\u3130-\u318f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff01-\uff60\uffe0-\uffe6]/;
-const CJK_WIDTH_SAMPLE = "가";
 
 export function shouldPatchTerminalCellMeasurements(
   fontFamily: string | undefined,
@@ -64,6 +68,16 @@ export function calculateDefaultSpacingFromSample(
   }
   const expectedSampleWidth = sampleCells * cellWidth;
   return expectedSampleWidth - measuredSampleWidth;
+}
+
+export function calculateCellWidthFromSample(
+  measuredSampleWidth: number,
+  sampleCells: number,
+): number | null {
+  if (measuredSampleWidth <= 0 || sampleCells <= 0) {
+    return null;
+  }
+  return measuredSampleWidth / sampleCells;
 }
 
 export function clampMeasuredWidth(
@@ -89,20 +103,8 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
   }
 
   if (!renderer.__acornCjkCellPatch) {
-    const originalWidthGet = widthCache.get.bind(widthCache);
     renderer.__acornCjkCellPatch = {
       originalSetDefaultSpacing: renderer._setDefaultSpacing?.bind(renderer),
-      originalWidthGet,
-    };
-    widthCache.get = (chars, bold, italic) => {
-      const measuredWidth = originalWidthGet(chars, bold, italic);
-      if (!shouldClampMeasuredWidth(chars)) return measuredWidth;
-
-      return clampMeasuredWidth(
-        measuredWidth,
-        getStringCellWidth(term, chars),
-        getCellWidth(renderer),
-      );
     };
     renderer._setDefaultSpacing = () =>
       recalibrateDefaultSpacing(term, renderer, widthCache);
@@ -140,7 +142,7 @@ function getCellWidth(renderer: DomRenderer): number {
 
 function getStringCellWidth(term: TerminalInternals, text: string): number {
   const width = term._core?._unicodeService?.getStringCellWidth?.(text);
-  if (typeof width === "number" && width >= 0) return width;
+  if (typeof width === "number" && width > 0) return width;
 
   let fallback = 0;
   for (const char of text) {
@@ -149,27 +151,36 @@ function getStringCellWidth(term: TerminalInternals, text: string): number {
   return fallback;
 }
 
+function applyCellWidth(
+  term: TerminalInternals,
+  renderer: DomRenderer,
+  cellWidth: number,
+): void {
+  const css = renderer.dimensions?.css;
+  if (!css?.cell || cellWidth <= 0) return;
+
+  css.cell.width = cellWidth;
+  if (css.canvas && typeof term.cols === "number" && term.cols > 0) {
+    css.canvas.width = cellWidth * term.cols;
+    for (const rowElement of renderer._rowElements ?? []) {
+      rowElement.style.width = `${css.canvas.width}px`;
+    }
+  }
+}
+
 function recalibrateDefaultSpacing(
   term: TerminalInternals,
   renderer: DomRenderer,
   widthCache: WidthCache,
 ): void {
-  const cellWidth = getCellWidth(renderer);
-  const measuredSampleWidth =
-    renderer.__acornCjkCellPatch?.originalWidthGet?.(
-      CJK_WIDTH_SAMPLE,
-      false,
-      false,
-    ) ?? widthCache.get(CJK_WIDTH_SAMPLE, false, false);
-  const cjkSpacing = calculateDefaultSpacingFromSample(
-    measuredSampleWidth,
-    getStringCellWidth(term, CJK_WIDTH_SAMPLE),
-    cellWidth,
-  );
-  const measuredAsciiWidth =
-    renderer.__acornCjkCellPatch?.originalWidthGet?.("W", false, false) ??
-    widthCache.get("W", false, false);
-  const spacing = cjkSpacing ?? cellWidth - measuredAsciiWidth;
+  const measuredSampleWidth = widthCache.get("가", false, false);
+  const sampleCells = getStringCellWidth(term, "가");
+  const cellWidth =
+    calculateCellWidthFromSample(measuredSampleWidth, sampleCells) ??
+    getCellWidth(renderer);
+  applyCellWidth(term, renderer, cellWidth);
+
+  const spacing = cellWidth - widthCache.get("W", false, false);
   if (renderer._rowContainer) {
     renderer._rowContainer.style.letterSpacing = `${spacing}px`;
   }

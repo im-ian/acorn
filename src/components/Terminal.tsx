@@ -159,9 +159,13 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
-    try {
+    const fitWithCellMeasurements = () => {
+      patchTerminalCellMeasurements(term);
       fitAddon.fit();
       patchTerminalCellMeasurements(term);
+    };
+    try {
+      fitWithCellMeasurements();
     } catch {
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
@@ -196,8 +200,7 @@ export function Terminal({
       }
       if (changed) {
         try {
-          fitAddon.fit();
-          patchTerminalCellMeasurements(term);
+          fitWithCellMeasurements();
         } catch {
           // ignore — ResizeObserver will retry
         }
@@ -704,8 +707,7 @@ export function Terminal({
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null;
         try {
-          fitAddon.fit();
-          patchTerminalCellMeasurements(term);
+          fitWithCellMeasurements();
         } catch (err) {
           console.error("[Terminal] fit failed", err);
         }
