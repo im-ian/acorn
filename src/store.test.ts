@@ -93,6 +93,7 @@ function resetStore(): void {
       rightTab: "commits",
       prAccountByRepo: {},
       pendingTerminalInput: {},
+      multiInputEnabled: false,
       loading: false,
       error: null,
       pendingRemoveId: null,
@@ -128,6 +129,16 @@ beforeEach(() => {
   mockApi.removeSession.mockResolvedValue(undefined);
   mockApi.removeProject.mockResolvedValue(undefined);
   resetStore();
+});
+
+describe("multi-input", () => {
+  it("starts disabled and toggles in memory", () => {
+    expect(useAppStore.getState().multiInputEnabled).toBe(false);
+    expect(useAppStore.getState().toggleMultiInput()).toBe(true);
+    expect(useAppStore.getState().multiInputEnabled).toBe(true);
+    expect(useAppStore.getState().toggleMultiInput()).toBe(false);
+    expect(useAppStore.getState().multiInputEnabled).toBe(false);
+  });
 });
 
 describe("refreshAll", () => {
@@ -203,6 +214,21 @@ describe("splitFocusedPane", () => {
     expect(Object.keys(s.panes)).toHaveLength(2);
     expect(s.panes[s.focusedPaneId].sessionIds).toEqual([]);
     expect(s.activeSessionId).toBeNull();
+  });
+
+  it("focuses the adjacent pane by visual direction", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    const rootPaneId = useAppStore.getState().focusedPaneId;
+
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const rightPaneId = useAppStore.getState().focusedPaneId;
+    expect(rightPaneId).not.toBe(rootPaneId);
+
+    useAppStore.getState().focusAdjacentPane("left");
+    expect(useAppStore.getState().focusedPaneId).toBe(rootPaneId);
+
+    useAppStore.getState().focusAdjacentPane("right");
+    expect(useAppStore.getState().focusedPaneId).toBe(rightPaneId);
   });
 });
 

@@ -90,6 +90,10 @@ pub fn run() {
                 .paste()
                 .select_all()
                 .build()?;
+            let multi_input_item = MenuItemBuilder::new("Toggle Multi Input")
+                .id("toggle-multi-input")
+                .accelerator("CmdOrCtrl+Alt+I")
+                .build(app)?;
             // Dev-only Reload (Cmd+R) so frontend edits that don't HMR cleanly
             // can be re-bootstrapped without restarting the whole Tauri host.
             // The release menu omits it on purpose — Acorn ships as a single
@@ -102,12 +106,18 @@ pub fn run() {
                 .build(app)?;
             #[cfg(debug_assertions)]
             let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&multi_input_item)
+                .separator()
                 .item(&reload_item)
                 .separator()
                 .fullscreen()
                 .build()?;
             #[cfg(not(debug_assertions))]
-            let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&multi_input_item)
+                .separator()
+                .fullscreen()
+                .build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
                 .maximize()
@@ -125,6 +135,11 @@ pub fn run() {
                 if event.id() == "settings" {
                     if let Err(err) = handle.emit("acorn:open-settings", ()) {
                         tracing::warn!("failed to emit open-settings: {err}");
+                    }
+                }
+                if event.id() == "toggle-multi-input" {
+                    if let Err(err) = handle.emit("acorn:toggle-multi-input", ()) {
+                        tracing::warn!("failed to emit toggle-multi-input: {err}");
                     }
                 }
                 #[cfg(debug_assertions)]
