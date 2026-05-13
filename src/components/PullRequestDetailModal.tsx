@@ -19,9 +19,11 @@ import {
   XCircle,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Panel, PanelGroup } from "react-resizable-panels";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import { ResizeHandle } from "./ResizeHandle";
 import type {
   DiffPayload,
   PullRequestCheck,
@@ -1126,30 +1128,39 @@ function CommitsPane({
   const selected = commits.find((c) => c.oid === selectedOid) ?? null;
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-r border-border text-xs">
-        <ul className="flex flex-col">
-          {commits.map((c) => (
-            <CommitListItem
-              key={c.oid}
-              commit={c}
-              selected={c.oid === selectedOid}
-              onSelect={() => setSelectedOid(c.oid)}
+    <PanelGroup
+      direction="horizontal"
+      autoSaveId="acorn:pr-commits-split"
+      className="h-full min-h-0"
+    >
+      <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
+        <aside className="flex h-full flex-col overflow-y-auto border-r border-border text-xs">
+          <ul className="flex flex-col">
+            {commits.map((c) => (
+              <CommitListItem
+                key={c.oid}
+                commit={c}
+                selected={c.oid === selectedOid}
+                onSelect={() => setSelectedOid(c.oid)}
+              />
+            ))}
+          </ul>
+        </aside>
+      </Panel>
+      <ResizeHandle />
+      <Panel id="detail" order={2} defaultSize={72} minSize={40}>
+        <div className="flex h-full min-w-0 flex-col">
+          {selected ? (
+            <CommitDetailView
+              commit={selected}
+              prUrl={prUrl}
+              repoPath={repoPath}
+              cwd={cwd}
             />
-          ))}
-        </ul>
-      </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        {selected ? (
-          <CommitDetailView
-            commit={selected}
-            prUrl={prUrl}
-            repoPath={repoPath}
-            cwd={cwd}
-          />
-        ) : null}
-      </div>
-    </div>
+          ) : null}
+        </div>
+      </Panel>
+    </PanelGroup>
   );
 }
 
@@ -1237,81 +1248,102 @@ function CommitDetailView({
     };
   }, [repoPath, commit.oid]);
 
+  const diffSection = (
+    <div className="h-full min-h-0 overflow-hidden">
+      {error ? (
+        <div className="flex h-full items-center justify-center px-4 text-center text-xs text-danger">
+          {error}
+        </div>
+      ) : loading || !diff ? (
+        <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+          Loading diff…
+        </div>
+      ) : diff.files.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+          No file changes in this commit.
+        </div>
+      ) : (
+        <DiffSplitView payload={diff} cwd={cwd} />
+      )}
+    </div>
+  );
+
+  const bodySection = (
+    <pre className="acorn-selectable h-full overflow-y-auto whitespace-pre-wrap bg-bg-sidebar/40 px-4 py-2 font-mono text-[11px] text-fg">
+      {commit.message_body}
+    </pre>
+  );
+
   return (
     <>
-      <header className="shrink-0 border-b border-border bg-bg-sidebar/40 px-4 py-2.5">
-        <div className="flex items-start gap-2">
-          <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
-          <div className="min-w-0 flex-1">
-            <div
-              className="truncate text-[13px] font-semibold tracking-tight text-fg"
-              title={commit.message_headline}
-            >
-              {commit.message_headline || "(no message)"}
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
-              {primaryAuthor ? (
-                <AuthorTag
-                  login={primaryAuthor.login ?? primaryAuthor.name ?? "unknown"}
-                  size={16}
-                  nameClass="text-[11px] text-fg-muted"
-                />
-              ) : null}
-              {commit.authors.length > 1 ? (
-                <span className="opacity-70">
-                  +{commit.authors.length - 1}
-                </span>
-              ) : null}
-              <span className="opacity-50">·</span>
-              <span className="font-mono opacity-70">
-                {formatTimestamp(commit.committed_date)}
-              </span>
-            </div>
+      <header className="flex shrink-0 items-start gap-2 border-b border-border bg-bg-sidebar/40 px-4 py-2.5">
+        <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
+        <div className="min-w-0 flex-1">
+          <div
+            className="truncate text-[13px] font-semibold tracking-tight text-fg"
+            title={commit.message_headline}
+          >
+            {commit.message_headline || "(no message)"}
           </div>
-          <Tooltip label="Copy SHA" side="bottom">
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
+            {primaryAuthor ? (
+              <AuthorTag
+                login={primaryAuthor.login ?? primaryAuthor.name ?? "unknown"}
+                size={16}
+                nameClass="text-[11px] text-fg-muted"
+              />
+            ) : null}
+            {commit.authors.length > 1 ? (
+              <span className="opacity-70">
+                +{commit.authors.length - 1}
+              </span>
+            ) : null}
+            <span className="opacity-50">·</span>
+            <span className="font-mono opacity-70">
+              {formatTimestamp(commit.committed_date)}
+            </span>
+          </div>
+        </div>
+        <Tooltip label="Copy SHA" side="bottom">
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(commit.oid);
+            }}
+            className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            {shortOid}
+          </button>
+        </Tooltip>
+        {commitUrl ? (
+          <Tooltip label="Open commit on GitHub" side="bottom">
             <button
               type="button"
-              onClick={() => {
-                void navigator.clipboard.writeText(commit.oid);
-              }}
-              className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              onClick={() => void openUrl(commitUrl)}
+              className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
             >
-              {shortOid}
+              <ExternalLink size={12} />
             </button>
           </Tooltip>
-          {commitUrl ? (
-            <Tooltip label="Open commit on GitHub" side="bottom">
-              <button
-                type="button"
-                onClick={() => void openUrl(commitUrl)}
-                className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-              >
-                <ExternalLink size={12} />
-              </button>
-            </Tooltip>
-          ) : null}
-        </div>
-        {hasBody ? (
-          <pre className="acorn-selectable mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-bg/50 px-2 py-1.5 font-mono text-[11px] text-fg">
-            {commit.message_body}
-          </pre>
         ) : null}
       </header>
       <div className="min-h-0 flex-1 overflow-hidden">
-        {error ? (
-          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-danger">
-            {error}
-          </div>
-        ) : loading || !diff ? (
-          <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-            Loading diff…
-          </div>
-        ) : diff.files.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-            No file changes in this commit.
-          </div>
+        {hasBody ? (
+          <PanelGroup
+            direction="vertical"
+            autoSaveId="acorn:pr-commit-body-diff"
+            className="h-full"
+          >
+            <Panel id="body" order={1} defaultSize={20} minSize={8} maxSize={70}>
+              {bodySection}
+            </Panel>
+            <ResizeHandle direction="vertical" />
+            <Panel id="diff" order={2} defaultSize={80} minSize={20}>
+              {diffSection}
+            </Panel>
+          </PanelGroup>
         ) : (
-          <DiffSplitView payload={diff} cwd={cwd} />
+          diffSection
         )}
       </div>
     </>
