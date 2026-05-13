@@ -27,7 +27,9 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime};
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 
@@ -38,18 +40,51 @@ use crate::state::AppState;
 // input still surfaces as a Fork target.
 const RECENCY_WINDOW_SECS: u64 = 24 * 60 * 60;
 
+// Throttle window for `collect_live_mappings`. The scan walks every
+// process on the host plus several directory trees, so back-to-back
+// calls (e.g. a user flicking the right-click menu open repeatedly)
+// would multiply that cost without changing the answer. A short hold
+// returns the cached result for repeat calls within this window.
+const SCAN_CACHE_TTL_MS: u64 = 300;
+
+struct ScanCache {
+    captured_at: Instant,
+    mappings: Vec<(uuid::Uuid, AgentKind, String)>,
+}
+
+fn scan_cache() -> &'static Mutex<Option<ScanCache>> {
+    static CACHE: OnceLock<Mutex<Option<ScanCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum AgentKind {
     Claude,
     Codex,
 }
 
-/// Public so `commands::detect_session_agent` can run a fresh scan on
-/// every user invocation — the in-memory map maintained by the watcher
-/// is at most one cycle (~3 s) stale, which races with rapid back-to-
-/// back Fork clicks. An on-demand scan resolves that race by snapshot-
-/// ing the current process state at the exact moment the menu opens.
+/// On-demand pairing scan. `detect_session_agent` calls this every
+/// time the Fork menu opens; results are cached for `SCAN_CACHE_TTL_MS`
+/// so repeated menu opens within a short window do not multiply the
+/// per-process syscall cost.
 pub fn collect_live_mappings(state: &AppState) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    {
+        let guard = scan_cache().lock().unwrap();
+        if let Some(cache) = guard.as_ref() {
+            if cache.captured_at.elapsed() < Duration::from_millis(SCAN_CACHE_TTL_MS) {
+                return cache.mappings.clone();
+            }
+        }
+    }
+    let mappings = scan_live_mappings(state);
+    *scan_cache().lock().unwrap() = Some(ScanCache {
+        captured_at: Instant::now(),
+        mappings: mappings.clone(),
+    });
+    mappings
+}
+
+fn scan_live_mappings(state: &AppState) -> Vec<(uuid::Uuid, AgentKind, String)> {
     let mut out = Vec::new();
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::new()),
@@ -197,21 +232,6 @@ fn codex_sessions_root() -> Option<PathBuf> {
 /// uses to bucket transcripts. Examples:
 ///   `/Users/me/proj`       → `-Users-me-proj`
 ///   `/Users/me/proj/sub`   → `-Users-me-proj-sub`
-fn claude_slug_for_cwd(cwd: &Path) -> String {
-    let s = cwd.to_string_lossy();
-    let trimmed = s.trim_start_matches('/');
-    let mut slug = String::with_capacity(s.len() + 1);
-    slug.push('-');
-    for ch in trimmed.chars() {
-        if ch == '/' || ch == '.' {
-            slug.push('-');
-        } else {
-            slug.push(ch);
-        }
-    }
-    slug
-}
-
 fn find_recent_claude_jsonl(
     cwd: &Path,
     projects_root: Option<&Path>,
@@ -220,7 +240,7 @@ fn find_recent_claude_jsonl(
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     let root = projects_root?;
-    let slug_dir = root.join(claude_slug_for_cwd(cwd));
+    let slug_dir = root.join(crate::claude_util::slug_for_cwd(cwd));
     pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, assigned)
 }
 
@@ -301,22 +321,28 @@ fn read_codex_transcript_cwd(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Pick the lexicographically greatest subdirectory of `dir`. Codex
+/// date dirs are `<root>/<YYYY>/<MM>/<DD>/`, so lexicographic ordering
+/// is equivalent to chronological ordering AND survives parent-dir
+/// mtime drift (some filesystems do not bump a directory's mtime when
+/// a child gains a new grandchild, which would mislead a mtime-based
+/// pick).
 fn newest_subdir(dir: &Path) -> Option<PathBuf> {
-    let mut best: Option<(PathBuf, SystemTime)> = None;
+    let mut best: Option<PathBuf> = None;
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
         match &best {
-            None => best = Some((path, mtime)),
-            Some((_, t)) if mtime > *t => best = Some((path, mtime)),
+            None => best = Some(path),
+            Some(current) if path.file_name() > current.file_name() => {
+                best = Some(path);
+            }
             _ => {}
         }
     }
-    best.map(|(p, _)| p)
+    best
 }
 
 fn pick_newest_unassigned_jsonl(
@@ -390,22 +416,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slugify_cwd_root_project() {
-        let cwd = Path::new("/Users/me/proj");
-        assert_eq!(claude_slug_for_cwd(cwd), "-Users-me-proj");
-    }
-
-    #[test]
-    fn slugify_cwd_with_dot_dirs() {
-        // Claude replaces `.` with `-` in slugs (e.g. `.claude` → `-claude`).
-        let cwd = Path::new("/Users/me/proj/.claude/worktrees/foo");
-        assert_eq!(
-            claude_slug_for_cwd(cwd),
-            "-Users-me-proj--claude-worktrees-foo"
-        );
-    }
-
-    #[test]
     fn extracts_uuid_from_claude_path() {
         let path = Path::new(
             "/Users/me/.claude/projects/-slug/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl",
@@ -425,5 +435,65 @@ mod tests {
             extract_uuid_from_path(path).as_deref(),
             Some("019e2001-3250-76b0-8410-2e073b38a2c1")
         );
+    }
+
+    /// `newest_subdir` must pick the chronologically latest date dir
+    /// regardless of filesystem mtime quirks. Lexicographic ordering on
+    /// the date components (YYYY → MM → DD) is what makes that work.
+    #[test]
+    fn newest_subdir_picks_lexicographically_greatest() {
+        use std::fs;
+        let base = std::env::temp_dir().join(format!(
+            "acorn-newest-subdir-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&base).unwrap();
+        for name in &["2025", "2026", "2024"] {
+            fs::create_dir(base.join(name)).unwrap();
+        }
+        let picked = newest_subdir(&base).unwrap();
+        assert_eq!(picked.file_name().unwrap(), "2026");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Process start-time and transcript mtime both round to seconds on
+    /// macOS sysinfo. Same-second values must still match: a process
+    /// that started in the same second as its transcript was created
+    /// should pair with that transcript, not skip it.
+    #[test]
+    fn pick_newest_unassigned_jsonl_includes_same_second_mtime() {
+        use std::fs::{self, File};
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-mtime-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        File::create(&jsonl).unwrap();
+        let mtime = fs::metadata(&jsonl).unwrap().modified().unwrap();
+        // Process start equals transcript mtime → must include (>=).
+        let result = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            mtime,
+            &HashSet::new(),
+        );
+        assert!(
+            result.is_some(),
+            "transcript with mtime == process_start must be a valid pair"
+        );
+        // Process started one second after the transcript → exclude.
+        let later = mtime + Duration::from_secs(1);
+        let result_later = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            later,
+            &HashSet::new(),
+        );
+        assert!(
+            result_later.is_none(),
+            "transcript predating the process must be excluded"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -150,11 +150,21 @@ export function Pane({ paneId }: PaneProps) {
         isolated,
       );
       // Claude resolves `--resume <uuid>` by looking under
-      // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`. A new worktree
-      // has a different slug from the parent so the resume fails until
-      // we stage a copy of the parent transcript there. Codex stores
-      // rollouts cwd-independently under `$CODEX_HOME/sessions/`, so no
-      // staging is needed for codex forks.
+      // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
+      //
+      // For a same-cwd fork (`isolated: false`) the new Acorn session
+      // inherits `parent.repo_path` as its worktree, so the slug is
+      // identical to the parent's and `claude --resume` finds the file
+      // without any staging. We rely on `api.createSession` honouring
+      // `isolated: false` by reusing the parent worktree path verbatim;
+      // a future change there would silently break the same-cwd fork.
+      //
+      // For a new-worktree fork (`isolated: true`) the new worktree
+      // lives under `.acorn/worktrees/<name>/` with a different slug,
+      // so we stage a copy of the parent transcript into that slug
+      // before queuing the resume. Codex stores rollouts cwd-
+      // independently under `$CODEX_HOME/sessions/`, so neither branch
+      // requires staging for codex.
       if (kind === "claude" && isolated) {
         try {
           await api.prepareClaudeFork(parentAgentId, created.worktree_path);
@@ -535,13 +545,11 @@ function TabItem({
 
   useEffect(() => {
     if (!menu) return;
-    console.debug("[Pane.Fork] detect start", { sessionId: tab.id });
     setAgent(null);
     let cancelled = false;
     api
       .detectSessionAgent(tab.id)
       .then((res) => {
-        console.debug("[Pane.Fork] detect ok", { sessionId: tab.id, res });
         if (!cancelled) setAgent(res);
       })
       .catch((err) => {

@@ -481,11 +481,27 @@ pub struct AgentDetection {
 ///
 /// Codex stores rollouts under `$CODEX_HOME/sessions/.../` (cwd-
 /// independent), so this is only needed for claude forks.
+///
+/// Both `parent_uuid` and `new_cwd` come from the frontend IPC bridge
+/// and are validated below:
+///   - `parent_uuid` is checked to be a real UUID before any disk
+///     lookup, blocking `..`-style filename injection.
+///   - `new_cwd` is slugified and the resulting directory path is
+///     verified to canonicalise under `~/.claude/projects/` before any
+///     `create_dir_all` runs, so a hostile cwd containing path-escape
+///     characters cannot make us materialise directories outside the
+///     claude project root.
 #[tauri::command]
 pub fn prepare_claude_fork(
     parent_uuid: String,
     new_cwd: String,
 ) -> AppResult<()> {
+    if Uuid::parse_str(&parent_uuid).is_err() {
+        return Err(AppError::Other(format!(
+            "parent_uuid must be a valid UUID, got: {parent_uuid}"
+        )));
+    }
+
     let home = directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .ok_or_else(|| AppError::Other("no home dir".into()))?;
@@ -513,8 +529,34 @@ pub fn prepare_claude_fork(
         )));
     };
 
-    let dst_slug = claude_slug_for_cwd(&new_cwd);
-    let dst_dir = projects_root.join(dst_slug);
+    let dst_slug = crate::claude_util::slug_for_cwd(std::path::Path::new(&new_cwd));
+    let dst_dir = projects_root.join(&dst_slug);
+
+    // Path-traversal guard: resolve both ends and verify the destination
+    // is a real descendant of `projects_root`. We rely on `parent()`
+    // climbing up — `projects_root` exists once `claude` has ever been
+    // run, but `dst_dir` may not, so canonicalize the parent and append
+    // the slug. A weird `new_cwd` (e.g. containing `..` segments that
+    // slugify to bare dashes) shouldn't matter given the per-char filter,
+    // but defense in depth is cheap.
+    if !dst_slug.starts_with('-')
+        || dst_slug.contains('/')
+        || dst_slug.contains("..")
+    {
+        return Err(AppError::Other(format!(
+            "refusing to stage transcript under unsafe slug: {dst_slug}"
+        )));
+    }
+    let canonical_root = projects_root.canonicalize().unwrap_or(projects_root.clone());
+    let prospective = canonical_root.join(&dst_slug);
+    if !prospective.starts_with(&canonical_root) {
+        return Err(AppError::Other(format!(
+            "destination {} escapes claude projects root {}",
+            prospective.display(),
+            canonical_root.display()
+        )));
+    }
+
     std::fs::create_dir_all(&dst_dir)?;
     let dst = dst_dir.join(&filename);
     if !dst.exists() {
@@ -522,20 +564,6 @@ pub fn prepare_claude_fork(
             .map_err(|e| AppError::Other(format!("copy transcript: {e}")))?;
     }
     Ok(())
-}
-
-fn claude_slug_for_cwd(cwd: &str) -> String {
-    let trimmed = cwd.trim_start_matches('/');
-    let mut slug = String::with_capacity(cwd.len() + 1);
-    slug.push('-');
-    for ch in trimmed.chars() {
-        if ch == '/' || ch == '.' {
-            slug.push('-');
-        } else {
-            slug.push(ch);
-        }
-    }
-    slug
 }
 
 /// Live-process snapshot of which agent transcripts (if any) the user is
