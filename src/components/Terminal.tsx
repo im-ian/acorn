@@ -313,6 +313,35 @@ export function Terminal({
     };
     scheduleThemeRefresh();
 
+    // OSC 7 cwd tracking. The shell rc we inject via ZDOTDIR emits
+    // `\e]7;file://<host><pwd>\e\\` on every prompt. xterm's parser hands
+    // us the inner payload (everything between `\e]7;` and the terminator)
+    // — strip the `file://[host]` prefix, percent-decode, classify via the
+    // backend, and update the live-cwd store entry for this session. Each
+    // emit is one cheap stat through libgit2; no polling, no system scan.
+    // Returning `true` claims the sequence so xterm doesn't echo it.
+    term.parser.registerOscHandler(7, (data) => {
+      const match = /^file:\/\/[^/]*(\/.*)$/.exec(data);
+      if (!match) return false;
+      let path: string;
+      try {
+        path = decodeURIComponent(match[1]);
+      } catch {
+        return false;
+      }
+      void api
+        .isPathLinkedWorktree(path)
+        .then((flag) => {
+          useAppStore.setState((s) => ({
+            liveInWorktree: { ...s.liveInWorktree, [sessionId]: flag },
+          }));
+        })
+        .catch((err: unknown) => {
+          console.debug("[Terminal] osc7 classify failed", err);
+        });
+      return true;
+    });
+
     // Live-apply terminal font setting changes without reinitialising xterm.
     const unsubSettings = useSettings.subscribe((state, prev) => {
       const next = state.settings.terminal;

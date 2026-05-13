@@ -285,6 +285,16 @@ export const api = {
     return invoke<Record<string, boolean>>("pty_in_worktree_all");
   },
   /**
+   * Classify an arbitrary on-disk path as "inside a linked git worktree".
+   * Backs the xterm OSC 7 handler: every shell `cd` emits the new cwd,
+   * the handler hands it here, and the boolean feeds the worktree-icon
+   * condition. Walks up via `Repository::discover` so subdirectories of
+   * a worktree resolve correctly.
+   */
+  isPathLinkedWorktree(path: string): Promise<boolean> {
+    return invoke<boolean>("is_path_linked_worktree", { path });
+  },
+  /**
    * Re-point a session at a different worktree directory. Used after an
    * in-PTY command creates a worktree and exits — adopting it lets the next
    * spawn land inside the new worktree instead of the original cwd.
