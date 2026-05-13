@@ -882,9 +882,10 @@ pub async fn pty_spawn<R: Runtime>(
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
     // Override `ZDOTDIR` with Acorn's staged dir so our `.zshrc` runs; stash
     // the user's original under `ACORN_USER_ZDOTDIR` so the staged rc can
-    // restore it before sourcing their real config. `.zshenv` from $HOME
-    // still runs unconditionally, so user config that has to land before
-    // any rc is untouched.
+    // restore it before sourcing their real config. zsh resolves `.zshenv`
+    // off `$ZDOTDIR` too, so the staged dir also ships a `.zshenv` that
+    // forwards to the user's `$HOME/.zshenv` (rustup, asdf etc. live there
+    // and break without it) before pinning `ZDOTDIR` back to ours.
     if let Ok(dir) = crate::shell_init::ensure_shell_init_dir() {
         let user_zdotdir = effective_env
             .get("ZDOTDIR")
