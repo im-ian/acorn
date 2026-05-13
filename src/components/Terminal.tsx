@@ -10,6 +10,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
+import { patchTerminalCellMeasurements } from "../lib/terminal-cjk-cell-width-addon";
 import {
   useSettings,
   type TerminalLinkActivation,
@@ -160,6 +161,7 @@ export function Terminal({
     term.open(container);
     try {
       fitAddon.fit();
+      patchTerminalCellMeasurements(term);
     } catch {
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
@@ -195,6 +197,7 @@ export function Terminal({
       if (changed) {
         try {
           fitAddon.fit();
+          patchTerminalCellMeasurements(term);
         } catch {
           // ignore — ResizeObserver will retry
         }
@@ -702,6 +705,7 @@ export function Terminal({
         resizeTimer = null;
         try {
           fitAddon.fit();
+          patchTerminalCellMeasurements(term);
         } catch (err) {
           console.error("[Terminal] fit failed", err);
         }
