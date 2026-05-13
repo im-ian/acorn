@@ -1559,7 +1559,7 @@ function PrRow({
   // Avatar rows get a touch more leading + larger text so the avatar
   // doesn't dominate visually. Plain rows stay compact at the prior size.
   const titleSize = showAvatar ? "text-[13px]" : "text-xs";
-  const metaSize = showAvatar ? "text-[12px]" : "text-[10px]";
+  const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
   return (
     <li
       role="button"
@@ -1601,7 +1601,7 @@ function PrRow({
         )}
       >
         <span className="flex min-w-0 shrink-0 items-center gap-1.5">
-          {showAvatar ? <AuthorAvatar login={pr.author} size={18} /> : null}
+          {showAvatar ? <AuthorAvatar login={pr.author} size={14} /> : null}
           <span className="truncate">{pr.author}</span>
         </span>
         <span className="opacity-50">·</span>
