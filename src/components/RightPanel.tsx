@@ -1159,6 +1159,11 @@ function usePrRowActions(
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(menu.pr.head_branch),
                 },
+                {
+                  label: "Copy reference",
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(`#${menu.pr.number}`),
+                },
                 { type: "separator" },
                 {
                   label: "Merge…",
