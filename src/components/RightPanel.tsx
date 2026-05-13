@@ -191,20 +191,20 @@ export function RightPanel() {
         cwd={repoPath ?? undefined}
         onClose={() => setExpanded(null)}
       />
+      <PullRequestSearchModal
+        open={prSearch}
+        detailOpen={prDetail !== null}
+        onClose={() => setPrSearch(null)}
+        onOpenDetail={(number) => {
+          if (!prSearch) return;
+          setPrDetail({ repoPath: prSearch.repoPath, number });
+        }}
+      />
       <PullRequestDetailModal
         open={prDetail}
         cwd={repoPath ?? undefined}
         onClose={() => setPrDetail(null)}
         onMutated={() => setPrListVersion((v) => v + 1)}
-      />
-      <PullRequestSearchModal
-        open={prSearch}
-        onClose={() => setPrSearch(null)}
-        onOpenDetail={(number) => {
-          if (!prSearch) return;
-          setPrDetail({ repoPath: prSearch.repoPath, number });
-          setPrSearch(null);
-        }}
       />
     </aside>
   );
@@ -1040,6 +1040,176 @@ const PR_PAGE_SIZE = 50;
 /** Backend clamps to 1000; mirror that here so the UI stops growing the limit. */
 const PR_PAGE_MAX = 1000;
 
+/**
+ * Shared PR row actions: context menu, copy/open helpers, and the
+ * merge/close dialog overlays. Lets the PRs tab and the search modal
+ * render the same right-click menu without duplicating handlers or state.
+ *
+ * `onMutated` fires after a merge or close so callers can refetch their
+ * own listing.
+ */
+function usePrRowActions(
+  repoPath: string,
+  onOpenDetail: (number: number) => void,
+  onMutated?: () => void,
+) {
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    pr: PullRequestInfo;
+  } | null>(null);
+  const [mergeFor, setMergeFor] = useState<{
+    number: number;
+    detail: PullRequestDetail;
+  } | null>(null);
+  const [closeFor, setCloseFor] = useState<{
+    number: number;
+    detail: PullRequestDetail;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Bumped on every detail fetch / dialog dismiss so stale getPullRequestDetail
+  // responses can't open a dialog after the user moved on.
+  const dialogEpochRef = useRef(0);
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openPrInBrowser(pr: PullRequestInfo) {
+    try {
+      await openUrl(pr.url);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function loadDetailFor(
+    pr: PullRequestInfo,
+  ): Promise<PullRequestDetail | null> {
+    const epoch = ++dialogEpochRef.current;
+    try {
+      const listing = await api.getPullRequestDetail(repoPath, pr.number);
+      if (epoch !== dialogEpochRef.current) return null;
+      if (listing.kind !== "ok") {
+        setError(
+          listing.kind === "not_github"
+            ? "Origin remote is not a GitHub repository."
+            : `No access to ${listing.slug}.`,
+        );
+        return null;
+      }
+      return listing.detail;
+    } catch (e) {
+      if (epoch === dialogEpochRef.current) setError(String(e));
+      return null;
+    }
+  }
+
+  async function openMergeFor(pr: PullRequestInfo) {
+    const detail = await loadDetailFor(pr);
+    if (!detail) return;
+    setMergeFor({ number: pr.number, detail });
+  }
+
+  async function openCloseFor(pr: PullRequestInfo) {
+    const detail = await loadDetailFor(pr);
+    if (!detail) return;
+    setCloseFor({ number: pr.number, detail });
+  }
+
+  function openContextMenu(
+    e: React.MouseEvent<HTMLLIElement>,
+    pr: PullRequestInfo,
+  ) {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, pr });
+  }
+
+  const overlays = (
+    <>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={
+          menu
+            ? ([
+                {
+                  label: "Open detail",
+                  icon: <Maximize2 size={12} />,
+                  onClick: () => onOpenDetail(menu.pr.number),
+                },
+                {
+                  label: "Open in browser",
+                  icon: <ExternalLink size={12} />,
+                  onClick: () => void openPrInBrowser(menu.pr),
+                },
+                {
+                  label: "Copy URL",
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(menu.pr.url),
+                },
+                {
+                  label: `Copy branch (${menu.pr.head_branch})`,
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(menu.pr.head_branch),
+                },
+                { type: "separator" },
+                {
+                  label: "Merge…",
+                  icon: <GitMerge size={12} />,
+                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
+                  onClick: () => void openMergeFor(menu.pr),
+                },
+                {
+                  label: "Close…",
+                  icon: <GitPullRequestClosed size={12} />,
+                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
+                  onClick: () => void openCloseFor(menu.pr),
+                },
+              ] satisfies ContextMenuItem[])
+            : []
+        }
+        onClose={() => setMenu(null)}
+      />
+      <MergePullRequestDialog
+        open={mergeFor !== null}
+        repoPath={repoPath}
+        detail={mergeFor?.detail ?? null}
+        onClose={() => {
+          dialogEpochRef.current += 1;
+          setMergeFor(null);
+        }}
+        onMerged={() => {
+          dialogEpochRef.current += 1;
+          setMergeFor(null);
+          onMutated?.();
+        }}
+      />
+      <ClosePullRequestDialog
+        open={closeFor !== null}
+        repoPath={repoPath}
+        detail={closeFor?.detail ?? null}
+        onClose={() => {
+          dialogEpochRef.current += 1;
+          setCloseFor(null);
+        }}
+        onClosed={() => {
+          dialogEpochRef.current += 1;
+          setCloseFor(null);
+          onMutated?.();
+        }}
+      />
+    </>
+  );
+
+  return { openContextMenu, overlays, error };
+}
+
 function PullRequestsTab({
   repoPath,
   onOpenDetail,
@@ -1065,22 +1235,6 @@ function PullRequestsTab({
   // Grows by PR_PAGE_SIZE each time the user scrolls to the bottom. Resets on
   // project / state-filter change so a fresh context starts at one page.
   const [limit, setLimit] = useState(PR_PAGE_SIZE);
-  const [menu, setMenu] = useState<{
-    x: number;
-    y: number;
-    pr: PullRequestInfo;
-  } | null>(null);
-  const [mergeFor, setMergeFor] = useState<{
-    number: number;
-    detail: PullRequestDetail;
-  } | null>(null);
-  const [closeFor, setCloseFor] = useState<{
-    number: number;
-    detail: PullRequestDetail;
-  } | null>(null);
-  // Bumped on every detail fetch / dialog dismiss so stale getPullRequestDetail
-  // responses can't open a dialog after the user moved on.
-  const dialogEpochRef = useRef(0);
   const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
 
   const fetchPrs = useCallback(
@@ -1142,53 +1296,9 @@ function PullRequestsTab({
     };
   }, [refreshKey, fetchPrs]);
 
-  async function copyText(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function openPrInBrowser(pr: PullRequestInfo) {
-    try {
-      await openUrl(pr.url);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function loadDetailFor(pr: PullRequestInfo): Promise<PullRequestDetail | null> {
-    const epoch = ++dialogEpochRef.current;
-    try {
-      const listing = await api.getPullRequestDetail(repoPath, pr.number);
-      if (epoch !== dialogEpochRef.current) return null;
-      if (listing.kind !== "ok") {
-        setError(
-          listing.kind === "not_github"
-            ? "Origin remote is not a GitHub repository."
-            : `No access to ${listing.slug}.`,
-        );
-        return null;
-      }
-      return listing.detail;
-    } catch (e) {
-      if (epoch === dialogEpochRef.current) setError(String(e));
-      return null;
-    }
-  }
-
-  async function openMergeFor(pr: PullRequestInfo) {
-    const detail = await loadDetailFor(pr);
-    if (!detail) return;
-    setMergeFor({ number: pr.number, detail });
-  }
-
-  async function openCloseFor(pr: PullRequestInfo) {
-    const detail = await loadDetailFor(pr);
-    if (!detail) return;
-    setCloseFor({ number: pr.number, detail });
-  }
+  const rowActions = usePrRowActions(repoPath, onOpenDetail, () => {
+    void fetchPrs();
+  });
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     if (loading) return;
@@ -1245,8 +1355,10 @@ function PullRequestsTab({
         className="flex-1 overflow-x-hidden overflow-y-auto"
         onScroll={handleScroll}
       >
-        {error ? (
-          <div className="p-3 text-xs text-danger">{error}</div>
+        {error || rowActions.error ? (
+          <div className="p-3 text-xs text-danger">
+            {error ?? rowActions.error}
+          </div>
         ) : !listing ? (
           <PrSkeletonList count={10} />
         ) : listing.kind === "not_github" ? (
@@ -1266,10 +1378,7 @@ function PullRequestsTab({
                 key={pr.number}
                 pr={pr}
                 onOpen={() => onOpenDetail(pr.number)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setMenu({ x: e.clientX, y: e.clientY, pr });
-                }}
+                onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />
             ))}
             {loading && listing.items.length >= limit ? (
@@ -1285,91 +1394,7 @@ function PullRequestsTab({
           </ul>
         )}
       </div>
-      <ContextMenu
-        open={menu !== null}
-        x={menu?.x ?? 0}
-        y={menu?.y ?? 0}
-        items={
-          menu
-            ? ([
-                {
-                  label: "Open detail",
-                  icon: <Maximize2 size={12} />,
-                  onClick: () => {
-                    onOpenDetail(menu.pr.number);
-                  },
-                },
-                {
-                  label: "Open in browser",
-                  icon: <ExternalLink size={12} />,
-                  onClick: () => {
-                    void openPrInBrowser(menu.pr);
-                  },
-                },
-                {
-                  label: "Copy URL",
-                  icon: <Copy size={12} />,
-                  onClick: () => {
-                    void copyText(menu.pr.url);
-                  },
-                },
-                {
-                  label: `Copy branch (${menu.pr.head_branch})`,
-                  icon: <Copy size={12} />,
-                  onClick: () => {
-                    void copyText(menu.pr.head_branch);
-                  },
-                },
-                { type: "separator" },
-                {
-                  label: "Merge…",
-                  icon: <GitMerge size={12} />,
-                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
-                  onClick: () => {
-                    void openMergeFor(menu.pr);
-                  },
-                },
-                {
-                  label: "Close…",
-                  icon: <GitPullRequestClosed size={12} />,
-                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
-                  onClick: () => {
-                    void openCloseFor(menu.pr);
-                  },
-                },
-              ] satisfies ContextMenuItem[])
-            : []
-        }
-        onClose={() => setMenu(null)}
-      />
-      <MergePullRequestDialog
-        open={mergeFor !== null}
-        repoPath={repoPath}
-        detail={mergeFor?.detail ?? null}
-        onClose={() => {
-          dialogEpochRef.current += 1;
-          setMergeFor(null);
-        }}
-        onMerged={() => {
-          dialogEpochRef.current += 1;
-          setMergeFor(null);
-          void fetchPrs();
-        }}
-      />
-      <ClosePullRequestDialog
-        open={closeFor !== null}
-        repoPath={repoPath}
-        detail={closeFor?.detail ?? null}
-        onClose={() => {
-          dialogEpochRef.current += 1;
-          setCloseFor(null);
-        }}
-        onClosed={() => {
-          dialogEpochRef.current += 1;
-          setCloseFor(null);
-          void fetchPrs();
-        }}
-      />
+      {rowActions.overlays}
     </div>
   );
 }
@@ -1497,11 +1522,22 @@ function PrRow({
   pr,
   onOpen,
   onContextMenu,
+  surface = "panel",
 }: {
   pr: PullRequestInfo;
   onOpen: () => void;
   onContextMenu?: (e: React.MouseEvent<HTMLLIElement>) => void;
+  /**
+   * Background context the row sits on. `panel` is the right-panel
+   * (`bg-bg`), `dialog` is the modal surface (`bg-bg-elevated`) — each
+   * needs a different hover color to actually feel interactive.
+   */
+  surface?: "panel" | "dialog";
 }) {
+  const hoverBg =
+    surface === "dialog"
+      ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
+      : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
   return (
     <li
       role="button"
@@ -1514,7 +1550,10 @@ function PrRow({
           onOpen();
         }
       }}
-      className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50 focus-visible:outline-none focus-visible:bg-bg-elevated/60"
+      className={cn(
+        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
+        hoverBg,
+      )}
     >
       <span className="flex w-full min-w-0 items-center gap-2">
         <span className="shrink-0 font-mono text-fg-muted">#{pr.number}</span>
@@ -1576,10 +1615,16 @@ const PR_SEARCH_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
  */
 function PullRequestSearchModal({
   open,
+  detailOpen,
   onClose,
   onOpenDetail,
 }: {
   open: { repoPath: string } | null;
+  /**
+   * True while the PR detail modal stacks on top. Used to suppress this
+   * modal's ESC handler so the top-of-stack closes first.
+   */
+  detailOpen: boolean;
   onClose: () => void;
   onOpenDetail: (number: number) => void;
 }) {
@@ -1593,7 +1638,16 @@ function PullRequestSearchModal({
   const [limit, setLimit] = useState(PR_PAGE_SIZE);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  useDialogShortcuts(open !== null, { onCancel: onClose });
+  // Refetch trigger used by row actions after a merge/close so the modal
+  // updates without the user reopening it.
+  const [refetchTick, setRefetchTick] = useState(0);
+  const rowActions = usePrRowActions(
+    repoPath ?? "",
+    onOpenDetail,
+    () => setRefetchTick((v) => v + 1),
+  );
+
+  useDialogShortcuts(open !== null && !detailOpen, { onCancel: onClose });
 
   // Wipe transient state every time the modal opens so a reopen never shows
   // results from the previous session.
@@ -1650,7 +1704,7 @@ function PullRequestSearchModal({
     return () => {
       signal.cancelled = true;
     };
-  }, [open, repoPath, debouncedQuery, stateFilter, limit]);
+  }, [open, repoPath, debouncedQuery, stateFilter, limit, refetchTick]);
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     if (loading) return;
@@ -1717,13 +1771,15 @@ function PullRequestSearchModal({
         </div>
       </div>
       <div
-        className="max-h-[60vh] min-h-[200px] overflow-y-auto"
+        className="h-[60vh] overflow-y-auto"
         onScroll={handleScroll}
       >
         {!debouncedQuery ? (
           <Empty msg="Type to search pull requests." />
-        ) : error ? (
-          <div className="p-3 text-xs text-danger">{error}</div>
+        ) : error || rowActions.error ? (
+          <div className="p-3 text-xs text-danger">
+            {error ?? rowActions.error}
+          </div>
         ) : !listing ? (
           <PrSkeletonList count={6} />
         ) : listing.kind === "not_github" ? (
@@ -1740,7 +1796,9 @@ function PullRequestSearchModal({
               <PrRow
                 key={pr.number}
                 pr={pr}
+                surface="dialog"
                 onOpen={() => onOpenDetail(pr.number)}
+                onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />
             ))}
             {loading && listing.items.length >= limit ? (
@@ -1756,6 +1814,7 @@ function PullRequestSearchModal({
           </ul>
         )}
       </div>
+      {rowActions.overlays}
     </Modal>
   );
 }
