@@ -71,6 +71,7 @@ function session(
     last_message: null,
     kind: "regular",
     position: null,
+    in_worktree: false,
     ...overrides,
   };
 }

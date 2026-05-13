@@ -215,6 +215,30 @@ export const api = {
       { id: string; status: SessionStatus; branch: string | null }[]
     >("detect_session_statuses", { ids });
   },
+  /**
+   * Inspect on-disk markers to determine which agent CLI (if any) the user has
+   * run inside this Acorn session. Drives the Tab > Fork menu item visibility.
+   */
+  detectSessionAgent(
+    sessionId: string,
+  ): Promise<{ claude: string | null; codex: string | null }> {
+    return invoke<{ claude: string | null; codex: string | null }>(
+      "detect_session_agent",
+      { sessionId },
+    );
+  },
+  /**
+   * Copy a parent claude transcript into the new worktree's project slug
+   * so `claude --resume <uuid>` resolves once the fork shell cd's there.
+   * Without this, the resume fails because claude looks transcripts up
+   * by slug-of-cwd, which differs between parent and worktree.
+   */
+  prepareClaudeFork(parentUuid: string, newCwd: string): Promise<void> {
+    return invoke<void>("prepare_claude_fork", {
+      parentUuid,
+      newCwd,
+    });
+  },
   scrollbackOrphanSize(): Promise<number> {
     return invoke<number>("scrollback_orphan_size");
   },
@@ -249,6 +273,26 @@ export const api = {
    */
   ptyRepoRoot(sessionId: string): Promise<string | null> {
     return invoke<string | null>("pty_repo_root", { sessionId });
+  },
+  /**
+   * Batched live "is the session sitting inside a linked git worktree?"
+   * probe. Returns a map keyed by session id; missing entries mean
+   * "no live PTY, or live cwd is not inside a linked worktree". One
+   * backend syscall sweep covers every session — call this on focus /
+   * after refresh, not on a tight interval.
+   */
+  ptyInWorktreeAll(): Promise<Record<string, boolean>> {
+    return invoke<Record<string, boolean>>("pty_in_worktree_all");
+  },
+  /**
+   * Classify an arbitrary on-disk path as "inside a linked git worktree".
+   * Backs the xterm OSC 7 handler: every shell `cd` emits the new cwd,
+   * the handler hands it here, and the boolean feeds the worktree-icon
+   * condition. Walks up via `Repository::discover` so subdirectories of
+   * a worktree resolve correctly.
+   */
+  isPathLinkedWorktree(path: string): Promise<boolean> {
+    return invoke<boolean>("is_path_linked_worktree", { path });
   },
   /**
    * Re-point a session at a different worktree directory. Used after an

@@ -31,6 +31,10 @@ export const tauriMockSource = `
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
+    if (cmd === 'detect_session_agent') {
+      return Promise.resolve({ claude: null, codex: null });
+    }
+    if (cmd === 'prepare_claude_fork') return Promise.resolve(undefined);
     if (cmd === 'read_session_todos') return Promise.resolve([]);
     if (cmd === 'list_commits') return Promise.resolve([]);
     if (cmd === 'resolve_commit_logins') return Promise.resolve({});
@@ -62,6 +66,10 @@ export const tauriMockSource = `
     if (cmd === 'ipc_restart') return Promise.resolve(undefined);
     if (cmd === 'reorder_projects') return Promise.resolve([]);
     if (cmd === 'reorder_sessions') return Promise.resolve([]);
+    // No live PTYs in E2E so the live-cwd map is empty and the static
+    // session flags (isolated, in_worktree) drive the worktree icon.
+    if (cmd === 'pty_in_worktree_all') return Promise.resolve({});
+    if (cmd === 'is_path_linked_worktree') return Promise.resolve(false);
     // Daemon-mode commands. E2E runs in-browser without a real acornd
     // bound to a socket, so every routed call short-circuits with a
     // realistic "disabled / not-running" response. Tests that need to

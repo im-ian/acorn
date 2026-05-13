@@ -135,18 +135,23 @@ test.describe("sessions: list rendering", () => {
 
     await page.goto("/");
 
-    // Isolated sessions render with the GitBranch icon's "isolated worktree"
-    // aria-label baked into the row's accessible name.
+    // Worktree-marked sessions render with the GitBranch icon's "worktree"
+    // aria-label baked into the row's accessible name. The label is the same
+    // for Acorn-isolated sessions and for any other session whose
+    // worktree_path is a linked worktree — the icon doesn't distinguish.
     await expect(
       page.getByRole("button", {
-        name: /^iso isolated worktree feature\/iso · Idle$/,
+        name: /^iso worktree feature\/iso · Idle$/,
       }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: /^plain main · Idle$/ }),
     ).toBeVisible();
-    // The GitBranch icon next to isolated session names carries
-    // aria-label="isolated worktree".
-    await expect(page.getByLabel("isolated worktree")).toHaveCount(1);
+    // Scope to the sidebar and use exact match — the tab strip renders the
+    // same icon, and the parent button's accessible name also contains
+    // "worktree" so a non-exact substring match double-counts.
+    await expect(
+      page.locator('aside').getByLabel("worktree", { exact: true }),
+    ).toHaveCount(1);
   });
 });
