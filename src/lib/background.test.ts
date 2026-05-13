@@ -29,6 +29,7 @@ import {
 } from "./background";
 import appCss from "../App.css?raw";
 import terminalSource from "../components/Terminal.tsx?raw";
+import tauriConfigRaw from "../../src-tauri/tauri.conf.json?raw";
 
 beforeEach(() => {
   tauriPathMock.appLocalDataDir.mockResolvedValue("/app/local");
@@ -174,5 +175,25 @@ describe("background overlay CSS", () => {
       'background: useTransparentBackground ? "rgba(0, 0, 0, 0)"',
     );
     expect(terminalSource).toContain("nextBackground.applyToTerminal");
+  });
+});
+
+describe("Tauri background asset access", () => {
+  it("allows the asset protocol to load persisted background images", () => {
+    const config = JSON.parse(tauriConfigRaw) as {
+      app?: {
+        security?: {
+          assetProtocol?: {
+            enable?: boolean;
+            scope?: string[];
+          };
+        };
+      };
+    };
+
+    expect(config.app?.security?.assetProtocol?.enable).toBe(true);
+    expect(config.app?.security?.assetProtocol?.scope).toContain(
+      "$APPLOCALDATA/backgrounds/**/*",
+    );
   });
 });
