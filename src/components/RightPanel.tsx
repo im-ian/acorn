@@ -1556,9 +1556,33 @@ function PrRow({
     surface === "dialog"
       ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
       : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
-  const content = (
-    <>
-      <span className="flex w-full min-w-0 items-center gap-2">
+  // Avatar rows get a touch more leading + larger text so the avatar
+  // doesn't dominate visually. Plain rows stay compact at the prior size.
+  const titleSize = showAvatar ? "text-[13px]" : "text-xs";
+  const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      onDoubleClick={onOpen}
+      onContextMenu={onContextMenu}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className={cn(
+        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
+        hoverBg,
+      )}
+    >
+      <span
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2",
+          titleSize,
+        )}
+      >
         <span className="shrink-0 font-mono text-fg-muted">#{pr.number}</span>
         <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
         <Tooltip
@@ -1570,8 +1594,16 @@ function PrRow({
           <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
         </Tooltip>
       </span>
-      <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
-        <span className="truncate">{pr.author}</span>
+      <span
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2 text-fg-muted",
+          metaSize,
+        )}
+      >
+        <span className="flex min-w-0 shrink-0 items-center gap-1.5">
+          {showAvatar ? <AuthorAvatar login={pr.author} size={18} /> : null}
+          <span className="truncate">{pr.author}</span>
+        </span>
         <span className="opacity-50">·</span>
         <span className="flex min-w-0 items-center gap-1">
           <Tooltip
@@ -1599,36 +1631,6 @@ function PrRow({
           </span>
         </Tooltip>
       </span>
-    </>
-  );
-  return (
-    <li
-      role="button"
-      tabIndex={0}
-      onDoubleClick={onOpen}
-      onContextMenu={onContextMenu}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={cn(
-        "w-full border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
-        showAvatar ? "flex items-center gap-2.5" : "flex flex-col items-start gap-0.5",
-        hoverBg,
-      )}
-    >
-      {showAvatar ? (
-        <>
-          <AuthorAvatar login={pr.author} size={28} />
-          <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-            {content}
-          </span>
-        </>
-      ) : (
-        content
-      )}
     </li>
   );
 }
