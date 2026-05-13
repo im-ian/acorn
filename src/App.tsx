@@ -34,6 +34,8 @@ import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
+import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
+import { applyTheme, useThemes } from "./lib/themes";
 import { useAppStore } from "./store";
 
 const FOCUSABLE_SELECTOR =
@@ -77,6 +79,39 @@ function App() {
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
+  const themes = useThemes((s) => s.themes);
+  const refreshThemes = useThemes((s) => s.refresh);
+  const appearance = useSettings((s) => s.settings.appearance);
+
+  useEffect(() => {
+    void refreshThemes();
+  }, [refreshThemes]);
+
+  useEffect(() => {
+    const theme = themes.find((t) => t.id === appearance.themeId) ?? themes[0];
+    if (theme) {
+      applyTheme(theme.id, theme.css);
+    }
+  }, [appearance.themeId, themes]);
+
+  useEffect(() => {
+    if (
+      appearance.background.relativePath &&
+      (appearance.background.applyToApp ||
+        appearance.background.applyToTerminal)
+    ) {
+      void applyBackgroundVars(appearance.background);
+    } else {
+      clearBackgroundVars();
+    }
+  }, [
+    appearance.background.relativePath,
+    appearance.background.fit,
+    appearance.background.opacity,
+    appearance.background.blur,
+    appearance.background.applyToApp,
+    appearance.background.applyToTerminal,
+  ]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the

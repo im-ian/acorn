@@ -1,6 +1,7 @@
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
 import { exists, mkdir, readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { create } from "zustand";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
 import acornLightCss from "../assets/themes/acorn-light.css?raw";
@@ -198,3 +199,18 @@ function humanize(id: string): string {
     .map((word) => (word.length > 0 ? word[0].toUpperCase() + word.slice(1) : word))
     .join(" ");
 }
+
+interface ThemesStore {
+  themes: AcornTheme[];
+  setThemes: (next: AcornTheme[]) => void;
+  refresh: () => Promise<void>;
+}
+
+export const useThemes = create<ThemesStore>((set) => ({
+  themes: [...BUILT_IN_THEMES],
+  setThemes: (themes) => set({ themes }),
+  refresh: async () => {
+    const userThemes = await loadUserThemes();
+    set({ themes: mergeThemes(BUILT_IN_THEMES, userThemes) });
+  },
+}));
