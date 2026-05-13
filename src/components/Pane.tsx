@@ -286,7 +286,7 @@ function EmptyPane({
         <>
           <FolderPlus size={28} className="opacity-40" />
           <p className="text-xs">
-            No projects yet. Double-click here to add one.
+            Add a project to get started. Double-click here.
           </p>
         </>
       )}
