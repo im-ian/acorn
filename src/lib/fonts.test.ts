@@ -3,6 +3,7 @@ import {
   CURATED_MONOSPACE_FONTS,
   fontStackFromSlots,
   fontSlotsFromStack,
+  fontFamilyOptions,
   sanitizeFontFamilyName,
 } from "./fonts";
 
@@ -57,6 +58,31 @@ describe("sanitizeFontFamilyName", () => {
   it("rejects comma-separated stacks and generic fallbacks", () => {
     expect(sanitizeFontFamilyName("A, B")).toBeNull();
     expect(sanitizeFontFamilyName("monospace")).toBeNull();
+  });
+});
+
+describe("fontFamilyOptions", () => {
+  it("collapses weight and style variants into one family option", () => {
+    expect(
+      fontFamilyOptions(
+        [
+          "Berkeley Mono Regular",
+          "Berkeley Mono Bold",
+          "Berkeley Mono Medium Italic",
+          "Alpha Sans Bold",
+        ],
+        "all",
+      ),
+    ).toEqual(["Alpha Sans", "Berkeley Mono"]);
+  });
+
+  it("can limit suggestions to likely monospace families", () => {
+    expect(
+      fontFamilyOptions(
+        ["Alpha Sans", "Alpha Mono", "Consolas", "Fira Code"],
+        "mono",
+      ),
+    ).toEqual(["Alpha Mono", "Consolas", "Fira Code"]);
   });
 });
 

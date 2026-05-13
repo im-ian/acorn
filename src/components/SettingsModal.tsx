@@ -16,7 +16,11 @@ import {
 } from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
-import { CURATED_MONOSPACE_FONTS } from "../lib/fonts";
+import {
+  CURATED_MONOSPACE_FONTS,
+  fontFamilyOptions,
+  type FontOptionScope,
+} from "../lib/fonts";
 import { sendTestNotification } from "../lib/notifications";
 import {
   fetchLatestReleaseNotes,
@@ -714,12 +718,14 @@ function FontSection({
     draftsFromFontSlots(slots),
   );
   const [activeSlot, setActiveSlot] = useState<0 | 1 | 2 | null>(null);
+  const [fontScope, setFontScope] = useState<FontOptionScope>("mono");
 
   const allFontOptions = useMemo(() => {
-    return Array.from(new Set([...CURATED_MONOSPACE_FONTS, ...systemFonts])).sort(
-      (a, b) => a.localeCompare(b),
+    return fontFamilyOptions(
+      [...CURATED_MONOSPACE_FONTS, ...systemFonts],
+      fontScope,
     );
-  }, [systemFonts]);
+  }, [fontScope, systemFonts]);
 
   useEffect(() => {
     setDrafts(draftsFromFontSlots(slots));
@@ -862,6 +868,30 @@ function FontSection({
             disabled={loading}
           >
             <RefreshCcw size={12} /> {loading ? "Scanning..." : "Refresh fonts"}
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={fontScope === "all"}
+            onClick={() =>
+              setFontScope((current) => (current === "mono" ? "all" : "mono"))
+            }
+            className="inline-flex h-7 items-center gap-2 rounded-md border border-border bg-bg px-2 transition hover:text-fg"
+          >
+            <span
+              className={cn(
+                "relative h-3.5 w-6 rounded-full transition",
+                fontScope === "all" ? "bg-accent" : "bg-bg-elevated",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 h-2.5 w-2.5 rounded-full bg-fg transition",
+                  fontScope === "all" ? "left-3" : "left-0.5",
+                )}
+              />
+            </span>
+            {fontScope === "mono" ? "Mono only" : "All fonts"}
           </button>
           <span>
             {systemFonts.length > 0

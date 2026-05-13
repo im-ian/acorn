@@ -231,4 +231,47 @@ describe("SettingsModal font controls", () => {
       fontSlots: ["Berkeley Mono", "Fira Code", "Menlo"],
     });
   });
+
+  it("defaults to mono suggestions and can toggle all fonts", async () => {
+    mocks.listSystemFonts.mockResolvedValue([
+      "Alpha Mono Regular",
+      "Alpha Mono Bold",
+      "Alpha Sans",
+      "Alpha Serif Italic",
+    ]);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const [primary] = fontInputs();
+    focusInput(primary);
+    setInputValue(primary, "Alpha");
+
+    const monoOptions = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).map((element) => element.textContent);
+    expect(monoOptions).toContain("Alpha Mono");
+    expect(monoOptions).not.toContain("Alpha Mono Bold");
+    expect(monoOptions).not.toContain("Alpha Sans");
+
+    const scopeSwitch = document.querySelector<HTMLElement>('[role="switch"]');
+    expect(scopeSwitch).toBeTruthy();
+    act(() => {
+      scopeSwitch?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const allOptions = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).map((element) => element.textContent);
+    expect(allOptions).toContain("Alpha Mono");
+    expect(allOptions).toContain("Alpha Sans");
+    expect(allOptions).toContain("Alpha Serif");
+    expect(allOptions).not.toContain("Alpha Serif Italic");
+  });
 });
