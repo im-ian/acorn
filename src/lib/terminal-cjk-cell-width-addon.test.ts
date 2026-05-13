@@ -4,6 +4,7 @@ import {
   calculateDefaultSpacingFromSample,
   clampMeasuredWidth,
   patchTerminalCellMeasurements,
+  selectCjkMeasurementSample,
   shouldClampMeasuredWidth,
   shouldPatchTerminalCellMeasurements,
 } from "./terminal-cjk-cell-width-addon";
@@ -22,6 +23,23 @@ describe("terminal CJK cell width patch", () => {
     expect(shouldPatchTerminalCellMeasurements("JetBrains Mono, monospace")).toBe(
       false,
     );
+  });
+
+  it("selects a measurement sample that matches the CJK font family", () => {
+    expect(selectCjkMeasurementSample('"D2Coding", monospace')).toBe("가");
+    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK KR", monospace')).toBe(
+      "가",
+    );
+    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK JP", monospace')).toBe(
+      "あ",
+    );
+    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK SC", monospace')).toBe(
+      "汉",
+    );
+    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK TC", monospace')).toBe(
+      "漢",
+    );
+    expect(selectCjkMeasurementSample("JetBrains Mono, monospace")).toBeNull();
   });
 
   it("recognizes wide CJK characters for width clamping", () => {
@@ -88,6 +106,40 @@ describe("terminal CJK cell width patch", () => {
     expect(rowContainer.style.letterSpacing).toBe("-1.5px");
     expect(rowFactory).toMatchObject({ defaultSpacing: -1.5 });
     expect(refreshCalls).toEqual([[0, 5]]);
+  });
+
+  it("uses the matching CJK sample when deriving non-Korean CJK cell width", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [document.createElement("div")],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "あ") return 15;
+          if (chars === "가") return 11;
+          return 8;
+        },
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      options: { fontFamily: '"Noto Sans Mono CJK JP", monospace' },
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+        _unicodeService: { getStringCellWidth: () => 2 },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(7.5);
+    expect(renderer.dimensions.css.canvas.width).toBe(45);
+    expect(rowContainer.style.letterSpacing).toBe("-0.5px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -0.5 });
   });
 
   it("keeps CJK width cache measurements unclamped so row rendering applies per-glyph spacing", () => {

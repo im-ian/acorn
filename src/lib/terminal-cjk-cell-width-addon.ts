@@ -47,11 +47,28 @@ interface TerminalInternals {
 const CJK_FONT_RE = /(?:D2Coding|Sarasa|CJK|Noto Sans Mono CJK)/i;
 const CJK_OR_WIDE_RE =
   /[\u1100-\u11ff\u2e80-\u303f\u3130-\u318f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff01-\uff60\uffe0-\uffe6]/;
+const CJK_FONT_SAMPLES: Array<[RegExp, string]> = [
+  [/(?:D2Coding|Sarasa\s+Mono\s+K|CJK\s+KR|Korean|Hangul|Malgun|Apple\s+SD\s+Gothic)/i, "가"],
+  [/(?:CJK\s+JP|Japanese|Hiragino|Yu\s+Gothic|Meiryo)/i, "あ"],
+  [/(?:CJK\s+SC|CJK\s+CN|Simplified|PingFang\s+SC|Microsoft\s+YaHei)/i, "汉"],
+  [/(?:CJK\s+TC|CJK\s+HK|Traditional|PingFang\s+TC|MingLiU)/i, "漢"],
+  [/(?:Sarasa|CJK|Chinese)/i, "漢"],
+];
 
 export function shouldPatchTerminalCellMeasurements(
   fontFamily: string | undefined,
 ): boolean {
   return !!fontFamily && CJK_FONT_RE.test(fontFamily);
+}
+
+export function selectCjkMeasurementSample(
+  fontFamily: string | undefined,
+): string | null {
+  if (!fontFamily) return null;
+  for (const [pattern, sample] of CJK_FONT_SAMPLES) {
+    if (pattern.test(fontFamily)) return sample;
+  }
+  return null;
 }
 
 export function shouldClampMeasuredWidth(chars: string): boolean {
@@ -173,8 +190,10 @@ function recalibrateDefaultSpacing(
   renderer: DomRenderer,
   widthCache: WidthCache,
 ): void {
-  const measuredSampleWidth = widthCache.get("가", false, false);
-  const sampleCells = getStringCellWidth(term, "가");
+  const sample = selectCjkMeasurementSample(term.options.fontFamily);
+  const measuredSampleWidth =
+    sample === null ? 0 : widthCache.get(sample, false, false);
+  const sampleCells = sample === null ? 0 : getStringCellWidth(term, sample);
   const cellWidth =
     calculateCellWidthFromSample(measuredSampleWidth, sampleCells) ??
     getCellWidth(renderer);
