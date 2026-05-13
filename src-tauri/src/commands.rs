@@ -1001,7 +1001,7 @@ pub fn pty_in_worktree_all(state: State<'_, AppState>) -> HashMap<String, bool> 
             Some(cwd) => match git2::Repository::discover(&cwd) {
                 Ok(repo) => repo
                     .workdir()
-                    .map(|wd| worktree::is_linked_worktree_root(wd))
+                    .map(worktree::is_linked_worktree_root)
                     .unwrap_or(false),
                 Err(_) => false,
             },
