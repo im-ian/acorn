@@ -18,7 +18,6 @@ const BASE_SESSION = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:05Z",
   last_message: null,
-  startup_mode: "terminal",
 };
 
 test.describe("session lifecycle", () => {
@@ -102,7 +101,6 @@ test.describe("session lifecycle", () => {
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
-              startup_mode: "terminal",
             },
           ];
     });

@@ -97,12 +97,12 @@ Past-tense framing for code that still runs in production today.
 
 ```ts
 // BAD
-// Sessions startup migration: legacy `mode === "claude"` collapses
-// into the new agent-mode + global selected agent.
+// Commit-message migration: legacy `commitMessage.provider` was
+// renamed to `agents.selected` in the multi-provider refactor.
 
 // GOOD
-// `mode === "claude"` from older storage maps to agent mode with the
-// global selected agent.
+// Older storage stored the agent under `commitMessage.provider`; lift
+// it into `agents.selected` so a single selection drives every AI feature.
 ```
 
 If the migration code is live, describe what it does **now**, not the history it came from.
@@ -146,15 +146,16 @@ Same rules apply, with one addition: doc comments on exported public surface (ty
 ```ts
 // GOOD — caller-facing invariant
 /**
- * Per-session PTY startup mode persisted on `Session.startup_mode`. `null`
- * (or omitted) means no per-session preference is recorded; the spawn
- * falls back to the global `sessionStartup.mode` setting.
+ * Distinguishes ordinary terminal sessions from "control" sessions, which
+ * (via the `acorn-ipc` CLI) can drive other sessions in the same project.
+ * Defaults to `Regular` so existing persisted sessions without this field
+ * load cleanly.
  */
-export type SessionStartupMode = ...
+export type SessionKind = ...
 
 // BAD — implementation narrative
 /**
- * Used to be a boolean before we added the "custom" mode. The check inside
+ * Used to be a boolean before we added the third variant. The check inside
  * Terminal.tsx still falls back to the old behavior for sessions created
  * before v0.4.
  */

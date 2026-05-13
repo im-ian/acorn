@@ -38,10 +38,12 @@ regular shell.
 
 ## Agent priming
 
-The point of a control session is that the agent running inside it should
-be able to orchestrate siblings *immediately*, not only after a user has
-explained the protocol. Acorn ships that priming through three layers
-that fire automatically every time a control-session PTY spawns:
+Sessions always spawn the user's `$SHELL`, so Acorn never invokes the
+agent CLI directly — the user does, from inside the shell. The point of a
+control session is that whichever agent the user launches inside it
+should be able to orchestrate siblings *immediately*, not only after the
+user has explained the protocol. Acorn ships that priming through two
+layers that fire automatically every time a control-session PTY spawns:
 
 1. **PTY environment.** Three pieces of state are injected into the
    control session's PTY before any user code runs:
@@ -53,18 +55,13 @@ that fire automatically every time a control-session PTY spawns:
      name without the user installing a shim. Regular sessions do not
      receive this prefix, keeping the IPC surface invisible outside
      control sessions.
-2. **Per-agent CLI flag.** For agents Acorn recognises, the spawn argv is
-   augmented so the primer lands in the agent's system prompt before its
-   first turn:
-   - **Claude Code** — `--append-system-prompt "<primer>"`
-   - **llm CLI** — `-s "<primer>"` (inserted after `chat` when present)
-   - **Codex / Gemini / Ollama / Custom** — no flag injected (those CLIs
-     don't have a stable inline-system-prompt convention); fall back to
-     layer 3.
-3. **Worktree marker file.** A `.acorn-control.md` is written to the
+2. **Worktree marker file.** A `.acorn-control.md` is written to the
    session's cwd on every spawn (overwritten each time so the substituted
-   session id is current). Agents that read project docs find it; humans
-   can `cat` it. Safe to commit-ignore.
+   session id is current). Agents that read project docs (Claude Code,
+   Codex, Gemini, Ollama, llm, …) find it; humans can `cat` it. Safe to
+   commit-ignore. The marker is the primary cue the agent uses to learn
+   the protocol — point the agent at it explicitly if it doesn't auto-
+   ingest project docs on startup.
 
 The primer text itself is generated server-side and lists every
 `acorn-ipc` subcommand with the current session id and socket path
@@ -230,7 +227,9 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
   literal bytes via `--data` or pre-encoded base64 via `--raw-base64`.
 - Audit logging is `tracing::info!`-level only; there is no on-disk audit
   file yet.
-- Inline agent priming only covers Claude Code and the `llm` CLI today.
-  Codex, Gemini, Ollama, and Custom commands rely on the
-  `.acorn-control.md` marker file. PRs welcome that wire each agent's
-  native flag.
+- Priming relies entirely on env vars + the `.acorn-control.md` marker
+  file. The previous spawn-time CLI flag injection (Claude
+  `--append-system-prompt`, `llm -s`) is dormant because Acorn no longer
+  spawns the agent directly — the user does, from inside `$SHELL`. The
+  flag-injection code remains and will activate again if `$SHELL` is
+  ever set to a recognised agent binary.

@@ -183,7 +183,6 @@ pub fn run() {
             commands::list_staged,
             commands::commit_diff,
             commands::commit_web_url,
-            commands::claude_session_exists,
             commands::open_in_editor,
             commands::staged_diff,
             commands::list_pull_requests,

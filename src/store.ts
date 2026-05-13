@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
-import { useSettings } from "./lib/settings";
 import type { Project, Session, SessionKind } from "./lib/types";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
 import {
@@ -713,17 +712,7 @@ export const useAppStore = create<AppStateModel>()(
   async createSession(name, repoPath, isolated = false, kind = "regular") {
     set({ loading: true, error: null });
     try {
-      // Snapshot the current global startup mode onto the session so a
-      // later change to `sessionStartup.mode` does not retroactively swap
-      // how this session respawns after an app restart.
-      const startupMode = useSettings.getState().settings.sessionStartup.mode;
-      const created = await api.createSession(
-        name,
-        repoPath,
-        isolated,
-        startupMode,
-        kind,
-      );
+      const created = await api.createSession(name, repoPath, isolated, kind);
       await get().refreshAll();
       // Focus the new session so Cmd+T (and any other entry point that goes
       // through the store) immediately surfaces it in its pane instead of

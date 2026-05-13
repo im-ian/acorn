@@ -26,7 +26,6 @@ async function seedActiveSession(
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
-      startup_mode: "terminal",
     },
   ]);
 }
@@ -126,7 +125,6 @@ test.describe("right panel: tab switching", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
-        startup_mode: "terminal",
       },
       {
         id: "s-b",
@@ -139,7 +137,6 @@ test.describe("right panel: tab switching", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
-        startup_mode: "terminal",
       },
     ]);
     // list_commits: page 0 returns 50 commits per repo (so hasMore=true and

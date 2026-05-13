@@ -13,9 +13,8 @@ use crate::pull_requests::{
     PullRequestListing,
 };
 use crate::scrollback;
-use crate::session::{Project, Session, SessionKind, SessionStartupMode, SessionStatus};
+use crate::session::{Project, Session, SessionKind, SessionStatus};
 use crate::session_status;
-use crate::shell_util::shell_quote;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
@@ -294,7 +293,6 @@ pub async fn create_session(
     name: String,
     repo_path: String,
     isolated: Option<bool>,
-    startup_mode: Option<SessionStartupMode>,
     kind: Option<SessionKind>,
 ) -> AppResult<Session> {
     let repo = PathBuf::from(&repo_path);
@@ -317,7 +315,6 @@ pub async fn create_session(
         worktree_path,
         branch,
         isolated,
-        startup_mode,
         kind.unwrap_or_default(),
     );
     let inserted = state.sessions.insert(session);
@@ -535,8 +532,6 @@ pub async fn pty_spawn<R: Runtime>(
     state: State<'_, AppState>,
     session_id: String,
     cwd: String,
-    command: Option<String>,
-    args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     cols: Option<u16>,
     rows: Option<u16>,
@@ -549,48 +544,9 @@ pub async fn pty_spawn<R: Runtime>(
     if state.pty.contains(&id) {
         return Ok(());
     }
-    // Resolve the actual (command, args) pair to spawn:
-    //
-    //   * Terminal mode  — frontend sends an empty/missing command, asking us
-    //     to drop the user into their interactive shell. Spawn $SHELL directly
-    //     so the prompt is the user's real shell.
-    //
-    //   * Agent / Custom mode — frontend sends e.g. `claude` with args. On
-    //     macOS GUI launches (Dock/Spotlight) the parent process inherits a
-    //     sanitized PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) and never sources
-    //     `~/.zshrc` / `~/.zprofile`, so binaries installed via Homebrew, npm,
-    //     bun, pnpm, pyenv, asdf, mise, etc. are invisible to spawn_command
-    //     and PTY creation fails with "No viable candidates found in PATH".
-    //
-    //     To fix this without acorn having to know each shell's rc-file
-    //     conventions, we wrap the target through the user's login+interactive
-    //     shell. The shell sources its rc files (picking up PATH, aliases,
-    //     env vars, shims) and then `exec`s the target — replacing itself
-    //     in-place so the PTY's child is the requested binary, not the shell.
-    let user_command_raw = match command {
-        Some(c) if !c.trim().is_empty() => Some(c),
-        _ => None,
-    };
-    let user_args = args.unwrap_or_default();
-    let (resolved_command, resolved_args) = match user_command_raw {
-        None => {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-            (shell, user_args)
-        }
-        Some(user_command) => {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-            let mut script = String::from("exec ");
-            script.push_str(&shell_quote(&user_command));
-            for a in &user_args {
-                script.push(' ');
-                script.push_str(&shell_quote(a));
-            }
-            (
-                shell,
-                vec!["-l".to_string(), "-i".to_string(), "-c".to_string(), script],
-            )
-        }
-    };
+    // Sessions always spawn the user's interactive `$SHELL`.
+    let resolved_command = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let resolved_args: Vec<String> = Vec::new();
     // Inject IPC env vars for control sessions so the user's shell (and any
     // agent it launches) can address the running app via the `acorn-ipc`
     // CLI without per-session configuration. Only control sessions get the
@@ -624,10 +580,12 @@ pub async fn pty_spawn<R: Runtime>(
                     crate::ipc::cli_path::prepend_to_path(&bin_dir, &existing),
                 );
             }
-            // Prime any agent we know how to talk to. The primer also lands
-            // in a worktree-local marker file as a fallback for agents we
-            // don't have a flag for (Codex, Gemini CLI, …) — those still
-            // get the env vars and can read the markdown manually.
+            // Drop the primer in a worktree-local marker file so whichever
+            // agent the user invokes inside the shell can read the IPC
+            // protocol. `inject_primer_args` is a no-op while `$SHELL` is
+            // an ordinary shell (`AgentFlavor::Unknown`) and only takes
+            // effect on the rare configuration where `$SHELL` itself
+            // resolves to a recognised agent binary.
             let primer = crate::ipc::primer::primer_for(&session, &socket);
             let flavor = crate::ipc::primer::AgentFlavor::detect(&resolved_command);
             primed_args = crate::ipc::primer::inject_primer_args(
@@ -655,8 +613,9 @@ pub async fn pty_spawn<R: Runtime>(
 /// PTY spawns. The file is small (<2 KiB) and overwritten on each spawn
 /// so the substituted session-id / socket-path always match the running
 /// PTY. Best-effort: a write failure is logged but does not abort spawn,
-/// because the agent-flag injection path is the primary signal and this
-/// file is a secondary nudge for agents we couldn't reach via flags.
+/// since the env vars carry enough state for `acorn-ipc` itself; this
+/// marker exists so whichever agent the user later invokes can read the
+/// protocol from a project-local file.
 fn write_control_marker(cwd: &std::path::Path, primer: &str) {
     let path = cwd.join(".acorn-control.md");
     let body = format!(
@@ -708,17 +667,11 @@ pub fn pty_reload_shell_env() {
 
 /// Resolve the *live* working directory of a session's PTY tree.
 ///
-/// We seed at the immediate PTY child (typically `$SHELL` or `claude`) and
-/// walk descendants, returning the cwd of the deepest descendant that exposes
-/// one. This catches both common drift cases:
-///
-///   * **Agent mode** — the PTY child *is* `claude`; on `--worktree` claude
-///     chdirs (or re-execs) into the new worktree and the immediate child's
-///     cwd updates directly.
-///   * **Terminal mode** — the PTY child is `$SHELL`; the user types
-///     `claude -w` and claude appears as a grandchild whose cwd reflects the
-///     freshly created worktree, while the shell's cwd is still the original
-///     project root.
+/// The PTY child is always `$SHELL`; we walk descendants and return the
+/// cwd of the deepest descendant that exposes one. This catches the
+/// common drift case where the user types e.g. `claude -w` and the agent
+/// chdirs into a freshly created worktree as a grandchild, while the
+/// shell's own cwd is still the original project root.
 ///
 /// Returns `None` if the session has no live PTY (not yet spawned, or
 /// already exited). The frontend then falls back to the session's recorded
@@ -990,44 +943,6 @@ pub async fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<
     git_ops::web_url_for_commit(&PathBuf::from(repo_path), &sha)
 }
 
-/// Check whether a `claude` CLI transcript already exists on disk for the
-/// given `session_id`. Used by the frontend to decide between `--session-id`
-/// (new conversation) and `--resume` (existing) when (re)spawning claude —
-/// claude refuses `--session-id` for an id that already has a transcript.
-///
-/// Match claude's *current* project-directory encoding for `cwd` only. Older
-/// claude versions preserved `.` in the encoded path; the current version
-/// replaces both `/` and `.` with `-`. An earlier implementation scanned every
-/// subdirectory under `~/.claude/projects/` to dodge the encoding drift, but
-/// that returned true for jsonl files left behind under the old encoding —
-/// after which claude itself, looking only at the new encoded dir, printed a
-/// persistent `error: session not found` on `--resume`. If claude changes its
-/// encoding again, update [`encode_claude_project_dir`].
-#[tauri::command]
-pub async fn claude_session_exists(cwd: String, session_id: String) -> bool {
-    let home = match std::env::var_os("HOME") {
-        Some(v) => PathBuf::from(v),
-        None => return false,
-    };
-    let dir_name = encode_claude_project_dir(&cwd);
-    let jsonl = home
-        .join(".claude")
-        .join("projects")
-        .join(dir_name)
-        .join(format!("{session_id}.jsonl"));
-    jsonl.is_file()
-}
-
-/// Encode `cwd` the way the current `claude` CLI does when locating its
-/// per-project transcript directory under `~/.claude/projects/`. Replaces
-/// `/` and `.` with `-`; everything else (including underscores) is
-/// preserved verbatim.
-fn encode_claude_project_dir(cwd: &str) -> String {
-    cwd.chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect()
-}
-
 /// Spawn an external editor on `path`. Used by the "Open in editor" action
 /// when the user has configured a custom editor command in settings.
 ///
@@ -1159,33 +1074,3 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encodes_plain_repo_path() {
-        assert_eq!(
-            encode_claude_project_dir("/Users/me/Documents/Personal/acorn"),
-            "-Users-me-Documents-Personal-acorn"
-        );
-    }
-
-    #[test]
-    fn encodes_dotted_segment_as_double_dash() {
-        assert_eq!(
-            encode_claude_project_dir(
-                "/Users/me/Documents/Personal/acorn/.claude/worktrees/foo"
-            ),
-            "-Users-me-Documents-Personal-acorn--claude-worktrees-foo"
-        );
-    }
-
-    #[test]
-    fn preserves_underscores() {
-        assert_eq!(
-            encode_claude_project_dir("/Users/me/Documents/GitHub/jtf_web"),
-            "-Users-me-Documents-GitHub-jtf_web"
-        );
-    }
-}

@@ -69,7 +69,6 @@ function session(
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
-    startup_mode: null,
     kind: "regular",
     position: null,
     ...overrides,
@@ -573,7 +572,6 @@ describe("createSession", () => {
       "foo",
       REPO_A,
       false,
-      expect.anything(),
       "regular",
     );
   });
@@ -589,7 +587,6 @@ describe("createSession", () => {
       "ctl",
       REPO_A,
       false,
-      expect.anything(),
       "control",
     );
   });

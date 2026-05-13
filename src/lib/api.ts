@@ -12,7 +12,6 @@ import type {
   PullRequestListing,
   Session,
   SessionKind,
-  SessionStartupMode,
   SessionStatus,
   StagedFile,
   TodoItem,
@@ -34,14 +33,12 @@ export const api = {
     name: string,
     repoPath: string,
     isolated = false,
-    startupMode: SessionStartupMode | null = null,
     kind: SessionKind = "regular",
   ): Promise<Session> {
     return invoke<Session>("create_session", {
       name,
       repoPath,
       isolated,
-      startupMode,
       kind,
     });
   },
@@ -88,9 +85,6 @@ export const api = {
   },
   commitWebUrl(repoPath: string, sha: string): Promise<string | null> {
     return invoke<string | null>("commit_web_url", { repoPath, sha });
-  },
-  claudeSessionExists(cwd: string, sessionId: string): Promise<boolean> {
-    return invoke<boolean>("claude_session_exists", { cwd, sessionId });
   },
   openInEditor(command: string, args: string[], path: string): Promise<void> {
     return invoke<void>("open_in_editor", { command, args, path });

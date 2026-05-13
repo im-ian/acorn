@@ -1,6 +1,6 @@
 //! Pseudoterminal (PTY) backend for Acorn.
 //!
-//! Manages a pool of PTY-backed child processes (typically `claude` CLI), keyed
+//! Manages a pool of PTY-backed child processes (the user's `$SHELL`), keyed
 //! by session UUID. Each session has:
 //!   * a master writer used to forward stdin
 //!   * a process child handle used to kill the process

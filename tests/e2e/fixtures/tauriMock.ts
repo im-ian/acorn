@@ -40,7 +40,6 @@ export const tauriMockSource = `
     if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
     if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
     if (cmd === 'scrollback_load') return Promise.resolve(null);
-    if (cmd === 'claude_session_exists') return Promise.resolve(false);
     if (cmd === 'get_memory_usage') {
       return Promise.resolve({
         rss_bytes: 0,

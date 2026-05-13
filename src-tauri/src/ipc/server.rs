@@ -434,7 +434,6 @@ fn handle_new_session<R: Runtime>(
         worktree_path,
         branch,
         isolated,
-        None,
         SessionKind::Regular,
     );
     let inserted = state.sessions.insert(session);
@@ -536,7 +535,6 @@ mod tests {
             PathBuf::from(repo),
             "main".to_string(),
             false,
-            None,
             kind,
         );
         s.status = SessionStatus::Idle;

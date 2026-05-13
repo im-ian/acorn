@@ -22,7 +22,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
-        startup_mode: null,
       },
       {
         id: "s-run",
@@ -35,7 +34,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:04Z",
         last_message: null,
-        startup_mode: null,
       },
       {
         id: "s-need",
@@ -48,7 +46,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:03Z",
         last_message: null,
-        startup_mode: null,
       },
       {
         id: "s-fail",
@@ -61,7 +58,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:02Z",
         last_message: null,
-        startup_mode: null,
       },
       {
         id: "s-done",
@@ -74,7 +70,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:01Z",
         last_message: null,
-        startup_mode: null,
       },
     ]);
 
@@ -123,7 +118,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
-        startup_mode: null,
       },
       {
         id: "s-plain",
@@ -136,7 +130,6 @@ test.describe("sessions: list rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:04Z",
         last_message: null,
-        startup_mode: null,
       },
     ]);
 

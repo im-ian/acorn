@@ -10,7 +10,7 @@ const TAB_MARKERS: Array<{
 }> = [
   { tab: "Terminal", marker: { kind: "text", pattern: /Font family/i } },
   { tab: "Agents", marker: { kind: "text", pattern: /which AI CLI acorn uses/i } },
-  { tab: "Sessions", marker: { kind: "text", pattern: /Default session startup/i } },
+  { tab: "Sessions", marker: { kind: "text", pattern: /Confirm before removing/i } },
   { tab: "Editor", marker: { kind: "text", pattern: /Editor command/i } },
   { tab: "Notifications", marker: { kind: "text", pattern: /System notifications/i } },
   { tab: "Storage", marker: { kind: "heading", name: "Reclaimable cache" } },
