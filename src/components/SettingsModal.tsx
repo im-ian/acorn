@@ -10,6 +10,7 @@ import {
   type ReleaseNotes,
 } from "../lib/releases";
 import { useUpdater } from "../lib/updater-store";
+import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
@@ -59,11 +60,30 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "about", label: "About" },
 ];
 
+const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
+
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
   const reset = useSettings((s) => s.reset);
+  const pendingTab = useSettings((s) => s.pendingTab);
+  const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
+
+  // When the store reports a pending tab (e.g. StatusBar daemon button
+  // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
+  // jump there on the next render and clear the flag so subsequent
+  // opens restore the user's manual tab choice. Subscribing to
+  // `pendingTab` (not just `open`) makes the deep-link work even when
+  // the modal is already open — without it the effect would only fire
+  // on the open-flag transition and a repeat click would no-op.
+  useEffect(() => {
+    if (!open || pendingTab === null) return;
+    const pending = consumePendingTab();
+    if (pending && TAB_IDS.has(pending)) {
+      setTab(pending as Tab);
+    }
+  }, [open, pendingTab, consumePendingTab]);
 
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step.
@@ -253,41 +273,73 @@ function SessionSettings() {
   const patchSessions = useSettings((s) => s.patchSessions);
 
   return (
-    <section className="space-y-4">
-      <Field
-        label="Confirm before removing a session"
-        hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+    <section className="space-y-6">
+      <div className="space-y-4">
+        <Field
+          label="Confirm before removing a session"
+          hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.confirmRemove}
+              onChange={(e) =>
+                patchSessions({ confirmRemove: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Show confirmation dialog
+          </label>
+        </Field>
+        <Field
+          label="Close tab when the process exits"
+          hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.closeOnExit}
+              onChange={(e) =>
+                patchSessions({ closeOnExit: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Auto-close on exit
+          </label>
+        </Field>
+        <ControlSessionInstallSection />
+      </div>
+      <SettingsGroup
+        title="Background sessions"
+        description="The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
       >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.confirmRemove}
-            onChange={(e) =>
-              patchSessions({ confirmRemove: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Show confirmation dialog
-        </label>
-      </Field>
-      <Field
-        label="Close tab when the process exits"
-        hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.closeOnExit}
-            onChange={(e) =>
-              patchSessions({ closeOnExit: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Auto-close on exit
-        </label>
-      </Field>
-      <ControlSessionInstallSection />
+        <BackgroundSessionsSettings />
+      </SettingsGroup>
     </section>
+  );
+}
+
+function SettingsGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-3 border-t border-border pt-5">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+          {title}
+        </h3>
+        {description ? (
+          <p className="mt-0.5 text-[11px] text-fg-muted/80">{description}</p>
+        ) : null}
+      </div>
+      {children}
+    </div>
   );
 }
 

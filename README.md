@@ -66,16 +66,23 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
   - 사이드바의 **유휴 / 입력 대기 / 작업 중** 라이브 상태 표시
   - 우측 패널의 todo 리스트
 
-### 🛰️ Control session — 에이전트가 형제 세션을 조작 (preview)
-- 한 control session에서 같은 프로젝트의 다른 세션들을 조작하는 오케스트레이션 좌석
+### 💾 에이전트 대화 영속화
+- Acorn 세션에서 `claude` / `codex`를 띄운 뒤 앱을 껐다 켜도 **이전 대화 그대로 이어서** 사용 가능
+- 별도 설정 / 설치 단계 없음 — 그냥 `claude` 또는 `codex` 치면 자동 적용
+- 사용자가 직접 옵션이나 서브커맨드를 지정한 호출은 그대로 통과
+
+### 🛏️ Background sessions
+- Acorn 앱을 종료·재시작해도 **PTY 세션이 그대로 살아 있음** — 다시 열면 화면도 복원
+- 기본 ON. 끄면 기존 동작(앱 종료 시 세션 같이 종료)으로 폴백
+- Settings → Sessions에서 상태 확인, 재시작·종료 제어
+- 상태 표시줄 아이콘 → 드롭다운으로 서비스 상태 한눈에 확인
+
+### 🛰️ Control session — 에이전트가 형제 세션을 조작
+- 한 세션 안의 AI 에이전트가 같은 프로젝트의 다른 세션을 직접 조작 (입력 전송, 화면 읽기, 새 세션 생성, 선택, 종료)
 - 시작: `⌘⌥⇧T` 또는 커맨드 팔레트 → **New control session** (사이드바에 🤖 아이콘)
-- 안에서 띄운 에이전트는 자동으로 priming됨 — `ACORN_SESSION_ID` / `ACORN_IPC_SOCKET` 환경변수 + `<cwd>/.acorn-control.md` 마커 파일로 IPC 프로토콜과 사용 가능한 명령들이 안내됨
-- 번들된 `acorn-ipc` CLI가 PTY의 PATH에 자동 prepend → **control session 안에선 설치 단계 없이 바로 사용 가능**
-- 6가지 명령: `list-sessions`, `send-keys`, `read-buffer`, `new-session`, `select-session`, `kill-session`
-- 권한: control session만 발신 가능, 같은 프로젝트 내부로 스코프 제한 (`Unauthorized` / `OutOfScope`)
-- 외부 셸에서 호출하려면 Settings → Sessions → "Control sessions"의 install pill 사용
+- 같은 프로젝트 내부로 권한 자동 스코프
 - 자세한 사용법 + 보안 모델: [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md)
-- 플랫폼: macOS / Linux (Unix 도메인 소켓 기반, Windows 미지원)
+- 플랫폼: macOS / Linux (Windows 미지원)
 
 ### 🎯 우측 패널
 - **Todos** — 진행 중인 작업 (**Claude Code 전용** — transcript의 `TodoWrite` 이벤트 파싱)
@@ -140,12 +147,12 @@ xattr -dr com.apple.quarantine /Applications/Acorn.app
 
 ```bash
 bun install
-bun run build:sidecar  # acorn-ipc 사이드카 빌드 (최초 1회 + IPC 변경 시)
+bun run build:sidecar  # acorn-ipc + acornd 사이드카 빌드 (최초 1회 + IPC/daemon 변경 시)
 bun run tauri dev      # 개발 모드
 bun run tauri build    # 프로덕션 빌드
 ```
 
-> ℹ️ `bun run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/acorn-ipc-...' doesn't exist` 에러로 빌드가 실패합니다. `bun run build:sidecar`가 호스트 타깃에 맞는 바이너리를 빌드하고 올바른 위치에 stage합니다.
+> ℹ️ `bun run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>`, `acornd-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/...' doesn't exist` 에러로 빌드가 실패합니다. `bun run build:sidecar`가 호스트 타깃에 맞는 두 바이너리를 빌드하고 올바른 위치에 stage합니다.
 
 ### 테스트
 

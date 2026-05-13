@@ -551,7 +551,17 @@ function persist(value: AcornSettings): void {
 interface SettingsState {
   settings: AcornSettings;
   open: boolean;
+  /// Tab the modal should land on the next time it opens. Consumed once
+  /// by SettingsModal on mount/open, then reset to null. Lets the
+  /// StatusBar daemon button deep-link to the Background sessions tab
+  /// without exposing the modal's internal Tab union outside the store.
+  pendingTab: string | null;
   setOpen: (v: boolean) => void;
+  /// Open settings AND land on a specific tab. The tab id is the same
+  /// string the modal uses internally; unknown ids fall back to the
+  /// default tab.
+  openTab: (tab: string) => void;
+  consumePendingTab: () => string | null;
   patchTerminal: (patch: Partial<AcornSettings["terminal"]>) => void;
   patchAgents: (
     patch: Partial<{
@@ -581,10 +591,19 @@ interface SettingsState {
   reset: () => void;
 }
 
-export const useSettings = create<SettingsState>((set) => ({
+export const useSettings = create<SettingsState>((set, get) => ({
   settings: loadSettings(),
   open: false,
+  pendingTab: null,
   setOpen: (v) => set({ open: v }),
+  openTab: (tab) => set({ open: true, pendingTab: tab }),
+  consumePendingTab: () => {
+    const t = get().pendingTab;
+    if (t !== null) {
+      set({ pendingTab: null });
+    }
+    return t;
+  },
   patchTerminal: (patch) =>
     set((s) => {
       const next: AcornSettings = {

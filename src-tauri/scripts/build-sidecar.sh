@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build the `acorn-ipc` CLI and stage it where Tauri's externalBin expects
-# it: `src-tauri/binaries/acorn-ipc-<target-triple>`.
+# Build the sidecar binaries (`acorn-ipc`, `acornd`) and stage them where
+# Tauri's externalBin expects: `src-tauri/binaries/<name>-<target-triple>`.
 #
 # Tauri 2's externalBin convention names the staged file after the *target*
 # triple — the one being built for, not the host the script is running on.
-# When `tauri build --target X` runs, the matching `acorn-ipc-X` file must
+# When `tauri build --target X` runs, every matching `<name>-X` file must
 # exist before the build script's existence check fires. For the release
 # matrix on Apple-Silicon `macos-latest` runners that means producing an
 # x86_64 binary alongside the aarch64 one, even though the host is aarch64.
@@ -15,7 +15,7 @@
 # the script keeps working without extra setup.
 #
 # Exits non-zero on any failure so the build surfaces the problem instead
-# of silently shipping a `.app` without the CLI sidecar.
+# of silently shipping a `.app` without one of the sidecars.
 
 set -euo pipefail
 
@@ -29,38 +29,50 @@ if [ -z "$target_triple" ]; then
   exit 1
 fi
 
+# List of [[bin]] targets that need to land in the bundle. Adding a new
+# sidecar here is a single-line change; `externalBin` in tauri.conf.json
+# must match.
+sidecars=(acorn-ipc acornd)
+
 # Always cross-compile with `--target` so the output lands in
 # `target/<triple>/<profile>/` even when host == target. The uniform
 # layout removes a branching copy step below and matches how the rest of
 # the release workflow already invokes cargo for the main binary.
-cargo_flags=(--bin acorn-ipc --target "$target_triple")
+cargo_flags=(--target "$target_triple")
+for bin in "${sidecars[@]}"; do
+  cargo_flags+=(--bin "$bin")
+done
 if [ "$profile" = "release" ]; then
   cargo_flags+=(--release)
 fi
 
 # Tauri's build.rs verifies that every `externalBin` path exists at
-# compile time. The sidecar we're about to build *is* that externalBin,
-# so the check would fail before we have a binary to point at. Stage an
-# empty placeholder first to satisfy the existence check; cargo's build
-# script only inspects whether the file is there, not its contents. The
-# real binary overwrites the placeholder once `cargo build` finishes.
+# compile time. The sidecars we're about to build *are* those externalBin
+# entries, so the check would fail before we have binaries to point at.
+# Stage empty placeholders first to satisfy the existence check; cargo's
+# build script only inspects whether each file is there, not its
+# contents. The real binaries overwrite the placeholders once
+# `cargo build` finishes.
 dest_dir="binaries"
-dest="$dest_dir/acorn-ipc-$target_triple"
 mkdir -p "$dest_dir"
-if [ ! -f "$dest" ]; then
-  : > "$dest"
-fi
+for bin in "${sidecars[@]}"; do
+  dest="$dest_dir/$bin-$target_triple"
+  if [ ! -f "$dest" ]; then
+    : > "$dest"
+  fi
+done
 
 echo "build-sidecar: cargo build ${cargo_flags[*]}"
 cargo build "${cargo_flags[@]}"
 
-src="target/$target_triple/$profile/acorn-ipc"
-if [ ! -f "$src" ]; then
-  echo "error: expected built binary at $src" >&2
-  exit 1
-fi
-
-cp -f "$src" "$dest"
-chmod +x "$dest"
-
-echo "build-sidecar: staged $dest"
+for bin in "${sidecars[@]}"; do
+  src="target/$target_triple/$profile/$bin"
+  dest="$dest_dir/$bin-$target_triple"
+  if [ ! -f "$src" ]; then
+    echo "error: expected built binary at $src" >&2
+    exit 1
+  fi
+  cp -f "$src" "$dest"
+  chmod +x "$dest"
+  echo "build-sidecar: staged $dest"
+done
