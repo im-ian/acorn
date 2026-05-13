@@ -51,6 +51,10 @@
   display: none;
 }
 
+:root[data-bg-app="on"] .acorn-bg-terminal {
+  display: none;
+}
+
 :root[data-bg-app="on"] .acorn-app-shell .bg-bg {
   background-color: color-mix(in srgb, var(--color-bg) 64%, transparent) !important;
 }

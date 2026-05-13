@@ -176,6 +176,12 @@ describe("background overlay CSS", () => {
     );
     expect(terminalSource).toContain("nextBackground.applyToTerminal");
   });
+
+  it("does not paint a second terminal image when the app background is active", () => {
+    expect(appCss).toMatch(
+      /:root\[data-bg-app="on"\] \.acorn-bg-terminal\s*\{\s*display: none;\s*\}/,
+    );
+  });
 });
 
 describe("Tauri background asset access", () => {
