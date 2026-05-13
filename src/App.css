@@ -9,6 +9,7 @@
   --color-border: #2f3338;
   --color-accent: oklch(72% 0.16 145);
   --color-accent-hover: oklch(78% 0.16 145);
+  --color-on-accent: #fff;
   --color-danger: oklch(62% 0.22 25);
   --color-warning: oklch(78% 0.16 75);
 
