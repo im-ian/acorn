@@ -1652,11 +1652,19 @@ fn classify_ai_agent_status_for_session(
         AiAgent::Claude if claude_transcript_exists(session_id) => {
             Some(map_session_status_to_agent_status(detected_status))
         }
-        AiAgent::Codex => codex_cwd
-            .and_then(|cwd| codex_status_for_cwd(cwd, codex_started_at))
+        AiAgent::Codex => codex_status_for_detected_process(codex_cwd, codex_started_at)
             .or(Some(AiAgentStatus::Open)),
         AiAgent::Claude | AiAgent::Gemini | AiAgent::Ollama => Some(AiAgentStatus::Open),
     }
+}
+
+fn codex_status_for_detected_process(
+    cwd: Option<&Path>,
+    started_at: Option<SystemTime>,
+) -> Option<AiAgentStatus> {
+    let cwd = cwd?;
+    let started_at = started_at?;
+    codex_status_for_cwd(cwd, Some(started_at))
 }
 
 fn codex_status_for_cwd(cwd: &Path, started_at: Option<SystemTime>) -> Option<AiAgentStatus> {
@@ -1992,6 +2000,14 @@ mod tests {
                 None,
             ),
             Some(AiAgentStatus::Open),
+        );
+    }
+
+    #[test]
+    fn codex_transcript_status_requires_detected_process_start_time() {
+        assert_eq!(
+            codex_status_for_detected_process(Some(std::path::Path::new("/tmp/repo")), None),
+            None,
         );
     }
 

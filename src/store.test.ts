@@ -574,6 +574,42 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("renames an AI session from the app-created default tab name", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { name: "repo-a" })],
+    );
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        sessions: {
+          ...DEFAULT_SETTINGS.sessions,
+          autoRenameAiTabs: true,
+          includeAiPromptInTabName: true,
+        },
+      },
+    });
+    useAppStore.getState().recordTerminalInput("a1", "claude -p fix tests\r");
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        active_agent: "claude",
+      },
+    ]);
+    mockApi.renameSession.mockResolvedValueOnce(
+      session("a1", REPO_A, { name: "Claude: fix tests" }),
+    );
+
+    await useAppStore.getState().pollSessionStatuses();
+
+    expect(mockApi.renameSession).toHaveBeenCalledWith(
+      "a1",
+      "Claude: fix tests",
+    );
+  });
+
   it("does not keep renaming an AI session after the generated name is set", async () => {
     await seed(
       [project(REPO_A, 0)],

@@ -178,6 +178,16 @@ function nextPaneId(): PaneId {
   paneCounter += 1;
   return `pane-${Date.now().toString(36)}-${paneCounter}`;
 }
+
+function isAppDefaultSessionName(name: string, repoPath: string): boolean {
+  const base = repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
+  if (!base) return false;
+  const trimmed = name.trim();
+  if (trimmed === base) return true;
+  if (!trimmed.startsWith(`${base}-`)) return false;
+  return /^\d+$/.test(trimmed.slice(base.length + 1));
+}
+
 let splitCounter = 0;
 function nextSplitId(): string {
   splitCounter += 1;
@@ -509,6 +519,7 @@ export const useAppStore = create<AppStateModel>()(
           const nextAgentStatus = nextAgent ? update.agent_status ?? "open" : null;
           const canAutoRename =
             sess.name === sess.id ||
+            isAppDefaultSessionName(sess.name, sess.repo_path) ||
             isGeneratedAiSessionName(sess.name) ||
             shouldRepairGeneratedAiSessionName(sess.name);
           if (
