@@ -3,12 +3,12 @@ import { create } from "zustand";
 const STORAGE_KEY = "acorn:settings:v1";
 
 /**
- * Catalog of AI agents acorn knows how to spawn. The user picks ONE
- * `selected` agent under Settings → Agents; that choice powers every AI
- * feature in the app (Sessions startup's Agent mode, the merge dialog's
- * "Generate with AI" button, …). Each agent has its own invocation
- * conventions for interactive PTY use and one-shot stdin/stdout use,
- * captured in `agentInteractiveCommand` / `agentOneshotCommand` below.
+ * Catalog of AI agents acorn knows how to invoke for one-shot tasks.
+ * The user picks ONE `selected` agent under Settings → Agents; that
+ * choice powers every AI feature in the app (currently the merge
+ * dialog's "Generate with AI" button). Each agent has its own one-shot
+ * stdin/stdout invocation convention, captured in `agentOneshotCommand`
+ * below.
  */
 export type AgentProvider = "claude" | "gemini" | "ollama" | "llm" | "codex";
 
@@ -21,43 +21,35 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   label: string;
   /** One-shot invocation hint shown in Settings. */
   oneshotHint: string;
-  /** Interactive PTY invocation hint shown in Settings. */
-  interactiveHint: string;
 }> = [
   {
     value: "claude",
     label: "Claude Code",
     oneshotHint: "claude -p --output-format text",
-    interactiveHint: "claude",
   },
   {
     value: "gemini",
     label: "Gemini CLI",
     oneshotHint: "gemini -p",
-    interactiveHint: "gemini",
   },
   {
     value: "ollama",
     label: "Ollama (local)",
     oneshotHint: "ollama run <model>",
-    interactiveHint: "ollama run <model>",
   },
   {
     value: "llm",
     label: "llm CLI",
     oneshotHint: "llm [-m <model>]",
-    interactiveHint: "llm chat [-m <model>]",
   },
   {
     value: "codex",
     label: "OpenAI Codex CLI",
     oneshotHint: "codex (interactive only)",
-    interactiveHint: "codex",
   },
 ];
 
-export type { SessionStartupMode } from "./types";
-import type { PrStateFilter, SessionStartupMode } from "./types";
+import type { PrStateFilter } from "./types";
 
 /**
  * Allowed PRs-tab refresh intervals shown in the Settings UI. Picked to
@@ -160,33 +152,21 @@ export interface AcornSettings {
     linkActivation: TerminalLinkActivation;
   };
   /**
-   * The single AI agent acorn uses everywhere: Sessions startup (when
-   * mode === "agent"), the merge dialog's "Generate with AI" button, and
-   * any future AI-powered features. Per-agent options (Ollama / llm
-   * model strings) live alongside so changing them once updates every
-   * call site.
+   * The single AI agent acorn uses everywhere AI features fire (currently
+   * the merge dialog's "Generate with AI" button). Per-agent options
+   * (Ollama / llm model strings) live alongside so changing them once
+   * updates every call site.
    */
   agents: {
     selected: SelectedAgent;
     /**
      * Used when `selected === "custom"`. Whitespace-separated; no shell
-     * expansion. The same string powers both interactive (Sessions) and
-     * one-shot (commit message) invocations — empty falls back to
-     * Claude Code in both cases.
+     * expansion. Powers the one-shot commit-message invocation; empty
+     * falls back to Claude Code.
      */
     customCommand: string;
     ollama: { model: string };
     llm: { model: string };
-  };
-  sessionStartup: {
-    mode: SessionStartupMode;
-    /**
-     * Used when `mode === "custom"`. Independent from
-     * `agents.customCommand` because session startup launches a long-
-     * lived PTY (your shell of choice), which has different needs from
-     * the AI one-shot command.
-     */
-    customCommand: string;
   };
   sessions: {
     /**
@@ -291,10 +271,6 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     customCommand: "",
     ollama: { model: "" },
     llm: { model: "" },
-  },
-  sessionStartup: {
-    mode: "terminal",
-    customCommand: "",
   },
   sessions: {
     confirmRemove: true,
@@ -451,24 +427,8 @@ function loadSettings(): AcornSettings {
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
 
-    // `mode === "claude"` from older storage maps to agent mode with the
-    // global selected agent.
-    const startupRaw = (parsed.sessionStartup ?? {}) as {
-      mode?: string;
-      customCommand?: string;
-    };
-    const legacyClaudeMode = startupRaw.mode === "claude";
-    const startupMode: SessionStartupMode = legacyClaudeMode
-      ? "agent"
-      : startupRaw.mode === "agent" ||
-          startupRaw.mode === "terminal" ||
-          startupRaw.mode === "custom"
-        ? startupRaw.mode
-        : DEFAULT_SETTINGS.sessionStartup.mode;
-
     // Prefer the `agents` block; fall back to values stored under the older
-    // `commitMessage` shape, then to the Claude default. `mode === "claude"`
-    // from older storage seeds `selected` when nothing else has set it.
+    // `commitMessage` shape, then to the Claude default.
     const agentsRaw = (parsed.agents ?? {}) as {
       selected?: string;
       customCommand?: string;
@@ -479,9 +439,7 @@ function loadSettings(): AcornSettings {
     const legacySelected =
       commitRaw.agent ?? commitRaw.provider ?? undefined;
     const selected = normalizeSelectedAgent(
-      agentsRaw.selected ??
-        legacySelected ??
-        (legacyClaudeMode ? "claude" : DEFAULT_SETTINGS.agents.selected),
+      agentsRaw.selected ?? legacySelected ?? DEFAULT_SETTINGS.agents.selected,
       DEFAULT_SETTINGS.agents.selected,
     );
     const customCommand =
@@ -523,12 +481,6 @@ function loadSettings(): AcornSettings {
         customCommand,
         ollama: { model: ollamaModel },
         llm: { model: llmModel },
-      },
-      sessionStartup: {
-        mode: startupMode,
-        customCommand:
-          startupRaw.customCommand ??
-          DEFAULT_SETTINGS.sessionStartup.customCommand,
       },
       sessions: {
         ...DEFAULT_SETTINGS.sessions,
@@ -609,9 +561,6 @@ interface SettingsState {
       llm: Partial<AcornSettings["agents"]["llm"]>;
     }>,
   ) => void;
-  patchSessionStartup: (
-    patch: Partial<AcornSettings["sessionStartup"]>,
-  ) => void;
   patchSessions: (patch: Partial<AcornSettings["sessions"]>) => void;
   patchEditor: (patch: Partial<AcornSettings["editor"]>) => void;
   patchNotifications: (
@@ -658,15 +607,6 @@ export const useSettings = create<SettingsState>((set) => ({
           ollama: { ...s.settings.agents.ollama, ...(patch.ollama ?? {}) },
           llm: { ...s.settings.agents.llm, ...(patch.llm ?? {}) },
         },
-      };
-      persist(next);
-      return { settings: next };
-    }),
-  patchSessionStartup: (patch) =>
-    set((s) => {
-      const next: AcornSettings = {
-        ...s.settings,
-        sessionStartup: { ...s.settings.sessionStartup, ...patch },
       };
       persist(next);
       return { settings: next };
@@ -757,34 +697,6 @@ interface ResolvedCommand {
 }
 
 /**
- * Interactive PTY invocation for an agent. Used by Sessions startup when
- * mode === "agent". Each provider's CLI launches into a chat/REPL loop.
- */
-function agentInteractiveCommand(
-  agent: AgentProvider,
-  agents: AcornSettings["agents"],
-): ResolvedCommand {
-  switch (agent) {
-    case "claude":
-      return { command: "claude", args: [] };
-    case "gemini":
-      return { command: "gemini", args: [] };
-    case "codex":
-      return { command: "codex", args: [] };
-    case "ollama": {
-      const model = agents.ollama.model.trim() || "llama3";
-      return { command: "ollama", args: ["run", model] };
-    }
-    case "llm": {
-      const model = agents.llm.model.trim();
-      return model
-        ? { command: "llm", args: ["chat", "-m", model] }
-        : { command: "llm", args: ["chat"] };
-    }
-  }
-}
-
-/**
  * One-shot stdin → stdout invocation for an agent. Used by the merge
  * dialog's "Generate with AI" action. Codex has no documented headless
  * mode here, so users who need codex specifically should select Custom
@@ -822,44 +734,6 @@ function tokenizeCustom(raw: string): ResolvedCommand | null {
 }
 
 /**
- * Resolve the command (and args) used to spawn a session's PTY based on
- * the current `sessionStartup` setting.
- *
- * - `terminal` → empty command; the Rust pty_spawn falls back to `$SHELL`
- * - `agent`    → globally selected agent's interactive invocation, or
- *                the agent custom command when selected === "custom"
- * - `custom`   → sessionStartup.customCommand (separate from the agent
- *                custom command), falls back to terminal when blank
- *
- * `modeOverride` lets a per-session preference (persisted on `Session`)
- * win over the global setting so changing `sessionStartup.mode` does not
- * retroactively swap the startup of existing sessions on respawn. `null`
- * or `undefined` means "no per-session preference" → use the global.
- */
-export function resolveStartupCommand(
-  s: AcornSettings,
-  modeOverride?: SessionStartupMode | null,
-): ResolvedCommand {
-  const mode = modeOverride ?? s.sessionStartup.mode;
-  if (mode === "agent") {
-    if (s.agents.selected === "custom") {
-      return (
-        tokenizeCustom(s.agents.customCommand) ??
-        agentInteractiveCommand("claude", s.agents)
-      );
-    }
-    return agentInteractiveCommand(s.agents.selected, s.agents);
-  }
-  if (mode === "custom") {
-    return tokenizeCustom(s.sessionStartup.customCommand) ?? {
-      command: "",
-      args: [],
-    };
-  }
-  return { command: "", args: [] };
-}
-
-/**
  * Resolve the AI CLI invocation for the merge dialog's "Generate with AI"
  * action. The resolved value is sent to the Rust backend as
  * `(command, args)` so the backend stays provider-agnostic.
@@ -876,9 +750,8 @@ export function resolveAiCommitCommand(s: AcornSettings): ResolvedCommand {
 
 /**
  * Human-friendly label for the global agent selection. Used by the merge
- * dialog tooltip and the Sessions tab description so the user sees at a
- * glance which CLI will run before clicking Generate or starting a
- * session.
+ * dialog tooltip so the user sees which CLI will run before clicking
+ * Generate.
  */
 export function selectedAgentLabel(s: AcornSettings): string {
   if (s.agents.selected === "custom") return "Custom command";

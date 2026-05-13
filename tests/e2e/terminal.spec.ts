@@ -1,7 +1,7 @@
 import { test, expect } from "./support";
 
 test.describe("terminal: spawn", () => {
-  test("activating a terminal-mode session calls pty_spawn with the session's cwd", async ({
+  test("activating a session calls pty_spawn with the session's cwd", async ({
     page,
     tauri,
   }) => {
@@ -28,8 +28,6 @@ test.describe("terminal: spawn", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
-        // Terminal startup → empty command, args=[]; Rust falls back to $SHELL.
-        startup_mode: "terminal",
       },
     ]);
     // Record every pty_spawn invocation on `window` so the test can read it
@@ -65,14 +63,10 @@ test.describe("terminal: spawn", () => {
     )) as Array<{
       sessionId: string;
       cwd: string;
-      command: string;
-      args: string[];
     }>;
 
     const first = calls[0];
     expect(first.sessionId).toBe("s-term");
     expect(first.cwd).toBe("/tmp/demo");
-    expect(first.command).toBe("");
-    expect(first.args).toEqual([]);
   });
 });

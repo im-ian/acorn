@@ -27,7 +27,6 @@ async function seedNoAccess(
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
-      startup_mode: "terminal",
     },
   ]);
   await tauri.handle("list_pull_requests", () => ({

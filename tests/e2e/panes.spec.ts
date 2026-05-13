@@ -18,7 +18,6 @@ const SESSION = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:05Z",
   last_message: null,
-  startup_mode: "terminal" as const,
 };
 
 test.describe("pane / sidebar shortcuts", () => {
@@ -100,7 +99,6 @@ test.describe("pane / sidebar shortcuts", () => {
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-01T00:00:05Z",
               last_message: null,
-              startup_mode: "terminal",
             },
           ];
     });

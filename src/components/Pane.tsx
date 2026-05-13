@@ -98,17 +98,7 @@ export function Pane({ paneId }: PaneProps) {
     setFocusedPane(paneId);
     const name = suggestSessionName(repoPath, sessions);
     try {
-      // Snapshot the current global startup mode onto the new session so
-      // changing the default later does not retroactively swap how this
-      // session respawns after an app restart.
-      const startupMode =
-        useSettings.getState().settings.sessionStartup.mode;
-      const created = await api.createSession(
-        name,
-        repoPath,
-        false,
-        startupMode,
-      );
+      const created = await api.createSession(name, repoPath, false);
       await useAppStore.getState().refreshAll();
       selectSession(created.id);
     } catch (err) {
