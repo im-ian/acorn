@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fontStackFromSlots } from "./fonts";
 import { DEFAULT_SETTINGS } from "./settings";
 
 describe("terminal.linkActivation default", () => {
@@ -50,10 +49,13 @@ describe("appearance settings migration", () => {
     expect(settings.appearance.background.relativePath).toBeNull();
   });
 
-  it("derives terminal.fontFamily from appearance.fontSlots on load", async () => {
+  it("keeps terminal.fontFamily as the source of truth on load", async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
+        terminal: {
+          fontFamily: '"Berkeley Mono", Menlo, monospace',
+        },
         appearance: { fontSlots: ["Menlo", "Monaco", null] },
       }),
     );
@@ -63,11 +65,11 @@ describe("appearance settings migration", () => {
     const settings = useSettings.getState().settings;
 
     expect(settings.terminal.fontFamily).toBe(
-      fontStackFromSlots(["Menlo", "Monaco", null], "monospace"),
+      '"Berkeley Mono", Menlo, monospace',
     );
   });
 
-  it("keeps custom system font names that are not in the curated seed list", async () => {
+  it("does not derive terminal.fontFamily from custom appearance fontSlots", async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -85,11 +87,11 @@ describe("appearance settings migration", () => {
       null,
     ]);
     expect(settings.terminal.fontFamily).toBe(
-      fontStackFromSlots(["CommitMono", "Berkeley Mono", null], "monospace"),
+      DEFAULT_SETTINGS.terminal.fontFamily,
     );
   });
 
-  it("migrates legacy terminal.fontFamily into appearance.fontSlots when slots are missing", async () => {
+  it("keeps legacy terminal.fontFamily without migrating it into appearance fontSlots", async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -101,13 +103,32 @@ describe("appearance settings migration", () => {
     const { useSettings } = await import("./settings");
     const settings = useSettings.getState().settings;
 
-    expect(settings.appearance.fontSlots).toEqual([
-      "Menlo",
-      "Monaco",
-      "Consolas",
-    ]);
+    expect(settings.appearance.fontSlots).toEqual(
+      DEFAULT_SETTINGS.appearance.fontSlots,
+    );
     expect(settings.terminal.fontFamily).toBe(
-      fontStackFromSlots(["Menlo", "Monaco", "Consolas"], "monospace"),
+      "Menlo, Monaco, Consolas, monospace",
+    );
+  });
+
+  it("does not rewrite terminal.fontFamily when patching appearance", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          fontFamily: '"Berkeley Mono", Menlo, monospace',
+        },
+      },
+    });
+
+    useSettings.getState().patchAppearance({ background: { opacity: 0.4 } });
+
+    expect(useSettings.getState().settings.terminal.fontFamily).toBe(
+      '"Berkeley Mono", Menlo, monospace',
     );
   });
 

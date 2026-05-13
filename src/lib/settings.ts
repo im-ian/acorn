@@ -2,7 +2,6 @@ import { create } from "zustand";
 import type { BackgroundFit, BackgroundState } from "./background";
 import {
   fontStackFromSlots,
-  fontSlotsFromStack,
   sanitizeFontFamilyName,
   type CuratedMonospaceFont,
 } from "./fonts";
@@ -413,18 +412,11 @@ function normalizeThemeId(v: unknown, fallback: string): string {
 function normalizeFontSlots(
   v: unknown,
   fallback: AcornSettings["appearance"]["fontSlots"],
-  legacyStack?: unknown,
 ): AcornSettings["appearance"]["fontSlots"] {
-  const source = Array.isArray(v)
-    ? v
-    : typeof legacyStack === "string"
-      ? fontSlotsFromStack(legacyStack)
-      : null;
-
-  if (!source) return fallback;
+  if (!Array.isArray(v)) return fallback;
 
   const cleaned = [0, 1, 2].map((index) => {
-    return sanitizeFontFamilyName(source[index]);
+    return sanitizeFontFamilyName(v[index]);
   });
 
   if (!cleaned[0]) return fallback;
@@ -565,7 +557,6 @@ function loadSettings(): AcornSettings {
       fontSlots: normalizeFontSlots(
         appearanceRaw.fontSlots,
         DEFAULT_SETTINGS.appearance.fontSlots,
-        terminalRaw.fontFamily,
       ),
       background: {
         relativePath:
@@ -598,16 +589,10 @@ function loadSettings(): AcornSettings {
             : DEFAULT_SETTINGS.appearance.background.applyToTerminal,
       },
     };
-    const derivedFontFamily = fontStackFromSlots(
-      appearance.fontSlots,
-      "monospace",
-    );
-
     return {
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
         ...terminalRaw,
-        fontFamily: derivedFontFamily,
         fontWeight: normalizeWeight(
           terminalRaw.fontWeight,
           DEFAULT_SETTINGS.terminal.fontWeight,
@@ -890,10 +875,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         appearance,
-        terminal: {
-          ...s.settings.terminal,
-          fontFamily: fontStackFromSlots(fontSlots, "monospace"),
-        },
       };
       persist(next);
       return { settings: next };

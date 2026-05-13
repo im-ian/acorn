@@ -6,9 +6,8 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import {
   importBackgroundImage,
@@ -17,11 +16,6 @@ import {
 } from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
-import {
-  CURATED_MONOSPACE_FONTS,
-  fontFamilyOptions,
-  type FontOptionScope,
-} from "../lib/fonts";
 import { sendTestNotification } from "../lib/notifications";
 import {
   fetchLatestReleaseNotes,
@@ -191,9 +185,15 @@ function TerminalSettings() {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px] text-fg-muted">
-        Font family is selected in <strong>Appearance → Terminal font</strong>.
-      </div>
+      <Field
+        label="Font family"
+        hint="Comma-separated stack. First family that resolves wins."
+      >
+        <TextInput
+          value={settings.terminal.fontFamily}
+          onChange={(e) => patchTerminal({ fontFamily: e.target.value })}
+        />
+      </Field>
       <Field label="Font size" hint="In CSS pixels. Range 8–32.">
         <Stepper
           value={settings.terminal.fontSize}
@@ -550,10 +550,6 @@ function AppearanceSettings() {
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
       />
-      <FontSection
-        slots={appearance.fontSlots}
-        onChange={(fontSlots) => patchAppearance({ fontSlots })}
-      />
       <SessionDisplaySection
         sessionDisplay={sessionDisplay}
         patch={patchSessionDisplay}
@@ -748,225 +744,6 @@ function BackgroundSection({
             />
           </Field>
         </div>
-      </div>
-    </Field>
-  );
-}
-
-type FontSlots = AcornSettings["appearance"]["fontSlots"];
-type FontSlotDrafts = [string, string, string];
-
-const FONT_SUGGESTION_LIMIT = 40;
-
-function draftsFromFontSlots(slots: FontSlots): FontSlotDrafts {
-  return [slots[0] ?? "", slots[1] ?? "", slots[2] ?? ""];
-}
-
-function FontSection({
-  slots,
-  onChange,
-}: {
-  slots: FontSlots;
-  onChange: (slots: FontSlots) => void;
-}) {
-  const [systemFonts, setSystemFonts] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<FontSlotDrafts>(() =>
-    draftsFromFontSlots(slots),
-  );
-  const [activeSlot, setActiveSlot] = useState<0 | 1 | 2 | null>(null);
-  const [fontScope, setFontScope] = useState<FontOptionScope>("mono");
-
-  const allFontOptions = useMemo(() => {
-    return fontFamilyOptions(
-      [...CURATED_MONOSPACE_FONTS, ...systemFonts],
-      fontScope,
-    );
-  }, [fontScope, systemFonts]);
-
-  useEffect(() => {
-    setDrafts(draftsFromFontSlots(slots));
-  }, [slots]);
-
-  const refreshSystemFonts = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      setSystemFonts(await api.listSystemFonts());
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshSystemFonts();
-  }, [refreshSystemFonts]);
-
-  const optionsForDraft = useCallback(
-    (value: string) => {
-      const query = value.trim().toLocaleLowerCase();
-      const options = query
-        ? allFontOptions.filter((font) =>
-            font.toLocaleLowerCase().includes(query),
-          )
-        : allFontOptions;
-      return options.slice(0, FONT_SUGGESTION_LIMIT);
-    },
-    [allFontOptions],
-  );
-
-  const setDraft = (index: 0 | 1 | 2, value: string) => {
-    setDrafts((current) => {
-      const next: FontSlotDrafts = [...current] as FontSlotDrafts;
-      next[index] = value;
-      return next;
-    });
-  };
-
-  const commitSlot = (index: 0 | 1 | 2, value: string) => {
-    const next: FontSlots = [...slots] as FontSlots;
-    const font = value.trim() === "" ? null : value.trim();
-    if (index === 0) {
-      if (!font) {
-        setDraft(0, slots[0]);
-        return;
-      }
-      next[0] = font;
-    } else {
-      next[index] = font;
-    }
-    setDrafts(draftsFromFontSlots(next));
-    setActiveSlot(null);
-    onChange(next);
-  };
-
-  const renderSlot = (index: 0 | 1 | 2, label: string, required: boolean) => {
-    const listId = `acorn-font-slot-options-${index}`;
-    const value = drafts[index];
-    const suggestions = optionsForDraft(value);
-    const showSuggestions = activeSlot === index && suggestions.length > 0;
-    return (
-      <Field key={index} label={label}>
-        <div className="relative min-w-[14rem]">
-          <TextInput
-            aria-autocomplete="list"
-            aria-controls={showSuggestions ? listId : undefined}
-            value={value}
-            onBlur={() => {
-              commitSlot(index, value);
-              setActiveSlot(null);
-            }}
-            onChange={(e) => {
-              setDraft(index, e.target.value);
-              setActiveSlot(index);
-            }}
-            onFocus={() => setActiveSlot(index)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.currentTarget.blur();
-              } else if (e.key === "Escape") {
-                setDrafts(draftsFromFontSlots(slots));
-                setActiveSlot(null);
-              }
-            }}
-            placeholder={
-              required ? "Search or type a font" : "Optional fallback"
-            }
-            className={!required && value ? "pr-8" : undefined}
-          />
-          {!required && value ? (
-            <button
-              type="button"
-              aria-label={`Clear ${label} font`}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                commitSlot(index, "");
-              }}
-              className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-fg-muted transition hover:bg-bg hover:text-fg"
-              tabIndex={-1}
-            >
-              <X size={12} />
-            </button>
-          ) : null}
-          {showSuggestions ? (
-            <div
-              id={listId}
-              role="listbox"
-              className="absolute left-0 right-0 top-full z-50 mt-1 max-h-36 overflow-y-auto rounded-md border border-border bg-bg-elevated py-1 shadow-lg"
-            >
-              {suggestions.map((font) => (
-                <button
-                  key={font}
-                  type="button"
-                  role="option"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    commitSlot(index, font);
-                  }}
-                  className="block w-full px-2 py-1 text-left font-mono text-xs text-fg-muted transition hover:bg-bg hover:text-fg"
-                >
-                  {font}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </Field>
-    );
-  };
-
-  return (
-    <Field
-      label="Terminal font"
-      hint="Search installed system fonts or type any font family. A generic monospace fallback is appended automatically."
-    >
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
-          <button
-            type="button"
-            onClick={() => void refreshSystemFonts()}
-            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 transition hover:text-fg disabled:opacity-60"
-            disabled={loading}
-          >
-            <RefreshCcw size={12} /> {loading ? "Scanning..." : "Refresh fonts"}
-          </button>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={fontScope === "all"}
-            onClick={() =>
-              setFontScope((current) => (current === "mono" ? "all" : "mono"))
-            }
-            className="inline-flex h-7 items-center gap-2 rounded-md border border-border bg-bg px-2 transition hover:text-fg"
-          >
-            <span
-              className={cn(
-                "relative h-3.5 w-6 rounded-full transition",
-                fontScope === "all" ? "bg-accent" : "bg-bg-elevated",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-0.5 h-2.5 w-2.5 rounded-full bg-fg transition",
-                  fontScope === "all" ? "left-3" : "left-0.5",
-                )}
-              />
-            </span>
-            {fontScope === "mono" ? "Mono only" : "All fonts"}
-          </button>
-          <span>
-            {systemFonts.length > 0
-              ? `${systemFonts.length} system fonts indexed`
-              : "Curated fonts available"}
-          </span>
-          {loadError ? <span className="text-danger">{loadError}</span> : null}
-        </div>
-        {renderSlot(0, "Primary", true)}
-        {renderSlot(1, "Secondary", false)}
-        {renderSlot(2, "Tertiary", false)}
       </div>
     </Field>
   );

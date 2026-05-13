@@ -6,14 +6,11 @@ const mocks = vi.hoisted(() => ({
   importBackgroundImage: vi.fn<
     (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
   >(),
-  listSystemFonts: vi.fn<() => Promise<string[]>>(),
   removeBackgroundImage: vi.fn<() => Promise<void>>(),
 }));
 
 vi.mock("../lib/api", () => ({
-  api: {
-    listSystemFonts: mocks.listSystemFonts,
-  },
+  api: {},
 }));
 
 vi.mock("../lib/background", () => ({
@@ -89,14 +86,6 @@ function openAppearanceTab() {
   });
 }
 
-function fontInputs(): HTMLInputElement[] {
-  return Array.from(
-    document.querySelectorAll<HTMLInputElement>(
-      'input[placeholder="Search or type a font"], input[placeholder="Optional fallback"]',
-    ),
-  );
-}
-
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLInputElement.prototype,
@@ -106,12 +95,6 @@ function setInputValue(input: HTMLInputElement, value: string) {
   act(() => {
     setter.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-function focusInput(input: HTMLInputElement) {
-  act(() => {
-    input.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
   });
 }
 
@@ -130,12 +113,12 @@ describe("SettingsModal font controls", () => {
       fileName: "wallpaper.png",
       relativePath: "backgrounds/wallpaper.png",
     });
-    mocks.listSystemFonts.mockResolvedValue([]);
     mocks.removeBackgroundImage.mockResolvedValue(undefined);
     useSettings.setState({
       open: true,
       settings: cloneSettings(),
       patchAppearance: vi.fn(),
+      patchTerminal: vi.fn(),
     });
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -150,105 +133,32 @@ describe("SettingsModal font controls", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps font typing local until blur so primary can be cleared and replaced", async () => {
+  it("edits terminal fontFamily as a comma-separated stack", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
-    openAppearanceTab();
-    await act(async () => {
-      await Promise.resolve();
-    });
 
-    const [primary] = fontInputs();
-    const patchAppearance = useSettings.getState().patchAppearance;
+    const fontFamily = document.querySelector<HTMLInputElement>("input");
+    const patchTerminal = useSettings.getState().patchTerminal;
 
-    setInputValue(primary, "");
-    expect(primary.value).toBe("");
-    expect(patchAppearance).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Font family");
+    expect(document.body.textContent).toContain(
+      "Comma-separated stack. First family that resolves wins.",
+    );
+    expect(fontFamily?.value).toBe(DEFAULT_SETTINGS.terminal.fontFamily);
 
-    setInputValue(primary, "Berkeley Mono");
-    expect(primary.value).toBe("Berkeley Mono");
-    expect(patchAppearance).not.toHaveBeenCalled();
-
-    act(() => {
-      primary.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    });
-
-    expect(patchAppearance).toHaveBeenCalledWith({
-      fontSlots: ["Berkeley Mono", "Fira Code", "Menlo"],
-    });
-  });
-
-  it("caps system font suggestions instead of rendering every installed font", async () => {
-    mocks.listSystemFonts.mockResolvedValue(
-      Array.from({ length: 500 }, (_, index) => `System Font ${index}`),
+    setInputValue(
+      fontFamily as HTMLInputElement,
+      '"Berkeley Mono", Menlo, monospace',
     );
 
-    await act(async () => {
-      root = createRoot(container);
-      root.render(<SettingsModal />);
-    });
-    openAppearanceTab();
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const [primary] = fontInputs();
-    focusInput(primary);
-    setInputValue(primary, "");
-
-    const listbox = document.querySelector('[role="listbox"]');
-    expect(listbox?.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(
-      40,
-    );
-  });
-
-  it("shows clickable font autocomplete suggestions while typing", async () => {
-    mocks.listSystemFonts.mockResolvedValue([
-      "Berkeley Mono",
-      "CommitMono",
-      "Recursive Mono",
-    ]);
-
-    await act(async () => {
-      root = createRoot(container);
-      root.render(<SettingsModal />);
-    });
-    openAppearanceTab();
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const [primary] = fontInputs();
-    const patchAppearance = useSettings.getState().patchAppearance;
-
-    focusInput(primary);
-    setInputValue(primary, "berk");
-
-    const option = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="option"]'),
-    ).find((element) => element.textContent === "Berkeley Mono");
-    expect(option).toBeTruthy();
-
-    act(() => {
-      option?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    });
-
-    expect(primary.value).toBe("Berkeley Mono");
-    expect(patchAppearance).toHaveBeenCalledWith({
-      fontSlots: ["Berkeley Mono", "Fira Code", "Menlo"],
+    expect(patchTerminal).toHaveBeenCalledWith({
+      fontFamily: '"Berkeley Mono", Menlo, monospace',
     });
   });
 
-  it("defaults to mono suggestions and can toggle all fonts", async () => {
-    mocks.listSystemFonts.mockResolvedValue([
-      "Alpha Mono Regular",
-      "Alpha Mono Bold",
-      "Alpha Sans",
-      "Alpha Serif Italic",
-    ]);
-
+  it("does not render the Appearance font dropdown controls", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -258,59 +168,9 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const [primary] = fontInputs();
-    focusInput(primary);
-    setInputValue(primary, "Alpha");
-
-    const monoOptions = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="option"]'),
-    ).map((element) => element.textContent);
-    expect(monoOptions).toContain("Alpha Mono");
-    expect(monoOptions).not.toContain("Alpha Mono Bold");
-    expect(monoOptions).not.toContain("Alpha Sans");
-
-    const scopeSwitch = document.querySelector<HTMLElement>('[role="switch"]');
-    expect(scopeSwitch).toBeTruthy();
-    act(() => {
-      scopeSwitch?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    const allOptions = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="option"]'),
-    ).map((element) => element.textContent);
-    expect(allOptions).toContain("Alpha Mono");
-    expect(allOptions).toContain("Alpha Sans");
-    expect(allOptions).toContain("Alpha Serif");
-    expect(allOptions).not.toContain("Alpha Serif Italic");
-  });
-
-  it("renders optional font clear as an icon button inside the input", async () => {
-    await act(async () => {
-      root = createRoot(container);
-      root.render(<SettingsModal />);
-    });
-    openAppearanceTab();
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const [, secondary] = fontInputs();
-    const patchAppearance = useSettings.getState().patchAppearance;
-    const secondaryClear = document.querySelector<HTMLButtonElement>(
-      '[aria-label="Clear Secondary font"]',
-    );
-
-    expect(document.body.textContent).not.toContain("Clear");
-    expect(secondaryClear).toBeTruthy();
-    expect(secondaryClear?.parentElement?.contains(secondary)).toBe(true);
-
-    act(() => {
-      secondaryClear?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    });
-
-    expect(patchAppearance).toHaveBeenCalledWith({
-      fontSlots: ["JetBrains Mono", null, "Menlo"],
-    });
+    expect(document.body.textContent).not.toContain("Terminal font");
+    expect(document.body.textContent).not.toContain("Refresh fonts");
+    expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 });
 
@@ -329,7 +189,6 @@ describe("SettingsModal background controls", () => {
       fileName: "wallpaper.png",
       relativePath: "backgrounds/wallpaper.png",
     });
-    mocks.listSystemFonts.mockResolvedValue([]);
     mocks.removeBackgroundImage.mockResolvedValue(undefined);
     useSettings.setState({
       open: true,
