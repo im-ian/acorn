@@ -57,6 +57,6 @@ export default defineConfig(async () => ({
     environment: "jsdom",
     globals: false,
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
-    css: false,
+    css: true,
   },
 }));
