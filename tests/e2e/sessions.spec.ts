@@ -147,6 +147,10 @@ test.describe("sessions: list rendering", () => {
     await expect(
       page.getByRole("button", { name: /^plain main · Idle$/ }),
     ).toBeVisible();
-    await expect(page.getByLabel("worktree")).toHaveCount(1);
+    // Scope to the sidebar — the tab strip in the main pane renders the
+    // same icon, so a global count would conflate the two surfaces.
+    await expect(
+      page.locator('aside').getByLabel("worktree"),
+    ).toHaveCount(1);
   });
 });
