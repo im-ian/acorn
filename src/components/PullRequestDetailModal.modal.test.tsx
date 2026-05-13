@@ -54,6 +54,7 @@ function fakeDetail(body: string): PullRequestDetail {
     comments: [],
     reviews: [],
     checks: [],
+    commits: [],
     diff: { files: [] },
   };
 }
