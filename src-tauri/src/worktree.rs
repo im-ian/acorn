@@ -65,19 +65,10 @@ pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
     Ok(target)
 }
 
-pub fn list_worktrees(repo_path: &Path) -> AppResult<Vec<String>> {
-    let repo = ensure_repo(repo_path)?;
-    let names = repo.worktrees()?;
-    Ok(names
-        .iter()
-        .filter_map(|n| n.map(|s| s.to_string()))
-        .collect())
-}
-
-/// Like [`list_worktrees`] but returns absolute on-disk paths instead of
-/// names. Used by the post-PTY-exit "did claude just create a worktree?"
-/// detector — names alone aren't enough because we need to point a session
-/// at the new worktree's directory to respawn the child there.
+/// Returns absolute on-disk paths of linked worktrees. Used by the
+/// post-PTY-exit "did claude just create a worktree?" detector — names alone
+/// aren't enough because we need to point a session at the new worktree's
+/// directory to respawn the child there.
 ///
 /// Note: this only enumerates *linked* worktrees. The main repo checkout is
 /// excluded; libgit2's `worktrees()` only reports `.git/worktrees/<name>`
