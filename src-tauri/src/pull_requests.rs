@@ -869,6 +869,42 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
         .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))
 }
 
+pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "origin remote is not a GitHub repository".into(),
+        ));
+    };
+    match try_with_account(repo_path, &slug, |token| run_commit_diff(&slug, sha, token))? {
+        AccountOutcome::Ok { value, .. } => Ok(crate::unified_diff::parse_unified_diff(&value)),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(format!(
+            "no logged-in gh account can access {slug}"
+        ))),
+    }
+}
+
+fn run_commit_diff(slug: &str, sha: &str, token: &str) -> AppResult<String> {
+    let endpoint = format!("repos/{slug}/commits/{sha}");
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "api",
+            "-H",
+            "Accept: application/vnd.github.diff",
+            &endpoint,
+        ]);
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
     let number_s = number.to_string();
     let output = cli_resolver::run("gh", |cmd| {
