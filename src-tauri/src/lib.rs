@@ -1,3 +1,4 @@
+mod agent_shim;
 mod cli_resolver;
 mod commands;
 pub mod daemon;

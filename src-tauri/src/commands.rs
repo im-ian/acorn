@@ -135,6 +135,33 @@ fn persist(state: &AppState) {
     }
 }
 
+/// Return the session's `agent_resume_token`, minting + persisting one
+/// if absent. Called at every PTY spawn so the token reaches the PTY
+/// env regardless of whether the session row was migrated in from an
+/// older `sessions.json` (where the field is `None`). The token is a
+/// fresh UUID — claude's `--session-id` accepts any UUID; reusing it
+/// across spawns is what makes its JSONL conversation file persist.
+///
+/// Returns the raw token. Caller is responsible for injecting it into
+/// the PTY env (`ACORN_RESUME_TOKEN`). Persistence failures are
+/// logged but not surfaced — a spawn shouldn't fail just because the
+/// disk write hiccuped, and the in-memory value is still usable for
+/// the lifetime of this app run.
+fn ensure_resume_token(state: &AppState, id: &uuid::Uuid) -> String {
+    if let Ok(session) = state.sessions.get(id) {
+        if let Some(token) = session.agent_resume_token {
+            return token;
+        }
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    if let Err(err) = state.sessions.set_agent_resume_token(id, Some(token.clone())) {
+        tracing::warn!(%id, error = %err, "persist agent_resume_token failed");
+        return token;
+    }
+    persist(state);
+    token
+}
+
 fn project_basename(repo_path: &std::path::Path) -> String {
     repo_path
         .file_name()
@@ -556,6 +583,30 @@ pub async fn pty_spawn<R: Runtime>(
     // env; regular sessions stay sandboxed from the IPC surface.
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
+
+    // Every session gets a stable resume token + the `claude` shim on
+    // PATH so user-invoked `claude` inside the terminal participates in
+    // Acorn's persistence (`--session-id $ACORN_RESUME_TOKEN`). The
+    // token is minted once per session and persisted; if the user never
+    // runs claude, the token sits unused — no harm.
+    let resume_token = ensure_resume_token(&state, &id);
+    effective_env
+        .entry("ACORN_RESUME_TOKEN".to_string())
+        .or_insert_with(|| resume_token.clone());
+    if let Ok(shim_dir) = crate::agent_shim::ensure_shim_dir() {
+        let existing = effective_env
+            .get("PATH")
+            .cloned()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_default();
+        effective_env.insert(
+            "PATH".to_string(),
+            crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
+        );
+    } else {
+        tracing::warn!(%id, "agent shim dir setup failed; claude resume token will not be auto-injected");
+    }
+
     if let Ok(session) = state.sessions.get(&id) {
         if session.kind == SessionKind::Control {
             effective_env
@@ -700,15 +751,12 @@ fn spawn_via_daemon<R: Runtime>(
         .unwrap_or(command);
     let agent_kind = detect_agent_kind(user_command_basename, args);
 
-    // Reuse the persisted resume token when present so the agent's
-    // session history (e.g. claude's JSONL) stays addressable across
-    // restarts. Mint a fresh UUID for Claude Code on first spawn.
-    let mut resume_token = session.as_ref().and_then(|s| s.agent_resume_token.clone());
-    if resume_token.is_none()
-        && matches!(agent_kind, Some(crate::daemon::protocol::AgentKind::ClaudeCode))
-    {
-        resume_token = Some(uuid::Uuid::new_v4().to_string());
-    }
+    // `pty_spawn` mints the resume token before reaching this helper,
+    // so the row's `agent_resume_token` is always populated by now.
+    // The daemon stamps it onto its own session record so reconcile
+    // can re-attach across an Acorn-app restart without re-querying
+    // the app DB.
+    let resume_token = session.as_ref().and_then(|s| s.agent_resume_token.clone());
 
     // Fast path: daemon already owns this PTY. Acorn restart re-enters
     // `pty_spawn` here; attach the stream and return. Pid comes from
@@ -749,11 +797,6 @@ fn spawn_via_daemon<R: Runtime>(
     // session, they just lose persistence across one restart.
     if let Err(err) = state.sessions.set_daemon_session_id(&id, Some(id)) {
         tracing::warn!(%id, error = %err, "persist daemon_session_id failed");
-    }
-    if resume_token.is_some() {
-        if let Err(err) = state.sessions.set_agent_resume_token(&id, resume_token) {
-            tracing::warn!(%id, error = %err, "persist agent_resume_token failed");
-        }
     }
     persist(state);
 
