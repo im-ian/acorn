@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { consoleForwardPlugin } from "vite-console-forward-plugin";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -11,7 +12,16 @@ const projectRoot: string = process.cwd();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // Forward webview console.{log,warn,error,info,debug} to the Vite dev
+    // server stdout so AI agents (and humans) can read app logs without
+    // opening the WKWebView inspector. Dev-only; the plugin no-ops in build.
+    consoleForwardPlugin({
+      levels: ["log", "warn", "error", "info", "debug"],
+    }),
+  ],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
