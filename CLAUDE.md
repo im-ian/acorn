@@ -65,6 +65,12 @@ bun run build          # tsc + vite build
 
 `src-tauri/binaries/acorn-ipc-<target-triple>` is `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without it, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `bun run build:sidecar` once per worktree (and again after any IPC change); plain `cargo build --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
 
+## Reading webview logs in dev
+
+`vite-console-forward-plugin` is wired in `vite.config.ts` (dev only). Every `console.log` / `warn` / `error` / `info` / `debug` call inside the running webview is POSTed to the Vite dev server and printed to the same terminal `bun run tauri dev` is logging to, prefixed with `[browser]`. AI agents and humans can read app logs without opening the WKWebView inspector (which is blocked anyway by the keybinding guards in `src/main.tsx`).
+
+The plugin no-ops in `vite build` and is not loaded by Vitest (it only injects via `transformIndexHtml` + `configureServer`, neither of which fire during unit tests).
+
 ## When in doubt
 
 - Reading: `docs/TESTING.md`, `docs/E2E_TESTING.md`, `docs/PR_LABELS.md`, `docs/COMMENTS.md`.
