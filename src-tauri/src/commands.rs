@@ -458,6 +458,121 @@ pub fn update_session_worktree(
     Ok(updated)
 }
 
+#[derive(Serialize, Default)]
+pub struct AgentDetection {
+    /// Parent claude session id when a claude transcript is present at
+    /// `~/.claude/projects/<slug>/<session-id>.jsonl`. Today this equals the
+    /// Acorn session UUID (claude shim runs `--session-id $ACORN_RESUME_TOKEN`
+    /// = Acorn UUID), so the parent id we pass to `claude --resume` is just
+    /// the Acorn session id. Kept as a separate field so the contract stays
+    /// stable if the shim ever stops reusing the Acorn UUID.
+    pub claude: Option<String>,
+    /// Codex session UUID captured by the codex shim in
+    /// `<state_dir>/codex.id` after the first zero-arg `codex` run.
+    pub codex: Option<String>,
+}
+
+/// Stage a parent claude transcript inside the new worktree's project
+/// slug so `claude --resume <uuid>` can find it after the fork shell
+/// `cd`s into the worktree. Claude looks transcripts up under
+/// `~/.claude/projects/<slugified-cwd>/<uuid>.jsonl`; the new worktree
+/// has a different slug, so without this copy the resume fails with
+/// "No conversation found with session ID: ...".
+///
+/// Codex stores rollouts under `$CODEX_HOME/sessions/.../` (cwd-
+/// independent), so this is only needed for claude forks.
+#[tauri::command]
+pub fn prepare_claude_fork(
+    parent_uuid: String,
+    new_cwd: String,
+) -> AppResult<()> {
+    let home = directories::UserDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .ok_or_else(|| AppError::Other("no home dir".into()))?;
+    let projects_root = home.join(".claude").join("projects");
+    let filename = format!("{parent_uuid}.jsonl");
+
+    // The parent transcript can live under any number of project
+    // slugs depending on where the agent was originally launched, so
+    // walk the projects dir for the first matching filename instead of
+    // recomputing the parent slug from a cwd the caller may not have.
+    let mut src: Option<PathBuf> = None;
+    if let Ok(entries) = std::fs::read_dir(&projects_root) {
+        for slug in entries.flatten() {
+            let candidate = slug.path().join(&filename);
+            if candidate.is_file() {
+                src = Some(candidate);
+                break;
+            }
+        }
+    }
+    let Some(src) = src else {
+        return Err(AppError::Other(format!(
+            "parent transcript {parent_uuid} not found under {}",
+            projects_root.display()
+        )));
+    };
+
+    let dst_slug = claude_slug_for_cwd(&new_cwd);
+    let dst_dir = projects_root.join(dst_slug);
+    std::fs::create_dir_all(&dst_dir)?;
+    let dst = dst_dir.join(&filename);
+    if !dst.exists() {
+        std::fs::copy(&src, &dst)
+            .map_err(|e| AppError::Other(format!("copy transcript: {e}")))?;
+    }
+    Ok(())
+}
+
+fn claude_slug_for_cwd(cwd: &str) -> String {
+    let trimmed = cwd.trim_start_matches('/');
+    let mut slug = String::with_capacity(cwd.len() + 1);
+    slug.push('-');
+    for ch in trimmed.chars() {
+        if ch == '/' || ch == '.' {
+            slug.push('-');
+        } else {
+            slug.push(ch);
+        }
+    }
+    slug
+}
+
+/// Live-process snapshot of which agent transcripts (if any) the user is
+/// currently writing inside this Acorn session. Drives the Tab context
+/// menu's Fork items — they only appear while the underlying claude /
+/// codex process is alive in the session's PTY tree.
+///
+/// We deliberately re-run the full process scan on every call instead
+/// of reading the watcher's cached map. The cache is at most one cycle
+/// (~3 s) stale, which races with rapid back-to-back Fork actions: a
+/// freshly-forked session's claude process can be live at the moment
+/// the user right-clicks but absent from the last cache, or vice-versa.
+/// An on-demand scan locks the answer to "what's true right now."
+#[tauri::command]
+pub fn detect_session_agent(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<AgentDetection> {
+    let parsed = parse_id(&session_id)?;
+    let mappings = crate::transcript_watcher::collect_live_mappings(&state);
+    let mut detection = AgentDetection::default();
+    for (sid, kind, uuid) in mappings {
+        if sid != parsed {
+            continue;
+        }
+        match kind {
+            crate::transcript_watcher::AgentKind::Claude => {
+                detection.claude = Some(uuid);
+            }
+            crate::transcript_watcher::AgentKind::Codex => {
+                detection.codex = Some(uuid);
+            }
+        }
+    }
+    Ok(detection)
+}
+
 /// Enumerate every linked git worktree of the repo containing `repo_path`.
 /// Returns absolute paths so the caller can detect "what's new since I last
 /// looked" by simple set diff. The main checkout is intentionally excluded —

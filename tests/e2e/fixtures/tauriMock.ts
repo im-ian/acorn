@@ -31,6 +31,10 @@ export const tauriMockSource = `
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
+    if (cmd === 'detect_session_agent') {
+      return Promise.resolve({ claude: null, codex: null });
+    }
+    if (cmd === 'prepare_claude_fork') return Promise.resolve(undefined);
     if (cmd === 'read_session_todos') return Promise.resolve([]);
     if (cmd === 'list_commits') return Promise.resolve([]);
     if (cmd === 'list_staged') return Promise.resolve([]);
