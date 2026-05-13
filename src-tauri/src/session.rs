@@ -173,6 +173,15 @@ pub struct Session {
     /// `None` for sessions whose agent has no known resume protocol.
     #[serde(default)]
     pub agent_resume_token: Option<String>,
+    /// Derived flag — `true` when `worktree_path` is the root of a linked git
+    /// worktree (`.git` is a file, not a directory). Computed at list-time
+    /// from the on-disk path; skipped on deserialize so persisted entries
+    /// load cleanly and never go stale. Drives the worktree icon on tabs and
+    /// in the sidebar, capturing not just Acorn-managed worktrees (`isolated`)
+    /// but also `claude -w` adoptions and projects that were already linked
+    /// worktrees when added.
+    #[serde(default, skip_deserializing)]
+    pub in_worktree: bool,
 }
 
 impl Session {
@@ -200,6 +209,7 @@ impl Session {
             position: None,
             daemon_session_id: None,
             agent_resume_token: None,
+            in_worktree: false,
         }
     }
 }
