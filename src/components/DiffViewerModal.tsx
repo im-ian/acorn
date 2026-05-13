@@ -1,12 +1,23 @@
+import { type ReactNode } from "react";
+import { Panel, PanelGroup } from "react-resizable-panels";
 import { DiffSplitView } from "./DiffSplitView";
+import { ResizeHandle } from "./ResizeHandle";
 import type { DiffPayload } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
-import { Modal, ModalHeader } from "./ui";
+import { Markdown, Modal, ModalHeader } from "./ui";
 
 interface DiffViewerModalProps {
   payload: DiffPayload | null;
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
+  /** Right-side header actions (e.g. Copy SHA, Open on GitHub). */
+  headerActions?: ReactNode;
+  /**
+   * Commit message body to show above the diff (renders markdown including
+   * inline images). Hidden entirely when empty / undefined — the diff then
+   * fills the whole viewer.
+   */
+  body?: string;
   /**
    * Working directory for resolving repo-relative diff paths to absolute paths
    * (used by the file context menu's "Open in editor" action). Typically the
@@ -20,6 +31,8 @@ export function DiffViewerModal({
   payload,
   title,
   subtitle,
+  headerActions,
+  body,
   cwd,
   onClose,
 }: DiffViewerModalProps) {
@@ -30,6 +43,8 @@ export function DiffViewerModal({
     onConfirm: onClose,
   });
 
+  const hasBody = !!body && body.trim().length > 0;
+
   return (
     <Modal
       open={payload !== null}
@@ -39,9 +54,32 @@ export function DiffViewerModal({
     >
       {payload ? (
         <>
-          <ModalHeader title={title} subtitle={subtitle} onClose={onClose} />
+          <ModalHeader
+            title={title}
+            subtitle={subtitle}
+            actions={headerActions}
+            onClose={onClose}
+          />
           <div className="min-h-0 flex-1 overflow-hidden">
-            <DiffSplitView payload={payload} cwd={cwd} />
+            {hasBody ? (
+              <PanelGroup
+                direction="vertical"
+                autoSaveId="acorn:commit-viewer-body-diff"
+                className="h-full"
+              >
+                <Panel id="body" order={1} defaultSize={25} minSize={8} maxSize={70}>
+                  <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-2">
+                    <Markdown content={body!} />
+                  </div>
+                </Panel>
+                <ResizeHandle direction="vertical" />
+                <Panel id="diff" order={2} defaultSize={75} minSize={20}>
+                  <DiffSplitView payload={payload} cwd={cwd} />
+                </Panel>
+              </PanelGroup>
+            ) : (
+              <DiffSplitView payload={payload} cwd={cwd} />
+            )}
           </div>
         </>
       ) : null}

@@ -1,6 +1,8 @@
 import {
   Bot,
   ChevronRight,
+  CircleX,
+  Columns2,
   Copy,
   Files,
   FolderOpen,
@@ -10,6 +12,7 @@ import {
   Pencil,
   PencilLine,
   Plus,
+  SquareX,
   Trash2,
   X,
 } from "lucide-react";
@@ -37,9 +40,9 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
-import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
+import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
   type AcornSettings,
@@ -449,7 +452,7 @@ function SessionRowPreview({ session }: { session: Session }) {
           <span className="truncate text-[13px] font-medium text-fg">
             {session.name}
           </span>
-          {session.isolated ? (
+          {session.isolated || session.in_worktree ? (
             <GitBranch size={10} className="shrink-0 text-fg-muted" />
           ) : null}
         </span>
@@ -802,19 +805,24 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       n += 1;
     }
     try {
-      // Carry the source session's kind onto the duplicate so a control
-      // session stays a control session and keeps its IPC-dispatch role.
-      await api.createSession(
-        next,
-        session.repo_path,
-        session.isolated,
-        session.kind,
-      );
-      await useAppStore.getState().refreshAll();
+      // Route through the store wrapper so the duplicate gets the same
+      // post-create treatment as Cmd+T and Pane "Duplicate Session": land
+      // next to the active tab, auto-select, and auto-focus xterm. Carries
+      // the source session's `kind` so a control session stays a control
+      // session (preserves its IPC-dispatch role).
+      await useAppStore
+        .getState()
+        .createSession(next, session.repo_path, session.isolated, session.kind);
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);
     }
   }
+
+  const projectSiblings = useMemo(
+    () => sessions.filter((s) => s.repo_path === session.repo_path),
+    [sessions, session.repo_path],
+  );
+  const otherSiblings = projectSiblings.filter((s) => s.id !== session.id);
 
   const sessionMenuItems: ContextMenuItem[] = [
     {
@@ -826,6 +834,14 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Duplicate Session",
       icon: <Files size={12} />,
       onClick: () => void duplicate(),
+    },
+    { type: "separator" },
+    {
+      label: "Equalize Pane Sizes",
+      icon: <Columns2 size={12} />,
+      onClick: () => {
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+      },
     },
     { type: "separator" },
     {
@@ -849,6 +865,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         });
       },
     },
+    { type: "separator" },
     {
       label: "Copy Worktree Path",
       icon: <Copy size={12} />,
@@ -875,6 +892,24 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Remove",
       icon: <Trash2 size={12} />,
       onClick: onRemove,
+    },
+    {
+      label: "Remove Others in Project",
+      icon: <CircleX size={12} />,
+      disabled: otherSiblings.length === 0,
+      onClick: () => {
+        const request = useAppStore.getState().requestRemoveSession;
+        for (const s of otherSiblings) request(s.id);
+      },
+    },
+    {
+      label: "Remove All in Project",
+      icon: <SquareX size={12} />,
+      disabled: projectSiblings.length === 0,
+      onClick: () => {
+        const request = useAppStore.getState().requestRemoveSession;
+        for (const s of projectSiblings) request(s.id);
+      },
     },
   ];
 
@@ -1000,6 +1035,13 @@ function SessionRowLabel({
   onSubmitRename,
   onCancelRename,
 }: SessionRowLabelProps) {
+  // Live cwd wins when a PTY is alive — a recorded worktree path doesn't
+  // describe where the user is *now*. Static flags (`isolated` / static
+  // `in_worktree`) only apply as fallback when the session has no live PTY,
+  // in which case `liveInWorktree[id]` is `undefined`.
+  const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
+  const inWorktree =
+    liveInWorktree ?? (session.isolated || session.in_worktree);
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex items-center gap-1">
@@ -1014,11 +1056,11 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
-        {showKindIcons && session.isolated ? (
+        {showKindIcons && inWorktree ? (
           <GitBranch
             size={10}
             className="shrink-0 text-fg-muted"
-            aria-label="isolated worktree"
+            aria-label="worktree"
           />
         ) : null}
         {showKindIcons && session.kind === "control" ? (

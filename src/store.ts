@@ -14,8 +14,10 @@ import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideMod
 import {
   type Direction,
   type LayoutNode,
+  type PaneFocusDirection,
   type PaneId,
   type SplitSide,
+  findAdjacentPaneId,
   listPaneIds,
   makePaneNode,
   removePaneFromLayout,
@@ -99,6 +101,7 @@ interface AppStateModel {
    */
   pendingTerminalInput: Record<string, string>;
   terminalInput: Record<string, TerminalInputState>;
+  multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
   pendingRemoveId: string | null;
@@ -114,8 +117,19 @@ interface AppStateModel {
    * results in a non-empty backend session list.
    */
   sessionsLoadedCleanly: boolean;
+  /**
+   * Session ids whose *live* PTY cwd resolves inside a linked git worktree
+   * (`.git` is a file). Separate from `Session.in_worktree`, which only
+   * reflects the recorded `worktree_path` at spawn / adoption time — this
+   * map catches the user typing `cd /some/other/worktree` interactively.
+   * Populated event-driven (after `refreshSessions` and on window focus),
+   * never on an interval, so the batched probe stays cheap.
+   */
+  liveInWorktree: Record<string, boolean>;
   loadInitialStatus: () => Promise<void>;
   refreshSessions: () => Promise<void>;
+  /** Re-probe every session's live cwd in one batched backend call. */
+  refreshLiveInWorktree: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   refreshAll: () => Promise<void>;
   /** Probe session liveness via JSONL transcripts; updates session statuses
@@ -124,6 +138,7 @@ interface AppStateModel {
   selectSession: (id: string | null) => void;
   setActiveProject: (repoPath: string) => void;
   setFocusedPane: (paneId: PaneId) => void;
+  focusAdjacentPane: (direction: PaneFocusDirection) => void;
   splitFocusedPane: (direction: Direction) => void;
   closeFocusedTab: () => void;
   closePane: (paneId: PaneId) => void;
@@ -154,6 +169,7 @@ interface AppStateModel {
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => string | null;
   recordTerminalInput: (sessionId: string, data: string) => void;
+  toggleMultiInput: () => boolean;
 }
 
 let paneCounter = 0;
@@ -373,11 +389,13 @@ export const useAppStore = create<AppStateModel>()(
   prAccountByRepo: {},
   pendingTerminalInput: {},
   terminalInput: {},
+  multiInputEnabled: false,
   loading: false,
   error: null,
   pendingRemoveId: null,
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
+  liveInWorktree: {},
 
   async loadInitialStatus() {
     try {
@@ -423,8 +441,22 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
         };
       });
+      void get().refreshLiveInWorktree();
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
+    }
+  },
+
+  async refreshLiveInWorktree() {
+    try {
+      const map = await api.ptyInWorktreeAll();
+      // Components do `s.liveInWorktree[id]`; null would crash that access.
+      // Backend returns an object in practice, but the mock fallback path
+      // (and any future RPC that returns null on degraded states) needs the
+      // guard to keep the store contract intact.
+      set({ liveInWorktree: map ?? {} });
+    } catch (e) {
+      console.debug("[store] refreshLiveInWorktree failed", e);
     }
   },
 
@@ -600,6 +632,21 @@ export const useAppStore = create<AppStateModel>()(
         if (!ws.panes[paneId]) return ws;
         if (ws.focusedPaneId === paneId) return ws;
         return { ...ws, focusedPaneId: paneId };
+      });
+      return patch ?? s;
+    });
+  },
+
+  focusAdjacentPane(direction) {
+    set((s) => {
+      const patch = updateActiveWorkspace(s, (ws) => {
+        const nextPaneId = findAdjacentPaneId(
+          ws.layout,
+          ws.focusedPaneId,
+          direction,
+        );
+        if (!nextPaneId || !ws.panes[nextPaneId]) return ws;
+        return { ...ws, focusedPaneId: nextPaneId };
       });
       return patch ?? s;
     });
@@ -793,12 +840,76 @@ export const useAppStore = create<AppStateModel>()(
   async createSession(name, repoPath, isolated = false, kind = "regular") {
     set({ loading: true, error: null });
     try {
+      // Snapshot the previously-active tab's index in the focused pane so
+      // we can land the new tab right after it (browser-style). Captured
+      // before `api.createSession` so the post-refresh reorder is anchored
+      // to the user's view at hotkey-press time, not the post-reconcile
+      // append position.
+      const beforeSnap = (() => {
+        const s = get();
+        const ws = s.workspaces[repoPath];
+        if (!ws) return null;
+        const paneId = ws.focusedPaneId;
+        const pane = ws.panes[paneId];
+        if (!pane?.activeSessionId) return null;
+        const idx = pane.sessionIds.indexOf(pane.activeSessionId);
+        return idx >= 0 ? { paneId, idx } : null;
+      })();
+
       const created = await api.createSession(name, repoPath, isolated, kind);
       await get().refreshAll();
+
+      // Reorder so the new tab sits immediately after the previously-active
+      // tab in the same pane. `reconcileWorkspace` always appends new
+      // sessions at the end of `focusedPaneId.sessionIds`; this step
+      // converts that to "next to active" without changing reconcile's
+      // boot-time behavior.
+      if (beforeSnap) {
+        set((s) => {
+          const ws = s.workspaces[repoPath];
+          if (!ws) return s;
+          const pane = ws.panes[beforeSnap.paneId];
+          if (!pane) return s;
+          const currentIdx = pane.sessionIds.indexOf(created.id);
+          if (currentIdx < 0) return s;
+          const targetIdx = Math.min(
+            beforeSnap.idx + 1,
+            pane.sessionIds.length - 1,
+          );
+          if (currentIdx === targetIdx) return s;
+          const ids = pane.sessionIds.filter((id) => id !== created.id);
+          ids.splice(targetIdx, 0, created.id);
+          const newPane = { ...pane, sessionIds: ids };
+          const newWs = {
+            ...ws,
+            panes: { ...ws.panes, [beforeSnap.paneId]: newPane },
+          };
+          const workspaces = { ...s.workspaces, [repoPath]: newWs };
+          return {
+            workspaces,
+            ...(s.activeProject === repoPath
+              ? mirrorActive(workspaces, repoPath)
+              : {}),
+          };
+        });
+      }
+
       // Focus the new session so Cmd+T (and any other entry point that goes
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
       get().selectSession(created.id);
+      // Grab keyboard focus for the new session's xterm. rAF defers past the
+      // portal reattach in `TerminalHost` so the slot is mounted in its pane
+      // body by the time `Terminal` calls `term.focus()`.
+      if (typeof window !== "undefined") {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(
+            new CustomEvent("acorn:focus-session", {
+              detail: { sessionId: created.id },
+            }),
+          );
+        });
+      }
       // First-run guidance for control sessions. Gated on a localStorage
       // flag so power users only see it once. App.tsx hosts the modal.
       if (
@@ -1013,6 +1124,15 @@ export const useAppStore = create<AppStateModel>()(
         },
       };
     });
+  },
+
+  toggleMultiInput() {
+    let enabled = false;
+    set((s) => {
+      enabled = !s.multiInputEnabled;
+      return { multiInputEnabled: enabled };
+    });
+    return enabled;
   },
     }),
     {

@@ -1,6 +1,19 @@
-import { Download, RefreshCcw, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Download,
+  FolderOpen,
+  ImagePlus,
+  RefreshCcw,
+  Settings as SettingsIcon,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
+import {
+  importBackgroundImage,
+  removeBackgroundImage,
+  type BackgroundFit,
+} from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import { sendTestNotification } from "../lib/notifications";
@@ -10,6 +23,7 @@ import {
   type ReleaseNotes,
 } from "../lib/releases";
 import { useUpdater } from "../lib/updater-store";
+import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
@@ -17,11 +31,13 @@ import {
   SESSION_TITLE_OPTIONS,
   type SelectedAgent,
   type SessionTitleSource,
+  type AcornSettings,
   type TerminalFontWeight,
   type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
+import { revealThemesFolder, useThemes } from "../lib/themes";
 import type { PrStateFilter } from "../lib/types";
 import {
   CheckboxRow,
@@ -45,6 +61,7 @@ type Tab =
   | "editor"
   | "notifications"
   | "storage"
+  | "experiments"
   | "about";
 
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -56,14 +73,34 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
   { id: "storage", label: "Storage" },
+  { id: "experiments", label: "Experiments" },
   { id: "about", label: "About" },
 ];
+
+const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
 
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
   const reset = useSettings((s) => s.reset);
+  const pendingTab = useSettings((s) => s.pendingTab);
+  const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
+
+  // When the store reports a pending tab (e.g. StatusBar daemon button
+  // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
+  // jump there on the next render and clear the flag so subsequent
+  // opens restore the user's manual tab choice. Subscribing to
+  // `pendingTab` (not just `open`) makes the deep-link work even when
+  // the modal is already open — without it the effect would only fire
+  // on the open-flag transition and a repeat click would no-op.
+  useEffect(() => {
+    if (!open || pendingTab === null) return;
+    const pending = consumePendingTab();
+    if (pending && TAB_IDS.has(pending)) {
+      setTab(pending as Tab);
+    }
+  }, [open, pendingTab, consumePendingTab]);
 
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step.
@@ -131,6 +168,8 @@ export function SettingsModal() {
             <NotificationSettings />
           ) : tab === "storage" ? (
             <StorageSettings />
+          ) : tab === "experiments" ? (
+            <ExperimentsSettings />
           ) : (
             <AboutSettings />
           )}
@@ -253,61 +292,95 @@ function SessionSettings() {
   const patchSessions = useSettings((s) => s.patchSessions);
 
   return (
-    <section className="space-y-4">
-      <Field
-        label="Confirm before removing a session"
-        hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+    <section className="space-y-6">
+      <div className="space-y-4">
+        <Field
+          label="Confirm before removing a session"
+          hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.confirmRemove}
+              onChange={(e) =>
+                patchSessions({ confirmRemove: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Show confirmation dialog
+          </label>
+        </Field>
+        <Field
+          label="Close tab when the process exits"
+          hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.closeOnExit}
+              onChange={(e) =>
+                patchSessions({ closeOnExit: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Auto-close on exit
+          </label>
+        </Field>
+        <Field
+          label="Auto-name AI tabs"
+          hint="When a pane is running Codex, Claude, Gemini, or Ollama, rename the session tab from the agent and first submitted prompt."
+        >
+          <div className="flex flex-col gap-1">
+            <CheckboxRow
+              label="Rename tabs for AI sessions"
+              description="Updates the session name when a known AI CLI is detected."
+              checked={settings.sessions.autoRenameAiTabs}
+              onChange={(v) => patchSessions({ autoRenameAiTabs: v })}
+            />
+            <CheckboxRow
+              label="Include prompt snippet"
+              description="Adds the submitted prompt after the agent name."
+              checked={settings.sessions.includeAiPromptInTabName}
+              disabled={!settings.sessions.autoRenameAiTabs}
+              onChange={(v) =>
+                patchSessions({ includeAiPromptInTabName: v })
+              }
+            />
+          </div>
+        </Field>
+        <ControlSessionInstallSection />
+      </div>
+      <SettingsGroup
+        title="Background sessions"
+        description="The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
       >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.confirmRemove}
-            onChange={(e) =>
-              patchSessions({ confirmRemove: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Show confirmation dialog
-        </label>
-      </Field>
-      <Field
-        label="Close tab when the process exits"
-        hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.closeOnExit}
-            onChange={(e) =>
-              patchSessions({ closeOnExit: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Auto-close on exit
-        </label>
-      </Field>
-      <Field
-        label="Auto-name AI tabs"
-        hint="When a pane is running Codex, Claude, Gemini, or Ollama, rename the session tab from the agent and latest submitted prompt."
-      >
-        <div className="flex flex-col gap-1">
-          <CheckboxRow
-            label="Rename tabs for AI sessions"
-            description="Updates the session name when a known AI CLI is detected."
-            checked={settings.sessions.autoRenameAiTabs}
-            onChange={(v) => patchSessions({ autoRenameAiTabs: v })}
-          />
-          <CheckboxRow
-            label="Include prompt snippet"
-            description="Adds the latest submitted prompt after the agent name."
-            checked={settings.sessions.includeAiPromptInTabName}
-            disabled={!settings.sessions.autoRenameAiTabs}
-            onChange={(v) => patchSessions({ includeAiPromptInTabName: v })}
-          />
-        </div>
-      </Field>
-      <ControlSessionInstallSection />
+        <BackgroundSessionsSettings />
+      </SettingsGroup>
     </section>
+  );
+}
+
+function SettingsGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-3 border-t border-border pt-5">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+          {title}
+        </h3>
+        {description ? (
+          <p className="mt-0.5 text-[11px] text-fg-muted/80">{description}</p>
+        ) : null}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -485,10 +558,235 @@ function AppearanceSettings() {
   const settings = useSettings((s) => s.settings);
   const patchStatusBar = useSettings((s) => s.patchStatusBar);
   const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
+  const patchAppearance = useSettings((s) => s.patchAppearance);
   const sessionDisplay = settings.sessionDisplay;
+  const appearance = settings.appearance;
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-6">
+      <ThemeSection
+        themeId={appearance.themeId}
+        onChange={(themeId) => patchAppearance({ themeId })}
+      />
+      <BackgroundSection
+        state={appearance.background}
+        onChange={(background) => patchAppearance({ background })}
+      />
+      <SessionDisplaySection
+        sessionDisplay={sessionDisplay}
+        patch={patchSessionDisplay}
+      />
+      <StatusBarSection
+        statusBar={settings.statusBar}
+        patch={patchStatusBar}
+      />
+    </section>
+  );
+}
+
+function ThemeSection({
+  themeId,
+  onChange,
+}: {
+  themeId: string;
+  onChange: (id: string) => void;
+}) {
+  const themes = useThemes((s) => s.themes);
+  const refresh = useThemes((s) => s.refresh);
+
+  return (
+    <Field
+      label="Theme"
+      hint="Built-in palettes and valid CSS files from the themes folder."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={themeId}
+          onChange={(e) => onChange(e.target.value)}
+          className="min-w-[14rem]"
+        >
+          {themes.map((theme) => (
+            <option key={theme.id} value={theme.id}>
+              {theme.label}
+              {theme.source === "user" ? " (custom)" : ""}
+            </option>
+          ))}
+        </Select>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
+          title="Rescan themes folder"
+        >
+          <RefreshCcw size={12} /> Refresh
+        </button>
+        <button
+          type="button"
+          onClick={() => void revealThemesFolder()}
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
+        >
+          <FolderOpen size={12} /> Reveal folder
+        </button>
+      </div>
+    </Field>
+  );
+}
+
+type BackgroundSettings = AcornSettings["appearance"]["background"];
+
+function BackgroundSection({
+  state,
+  onChange,
+}: {
+  state: BackgroundSettings;
+  onChange: (patch: Partial<BackgroundSettings>) => void;
+}) {
+  const [pickError, setPickError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    setPickError(null);
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await importBackgroundImage(file.name, bytes);
+      onChange({
+        relativePath: result.relativePath,
+        fileName: result.fileName,
+        applyToApp: true,
+        applyToTerminal: true,
+      });
+    } catch (err) {
+      setPickError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const remove = async () => {
+    if (state.relativePath) {
+      await removeBackgroundImage(state.relativePath).catch(() => {});
+    }
+    onChange({
+      relativePath: null,
+      fileName: null,
+      applyToApp: false,
+      applyToTerminal: false,
+    });
+  };
+
+  return (
+    <Field
+      label="Background image"
+      hint="One image can be applied to the app area, terminal area, or both."
+    >
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => void handleFileChange(event)}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg transition hover:bg-bg-elevated"
+          >
+            <ImagePlus size={12} /> {state.relativePath ? "Replace" : "Pick image"}
+          </button>
+          <span className="min-w-0 truncate text-[11px] text-fg-muted">
+            {state.fileName ?? "No image selected"}
+          </span>
+          {state.relativePath ? (
+            <button
+              type="button"
+              onClick={() => void remove()}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-danger"
+            >
+              <Trash2 size={12} /> Remove
+            </button>
+          ) : null}
+        </div>
+        {pickError ? (
+          <div className="text-[11px] text-danger">{pickError}</div>
+        ) : null}
+        <div className="flex flex-col gap-1">
+          <CheckboxRow
+            label="Apply to app background"
+            checked={state.applyToApp}
+            disabled={!state.relativePath}
+            onChange={(checked) => onChange({ applyToApp: checked })}
+          />
+          <CheckboxRow
+            label="Apply to terminal background"
+            checked={state.applyToTerminal}
+            disabled={!state.relativePath}
+            onChange={(checked) => onChange({ applyToTerminal: checked })}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[11px] font-medium text-fg-muted">Fit</span>
+          <div className="flex flex-wrap gap-1.5">
+            {(["cover", "contain", "tile"] as BackgroundFit[]).map((fit) => (
+              <RadioCard<BackgroundFit>
+                key={fit}
+                name="acorn-bg-fit"
+                value={fit}
+                current={state.fit}
+                label={fit[0].toUpperCase() + fit.slice(1)}
+                onSelect={(value) => onChange({ fit: value })}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Opacity" hint="0 is transparent, 100 is opaque.">
+            <Stepper
+              value={Math.round(state.opacity * 100)}
+              min={0}
+              max={100}
+              step={5}
+              unit="%"
+              onChange={(value) => onChange({ opacity: value / 100 })}
+            />
+          </Field>
+          <Field label="Blur">
+            <Stepper
+              value={state.blur}
+              min={0}
+              max={24}
+              step={1}
+              unit="px"
+              onChange={(value) => onChange({ blur: value })}
+            />
+          </Field>
+        </div>
+      </div>
+    </Field>
+  );
+}
+
+function SessionDisplaySection({
+  sessionDisplay,
+  patch,
+}: {
+  sessionDisplay: AcornSettings["sessionDisplay"];
+  patch: (
+    patch: Partial<
+      Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
+    > & {
+      metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
+      icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
+    },
+  ) => void;
+}) {
+  return (
+    <>
       <Field
         label="Session title"
         hint="Which field becomes the bold first line of each sidebar session row."
@@ -502,7 +800,7 @@ function AppearanceSettings() {
               current={sessionDisplay.title}
               label={opt.label}
               description={opt.description}
-              onSelect={(v) => patchSessionDisplay({ title: v })}
+              onSelect={(v) => patch({ title: v })}
             />
           ))}
         </div>
@@ -516,25 +814,19 @@ function AppearanceSettings() {
             label="Branch"
             description="Active git branch."
             checked={sessionDisplay.metadata.branch}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { branch: v } })
-            }
+            onChange={(v) => patch({ metadata: { branch: v } })}
           />
           <CheckboxRow
             label="Working directory"
             description="Worktree directory basename."
             checked={sessionDisplay.metadata.workingDirectory}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { workingDirectory: v } })
-            }
+            onChange={(v) => patch({ metadata: { workingDirectory: v } })}
           />
           <CheckboxRow
             label="Status"
             description="Idle / Running / Needs input / Failed / Completed."
             checked={sessionDisplay.metadata.status}
-            onChange={(v) =>
-              patchSessionDisplay({ metadata: { status: v } })
-            }
+            onChange={(v) => patch({ metadata: { status: v } })}
           />
         </div>
       </Field>
@@ -547,17 +839,13 @@ function AppearanceSettings() {
             label="Status dot"
             description="Colored bullet at the row start. Redundant when Status is enabled in metadata."
             checked={sessionDisplay.icons.statusDot}
-            onChange={(v) =>
-              patchSessionDisplay({ icons: { statusDot: v } })
-            }
+            onChange={(v) => patch({ icons: { statusDot: v } })}
           />
           <CheckboxRow
             label="Session kind icons"
             description="Branch glyph for isolated worktrees and bot glyph for control sessions."
             checked={sessionDisplay.icons.sessionKind}
-            onChange={(v) =>
-              patchSessionDisplay({ icons: { sessionKind: v } })
-            }
+            onChange={(v) => patch({ icons: { sessionKind: v } })}
           />
         </div>
       </Field>
@@ -569,34 +857,55 @@ function AppearanceSettings() {
           <input
             type="checkbox"
             checked={sessionDisplay.showDetailsOnHover}
-            onChange={(e) =>
-              patchSessionDisplay({ showDetailsOnHover: e.target.checked })
-            }
+            onChange={(e) => patch({ showDetailsOnHover: e.target.checked })}
             className="accent-[var(--color-accent)]"
           />
           Enable hover tooltip
         </label>
       </Field>
-      <Field
-        label="Status bar"
-        hint="Choose which optional badges show in the bottom status bar."
-      >
-        <div className="flex flex-col gap-1">
-          <CheckboxRow
-            label="GitHub account"
-            description="The `gh` account used to list pull requests for the active repo."
-            checked={settings.statusBar.showGithubAccount}
-            onChange={(v) => patchStatusBar({ showGithubAccount: v })}
-          />
-          <CheckboxRow
-            label="Memory usage"
-            description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
-            checked={settings.statusBar.showMemory}
-            onChange={(v) => patchStatusBar({ showMemory: v })}
-          />
-        </div>
-      </Field>
-    </section>
+    </>
+  );
+}
+
+function StatusBarSection({
+  statusBar,
+  patch,
+}: {
+  statusBar: AcornSettings["statusBar"];
+  patch: (patch: Partial<AcornSettings["statusBar"]>) => void;
+}) {
+  return (
+    <Field
+      label="Status bar"
+      hint="Choose which optional badges show in the bottom status bar."
+    >
+      <div className="flex flex-col gap-1">
+        <CheckboxRow
+          label="Session count"
+          description="Total number of sessions across the active project (`sessions: N`)."
+          checked={statusBar.showSessionCount}
+          onChange={(v) => patch({ showSessionCount: v })}
+        />
+        <CheckboxRow
+          label="Active session status"
+          description="Lifecycle state of the active session (Idle / Running / Needs input / Failed / Completed)."
+          checked={statusBar.showSessionStatus}
+          onChange={(v) => patch({ showSessionStatus: v })}
+        />
+        <CheckboxRow
+          label="GitHub account"
+          description="The `gh` account used to list pull requests for the active repo."
+          checked={statusBar.showGithubAccount}
+          onChange={(v) => patch({ showGithubAccount: v })}
+        />
+        <CheckboxRow
+          label="Memory usage"
+          description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
+          checked={statusBar.showMemory}
+          onChange={(v) => patch({ showMemory: v })}
+        />
+      </div>
+    </Field>
   );
 }
 
@@ -1019,6 +1328,27 @@ type WhatsNewSource =
        */
       isFallback: boolean;
     };
+
+function ExperimentsSettings() {
+  const experiments = useSettings((s) => s.settings.experiments);
+  const patchExperiments = useSettings((s) => s.patchExperiments);
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
+        <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
+        Unfinished features. Behaviour may change between releases; the toggles
+        themselves are stable.
+      </div>
+      <CheckboxRow
+        checked={experiments.stickyPrompt}
+        onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
+        label="Pin last user prompt above terminal"
+        description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
+      />
+    </section>
+  );
+}
 
 function AboutSettings() {
   const currentVersion = useUpdater((s) => s.currentVersion);

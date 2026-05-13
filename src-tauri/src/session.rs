@@ -181,6 +181,34 @@ pub struct Session {
     pub active_agent: Option<AiAgent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_status: Option<AiAgentStatus>,
+    /// Identifier the `acornd` daemon uses for this session's live PTY.
+    /// `None` while the session is using the legacy in-process PTY path,
+    /// or while the daemon has not yet spawned a child for it. Stored so
+    /// the app can route follow-up ops (write/resize/kill) to the right
+    /// daemon registry entry; survives serialization so reattach after
+    /// an Acorn-app restart finds the matching live session.
+    ///
+    /// BC: older `sessions.json` files without this field load with
+    /// `daemon_session_id == None`, which is the legacy in-process
+    /// behavior and the natural "ghost" indicator for the daemon-mode
+    /// reconciliation path.
+    #[serde(default)]
+    pub daemon_session_id: Option<Uuid>,
+    /// Deterministic resume token persisted across (re)spawns. For Claude
+    /// Code this is the `--session-id <uuid>` value the daemon injects so
+    /// the agent's JSONL chat history remains reachable after a crash.
+    /// `None` for sessions whose agent has no known resume protocol.
+    #[serde(default)]
+    pub agent_resume_token: Option<String>,
+    /// Derived flag — `true` when `worktree_path` is the root of a linked git
+    /// worktree (`.git` is a file, not a directory). Computed at list-time
+    /// from the on-disk path; skipped on deserialize so persisted entries
+    /// load cleanly and never go stale. Drives the worktree icon on tabs and
+    /// in the sidebar, capturing not just Acorn-managed worktrees (`isolated`)
+    /// but also `claude -w` adoptions and projects that were already linked
+    /// worktrees when added.
+    #[serde(default, skip_deserializing)]
+    pub in_worktree: bool,
 }
 
 impl Session {
@@ -208,6 +236,9 @@ impl Session {
             position: None,
             active_agent: None,
             agent_status: None,
+            daemon_session_id: None,
+            agent_resume_token: None,
+            in_worktree: false,
         }
     }
 }
@@ -261,6 +292,43 @@ impl SessionStore {
         if entry.status != status {
             entry.status = status;
         }
+        Ok(entry.clone())
+    }
+
+    /// Attach a daemon session id to an existing session record. The
+    /// setter exists so the daemon-routed PTY path can update the row
+    /// it created in-app; it is wired up at the same time as that path
+    /// — leaving the API stable today avoids a second schema migration.
+    /// Idempotent: passing `None` detaches.
+    #[allow(dead_code)]
+    pub fn set_daemon_session_id(
+        &self,
+        id: &Uuid,
+        daemon_id: Option<Uuid>,
+    ) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        entry.daemon_session_id = daemon_id;
+        Ok(entry.clone())
+    }
+
+    /// Persist the resume token chosen for this session's agent (e.g.
+    /// Claude Code's `--session-id`). Set once at first spawn; the
+    /// daemon re-injects this on every respawn. Pairs with
+    /// `set_daemon_session_id` — wired by the same downstream path.
+    #[allow(dead_code)]
+    pub fn set_agent_resume_token(
+        &self,
+        id: &Uuid,
+        token: Option<String>,
+    ) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        entry.agent_resume_token = token;
         Ok(entry.clone())
     }
 

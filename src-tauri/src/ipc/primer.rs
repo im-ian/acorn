@@ -49,6 +49,9 @@ impl AgentFlavor {
 /// verbatim. Kept short on purpose — every byte goes into every
 /// agent-call's system prompt.
 pub fn primer_for(session: &Session, socket_path: &Path) -> String {
+    let daemon_socket = crate::daemon::paths::control_socket_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     format!(
         "You are running inside an Acorn \"control session\". You can orchestrate \
          other terminal sessions in the same project ({repo}) via the `acorn-ipc` \
@@ -56,6 +59,7 @@ pub fn primer_for(session: &Session, socket_path: &Path) -> String {
          \n\
          Your session id: {session_id}\n\
          IPC socket:      {socket}\n\
+         Daemon socket:   {daemon}\n\
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\
@@ -66,8 +70,12 @@ pub fn primer_for(session: &Session, socket_path: &Path) -> String {
            acorn-ipc select-session -t <uuid>            # focus a tab in the UI\n\
            acorn-ipc kill-session  -t <uuid>             # destructive — last resort\n\
          \n\
+         The newer `acornd` CLI talks to the same project graph via the\n\
+         background daemon (currently rolling out). `acornd list-sessions`,\n\
+         `acornd send-keys -t …`, etc. — same shape, different transport.\n\
+         \n\
          Tips:\n\
-         - Pass `--json` to any command for machine-parseable output.\n\
+         - Pass `--json` to `acorn-ipc` for machine-parseable output.\n\
          - Prefer delegating CPU-bound or long-running work to sibling sessions \
          instead of running it serially here; this seat is the orchestrator.\n\
          - `read-buffer` after a `send-keys` may need a brief wait — the sibling \
@@ -75,6 +83,7 @@ pub fn primer_for(session: &Session, socket_path: &Path) -> String {
         repo = session.repo_path.display(),
         session_id = session.id,
         socket = socket_path.display(),
+        daemon = daemon_socket,
     )
 }
 

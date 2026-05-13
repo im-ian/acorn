@@ -1,0 +1,15 @@
+/* @mode light */
+:root[data-acorn-theme="github-light"] {
+  --color-bg: #ffffff;
+  --color-bg-elevated: #f6f8fa;
+  --color-bg-sidebar: #f0f3f6;
+  --color-fg: #1f2328;
+  --color-fg-muted: #59636e;
+  --color-border: #d1d9e0;
+  --color-accent: #0969da;
+  --color-accent-hover: #0550ae;
+  --color-danger: #cf222e;
+  --color-warning: #9a6700;
+  --color-terminal-bg: #ffffff;
+  --color-terminal-fg: #1f2328;
+}

@@ -65,19 +65,10 @@ pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
     Ok(target)
 }
 
-pub fn list_worktrees(repo_path: &Path) -> AppResult<Vec<String>> {
-    let repo = ensure_repo(repo_path)?;
-    let names = repo.worktrees()?;
-    Ok(names
-        .iter()
-        .filter_map(|n| n.map(|s| s.to_string()))
-        .collect())
-}
-
-/// Like [`list_worktrees`] but returns absolute on-disk paths instead of
-/// names. Used by the post-PTY-exit "did claude just create a worktree?"
-/// detector — names alone aren't enough because we need to point a session
-/// at the new worktree's directory to respawn the child there.
+/// Returns absolute on-disk paths of linked worktrees. Used by the
+/// post-PTY-exit "did claude just create a worktree?" detector — names alone
+/// aren't enough because we need to point a session at the new worktree's
+/// directory to respawn the child there.
 ///
 /// Note: this only enumerates *linked* worktrees. The main repo checkout is
 /// excluded; libgit2's `worktrees()` only reports `.git/worktrees/<name>`
@@ -104,6 +95,19 @@ pub fn remove_worktree(repo_path: &Path, name: &str) -> AppResult<()> {
         std::fs::remove_dir_all(&path).ok();
     }
     Ok(())
+}
+
+/// Returns `true` when `path` is the root of a *linked* git worktree.
+/// Linked worktrees mark their root with a `.git` *file* (pointing at the
+/// parent repo's `worktrees/<name>` admin dir) instead of a `.git` directory.
+/// Cheap: a single stat, no libgit2 open. Used to surface a worktree
+/// indicator on session tabs regardless of how the worktree was created
+/// (Acorn's "new isolated session" button, `claude -w` adoption, or a
+/// repo that was already a worktree when added as a project).
+pub fn is_linked_worktree_root(path: &Path) -> bool {
+    std::fs::metadata(path.join(".git"))
+        .map(|m| m.is_file())
+        .unwrap_or(false)
 }
 
 pub fn current_branch(repo_path: &Path) -> AppResult<String> {

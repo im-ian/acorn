@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   Copy,
@@ -36,6 +36,7 @@ import type {
   TodoItem,
 } from "../lib/types";
 import { AuthorAvatar } from "./AuthorAvatar";
+import { loginFromEmail } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
@@ -56,7 +57,15 @@ import { useDialogShortcuts } from "../lib/dialog";
 interface ExpandedDiff {
   payload: DiffPayload;
   title: string;
-  subtitle?: string;
+  /** Rich React subtitle — avatar + author + sha line for commit expansion. */
+  subtitle?: ReactNode;
+  /** Right-side header buttons (Copy SHA / Open on GitHub for commits). */
+  headerActions?: ReactNode;
+  /**
+   * Commit message body to show above the diff. Populated when expanding a
+   * commit; omitted for staged-diff expansion (no commit context).
+   */
+  body?: string;
 }
 
 const COMMITS_PAGE_SIZE = 50;
@@ -189,6 +198,8 @@ export function RightPanel() {
         payload={expanded?.payload ?? null}
         title={expanded?.title ?? ""}
         subtitle={expanded?.subtitle}
+        headerActions={expanded?.headerActions}
+        body={expanded?.body}
         cwd={repoPath ?? undefined}
         onClose={() => setExpanded(null)}
       />
@@ -521,6 +532,9 @@ function CommitsTab({
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
+  const [commitLogins, setCommitLogins] = useState<
+    Record<string, string | null>
+  >({});
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState<DiffPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -545,6 +559,7 @@ function CommitsTab({
     setLoadingMore(false);
     setLoadingFirst(true);
     setCommits([]);
+    setCommitLogins({});
     api
       .listCommits(repoPath, 0, COMMITS_PAGE_SIZE)
       .then((page) => {
@@ -563,6 +578,51 @@ function CommitsTab({
       cancelled = true;
     };
   }, [repoPath]);
+
+  // Resolve commit author logins via GitHub GraphQL for any sha we don't
+  // already have. The backend caches by (slug, sha) so re-fetches across
+  // pagination / project re-entry are free.
+  useEffect(() => {
+    if (commits.length === 0) return;
+    const missing = commits
+      .map((c) => c.sha)
+      .filter((sha) => !(sha in commitLogins));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    // Mark every attempted sha in `commitLogins` (resolved or not) so this
+    // effect doesn't re-fire forever for unknown authors. Without this, the
+    // `missing` filter keeps matching the same shas — backend returns only
+    // the subset with a known login, and `setCommitLogins` always produces
+    // a fresh object reference, which retriggers the effect via the
+    // `commitLogins` dep.
+    const settle = (map: Record<string, string | null>) => {
+      setCommitLogins((prev) => {
+        const next: Record<string, string | null> = { ...prev };
+        for (const sha of missing) {
+          if (!(sha in next)) next[sha] = null;
+        }
+        for (const [sha, login] of Object.entries(map)) {
+          next[sha] = login;
+        }
+        return next;
+      });
+    };
+    api
+      .resolveCommitLogins(repoPath, missing)
+      .then((map) => {
+        if (cancelled) return;
+        settle(map);
+      })
+      .catch(() => {
+        // No gh access / network failure — record null entries so we don't
+        // retry the same shas every render.
+        if (cancelled) return;
+        settle({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoPath, commits, commitLogins]);
 
   useEffect(() => {
     let cancelled = false;
@@ -619,13 +679,61 @@ function CommitsTab({
       .catch((e) => setError(String(e)));
   }
 
+  function buildSubtitle(c: CommitInfo): ReactNode {
+    const login = commitLogins[c.sha] ?? loginFromEmail(c.author_email);
+    return (
+      <span className="flex items-center gap-2 text-[11px] text-fg-muted">
+        <span className="flex items-center gap-1.5">
+          <AuthorAvatar login={login} size={16} />
+          <span>{c.author}</span>
+        </span>
+        <span className="opacity-50">·</span>
+        <Tooltip label={absoluteTime(c.timestamp)} side="bottom">
+          <span className="font-mono">{relativeTime(c.timestamp)}</span>
+        </Tooltip>
+      </span>
+    );
+  }
+
+  function buildHeaderActions(c: CommitInfo, webUrl: string | null): ReactNode {
+    return (
+      <>
+        <Tooltip label="Copy SHA" side="bottom">
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard.writeText(c.sha)}
+            className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            {c.short_sha}
+          </button>
+        </Tooltip>
+        {webUrl ? (
+          <Tooltip label="Open on GitHub" side="bottom">
+            <button
+              type="button"
+              onClick={() => void openUrl(webUrl)}
+              className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <ExternalLink size={12} />
+            </button>
+          </Tooltip>
+        ) : null}
+      </>
+    );
+  }
+
   async function expandCommit(c: CommitInfo) {
     try {
-      const payload = await api.commitDiff(repoPath, c.sha);
+      const [payload, webUrl] = await Promise.all([
+        api.commitDiff(repoPath, c.sha),
+        api.commitWebUrl(repoPath, c.sha).catch(() => null),
+      ]);
       onExpand({
         payload,
         title: c.summary,
-        subtitle: `${c.short_sha} · ${c.author}`,
+        subtitle: buildSubtitle(c),
+        headerActions: buildHeaderActions(c, webUrl),
+        body: c.body,
       });
     } catch (e) {
       setError(String(e));
@@ -758,8 +866,16 @@ function CommitsTab({
                         <span className="min-w-0 flex-1 truncate text-fg">{c.summary}</span>
                       </Tooltip>
                     </span>
-                    <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
-                      <span className="truncate">{c.author}</span>
+                    <span className="flex w-full min-w-0 items-center gap-2 text-[11px] text-fg-muted">
+                      <span className="flex min-w-0 shrink items-center gap-1.5">
+                        <AuthorAvatar
+                          login={
+                            commitLogins[c.sha] ?? loginFromEmail(c.author_email)
+                          }
+                          size={14}
+                        />
+                        <span className="truncate">{c.author}</span>
+                      </span>
                       <span className="opacity-50">·</span>
                       <Tooltip label={absoluteTime(c.timestamp)} side="top">
                         <span className="font-mono">
@@ -783,11 +899,15 @@ function CommitsTab({
               payload={diff}
               onExpand={() => {
                 const c = commits.find((x) => x.sha === selected);
-                onExpand({
-                  payload: diff,
-                  title: c?.summary ?? selected.slice(0, 12),
-                  subtitle: `${c?.short_sha ?? selected.slice(0, 7)} · ${c?.author ?? ""}`,
-                });
+                if (c) {
+                  void expandCommit(c);
+                } else {
+                  onExpand({
+                    payload: diff,
+                    title: selected.slice(0, 12),
+                    subtitle: selected.slice(0, 7),
+                  });
+                }
               }}
             />
           ) : selected ? (
@@ -818,6 +938,7 @@ function CommitsTab({
                     void openOnGitHub(menu.commit);
                   },
                 },
+                { type: "separator" },
                 {
                   label: `Copy SHA (${menu.commit.short_sha})`,
                   icon: <Copy size={12} />,
@@ -981,7 +1102,7 @@ function StagedTab({
                 onExpand({
                   payload: diff,
                   title: "Working tree changes",
-                  subtitle: repoPath,
+                  subtitle: <span className="font-mono">{repoPath}</span>,
                 })
               }
             />

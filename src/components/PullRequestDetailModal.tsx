@@ -6,7 +6,9 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Copy,
   ExternalLink,
+  GitCommit,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -18,17 +20,21 @@ import {
   XCircle,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Panel, PanelGroup } from "react-resizable-panels";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import { ResizeHandle } from "./ResizeHandle";
 import type {
+  DiffPayload,
   PullRequestCheck,
   PullRequestComment,
+  PullRequestCommit,
   PullRequestDetail,
   PullRequestDetailListing,
   PullRequestReview,
 } from "../lib/types";
-import { AuthorAvatar } from "./AuthorAvatar";
+import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
@@ -36,7 +42,7 @@ import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
 import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
 
-type DetailTab = "conversation" | "checks" | "files";
+type DetailTab = "conversation" | "commits" | "checks" | "files";
 
 interface PullRequestDetailModalProps {
   /**
@@ -72,6 +78,15 @@ export function PullRequestDetailModal({
   const [refreshing, setRefreshing] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  // Optimistic body override while a task-list checkbox toggle is in flight
+  // (or after one succeeds, until the next fetch overwrites it). Keyed by
+  // PR identity so a stale override never bleeds into a different PR.
+  const [bodyOverride, setBodyOverride] = useState<{
+    key: string;
+    body: string;
+  } | null>(null);
+  const [bodySaveError, setBodySaveError] = useState<string | null>(null);
+  const bodyWriteSeqRef = useRef(0);
 
   useDialogShortcuts(open !== null, {
     onCancel: onClose,
@@ -88,10 +103,14 @@ export function PullRequestDetailModal({
       setReloadKey(0);
       setMergeDialogOpen(false);
       setCloseDialogOpen(false);
+      setBodyOverride(null);
+      setBodySaveError(null);
       return;
     }
     setListing(null);
     setError(null);
+    setBodyOverride(null);
+    setBodySaveError(null);
   }, [open]);
 
   // Fetch on open and on every refresh bump.
@@ -127,6 +146,51 @@ export function PullRequestDetailModal({
 
   const detail =
     listing && listing.kind === "ok" ? listing.detail : null;
+  const prKey = open ? `${open.repoPath}#${open.number}` : null;
+  // Whenever a fresh detail arrives, the canonical body wins unless we have
+  // an unsynced override from a click that happened mid-fetch. The override
+  // is cleared opportunistically when it matches the server again.
+  useEffect(() => {
+    if (!detail || !prKey) return;
+    setBodyOverride((prev) => {
+      if (!prev || prev.key !== prKey) return null;
+      if (prev.body === detail.body) return null;
+      return prev;
+    });
+  }, [detail, prKey]);
+
+  const displayBody = useMemo(() => {
+    if (!detail || !prKey) return null;
+    if (bodyOverride && bodyOverride.key === prKey) return bodyOverride.body;
+    return detail.body;
+  }, [detail, bodyOverride, prKey]);
+
+  const handleTaskToggle = useCallback(
+    (index: number, checked: boolean) => {
+      if (!open || !detail || !prKey) return;
+      const current =
+        bodyOverride && bodyOverride.key === prKey
+          ? bodyOverride.body
+          : detail.body;
+      const next = toggleTaskMarker(current, index, checked);
+      if (next === null || next === current) return;
+      const seq = ++bodyWriteSeqRef.current;
+      setBodyOverride({ key: prKey, body: next });
+      setBodySaveError(null);
+      api
+        .updatePullRequestBody(open.repoPath, open.number, next)
+        .then(() => {
+          if (seq !== bodyWriteSeqRef.current) return;
+          setReloadKey((k) => k + 1);
+        })
+        .catch((e) => {
+          if (seq !== bodyWriteSeqRef.current) return;
+          setBodyOverride(null);
+          setBodySaveError(String(e));
+        });
+    },
+    [open, detail, prKey, bodyOverride],
+  );
 
   return (
     <>
@@ -159,8 +223,12 @@ export function PullRequestDetailModal({
         ) : (
           <DetailBody
             detail={listing.detail}
+            body={displayBody ?? listing.detail.body}
+            onTaskToggle={handleTaskToggle}
+            bodySaveError={bodySaveError}
             tab={tab}
             onTab={setTab}
+            repoPath={open.repoPath}
             cwd={cwd}
             onClose={onClose}
             onRefresh={handleRefresh}
@@ -218,8 +286,12 @@ function ModalShell({
 
 function DetailBody({
   detail,
+  body,
+  onTaskToggle,
+  bodySaveError,
   tab,
   onTab,
+  repoPath,
   cwd,
   onClose,
   onRefresh,
@@ -228,8 +300,13 @@ function DetailBody({
   onOpenClose,
 }: {
   detail: PullRequestDetail;
+  /** Optimistically-overridden body (or `detail.body` if no edit is pending). */
+  body: string;
+  onTaskToggle: (index: number, checked: boolean) => void;
+  bodySaveError: string | null;
   tab: DetailTab;
   onTab: (t: DetailTab) => void;
+  repoPath: string;
   cwd?: string;
   onClose: () => void;
   onRefresh: () => void;
@@ -252,6 +329,7 @@ function DetailBody({
     effectiveChecks > 0 && !allChecksPassed && !allChecksFailed;
   const totalChecks = effectiveChecks;
   const fileCount = detail.diff.files.length;
+  const commitCount = detail.commits.length;
 
   return (
     <>
@@ -326,9 +404,14 @@ function DetailBody({
         </div>
       </header>
 
-      {detail.body.trim().length > 0 ? (
+      {body.trim().length > 0 ? (
         <ResizableBody>
-          <Markdown content={detail.body} />
+          <Markdown content={body} onTaskToggle={onTaskToggle} />
+          {bodySaveError ? (
+            <p className="mt-2 text-[10.5px] text-danger">
+              Couldn't save checkbox: {bodySaveError}
+            </p>
+          ) : null}
         </ResizableBody>
       ) : null}
 
@@ -339,6 +422,13 @@ function DetailBody({
           badge={conversationCount > 0 ? conversationCount : null}
           active={tab === "conversation"}
           onClick={() => onTab("conversation")}
+        />
+        <DetailTabButton
+          icon={<GitCommit size={13} />}
+          label="Commits"
+          badge={commitCount > 0 ? commitCount : null}
+          active={tab === "commits"}
+          onClick={() => onTab("commits")}
         />
         <DetailTabButton
           icon={<CheckCircle2 size={13} />}
@@ -376,6 +466,13 @@ function DetailBody({
           <ConversationPane
             comments={detail.comments}
             reviews={detail.reviews}
+          />
+        ) : tab === "commits" ? (
+          <CommitsPane
+            commits={detail.commits}
+            prUrl={detail.url}
+            repoPath={repoPath}
+            cwd={cwd}
           />
         ) : tab === "checks" ? (
           <ChecksPane checks={detail.checks} />
@@ -460,6 +557,7 @@ function DetailSkeleton({
       <nav className="flex shrink-0 border-b border-border">
         {[
           { icon: <MessagesSquare size={13} />, w: "w-20" },
+          { icon: <GitCommit size={13} />, w: "w-14" },
           { icon: <CheckCircle2 size={13} />, w: "w-12" },
           { icon: <GitPullRequest size={13} />, w: "w-10" },
         ].map((tab, i) => (
@@ -909,65 +1007,6 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
   );
 }
 
-/**
- * Avatar + login pair with a right-click context menu offering "Open
- * GitHub profile". Used in the modal header and in each conversation
- * block. Strips the `[bot]` suffix when building the profile URL so it
- * resolves for bot accounts like `dependabot[bot]`.
- */
-function AuthorTag({
-  login,
-  size = 24,
-  nameClass,
-  avatarOnly = false,
-}: {
-  login: string;
-  size?: number;
-  nameClass?: string;
-  /** When true, render only the avatar (no inline username text). */
-  avatarOnly?: boolean;
-}) {
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const slug = login.replace(/\[bot\]$/, "");
-  const profileUrl = slug ? `https://github.com/${slug}` : null;
-
-  const items: ContextMenuItem[] = profileUrl
-    ? [
-        {
-          label: "Open GitHub profile",
-          icon: <ExternalLink size={12} />,
-          onClick: () => void openUrl(profileUrl),
-        },
-      ]
-    : [];
-
-  return (
-    <>
-      <span
-        onContextMenu={(e) => {
-          if (!profileUrl) return;
-          e.preventDefault();
-          e.stopPropagation();
-          setMenu({ x: e.clientX, y: e.clientY });
-        }}
-        className="inline-flex shrink-0 items-center gap-1.5 align-middle"
-      >
-        <AuthorAvatar login={login} size={size} />
-        {avatarOnly ? null : (
-          <span className={cn("font-mono text-fg", nameClass)}>{login}</span>
-        )}
-      </span>
-      <ContextMenu
-        open={menu !== null}
-        x={menu?.x ?? 0}
-        y={menu?.y ?? 0}
-        items={items}
-        onClose={() => setMenu(null)}
-      />
-    </>
-  );
-}
-
 function ReviewStateBadge({ state }: { state: string }) {
   const upper = state.toUpperCase();
   const tone =
@@ -989,6 +1028,345 @@ function ReviewStateBadge({ state }: { state: string }) {
       {label}
     </span>
   );
+}
+
+function CommitsPane({
+  commits,
+  prUrl,
+  repoPath,
+  cwd,
+}: {
+  commits: PullRequestCommit[];
+  prUrl: string;
+  repoPath: string;
+  cwd?: string;
+}) {
+  const [selectedOid, setSelectedOid] = useState<string | null>(
+    commits[0]?.oid ?? null,
+  );
+
+  // Re-select first commit whenever the list identity changes (PR switch /
+  // refresh adds new commits). Compare by joined oid list to avoid resetting
+  // on every render.
+  const oidsKey = useMemo(() => commits.map((c) => c.oid).join(","), [commits]);
+  useEffect(() => {
+    if (commits.length === 0) {
+      setSelectedOid(null);
+      return;
+    }
+    setSelectedOid((cur) =>
+      cur && commits.some((c) => c.oid === cur) ? cur : commits[0].oid,
+    );
+  }, [oidsKey, commits]);
+
+  if (commits.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+        No commits in this pull request.
+      </div>
+    );
+  }
+
+  const selected = commits.find((c) => c.oid === selectedOid) ?? null;
+
+  return (
+    <PanelGroup
+      direction="horizontal"
+      autoSaveId="acorn:pr-commits-split"
+      className="h-full min-h-0"
+    >
+      <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
+        <aside className="flex h-full flex-col overflow-y-auto border-r border-border text-xs">
+          <ul className="flex flex-col">
+            {commits.map((c) => (
+              <CommitListItem
+                key={c.oid}
+                commit={c}
+                prUrl={prUrl}
+                selected={c.oid === selectedOid}
+                onSelect={() => setSelectedOid(c.oid)}
+              />
+            ))}
+          </ul>
+        </aside>
+      </Panel>
+      <ResizeHandle />
+      <Panel id="detail" order={2} defaultSize={72} minSize={40}>
+        <div className="flex h-full min-w-0 flex-col">
+          {selected ? (
+            <CommitDetailView
+              commit={selected}
+              prUrl={prUrl}
+              repoPath={repoPath}
+              cwd={cwd}
+            />
+          ) : null}
+        </div>
+      </Panel>
+    </PanelGroup>
+  );
+}
+
+function CommitListItem({
+  commit,
+  prUrl,
+  selected,
+  onSelect,
+}: {
+  commit: PullRequestCommit;
+  prUrl: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const primaryAuthor = commit.authors[0];
+  const commitUrl = buildCommitUrl(prUrl, commit.oid);
+  const profileItems = buildProfileMenuItems(primaryAuthor?.login);
+
+  const items: ContextMenuItem[] = [
+    ...(commitUrl
+      ? [
+          {
+            label: "View on GitHub",
+            icon: <ExternalLink size={12} />,
+            onClick: () => void openUrl(commitUrl),
+          },
+        ]
+      : []),
+    ...profileItems,
+    ...((commitUrl || profileItems.length > 0)
+      ? [{ type: "separator" as const }]
+      : []),
+    {
+      label: "Copy SHA",
+      icon: <Copy size={12} />,
+      onClick: () => void navigator.clipboard.writeText(commit.oid),
+    },
+  ];
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        className={cn(
+          "block w-full border-b border-border/40 px-3 py-2 text-left transition",
+          selected
+            ? "bg-accent/15 text-fg"
+            : "text-fg-muted hover:bg-bg-elevated hover:text-fg",
+        )}
+      >
+        <div className="truncate text-[12px] font-medium text-fg" title={commit.message_headline}>
+          {commit.message_headline || "(no message)"}
+        </div>
+        <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-fg-muted">
+          {primaryAuthor ? (
+            <AuthorTag
+              login={primaryAuthor.login}
+              fallbackName={primaryAuthor.name || "unknown"}
+              size={14}
+              nameClass="text-[10.5px] text-fg-muted"
+            />
+          ) : null}
+          <span className="opacity-50">·</span>
+          <span className="font-mono opacity-70">
+            {formatRelativeTime(commit.committed_date)}
+          </span>
+        </div>
+      </button>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={items}
+        onClose={() => setMenu(null)}
+      />
+    </li>
+  );
+}
+
+function CommitDetailView({
+  commit,
+  prUrl,
+  repoPath,
+  cwd,
+}: {
+  commit: PullRequestCommit;
+  prUrl: string;
+  repoPath: string;
+  cwd?: string;
+}) {
+  const [diff, setDiff] = useState<DiffPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const shortOid = commit.oid.slice(0, 7);
+  const commitUrl = buildCommitUrl(prUrl, commit.oid);
+  const hasBody = commit.message_body.trim().length > 0;
+  const primaryAuthor = commit.authors[0];
+
+  useEffect(() => {
+    let cancelled = false;
+    setDiff(null);
+    setError(null);
+    setLoading(true);
+    api
+      .getPullRequestCommitDiff(repoPath, commit.oid)
+      .then((payload) => {
+        if (cancelled) return;
+        setDiff(payload);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(String(e));
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoPath, commit.oid]);
+
+  const diffSection = (
+    <div className="h-full min-h-0 overflow-hidden">
+      {error ? (
+        <div className="flex h-full items-center justify-center px-4 text-center text-xs text-danger">
+          {error}
+        </div>
+      ) : loading || !diff ? (
+        <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+          Loading diff…
+        </div>
+      ) : diff.files.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+          No file changes in this commit.
+        </div>
+      ) : (
+        <DiffSplitView payload={diff} cwd={cwd} />
+      )}
+    </div>
+  );
+
+  const bodySection = (
+    <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-2">
+      <Markdown content={commit.message_body} />
+    </div>
+  );
+
+  return (
+    <>
+      <header className="flex shrink-0 items-start gap-2 border-b border-border bg-bg-sidebar/40 px-4 py-2.5">
+        <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
+        <div className="min-w-0 flex-1">
+          <div
+            className="truncate text-[13px] font-semibold tracking-tight text-fg"
+            title={commit.message_headline}
+          >
+            {commit.message_headline || "(no message)"}
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
+            {primaryAuthor ? (
+              <AuthorTag
+                login={primaryAuthor.login}
+                fallbackName={primaryAuthor.name || "unknown"}
+                size={16}
+                nameClass="text-[11px] text-fg-muted"
+              />
+            ) : null}
+            {commit.authors.length > 1 ? (
+              <span className="opacity-70">
+                +{commit.authors.length - 1}
+              </span>
+            ) : null}
+            <span className="opacity-50">·</span>
+            <span className="font-mono opacity-70">
+              {formatTimestamp(commit.committed_date)}
+            </span>
+          </div>
+        </div>
+        <Tooltip label="Copy SHA" side="bottom">
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(commit.oid);
+            }}
+            className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            {shortOid}
+          </button>
+        </Tooltip>
+        {commitUrl ? (
+          <Tooltip label="Open commit on GitHub" side="bottom">
+            <button
+              type="button"
+              onClick={() => void openUrl(commitUrl)}
+              className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <ExternalLink size={12} />
+            </button>
+          </Tooltip>
+        ) : null}
+      </header>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {hasBody ? (
+          <PanelGroup
+            direction="vertical"
+            autoSaveId="acorn:pr-commit-body-diff"
+            className="h-full"
+          >
+            <Panel id="body" order={1} defaultSize={20} minSize={8} maxSize={70}>
+              {bodySection}
+            </Panel>
+            <ResizeHandle direction="vertical" />
+            <Panel id="diff" order={2} defaultSize={80} minSize={20}>
+              {diffSection}
+            </Panel>
+          </PanelGroup>
+        ) : (
+          diffSection
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * Compact "23h" / "2d" / "May 4" — keeps the commit list narrow. Falls back
+ * to the raw string when parsing fails.
+ */
+function formatRelativeTime(iso: string): string {
+  if (!iso) return "—";
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  const diff = Date.now() - ms;
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return "now";
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/**
+ * `detail.url` is the PR URL (`.../pull/N`). Rewrite to the standalone
+ * commit page (`.../commit/{sha}`); returns null when the PR URL is empty
+ * or unrecognized so the link button can be skipped instead of opening a
+ * broken target.
+ */
+function buildCommitUrl(prUrl: string, oid: string): string | null {
+  if (!prUrl || !oid) return null;
+  const m = prUrl.match(/^(.*)\/pull\/\d+(?:\/.*)?$/);
+  if (!m) return null;
+  return `${m[1]}/commit/${oid}`;
 }
 
 function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
@@ -1075,6 +1453,48 @@ function CheckStatusLabel({
   return (
     <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
   );
+}
+
+/**
+ * Toggle the Nth GFM task-list marker in `body` to the requested state.
+ * Returns the new body, or `null` if the index is out of range.
+ *
+ * Walks line-by-line so fenced code blocks (which may contain literal
+ * `- [ ]` text) don't get counted. Matches the same list markers GFM
+ * accepts: `-`, `*`, `+`, `1.`, `1)`.
+ */
+export function toggleTaskMarker(
+  body: string,
+  index: number,
+  checked: boolean,
+): string | null {
+  const lineRe = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\](?=[ \t])/;
+  const fenceRe = /^[ \t]{0,3}(```+|~~~+)/;
+  let inFence = false;
+  let pos = 0;
+  let n = 0;
+  const lines = body.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fenceRe.test(line)) {
+      inFence = !inFence;
+    } else if (!inFence) {
+      const m = lineRe.exec(line);
+      if (m) {
+        if (n === index) {
+          const bracketStart = pos + m[1].length;
+          return (
+            body.slice(0, bracketStart) +
+            `[${checked ? "x" : " "}]` +
+            body.slice(bracketStart + 3)
+          );
+        }
+        n++;
+      }
+    }
+    pos += line.length + 1;
+  }
+  return null;
 }
 
 function formatTimestamp(iso: string): string {

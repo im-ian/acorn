@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { homeDir } from "@tauri-apps/api/path";
-import { Bot, Loader2 } from "lucide-react";
+import { Activity, Loader2, Settings } from "lucide-react";
 import { api } from "../lib/api";
 import { sessionStatusLabel } from "../lib/ai-agent";
 import { cn } from "../lib/cn";
@@ -105,7 +106,14 @@ function GitHubMark() {
 export function StatusBar() {
   const { sessions, activeSessionId, activeProject, error, loading } =
     useAppStore();
+  const multiInputEnabled = useAppStore((s) => s.multiInputEnabled);
   const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
+  const showSessionCount = useSettings(
+    (s) => s.settings.statusBar.showSessionCount,
+  );
+  const showSessionStatus = useSettings(
+    (s) => s.settings.statusBar.showSessionStatus,
+  );
   const showGithubAccount = useSettings(
     (s) => s.settings.statusBar.showGithubAccount,
   );
@@ -125,15 +133,30 @@ export function StatusBar() {
     <>
       <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         {/* Left: aggregate counters about acorn itself — total sessions and
-            the active session's lifecycle status. The IPC button sits first
-            so the user can recover from a dead control-session socket
-            without leaving the main view. */}
-        <IpcStatusButton />
-        <span>sessions: {sessions.length}</span>
-        {active ? (
+            the active session's lifecycle status. The IPC and daemon
+            buttons sit first so the user can recover from a dead
+            control-session socket or a stopped daemon without leaving
+            the main view. */}
+        <ServicesStatusButton />
+        {showSessionCount ? (
+          <span>sessions: {sessions.length}</span>
+        ) : null}
+        {showSessionStatus && active ? (
           <>
-            <span className="text-fg-muted/50">|</span>
+            {showSessionCount ? (
+              <span className="text-fg-muted/50">|</span>
+            ) : null}
             <span>status: {sessionStatusLabel(active)}</span>
+          </>
+        ) : null}
+        {multiInputEnabled ? (
+          <>
+            {showSessionCount || (showSessionStatus && active) ? (
+              <span className="text-fg-muted/50">|</span>
+            ) : null}
+            <span className="rounded bg-accent/15 px-1.5 py-0.5 text-accent">
+              multi-input: on
+            </span>
           </>
         ) : null}
 
@@ -199,82 +222,369 @@ export function StatusBar() {
   );
 }
 
-// Bottom-bar IPC indicator + restart trigger. The badge reflects the in-app
-// listener thread state (authoritative for "can I still accept new
-// connections?"); clicking always cycles the listener so users can recover
-// from a stale socket file even when the thread itself is happy.
-function IpcStatusButton() {
-  const [running, setRunning] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [lastError, setLastError] = useState<string | null>(null);
+// Combined indicator for the in-process IPC server + the out-of-process
+// `acornd` daemon. Both signals collapse into a single status-bar slot
+// (the dot's color = worst-of-two) and expand into a dropdown on click
+// so the user can read each service's state and act on it. Inline
+// restart for IPC stays; daemon restart still routes through Settings
+// (one click in the dropdown jumps there) because killing the daemon
+// drops every persisted PTY.
+interface IpcSnapshot {
+  running: boolean | null;
+  busy: boolean;
+  lastError: string | null;
+}
 
-  const refresh = useCallback(async () => {
+interface DaemonSnapshot {
+  running: boolean;
+  enabled: boolean;
+  sessions: number | null;
+}
+
+type DotState = "ok" | "down" | "muted";
+
+function StatusDot({ state }: { state: DotState }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "inline-block h-1.5 w-1.5 rounded-full",
+        state === "ok"
+          ? "bg-accent"
+          : state === "down"
+            ? "bg-danger"
+            : "bg-fg-muted/60",
+      )}
+    />
+  );
+}
+
+function ServicesStatusButton() {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const [ipc, setIpc] = useState<IpcSnapshot>({
+    running: null,
+    busy: false,
+    lastError: null,
+  });
+  const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
+
+  const refreshIpc = useCallback(async () => {
     try {
       const status = await api.getAcornIpcStatus();
-      setRunning(status.server_running);
+      setIpc((s) => ({ ...s, running: status.server_running }));
     } catch {
-      // Probe failure is a strong "the backend is unhappy" signal; surface
-      // it as down so the badge is honest rather than stuck on the last
-      // known good state.
-      setRunning(false);
+      setIpc((s) => ({ ...s, running: false }));
+    }
+  }, []);
+
+  const refreshDaemon = useCallback(async () => {
+    try {
+      const snap = await api.daemonStatus();
+      setDaemon({
+        running: snap.running,
+        enabled: snap.enabled,
+        sessions: snap.session_count_alive,
+      });
+    } catch {
+      setDaemon({ running: false, enabled: true, sessions: null });
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void refreshIpc();
+    void refreshDaemon();
+    // Daemon socket round-trip every 5s; IPC probe piggy-backs on
+    // the same cadence so both reads share one tick budget.
+    const id = window.setInterval(() => {
+      void refreshIpc();
+      void refreshDaemon();
+    }, 5_000);
+    return () => window.clearInterval(id);
+  }, [refreshIpc, refreshDaemon]);
 
-  const handleClick = useCallback(async () => {
-    if (busy) return;
-    setBusy(true);
-    setLastError(null);
+  const restartIpc = useCallback(async () => {
+    if (ipc.busy) return;
+    setIpc((s) => ({ ...s, busy: true, lastError: null }));
     try {
       await api.ipcRestart();
-      await refresh();
+      await refreshIpc();
+      setIpc((s) => ({ ...s, busy: false }));
     } catch (err) {
-      setLastError(err instanceof Error ? err.message : String(err));
-      await refresh();
-    } finally {
-      setBusy(false);
+      const msg = err instanceof Error ? err.message : String(err);
+      await refreshIpc();
+      setIpc((s) => ({ ...s, busy: false, lastError: msg }));
     }
-  }, [busy, refresh]);
+  }, [ipc.busy, refreshIpc]);
 
-  const tooltip = busy
-    ? "Restarting IPC server…"
-    : lastError
-      ? `IPC restart failed: ${lastError}`
-      : running === null
-        ? "IPC status: loading"
-        : running
-          ? "IPC server: running — click to restart"
-          : "IPC server: down — click to restart";
+  const openDaemonSettings = useCallback(() => {
+    // Sessions tab houses the daemon panel as a sub-section.
+    window.dispatchEvent(
+      new CustomEvent("acorn:open-settings", { detail: { tab: "sessions" } }),
+    );
+    setOpen(false);
+  }, []);
+
+  // Worst-of-two for the trigger dot — any down service paints red so
+  // the user notices something needs attention without expanding.
+  const aggregate: DotState = (() => {
+    const ipcDown = ipc.running === false;
+    const daemonDown = daemon !== null && daemon.enabled && !daemon.running;
+    if (ipcDown || daemonDown) return "down";
+    if (ipc.running === null || daemon === null) return "muted";
+    return "ok";
+  })();
+
+  const tooltip = (() => {
+    const ipcLabel =
+      ipc.running === null
+        ? "ipc: loading"
+        : ipc.running
+          ? "ipc: on"
+          : "ipc: off";
+    const daemonLabel =
+      daemon === null
+        ? "daemon: loading"
+        : !daemon.enabled
+          ? "daemon: disabled"
+          : daemon.running
+            ? `daemon: on${daemon.sessions !== null ? ` (${daemon.sessions})` : ""}`
+            : "daemon: down";
+    return `${ipcLabel} · ${daemonLabel} — click for details`;
+  })();
+
+  const ipcDotState: DotState =
+    ipc.running === null ? "muted" : ipc.running ? "ok" : "down";
+  const daemonDotState: DotState = (() => {
+    if (daemon === null) return "muted";
+    if (!daemon.enabled) return "muted";
+    return daemon.running ? "ok" : "down";
+  })();
 
   return (
-    <Tooltip label={tooltip} side="top" multiline>
-      <button
-        type="button"
-        onClick={() => void handleClick()}
-        disabled={busy}
-        className={cn(
-          "flex h-5 items-center gap-1 rounded px-1.5 transition",
-          "hover:bg-bg-elevated disabled:cursor-default disabled:hover:bg-transparent",
-          running === null
-            ? "text-fg-muted"
-            : running
+    <>
+      <Tooltip label={tooltip} side="top" multiline>
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Service status"
+          className={cn(
+            "flex h-5 items-center gap-1.5 rounded px-1.5 transition",
+            "hover:bg-bg-elevated",
+            aggregate === "ok"
               ? "text-accent"
-              : "text-danger",
-        )}
-        aria-label="Restart IPC server"
-      >
-        {busy ? (
-          <Loader2 size={12} className="animate-spin" />
-        ) : (
-          <Bot size={12} />
-        )}
-        <span className="text-[10px]">
-          ipc: {running === null ? "…" : running ? "on" : "off"}
-        </span>
-      </button>
-    </Tooltip>
+              : aggregate === "down"
+                ? "text-danger"
+                : "text-fg-muted",
+          )}
+        >
+          <Activity size={12} />
+          <StatusDot state={aggregate} />
+        </button>
+      </Tooltip>
+      {open ? (
+        <ServicesDropdown
+          anchor={triggerRef.current}
+          onClose={() => setOpen(false)}
+          ipc={ipc}
+          ipcDotState={ipcDotState}
+          daemon={daemon}
+          daemonDotState={daemonDotState}
+          onRestartIpc={() => void restartIpc()}
+          onOpenDaemonSettings={openDaemonSettings}
+        />
+      ) : null}
+    </>
+  );
+}
+
+interface ServicesDropdownProps {
+  anchor: HTMLElement | null;
+  onClose: () => void;
+  ipc: IpcSnapshot;
+  ipcDotState: DotState;
+  daemon: DaemonSnapshot | null;
+  daemonDotState: DotState;
+  onRestartIpc: () => void;
+  onOpenDaemonSettings: () => void;
+}
+
+function ServicesDropdown({
+  anchor,
+  onClose,
+  ipc,
+  ipcDotState,
+  daemon,
+  daemonDotState,
+  onRestartIpc,
+  onOpenDaemonSettings,
+}: ServicesDropdownProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; bottom: number } | null>(
+    null,
+  );
+
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    // Bottom-anchored: dropdown opens above the status bar trigger.
+    setPosition({
+      left: rect.left,
+      bottom: Math.max(8, window.innerHeight - rect.top + 6),
+    });
+  }, [anchor]);
+
+  useLayoutEffect(() => {
+    if (!ref.current || !position) return;
+    // Clamp horizontally so the menu does not run off the right edge.
+    const rect = ref.current.getBoundingClientRect();
+    const overflowRight = position.left + rect.width - (window.innerWidth - 8);
+    if (overflowRight > 0) {
+      setPosition((p) => (p ? { ...p, left: Math.max(8, p.left - overflowRight) } : p));
+    }
+    // intentional: this effect re-measures only when the menu first mounts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref.current]);
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (ref.current && ref.current.contains(e.target as Node)) return;
+      if (anchor && anchor.contains(e.target as Node)) return;
+      onClose();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [anchor, onClose]);
+
+  if (!position) return null;
+
+  const ipcStatusText =
+    ipc.running === null
+      ? "loading"
+      : ipc.running
+        ? "running"
+        : "down";
+  const daemonStatusText =
+    daemon === null
+      ? "loading"
+      : !daemon.enabled
+        ? "disabled"
+        : daemon.running
+          ? daemon.sessions !== null
+            ? `running · ${daemon.sessions} session${daemon.sessions === 1 ? "" : "s"}`
+            : "running"
+          : "down";
+
+  return createPortal(
+    <div
+      ref={ref}
+      role="menu"
+      style={{ position: "fixed", left: position.left, bottom: position.bottom, zIndex: 60 }}
+      className="w-64 overflow-hidden rounded-md border border-border bg-bg-elevated shadow-2xl"
+    >
+      <ul className="divide-y divide-border text-[11px]">
+        <li>
+          <ServiceRow
+            label="IPC server"
+            description="control-session ↔ app socket"
+            dot={ipcDotState}
+            statusText={ipcStatusText}
+            actionLabel={ipc.busy ? "Restarting…" : "Restart"}
+            actionIcon={
+              ipc.busy ? <Loader2 size={11} className="animate-spin" /> : null
+            }
+            actionDisabled={ipc.busy}
+            onAction={onRestartIpc}
+            error={ipc.lastError}
+          />
+        </li>
+        <li>
+          <ServiceRow
+            label="acornd daemon"
+            description="persistent PTY sessions"
+            dot={daemonDotState}
+            statusText={daemonStatusText}
+            actionLabel="Settings"
+            actionIcon={<Settings size={11} />}
+            actionDisabled={false}
+            onAction={onOpenDaemonSettings}
+            error={null}
+          />
+        </li>
+      </ul>
+    </div>,
+    document.body,
+  );
+}
+
+interface ServiceRowProps {
+  label: string;
+  description: string;
+  dot: DotState;
+  statusText: string;
+  actionLabel: string;
+  actionIcon: React.ReactNode | null;
+  actionDisabled: boolean;
+  onAction: () => void;
+  error: string | null;
+}
+
+function ServiceRow({
+  label,
+  description,
+  dot,
+  statusText,
+  actionLabel,
+  actionIcon,
+  actionDisabled,
+  onAction,
+  error,
+}: ServiceRowProps) {
+  // Two stacked rows: text on top, action button right-aligned below.
+  // Inline action next to the text wraps "running · N sessions" on
+  // the 256px dropdown.
+  return (
+    <div className="flex flex-col gap-1 px-2.5 py-2">
+      <div className="flex items-start gap-2">
+        <StatusDot state={dot} />
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[11px] text-fg">{label}</div>
+          <div className="font-mono text-[10px] text-fg-muted">{statusText}</div>
+          <div className="text-[10px] text-fg-muted/80">{description}</div>
+          {error ? (
+            <div className="mt-0.5 break-words text-[10px] text-danger">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onAction}
+          disabled={actionDisabled}
+          className={cn(
+            "flex shrink-0 items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] transition",
+            "hover:bg-bg-sidebar disabled:cursor-default disabled:opacity-60",
+          )}
+        >
+          {actionIcon}
+          <span>{actionLabel}</span>
+        </button>
+      </div>
+    </div>
   );
 }

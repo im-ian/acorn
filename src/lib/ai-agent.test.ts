@@ -124,6 +124,7 @@ describe("sessionStatusLabel", () => {
       position: null,
       active_agent,
       agent_status,
+      in_worktree: false,
     };
   }
 

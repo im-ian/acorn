@@ -1,31 +1,53 @@
-function makeStorage(): Storage {
+function isStorageLike(value: unknown): value is Storage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Storage).clear === "function" &&
+    typeof (value as Storage).getItem === "function" &&
+    typeof (value as Storage).setItem === "function" &&
+    typeof (value as Storage).removeItem === "function"
+  );
+}
+
+function createMemoryStorage(): Storage {
   const data = new Map<string, string>();
+
   return {
     get length() {
       return data.size;
     },
-    clear: () => data.clear(),
-    getItem: (key) => data.get(key) ?? null,
-    key: (index) => Array.from(data.keys())[index] ?? null,
-    removeItem: (key) => {
+    clear() {
+      data.clear();
+    },
+    getItem(key: string) {
+      return data.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(data.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
       data.delete(key);
     },
-    setItem: (key, value) => {
+    setItem(key: string, value: string) {
       data.set(key, String(value));
     },
   };
 }
 
-function ensureStorage(target: typeof globalThis | Window): void {
-  const current = target.localStorage;
-  if (typeof current?.setItem === "function") return;
-  Object.defineProperty(target, "localStorage", {
-    value: makeStorage(),
-    configurable: true,
-  });
-}
+const storage = isStorageLike(globalThis.localStorage)
+  ? globalThis.localStorage
+  : createMemoryStorage();
 
-ensureStorage(globalThis);
+Object.defineProperty(globalThis, "localStorage", {
+  value: storage,
+  configurable: true,
+  writable: true,
+});
+
 if (typeof window !== "undefined") {
-  ensureStorage(window);
+  Object.defineProperty(window, "localStorage", {
+    value: storage,
+    configurable: true,
+    writable: true,
+  });
 }
