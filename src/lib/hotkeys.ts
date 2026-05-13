@@ -72,6 +72,19 @@ export type HotkeyHandler = (event: KeyboardEvent) => void;
 
 export type HotkeyBindings = Record<string, HotkeyHandler>;
 
+type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
+
+function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in (window as TauriRuntimeWindow)
+  );
+}
+
+export function shouldUseTinykeysToggleMultiInputFallback(): boolean {
+  return !isTauriRuntime();
+}
+
 /**
  * Subscribes the given keybinding map to `window` for the lifetime of the
  * component. Bindings are re-attached whenever the map identity changes,

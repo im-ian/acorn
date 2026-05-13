@@ -1404,7 +1404,6 @@ export function Terminal({
       }}
     >
       <div className="acorn-bg-terminal" aria-hidden="true" />
-      <div className="acorn-bg-terminal" aria-hidden="true" />
       <div
         ref={containerRef}
         className={`acorn-terminal relative z-10 h-full w-full ${

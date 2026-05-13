@@ -26,7 +26,11 @@ import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { api } from "./lib/api";
-import { Hotkeys, useHotkeys } from "./lib/hotkeys";
+import {
+  Hotkeys,
+  shouldUseTinykeysToggleMultiInputFallback,
+  useHotkeys,
+} from "./lib/hotkeys";
 import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
@@ -526,6 +530,7 @@ function App() {
       },
       [Hotkeys.toggleMultiInput]: (e: KeyboardEvent) => {
         e.preventDefault();
+        if (!shouldUseTinykeysToggleMultiInputFallback()) return;
         toggleMultiInput();
       },
       [Hotkeys.focusPaneLeft]: (e: KeyboardEvent) => {
