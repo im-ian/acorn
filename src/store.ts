@@ -770,6 +770,18 @@ export const useAppStore = create<AppStateModel>()(
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
       get().selectSession(created.id);
+      // Grab keyboard focus for the new session's xterm. rAF defers past the
+      // portal reattach in `TerminalHost` so the slot is mounted in its pane
+      // body by the time `Terminal` calls `term.focus()`.
+      if (typeof window !== "undefined") {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(
+            new CustomEvent("acorn:focus-session", {
+              detail: { sessionId: created.id },
+            }),
+          );
+        });
+      }
       // First-run guidance for control sessions. Gated on a localStorage
       // flag so power users only see it once. App.tsx hosts the modal.
       if (

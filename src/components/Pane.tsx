@@ -38,7 +38,7 @@ import { useSettings } from "../lib/settings";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
-import type { Session, SessionStatus } from "../lib/types";
+import type { Session, SessionKind, SessionStatus } from "../lib/types";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
   idle: "bg-fg-muted",
@@ -116,10 +116,13 @@ export function Pane({ paneId }: PaneProps) {
   // `store.createSession` lands the new tab next to *this* pane's active
   // tab, then routes through the store wrapper for consistent placement
   // and selection (browser-style "next to active").
-  async function spawnSession(repoPath: string) {
+  async function spawnSession(
+    repoPath: string,
+    kind: SessionKind = "regular",
+  ) {
     setFocusedPane(paneId);
     const name = suggestSessionName(repoPath, sessions);
-    await createSession(name, repoPath, false);
+    await createSession(name, repoPath, false, kind);
   }
 
   async function handleNewTabFromStrip() {
@@ -178,8 +181,8 @@ export function Pane({ paneId }: PaneProps) {
               splitSide: "after",
             });
           }}
-          onDuplicate={(repoPath) => {
-            void spawnSession(repoPath);
+          onDuplicate={(repoPath, kind) => {
+            void spawnSession(repoPath, kind);
           }}
         />
       ) : null}
@@ -304,7 +307,7 @@ interface TabStripProps {
   ) => void;
   onNewTab: () => void;
   onSplitTab: (sessionId: string, direction: Direction) => void;
-  onDuplicate: (repoPath: string) => void;
+  onDuplicate: (repoPath: string, kind: SessionKind) => void;
 }
 
 function TabStrip({
@@ -387,7 +390,7 @@ function TabStrip({
             for (const t of tabs) onClose(t.id);
           }}
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
-          onDuplicate={() => onDuplicate(tab.repo_path)}
+          onDuplicate={() => onDuplicate(tab.repo_path, tab.kind)}
           siblingCount={tabs.length}
           registerRef={(el) => {
             if (el) tabRefs.current.set(tab.id, el);
