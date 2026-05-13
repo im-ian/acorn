@@ -256,6 +256,20 @@ export interface AcornSettings {
      */
     showDetailsOnHover: boolean;
   };
+  /**
+   * Opt-in toggles for unfinished features. Anything under here is
+   * unstable on purpose — the contract is "we keep the toggle, the
+   * implementation can churn".
+   */
+  experiments: {
+    /**
+     * Pins the most recent user-prompt line from the claude TUI to the
+     * top of the terminal so the user keeps it in view while reading
+     * the assistant's reply. Detection is buffer-driven, so Cmd+K
+     * naturally clears the banner along with the rest of the scrollback.
+     */
+    stickyPrompt: boolean;
+  };
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
@@ -312,6 +326,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       sessionKind: true,
     },
     showDetailsOnHover: true,
+  },
+  experiments: {
+    stickyPrompt: false,
   },
 };
 
@@ -538,6 +555,14 @@ function loadSettings(): AcornSettings {
             ? parsed.sessionDisplay.showDetailsOnHover
             : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
       },
+      experiments: {
+        ...DEFAULT_SETTINGS.experiments,
+        ...(parsed.experiments ?? {}),
+        stickyPrompt:
+          typeof parsed.experiments?.stickyPrompt === "boolean"
+            ? parsed.experiments.stickyPrompt
+            : DEFAULT_SETTINGS.experiments.stickyPrompt,
+      },
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -592,6 +617,7 @@ interface SettingsState {
       icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
     },
   ) => void;
+  patchExperiments: (patch: Partial<AcornSettings["experiments"]>) => void;
   reset: () => void;
 }
 
@@ -704,6 +730,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
           metadata,
           icons,
         },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchExperiments: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        experiments: { ...s.settings.experiments, ...patch },
       };
       persist(next);
       return { settings: next };
