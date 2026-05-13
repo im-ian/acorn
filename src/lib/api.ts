@@ -215,6 +215,30 @@ export const api = {
       { id: string; status: SessionStatus; branch: string | null }[]
     >("detect_session_statuses", { ids });
   },
+  /**
+   * Inspect on-disk markers to determine which agent CLI (if any) the user has
+   * run inside this Acorn session. Drives the Tab > Fork menu item visibility.
+   */
+  detectSessionAgent(
+    sessionId: string,
+  ): Promise<{ claude: string | null; codex: string | null }> {
+    return invoke<{ claude: string | null; codex: string | null }>(
+      "detect_session_agent",
+      { sessionId },
+    );
+  },
+  /**
+   * Copy a parent claude transcript into the new worktree's project slug
+   * so `claude --resume <uuid>` resolves once the fork shell cd's there.
+   * Without this, the resume fails because claude looks transcripts up
+   * by slug-of-cwd, which differs between parent and worktree.
+   */
+  prepareClaudeFork(parentUuid: string, newCwd: string): Promise<void> {
+    return invoke<void>("prepare_claude_fork", {
+      parentUuid,
+      newCwd,
+    });
+  },
   scrollbackOrphanSize(): Promise<number> {
     return invoke<number>("scrollback_orphan_size");
   },
