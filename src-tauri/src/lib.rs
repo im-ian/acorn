@@ -16,6 +16,7 @@ mod scrollback;
 mod session;
 mod session_status;
 mod shell_env;
+mod shell_init;
 mod shell_util;
 mod state;
 mod todos;
@@ -275,6 +276,7 @@ pub fn run() {
             commands::pty_cwd,
             commands::pty_repo_root,
             commands::pty_in_worktree_all,
+            commands::is_path_linked_worktree,
             commands::update_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,

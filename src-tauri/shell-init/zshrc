@@ -1,0 +1,32 @@
+# Acorn zsh init.
+#
+# Sourced because Acorn sets `ZDOTDIR` to its own staged dir before spawning
+# the PTY. This file restores the user's real `ZDOTDIR`, sources their
+# `.zshrc` so their configuration still runs, then appends an OSC 7
+# emitter so the terminal learns the live cwd after every command without
+# the host having to poll `proc_pidinfo`.
+#
+# OSC 7 (`\e]7;file://<host><pwd>\e\\`) is the de-facto "current directory"
+# protocol shared by iTerm2, GNOME Terminal, Wezterm, Kitty, VS Code, etc.
+# Acorn's xterm.js handler treats every emit as the new live cwd for the
+# session and updates the worktree-icon condition in O(1) — no system scan.
+
+if [ -n "${ACORN_USER_ZDOTDIR-}" ]; then
+    ZDOTDIR=$ACORN_USER_ZDOTDIR
+else
+    ZDOTDIR=$HOME
+fi
+unset ACORN_USER_ZDOTDIR
+[ -f "$ZDOTDIR/.zshrc" ] && source "$ZDOTDIR/.zshrc"
+
+_acorn_osc7() {
+    printf '\e]7;file://%s%s\e\\' "${HOST:-${HOSTNAME-localhost}}" "$PWD"
+}
+# precmd_functions is the canonical "run before each prompt" hook list in
+# zsh. typeset -gaU keeps it global, array-typed, and dedup'd so a repeated
+# `source` of this file (e.g. `exec zsh`) doesn't stack duplicate emitters.
+typeset -gaU precmd_functions
+precmd_functions+=(_acorn_osc7)
+# Emit once immediately so the host gets the spawn cwd before the user runs
+# anything — without this, the icon waits for the first prompt.
+_acorn_osc7
