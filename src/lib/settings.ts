@@ -739,9 +739,8 @@ export function resolveAiCommitCommand(s: AcornSettings): ResolvedCommand {
 
 /**
  * Human-friendly label for the global agent selection. Used by the merge
- * dialog tooltip and the Sessions tab description so the user sees at a
- * glance which CLI will run before clicking Generate or starting a
- * session.
+ * dialog tooltip so the user sees which CLI will run before clicking
+ * Generate.
  */
 export function selectedAgentLabel(s: AcornSettings): string {
   if (s.agents.selected === "custom") return "Custom command";

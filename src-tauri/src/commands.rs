@@ -580,10 +580,12 @@ pub async fn pty_spawn<R: Runtime>(
                     crate::ipc::cli_path::prepend_to_path(&bin_dir, &existing),
                 );
             }
-            // Prime any agent we know how to talk to. The primer also lands
-            // in a worktree-local marker file as a fallback for agents we
-            // don't have a flag for (Codex, Gemini CLI, …) — those still
-            // get the env vars and can read the markdown manually.
+            // Drop the primer in a worktree-local marker file so whichever
+            // agent the user invokes inside the shell can read the IPC
+            // protocol. `inject_primer_args` is a no-op while `$SHELL` is
+            // an ordinary shell (`AgentFlavor::Unknown`) and only takes
+            // effect on the rare configuration where `$SHELL` itself
+            // resolves to a recognised agent binary.
             let primer = crate::ipc::primer::primer_for(&session, &socket);
             let flavor = crate::ipc::primer::AgentFlavor::detect(&resolved_command);
             primed_args = crate::ipc::primer::inject_primer_args(
@@ -611,8 +613,9 @@ pub async fn pty_spawn<R: Runtime>(
 /// PTY spawns. The file is small (<2 KiB) and overwritten on each spawn
 /// so the substituted session-id / socket-path always match the running
 /// PTY. Best-effort: a write failure is logged but does not abort spawn,
-/// because the agent-flag injection path is the primary signal and this
-/// file is a secondary nudge for agents we couldn't reach via flags.
+/// since the env vars carry enough state for `acorn-ipc` itself; this
+/// marker exists so whichever agent the user later invokes can read the
+/// protocol from a project-local file.
 fn write_control_marker(cwd: &std::path::Path, primer: &str) {
     let path = cwd.join(".acorn-control.md");
     let body = format!(
