@@ -233,6 +233,12 @@ export interface AcornSettings {
     defaultState: PrStateFilter;
     /** Auto-refresh cadence for the PRs tab in milliseconds. */
     refreshIntervalMs: number;
+    /**
+     * Show the author's GitHub avatar on each PR row. Trades a thicker
+     * row for at-a-glance author recognition, mirroring the PR detail
+     * modal which already shows avatars in its header / conversation.
+     */
+    showAvatars: boolean;
   };
   /**
    * Sidebar session-row presentation. Mirrors Warp's "View as / Pane
@@ -312,6 +318,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   pullRequests: {
     defaultState: "open",
     refreshIntervalMs: 60_000,
+    showAvatars: true,
   },
   sessionDisplay: {
     title: "name",
@@ -552,6 +559,10 @@ function loadSettings(): AcornSettings {
           parsed.pullRequests?.refreshIntervalMs,
           DEFAULT_SETTINGS.pullRequests.refreshIntervalMs,
         ),
+        showAvatars:
+          typeof parsed.pullRequests?.showAvatars === "boolean"
+            ? parsed.pullRequests.showAvatars
+            : DEFAULT_SETTINGS.pullRequests.showAvatars,
       },
       sessionDisplay: {
         title: normalizeSessionTitle(

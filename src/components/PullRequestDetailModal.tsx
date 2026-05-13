@@ -28,6 +28,7 @@ import type {
   PullRequestDetailListing,
   PullRequestReview,
 } from "../lib/types";
+import { AuthorAvatar } from "./AuthorAvatar";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
@@ -158,7 +159,6 @@ export function PullRequestDetailModal({
         ) : (
           <DetailBody
             detail={listing.detail}
-            account={listing.account}
             tab={tab}
             onTab={setTab}
             cwd={cwd}
@@ -218,7 +218,6 @@ function ModalShell({
 
 function DetailBody({
   detail,
-  account,
   tab,
   onTab,
   cwd,
@@ -229,7 +228,6 @@ function DetailBody({
   onOpenClose,
 }: {
   detail: PullRequestDetail;
-  account: string;
   tab: DetailTab;
   onTab: (t: DetailTab) => void;
   cwd?: string;
@@ -288,10 +286,6 @@ function DetailBody({
             </span>
             <span className="opacity-50"> · </span>
             <span>{detail.changed_files} files</span>
-            <span className="opacity-50"> · </span>
-            <Tooltip label={`Listed via gh account ${account}`} side="bottom">
-              <span>@{account}</span>
-            </Tooltip>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -912,41 +906,6 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
         </p>
       )}
     </li>
-  );
-}
-
-/**
- * Inline 18px GitHub avatar. Uses the public `github.com/{login}.png`
- * endpoint — no API token needed and it works for `[bot]` accounts when
- * the `[bot]` suffix is stripped. Falls back invisibly via `alt=""` on
- * load failure so the timeline stays clean.
- */
-function AuthorAvatar({
-  login,
-  size = 24,
-  className,
-}: {
-  login: string;
-  size?: number;
-  className?: string;
-}) {
-  const slug = login.replace(/\[bot\]$/, "");
-  if (!slug) return null;
-  const pixelSize = Math.max(40, size * 2);
-  return (
-    <img
-      src={`https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`}
-      alt=""
-      title={login}
-      width={size}
-      height={size}
-      loading="lazy"
-      style={{ width: size, height: size }}
-      className={cn(
-        "shrink-0 rounded-full bg-bg-elevated align-middle",
-        className,
-      )}
-    />
   );
 }
 
