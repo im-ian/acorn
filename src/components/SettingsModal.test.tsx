@@ -172,6 +172,39 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).not.toContain("Refresh fonts");
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
+
+  it("edits Appearance UI scale as a percentage", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const scaleInput = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Custom UI scale percentage"]',
+    );
+
+    expect(document.body.textContent).toContain("UI scale");
+    expect(scaleInput?.value).toBe("100");
+
+    setInputValue(scaleInput as HTMLInputElement, "126");
+
+    expect(useSettings.getState().patchAppearance).not.toHaveBeenCalledWith({
+      uiScalePercent: 125,
+    });
+    expect(scaleInput?.value).toBe("126");
+
+    act(() => {
+      scaleInput?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+
+    expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
+      uiScalePercent: 125,
+    });
+  });
 });
 
 describe("SettingsModal background controls", () => {

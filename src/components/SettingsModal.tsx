@@ -35,6 +35,10 @@ import {
   type TerminalFontWeight,
   type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
+  UI_SCALE_PERCENT_MAX,
+  UI_SCALE_PERCENT_MIN,
+  UI_SCALE_PERCENT_STEP,
+  normalizeUiScalePercent,
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
@@ -546,6 +550,10 @@ function AppearanceSettings() {
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
       />
+      <UiScaleSection
+        value={appearance.uiScalePercent}
+        onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
+      />
       <BackgroundSection
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
@@ -559,6 +567,89 @@ function AppearanceSettings() {
         patch={patchStatusBar}
       />
     </section>
+  );
+}
+
+const UI_SCALE_PRESETS = [75, 80, 90, 100, 110, 125, 150] as const;
+
+function UiScaleSection({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const presets = UI_SCALE_PRESETS.includes(
+    value as (typeof UI_SCALE_PRESETS)[number],
+  )
+    ? UI_SCALE_PRESETS
+    : [...UI_SCALE_PRESETS, value].sort((a, b) => a - b);
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commitValue = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    const normalized = normalizeUiScalePercent(next, value);
+    setDraft(String(normalized));
+    onChange(normalized);
+  };
+
+  const commitDraft = () => {
+    const raw = draft.trim();
+    if (!raw) {
+      setDraft(String(value));
+      return;
+    }
+    const next = Number(raw);
+    if (!Number.isFinite(next)) {
+      setDraft(String(value));
+      return;
+    }
+    commitValue(next);
+  };
+
+  return (
+    <Field
+      label="UI scale"
+      hint="Scales the app chrome in 5% steps. Terminal text keeps its separate size setting."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={String(value)}
+          onChange={(e) => commitValue(Number(e.target.value))}
+          className="w-32"
+        >
+          {presets.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}%
+            </option>
+          ))}
+        </Select>
+        <TextInput
+          type="number"
+          min={UI_SCALE_PERCENT_MIN}
+          max={UI_SCALE_PERCENT_MAX}
+          step={UI_SCALE_PERCENT_STEP}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              commitDraft();
+              e.currentTarget.blur();
+            } else if (e.key === "Escape") {
+              setDraft(String(value));
+              e.currentTarget.blur();
+            }
+          }}
+          className="w-24"
+          aria-label="Custom UI scale percentage"
+        />
+      </div>
+    </Field>
   );
 }
 

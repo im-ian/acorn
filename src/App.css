@@ -145,3 +145,10 @@ textarea,
 [draggable="true"] {
   -webkit-user-drag: element;
 }
+
+.acorn-app-shell {
+  width: calc(100vw / var(--acorn-ui-scale, 1));
+  height: calc(100vh / var(--acorn-ui-scale, 1));
+  transform: scale(var(--acorn-ui-scale, 1));
+  transform-origin: top left;
+}
