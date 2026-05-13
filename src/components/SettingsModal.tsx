@@ -615,6 +615,18 @@ function AppearanceSettings() {
       >
         <div className="flex flex-col gap-1">
           <CheckboxRow
+            label="Session count"
+            description="Total number of sessions across the active project (`sessions: N`)."
+            checked={settings.statusBar.showSessionCount}
+            onChange={(v) => patchStatusBar({ showSessionCount: v })}
+          />
+          <CheckboxRow
+            label="Active session status"
+            description="Lifecycle state of the active session (Idle / Running / Needs input / Failed / Completed)."
+            checked={settings.statusBar.showSessionStatus}
+            onChange={(v) => patchStatusBar({ showSessionStatus: v })}
+          />
+          <CheckboxRow
             label="GitHub account"
             description="The `gh` account used to list pull requests for the active repo."
             checked={settings.statusBar.showGithubAccount}
