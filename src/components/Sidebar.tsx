@@ -40,7 +40,6 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
-import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
@@ -816,15 +815,14 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       n += 1;
     }
     try {
-      // Carry the source session's kind onto the duplicate so a control
-      // session stays a control session and keeps its IPC-dispatch role.
-      await api.createSession(
-        next,
-        session.repo_path,
-        session.isolated,
-        session.kind,
-      );
-      await useAppStore.getState().refreshAll();
+      // Route through the store wrapper so the duplicate gets the same
+      // post-create treatment as Cmd+T and Pane "Duplicate Session": land
+      // next to the active tab, auto-select, and auto-focus xterm. Carries
+      // the source session's `kind` so a control session stays a control
+      // session (preserves its IPC-dispatch role).
+      await useAppStore
+        .getState()
+        .createSession(next, session.repo_path, session.isolated, session.kind);
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);
     }
