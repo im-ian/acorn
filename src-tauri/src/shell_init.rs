@@ -1,11 +1,13 @@
 //! Acorn-managed shell rc files materialised under the data dir.
 //!
-//! Set `ZDOTDIR` on PTY spawn to point zsh at our staged `.zshrc` instead
-//! of the user's. Our rc sources the user's real `.zshrc` first, then
-//! registers an OSC 7 emitter so the host learns the live cwd every
-//! prompt without polling. The same pattern iTerm2 / Wezterm / VS Code
-//! use; ZDOTDIR is the only env handle zsh provides for "load an extra
-//! interactive rc before the user's".
+//! Set `ZDOTDIR` on PTY spawn to point zsh at our staged `.zshenv` +
+//! `.zshrc`. The `.zshrc` registers an OSC 7 emitter so the host learns
+//! the live cwd every prompt without polling, and the `.zshenv` forwards
+//! to the user's real `.zshenv` so rustup / asdf style env bootstrap
+//! still runs (zsh resolves both files via `$ZDOTDIR`, not `$HOME`).
+//! The same pattern iTerm2 / Wezterm / VS Code use; `ZDOTDIR` is the
+//! only env handle zsh provides for "load an extra interactive rc
+//! before the user's".
 //!
 //! bash and fish are out of scope today — bash supports `PROMPT_COMMAND`
 //! from the env directly, and fish emits OSC 7 by default. zsh is the
@@ -16,8 +18,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 const SHELL_INIT_DIR_NAME: &str = "shell-init";
+const ZSHENV_NAME: &str = ".zshenv";
 const ZSHRC_NAME: &str = ".zshrc";
 
+const ZSHENV_BODY: &str = include_str!("../shell-init/zshenv");
 const ZSHRC_BODY: &str = include_str!("../shell-init/zshrc");
 
 /// Materialise the shell-init dir under Acorn's data dir, returning the
@@ -31,6 +35,7 @@ pub fn ensure_shell_init_dir() -> io::Result<PathBuf> {
 fn ensure_shell_init_dir_at(base: &Path) -> io::Result<PathBuf> {
     let dir = base.join(SHELL_INIT_DIR_NAME);
     fs::create_dir_all(&dir)?;
+    fs::write(dir.join(ZSHENV_NAME), ZSHENV_BODY)?;
     fs::write(dir.join(ZSHRC_NAME), ZSHRC_BODY)?;
     Ok(dir)
 }
@@ -69,6 +74,18 @@ mod tests {
         assert!(body.contains("_acorn_osc7"));
         assert!(body.contains("precmd_functions"));
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
+    }
+
+    #[test]
+    fn writes_zshenv_forwarding_to_user() {
+        let base = ScratchDir::new("zshenv");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let zshenv = dir.join(ZSHENV_NAME);
+        assert!(zshenv.exists());
+        let body = fs::read_to_string(&zshenv).unwrap();
+        assert!(body.contains("ACORN_USER_ZDOTDIR"));
+        assert!(body.contains(".zshenv"));
+        assert!(body.contains("ZDOTDIR=$_acorn_zd"));
     }
 
     #[test]
