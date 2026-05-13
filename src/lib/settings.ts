@@ -1,4 +1,12 @@
 import { create } from "zustand";
+import type { BackgroundFit, BackgroundState } from "./background";
+import {
+  CURATED_MONOSPACE_FONTS,
+  fontStackFromSlots,
+  fontSlotsFromStack,
+  type CuratedMonospaceFont,
+} from "./fonts";
+import { BUILT_IN_THEMES } from "./themes";
 
 const STORAGE_KEY = "acorn:settings:v1";
 
@@ -254,12 +262,19 @@ export interface AcornSettings {
      */
     showDetailsOnHover: boolean;
   };
+  appearance: {
+    themeId: string;
+    background: BackgroundState;
+    fontSlots: [string, string | null, string | null];
+  };
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
   terminal: {
-    fontFamily:
-      '"JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, monospace',
+    fontFamily: fontStackFromSlots(
+      ["JetBrains Mono", "Fira Code", "Menlo"],
+      "monospace",
+    ),
     fontSize: 12,
     fontWeight: 400,
     fontWeightBold: 700,
@@ -309,6 +324,19 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
     showDetailsOnHover: true,
   },
+  appearance: {
+    themeId: "acorn-dark",
+    background: {
+      relativePath: null,
+      fileName: null,
+      fit: "cover",
+      opacity: 0.6,
+      blur: 0,
+      applyToApp: false,
+      applyToTerminal: false,
+    },
+    fontSlots: ["JetBrains Mono", "Fira Code", "Menlo"],
+  },
 };
 
 const VALID_WEIGHTS = new Set<TerminalFontWeight>([
@@ -333,6 +361,57 @@ const VALID_PR_STATES = new Set<PrStateFilter>([
 const VALID_PR_INTERVALS = new Set<number>(
   PR_REFRESH_INTERVAL_OPTIONS.map((o) => o.value),
 );
+
+const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
+const CURATED_FONT_SET = new Set<string>(CURATED_MONOSPACE_FONTS);
+const VALID_THEME_IDS = new Set<string>(BUILT_IN_THEMES.map((t) => t.id));
+
+function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
+  if (typeof v === "string" && VALID_BG_FITS.has(v as BackgroundFit)) {
+    return v as BackgroundFit;
+  }
+  return fallback;
+}
+
+function clamp01(v: unknown, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.max(0, Math.min(1, v));
+}
+
+function clampBlur(v: unknown, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.max(0, Math.min(24, v));
+}
+
+function normalizeThemeId(v: unknown, fallback: string): string {
+  if (typeof v === "string" && VALID_THEME_IDS.has(v)) {
+    return v;
+  }
+  return fallback;
+}
+
+function normalizeFontSlots(
+  v: unknown,
+  fallback: AcornSettings["appearance"]["fontSlots"],
+  legacyStack?: unknown,
+): AcornSettings["appearance"]["fontSlots"] {
+  const source = Array.isArray(v)
+    ? v
+    : typeof legacyStack === "string"
+      ? fontSlotsFromStack(legacyStack)
+      : null;
+
+  if (!source) return fallback;
+
+  const cleaned = [0, 1, 2].map((index) => {
+    const raw = source[index];
+    if (typeof raw !== "string") return null;
+    return CURATED_FONT_SET.has(raw) ? raw : null;
+  });
+
+  if (!cleaned[0]) return fallback;
+  return [cleaned[0], cleaned[1], cleaned[2]];
+}
 
 function normalizeLinkActivation(
   v: unknown,
@@ -455,10 +534,62 @@ function loadSettings(): AcornSettings {
       commitRaw.llmModel ??
       DEFAULT_SETTINGS.agents.llm.model;
 
+    const appearanceRaw = (parsed.appearance ?? {}) as Partial<
+      AcornSettings["appearance"]
+    > & {
+      background?: Partial<BackgroundState>;
+    };
+    const appearance: AcornSettings["appearance"] = {
+      themeId: normalizeThemeId(
+        appearanceRaw.themeId,
+        DEFAULT_SETTINGS.appearance.themeId,
+      ),
+      fontSlots: normalizeFontSlots(
+        appearanceRaw.fontSlots,
+        DEFAULT_SETTINGS.appearance.fontSlots,
+        terminalRaw.fontFamily,
+      ),
+      background: {
+        relativePath:
+          typeof appearanceRaw.background?.relativePath === "string"
+            ? appearanceRaw.background.relativePath
+            : DEFAULT_SETTINGS.appearance.background.relativePath,
+        fileName:
+          typeof appearanceRaw.background?.fileName === "string"
+            ? appearanceRaw.background.fileName
+            : DEFAULT_SETTINGS.appearance.background.fileName,
+        fit: normalizeBgFit(
+          appearanceRaw.background?.fit,
+          DEFAULT_SETTINGS.appearance.background.fit,
+        ),
+        opacity: clamp01(
+          appearanceRaw.background?.opacity,
+          DEFAULT_SETTINGS.appearance.background.opacity,
+        ),
+        blur: clampBlur(
+          appearanceRaw.background?.blur,
+          DEFAULT_SETTINGS.appearance.background.blur,
+        ),
+        applyToApp:
+          typeof appearanceRaw.background?.applyToApp === "boolean"
+            ? appearanceRaw.background.applyToApp
+            : DEFAULT_SETTINGS.appearance.background.applyToApp,
+        applyToTerminal:
+          typeof appearanceRaw.background?.applyToTerminal === "boolean"
+            ? appearanceRaw.background.applyToTerminal
+            : DEFAULT_SETTINGS.appearance.background.applyToTerminal,
+      },
+    };
+    const derivedFontFamily = fontStackFromSlots(
+      appearance.fontSlots,
+      "monospace",
+    );
+
     return {
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
         ...terminalRaw,
+        fontFamily: derivedFontFamily,
         fontWeight: normalizeWeight(
           terminalRaw.fontWeight,
           DEFAULT_SETTINGS.terminal.fontWeight,
@@ -534,6 +665,7 @@ function loadSettings(): AcornSettings {
             ? parsed.sessionDisplay.showDetailsOnHover
             : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
       },
+      appearance,
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -576,6 +708,14 @@ interface SettingsState {
     > & {
       metadata?: Partial<AcornSettings["sessionDisplay"]["metadata"]>;
       icons?: Partial<AcornSettings["sessionDisplay"]["icons"]>;
+    },
+  ) => void;
+  patchAppearance: (
+    patch: Partial<
+      Omit<AcornSettings["appearance"], "background" | "fontSlots">
+    > & {
+      background?: Partial<BackgroundState>;
+      fontSlots?: AcornSettings["appearance"]["fontSlots"];
     },
   ) => void;
   reset: () => void;
@@ -685,6 +825,33 @@ export const useSettings = create<SettingsState>((set) => ({
       persist(next);
       return { settings: next };
     }),
+  patchAppearance: (patch) =>
+    set((s) => {
+      const fontSlots =
+        patch.fontSlots !== undefined
+          ? patch.fontSlots
+          : s.settings.appearance.fontSlots;
+      const background = patch.background
+        ? { ...s.settings.appearance.background, ...patch.background }
+        : s.settings.appearance.background;
+      const { background: _background, fontSlots: _fontSlots, ...rest } = patch;
+      const appearance: AcornSettings["appearance"] = {
+        ...s.settings.appearance,
+        ...rest,
+        background,
+        fontSlots,
+      };
+      const next: AcornSettings = {
+        ...s.settings,
+        appearance,
+        terminal: {
+          ...s.settings.terminal,
+          fontFamily: fontStackFromSlots(fontSlots, "monospace"),
+        },
+      };
+      persist(next);
+      return { settings: next };
+    }),
   reset: () => {
     persist(DEFAULT_SETTINGS);
     set({ settings: DEFAULT_SETTINGS });
@@ -762,3 +929,5 @@ export function selectedAgentLabel(s: AcornSettings): string {
 
 /** Backwards-compat alias for callers that still read this name. */
 export const aiCommitProviderLabel = selectedAgentLabel;
+
+export type { CuratedMonospaceFont };
