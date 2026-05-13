@@ -274,4 +274,33 @@ describe("SettingsModal font controls", () => {
     expect(allOptions).toContain("Alpha Serif");
     expect(allOptions).not.toContain("Alpha Serif Italic");
   });
+
+  it("renders optional font clear as an icon button inside the input", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const [, secondary] = fontInputs();
+    const patchAppearance = useSettings.getState().patchAppearance;
+    const secondaryClear = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Clear Secondary font"]',
+    );
+
+    expect(document.body.textContent).not.toContain("Clear");
+    expect(secondaryClear).toBeTruthy();
+    expect(secondaryClear?.parentElement?.contains(secondary)).toBe(true);
+
+    act(() => {
+      secondaryClear?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+
+    expect(patchAppearance).toHaveBeenCalledWith({
+      fontSlots: ["JetBrains Mono", null, "Menlo"],
+    });
+  });
 });

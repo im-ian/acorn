@@ -70,10 +70,13 @@ describe("fontFamilyOptions", () => {
           "Berkeley Mono Bold",
           "Berkeley Mono Medium Italic",
           "Alpha Sans Bold",
+          "GeistMono BlackItalic",
+          "GeistMono MediumItalic",
+          "GeistMono ThinItalic",
         ],
         "all",
       ),
-    ).toEqual(["Alpha Sans", "Berkeley Mono"]);
+    ).toEqual(["Alpha Sans", "Berkeley Mono", "GeistMono"]);
   });
 
   it("can limit suggestions to likely monospace families", () => {

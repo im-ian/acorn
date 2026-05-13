@@ -6,6 +6,7 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
@@ -817,7 +818,22 @@ function FontSection({
             placeholder={
               required ? "Search or type a font" : "Optional fallback"
             }
+            className={!required && value ? "pr-8" : undefined}
           />
+          {!required && value ? (
+            <button
+              type="button"
+              aria-label={`Clear ${label} font`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                commitSlot(index, "");
+              }}
+              className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-fg-muted transition hover:bg-bg hover:text-fg"
+              tabIndex={-1}
+            >
+              <X size={12} />
+            </button>
+          ) : null}
           {showSuggestions ? (
             <div
               id={listId}
@@ -841,15 +857,6 @@ function FontSection({
             </div>
           ) : null}
         </div>
-        {!required && value ? (
-          <button
-            type="button"
-            onClick={() => commitSlot(index, "")}
-            className="mt-1 text-[11px] text-fg-muted transition hover:text-fg"
-          >
-            Clear
-          </button>
-        ) : null}
       </Field>
     );
   };

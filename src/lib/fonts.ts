@@ -52,6 +52,17 @@ const FONT_STYLE_SUFFIXES = new Set([
   "ultralight",
 ]);
 
+const FONT_STYLE_SUFFIX_PATTERN =
+  "(?:black|bold|book|condensed|demibold|expanded|extrabold|extralight|heavy|light|medium|regular|roman|semibold|thin|ultrabold|ultralight)(?:italic|oblique)?|(?:italic|oblique)";
+const FONT_STYLE_SUFFIX_RE = new RegExp(
+  `^${FONT_STYLE_SUFFIX_PATTERN}$`,
+  "i",
+);
+const FONT_COMPOUND_STYLE_SUFFIX_RE = new RegExp(
+  `(.+?)${FONT_STYLE_SUFFIX_PATTERN}$`,
+  "i",
+);
+
 const MONO_FAMILY_HINTS = [
   "mono",
   "code",
@@ -92,15 +103,22 @@ export function sanitizeFontFamilyName(value: unknown): string | null {
 function isStyleSuffix(word: string): boolean {
   const normalized = word.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
   if (FONT_STYLE_SUFFIXES.has(normalized)) return true;
-  return /^(extra|semi|demi|ultra)?(bold|light)(italic|oblique)?$/.test(
-    normalized,
-  );
+  return FONT_STYLE_SUFFIX_RE.test(normalized);
+}
+
+function stripCompoundStyleSuffix(word: string): string {
+  const match = word.match(FONT_COMPOUND_STYLE_SUFFIX_RE);
+  return match?.[1] ? match[1] : word;
 }
 
 function stripStyleSuffixes(name: string): string {
   const words = name.split(/\s+/).filter(Boolean);
   while (words.length > 1 && isStyleSuffix(words[words.length - 1])) {
     words.pop();
+  }
+  const last = words[words.length - 1];
+  if (last) {
+    words[words.length - 1] = stripCompoundStyleSuffix(last);
   }
   return words.join(" ");
 }

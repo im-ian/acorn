@@ -220,22 +220,47 @@ fn font_name_from_path(path: &Path) -> Option<String> {
 }
 
 fn is_style_suffix(word: &str) -> bool {
+    let normalized = word
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect::<String>();
+    if is_style_suffix_base(&normalized) {
+        return true;
+    }
+    for suffix in ["italic", "oblique"] {
+        if let Some(base) = normalized.strip_suffix(suffix) {
+            return is_style_suffix_base(base);
+        }
+    }
+    false
+}
+
+fn is_style_suffix_base(word: &str) -> bool {
     matches!(
-        word.to_ascii_lowercase().as_str(),
+        word,
         "black"
             | "bold"
             | "book"
             | "condensed"
+            | "demi"
             | "demibold"
+            | "expanded"
+            | "extra"
             | "extrabold"
             | "extralight"
             | "heavy"
             | "italic"
             | "light"
             | "medium"
+            | "oblique"
             | "regular"
+            | "roman"
+            | "semi"
             | "semibold"
             | "thin"
+            | "ultra"
+            | "ultrabold"
             | "ultralight"
     )
 }
@@ -1186,4 +1211,26 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::font_name_from_path;
+    use std::path::Path;
+
+    #[test]
+    fn font_name_from_path_strips_compound_style_suffixes() {
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-BlackItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-MediumItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-ThinItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+    }
 }
