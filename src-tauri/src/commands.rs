@@ -1062,11 +1062,13 @@ pub async fn list_pull_requests(
     repo_path: String,
     state: Option<PrStateFilter>,
     limit: Option<u32>,
+    query: Option<String>,
 ) -> AppResult<PullRequestListing> {
     pull_requests::list_pull_requests(
         &PathBuf::from(repo_path),
         state.unwrap_or(PrStateFilter::Open),
         limit.unwrap_or(50),
+        query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
     )
 }
 

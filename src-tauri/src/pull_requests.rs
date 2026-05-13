@@ -210,13 +210,14 @@ pub fn list_pull_requests(
     repo_path: &Path,
     state: PrStateFilter,
     limit: u32,
+    query: Option<&str>,
 ) -> AppResult<PullRequestListing> {
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Ok(PullRequestListing::NotGithub);
     };
 
     match try_with_account(repo_path, &slug, |token| {
-        run_pr_list(&slug, token, state, limit)
+        run_pr_list(&slug, token, state, limit, query)
     })? {
         AccountOutcome::Ok { account, value } => Ok(PullRequestListing::Ok {
             items: value,
@@ -283,8 +284,9 @@ fn run_pr_list(
     token: &str,
     state: PrStateFilter,
     limit: u32,
+    query: Option<&str>,
 ) -> AppResult<Vec<PullRequestInfo>> {
-    let limit = limit.clamp(1, 200);
+    let limit = limit.clamp(1, 1000);
     let limit_s = limit.to_string();
     let output = cli_resolver::run("gh", |cmd| {
         cmd.env("GH_TOKEN", token)
@@ -306,6 +308,9 @@ fn run_pr_list(
                 "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
                  isDraft,statusCheckRollup",
             ]);
+        if let Some(q) = query {
+            cmd.args(["--search", q]);
+        }
     })?;
 
     if !output.status.success() {
