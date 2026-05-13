@@ -1,0 +1,15 @@
+/* @mode light */
+:root[data-acorn-theme="solarized-light"] {
+  --color-bg: #fdf6e3;
+  --color-bg-elevated: #eee8d5;
+  --color-bg-sidebar: #eee8d5;
+  --color-fg: #586e75;
+  --color-fg-muted: #93a1a1;
+  --color-border: #d8d2bb;
+  --color-accent: #268bd2;
+  --color-accent-hover: #1f6fa8;
+  --color-danger: #dc322f;
+  --color-warning: #b58900;
+  --color-terminal-bg: #fdf6e3;
+  --color-terminal-fg: #586e75;
+}

@@ -13,11 +13,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
+import type { BackgroundState } from "../lib/background";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
+import { buildXtermTheme } from "../lib/terminalTheme";
+import { useThemes, type ThemeMode } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
@@ -38,20 +41,35 @@ interface PtyOutputPayload {
   data: string;
 }
 
-const TERMINAL_BG = "#1f2326";
+function readCssVar(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  return (
+    getComputedStyle(document.documentElement).getPropertyValue(name) || null
+  );
+}
 
-const TERMINAL_THEME: ITheme = {
-  background: TERMINAL_BG, foreground: "#ededed", cursor: "#ededed",
-  cursorAccent: TERMINAL_BG, selectionBackground: "#3a3f44",
-  scrollbarSliderBackground: "rgba(255, 255, 255, 0.08)",
-  scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.16)",
-  scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.24)",
-  black: TERMINAL_BG, red: "#e06c75", green: "#98c379", yellow: "#e5c07b",
-  blue: "#61afef", magenta: "#c678dd", cyan: "#56b6c2", white: "#ededed",
-  brightBlack: "#5c6370", brightRed: "#e06c75", brightGreen: "#98c379",
-  brightYellow: "#e5c07b", brightBlue: "#61afef", brightMagenta: "#c678dd",
-  brightCyan: "#56b6c2", brightWhite: "#ffffff",
-};
+// Current theme's mode (dark/light) drives the default ANSI palette so a
+// light terminal background doesn't render yellow/green/brightWhite as
+// near-invisible smudges. Theme authors override individual slots via the
+// --color-term-* CSS variables read inside buildXtermTheme.
+function currentThemeMode(): ThemeMode {
+  if (typeof document === "undefined") return "dark";
+  const id = document.documentElement.getAttribute("data-acorn-theme");
+  if (!id) return "dark";
+  return useThemes.getState().themes.find((t) => t.id === id)?.mode ?? "dark";
+}
+
+function terminalBackgroundActive(background: BackgroundState): boolean {
+  return Boolean(background.relativePath && background.applyToTerminal);
+}
+
+function makeXtermTheme(useTransparentBackground = false): ITheme {
+  return buildXtermTheme({
+    mode: currentThemeMode(),
+    readVar: readCssVar,
+    useTransparentBackground,
+  });
+}
 
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
@@ -205,7 +223,10 @@ export function Terminal({
     // are applied live via the subscription below.
     const initialSettings = useSettings.getState().settings;
     const term = new XTerm({
-      theme: TERMINAL_THEME,
+      theme: makeXtermTheme(
+        terminalBackgroundActive(initialSettings.appearance.background),
+      ),
+      allowTransparency: true,
       fontFamily: initialSettings.terminal.fontFamily,
       fontSize: initialSettings.terminal.fontSize,
       fontWeight: initialSettings.terminal.fontWeight,
@@ -271,6 +292,27 @@ export function Terminal({
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
 
+    let themeFrame: number | null = null;
+    const scheduleThemeRefresh = () => {
+      if (themeFrame !== null) {
+        cancelAnimationFrame(themeFrame);
+      }
+      themeFrame = requestAnimationFrame(() => {
+        themeFrame = null;
+        term.options.theme = makeXtermTheme(
+          terminalBackgroundActive(
+            useSettings.getState().settings.appearance.background,
+          ),
+        );
+        try {
+          fitAddon.fit();
+        } catch {
+          // ignore — ResizeObserver will retry
+        }
+      });
+    };
+    scheduleThemeRefresh();
+
     // Live-apply terminal font setting changes without reinitialising xterm.
     const unsubSettings = useSettings.subscribe((state, prev) => {
       const next = state.settings.terminal;
@@ -298,6 +340,17 @@ export function Terminal({
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
+      }
+      if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
+        scheduleThemeRefresh();
+      }
+      const nextBackground = state.settings.appearance.background;
+      const previousBackground = prev.settings.appearance.background;
+      if (
+        nextBackground.relativePath !== previousBackground.relativePath ||
+        nextBackground.applyToTerminal !== previousBackground.applyToTerminal
+      ) {
+        scheduleThemeRefresh();
       }
       if (changed) {
         try {
@@ -1189,6 +1242,10 @@ export function Terminal({
     return () => {
       disposed = true;
       unsubSettings();
+      if (themeFrame !== null) {
+        cancelAnimationFrame(themeFrame);
+        themeFrame = null;
+      }
       unregisterScrollbackFlusher();
       if (scrollbackSaveTimer !== null) {
         window.clearTimeout(scrollbackSaveTimer);
@@ -1312,10 +1369,14 @@ export function Terminal({
   // characters into half-rendered lines.
   return (
     <div
-      className="relative h-full w-full"
-      style={{ padding: "16px 8px", background: TERMINAL_BG }}
+      className="acorn-terminal-shell relative h-full w-full"
+      style={{
+        padding: "16px 8px",
+        overflow: "hidden",
+      }}
     >
-      <div ref={containerRef} className="acorn-terminal h-full w-full" />
+      <div className="acorn-bg-terminal" aria-hidden="true" />
+      <div ref={containerRef} className="acorn-terminal relative z-10 h-full w-full" />
       {/* Pinned-prompt overlay. */}
       <StickyUserPrompt sessionId={sessionId} />
     </div>

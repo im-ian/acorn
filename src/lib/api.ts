@@ -202,6 +202,9 @@ export const api = {
   ipcRestart(): Promise<void> {
     return invoke<void>("ipc_restart");
   },
+  listSystemFonts(): Promise<string[]> {
+    return invoke<string[]>("list_system_fonts");
+  },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
   },

@@ -455,4 +455,3 @@ fn image_data_uri_workdir(
     let bytes = std::fs::read(abs).ok()?;
     Some(encode_data_uri(&bytes, path))
 }
-

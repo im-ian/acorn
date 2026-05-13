@@ -74,8 +74,8 @@ export function StickyUserPrompt({
         // actually a second line to reveal. For single-line prompts the
         // row stays passive — no cursor change, no click handler, no
         // chevron — so the affordance reflects the real state.
-        className={`pointer-events-auto border-b border-white/10 bg-[#1a1d20]/95 px-3 py-2 text-xs leading-snug text-white/80 shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors ${
-          expandable ? "cursor-pointer hover:bg-[#1a1d20]" : ""
+        className={`pointer-events-auto border-b border-border bg-bg-elevated/95 px-3 py-2 text-xs leading-snug text-fg shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors ${
+          expandable ? "cursor-pointer hover:bg-bg-elevated" : ""
         }`}
         role={expandable ? "button" : undefined}
         tabIndex={expandable ? 0 : undefined}
@@ -101,7 +101,7 @@ export function StickyUserPrompt({
       >
         <div className="flex items-start gap-2">
           <span
-            className="flex h-[16.5px] shrink-0 items-center text-white/50"
+            className="flex h-[16.5px] shrink-0 items-center text-fg-muted"
             aria-hidden
           >
             <MessageSquare size={12} />
@@ -134,7 +134,7 @@ export function StickyUserPrompt({
           </div>
           {expandable ? (
             <span
-              className="flex h-[16.5px] shrink-0 items-center text-white/50"
+              className="flex h-[16.5px] shrink-0 items-center text-fg-muted"
               aria-hidden
             >
               <ChevronDown

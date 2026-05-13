@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::{AppHandle, Runtime, State};
@@ -87,6 +87,21 @@ pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
     }
 }
 
+#[tauri::command]
+pub fn list_system_fonts() -> Vec<String> {
+    let mut fonts = BTreeSet::new();
+    let mut remaining = 8_000usize;
+
+    for dir in system_font_dirs() {
+        collect_font_names(&dir, &mut fonts, &mut remaining);
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    fonts.into_iter().collect()
+}
+
 /// Stop the running IPC listener (if any) and spawn a fresh one. Used by
 /// the Settings → Control sessions "Restart" button when the socket has
 /// gone stale (e.g. socket file removed under the app's feet). The signal
@@ -124,6 +139,130 @@ fn standard_shim_paths() -> Vec<PathBuf> {
         out.push(PathBuf::from(&home).join("bin/acorn-ipc"));
     }
     out
+}
+
+fn system_font_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/Library/Fonts"),
+        PathBuf::from("/usr/share/fonts"),
+        PathBuf::from("/usr/local/share/fonts"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join("Library/Fonts"));
+        dirs.push(home.join(".local/share/fonts"));
+        dirs.push(home.join(".fonts"));
+    }
+    dirs
+}
+
+fn collect_font_names(dir: &Path, fonts: &mut BTreeSet<String>, remaining: &mut usize) {
+    if *remaining == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        if *remaining == 0 {
+            return;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_font_names(&path, fonts, remaining);
+            continue;
+        }
+        if !file_type.is_file() || !is_font_file(&path) {
+            continue;
+        }
+        *remaining -= 1;
+        if let Some(name) = font_name_from_path(&path) {
+            fonts.insert(name);
+        }
+    }
+}
+
+fn is_font_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("ttf" | "otf" | "ttc")
+    )
+}
+
+fn font_name_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let mut words: Vec<&str> = stem
+        .split(['-', '_', ' '])
+        .filter(|part| !part.is_empty())
+        .collect();
+    while words
+        .last()
+        .map(|word| is_style_suffix(word))
+        .unwrap_or(false)
+    {
+        words.pop();
+    }
+    let name = words.join(" ");
+    let cleaned = name.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
+fn is_style_suffix(word: &str) -> bool {
+    let normalized = word
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect::<String>();
+    if is_style_suffix_base(&normalized) {
+        return true;
+    }
+    for suffix in ["italic", "oblique"] {
+        if let Some(base) = normalized.strip_suffix(suffix) {
+            return is_style_suffix_base(base);
+        }
+    }
+    false
+}
+
+fn is_style_suffix_base(word: &str) -> bool {
+    matches!(
+        word,
+        "black"
+            | "bold"
+            | "book"
+            | "condensed"
+            | "demi"
+            | "demibold"
+            | "expanded"
+            | "extra"
+            | "extrabold"
+            | "extralight"
+            | "heavy"
+            | "italic"
+            | "light"
+            | "medium"
+            | "oblique"
+            | "regular"
+            | "roman"
+            | "semi"
+            | "semibold"
+            | "thin"
+            | "ultra"
+            | "ultrabold"
+            | "ultralight"
+    )
 }
 
 fn persist(state: &AppState) {
@@ -1319,3 +1458,24 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::font_name_from_path;
+    use std::path::Path;
+
+    #[test]
+    fn font_name_from_path_strips_compound_style_suffixes() {
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-BlackItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-MediumItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-ThinItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+    }
+}

@@ -1,0 +1,14 @@
+:root[data-acorn-theme="tokyo-night"] {
+  --color-bg: #1a1b26;
+  --color-bg-elevated: #1f2335;
+  --color-bg-sidebar: #16161e;
+  --color-fg: #c0caf5;
+  --color-fg-muted: #565f89;
+  --color-border: #2a2e44;
+  --color-accent: #7aa2f7;
+  --color-accent-hover: #9bb8ff;
+  --color-danger: #f7768e;
+  --color-warning: #e0af68;
+  --color-terminal-bg: #1a1b26;
+  --color-terminal-fg: #c0caf5;
+}

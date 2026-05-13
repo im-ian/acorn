@@ -9,6 +9,7 @@
   --color-border: #2f3338;
   --color-accent: oklch(72% 0.16 145);
   --color-accent-hover: oklch(78% 0.16 145);
+  --color-on-accent: #fff;
   --color-danger: oklch(62% 0.22 25);
   --color-warning: oklch(78% 0.16 75);
 
@@ -27,6 +28,58 @@
 .acorn-terminal .xterm-scrollable-element > .scrollbar.vertical > .slider {
   width: 6px !important;
   border-radius: 4px;
+}
+
+.acorn-bg-app,
+.acorn-bg-terminal {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: var(--bg-image-url, none);
+  background-size: var(--bg-fit-size, cover);
+  background-repeat: var(--bg-fit-repeat, no-repeat);
+  background-position: center;
+  opacity: var(--bg-opacity, 0);
+  filter: blur(var(--bg-blur, 0px));
+}
+
+:root:not([data-bg-app="on"]) .acorn-bg-app {
+  display: none;
+}
+
+:root:not([data-bg-terminal="on"]) .acorn-bg-terminal {
+  display: none;
+}
+
+:root[data-bg-app="on"] .acorn-bg-terminal {
+  display: none;
+}
+
+:root[data-bg-app="on"] .acorn-app-shell .bg-bg {
+  background-color: color-mix(in srgb, var(--color-bg) 64%, transparent) !important;
+}
+
+:root[data-bg-app="on"] .acorn-app-shell .bg-bg-sidebar,
+:root[data-bg-app="on"] .acorn-app-shell [class*="bg-bg-sidebar/"] {
+  background-color: color-mix(in srgb, var(--color-bg-sidebar) 62%, transparent) !important;
+}
+
+:root[data-bg-app="on"] .acorn-app-shell .bg-bg-elevated,
+:root[data-bg-app="on"] .acorn-app-shell [class*="bg-bg-elevated/"] {
+  background-color: color-mix(in srgb, var(--color-bg-elevated) 66%, transparent) !important;
+}
+
+.acorn-terminal-shell {
+  background: var(--color-terminal-bg, #1f2326);
+}
+
+:root[data-bg-terminal="on"] .acorn-terminal-shell {
+  background: color-mix(
+    in srgb,
+    var(--color-terminal-bg, #1f2326) 62%,
+    transparent
+  );
 }
 
 * {
