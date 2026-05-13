@@ -62,6 +62,11 @@ export const tauriMockSource = `
     if (cmd === 'ipc_restart') return Promise.resolve(undefined);
     if (cmd === 'reorder_projects') return Promise.resolve([]);
     if (cmd === 'reorder_sessions') return Promise.resolve([]);
+    // No live PTYs in E2E → no live cwd to classify; an empty map keeps
+    // the store's optional-chaining lookups safe and lets the static
+    // `isolated`/`in_worktree` flags drive the worktree icon.
+    if (cmd === 'pty_in_worktree_all') return Promise.resolve({});
+    if (cmd === 'is_path_linked_worktree') return Promise.resolve(false);
     // Daemon-mode commands. E2E runs in-browser without a real acornd
     // bound to a socket, so every routed call short-circuits with a
     // realistic "disabled / not-running" response. Tests that need to
