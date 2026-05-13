@@ -114,6 +114,29 @@ export const api = {
       number,
     });
   },
+  getPullRequestCommitDiff(
+    repoPath: string,
+    sha: string,
+  ): Promise<DiffPayload> {
+    return invoke<DiffPayload>("get_pull_request_commit_diff", {
+      repoPath,
+      sha,
+    });
+  },
+  /**
+   * Batch-resolve git OIDs → GitHub login (when GitHub knows about them).
+   * Missing keys mean we couldn't reach GitHub; `null` values mean the
+   * commit exists but its author doesn't map to a GitHub account.
+   */
+  resolveCommitLogins(
+    repoPath: string,
+    shas: string[],
+  ): Promise<Record<string, string | null>> {
+    return invoke<Record<string, string | null>>("resolve_commit_logins", {
+      repoPath,
+      shas,
+    });
+  },
   mergePullRequest(
     repoPath: string,
     number: number,
@@ -131,6 +154,17 @@ export const api = {
   },
   closePullRequest(repoPath: string, number: number): Promise<void> {
     return invoke<void>("close_pull_request", { repoPath, number });
+  },
+  updatePullRequestBody(
+    repoPath: string,
+    number: number,
+    body: string,
+  ): Promise<void> {
+    return invoke<void>("update_pull_request_body", {
+      repoPath,
+      number,
+      body,
+    });
   },
   generatePrCommitMessage(
     repoPath: string,
@@ -168,6 +202,9 @@ export const api = {
   ipcRestart(): Promise<void> {
     return invoke<void>("ipc_restart");
   },
+  listSystemFonts(): Promise<string[]> {
+    return invoke<string[]>("list_system_fonts");
+  },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
   },
@@ -177,6 +214,30 @@ export const api = {
     return invoke<
       { id: string; status: SessionStatus; branch: string | null }[]
     >("detect_session_statuses", { ids });
+  },
+  /**
+   * Inspect on-disk markers to determine which agent CLI (if any) the user has
+   * run inside this Acorn session. Drives the Tab > Fork menu item visibility.
+   */
+  detectSessionAgent(
+    sessionId: string,
+  ): Promise<{ claude: string | null; codex: string | null }> {
+    return invoke<{ claude: string | null; codex: string | null }>(
+      "detect_session_agent",
+      { sessionId },
+    );
+  },
+  /**
+   * Copy a parent claude transcript into the new worktree's project slug
+   * so `claude --resume <uuid>` resolves once the fork shell cd's there.
+   * Without this, the resume fails because claude looks transcripts up
+   * by slug-of-cwd, which differs between parent and worktree.
+   */
+  prepareClaudeFork(parentUuid: string, newCwd: string): Promise<void> {
+    return invoke<void>("prepare_claude_fork", {
+      parentUuid,
+      newCwd,
+    });
   },
   scrollbackOrphanSize(): Promise<number> {
     return invoke<number>("scrollback_orphan_size");
@@ -214,6 +275,26 @@ export const api = {
     return invoke<string | null>("pty_repo_root", { sessionId });
   },
   /**
+   * Batched live "is the session sitting inside a linked git worktree?"
+   * probe. Returns a map keyed by session id; missing entries mean
+   * "no live PTY, or live cwd is not inside a linked worktree". One
+   * backend syscall sweep covers every session — call this on focus /
+   * after refresh, not on a tight interval.
+   */
+  ptyInWorktreeAll(): Promise<Record<string, boolean>> {
+    return invoke<Record<string, boolean>>("pty_in_worktree_all");
+  },
+  /**
+   * Classify an arbitrary on-disk path as "inside a linked git worktree".
+   * Backs the xterm OSC 7 handler: every shell `cd` emits the new cwd,
+   * the handler hands it here, and the boolean feeds the worktree-icon
+   * condition. Walks up via `Repository::discover` so subdirectories of
+   * a worktree resolve correctly.
+   */
+  isPathLinkedWorktree(path: string): Promise<boolean> {
+    return invoke<boolean>("is_path_linked_worktree", { path });
+  },
+  /**
    * Re-point a session at a different worktree directory. Used after an
    * in-PTY command creates a worktree and exits — adopting it lets the next
    * spawn land inside the new worktree instead of the original cwd.
@@ -229,4 +310,65 @@ export const api = {
   gitWorktrees(repoPath: string): Promise<string[]> {
     return invoke<string[]>("git_worktrees", { repoPath });
   },
+  /**
+   * Probe the `acornd` daemon. Backs the StatusBar daemon indicator and
+   * the Settings → Background sessions panel. Always resolves — when no
+   * daemon is reachable, fields collapse to `null` and `running` is
+   * `false`; rejection only on serialization failure (which should never
+   * happen for this shape).
+   */
+  daemonStatus(): Promise<DaemonStatus> {
+    return invoke<DaemonStatus>("daemon_status");
+  },
+  /**
+   * Flip the daemon killswitch. Persistence (so the setting survives a
+   * restart) is the caller's responsibility — stash to `localStorage`
+   * under `acorn:daemon-enabled`.
+   */
+  daemonSetEnabled(enabled: boolean): Promise<void> {
+    return invoke<void>("daemon_set_enabled", { enabled });
+  },
+  /**
+   * Force the bridge to reconnect — drops the cached control connection
+   * and re-spawns the daemon if necessary. Used by the Settings
+   * "Restart daemon" button after a manual `acornd shutdown`.
+   */
+  daemonRestart(): Promise<void> {
+    return invoke<void>("daemon_restart");
+  },
+  /**
+   * Ask the daemon to shut down (kills every PTY, then exits). Caller
+   * must confirm with the user before calling — destructive.
+   */
+  daemonShutdown(): Promise<void> {
+    return invoke<void>("daemon_shutdown");
+  },
+  /**
+   * Enumerate sessions tracked by the daemon (alive + dead). Backs the
+   * Settings → Background sessions list view.
+   */
+  daemonListSessions(): Promise<DaemonSessionSummary[]> {
+    return invoke<DaemonSessionSummary[]>("daemon_list_sessions");
+  },
 };
+
+export interface DaemonStatus {
+  running: boolean;
+  enabled: boolean;
+  daemon_version: string | null;
+  uptime_seconds: number | null;
+  session_count_total: number | null;
+  session_count_alive: number | null;
+  log_path: string | null;
+  last_error: string | null;
+}
+
+export interface DaemonSessionSummary {
+  id: string;
+  name: string;
+  kind: "regular" | "control";
+  alive: boolean;
+  repo_path: string | null;
+  branch: string | null;
+  agent_kind: string | null;
+}

@@ -1,5 +1,9 @@
 import { useEffect, useRef, type ReactElement } from "react";
-import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
+import {
+  Terminal as XTerm,
+  type IBuffer,
+  type ITheme,
+} from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -9,14 +13,19 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
+import type { BackgroundState } from "../lib/background";
+import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import { patchTerminalCellMeasurements } from "../lib/terminal-cjk-cell-width-addon";
 import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
+import { buildXtermTheme } from "../lib/terminalTheme";
+import { useThemes, type ThemeMode } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
 import { useAppStore } from "../store";
+import { StickyUserPrompt } from "./StickyUserPrompt";
 
 interface TerminalProps {
   sessionId: string;
@@ -28,30 +37,148 @@ interface TerminalProps {
    * activate triggers a `fit()` + `refresh()` cycle so the buffer redraws.
    */
   isActive?: boolean;
+  isFocusedPane?: boolean;
 }
 
 interface PtyOutputPayload {
   data: string;
 }
 
-const TERMINAL_BG = "#1f2326";
+function readCssVar(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  return (
+    getComputedStyle(document.documentElement).getPropertyValue(name) || null
+  );
+}
 
-const TERMINAL_THEME: ITheme = {
-  background: TERMINAL_BG, foreground: "#ededed", cursor: "#ededed",
-  cursorAccent: TERMINAL_BG, selectionBackground: "#3a3f44",
-  scrollbarSliderBackground: "rgba(255, 255, 255, 0.08)",
-  scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.16)",
-  scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.24)",
-  black: TERMINAL_BG, red: "#e06c75", green: "#98c379", yellow: "#e5c07b",
-  blue: "#61afef", magenta: "#c678dd", cyan: "#56b6c2", white: "#ededed",
-  brightBlack: "#5c6370", brightRed: "#e06c75", brightGreen: "#98c379",
-  brightYellow: "#e5c07b", brightBlue: "#61afef", brightMagenta: "#c678dd",
-  brightCyan: "#56b6c2", brightWhite: "#ffffff",
-};
+// Current theme's mode (dark/light) drives the default ANSI palette so a
+// light terminal background doesn't render yellow/green/brightWhite as
+// near-invisible smudges. Theme authors override individual slots via the
+// --color-term-* CSS variables read inside buildXtermTheme.
+function currentThemeMode(): ThemeMode {
+  if (typeof document === "undefined") return "dark";
+  const id = document.documentElement.getAttribute("data-acorn-theme");
+  if (!id) return "dark";
+  return useThemes.getState().themes.find((t) => t.id === id)?.mode ?? "dark";
+}
+
+function terminalBackgroundActive(background: BackgroundState): boolean {
+  return Boolean(background.relativePath && background.applyToTerminal);
+}
+
+function makeXtermTheme(useTransparentBackground = false): ITheme {
+  return buildXtermTheme({
+    mode: currentThemeMode(),
+    readVar: readCssVar,
+    useTransparentBackground,
+  });
+}
 
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
+
+// Custom event the sticky-prompt banner listens to. Fired whenever the user
+// scrolls the terminal so the banner can swap to the prompt "in scope" at
+// the top of the viewport, then revert to the JSONL-latest prompt when the
+// user scrolls back to live tail.
+const CONTEXT_PROMPT_EVENT = "acorn:context-prompt";
+
+interface ContextPromptDetail {
+  sessionId: string;
+  /** Prompt text to pin, or `null` to revert to JSONL-latest. */
+  prompt: string | null;
+}
+
+// Markers Claude TUI uses to introduce a user turn. v2.1.x renders `›`
+// (U+203A); older versions used `>`; `❯` shows up in some shell-prompt
+// theming. Matching any of these lets the scroll-aware banner cope with
+// claude version churn without code changes.
+const PROMPT_MARKER_RE = /^[›>❯]\s+/u;
+// Lines that look like the *start* of an assistant turn or another
+// claude UI element — used to bound the continuation walk so a long
+// stream of assistant output doesn't get spliced into the pinned prompt.
+const TURN_BOUNDARY_RE = /^[●○*✱⏺·]\s/u;
+const BOX_DRAWING_RE = /^[\s│╭╮╰╯─┃┏┓┗┛━]+/u;
+
+/**
+ * Walk xterm buffer rows upwards from `startY` to find the nearest
+ * user-prompt marker line, then walk down to collect the rest of the
+ * prompt body (continuation rows are either xterm wrap-continuations
+ * or indented rows beneath the marker). The result is the full prompt
+ * text the user typed, joined with `\n` between hard-wrapped rows so
+ * the banner's `whitespace-pre-wrap` styling preserves line breaks.
+ *
+ * Returns `null` when no prompt line is reachable above the start row —
+ * e.g. user scrolled past the top of scrollback, or the buffer contains
+ * raw shell output rather than a claude conversation.
+ */
+function scanForContextPrompt(buf: IBuffer, startY: number): string | null {
+  // Max walk distance. Bounded so a terminal with a massive scrollback
+  // (claude conversations easily push tens of thousands of rows) doesn't
+  // freeze the UI on every scroll event. 5000 rows ≈ the default xterm
+  // scrollback limit (`scrollback: 5000` in this file).
+  const MAX_WALK = 5000;
+  const MAX_CONTINUATION = 200;
+  const limit = Math.max(0, startY - MAX_WALK);
+  for (let y = startY; y >= limit; y--) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const raw = line.translateToString(true);
+    const stripped = raw.replace(BOX_DRAWING_RE, "");
+    const match = stripped.match(PROMPT_MARKER_RE);
+    if (!match) continue;
+    const headBody = stripped
+      .slice(match[0].length)
+      .replace(/\s*[│┃]?\s*$/u, "")
+      .trim();
+    if (headBody.length === 0) continue;
+    const parts: string[] = [headBody];
+    for (let yy = y + 1; yy <= y + MAX_CONTINUATION; yy++) {
+      const cont = buf.getLine(yy);
+      if (!cont) break;
+      const contRaw = cont.translateToString(true);
+      // Use the raw line (not the box-stripped form) to detect "blank-ish"
+      // continuation gutters that still belong to the same turn.
+      const trimmedTail = contRaw.replace(/\s+$/u, "");
+      const contStripped = trimmedTail.replace(BOX_DRAWING_RE, "");
+      // Hit the next prompt marker → previous user turn ended.
+      if (PROMPT_MARKER_RE.test(contStripped)) break;
+      // Hit an assistant or other turn-class marker.
+      if (TURN_BOUNDARY_RE.test(contStripped)) break;
+      // An xterm wrap-continuation row is unambiguously the same logical
+      // line, so always accept it.
+      if (cont.isWrapped) {
+        const wrapBody = contStripped.replace(/\s*[│┃]?\s*$/u, "");
+        if (wrapBody.length > 0) parts.push(wrapBody);
+        continue;
+      }
+      // Hard-wrapped continuation rows in claude's TUI keep a leading
+      // indent (so the body lines up under the `> ` marker). Accept
+      // rows whose first non-whitespace column matches the marker's,
+      // and bail on anything that looks like a new gutter / divider.
+      if (trimmedTail.length === 0) {
+        // Single blank row inside a long pasted prompt is part of the
+        // same turn (the user pressed Enter twice). Treat as line
+        // break, keep collecting.
+        parts.push("");
+        continue;
+      }
+      if (/^\s{2,}/u.test(contRaw) && contStripped.length > 0) {
+        parts.push(contStripped.replace(/\s*[│┃]?\s*$/u, ""));
+        continue;
+      }
+      break;
+    }
+    // Strip trailing blank-string entries the loop may have collected
+    // before hitting the boundary.
+    while (parts.length > 0 && parts[parts.length - 1] === "") {
+      parts.pop();
+    }
+    return parts.join("\n");
+  }
+  return null;
+}
 
 // macOS uses Cmd (metaKey); other platforms use Ctrl. Matches the
 // platform-primary modifier `tinykeys` resolves `$mod` to.
@@ -86,6 +213,7 @@ export function Terminal({
   sessionId,
   cwd,
   isActive = true,
+  isFocusedPane = true,
 }: TerminalProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -99,13 +227,16 @@ export function Terminal({
     // are applied live via the subscription below.
     const initialSettings = useSettings.getState().settings;
     const term = new XTerm({
-      theme: TERMINAL_THEME,
+      theme: makeXtermTheme(
+        terminalBackgroundActive(initialSettings.appearance.background),
+      ),
+      allowTransparency: true,
       fontFamily: initialSettings.terminal.fontFamily,
       fontSize: initialSettings.terminal.fontSize,
       fontWeight: initialSettings.terminal.fontWeight,
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
-      cursorBlink: true,
+      cursorBlink: isFocusedPane,
       allowProposedApi: true,
       scrollback: 5000,
       // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
@@ -170,6 +301,56 @@ export function Terminal({
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
 
+    let themeFrame: number | null = null;
+    const scheduleThemeRefresh = () => {
+      if (themeFrame !== null) {
+        cancelAnimationFrame(themeFrame);
+      }
+      themeFrame = requestAnimationFrame(() => {
+        themeFrame = null;
+        term.options.theme = makeXtermTheme(
+          terminalBackgroundActive(
+            useSettings.getState().settings.appearance.background,
+          ),
+        );
+        try {
+          fitAddon.fit();
+        } catch {
+          // ignore — ResizeObserver will retry
+        }
+      });
+    };
+    scheduleThemeRefresh();
+
+    // OSC 7 cwd tracking. The shell rc we inject via ZDOTDIR emits
+    // `\e]7;file://<host><pwd>\e\\` on every prompt. xterm's parser hands
+    // us the inner payload (everything between `\e]7;` and the terminator)
+    // — strip the `file://[host]` prefix, percent-decode, classify via the
+    // backend, and update the live-cwd store entry for this session. Each
+    // emit is one cheap stat through libgit2; no polling, no system scan.
+    // Returning `true` claims the sequence so xterm doesn't echo it.
+    term.parser.registerOscHandler(7, (data) => {
+      const match = /^file:\/\/[^/]*(\/.*)$/.exec(data);
+      if (!match) return false;
+      let path: string;
+      try {
+        path = decodeURIComponent(match[1]);
+      } catch {
+        return false;
+      }
+      void api
+        .isPathLinkedWorktree(path)
+        .then((flag) => {
+          useAppStore.setState((s) => ({
+            liveInWorktree: { ...s.liveInWorktree, [sessionId]: flag },
+          }));
+        })
+        .catch((err: unknown) => {
+          console.debug("[Terminal] osc7 classify failed", err);
+        });
+      return true;
+    });
+
     // Live-apply terminal font setting changes without reinitialising xterm.
     const unsubSettings = useSettings.subscribe((state, prev) => {
       const next = state.settings.terminal;
@@ -197,6 +378,17 @@ export function Terminal({
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
+      }
+      if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
+        scheduleThemeRefresh();
+      }
+      const nextBackground = state.settings.appearance.background;
+      const previousBackground = prev.settings.appearance.background;
+      if (
+        nextBackground.relativePath !== previousBackground.relativePath ||
+        nextBackground.applyToTerminal !== previousBackground.applyToTerminal
+      ) {
+        scheduleThemeRefresh();
       }
       if (changed) {
         try {
@@ -275,14 +467,28 @@ export function Terminal({
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
 
-    const sendToPty = (data: string) => {
+    const writeToPty = (targetSessionId: string, data: string) => {
       if (data.length === 0) return;
       invoke("pty_write", {
-        sessionId,
+        sessionId: targetSessionId,
         data: encodeStringToBase64(data),
       }).catch((err: unknown) => {
         console.error("[Terminal] pty_write failed", err);
       });
+    };
+    const sendToPty = (data: string) => {
+      writeToPty(sessionId, data);
+    };
+    const sendUserInputToPty = (data: string) => {
+      if (data.length === 0) return;
+      const state = useAppStore.getState();
+      const targets = state.multiInputEnabled
+        ? visibleMultiInputSessionIds(state.panes)
+        : [sessionId];
+      const targetIds = targets.length > 0 ? targets : [sessionId];
+      for (const targetId of targetIds) {
+        writeToPty(targetId, data);
+      }
     };
 
     // CJK IME path. xterm.js's built-in handler only processes plain
@@ -389,7 +595,7 @@ export function Terminal({
         ? ta.value.slice(sentPrefix.length)
         : "";
       const data = tail || explicit || "";
-      if (data) sendToPty(data);
+      if (data) sendUserInputToPty(data);
       if (ta) ta.value = "";
       sentPrefix = "";
       composing = false;
@@ -459,7 +665,7 @@ export function Terminal({
           }
           const committedEnd = value.length - newCharLen;
           if (committedEnd > sentPrefix.length) {
-            sendToPty(value.slice(sentPrefix.length, committedEnd));
+            sendUserInputToPty(value.slice(sentPrefix.length, committedEnd));
             sentPrefix = value.slice(0, committedEnd);
           }
           showComposing(value.slice(sentPrefix.length));
@@ -559,7 +765,7 @@ export function Terminal({
       // Claude CLI cannot tell them apart. Send a literal LF and stop the
       // event so xterm does not emit its own \r on top.
       if (ev.key === "Enter" && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        sendToPty("\n");
+        sendUserInputToPty("\n");
         ev.preventDefault();
         ev.stopImmediatePropagation();
         return;
@@ -574,13 +780,13 @@ export function Terminal({
         !ev.shiftKey
       ) {
         if (ev.key === "ArrowLeft") {
-          sendToPty("\x01");
+          sendUserInputToPty("\x01");
           ev.preventDefault();
           ev.stopImmediatePropagation();
           return;
         }
         if (ev.key === "ArrowRight") {
-          sendToPty("\x05");
+          sendUserInputToPty("\x05");
           ev.preventDefault();
           ev.stopImmediatePropagation();
           return;
@@ -642,7 +848,7 @@ export function Terminal({
     container.addEventListener("compositionend", swallowComposition, true);
 
     const inputDisposable = term.onData((data: string) => {
-      sendToPty(data);
+      sendUserInputToPty(data);
     });
 
     // Re-anchor the composition preview to the cursor on every xterm render.
@@ -673,6 +879,59 @@ export function Terminal({
     const scrollDisposable = term.onScroll(repositionComposing);
     const cursorMoveDisposable = term.onCursorMove(repositionComposing);
 
+    // Sticky-prompt detection. The banner above the terminal pins the
+    // most recent user-prompt line found in xterm's rendered buffer
+    // at-or-above the topmost-visible row. Detection is buffer-only —
+    // a Cmd+K clear empties the buffer and the dispatch naturally
+    // settles to `null`, hiding the banner without any side-channel
+    // bookkeeping. Triggers:
+    //   - scroll          (user navigates scrollback)
+    //   - PTY output      (a new turn just landed)
+    //   - terminal clear  (buffer wiped)
+    // All three coalesce through a single rAF so a flurry of events
+    // emits one buffer scan + one dispatch per animation frame.
+    //
+    // The Experiments → "Pin last user prompt" toggle short-circuits
+    // every dispatch when off, AND emits a one-shot `null` so a banner
+    // already showing from a prior render disappears immediately.
+    let contextDispatchPending = false;
+    let lastDispatchedContext: string | null | undefined = undefined;
+    const dispatchContextPrompt = () => {
+      contextDispatchPending = false;
+      if (disposed) return;
+      const enabled =
+        useSettings.getState().settings.experiments.stickyPrompt;
+      const next = enabled
+        ? scanForContextPrompt(term.buffer.active, term.buffer.active.viewportY)
+        : null;
+      if (next === lastDispatchedContext) return;
+      lastDispatchedContext = next;
+      window.dispatchEvent(
+        new CustomEvent<ContextPromptDetail>(CONTEXT_PROMPT_EVENT, {
+          detail: { sessionId, prompt: next },
+        }),
+      );
+    };
+    const scheduleContextDispatch = () => {
+      if (contextDispatchPending || disposed) return;
+      contextDispatchPending = true;
+      requestAnimationFrame(dispatchContextPrompt);
+    };
+    const contextScrollDisposable = term.onScroll(scheduleContextDispatch);
+    // Initial dispatch so the banner reflects whatever was restored from
+    // scrollback before the first scroll/output event fires.
+    scheduleContextDispatch();
+    // Toggle off mid-session must hide the banner without waiting for
+    // the next scroll/output event; toggle back on rescans the buffer.
+    const unsubStickyToggle = useSettings.subscribe((state, prev) => {
+      if (
+        state.settings.experiments.stickyPrompt !==
+        prev.settings.experiments.stickyPrompt
+      ) {
+        scheduleContextDispatch();
+      }
+    });
+
     // Custom event hook so a global hotkey (Cmd+K) can clear THIS terminal
     // without needing a cross-component ref registry. The dispatcher passes
     // the target sessionId in `detail.sessionId`; terminals match against
@@ -681,6 +940,11 @@ export function Terminal({
       const detail = (e as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
       term.clear();
+      // Sticky-prompt banner watches the buffer for `> ` lines; after a
+      // clear there are none, so explicitly schedule a dispatch so the
+      // banner picks up the now-empty state without waiting for the
+      // next scroll/output event.
+      scheduleContextDispatch();
       // Also redraw the shell prompt so the user sees a clean state.
       sendToPty("\x0c");
     };
@@ -816,6 +1080,10 @@ export function Terminal({
               // so a TUI redraw interrupted mid-stream doesn't leave stale
               // glyphs from a wider previous line painted on screen.
               scheduleViewportRepaint();
+              // A new prompt row may have just been rendered. Rescan the
+              // buffer so the sticky banner picks it up in the same frame
+              // (instead of waiting for the user's next scroll).
+              scheduleContextDispatch();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -1026,6 +1294,10 @@ export function Terminal({
     return () => {
       disposed = true;
       unsubSettings();
+      if (themeFrame !== null) {
+        cancelAnimationFrame(themeFrame);
+        themeFrame = null;
+      }
       unregisterScrollbackFlusher();
       if (scrollbackSaveTimer !== null) {
         window.clearTimeout(scrollbackSaveTimer);
@@ -1059,6 +1331,8 @@ export function Terminal({
       renderDisposable.dispose();
       scrollDisposable.dispose();
       cursorMoveDisposable.dispose();
+      contextScrollDisposable.dispose();
+      unsubStickyToggle();
       resizeDisposable.dispose();
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
@@ -1074,6 +1348,31 @@ export function Terminal({
       fitRef.current = null;
     };
   }, [sessionId, cwd]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.cursorBlink = isFocusedPane;
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch {
+      // ignore
+    }
+  }, [isFocusedPane]);
+
+  // Steal keyboard focus for newly created sessions so the user can type
+  // immediately after Cmd+T (or any other creation path). Store dispatches
+  // `acorn:focus-session` after rAF so the slot has reattached to its pane
+  // body before we call `term.focus()`.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      termRef.current?.focus();
+    };
+    window.addEventListener("acorn:focus-session", handler);
+    return () => window.removeEventListener("acorn:focus-session", handler);
+  }, [sessionId]);
 
   // When this terminal is hidden behind another tab in the same pane and
   // then made visible again, the DOM renderer may not have repainted while
@@ -1124,13 +1423,30 @@ export function Terminal({
     };
   }, [isActive]);
 
-  // FitAddon subtracts padding from xterm.element, not its parent — keep the gutter on the outer wrapper so xterm's parent stays padding-free and rows don't overflow past the pane body.
+  // FitAddon subtracts padding from xterm.element, not its parent — keep the
+  // gutter on the outer wrapper so xterm's parent stays padding-free and rows
+  // don't overflow past the pane body. The pinned-prompt banner overlays the
+  // top edge as an `absolute` element so it never changes the terminal's
+  // computed dimensions — a flex layout that shrunk the xterm container
+  // mid-render fired SIGWINCH at claude's TUI and shredded its box-drawing
+  // characters into half-rendered lines.
   return (
     <div
-      className="relative h-full w-full"
-      style={{ padding: "16px 8px", background: TERMINAL_BG }}
+      className="acorn-terminal-shell relative h-full w-full"
+      style={{
+        padding: "16px 8px",
+        overflow: "hidden",
+      }}
     >
-      <div ref={containerRef} className="acorn-terminal h-full w-full" />
+      <div className="acorn-bg-terminal" aria-hidden="true" />
+      <div
+        ref={containerRef}
+        className={`acorn-terminal relative z-10 h-full w-full ${
+          isFocusedPane ? "" : "acorn-terminal-inactive"
+        }`}
+      />
+      {/* Pinned-prompt overlay. */}
+      <StickyUserPrompt sessionId={sessionId} />
     </div>
   );
 }

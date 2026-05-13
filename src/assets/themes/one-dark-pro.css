@@ -1,0 +1,14 @@
+:root[data-acorn-theme="one-dark-pro"] {
+  --color-bg: #282c34;
+  --color-bg-elevated: #2c313a;
+  --color-bg-sidebar: #21252b;
+  --color-fg: #abb2bf;
+  --color-fg-muted: #6b7280;
+  --color-border: #3e4451;
+  --color-accent: #61afef;
+  --color-accent-hover: #82c0ff;
+  --color-danger: #e06c75;
+  --color-warning: #e5c07b;
+  --color-terminal-bg: #282c34;
+  --color-terminal-fg: #abb2bf;
+}

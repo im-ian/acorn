@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Acorn",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "identifier": "io.im-ian.acorn",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "bun run dev:sidecar && bun run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "bun run build && bun run build:sidecar",
     "frontendDist": "../dist"
@@ -17,18 +17,23 @@
         "height": 800,
         "minWidth": 900,
         "minHeight": 600,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "devtools": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPLOCALDATA/backgrounds/**/*"]
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/acorn-ipc"],
+    "externalBin": ["binaries/acorn-ipc", "binaries/acornd"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

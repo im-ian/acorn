@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::{AppHandle, Runtime, State};
@@ -87,6 +87,21 @@ pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
     }
 }
 
+#[tauri::command]
+pub fn list_system_fonts() -> Vec<String> {
+    let mut fonts = BTreeSet::new();
+    let mut remaining = 8_000usize;
+
+    for dir in system_font_dirs() {
+        collect_font_names(&dir, &mut fonts, &mut remaining);
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    fonts.into_iter().collect()
+}
+
 /// Stop the running IPC listener (if any) and spawn a fresh one. Used by
 /// the Settings → Control sessions "Restart" button when the socket has
 /// gone stale (e.g. socket file removed under the app's feet). The signal
@@ -124,6 +139,130 @@ fn standard_shim_paths() -> Vec<PathBuf> {
         out.push(PathBuf::from(&home).join("bin/acorn-ipc"));
     }
     out
+}
+
+fn system_font_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/Library/Fonts"),
+        PathBuf::from("/usr/share/fonts"),
+        PathBuf::from("/usr/local/share/fonts"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join("Library/Fonts"));
+        dirs.push(home.join(".local/share/fonts"));
+        dirs.push(home.join(".fonts"));
+    }
+    dirs
+}
+
+fn collect_font_names(dir: &Path, fonts: &mut BTreeSet<String>, remaining: &mut usize) {
+    if *remaining == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        if *remaining == 0 {
+            return;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_font_names(&path, fonts, remaining);
+            continue;
+        }
+        if !file_type.is_file() || !is_font_file(&path) {
+            continue;
+        }
+        *remaining -= 1;
+        if let Some(name) = font_name_from_path(&path) {
+            fonts.insert(name);
+        }
+    }
+}
+
+fn is_font_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("ttf" | "otf" | "ttc")
+    )
+}
+
+fn font_name_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let mut words: Vec<&str> = stem
+        .split(['-', '_', ' '])
+        .filter(|part| !part.is_empty())
+        .collect();
+    while words
+        .last()
+        .map(|word| is_style_suffix(word))
+        .unwrap_or(false)
+    {
+        words.pop();
+    }
+    let name = words.join(" ");
+    let cleaned = name.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
+fn is_style_suffix(word: &str) -> bool {
+    let normalized = word
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect::<String>();
+    if is_style_suffix_base(&normalized) {
+        return true;
+    }
+    for suffix in ["italic", "oblique"] {
+        if let Some(base) = normalized.strip_suffix(suffix) {
+            return is_style_suffix_base(base);
+        }
+    }
+    false
+}
+
+fn is_style_suffix_base(word: &str) -> bool {
+    matches!(
+        word,
+        "black"
+            | "bold"
+            | "book"
+            | "condensed"
+            | "demi"
+            | "demibold"
+            | "expanded"
+            | "extra"
+            | "extrabold"
+            | "extralight"
+            | "heavy"
+            | "italic"
+            | "light"
+            | "medium"
+            | "oblique"
+            | "regular"
+            | "roman"
+            | "semi"
+            | "semibold"
+            | "thin"
+            | "ultra"
+            | "ultrabold"
+            | "ultralight"
+    )
 }
 
 fn persist(state: &AppState) {
@@ -171,13 +310,20 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
         .sessions
         .list()
         .into_iter()
-        .map(|mut s| {
-            if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
-                s.branch = branch;
-            }
-            s
-        })
+        .map(enrich_session)
         .collect()
+}
+
+/// Attach derived fields (`branch`, `in_worktree`) computed from the
+/// session's current on-disk state. Pure: never mutates the persisted
+/// store. Called on every Session leaving the backend so the frontend
+/// sees fresh values without a second round-trip.
+fn enrich_session(mut s: Session) -> Session {
+    if let Ok(branch) = worktree::current_branch(&s.worktree_path) {
+        s.branch = branch;
+    }
+    s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
+    s
 }
 
 static MEMORY_PROBE: Mutex<Option<System>> = Mutex::new(None);
@@ -320,7 +466,7 @@ pub async fn create_session(
     let inserted = state.sessions.insert(session);
     state.projects.ensure(repo.clone(), project_basename(&repo));
     persist(&state);
-    Ok(inserted)
+    Ok(enrich_session(inserted))
 }
 
 #[tauri::command]
@@ -360,7 +506,7 @@ pub fn reorder_sessions(
         .collect();
     state.sessions.reorder(&path, &ids);
     persist(&state);
-    Ok(state.sessions.list())
+    Ok(state.sessions.list().into_iter().map(enrich_session).collect())
 }
 
 #[tauri::command]
@@ -434,7 +580,7 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
     }
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
-    Ok(updated)
+    Ok(enrich_session(updated))
 }
 
 /// Re-point a session at a new worktree directory and persist the change.
@@ -455,7 +601,150 @@ pub fn update_session_worktree(
     }
     let updated = state.sessions.update_worktree_path(&id, path)?;
     persist(&state);
-    Ok(updated)
+    Ok(enrich_session(updated))
+}
+
+#[derive(Serialize, Default)]
+pub struct AgentDetection {
+    /// Parent claude session id when a claude transcript is present at
+    /// `~/.claude/projects/<slug>/<session-id>.jsonl`. Today this equals the
+    /// Acorn session UUID (claude shim runs `--session-id $ACORN_RESUME_TOKEN`
+    /// = Acorn UUID), so the parent id we pass to `claude --resume` is just
+    /// the Acorn session id. Kept as a separate field so the contract stays
+    /// stable if the shim ever stops reusing the Acorn UUID.
+    pub claude: Option<String>,
+    /// Codex session UUID captured by the codex shim in
+    /// `<state_dir>/codex.id` after the first zero-arg `codex` run.
+    pub codex: Option<String>,
+}
+
+/// Stage a parent claude transcript inside the new worktree's project
+/// slug so `claude --resume <uuid>` can find it after the fork shell
+/// `cd`s into the worktree. Claude looks transcripts up under
+/// `~/.claude/projects/<slugified-cwd>/<uuid>.jsonl`; the new worktree
+/// has a different slug, so without this copy the resume fails with
+/// "No conversation found with session ID: ...".
+///
+/// Codex stores rollouts under `$CODEX_HOME/sessions/.../` (cwd-
+/// independent), so this is only needed for claude forks.
+///
+/// Both `parent_uuid` and `new_cwd` come from the frontend IPC bridge
+/// and are validated below:
+///   - `parent_uuid` is checked to be a real UUID before any disk
+///     lookup, blocking `..`-style filename injection.
+///   - `new_cwd` is slugified and the resulting directory path is
+///     verified to canonicalise under `~/.claude/projects/` before any
+///     `create_dir_all` runs, so a hostile cwd containing path-escape
+///     characters cannot make us materialise directories outside the
+///     claude project root.
+#[tauri::command]
+pub fn prepare_claude_fork(
+    parent_uuid: String,
+    new_cwd: String,
+) -> AppResult<()> {
+    if Uuid::parse_str(&parent_uuid).is_err() {
+        return Err(AppError::Other(format!(
+            "parent_uuid must be a valid UUID, got: {parent_uuid}"
+        )));
+    }
+
+    let home = directories::UserDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .ok_or_else(|| AppError::Other("no home dir".into()))?;
+    let projects_root = home.join(".claude").join("projects");
+    let filename = format!("{parent_uuid}.jsonl");
+
+    // The parent transcript can live under any number of project
+    // slugs depending on where the agent was originally launched, so
+    // walk the projects dir for the first matching filename instead of
+    // recomputing the parent slug from a cwd the caller may not have.
+    let mut src: Option<PathBuf> = None;
+    if let Ok(entries) = std::fs::read_dir(&projects_root) {
+        for slug in entries.flatten() {
+            let candidate = slug.path().join(&filename);
+            if candidate.is_file() {
+                src = Some(candidate);
+                break;
+            }
+        }
+    }
+    let Some(src) = src else {
+        return Err(AppError::Other(format!(
+            "parent transcript {parent_uuid} not found under {}",
+            projects_root.display()
+        )));
+    };
+
+    let dst_slug = crate::claude_util::slug_for_cwd(std::path::Path::new(&new_cwd));
+    let dst_dir = projects_root.join(&dst_slug);
+
+    // Path-traversal guard: resolve both ends and verify the destination
+    // is a real descendant of `projects_root`. We rely on `parent()`
+    // climbing up — `projects_root` exists once `claude` has ever been
+    // run, but `dst_dir` may not, so canonicalize the parent and append
+    // the slug. A weird `new_cwd` (e.g. containing `..` segments that
+    // slugify to bare dashes) shouldn't matter given the per-char filter,
+    // but defense in depth is cheap.
+    if !dst_slug.starts_with('-')
+        || dst_slug.contains('/')
+        || dst_slug.contains("..")
+    {
+        return Err(AppError::Other(format!(
+            "refusing to stage transcript under unsafe slug: {dst_slug}"
+        )));
+    }
+    let canonical_root = projects_root.canonicalize().unwrap_or(projects_root.clone());
+    let prospective = canonical_root.join(&dst_slug);
+    if !prospective.starts_with(&canonical_root) {
+        return Err(AppError::Other(format!(
+            "destination {} escapes claude projects root {}",
+            prospective.display(),
+            canonical_root.display()
+        )));
+    }
+
+    std::fs::create_dir_all(&dst_dir)?;
+    let dst = dst_dir.join(&filename);
+    if !dst.exists() {
+        std::fs::copy(&src, &dst)
+            .map_err(|e| AppError::Other(format!("copy transcript: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Live-process snapshot of which agent transcripts (if any) the user is
+/// currently writing inside this Acorn session. Drives the Tab context
+/// menu's Fork items — they only appear while the underlying claude /
+/// codex process is alive in the session's PTY tree.
+///
+/// We deliberately re-run the full process scan on every call instead
+/// of reading the watcher's cached map. The cache is at most one cycle
+/// (~3 s) stale, which races with rapid back-to-back Fork actions: a
+/// freshly-forked session's claude process can be live at the moment
+/// the user right-clicks but absent from the last cache, or vice-versa.
+/// An on-demand scan locks the answer to "what's true right now."
+#[tauri::command]
+pub fn detect_session_agent(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<AgentDetection> {
+    let parsed = parse_id(&session_id)?;
+    let mappings = crate::transcript_watcher::collect_live_mappings(&state);
+    let mut detection = AgentDetection::default();
+    for (sid, kind, uuid) in mappings {
+        if sid != parsed {
+            continue;
+        }
+        match kind {
+            crate::transcript_watcher::AgentKind::Claude => {
+                detection.claude = Some(uuid);
+            }
+            crate::transcript_watcher::AgentKind::Codex => {
+                detection.codex = Some(uuid);
+            }
+        }
+    }
+    Ok(detection)
 }
 
 /// Enumerate every linked git worktree of the repo containing `repo_path`.
@@ -541,7 +830,10 @@ pub async fn pty_spawn<R: Runtime>(
     if !cwd.exists() {
         return Err(AppError::InvalidPath(cwd.display().to_string()));
     }
-    if state.pty.contains(&id) {
+    // Either an in-process PTY or a daemon-side stream attachment for
+    // this session already exists — caller hit `pty_spawn` twice (e.g.
+    // StrictMode double mount), nothing to do.
+    if state.pty.contains(&id) || state.stream_registry.contains(&id) {
         return Ok(());
     }
     // Sessions always spawn the user's interactive `$SHELL`.
@@ -553,6 +845,59 @@ pub async fn pty_spawn<R: Runtime>(
     // env; regular sessions stay sandboxed from the IPC surface.
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
+
+    // The Acorn session UUID doubles as the resume token. claude's
+    // `--session-id` names the JSONL transcript at
+    // `~/.claude/projects/<repo-slug>/<id>.jsonl`, and
+    // `session_status::detect` looks the file up by Acorn's session
+    // id verbatim — minting a separate UUID would break that lookup
+    // and leave status detection on the descendant-process fallback.
+    // `ACORN_AGENT_STATE_DIR` is the per-session scratch directory
+    // the codex shim writes its captured `codex.id` into.
+    let resume_token = id.to_string();
+    effective_env
+        .entry("ACORN_RESUME_TOKEN".to_string())
+        .or_insert_with(|| resume_token.clone());
+    if let Ok(state_dir) = crate::agent_shim::ensure_session_state_dir(id) {
+        effective_env
+            .entry("ACORN_AGENT_STATE_DIR".to_string())
+            .or_insert_with(|| state_dir.display().to_string());
+    } else {
+        tracing::warn!(%id, "agent state dir setup failed; codex shim will skip resume tracking");
+    }
+    if let Ok(shim_dir) = crate::agent_shim::ensure_shim_dir() {
+        let existing = effective_env
+            .get("PATH")
+            .cloned()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_default();
+        effective_env.insert(
+            "PATH".to_string(),
+            crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
+        );
+    } else {
+        tracing::warn!(%id, "agent shim dir setup failed; claude/codex resume helpers will not be active");
+    }
+
+    // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
+    // Override `ZDOTDIR` with Acorn's staged dir so our `.zshrc` runs; stash
+    // the user's original under `ACORN_USER_ZDOTDIR` so the staged rc can
+    // restore it before sourcing their real config. zsh resolves `.zshenv`
+    // off `$ZDOTDIR` too, so the staged dir also ships a `.zshenv` that
+    // forwards to the user's `$HOME/.zshenv` (rustup, asdf etc. live there
+    // and break without it) before pinning `ZDOTDIR` back to ours.
+    if let Ok(dir) = crate::shell_init::ensure_shell_init_dir() {
+        let user_zdotdir = effective_env
+            .get("ZDOTDIR")
+            .cloned()
+            .or_else(|| std::env::var("ZDOTDIR").ok())
+            .unwrap_or_default();
+        effective_env.insert("ACORN_USER_ZDOTDIR".to_string(), user_zdotdir);
+        effective_env.insert("ZDOTDIR".to_string(), dir.display().to_string());
+    } else {
+        tracing::warn!(%id, "shell init dir setup failed; OSC 7 cwd tracking will fall back to focus-based refresh");
+    }
+
     if let Ok(session) = state.sessions.get(&id) {
         if session.kind == SessionKind::Control {
             effective_env
@@ -564,11 +909,25 @@ pub async fn pty_spawn<R: Runtime>(
                     .entry("ACORN_IPC_SOCKET".to_string())
                     .or_insert_with(|| socket.display().to_string());
             }
-            // Make the bundled `acorn-ipc` CLI resolvable from inside this
-            // PTY without the user installing a PATH shim. Prepending — not
-            // replacing — keeps the user's existing PATH intact for every
-            // other binary; the dedup in `prepend_to_path` prevents the
-            // entry from accumulating across reconnects.
+            // Daemon socket for the `acornd` CLI. Coexists with
+            // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
+            // the in-process server, while `acornd <subcommand>`
+            // reaches the daemon. The two transports manage different
+            // session graphs today (daemon vs in-process); they
+            // converge when `pty_spawn` itself routes through the
+            // daemon.
+            if let Ok(daemon_sock) = crate::daemon::paths::control_socket_path() {
+                effective_env
+                    .entry("ACORN_DAEMON_SOCKET".to_string())
+                    .or_insert_with(|| daemon_sock.display().to_string());
+            }
+            // Make the bundled `acorn-ipc` AND `acornd` CLIs resolvable
+            // from inside this PTY without the user installing a PATH
+            // shim. Both binaries ship in the same directory, so a
+            // single prepend covers both. Prepending — not replacing —
+            // keeps the user's existing PATH intact for every other
+            // binary; dedup in `prepend_to_path` prevents the entry
+            // from accumulating across reconnects.
             if let Some(bin_dir) = crate::ipc::cli_path::bundled_cli_dir() {
                 let existing = effective_env
                     .get("PATH")
@@ -597,6 +956,30 @@ pub async fn pty_spawn<R: Runtime>(
         }
     }
 
+    // Daemon path — when the killswitch is on, route through `acornd`
+    // so the PTY survives an Acorn app close. The in-process branch
+    // below is kept verbatim as the fallback for users who flip the
+    // toggle off (or for environments where the daemon binary is
+    // missing / refusing to start).
+    if state.daemon_bridge.is_enabled() {
+        match spawn_via_daemon(
+            &app,
+            &state,
+            id,
+            &cwd,
+            &resolved_command,
+            &primed_args,
+            &effective_env,
+            cols.unwrap_or(0),
+            rows.unwrap_or(0),
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                tracing::warn!(%id, error = %err, "daemon spawn failed; falling back to in-process PTY");
+            }
+        }
+    }
+
     state.pty.spawn(
         app,
         id,
@@ -607,6 +990,103 @@ pub async fn pty_spawn<R: Runtime>(
         cols.unwrap_or(0),
         rows.unwrap_or(0),
     )
+}
+
+/// Route a `pty_spawn` through the daemon. Three cases:
+///
+/// 1. **Already attached** — short-circuit; redundant guard catches
+///    races where two callers hit this helper concurrently.
+/// 2. **Daemon already has an alive session** under this UUID (Acorn
+///    just restarted) — skip spawn, open a stream attachment with
+///    scrollback replay so the user sees the daemon's last screen.
+/// 3. **No live session** — fresh daemon spawn, attach the stream,
+///    persist `daemon_session_id` so the next restart hits case 2.
+fn spawn_via_daemon<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    id: uuid::Uuid,
+    cwd: &std::path::Path,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let bridge = &state.daemon_bridge;
+    let registry = state.stream_registry.clone();
+
+    if registry.contains(&id) {
+        return Ok(());
+    }
+
+    // Resolve the session row's persisted daemon metadata. Missing
+    // session is treated as a new spawn — control sessions get their
+    // own env/argv augmentation up-stack, so this branch only handles
+    // the daemon ↔ stream wiring.
+    let session = state.sessions.get(&id).ok();
+    let session_kind = session
+        .as_ref()
+        .map(|s| s.kind)
+        .unwrap_or(SessionKind::Regular);
+    let repo_path = session.as_ref().map(|s| s.repo_path.clone());
+    let branch = session.as_ref().map(|s| s.branch.clone());
+
+    // `pty_spawn` always launches `$SHELL`, never an agent binary
+    // directly, so the daemon's per-agent resume strategy registry
+    // has nothing to react to here. The shim layer in the PTY is
+    // what specialises behaviour by agent.
+    let agent_kind: Option<crate::daemon::protocol::AgentKind> = None;
+
+    // The resume token == Acorn session UUID; stamped onto the
+    // daemon's session record (mirrors the PTY env var the shim
+    // reads) so a future daemon-side reconcile can recover identity
+    // without consulting the app DB.
+    let resume_token = Some(id.to_string());
+
+    // Fast path: daemon already owns this PTY. Acorn restart re-enters
+    // `pty_spawn` here; attach the stream and return. Pid comes from
+    // the daemon's session registry so status polling has a process
+    // tree to walk without an extra round-trip on every poll.
+    if bridge.is_alive(id) {
+        let pid = bridge.session_pid(id);
+        crate::daemon_stream::attach(app.clone(), registry.clone(), id, pid, true)
+            .map_err(|e| format!("daemon stream attach failed: {e}"))?;
+        return Ok(());
+    }
+
+    let kind = match session_kind {
+        SessionKind::Regular => crate::daemon::protocol::SessionKind::Regular,
+        SessionKind::Control => crate::daemon::protocol::SessionKind::Control,
+    };
+
+    let outcome = bridge
+        .spawn(
+            id,
+            id.to_string(),
+            cwd.to_path_buf(),
+            command.to_string(),
+            args.to_vec(),
+            env.clone(),
+            cols,
+            rows,
+            kind,
+            repo_path,
+            branch,
+            agent_kind,
+            resume_token.clone(),
+        )
+        .map_err(|e| format!("daemon spawn failed: {e}"))?;
+
+    // Persist the daemon binding so next-restart's reconcile picks
+    // this row up. Failures are non-fatal — the user can still use the
+    // session, they just lose persistence across one restart.
+    if let Err(err) = state.sessions.set_daemon_session_id(&id, Some(id)) {
+        tracing::warn!(%id, error = %err, "persist daemon_session_id failed");
+    }
+    persist(state);
+
+    crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, true)
+        .map_err(|e| format!("daemon stream attach failed: {e}"))
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session
@@ -635,6 +1115,16 @@ fn write_control_marker(cwd: &std::path::Path, primer: &str) {
 pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let bytes = decode_b64(&data)?;
+    // Daemon-managed sessions route stdin through the control socket.
+    // Keystrokes are small; one RPC round-trip per keystroke is well
+    // under the typing-feedback threshold and avoids managing a second
+    // socket on the app side just for input.
+    if state.stream_registry.contains(&id) {
+        return state
+            .daemon_bridge
+            .send_input(id, &bytes)
+            .map_err(|e| AppError::Pty(e.to_string()));
+    }
     state.pty.write(&id, &bytes)
 }
 
@@ -646,12 +1136,33 @@ pub fn pty_resize(
     rows: u16,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        return state
+            .daemon_bridge
+            .resize(id, cols, rows)
+            .map_err(|e| AppError::Pty(e.to_string()));
+    }
     state.pty.resize(&id, cols, rows)
 }
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        // Order: tell the daemon to terminate the PTY first, then
+        // release the stream attachment. The daemon's wait thread
+        // emits an `Exit` frame the stream pump turns into a Tauri
+        // event, so the frontend sees the same exit signal it would
+        // get from an in-process kill. Drop the attachment after to
+        // free the entry in `stream_registry` even if the daemon
+        // already disconnected first.
+        let result = state
+            .daemon_bridge
+            .kill(id)
+            .map_err(|e| AppError::Pty(e.to_string()));
+        state.stream_registry.drop_attachment(&id);
+        return result;
+    }
     state.pty.kill(&id)
 }
 
@@ -751,6 +1262,73 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
         }
     }
     best.map(|(_, p)| p)
+}
+
+/// Classify an arbitrary path as "inside a linked git worktree". Walks up
+/// via libgit2's `Repository::discover` so subdirectories of a worktree
+/// resolve correctly, then checks whether the discovered workdir itself
+/// is a linked worktree (`.git` is a file). Used by the xterm OSC 7
+/// handler — every emit hands the host a fresh cwd from the shell and
+/// the response feeds straight into the worktree-icon condition without
+/// touching the system process table.
+#[tauri::command]
+pub fn is_path_linked_worktree(path: String) -> bool {
+    let p = PathBuf::from(&path);
+    let Ok(repo) = git2::Repository::discover(&p) else {
+        return false;
+    };
+    repo.workdir()
+        .map(worktree::is_linked_worktree_root)
+        .unwrap_or(false)
+}
+
+/// Batched live-cwd → "is linked worktree" probe for every session that has
+/// a live PTY. Single system process refresh, one descendant walk per
+/// session — ~20-30ms regardless of session count, vs. that cost × N when
+/// callers loop `pty_cwd` per session.
+///
+/// Key invariant: a session id appears in the map **iff** it currently has a
+/// live PTY. The value is `true` when its live cwd resolves inside a linked
+/// worktree, `false` otherwise. Absence means "no live PTY — fall back to
+/// the session's recorded `worktree_path` / `isolated` flags". Conflating
+/// "no live PTY" with "live but not in a worktree" would let a stale static
+/// signal override the fresh live one (e.g. user `cd`s out of an adopted
+/// worktree).
+#[tauri::command]
+pub fn pty_in_worktree_all(state: State<'_, AppState>) -> HashMap<String, bool> {
+    let sessions = state.sessions.list();
+    let pids: Vec<(Uuid, u32)> = sessions
+        .iter()
+        .filter_map(|s| state.pty.child_pid(&s.id).map(|pid| (s.id, pid)))
+        .collect();
+    if pids.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+    );
+
+    let mut out = HashMap::with_capacity(pids.len());
+    for (id, pid) in pids {
+        let in_worktree = match deepest_descendant_cwd(&sys, Pid::from_u32(pid)) {
+            Some(cwd) => match git2::Repository::discover(&cwd) {
+                Ok(repo) => repo
+                    .workdir()
+                    .map(worktree::is_linked_worktree_root)
+                    .unwrap_or(false),
+                Err(_) => false,
+            },
+            None => false,
+        };
+        out.insert(id.to_string(), in_worktree);
+    }
+    out
 }
 
 #[tauri::command]
@@ -861,10 +1439,22 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
+            // Routing-aware pid lookup. Daemon-managed sessions live
+            // in `stream_registry` (their root pid was captured from
+            // the daemon at spawn / attach); legacy in-process sessions
+            // live in `state.pty`. Each side drives its own shell-state
+            // machine because the sticky NeedsInput deadline is
+            // per-attachment, not global.
             let shell_hint = parsed_id.and_then(|uuid| {
-                let root = state.pty.child_pid(&uuid)?;
-                let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
-                state.pty.update_shell_state(&uuid, has_child_now)
+                if state.stream_registry.contains(&uuid) {
+                    let root = state.stream_registry.pid(&uuid)?;
+                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                    state.stream_registry.update_shell_state(&uuid, has_child_now)
+                } else {
+                    let root = state.pty.child_pid(&uuid)?;
+                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                    state.pty.update_shell_state(&uuid, has_child_now)
+                }
             });
             let status =
                 session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
@@ -874,7 +1464,12 @@ pub async fn detect_session_statuses(
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
             let live_cwd_branch = parsed_id
-                .and_then(|uuid| state.pty.child_pid(&uuid))
+                .and_then(|uuid| {
+                    state
+                        .stream_registry
+                        .pid(&uuid)
+                        .or_else(|| state.pty.child_pid(&uuid))
+                })
                 .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
                 .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
             let branch = live_cwd_branch.or_else(|| {
@@ -996,6 +1591,22 @@ pub async fn get_pull_request_detail(
 }
 
 #[tauri::command]
+pub async fn get_pull_request_commit_diff(
+    repo_path: String,
+    sha: String,
+) -> AppResult<DiffPayload> {
+    pull_requests::get_pull_request_commit_diff(&PathBuf::from(repo_path), &sha)
+}
+
+#[tauri::command]
+pub async fn resolve_commit_logins(
+    repo_path: String,
+    shas: Vec<String>,
+) -> AppResult<std::collections::HashMap<String, Option<String>>> {
+    pull_requests::resolve_commit_logins(&PathBuf::from(repo_path), shas)
+}
+
+#[tauri::command]
 pub async fn merge_pull_request(
     repo_path: String,
     number: u64,
@@ -1015,6 +1626,15 @@ pub async fn merge_pull_request(
 #[tauri::command]
 pub async fn close_pull_request(repo_path: String, number: u64) -> AppResult<()> {
     pull_requests::close_pull_request(&PathBuf::from(repo_path), number)
+}
+
+#[tauri::command]
+pub async fn update_pull_request_body(
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    pull_requests::update_pull_request_body(&PathBuf::from(repo_path), number, &body)
 }
 
 #[tauri::command]
@@ -1074,3 +1694,24 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::font_name_from_path;
+    use std::path::Path;
+
+    #[test]
+    fn font_name_from_path_strips_compound_style_suffixes() {
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-BlackItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-MediumItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+        assert_eq!(
+            font_name_from_path(Path::new("/tmp/GeistMono-ThinItalic.ttf")),
+            Some("GeistMono".to_string())
+        );
+    }
+}

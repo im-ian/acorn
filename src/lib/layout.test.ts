@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  findAdjacentPaneId,
   findPaneNode,
   listPaneIds,
   makePaneNode,
@@ -52,6 +53,34 @@ describe("findPaneNode", () => {
 
   it("returns null when missing", () => {
     expect(findPaneNode(layout, "nope")).toBeNull();
+  });
+});
+
+describe("findAdjacentPaneId", () => {
+  const layout: LayoutNode = {
+    kind: "split",
+    id: "root-split",
+    direction: "horizontal",
+    a: makePaneNode("left"),
+    b: {
+      kind: "split",
+      id: "right-split",
+      direction: "vertical",
+      a: makePaneNode("top-right"),
+      b: makePaneNode("bottom-right"),
+    },
+  };
+
+  it("finds the nearest pane in the requested visual direction", () => {
+    expect(findAdjacentPaneId(layout, "left", "right")).toBe("top-right");
+    expect(findAdjacentPaneId(layout, "top-right", "down")).toBe("bottom-right");
+    expect(findAdjacentPaneId(layout, "bottom-right", "up")).toBe("top-right");
+    expect(findAdjacentPaneId(layout, "top-right", "left")).toBe("left");
+  });
+
+  it("returns null when no pane exists in that direction", () => {
+    expect(findAdjacentPaneId(layout, "left", "left")).toBeNull();
+    expect(findAdjacentPaneId(layout, "top-right", "up")).toBeNull();
   });
 });
 

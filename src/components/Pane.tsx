@@ -1,14 +1,17 @@
 import {
+  CircleX,
   Columns2,
   Copy,
   Files,
   FolderOpen,
   FolderPlus,
   GitBranch,
+  GitFork,
   Pencil,
   PencilLine,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  SquareX,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -37,7 +40,7 @@ import { useSettings } from "../lib/settings";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
-import type { Session, SessionStatus } from "../lib/types";
+import type { Session, SessionKind, SessionStatus } from "../lib/types";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
   idle: "bg-fg-muted",
@@ -67,6 +70,7 @@ export function Pane({ paneId }: PaneProps) {
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const selectSession = useAppStore((s) => s.selectSession);
+  const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
@@ -110,17 +114,75 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
 
   // Spawn a new session in the given project. Triggered by double-clicking
-  // the empty pane body or the tab strip. We bypass the store wrapper so we
-  // can grab the new session id and immediately focus its tab in this pane.
-  async function spawnSession(repoPath: string) {
+  // the empty pane body or the tab strip. `setFocusedPane` first so
+  // `store.createSession` lands the new tab next to *this* pane's active
+  // tab, then routes through the store wrapper for consistent placement
+  // and selection (browser-style "next to active").
+  async function spawnSession(
+    repoPath: string,
+    kind: SessionKind = "regular",
+  ) {
     setFocusedPane(paneId);
     const name = suggestSessionName(repoPath, sessions);
+    await createSession(name, repoPath, false, kind);
+  }
+
+  // Fork an existing claude/codex conversation into a new Acorn session.
+  // Inherits the parent's cwd and queues the explicit fork command into
+  // the new shell's stdin so the user does not retype it. We bypass the
+  // shim's fork-env branch deliberately — the shim may not even be on
+  // PATH in the user's resolved shell (a kaku-style rc that prepends
+  // user bin dirs buries it), so relying on a command line that maps to
+  // the actual CLI flags works regardless of shim availability. The
+  // user's existing `claude` alias (e.g. `--dangerously-skip-permissions`)
+  // expands the first token, leaving our `--resume <id> --fork-session`
+  // args intact.
+  async function forkSession(
+    parent: Session,
+    kind: "claude" | "codex",
+    parentAgentId: string,
+    isolated: boolean,
+  ) {
+    setFocusedPane(paneId);
+    const name = suggestSessionName(parent.repo_path, sessions);
     try {
-      const created = await api.createSession(name, repoPath, false);
+      const created = await api.createSession(
+        name,
+        parent.repo_path,
+        isolated,
+      );
+      // Claude resolves `--resume <uuid>` by looking under
+      // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
+      //
+      // For a same-cwd fork (`isolated: false`) the new Acorn session
+      // inherits `parent.repo_path` as its worktree, so the slug is
+      // identical to the parent's and `claude --resume` finds the file
+      // without any staging. We rely on `api.createSession` honouring
+      // `isolated: false` by reusing the parent worktree path verbatim;
+      // a future change there would silently break the same-cwd fork.
+      //
+      // For a new-worktree fork (`isolated: true`) the new worktree
+      // lives under `.acorn/worktrees/<name>/` with a different slug,
+      // so we stage a copy of the parent transcript into that slug
+      // before queuing the resume. Codex stores rollouts cwd-
+      // independently under `$CODEX_HOME/sessions/`, so neither branch
+      // requires staging for codex.
+      if (kind === "claude" && isolated) {
+        try {
+          await api.prepareClaudeFork(parentAgentId, created.worktree_path);
+        } catch (err) {
+          console.error("[Pane] prepare_claude_fork failed", err);
+        }
+      }
+      const command =
+        kind === "claude"
+          ? `claude --resume ${parentAgentId} --fork-session`
+          : `codex fork ${parentAgentId}`;
+      useAppStore.getState().setPendingTerminalInput(created.id, command);
       await useAppStore.getState().refreshAll();
       selectSession(created.id);
     } catch (err) {
-      console.error("[Pane] new session spawn failed", err);
+      console.error("[Pane] fork session failed", err);
     }
   }
 
@@ -180,8 +242,11 @@ export function Pane({ paneId }: PaneProps) {
               splitSide: "after",
             });
           }}
-          onDuplicate={(repoPath) => {
-            void spawnSession(repoPath);
+          onDuplicate={(repoPath, kind) => {
+            void spawnSession(repoPath, kind);
+          }}
+          onFork={(parent, kind, parentAgentId, isolated) => {
+            void forkSession(parent, kind, parentAgentId, isolated);
           }}
         />
       ) : null}
@@ -306,7 +371,13 @@ interface TabStripProps {
   ) => void;
   onNewTab: () => void;
   onSplitTab: (sessionId: string, direction: Direction) => void;
-  onDuplicate: (repoPath: string) => void;
+  onDuplicate: (repoPath: string, kind: SessionKind) => void;
+  onFork: (
+    parent: Session,
+    kind: "claude" | "codex",
+    parentAgentId: string,
+    isolated: boolean,
+  ) => void;
 }
 
 function TabStrip({
@@ -319,6 +390,7 @@ function TabStrip({
   onNewTab,
   onSplitTab,
   onDuplicate,
+  onFork,
 }: TabStripProps) {
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
@@ -389,7 +461,10 @@ function TabStrip({
             for (const t of tabs) onClose(t.id);
           }}
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
-          onDuplicate={() => onDuplicate(tab.repo_path)}
+          onDuplicate={() => onDuplicate(tab.repo_path, tab.kind)}
+          onFork={(kind, parentAgentId, isolated) =>
+            onFork(tab, kind, parentAgentId, isolated)
+          }
           siblingCount={tabs.length}
           registerRef={(el) => {
             if (el) tabRefs.current.set(tab.id, el);
@@ -429,6 +504,11 @@ interface TabItemProps {
   onCloseAll: () => void;
   onSplitTab: (direction: Direction) => void;
   onDuplicate: () => void;
+  onFork: (
+    kind: "claude" | "codex",
+    parentAgentId: string,
+    isolated: boolean,
+  ) => void;
   siblingCount: number;
   registerRef: (el: HTMLDivElement | null) => void;
 }
@@ -444,10 +524,12 @@ function TabItem({
   onCloseAll,
   onSplitTab,
   onDuplicate,
+  onFork,
   siblingCount,
   registerRef,
 }: TabItemProps) {
   const renameSession = useAppStore((s) => s.renameSession);
+  const liveInWorktree = useAppStore((s) => s.liveInWorktree[tab.id]);
   // Subscribe to the editor command so the menu's enabled/disabled state
   // updates immediately when the user configures an editor in Settings.
   const editorCommand = useSettings(
@@ -456,6 +538,68 @@ function TabItem({
   const editorConfigured = editorCommand.trim().length > 0;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
+  // Per-session agent detection result, refreshed each time the context
+  // menu opens. Null while loading; the menu rebuilds when this resolves
+  // so the Fork item gets the right label / enabled state.
+  const [agent, setAgent] = useState<{
+    claude: string | null;
+    codex: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    setAgent(null);
+    let cancelled = false;
+    api
+      .detectSessionAgent(tab.id)
+      .then((res) => {
+        if (!cancelled) setAgent(res);
+      })
+      .catch((err) => {
+        console.error("[Pane.Fork] detect failed", { sessionId: tab.id, err });
+        if (!cancelled) setAgent({ claude: null, codex: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [menu, tab.id]);
+
+  const forkItems: ContextMenuItem[] = (() => {
+    if (!agent) return [];
+    const items: ContextMenuItem[] = [];
+    const both = agent.claude && agent.codex;
+    if (agent.claude) {
+      items.push({
+        label: both ? "Fork Claude Session" : "Fork Session",
+        icon: <GitFork size={12} />,
+        onClick: () => onFork("claude", agent.claude!, false),
+      });
+      items.push({
+        label: both
+          ? "Fork Claude in New Worktree"
+          : "Fork in New Worktree",
+        icon: <GitBranch size={12} />,
+        onClick: () => onFork("claude", agent.claude!, true),
+      });
+    }
+    if (agent.codex) {
+      items.push({
+        label: both ? "Fork Codex Session" : "Fork Session",
+        icon: <GitFork size={12} />,
+        onClick: () => onFork("codex", agent.codex!, false),
+      });
+      items.push({
+        label: both
+          ? "Fork Codex in New Worktree"
+          : "Fork in New Worktree",
+        icon: <GitBranch size={12} />,
+        onClick: () => onFork("codex", agent.codex!, true),
+      });
+    }
+    return items.length > 0
+      ? [...items, { type: "separator" } as ContextMenuItem]
+      : [];
+  })();
 
   const menuItems: ContextMenuItem[] = [
     {
@@ -469,6 +613,7 @@ function TabItem({
       onClick: onDuplicate,
     },
     { type: "separator" },
+    ...forkItems,
     {
       label: "Split Right",
       icon: <SplitSquareHorizontal size={12} />,
@@ -510,6 +655,7 @@ function TabItem({
         });
       },
     },
+    { type: "separator" },
     {
       label: "Copy Worktree Path",
       icon: <Copy size={12} />,
@@ -547,11 +693,13 @@ function TabItem({
     },
     {
       label: "Close Others",
+      icon: <CircleX size={12} />,
       onClick: onCloseOthers,
       disabled: siblingCount <= 1,
     },
     {
       label: "Close All",
+      icon: <SquareX size={12} />,
       onClick: onCloseAll,
     },
   ];
@@ -626,11 +774,11 @@ function TabItem({
             {tab.name}
           </span>
         )}
-        {tab.isolated ? (
+        {(liveInWorktree ?? (tab.isolated || tab.in_worktree)) ? (
           <GitBranch
             size={10}
             className="pointer-events-none text-fg-muted"
-            aria-label="isolated"
+            aria-label="worktree"
           />
         ) : null}
         <button
@@ -747,6 +895,7 @@ function buildPaneMenuItems({
             );
           },
         },
+        { type: "separator" },
         {
           label: "Copy Worktree Path",
           icon: <Copy size={12} />,
