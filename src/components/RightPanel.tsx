@@ -1148,6 +1148,7 @@ function usePrRowActions(
                   icon: <ExternalLink size={12} />,
                   onClick: () => void openPrInBrowser(menu.pr),
                 },
+                { type: "separator" },
                 {
                   label: "Copy URL",
                   icon: <Copy size={12} />,
