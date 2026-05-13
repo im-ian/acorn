@@ -1,3 +1,4 @@
+import { type ReactNode } from "react";
 import { Panel, PanelGroup } from "react-resizable-panels";
 import { DiffSplitView } from "./DiffSplitView";
 import { ResizeHandle } from "./ResizeHandle";
@@ -8,7 +9,9 @@ import { Markdown, Modal, ModalHeader } from "./ui";
 interface DiffViewerModalProps {
   payload: DiffPayload | null;
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
+  /** Right-side header actions (e.g. Copy SHA, Open on GitHub). */
+  headerActions?: ReactNode;
   /**
    * Commit message body to show above the diff (renders markdown including
    * inline images). Hidden entirely when empty / undefined — the diff then
@@ -28,6 +31,7 @@ export function DiffViewerModal({
   payload,
   title,
   subtitle,
+  headerActions,
   body,
   cwd,
   onClose,
@@ -50,7 +54,12 @@ export function DiffViewerModal({
     >
       {payload ? (
         <>
-          <ModalHeader title={title} subtitle={subtitle} onClose={onClose} />
+          <ModalHeader
+            title={title}
+            subtitle={subtitle}
+            actions={headerActions}
+            onClose={onClose}
+          />
           <div className="min-h-0 flex-1 overflow-hidden">
             {hasBody ? (
               <PanelGroup

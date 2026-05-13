@@ -926,6 +926,107 @@ pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<Di
     }
 }
 
+/// Map of git OID → GitHub login for commits in a repo. Resolves the
+/// missing chunk in one batched GraphQL call against `repository.object`
+/// nodes, then caches `(slug, sha) → Option<login>` so subsequent calls
+/// (re-paging, modal re-opens) are free.
+///
+/// `None` in the returned map means the commit exists on GitHub but its
+/// author email didn't resolve to a user account; missing keys mean we
+/// couldn't reach GitHub at all (no gh account with access, network
+/// failure, etc.) and the caller should not display an avatar.
+pub fn resolve_commit_logins(
+    repo_path: &Path,
+    shas: Vec<String>,
+) -> AppResult<HashMap<String, Option<String>>> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(HashMap::new());
+    };
+
+    let cache = commit_login_cache();
+    let mut result: HashMap<String, Option<String>> = HashMap::new();
+    let mut needed: Vec<String> = Vec::new();
+    {
+        let lock = cache
+            .lock()
+            .map_err(|_| AppError::Other("commit-login cache poisoned".into()))?;
+        for sha in &shas {
+            let key = (slug.clone(), sha.clone());
+            if let Some(login) = lock.get(&key) {
+                result.insert(sha.clone(), login.clone());
+            } else {
+                needed.push(sha.clone());
+            }
+        }
+    }
+    if needed.is_empty() {
+        return Ok(result);
+    }
+
+    let (owner, name) = slug
+        .split_once('/')
+        .ok_or_else(|| AppError::Other(format!("invalid slug: {slug}")))?;
+    let mut query = String::from("query{repository(owner:\"");
+    query.push_str(owner);
+    query.push_str("\",name:\"");
+    query.push_str(name);
+    query.push_str("\"){");
+    for (i, sha) in needed.iter().enumerate() {
+        query.push_str(&format!(
+            "c{i}:object(oid:\"{sha}\"){{...on Commit{{author{{user{{login}}}}}}}}",
+        ));
+    }
+    query.push_str("}}");
+
+    match try_with_account(repo_path, &slug, |token| {
+        let output = cli_resolver::run("gh", |cmd| {
+            cmd.env("GH_TOKEN", token)
+                .env("GH_HOST", GH_HOST)
+                .args(["api", "graphql", "-f", &format!("query={query}")]);
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(AppError::Other(if stderr.is_empty() {
+                format!("gh graphql exited with {}", output.status)
+            } else {
+                stderr
+            }));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|e| AppError::Other(format!("gh graphql parse: {e}")))?;
+        let mut out: HashMap<String, Option<String>> = HashMap::new();
+        if let Some(repo) = v.pointer("/data/repository").and_then(|x| x.as_object()) {
+            for (i, sha) in needed.iter().enumerate() {
+                let key = format!("c{i}");
+                let login = repo
+                    .get(&key)
+                    .and_then(|c| c.pointer("/author/user/login"))
+                    .and_then(|l| l.as_str())
+                    .map(|s| s.to_string());
+                out.insert(sha.clone(), login);
+            }
+        }
+        Ok(out)
+    })? {
+        AccountOutcome::Ok { value, .. } => {
+            if let Ok(mut lock) = cache.lock() {
+                for (sha, login) in value.iter() {
+                    lock.insert((slug.clone(), sha.clone()), login.clone());
+                }
+            }
+            result.extend(value);
+            Ok(result)
+        }
+        AccountOutcome::NoAccess { .. } => Ok(result),
+    }
+}
+
+fn commit_login_cache() -> &'static Mutex<HashMap<(String, String), Option<String>>> {
+    use std::sync::OnceLock;
+    static CELL: OnceLock<Mutex<HashMap<(String, String), Option<String>>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// For every image file in `payload`, fetch the actual blob bytes from
 /// GitHub at `sha` (new side) and `sha^` (old side) and encode them as
 /// `data:` URIs. Misses (deleted file → no `new_path`, parent fetch

@@ -10,6 +10,9 @@ pub struct CommitInfo {
     pub sha: String,
     pub short_sha: String,
     pub author: String,
+    /// Git author email. Surfaced so the UI can resolve a GitHub avatar
+    /// (e.g. parse the `users.noreply.github.com` pattern for a login).
+    pub author_email: String,
     pub timestamp: i64,
     pub summary: String,
     /// Commit message body — everything after the first-line headline. Empty
@@ -191,6 +194,7 @@ pub fn list_commits(
             sha: oid.to_string(),
             short_sha: oid.to_string().chars().take(7).collect(),
             author: author.name().unwrap_or("?").to_string(),
+            author_email: author.email().unwrap_or("").to_string(),
             timestamp: commit.time().seconds(),
             summary: commit.summary().unwrap_or("").to_string(),
             body: commit.body().unwrap_or("").to_string(),
@@ -451,3 +455,4 @@ fn image_data_uri_workdir(
     let bytes = std::fs::read(abs).ok()?;
     Some(encode_data_uri(&bytes, path))
 }
+

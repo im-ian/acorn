@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Copy,
   ExternalLink,
   GitCommit,
   GitMerge,
@@ -33,7 +34,7 @@ import type {
   PullRequestDetailListing,
   PullRequestReview,
 } from "../lib/types";
-import { AuthorAvatar } from "./AuthorAvatar";
+import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
@@ -1006,65 +1007,6 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
   );
 }
 
-/**
- * Avatar + login pair with a right-click context menu offering "Open
- * GitHub profile". Used in the modal header and in each conversation
- * block. Strips the `[bot]` suffix when building the profile URL so it
- * resolves for bot accounts like `dependabot[bot]`.
- */
-function AuthorTag({
-  login,
-  size = 24,
-  nameClass,
-  avatarOnly = false,
-}: {
-  login: string;
-  size?: number;
-  nameClass?: string;
-  /** When true, render only the avatar (no inline username text). */
-  avatarOnly?: boolean;
-}) {
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const slug = login.replace(/\[bot\]$/, "");
-  const profileUrl = slug ? `https://github.com/${slug}` : null;
-
-  const items: ContextMenuItem[] = profileUrl
-    ? [
-        {
-          label: "Open GitHub profile",
-          icon: <ExternalLink size={12} />,
-          onClick: () => void openUrl(profileUrl),
-        },
-      ]
-    : [];
-
-  return (
-    <>
-      <span
-        onContextMenu={(e) => {
-          if (!profileUrl) return;
-          e.preventDefault();
-          e.stopPropagation();
-          setMenu({ x: e.clientX, y: e.clientY });
-        }}
-        className="inline-flex shrink-0 items-center gap-1.5 align-middle"
-      >
-        <AuthorAvatar login={login} size={size} />
-        {avatarOnly ? null : (
-          <span className={cn("font-mono text-fg", nameClass)}>{login}</span>
-        )}
-      </span>
-      <ContextMenu
-        open={menu !== null}
-        x={menu?.x ?? 0}
-        y={menu?.y ?? 0}
-        items={items}
-        onClose={() => setMenu(null)}
-      />
-    </>
-  );
-}
-
 function ReviewStateBadge({ state }: { state: string }) {
   const upper = state.toUpperCase();
   const tone =
@@ -1140,6 +1082,7 @@ function CommitsPane({
               <CommitListItem
                 key={c.oid}
                 commit={c}
+                prUrl={prUrl}
                 selected={c.oid === selectedOid}
                 onSelect={() => setSelectedOid(c.oid)}
               />
@@ -1166,19 +1109,51 @@ function CommitsPane({
 
 function CommitListItem({
   commit,
+  prUrl,
   selected,
   onSelect,
 }: {
   commit: PullRequestCommit;
+  prUrl: string;
   selected: boolean;
   onSelect: () => void;
 }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const primaryAuthor = commit.authors[0];
+  const commitUrl = buildCommitUrl(prUrl, commit.oid);
+  const profileItems = buildProfileMenuItems(primaryAuthor?.login);
+
+  const items: ContextMenuItem[] = [
+    ...(commitUrl
+      ? [
+          {
+            label: "View on GitHub",
+            icon: <ExternalLink size={12} />,
+            onClick: () => void openUrl(commitUrl),
+          },
+        ]
+      : []),
+    ...profileItems,
+    ...((commitUrl || profileItems.length > 0)
+      ? [{ type: "separator" as const }]
+      : []),
+    {
+      label: "Copy SHA",
+      icon: <Copy size={12} />,
+      onClick: () => void navigator.clipboard.writeText(commit.oid),
+    },
+  ];
+
   return (
     <li>
       <button
         type="button"
         onClick={onSelect}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
         className={cn(
           "block w-full border-b border-border/40 px-3 py-2 text-left transition",
           selected
@@ -1192,7 +1167,8 @@ function CommitListItem({
         <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-fg-muted">
           {primaryAuthor ? (
             <AuthorTag
-              login={primaryAuthor.login ?? primaryAuthor.name ?? "unknown"}
+              login={primaryAuthor.login}
+              fallbackName={primaryAuthor.name || "unknown"}
               size={14}
               nameClass="text-[10.5px] text-fg-muted"
             />
@@ -1203,6 +1179,13 @@ function CommitListItem({
           </span>
         </div>
       </button>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={items}
+        onClose={() => setMenu(null)}
+      />
     </li>
   );
 }
@@ -1288,7 +1271,8 @@ function CommitDetailView({
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
             {primaryAuthor ? (
               <AuthorTag
-                login={primaryAuthor.login ?? primaryAuthor.name ?? "unknown"}
+                login={primaryAuthor.login}
+                fallbackName={primaryAuthor.name || "unknown"}
                 size={16}
                 nameClass="text-[11px] text-fg-muted"
               />

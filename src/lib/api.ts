@@ -123,6 +123,20 @@ export const api = {
       sha,
     });
   },
+  /**
+   * Batch-resolve git OIDs → GitHub login (when GitHub knows about them).
+   * Missing keys mean we couldn't reach GitHub; `null` values mean the
+   * commit exists but its author doesn't map to a GitHub account.
+   */
+  resolveCommitLogins(
+    repoPath: string,
+    shas: string[],
+  ): Promise<Record<string, string | null>> {
+    return invoke<Record<string, string | null>>("resolve_commit_logins", {
+      repoPath,
+      shas,
+    });
+  },
   mergePullRequest(
     repoPath: string,
     number: number,

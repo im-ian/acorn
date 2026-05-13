@@ -33,6 +33,7 @@ export const tauriMockSource = `
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
     if (cmd === 'read_session_todos') return Promise.resolve([]);
     if (cmd === 'list_commits') return Promise.resolve([]);
+    if (cmd === 'resolve_commit_logins') return Promise.resolve({});
     if (cmd === 'list_staged') return Promise.resolve([]);
     if (cmd === 'list_pull_requests') {
       return Promise.resolve({ items: [], account: null, error: null });

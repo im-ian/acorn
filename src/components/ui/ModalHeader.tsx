@@ -5,7 +5,7 @@ import { type ModalVariant } from "./Modal";
 
 interface ModalHeaderProps {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   icon?: ReactNode;
   /** Rendered before the close button. Use for action buttons (e.g. external link). */
   actions?: ReactNode;
@@ -41,9 +41,7 @@ export function ModalHeader({
             {title}
           </h3>
           {subtitle ? (
-            <p className="truncate font-mono text-xs text-fg-muted">
-              {subtitle}
-            </p>
+            <div className="truncate text-xs text-fg-muted">{subtitle}</div>
           ) : null}
         </div>
       </div>
