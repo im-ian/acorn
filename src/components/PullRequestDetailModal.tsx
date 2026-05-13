@@ -175,8 +175,6 @@ export function PullRequestDetailModal({
         .updatePullRequestBody(open.repoPath, open.number, next)
         .then(() => {
           if (seq !== bodyWriteSeqRef.current) return;
-          // Fold the canonical state into the override silently in the
-          // background — no spinner flash, no flicker if the body is unchanged.
           setReloadKey((k) => k + 1);
         })
         .catch((e) => {

@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -30,6 +30,12 @@ const sanitizeSchema = {
       "target",
       "rel",
     ],
+    input: [
+      ...(defaultSchema.attributes?.input ?? []),
+      // Stamped by `rehypeTaskIndex` below so the React input component can
+      // map a click back to its source-order checkbox.
+      "dataTaskIndex",
+    ],
   },
   tagNames: [
     ...(defaultSchema.tagNames ?? []),
@@ -37,6 +43,35 @@ const sanitizeSchema = {
     "summary",
   ],
 };
+
+// Walks the HAST tree once (outside React's render cycle, so immune to
+// StrictMode double-invocation) and stamps each task-list checkbox input
+// with a `data-task-index` attribute reflecting its source-order position.
+// Runs after `rehypeRaw` (whose tree-rebuild strips positions) and before
+// `rehypeSanitize`, which is configured above to allow the data attr.
+function rehypeTaskIndex() {
+  return (tree: { children?: unknown[]; [k: string]: unknown }) => {
+    let i = 0;
+    const walk = (node: unknown) => {
+      if (!node || typeof node !== "object") return;
+      const n = node as {
+        type?: string;
+        tagName?: string;
+        properties?: Record<string, unknown>;
+        children?: unknown[];
+      };
+      if (
+        n.type === "element" &&
+        n.tagName === "input" &&
+        n.properties?.type === "checkbox"
+      ) {
+        n.properties = { ...n.properties, dataTaskIndex: i++ };
+      }
+      n.children?.forEach(walk);
+    };
+    walk(tree);
+  };
+}
 
 interface MarkdownProps {
   content: string;
@@ -196,13 +231,6 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
     { src: string; alt?: string } | null
   >(null);
 
-  // ReactMarkdown walks the tree in source order, so a per-render counter
-  // gives every checkbox a stable zero-based index that lines up with the
-  // Nth task marker in the markdown source. Reset on each render so we
-  // don't accumulate across mounts.
-  const taskCounterRef = useRef(0);
-  taskCounterRef.current = 0;
-
   const components = useMemo<Components>(
     () => ({
       ...baseComponents,
@@ -223,7 +251,8 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
           />
         );
       },
-      input({ type, checked, disabled }) {
+      input(props) {
+        const { type, checked, disabled } = props;
         if (type !== "checkbox") return null;
         if (!onTaskToggle) {
           return (
@@ -236,13 +265,26 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
             />
           );
         }
-        const index = taskCounterRef.current;
-        taskCounterRef.current = index + 1;
+        // `rehypeTaskIndex` stamps this on each checkbox input during the
+        // HAST tree walk — a single-pass numbering that survives StrictMode's
+        // double-invocation of the React renderer.
+        const indexRaw = (props as { "data-task-index"?: unknown })[
+          "data-task-index"
+        ];
+        const index =
+          typeof indexRaw === "number"
+            ? indexRaw
+            : typeof indexRaw === "string"
+              ? Number(indexRaw)
+              : -1;
         return (
           <input
             type="checkbox"
             checked={!!checked}
-            onChange={(e) => onTaskToggle(index, e.currentTarget.checked)}
+            onChange={(e) => {
+              if (!Number.isFinite(index) || index < 0) return;
+              onTaskToggle(index, e.currentTarget.checked);
+            }}
             className="mr-1 cursor-pointer align-middle accent-accent"
           />
         );
@@ -256,7 +298,11 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
       <div className={cn("text-[11.5px] leading-relaxed text-fg", className)}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
+          rehypePlugins={[
+            rehypeRaw,
+            rehypeTaskIndex,
+            [rehypeSanitize, sanitizeSchema],
+          ]}
           components={components}
         >
           {content}
