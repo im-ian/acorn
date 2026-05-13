@@ -1069,6 +1069,20 @@ export function Terminal({
     };
   }, [sessionId, cwd]);
 
+  // Steal keyboard focus for newly created sessions so the user can type
+  // immediately after Cmd+T (or any other creation path). Store dispatches
+  // `acorn:focus-session` after rAF so the slot has reattached to its pane
+  // body before we call `term.focus()`.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      termRef.current?.focus();
+    };
+    window.addEventListener("acorn:focus-session", handler);
+    return () => window.removeEventListener("acorn:focus-session", handler);
+  }, [sessionId]);
+
   // When this terminal is hidden behind another tab in the same pane and
   // then made visible again, the DOM renderer may not have repainted while
   // CSS visibility was `hidden`. Force a fit + full-buffer refresh so the
