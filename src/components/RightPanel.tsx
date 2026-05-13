@@ -35,6 +35,7 @@ import type {
   StagedFile,
   TodoItem,
 } from "../lib/types";
+import { AuthorAvatar } from "./AuthorAvatar";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
@@ -1234,6 +1235,9 @@ function PullRequestsTab({
   const refreshIntervalMs = useSettings(
     (s) => s.settings.pullRequests.refreshIntervalMs,
   );
+  const showAvatars = useSettings(
+    (s) => s.settings.pullRequests.showAvatars,
+  );
   const [stateFilter, setStateFilter] = useState<PrStateFilter>(defaultPrState);
   const [listing, setListing] = useState<PullRequestListing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1383,6 +1387,7 @@ function PullRequestsTab({
               <PrRow
                 key={pr.number}
                 pr={pr}
+                showAvatar={showAvatars}
                 onOpen={() => onOpenDetail(pr.number)}
                 onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />
@@ -1529,6 +1534,7 @@ function PrRow({
   onOpen,
   onContextMenu,
   surface = "panel",
+  showAvatar = false,
 }: {
   pr: PullRequestInfo;
   onOpen: () => void;
@@ -1539,28 +1545,19 @@ function PrRow({
    * needs a different hover color to actually feel interactive.
    */
   surface?: "panel" | "dialog";
+  /**
+   * Render the author's GitHub avatar to the left of the row. Bumps the
+   * row's vertical footprint slightly in exchange for at-a-glance author
+   * recognition. Controlled by the `pullRequests.showAvatars` setting.
+   */
+  showAvatar?: boolean;
 }) {
   const hoverBg =
     surface === "dialog"
       ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
       : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
-  return (
-    <li
-      role="button"
-      tabIndex={0}
-      onDoubleClick={onOpen}
-      onContextMenu={onContextMenu}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={cn(
-        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
-        hoverBg,
-      )}
-    >
+  const content = (
+    <>
       <span className="flex w-full min-w-0 items-center gap-2">
         <span className="shrink-0 font-mono text-fg-muted">#{pr.number}</span>
         <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
@@ -1602,6 +1599,36 @@ function PrRow({
           </span>
         </Tooltip>
       </span>
+    </>
+  );
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      onDoubleClick={onOpen}
+      onContextMenu={onContextMenu}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className={cn(
+        "w-full border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
+        showAvatar ? "flex items-center gap-2.5" : "flex flex-col items-start gap-0.5",
+        hoverBg,
+      )}
+    >
+      {showAvatar ? (
+        <>
+          <AuthorAvatar login={pr.author} size={28} />
+          <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+            {content}
+          </span>
+        </>
+      ) : (
+        content
+      )}
     </li>
   );
 }
@@ -1635,6 +1662,9 @@ function PullRequestSearchModal({
   onOpenDetail: (number: number) => void;
 }) {
   const repoPath = open?.repoPath ?? null;
+  const showAvatars = useSettings(
+    (s) => s.settings.pullRequests.showAvatars,
+  );
   const [rawQuery, setRawQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("all");
@@ -1803,6 +1833,7 @@ function PullRequestSearchModal({
                 key={pr.number}
                 pr={pr}
                 surface="dialog"
+                showAvatar={showAvatars}
                 onOpen={() => onOpenDetail(pr.number)}
                 onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />

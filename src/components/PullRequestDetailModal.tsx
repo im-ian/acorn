@@ -28,6 +28,7 @@ import type {
   PullRequestDetailListing,
   PullRequestReview,
 } from "../lib/types";
+import { AuthorAvatar } from "./AuthorAvatar";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
@@ -912,41 +913,6 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
         </p>
       )}
     </li>
-  );
-}
-
-/**
- * Inline 18px GitHub avatar. Uses the public `github.com/{login}.png`
- * endpoint — no API token needed and it works for `[bot]` accounts when
- * the `[bot]` suffix is stripped. Falls back invisibly via `alt=""` on
- * load failure so the timeline stays clean.
- */
-function AuthorAvatar({
-  login,
-  size = 24,
-  className,
-}: {
-  login: string;
-  size?: number;
-  className?: string;
-}) {
-  const slug = login.replace(/\[bot\]$/, "");
-  if (!slug) return null;
-  const pixelSize = Math.max(40, size * 2);
-  return (
-    <img
-      src={`https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`}
-      alt=""
-      title={login}
-      width={size}
-      height={size}
-      loading="lazy"
-      style={{ width: size, height: size }}
-      className={cn(
-        "shrink-0 rounded-full bg-bg-elevated align-middle",
-        className,
-      )}
-    />
   );
 }
 
