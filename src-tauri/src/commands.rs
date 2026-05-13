@@ -5,6 +5,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
+use crate::agent_shim;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
@@ -607,11 +608,11 @@ pub fn update_session_worktree(
 #[derive(Serialize, Default)]
 pub struct AgentDetection {
     /// Parent claude session id when a claude transcript is present at
-    /// `~/.claude/projects/<slug>/<session-id>.jsonl`. Today this equals the
-    /// Acorn session UUID (claude shim runs `--session-id $ACORN_RESUME_TOKEN`
-    /// = Acorn UUID), so the parent id we pass to `claude --resume` is just
-    /// the Acorn session id. Kept as a separate field so the contract stays
-    /// stable if the shim ever stops reusing the Acorn UUID.
+    /// `~/.claude/projects/<slug>/<uuid>.jsonl`. This is whatever UUID
+    /// claude minted for its most recent run in this Acorn session —
+    /// observed live by `transcript_watcher` and mirrored to
+    /// `<state_dir>/claude.id` by the shim. It is *not* guaranteed to
+    /// equal the Acorn session UUID.
     pub claude: Option<String>,
     /// Codex session UUID captured by the codex shim in
     /// `<state_dir>/codex.id` after the first zero-arg `codex` run.
@@ -846,14 +847,13 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
-    // The Acorn session UUID doubles as the resume token. claude's
-    // `--session-id` names the JSONL transcript at
-    // `~/.claude/projects/<repo-slug>/<id>.jsonl`, and
-    // `session_status::detect` looks the file up by Acorn's session
-    // id verbatim — minting a separate UUID would break that lookup
-    // and leave status detection on the descendant-process fallback.
+    // `ACORN_RESUME_TOKEN` carries the Acorn session UUID. The shim no
+    // longer reads it (auto-resume is gated behind the focus-time
+    // modal), but the env var is left in place so user scripts that
+    // address the running Acorn session by UUID keep working.
     // `ACORN_AGENT_STATE_DIR` is the per-session scratch directory
-    // the codex shim writes its captured `codex.id` into.
+    // both the claude and codex shims write their captured ids into
+    // (`claude.id`, `codex.id`) for the modal to read.
     let resume_token = id.to_string();
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
@@ -1678,6 +1678,87 @@ pub(crate) fn create_unique_worktree(
         candidate = format!("{base}-{n}");
         n += 1;
     }
+}
+
+/// Surface the "이전 Claude 대화 있음" candidate for a session — used by
+/// the frontend modal that pops on session focus. `None` means there is
+/// nothing the user needs to decide about (no claude has run, or the
+/// last id is already acknowledged, or claude is currently active in
+/// this session's PTY tree and the modal would be redundant).
+#[tauri::command]
+pub fn get_claude_resume_candidate(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<agent_shim::ClaudeResumeCandidate>> {
+    let id = parse_id(&session_id)?;
+    if claude_is_running_in_session(&state, &id) {
+        return Ok(None);
+    }
+    agent_shim::claude_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Mark the current `claude.id` as seen so the modal does not pop again
+/// for the same UUID. Invoked by every modal-button handler (이어하기 /
+/// ID 복사 / 취소) — the only thing that revives the candidate is a
+/// *new* JSONL appearing under a different UUID.
+#[tauri::command]
+pub fn acknowledge_claude_resume(session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    agent_shim::acknowledge_claude_resume(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// `true` when a `claude` process is alive anywhere in the session's
+/// PTY descendant tree. Cheap process-table scan — fine on the focus
+/// path which fires at most a few times per second.
+fn claude_is_running_in_session(state: &AppState, session_id: &Uuid) -> bool {
+    let Some(root) = state
+        .stream_registry
+        .pid(session_id)
+        .or_else(|| state.pty.child_pid(session_id))
+    else {
+        return false;
+    };
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new(),
+    );
+    let mut frontier: Vec<Pid> = vec![Pid::from_u32(root)];
+    let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();
+    while let Some(pid) = frontier.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        if let Some(proc) = sys.process(pid) {
+            if is_claude_process(proc) {
+                return true;
+            }
+        }
+        for (child_pid, child) in sys.processes() {
+            if child.parent() == Some(pid) && !visited.contains(child_pid) {
+                frontier.push(*child_pid);
+            }
+        }
+    }
+    false
+}
+
+/// Match `claude` by argv[0] basename. The shim itself is also named
+/// `claude`, but it `exec`s the real binary on every passthrough path
+/// and runs real claude as a child on the snapshot path — both leave a
+/// process called `claude` in the descendant tree when the user is
+/// actively chatting, so basename matching is enough.
+fn is_claude_process(proc: &sysinfo::Process) -> bool {
+    let argv = proc.cmd();
+    let Some(first) = argv.first() else {
+        return false;
+    };
+    let s = first.to_string_lossy();
+    let base = s.rsplit('/').next().unwrap_or(s.as_ref());
+    base == "claude"
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {
