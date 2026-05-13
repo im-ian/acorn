@@ -14,6 +14,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
+import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
   useSettings,
@@ -35,6 +36,7 @@ interface TerminalProps {
    * activate triggers a `fit()` + `refresh()` cycle so the buffer redraws.
    */
   isActive?: boolean;
+  isFocusedPane?: boolean;
 }
 
 interface PtyOutputPayload {
@@ -210,6 +212,7 @@ export function Terminal({
   sessionId,
   cwd,
   isActive = true,
+  isFocusedPane = true,
 }: TerminalProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -232,7 +235,7 @@ export function Terminal({
       fontWeight: initialSettings.terminal.fontWeight,
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
-      cursorBlink: true,
+      cursorBlink: isFocusedPane,
       allowProposedApi: true,
       scrollback: 5000,
       // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
@@ -458,14 +461,28 @@ export function Terminal({
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
 
-    const sendToPty = (data: string) => {
+    const writeToPty = (targetSessionId: string, data: string) => {
       if (data.length === 0) return;
       invoke("pty_write", {
-        sessionId,
+        sessionId: targetSessionId,
         data: encodeStringToBase64(data),
       }).catch((err: unknown) => {
         console.error("[Terminal] pty_write failed", err);
       });
+    };
+    const sendToPty = (data: string) => {
+      writeToPty(sessionId, data);
+    };
+    const sendUserInputToPty = (data: string) => {
+      if (data.length === 0) return;
+      const state = useAppStore.getState();
+      const targets = state.multiInputEnabled
+        ? visibleMultiInputSessionIds(state.panes)
+        : [sessionId];
+      const targetIds = targets.length > 0 ? targets : [sessionId];
+      for (const targetId of targetIds) {
+        writeToPty(targetId, data);
+      }
     };
 
     // CJK IME path. xterm.js's built-in handler only processes plain
@@ -572,7 +589,7 @@ export function Terminal({
         ? ta.value.slice(sentPrefix.length)
         : "";
       const data = tail || explicit || "";
-      if (data) sendToPty(data);
+      if (data) sendUserInputToPty(data);
       if (ta) ta.value = "";
       sentPrefix = "";
       composing = false;
@@ -642,7 +659,7 @@ export function Terminal({
           }
           const committedEnd = value.length - newCharLen;
           if (committedEnd > sentPrefix.length) {
-            sendToPty(value.slice(sentPrefix.length, committedEnd));
+            sendUserInputToPty(value.slice(sentPrefix.length, committedEnd));
             sentPrefix = value.slice(0, committedEnd);
           }
           showComposing(value.slice(sentPrefix.length));
@@ -742,7 +759,7 @@ export function Terminal({
       // Claude CLI cannot tell them apart. Send a literal LF and stop the
       // event so xterm does not emit its own \r on top.
       if (ev.key === "Enter" && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        sendToPty("\n");
+        sendUserInputToPty("\n");
         ev.preventDefault();
         ev.stopImmediatePropagation();
         return;
@@ -757,13 +774,13 @@ export function Terminal({
         !ev.shiftKey
       ) {
         if (ev.key === "ArrowLeft") {
-          sendToPty("\x01");
+          sendUserInputToPty("\x01");
           ev.preventDefault();
           ev.stopImmediatePropagation();
           return;
         }
         if (ev.key === "ArrowRight") {
-          sendToPty("\x05");
+          sendUserInputToPty("\x05");
           ev.preventDefault();
           ev.stopImmediatePropagation();
           return;
@@ -825,7 +842,7 @@ export function Terminal({
     container.addEventListener("compositionend", swallowComposition, true);
 
     const inputDisposable = term.onData((data: string) => {
-      sendToPty(data);
+      sendUserInputToPty(data);
     });
 
     // Re-anchor the composition preview to the cursor on every xterm render.
@@ -1326,6 +1343,17 @@ export function Terminal({
     };
   }, [sessionId, cwd]);
 
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.cursorBlink = isFocusedPane;
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch {
+      // ignore
+    }
+  }, [isFocusedPane]);
+
   // Steal keyboard focus for newly created sessions so the user can type
   // immediately after Cmd+T (or any other creation path). Store dispatches
   // `acorn:focus-session` after rAF so the slot has reattached to its pane
@@ -1405,7 +1433,12 @@ export function Terminal({
       }}
     >
       <div className="acorn-bg-terminal" aria-hidden="true" />
-      <div ref={containerRef} className="acorn-terminal relative z-10 h-full w-full" />
+      <div
+        ref={containerRef}
+        className={`acorn-terminal relative z-10 h-full w-full ${
+          isFocusedPane ? "" : "acorn-terminal-inactive"
+        }`}
+      />
       {/* Pinned-prompt overlay. */}
       <StickyUserPrompt sessionId={sessionId} />
     </div>

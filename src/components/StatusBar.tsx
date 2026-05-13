@@ -105,6 +105,7 @@ function GitHubMark() {
 export function StatusBar() {
   const { sessions, activeSessionId, activeProject, error, loading } =
     useAppStore();
+  const multiInputEnabled = useAppStore((s) => s.multiInputEnabled);
   const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
   const showSessionCount = useSettings(
     (s) => s.settings.statusBar.showSessionCount,
@@ -145,6 +146,16 @@ export function StatusBar() {
               <span className="text-fg-muted/50">|</span>
             ) : null}
             <span>status: {active.status}</span>
+          </>
+        ) : null}
+        {multiInputEnabled ? (
+          <>
+            {showSessionCount || (showSessionStatus && active) ? (
+              <span className="text-fg-muted/50">|</span>
+            ) : null}
+            <span className="rounded bg-accent/15 px-1.5 py-0.5 text-accent">
+              multi-input: on
+            </span>
           </>
         ) : null}
 

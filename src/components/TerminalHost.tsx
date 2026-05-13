@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
+import { isSessionInFocusedPane } from "../lib/multiInput";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
 import { Terminal } from "./Terminal";
@@ -59,6 +60,9 @@ function PortaledTerminal({ session }: { session: Session }) {
       ? state.workspaces[state.activeProject]?.layout ?? null
       : null,
   );
+  const isFocusedPane = useAppStore((state) =>
+    isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
+  );
 
   // Park the target in limbo immediately on mount so React's createPortal
   // has a connected DOM node to render into; full unmount returns it to
@@ -106,6 +110,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       sessionId={session.id}
       cwd={session.worktree_path}
       isActive={visiblePaneId !== null}
+      isFocusedPane={isFocusedPane}
     />,
     targetRef.current,
   );

@@ -14,6 +14,7 @@
 
 export type Direction = "horizontal" | "vertical";
 export type PaneId = string;
+export type PaneFocusDirection = "left" | "right" | "up" | "down";
 
 export interface PaneNode {
   kind: "pane";
@@ -49,6 +50,101 @@ export function findPaneNode(
     return layout.id === paneId ? layout : null;
   }
   return findPaneNode(layout.a, paneId) ?? findPaneNode(layout.b, paneId);
+}
+
+interface PaneBounds {
+  id: PaneId;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function collectPaneBounds(
+  layout: LayoutNode,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  out: PaneBounds[],
+): void {
+  if (layout.kind === "pane") {
+    out.push({ id: layout.id, left, top, right, bottom });
+    return;
+  }
+
+  if (layout.direction === "horizontal") {
+    const mid = (left + right) / 2;
+    collectPaneBounds(layout.a, left, top, mid, bottom, out);
+    collectPaneBounds(layout.b, mid, top, right, bottom, out);
+    return;
+  }
+
+  const mid = (top + bottom) / 2;
+  collectPaneBounds(layout.a, left, top, right, mid, out);
+  collectPaneBounds(layout.b, left, mid, right, bottom, out);
+}
+
+function overlaps(a1: number, a2: number, b1: number, b2: number): boolean {
+  return Math.max(a1, b1) < Math.min(a2, b2);
+}
+
+export function findAdjacentPaneId(
+  layout: LayoutNode,
+  fromPaneId: PaneId,
+  direction: PaneFocusDirection,
+): PaneId | null {
+  const bounds: PaneBounds[] = [];
+  collectPaneBounds(layout, 0, 0, 1, 1, bounds);
+  const current = bounds.find((b) => b.id === fromPaneId);
+  if (!current) return null;
+
+  let best: { id: PaneId; distance: number; offset: number } | null = null;
+  const currentX = (current.left + current.right) / 2;
+  const currentY = (current.top + current.bottom) / 2;
+
+  for (const candidate of bounds) {
+    if (candidate.id === current.id) continue;
+    let distance: number | null = null;
+    let offset = 0;
+
+    if (direction === "left" && candidate.right <= current.left) {
+      if (!overlaps(current.top, current.bottom, candidate.top, candidate.bottom)) {
+        continue;
+      }
+      distance = current.left - candidate.right;
+      offset = Math.abs(currentY - (candidate.top + candidate.bottom) / 2);
+    } else if (direction === "right" && candidate.left >= current.right) {
+      if (!overlaps(current.top, current.bottom, candidate.top, candidate.bottom)) {
+        continue;
+      }
+      distance = candidate.left - current.right;
+      offset = Math.abs(currentY - (candidate.top + candidate.bottom) / 2);
+    } else if (direction === "up" && candidate.bottom <= current.top) {
+      if (!overlaps(current.left, current.right, candidate.left, candidate.right)) {
+        continue;
+      }
+      distance = current.top - candidate.bottom;
+      offset = Math.abs(currentX - (candidate.left + candidate.right) / 2);
+    } else if (direction === "down" && candidate.top >= current.bottom) {
+      if (!overlaps(current.left, current.right, candidate.left, candidate.right)) {
+        continue;
+      }
+      distance = candidate.top - current.bottom;
+      offset = Math.abs(currentX - (candidate.left + candidate.right) / 2);
+    }
+
+    if (distance === null) continue;
+    if (
+      !best ||
+      distance < best.distance ||
+      (distance === best.distance && offset < best.offset)
+    ) {
+      best = { id: candidate.id, distance, offset };
+    }
+  }
+
+  return best?.id ?? null;
 }
 
 /**
