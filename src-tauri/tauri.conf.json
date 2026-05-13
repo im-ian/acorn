@@ -24,11 +24,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APPLOCALDATA/backgrounds",
-          "$APPLOCALDATA/backgrounds/*",
-          "$APPLOCALDATA/backgrounds/**/*"
-        ]
+        "scope": ["$APPLOCALDATA/backgrounds/**/*"]
       }
     }
   },

@@ -479,7 +479,9 @@ function App() {
   return (
     <div className="acorn-app-shell relative flex h-screen w-screen flex-col bg-bg text-fg">
       <div className="acorn-bg-app" aria-hidden="true" />
-      <UpdateBanner />
+      <div className="relative z-10">
+        <UpdateBanner />
+      </div>
       <ToastHost />
       <div className="relative z-10 flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
