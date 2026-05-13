@@ -1151,7 +1151,7 @@ function usePrRowActions(
                 },
                 { type: "separator" },
                 {
-                  label: "Copy reference",
+                  label: "Copy PR number",
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(`#${menu.pr.number}`),
                 },
