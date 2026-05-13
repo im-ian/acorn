@@ -258,6 +258,13 @@ pub enum ControlResult {
     },
     SessionSpawned {
         session_id: Uuid,
+        /// OS process id of the PTY child the daemon just forked.
+        /// `None` only on platforms where `portable-pty` cannot return
+        /// one (rare). Included in the response so the app does not
+        /// have to round-trip a `ListSessions` immediately after spawn
+        /// to pick up the pid for status polling.
+        #[serde(default)]
+        pid: Option<u32>,
     },
     Ack,
     Buffer {
@@ -307,6 +314,12 @@ pub struct SessionSummary {
     pub repo_path: Option<std::path::PathBuf>,
     pub branch: Option<String>,
     pub agent_kind: Option<AgentKind>,
+    /// OS process id of the immediate PTY child. `None` once the
+    /// process has exited (alive=false) or when the host could not
+    /// hand one back at spawn. The app uses this to walk descendants
+    /// for shell-mode status detection (Running / NeedsInput / Idle).
+    #[serde(default)]
+    pub pid: Option<u32>,
     /// `true` when the source of this `ListSessions` call is the same
     /// session being described — the CLI uses this to render a marker.
     #[serde(default)]

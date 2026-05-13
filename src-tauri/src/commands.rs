@@ -711,9 +711,12 @@ fn spawn_via_daemon<R: Runtime>(
     }
 
     // Fast path: daemon already owns this PTY. Acorn restart re-enters
-    // `pty_spawn` here; attach the stream and return.
+    // `pty_spawn` here; attach the stream and return. Pid comes from
+    // the daemon's session registry so status polling has a process
+    // tree to walk without an extra round-trip on every poll.
     if bridge.is_alive(id) {
-        crate::daemon_stream::attach(app.clone(), registry.clone(), id, true)
+        let pid = bridge.session_pid(id);
+        crate::daemon_stream::attach(app.clone(), registry.clone(), id, pid, true)
             .map_err(|e| format!("daemon stream attach failed: {e}"))?;
         return Ok(());
     }
@@ -723,7 +726,7 @@ fn spawn_via_daemon<R: Runtime>(
         SessionKind::Control => crate::daemon::protocol::SessionKind::Control,
     };
 
-    bridge
+    let outcome = bridge
         .spawn(
             id,
             id.to_string(),
@@ -754,7 +757,7 @@ fn spawn_via_daemon<R: Runtime>(
     }
     persist(state);
 
-    crate::daemon_stream::attach(app.clone(), registry, id, true)
+    crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, true)
         .map_err(|e| format!("daemon stream attach failed: {e}"))
 }
 
@@ -1059,10 +1062,22 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
+            // Routing-aware pid lookup. Daemon-managed sessions live
+            // in `stream_registry` (their root pid was captured from
+            // the daemon at spawn / attach); legacy in-process sessions
+            // live in `state.pty`. Each side drives its own shell-state
+            // machine because the sticky NeedsInput deadline is
+            // per-attachment, not global.
             let shell_hint = parsed_id.and_then(|uuid| {
-                let root = state.pty.child_pid(&uuid)?;
-                let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
-                state.pty.update_shell_state(&uuid, has_child_now)
+                if state.stream_registry.contains(&uuid) {
+                    let root = state.stream_registry.pid(&uuid)?;
+                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                    state.stream_registry.update_shell_state(&uuid, has_child_now)
+                } else {
+                    let root = state.pty.child_pid(&uuid)?;
+                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
+                    state.pty.update_shell_state(&uuid, has_child_now)
+                }
             });
             let status =
                 session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
@@ -1072,7 +1087,12 @@ pub async fn detect_session_statuses(
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
             let live_cwd_branch = parsed_id
-                .and_then(|uuid| state.pty.child_pid(&uuid))
+                .and_then(|uuid| {
+                    state
+                        .stream_registry
+                        .pid(&uuid)
+                        .or_else(|| state.pty.child_pid(&uuid))
+                })
                 .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
                 .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
             let branch = live_cwd_branch.or_else(|| {

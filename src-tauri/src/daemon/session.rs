@@ -56,6 +56,11 @@ pub struct DaemonSession {
     /// Scrollback ring. Shared between the PTY reader and attached
     /// streams; both sides use `Arc::clone` to avoid double-buffering.
     pub scrollback: Arc<RingBuffer>,
+    /// OS process id of the PTY child captured at spawn. Surfaced to
+    /// the app via `SessionSummary.pid` so it can walk descendants for
+    /// shell-mode status detection (Running / NeedsInput / Idle) the
+    /// same way the in-process `PtyManager` does for legacy sessions.
+    pub pid: Option<u32>,
     /// `true` while the PTY child is still alive. Flipped to `false` by
     /// the wait thread on child exit; the metadata row stays in the
     /// registry until `ForgetSession` is called (so ghost UI can render).
@@ -80,6 +85,7 @@ impl DaemonSession {
             agent_kind: None,
             agent_resume_token: None,
             scrollback: Arc::new(RingBuffer::new()),
+            pid: None,
             alive: true,
             exit_code: None,
             created_at: chrono::Utc::now(),

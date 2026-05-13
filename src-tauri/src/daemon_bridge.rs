@@ -97,6 +97,14 @@ impl From<io::Error> for BridgeError {
 
 pub type BridgeResult<T> = Result<T, BridgeError>;
 
+/// Successful spawn payload. Mirrors the daemon's
+/// `ControlResult::SessionSpawned` so callers can wire the pid into
+/// status polling without re-listing sessions.
+pub struct SpawnOutcome {
+    pub session_id: Uuid,
+    pub pid: Option<u32>,
+}
+
 /// Cached, lazily-spawned daemon connection. Held on `AppState`.
 pub struct DaemonBridge {
     enabled: AtomicBool,
@@ -292,7 +300,7 @@ impl DaemonBridge {
         branch: Option<String>,
         agent_kind: Option<AgentKind>,
         agent_resume_token: Option<String>,
-    ) -> BridgeResult<Uuid> {
+    ) -> BridgeResult<SpawnOutcome> {
         let spec = SpawnSpec {
             session_id: Some(session_id),
             name,
@@ -309,9 +317,26 @@ impl DaemonBridge {
             agent_resume_token,
         };
         match Self::unpack_error(self.call(ControlPayload::SpawnSession { spec })?)? {
-            ControlResult::SessionSpawned { session_id } => Ok(session_id),
+            ControlResult::SessionSpawned { session_id, pid } => {
+                Ok(SpawnOutcome { session_id, pid })
+            }
             other => Err(unexpected(other)),
         }
+    }
+
+    /// Look up the immediate PTY child pid for a daemon-managed session
+    /// via `ListSessions`. Returns `None` when the daemon does not know
+    /// about the session or the bridge call fails (e.g. transient
+    /// disconnect). Status polling treats `None` as "no descendant
+    /// info" and falls back to the previous status, which is the same
+    /// conservative behavior the in-process path uses when a pid is
+    /// not yet available.
+    pub fn session_pid(&self, id: Uuid) -> Option<u32> {
+        let sessions = self.list_sessions().ok()?;
+        sessions
+            .into_iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.pid)
     }
 
     pub fn send_input(&self, target: Uuid, bytes: &[u8]) -> BridgeResult<()> {

@@ -40,6 +40,14 @@ use super::session::{DaemonSession, SessionRegistry};
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const READ_BUFFER_SIZE: usize = 4096;
+
+/// Tuple returned by `PtyManager::spawn`. The pid is surfaced separately
+/// so callers (notably `server::dispatch`) can echo it in the
+/// `SessionSpawned` response without re-traversing the registry.
+pub struct SpawnedSession {
+    pub session_id: Uuid,
+    pub pid: Option<u32>,
+}
 /// Capacity of the per-session broadcast channel (raw byte chunks). Sized
 /// to absorb a multi-MB burst before slow consumers force a `RecvError::Lagged`
 /// — if a consumer lags, the daemon still has the ring buffer to backfill
@@ -92,7 +100,7 @@ impl PtyManager {
         &self,
         spec: SpawnSpec,
         registry: Arc<SessionRegistry>,
-    ) -> std::io::Result<Uuid> {
+    ) -> std::io::Result<SpawnedSession> {
         let session_id = spec.session_id.unwrap_or_else(Uuid::new_v4);
         if self.handles.contains_key(&session_id) {
             return Err(std::io::Error::new(
@@ -143,6 +151,7 @@ impl PtyManager {
             .try_clone_reader()
             .map_err(|e| std::io::Error::other(format!("try_clone_reader failed: {e}")))?;
         let killer = child.clone_killer();
+        let pid = child.process_id();
 
         let scrollback = Arc::new(RingBuffer::new());
         let (output_tx, _output_rx) = broadcast::channel::<Vec<u8>>(BROADCAST_CAPACITY);
@@ -168,6 +177,7 @@ impl PtyManager {
         session.agent_kind = spec.agent_kind;
         session.agent_resume_token = spec.agent_resume_token.clone();
         session.scrollback = Arc::clone(&scrollback);
+        session.pid = pid;
         registry.insert(session);
 
         let stop_reader = stop.clone();
@@ -187,7 +197,10 @@ impl PtyManager {
                 wait_loop(child, session_id, handles_for_wait, registry_for_wait, stop);
             })?;
 
-        Ok(session_id)
+        Ok(SpawnedSession {
+            session_id,
+            pid,
+        })
     }
 
     pub fn write(&self, id: &Uuid, data: &[u8]) -> std::io::Result<()> {

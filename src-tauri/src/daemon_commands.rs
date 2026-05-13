@@ -186,7 +186,7 @@ pub fn daemon_spawn_session(
     let id = Uuid::parse_str(&session_id).map_err(|e| format!("invalid session id: {e}"))?;
     let session_kind = parse_kind(&kind)?;
     let agent = agent_kind.as_deref().and_then(parse_agent_kind);
-    let new_id = state
+    let outcome = state
         .daemon_bridge
         .spawn(
             id,
@@ -204,7 +204,7 @@ pub fn daemon_spawn_session(
             agent_resume_token,
         )
         .map_err(|e| e.to_string())?;
-    Ok(new_id.to_string())
+    Ok(outcome.session_id.to_string())
 }
 
 #[tauri::command]

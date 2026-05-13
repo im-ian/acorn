@@ -260,12 +260,16 @@ impl Daemon {
                         repo_path: s.repo_path,
                         branch: s.branch,
                         agent_kind: s.agent_kind,
+                        pid: s.pid,
                     })
                     .collect(),
             },
             ControlPayload::SpawnSession { spec } => {
                 match self.pty.spawn(spec, self.registry.clone()) {
-                    Ok(id) => ControlResult::SessionSpawned { session_id: id },
+                    Ok(spawned) => ControlResult::SessionSpawned {
+                        session_id: spawned.session_id,
+                        pid: spawned.pid,
+                    },
                     Err(err) => ControlResult::Error {
                         code: ErrorCode::Internal,
                         message: err.to_string(),

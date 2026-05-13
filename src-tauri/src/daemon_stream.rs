@@ -17,9 +17,11 @@
 use std::io::{BufRead, BufReader, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use dashmap::DashMap;
 use interprocess::local_socket::Stream;
+use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
@@ -27,12 +29,29 @@ use uuid::Uuid;
 use crate::daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
 use crate::daemon::socket;
 
+/// Same sticky window the in-process PtyManager uses for the
+/// post-command "still waiting on you" NeedsInput cue. Mirrors
+/// `pty::NEEDS_INPUT_STICKY` so daemon-managed and in-process
+/// sessions show identical UI behavior.
+const NEEDS_INPUT_STICKY: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Per-session attachment handle. Dropping the handle does not stop the
 /// pump; call `stop()` first, otherwise the reader thread keeps draining
 /// the socket until the daemon emits an `Exit` frame or the connection
 /// closes.
 pub struct StreamAttachment {
     stop: Arc<AtomicBool>,
+    /// OS process id of the daemon-side PTY child captured at spawn /
+    /// attach. Used by status polling to walk descendants for
+    /// shell-mode classification (Running / NeedsInput / Idle).
+    pub pid: Option<u32>,
+    /// Previous "has live descendant" sample. Drives the
+    /// Running → NeedsInput transition the same way
+    /// `PtyHandle.had_child` does for in-process sessions.
+    had_child: AtomicBool,
+    /// Deadline for the sticky NeedsInput cue. Cleared by an input
+    /// write or by the next status poll past the deadline.
+    needs_input_until: Mutex<Option<Instant>>,
 }
 
 impl StreamAttachment {
@@ -69,6 +88,45 @@ impl StreamRegistry {
         }
     }
 
+    /// Look up the immediate PTY child pid for a daemon-managed
+    /// session. Mirrors `PtyManager::child_pid` so status polling can
+    /// stay routing-agnostic.
+    pub fn pid(&self, id: &Uuid) -> Option<u32> {
+        self.inner.get(id).and_then(|r| r.value().pid)
+    }
+
+    /// Drive the shell-mode state machine the same way the in-process
+    /// path does: fold a fresh `has_child_now` against the previous
+    /// observation and the sticky NeedsInput deadline. Returns `None`
+    /// when no attachment exists for `id` so the caller can treat that
+    /// as Idle.
+    pub fn update_shell_state(
+        &self,
+        id: &Uuid,
+        has_child_now: bool,
+    ) -> Option<crate::pty::ShellHint> {
+        use crate::pty::ShellHint;
+        let handle = self.inner.get(id)?.value().clone();
+        let had_child = handle.had_child.swap(has_child_now, Ordering::SeqCst);
+        let mut sticky = handle.needs_input_until.lock();
+        let hint = if has_child_now {
+            *sticky = None;
+            ShellHint::Running
+        } else if had_child {
+            *sticky = Some(Instant::now() + NEEDS_INPUT_STICKY);
+            ShellHint::NeedsInput
+        } else {
+            match *sticky {
+                Some(deadline) if Instant::now() < deadline => ShellHint::NeedsInput,
+                _ => {
+                    *sticky = None;
+                    ShellHint::Idle
+                }
+            }
+        };
+        Some(hint)
+    }
+
     fn insert(&self, id: Uuid, handle: Arc<StreamAttachment>) {
         if let Some((_, old)) = self.inner.remove(&id) {
             old.stop();
@@ -101,6 +159,7 @@ pub fn attach<R: Runtime>(
     app: AppHandle<R>,
     registry: Arc<StreamRegistry>,
     session_id: Uuid,
+    pid: Option<u32>,
     replay_scrollback: bool,
 ) -> std::io::Result<()> {
     let mut conn = socket::connect_stream()?;
@@ -135,7 +194,12 @@ pub fn attach<R: Runtime>(
     }
 
     let stop = Arc::new(AtomicBool::new(false));
-    let handle = Arc::new(StreamAttachment { stop: stop.clone() });
+    let handle = Arc::new(StreamAttachment {
+        stop: stop.clone(),
+        pid,
+        had_child: AtomicBool::new(false),
+        needs_input_until: Mutex::new(None),
+    });
     registry.insert(session_id, handle);
 
     let registry_for_thread = Arc::clone(&registry);
