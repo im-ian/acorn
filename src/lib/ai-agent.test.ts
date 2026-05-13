@@ -27,6 +27,21 @@ describe("extractPromptSnippet", () => {
     expect(extractPromptSnippet("claude")).toBeNull();
     expect(extractPromptSnippet("codex --dangerously-bypass-approvals")).toBeNull();
   });
+
+  it("ignores commands that are not known AI agents", () => {
+    expect(extractPromptSnippet("ls")).toBeNull();
+    expect(extractPromptSnippet("git status")).toBeNull();
+    expect(extractPromptSnippet("make test")).toBeNull();
+  });
+
+  it("skips value-bearing flags before collecting prompt text", () => {
+    expect(
+      extractPromptSnippet("claude --model claude-sonnet-4-5 -p fix tests"),
+    ).toBe("fix tests");
+    expect(
+      extractPromptSnippet("codex --model gpt-5.3-codex review this"),
+    ).toBe("review this");
+  });
 });
 
 describe("extractCommandAgent", () => {

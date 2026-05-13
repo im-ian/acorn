@@ -11,9 +11,11 @@ export function TopBar() {
         <span className="font-mono text-sm font-semibold tracking-tight text-fg">
           Acorn
         </span>
-        <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-normal text-accent">
-          ai-support
-        </span>
+        {import.meta.env.DEV ? (
+          <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-normal text-accent">
+            ai-support
+          </span>
+        ) : null}
       </div>
       <div className="h-4 w-px bg-border" />
       {active ? (

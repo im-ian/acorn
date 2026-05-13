@@ -13,13 +13,6 @@ const AGENT_LABEL: Record<AiAgent, string> = {
   ollama: "Ollama",
 };
 
-const AGENT_SHORT_LABEL: Record<AiAgent, string> = {
-  claude: "Cl",
-  codex: "Cx",
-  gemini: "Ge",
-  ollama: "Ol",
-};
-
 const PROMPT_MAX = 64;
 
 const STATUS_LABEL: Record<Session["status"], string> = {
@@ -39,10 +32,6 @@ const AGENT_STATUS_LABEL: Record<NonNullable<Session["agent_status"]>, string> =
 
 export function aiAgentLabel(agent: AiAgent): string {
   return AGENT_LABEL[agent];
-}
-
-export function aiAgentShortLabel(agent: AiAgent): string {
-  return AGENT_SHORT_LABEL[agent];
 }
 
 export function sessionStatusLabel(session: Session): string {
@@ -99,6 +88,13 @@ export function shouldRepairGeneratedAiSessionName(name: string): boolean {
   return !isCleanPromptSnippet(trimmed) || /\[\??\d|rgb:|\\\]1[01];/.test(trimmed);
 }
 
+export function isGeneratedAiSessionName(name: string): boolean {
+  const trimmed = name.trim();
+  return Object.values(AGENT_LABEL).some(
+    (label) => trimmed === label || trimmed.startsWith(`${label}:`),
+  );
+}
+
 export function reduceTerminalInput(
   previous: TerminalInputState,
   data: string,
@@ -146,7 +142,7 @@ export function extractPromptSnippet(input: string): string | null {
     const afterModel = tokens.length > run ? run + 1 : run;
     return joinPrompt(tokens.slice(afterModel));
   }
-  return joinPrompt(tokens);
+  return null;
 }
 
 export function extractCommandAgent(input: string): AiAgent | null {
@@ -168,9 +164,29 @@ function promptAfterFlags(
   promptFlags: Set<string>,
 ): string | null {
   const prompt: string[] = [];
+  const valueFlags = new Set([
+    "-m",
+    "--model",
+    "--system-prompt",
+    "--append-system-prompt",
+    "--cd",
+    "--cwd",
+    "--config",
+    "--profile",
+    "--sandbox",
+    "--approval-policy",
+    "--output-format",
+  ]);
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (promptFlags.has(token)) continue;
+    if (valueFlags.has(token)) {
+      i += 1;
+      continue;
+    }
+    if ([...valueFlags].some((flag) => token.startsWith(`${flag}=`))) {
+      continue;
+    }
     if (token.startsWith("-")) continue;
     prompt.push(token);
   }

@@ -5,6 +5,7 @@ import type { Project, Session, SessionKind } from "./lib/types";
 import {
   aiAgentLabel,
   buildAiSessionName,
+  isGeneratedAiSessionName,
   reduceTerminalInput,
   shouldRepairGeneratedAiSessionName,
   type TerminalInputState,
@@ -506,9 +507,14 @@ export const useAppStore = create<AppStateModel>()(
           const input = s.terminalInput[sess.id];
           const nextAgent = update.active_agent ?? input?.activeAgentHint ?? null;
           const nextAgentStatus = nextAgent ? update.agent_status ?? "open" : null;
+          const canAutoRename =
+            sess.name === sess.id ||
+            isGeneratedAiSessionName(sess.name) ||
+            shouldRepairGeneratedAiSessionName(sess.name);
           if (
             settings.sessions.autoRenameAiTabs &&
             nextAgent &&
+            canAutoRename &&
             (sess.active_agent !== nextAgent ||
               (input?.lastSubmitted && sess.name === aiAgentLabel(nextAgent)) ||
               shouldRepairGeneratedAiSessionName(sess.name))

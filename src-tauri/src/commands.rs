@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -1481,12 +1481,16 @@ pub async fn detect_session_statuses(
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
-            let tail_text = parsed_id.and_then(|uuid| {
-                let (tail, _) = state.pty.tail_bytes(&uuid, 64 * 1024)?;
-                Some(String::from_utf8_lossy(&tail).into_owned())
-            });
             let detected_agent =
                 root_pid.and_then(|pid| detect_ai_agent(&sys, &children, Pid::from_u32(pid)));
+            let tail_text = if detected_agent.is_none() {
+                parsed_id.and_then(|uuid| {
+                    let (tail, _) = state.pty.tail_bytes(&uuid, 64 * 1024)?;
+                    Some(String::from_utf8_lossy(&tail).into_owned())
+                })
+            } else {
+                None
+            };
             let active_agent = detected_agent
                 .map(|d| d.agent)
                 .or_else(|| tail_text.as_deref().and_then(classify_ai_agent_tail));
@@ -1557,7 +1561,11 @@ fn detect_ai_agent(
     root: Pid,
 ) -> Option<DetectedAiAgent> {
     let mut frontier = children.get(&root).cloned().unwrap_or_default();
+    let mut seen = HashSet::new();
     while let Some(pid) = frontier.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
         if let Some(proc) = sys.process(pid) {
             let name = process_display_name(proc);
             let command_line = process_command_line(proc);
@@ -1627,14 +1635,8 @@ fn classify_ai_agent_tail(tail: &str) -> Option<AiAgent> {
     if lower.contains("gemini cli") || lower.contains("type your message or @path/to/file") {
         return Some(AiAgent::Gemini);
     }
-    if lower.contains("claude code") {
-        return Some(AiAgent::Claude);
-    }
-    if lower.contains("codex") && lower.contains("openai") {
+    if lower.contains("codex") && lower.contains("openai") && lower.contains("type your task") {
         return Some(AiAgent::Codex);
-    }
-    if lower.contains("ollama") {
-        return Some(AiAgent::Ollama);
     }
     None
 }
@@ -1726,7 +1728,13 @@ fn codex_transcript_cwd_matches(path: &Path, cwd: &Path) -> bool {
 fn codex_transcript_cwd(path: &Path) -> Option<String> {
     let text = read_head(path, 256 * 1024).ok()?;
     for line in text.lines() {
-        let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
         let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         if line_type != "session_meta" && line_type != "turn_context" {
             continue;
@@ -1948,6 +1956,18 @@ mod tests {
     }
 
     #[test]
+    fn classify_ai_agent_tail_ignores_plain_text_mentions() {
+        assert_eq!(
+            classify_ai_agent_tail("cat CLAUDE.md\nClaude Code CLI wrapper"),
+            None,
+        );
+        assert_eq!(
+            classify_ai_agent_tail("README says install ollama for local models"),
+            None,
+        );
+    }
+
+    #[test]
     fn classify_gemini_status_is_presence_only() {
         assert_eq!(
             classify_ai_agent_status_for_session(
@@ -1995,6 +2015,25 @@ mod tests {
             codex_transcript_status_from_str(&idle),
             Some(AiAgentStatus::Idle),
         );
+    }
+
+    #[test]
+    fn codex_transcript_cwd_skips_blank_and_invalid_lines() {
+        let root = std::env::temp_dir().join(format!(
+            "acorn-codex-cwd-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let transcript = root.join("rollout-2026-05-13T10-00-00-test.jsonl");
+        std::fs::write(
+            &transcript,
+            "\nnot json\n{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/tmp/repo\"}}\n",
+        )
+        .unwrap();
+
+        assert_eq!(codex_transcript_cwd(&transcript).as_deref(), Some("/tmp/repo"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

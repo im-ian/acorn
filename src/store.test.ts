@@ -611,6 +611,39 @@ describe("pollSessionStatuses", () => {
       "Gemini: first question",
     );
   });
+
+  it("does not overwrite a manually named session on first agent detection", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { name: "manual debug session" })],
+    );
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        sessions: {
+          ...DEFAULT_SETTINGS.sessions,
+          autoRenameAiTabs: true,
+          includeAiPromptInTabName: true,
+        },
+      },
+    });
+    useAppStore.getState().recordTerminalInput("a1", "claude -p fix tests\r");
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        active_agent: "claude",
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses();
+
+    expect(mockApi.renameSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions[0]?.name).toBe(
+      "manual debug session",
+    );
+  });
 });
 
 describe("removeProject", () => {
