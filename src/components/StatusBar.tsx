@@ -533,32 +533,39 @@ function ServiceRow({
   onAction,
   error,
 }: ServiceRowProps) {
+  // Stack the label/description on their own lines and put the action
+  // on a second row underneath. Putting the button inline with the
+  // text squeezed the status text on a 256px-wide dropdown to two
+  // wrapped lines for the common "running · N sessions" case.
   return (
-    <div className="flex items-center gap-2 px-2.5 py-2">
-      <StatusDot state={dot} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="font-mono text-[11px] text-fg">{label}</span>
-          <span className="font-mono text-[10px] text-fg-muted">·</span>
-          <span className="font-mono text-[10px] text-fg-muted">{statusText}</span>
+    <div className="flex flex-col gap-1 px-2.5 py-2">
+      <div className="flex items-start gap-2">
+        <StatusDot state={dot} />
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[11px] text-fg">{label}</div>
+          <div className="font-mono text-[10px] text-fg-muted">{statusText}</div>
+          <div className="text-[10px] text-fg-muted/80">{description}</div>
+          {error ? (
+            <div className="mt-0.5 break-words text-[10px] text-danger">
+              {error}
+            </div>
+          ) : null}
         </div>
-        <div className="truncate text-[10px] text-fg-muted/80">{description}</div>
-        {error ? (
-          <div className="mt-0.5 truncate text-[10px] text-danger">{error}</div>
-        ) : null}
       </div>
-      <button
-        type="button"
-        onClick={onAction}
-        disabled={actionDisabled}
-        className={cn(
-          "flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] transition",
-          "hover:bg-bg-sidebar disabled:cursor-default disabled:opacity-60",
-        )}
-      >
-        {actionIcon}
-        <span>{actionLabel}</span>
-      </button>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onAction}
+          disabled={actionDisabled}
+          className={cn(
+            "flex shrink-0 items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] transition",
+            "hover:bg-bg-sidebar disabled:cursor-default disabled:opacity-60",
+          )}
+        >
+          {actionIcon}
+          <span>{actionLabel}</span>
+        </button>
+      </div>
     </div>
   );
 }
