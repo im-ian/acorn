@@ -11,7 +11,6 @@ interface DomRenderer {
   _widthCache?: WidthCache;
   __acornCjkCellPatch?: {
     originalSetDefaultSpacing?: () => void;
-    originalWidthGet?: WidthCache["get"];
   };
   dimensions?: {
     css?: {
@@ -49,9 +48,9 @@ const CJK_OR_WIDE_RE =
   /[\u1100-\u11ff\u2e80-\u303f\u3130-\u318f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff01-\uff60\uffe0-\uffe6]/;
 const CJK_FONT_SAMPLES: Array<[RegExp, string]> = [
   [/(?:D2Coding|Sarasa\s+Mono\s+K|CJK\s+KR|Korean|Hangul|Malgun|Apple\s+SD\s+Gothic)/i, "가"],
-  [/(?:CJK\s+JP|Japanese|Hiragino|Yu\s+Gothic|Meiryo)/i, "あ"],
-  [/(?:CJK\s+SC|CJK\s+CN|Simplified|PingFang\s+SC|Microsoft\s+YaHei)/i, "汉"],
-  [/(?:CJK\s+TC|CJK\s+HK|Traditional|PingFang\s+TC|MingLiU)/i, "漢"],
+  [/(?:Sarasa\s+Mono\s+J|CJK\s+JP|Japanese|Hiragino|Yu\s+Gothic|Meiryo)/i, "あ"],
+  [/(?:Sarasa\s+Mono\s+SC|CJK\s+SC|CJK\s+CN|Simplified|PingFang\s+SC|Microsoft\s+YaHei)/i, "汉"],
+  [/(?:Sarasa\s+Mono\s+TC|CJK\s+TC|CJK\s+HK|Traditional|PingFang\s+TC|MingLiU)/i, "漢"],
   [/(?:Sarasa|CJK|Chinese)/i, "漢"],
 ];
 
@@ -71,22 +70,6 @@ export function selectCjkMeasurementSample(
   return null;
 }
 
-export function shouldClampMeasuredWidth(chars: string): boolean {
-  return CJK_OR_WIDE_RE.test(chars);
-}
-
-export function calculateDefaultSpacingFromSample(
-  measuredSampleWidth: number,
-  sampleCells: number,
-  cellWidth: number,
-): number | null {
-  if (measuredSampleWidth <= 0 || sampleCells <= 0 || cellWidth <= 0) {
-    return null;
-  }
-  const expectedSampleWidth = sampleCells * cellWidth;
-  return expectedSampleWidth - measuredSampleWidth;
-}
-
 export function calculateCellWidthFromSample(
   measuredSampleWidth: number,
   sampleCells: number,
@@ -95,16 +78,6 @@ export function calculateCellWidthFromSample(
     return null;
   }
   return measuredSampleWidth / sampleCells;
-}
-
-export function clampMeasuredWidth(
-  measuredWidth: number,
-  expectedCells: number,
-  cellWidth: number,
-): number {
-  if (expectedCells <= 0 || cellWidth <= 0) return measuredWidth;
-  const expectedWidth = expectedCells * cellWidth;
-  return measuredWidth < expectedWidth ? expectedWidth : measuredWidth;
 }
 
 export function patchTerminalCellMeasurements(term: TerminalInternals): void {
@@ -123,8 +96,13 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     renderer.__acornCjkCellPatch = {
       originalSetDefaultSpacing: renderer._setDefaultSpacing?.bind(renderer),
     };
-    renderer._setDefaultSpacing = () =>
+    renderer._setDefaultSpacing = () => {
+      if (!shouldPatchTerminalCellMeasurements(term.options.fontFamily)) {
+        restoreTerminalCellMeasurements(renderer, widthCache);
+        return;
+      }
       recalibrateDefaultSpacing(term, renderer, widthCache);
+    };
   }
 
   widthCache.clear?.();
@@ -142,15 +120,23 @@ function restoreTerminalCellMeasurements(
   const patch = renderer.__acornCjkCellPatch;
   if (!patch) return;
 
-  if (patch.originalWidthGet) {
-    widthCache.get = patch.originalWidthGet;
-  }
-  if (patch.originalSetDefaultSpacing) {
-    renderer._setDefaultSpacing = patch.originalSetDefaultSpacing;
-  }
-  widthCache.clear?.();
-  renderer._setDefaultSpacing?.();
+  const originalSetDefaultSpacing = patch.originalSetDefaultSpacing;
   delete renderer.__acornCjkCellPatch;
+
+  if (originalSetDefaultSpacing) {
+    renderer._setDefaultSpacing = originalSetDefaultSpacing;
+  } else {
+    delete renderer._setDefaultSpacing;
+    if (renderer._rowContainer) {
+      renderer._rowContainer.style.letterSpacing = "";
+    }
+    if (renderer._rowFactory) {
+      delete renderer._rowFactory.defaultSpacing;
+    }
+  }
+
+  widthCache.clear?.();
+  originalSetDefaultSpacing?.();
 }
 
 function getCellWidth(renderer: DomRenderer): number {
@@ -190,6 +176,10 @@ function recalibrateDefaultSpacing(
   renderer: DomRenderer,
   widthCache: WidthCache,
 ): void {
+  if (renderer._rowContainer) {
+    renderer._rowContainer.style.letterSpacing = "";
+  }
+
   const sample = selectCjkMeasurementSample(term.options.fontFamily);
   const measuredSampleWidth =
     sample === null ? 0 : widthCache.get(sample, false, false);
