@@ -879,6 +879,24 @@ pub async fn pty_spawn<R: Runtime>(
         tracing::warn!(%id, "agent shim dir setup failed; claude/codex resume helpers will not be active");
     }
 
+    // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
+    // Override `ZDOTDIR` with Acorn's staged dir so our `.zshrc` runs; stash
+    // the user's original under `ACORN_USER_ZDOTDIR` so the staged rc can
+    // restore it before sourcing their real config. `.zshenv` from $HOME
+    // still runs unconditionally, so user config that has to land before
+    // any rc is untouched.
+    if let Ok(dir) = crate::shell_init::ensure_shell_init_dir() {
+        let user_zdotdir = effective_env
+            .get("ZDOTDIR")
+            .cloned()
+            .or_else(|| std::env::var("ZDOTDIR").ok())
+            .unwrap_or_default();
+        effective_env.insert("ACORN_USER_ZDOTDIR".to_string(), user_zdotdir);
+        effective_env.insert("ZDOTDIR".to_string(), dir.display().to_string());
+    } else {
+        tracing::warn!(%id, "shell init dir setup failed; OSC 7 cwd tracking will fall back to focus-based refresh");
+    }
+
     if let Ok(session) = state.sessions.get(&id) {
         if session.kind == SessionKind::Control {
             effective_env
@@ -1243,6 +1261,24 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
         }
     }
     best.map(|(_, p)| p)
+}
+
+/// Classify an arbitrary path as "inside a linked git worktree". Walks up
+/// via libgit2's `Repository::discover` so subdirectories of a worktree
+/// resolve correctly, then checks whether the discovered workdir itself
+/// is a linked worktree (`.git` is a file). Used by the xterm OSC 7
+/// handler — every emit hands the host a fresh cwd from the shell and
+/// the response feeds straight into the worktree-icon condition without
+/// touching the system process table.
+#[tauri::command]
+pub fn is_path_linked_worktree(path: String) -> bool {
+    let p = PathBuf::from(&path);
+    let Ok(repo) = git2::Repository::discover(&p) else {
+        return false;
+    };
+    repo.workdir()
+        .map(worktree::is_linked_worktree_root)
+        .unwrap_or(false)
 }
 
 /// Batched live-cwd → "is linked worktree" probe for every session that has
