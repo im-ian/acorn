@@ -114,6 +114,15 @@ export const api = {
       number,
     });
   },
+  getPullRequestCommitDiff(
+    repoPath: string,
+    sha: string,
+  ): Promise<DiffPayload> {
+    return invoke<DiffPayload>("get_pull_request_commit_diff", {
+      repoPath,
+      sha,
+    });
+  },
   mergePullRequest(
     repoPath: string,
     number: number,

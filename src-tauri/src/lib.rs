@@ -187,6 +187,7 @@ pub fn run() {
             commands::staged_diff,
             commands::list_pull_requests,
             commands::get_pull_request_detail,
+            commands::get_pull_request_commit_diff,
             commands::merge_pull_request,
             commands::close_pull_request,
             commands::update_pull_request_body,
