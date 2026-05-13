@@ -13,6 +13,9 @@ export type SessionStatus =
  */
 export type SessionKind = "regular" | "control";
 
+export type AiAgent = "codex" | "claude" | "ollama" | "gemini";
+export type AiAgentStatus = "open" | "idle" | "running" | "needs_input";
+
 export interface Session {
   id: string;
   name: string;
@@ -26,6 +29,8 @@ export interface Session {
   last_message: string | null;
   kind: SessionKind;
   position: number | null;
+  active_agent?: AiAgent | null;
+  agent_status?: AiAgentStatus | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
    * worktree marker). Surfaces the worktree icon regardless of whether Acorn,
    * `claude -w`, or the user originally created the worktree. */

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { homeDir } from "@tauri-apps/api/path";
 import { Activity, Loader2, Settings } from "lucide-react";
 import { api } from "../lib/api";
+import { sessionStatusLabel } from "../lib/ai-agent";
 import { cn } from "../lib/cn";
 import { useSettings } from "../lib/settings";
 import type { MemoryProcess } from "../lib/types";
@@ -145,7 +146,7 @@ export function StatusBar() {
             {showSessionCount ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span>status: {active.status}</span>
+            <span>status: {sessionStatusLabel(active)}</span>
           </>
         ) : null}
         {multiInputEnabled ? (

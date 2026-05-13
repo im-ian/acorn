@@ -1,5 +1,5 @@
 //! Per-session shell shims that let user-invoked agents (`claude`,
-//! `codex`) pick up Acorn's persistence hints without the user
+//! `codex`, `gemini`) pick up Acorn's persistence hints without the user
 //! installing anything.
 //!
 //! Every Acorn PTY gets the shim directory prepended onto `PATH`. The
@@ -12,6 +12,9 @@
 //!   it. Reusing the Acorn UUID (rather than minting a fresh one)
 //!   keeps the JSONL transcript filename aligned with what
 //!   `session_status::detect` looks up.
+//! - **gemini** — accepts `--session-id <uuid>`. Acorn exports the
+//!   pane UUID as `ACORN_RESUME_TOKEN`; the shim forwards it unless
+//!   the user supplied their own session/resume/list/delete flag.
 //! - **codex** — no deterministic id flag. The shim snapshots
 //!   `$CODEX_HOME/sessions/.../rollout-*.jsonl` before/after the
 //!   first zero-arg run, extracts the trailing UUID from the new
@@ -30,9 +33,11 @@ const SHIM_DIR_NAME: &str = "shims";
 const AGENT_STATE_DIR_NAME: &str = "agent-state";
 const CLAUDE_SHIM_NAME: &str = "claude";
 const CODEX_SHIM_NAME: &str = "codex";
+const GEMINI_SHIM_NAME: &str = "gemini";
 
 const CLAUDE_SHIM_BODY: &str = include_str!("../shims/claude.sh");
 const CODEX_SHIM_BODY: &str = include_str!("../shims/codex.sh");
+const GEMINI_SHIM_BODY: &str = include_str!("../shims/gemini.sh");
 
 /// Ensure the shim directory and its scripts exist under Acorn's data
 /// dir, returning the directory PTYs should prepend to their `PATH`.
@@ -54,6 +59,7 @@ fn ensure_shim_dir_at(base: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(&dir)?;
     write_shim(&dir.join(CLAUDE_SHIM_NAME), CLAUDE_SHIM_BODY)?;
     write_shim(&dir.join(CODEX_SHIM_NAME), CODEX_SHIM_BODY)?;
+    write_shim(&dir.join(GEMINI_SHIM_NAME), GEMINI_SHIM_BODY)?;
     Ok(dir)
 }
 
@@ -133,6 +139,22 @@ mod tests {
     }
 
     #[test]
+    fn ensure_shim_dir_creates_gemini_script() {
+        let base = ScratchDir::new("gemini");
+        let dir = ensure_shim_dir_at(base.path()).unwrap();
+        let gemini = dir.join(GEMINI_SHIM_NAME);
+        assert!(gemini.exists());
+        let mode = fs::metadata(&gemini).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o111,
+            0o111,
+            "gemini shim must be executable: {mode:o}"
+        );
+        let body = fs::read_to_string(&gemini).unwrap();
+        assert!(body.contains("--session-id \"$ACORN_RESUME_TOKEN\""));
+    }
+
+    #[test]
     fn ensure_shim_dir_is_idempotent() {
         let base = ScratchDir::new("idem");
         let dir1 = ensure_shim_dir_at(base.path()).unwrap();
@@ -180,8 +202,40 @@ mod tests {
         let lines: Vec<&str> = captured.lines().collect();
         assert_eq!(
             lines,
-            vec!["--session-id", "test-token-1234", "--print"],
-            "shim must prepend --session-id <token> to user args"
+            vec![
+                "--session-id",
+                "test-token-1234",
+                "--name",
+                "acorn-test-token-1234",
+                "--print"
+            ],
+            "shim must prepend --session-id <token> and default --name to user args"
+        );
+    }
+
+    #[test]
+    fn gemini_shim_injects_session_id_when_token_set() {
+        let base = ScratchDir::new("gemini-inject");
+        let dir = ensure_shim_dir_at(base.path()).unwrap();
+        let capture = base.path().join("argv-gemini.txt");
+        let bin_dir = make_fake_bin(base.path(), "gemini", &capture);
+
+        let path = format!("{}:{}:/bin:/usr/bin", dir.display(), bin_dir.display());
+        let status = std::process::Command::new(dir.join(GEMINI_SHIM_NAME))
+            .env("PATH", &path)
+            .env("ACORN_RESUME_TOKEN", "gemini-token-1234")
+            .arg("--prompt")
+            .arg("hi")
+            .status()
+            .unwrap();
+        assert!(status.success(), "shim exit code: {status:?}");
+
+        let captured = fs::read_to_string(&capture).unwrap();
+        let lines: Vec<&str> = captured.lines().collect();
+        assert_eq!(
+            lines,
+            vec!["--session-id", "gemini-token-1234", "--prompt", "hi"],
+            "gemini shim must prepend --session-id <token> to user args"
         );
     }
 

@@ -57,13 +57,18 @@ impl ProjectStore {
     }
 
     pub fn insert(&self, project: Project) -> Project {
-        self.inner.insert(project.repo_path.clone(), project.clone());
+        self.inner
+            .insert(project.repo_path.clone(), project.clone());
         project
     }
 
     pub fn list(&self) -> Vec<Project> {
         let mut v: Vec<Project> = self.inner.iter().map(|r| r.value().clone()).collect();
-        v.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
+        v.sort_by(|a, b| {
+            a.position
+                .cmp(&b.position)
+                .then_with(|| a.name.cmp(&b.name))
+        });
         v
     }
 
@@ -133,6 +138,24 @@ pub enum SessionKind {
     Control,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiAgent {
+    Codex,
+    Claude,
+    Ollama,
+    Gemini,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiAgentStatus {
+    Open,
+    Idle,
+    Running,
+    NeedsInput,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -154,6 +177,10 @@ pub struct Session {
     /// every session in that project gets an explicit position.
     #[serde(default)]
     pub position: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_agent: Option<AiAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_status: Option<AiAgentStatus>,
     /// Identifier the `acornd` daemon uses for this session's live PTY.
     /// `None` while the session is using the legacy in-process PTY path,
     /// or while the daemon has not yet spawned a child for it. Stored so
@@ -207,6 +234,8 @@ impl Session {
             last_message: None,
             kind,
             position: None,
+            active_agent: None,
+            agent_status: None,
             daemon_session_id: None,
             agent_resume_token: None,
             in_worktree: false,

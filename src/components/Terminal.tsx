@@ -463,6 +463,7 @@ export function Terminal({
 
     const writeToPty = (targetSessionId: string, data: string) => {
       if (data.length === 0) return;
+      useAppStore.getState().recordTerminalInput(sessionId, data);
       invoke("pty_write", {
         sessionId: targetSessionId,
         data: encodeStringToBase64(data),

@@ -188,6 +188,13 @@ export interface AcornSettings {
      * preserved either way; only the in-app tab is affected.
      */
     closeOnExit: boolean;
+    /**
+     * When a terminal session is running a known AI CLI, rename the tab from
+     * the agent and the latest prompt observed in terminal input.
+     */
+    autoRenameAiTabs: boolean;
+    /** Include the latest submitted prompt snippet in the generated tab name. */
+    includeAiPromptInTabName: boolean;
   };
   editor: {
     /**
@@ -304,6 +311,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   sessions: {
     confirmRemove: true,
     closeOnExit: false,
+    autoRenameAiTabs: true,
+    includeAiPromptInTabName: true,
   },
   editor: {
     command: "",
@@ -622,6 +631,14 @@ function loadSettings(): AcornSettings {
       sessions: {
         ...DEFAULT_SETTINGS.sessions,
         ...(parsed.sessions ?? {}),
+        autoRenameAiTabs:
+          typeof parsed.sessions?.autoRenameAiTabs === "boolean"
+            ? parsed.sessions.autoRenameAiTabs
+            : DEFAULT_SETTINGS.sessions.autoRenameAiTabs,
+        includeAiPromptInTabName:
+          typeof parsed.sessions?.includeAiPromptInTabName === "boolean"
+            ? parsed.sessions.includeAiPromptInTabName
+            : DEFAULT_SETTINGS.sessions.includeAiPromptInTabName,
       },
       editor: {
         ...DEFAULT_SETTINGS.editor,

@@ -39,13 +39,17 @@ if [ -z "$REAL" ] || [ "$REAL" = "$0" ]; then
 fi
 
 if [ -n "$ACORN_RESUME_TOKEN" ]; then
-    # If the user passed --session-id explicitly, respect it.
     has_session_id=0
+    has_name=0
     for arg in "$@"; do
         case "$arg" in
-            --session-id|--session-id=*) has_session_id=1; break ;;
+            --session-id|--session-id=*|-r|--resume|--resume=*|-c|--continue) has_session_id=1 ;;
+            -n|--name|--name=*) has_name=1 ;;
         esac
     done
+    if [ "$has_session_id" -eq 0 ] && [ "$has_name" -eq 0 ]; then
+        exec "$REAL" --session-id "$ACORN_RESUME_TOKEN" --name "acorn-$ACORN_RESUME_TOKEN" "$@"
+    fi
     if [ "$has_session_id" -eq 0 ]; then
         exec "$REAL" --session-id "$ACORN_RESUME_TOKEN" "$@"
     fi

@@ -14,7 +14,13 @@ vi.mock("./lib/api", () => {
       listProjects: vi.fn(async () => [] as Project[]),
       detectSessionStatuses: vi.fn(
         async (_ids: string[]) =>
-          [] as { id: string; status: SessionStatus }[],
+          [] as {
+            id: string;
+            status: SessionStatus;
+            branch: string | null;
+            active_agent?: Session["active_agent"];
+            agent_status?: Session["agent_status"];
+          }[],
       ),
       createSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => undefined),
@@ -37,6 +43,7 @@ vi.mock("./lib/api", () => {
 });
 
 import { api } from "./lib/api";
+import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
 import { useAppStore } from "./store";
 
 const mockApi = vi.mocked(api);
@@ -71,6 +78,8 @@ function session(
     last_message: null,
     kind: "regular",
     position: null,
+    active_agent: null,
+    agent_status: null,
     in_worktree: false,
     ...overrides,
   };
@@ -94,6 +103,7 @@ function resetStore(): void {
       rightTab: "commits",
       prAccountByRepo: {},
       pendingTerminalInput: {},
+      terminalInput: {},
       multiInputEnabled: false,
       loading: false,
       error: null,
@@ -129,6 +139,7 @@ beforeEach(() => {
   mockApi.detectSessionStatuses.mockResolvedValue([]);
   mockApi.removeSession.mockResolvedValue(undefined);
   mockApi.removeProject.mockResolvedValue(undefined);
+  useSettings.setState({ settings: DEFAULT_SETTINGS });
   resetStore();
 });
 
@@ -528,6 +539,146 @@ describe("pollSessionStatuses", () => {
   it("is a no-op when there are no sessions to poll", async () => {
     await useAppStore.getState().pollSessionStatuses();
     expect(mockApi.detectSessionStatuses).not.toHaveBeenCalled();
+  });
+
+  it("renames an AI session from the detected agent and submitted prompt when enabled", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        sessions: {
+          ...DEFAULT_SETTINGS.sessions,
+          autoRenameAiTabs: true,
+          includeAiPromptInTabName: true,
+        },
+      },
+    });
+    useAppStore.getState().recordTerminalInput("a1", "claude -p fix tests\r");
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        active_agent: "claude",
+      },
+    ]);
+    mockApi.renameSession.mockResolvedValueOnce(
+      session("a1", REPO_A, { name: "Claude: fix tests" }),
+    );
+
+    await useAppStore.getState().pollSessionStatuses();
+
+    expect(mockApi.renameSession).toHaveBeenCalledWith(
+      "a1",
+      "Claude: fix tests",
+    );
+  });
+
+  it("renames an AI session from the app-created default tab name", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { name: "repo-a" })],
+    );
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        sessions: {
+          ...DEFAULT_SETTINGS.sessions,
+          autoRenameAiTabs: true,
+          includeAiPromptInTabName: true,
+        },
+      },
+    });
+    useAppStore.getState().recordTerminalInput("a1", "claude -p fix tests\r");
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        active_agent: "claude",
+      },
+    ]);
+    mockApi.renameSession.mockResolvedValueOnce(
+      session("a1", REPO_A, { name: "Claude: fix tests" }),
+    );
+
+    await useAppStore.getState().pollSessionStatuses();
+
+    expect(mockApi.renameSession).toHaveBeenCalledWith(
+      "a1",
+      "Claude: fix tests",
+    );
+  });
+
+  it("does not keep renaming an AI session after the generated name is set", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          name: "Gemini: first question",
+          active_agent: "gemini",
+        }),
+      ],
+    );
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        sessions: {
+          ...DEFAULT_SETTINGS.sessions,
+          autoRenameAiTabs: true,
+          includeAiPromptInTabName: true,
+        },
+      },
+    });
+    useAppStore.getState().recordTerminalInput("a1", "second question\r");
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        active_agent: "gemini",
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses();
+
+    expect(mockApi.renameSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions[0]?.name).toBe(
+      "Gemini: first question",
+    );
+  });
+
+  it("does not overwrite a manually named session on first agent detection", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { name: "manual debug session" })],
+    );
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        sessions: {
+          ...DEFAULT_SETTINGS.sessions,
+          autoRenameAiTabs: true,
+          includeAiPromptInTabName: true,
+        },
+      },
+    });
+    useAppStore.getState().recordTerminalInput("a1", "claude -p fix tests\r");
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        active_agent: "claude",
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses();
+
+    expect(mockApi.renameSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions[0]?.name).toBe(
+      "manual debug session",
+    );
   });
 });
 

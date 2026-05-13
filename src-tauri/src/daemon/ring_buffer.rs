@@ -107,11 +107,13 @@ impl RingBuffer {
         //    bytes from the front up to (and including) the oldest
         //    surplus newline. This keeps the ring's "logical row" count
         //    bounded even when individual lines are short.
-        while newlines.len() > LINE_CAP {
-            // Safe: the while-condition guarantees at least LINE_CAP+1
-            // entries; `pop_front` cannot return None here.
-            let cutover = newlines.pop_front().expect("invariant: surplus exists");
-            // Drop bytes 0..=cutover (inclusive of the newline itself).
+        if newlines.len() > LINE_CAP {
+            let surplus = newlines.len() - LINE_CAP;
+            let cutover = *newlines
+                .get(surplus - 1)
+                .expect("invariant: surplus newline exists");
+            newlines.drain(..surplus);
+            // Drop bytes 0..=cutover (inclusive of the newest surplus newline).
             drop_front_bytes(&mut bytes, cutover + 1);
             // Rebase remaining newline indices by (cutover + 1).
             for n in newlines.iter_mut() {

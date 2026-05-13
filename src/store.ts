@@ -2,6 +2,15 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
 import type { Project, Session, SessionKind } from "./lib/types";
+import {
+  aiAgentLabel,
+  buildAiSessionName,
+  isGeneratedAiSessionName,
+  reduceTerminalInput,
+  shouldRepairGeneratedAiSessionName,
+  type TerminalInputState,
+} from "./lib/ai-agent";
+import { useSettings } from "./lib/settings";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
 import {
   type Direction,
@@ -19,6 +28,30 @@ import {
 type RightTab = "todos" | "commits" | "staged" | "prs";
 
 const ROOT_PANE_ID: PaneId = "root";
+
+function makeMemoryStorage(): Storage {
+  const data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    clear: () => data.clear(),
+    getItem: (key) => data.get(key) ?? null,
+    key: (index) => Array.from(data.keys())[index] ?? null,
+    removeItem: (key) => {
+      data.delete(key);
+    },
+    setItem: (key, value) => {
+      data.set(key, value);
+    },
+  };
+}
+
+function workspaceStorage(): Storage {
+  const storage = window.localStorage;
+  if (typeof storage?.setItem === "function") return storage;
+  return makeMemoryStorage();
+}
 
 export interface PaneState {
   id: PaneId;
@@ -68,6 +101,7 @@ interface AppStateModel {
    * resolver, so the value is in-memory only and never persisted.
    */
   pendingTerminalInput: Record<string, string>;
+  terminalInput: Record<string, TerminalInputState>;
   multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
@@ -135,6 +169,7 @@ interface AppStateModel {
   setPendingTerminalInput: (sessionId: string, command: string) => void;
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => string | null;
+  recordTerminalInput: (sessionId: string, data: string) => void;
   toggleMultiInput: () => boolean;
 }
 
@@ -143,6 +178,16 @@ function nextPaneId(): PaneId {
   paneCounter += 1;
   return `pane-${Date.now().toString(36)}-${paneCounter}`;
 }
+
+function isAppDefaultSessionName(name: string, repoPath: string): boolean {
+  const base = repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
+  if (!base) return false;
+  const trimmed = name.trim();
+  if (trimmed === base) return true;
+  if (!trimmed.startsWith(`${base}-`)) return false;
+  return /^\d+$/.test(trimmed.slice(base.length + 1));
+}
+
 let splitCounter = 0;
 function nextSplitId(): string {
   splitCounter += 1;
@@ -354,6 +399,7 @@ export const useAppStore = create<AppStateModel>()(
   rightTab: "commits",
   prAccountByRepo: {},
   pendingTerminalInput: {},
+  terminalInput: {},
   multiInputEnabled: false,
   loading: false,
   error: null,
@@ -459,6 +505,8 @@ export const useAppStore = create<AppStateModel>()(
     try {
       const updates = await api.detectSessionStatuses(ids);
       const map = new Map(updates.map((u) => [u.id, u]));
+      const settings = useSettings.getState().settings;
+      const renameRequests: { id: string; name: string }[] = [];
       set((s) => {
         let changed = false;
         const nextSessions = s.sessions.map((sess) => {
@@ -466,14 +514,64 @@ export const useAppStore = create<AppStateModel>()(
           if (!update) return sess;
           const nextStatus = update.status;
           const nextBranch = update.branch ?? sess.branch;
-          if (nextStatus !== sess.status || nextBranch !== sess.branch) {
+          const input = s.terminalInput[sess.id];
+          const nextAgent = update.active_agent ?? input?.activeAgentHint ?? null;
+          const nextAgentStatus = nextAgent ? update.agent_status ?? "open" : null;
+          const canAutoRename =
+            sess.name === sess.id ||
+            isAppDefaultSessionName(sess.name, sess.repo_path) ||
+            isGeneratedAiSessionName(sess.name) ||
+            shouldRepairGeneratedAiSessionName(sess.name);
+          if (
+            settings.sessions.autoRenameAiTabs &&
+            nextAgent &&
+            canAutoRename &&
+            (sess.active_agent !== nextAgent ||
+              (input?.lastSubmitted && sess.name === aiAgentLabel(nextAgent)) ||
+              shouldRepairGeneratedAiSessionName(sess.name))
+          ) {
+            const nextName = buildAiSessionName(
+              nextAgent,
+              input?.lastSubmitted ?? null,
+              {
+                includePrompt: settings.sessions.includeAiPromptInTabName,
+              },
+            );
+            if (nextName !== sess.name) {
+              renameRequests.push({ id: sess.id, name: nextName });
+            }
+          }
+          if (
+            nextStatus !== sess.status ||
+            nextBranch !== sess.branch ||
+            nextAgent !== sess.active_agent ||
+            nextAgentStatus !== (sess.agent_status ?? null)
+          ) {
             changed = true;
-            return { ...sess, status: nextStatus, branch: nextBranch };
+            return {
+              ...sess,
+              status: nextStatus,
+              branch: nextBranch,
+              active_agent: nextAgent,
+              agent_status: nextAgentStatus,
+            };
           }
           return sess;
         });
         return changed ? { sessions: nextSessions } : s;
       });
+      for (const request of renameRequests) {
+        await api.renameSession(request.id, request.name);
+      }
+      if (renameRequests.length > 0) {
+        const names = new Map(renameRequests.map((r) => [r.id, r.name]));
+        set((s) => ({
+          sessions: s.sessions.map((sess) => {
+            const name = names.get(sess.id);
+            return name ? { ...sess, name } : sess;
+          }),
+        }));
+      }
     } catch (e) {
       // Polling errors are non-fatal: log and move on.
       console.warn("[acorn] pollSessionStatuses failed", e);
@@ -1030,6 +1128,21 @@ export const useAppStore = create<AppStateModel>()(
     return consumed;
   },
 
+  recordTerminalInput(sessionId, data) {
+    set((s) => {
+      const previous = s.terminalInput[sessionId] ?? {
+        draft: "",
+        lastSubmitted: null,
+      };
+      return {
+        terminalInput: {
+          ...s.terminalInput,
+          [sessionId]: reduceTerminalInput(previous, data),
+        },
+      };
+    });
+  },
+
   toggleMultiInput() {
     let enabled = false;
     set((s) => {
@@ -1041,7 +1154,7 @@ export const useAppStore = create<AppStateModel>()(
     }),
     {
       name: "acorn-workspaces",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(workspaceStorage),
       version: 1,
       partialize: (state) => ({
         workspaces: state.workspaces,

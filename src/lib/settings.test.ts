@@ -7,6 +7,13 @@ describe("terminal.linkActivation default", () => {
   });
 });
 
+describe("sessions AI defaults", () => {
+  it("auto-renames AI tabs by default while keeping the setting user-toggleable", () => {
+    expect(DEFAULT_SETTINGS.sessions.autoRenameAiTabs).toBe(true);
+    expect(DEFAULT_SETTINGS.sessions.includeAiPromptInTabName).toBe(true);
+  });
+});
+
 describe("appearance settings migration", () => {
   const STORAGE_KEY = "acorn:settings:v1";
   let storage: Map<string, string>;
