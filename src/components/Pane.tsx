@@ -444,6 +444,7 @@ function TabItem({
   registerRef,
 }: TabItemProps) {
   const renameSession = useAppStore((s) => s.renameSession);
+  const liveInWorktree = useAppStore((s) => s.liveInWorktree[tab.id]);
   // Subscribe to the editor command so the menu's enabled/disabled state
   // updates immediately when the user configures an editor in Settings.
   const editorCommand = useSettings(
@@ -622,11 +623,11 @@ function TabItem({
             {tab.name}
           </span>
         )}
-        {tab.isolated ? (
+        {(liveInWorktree ?? (tab.isolated || tab.in_worktree)) ? (
           <GitBranch
             size={10}
             className="pointer-events-none text-fg-muted"
-            aria-label="isolated"
+            aria-label="worktree"
           />
         ) : null}
         <button

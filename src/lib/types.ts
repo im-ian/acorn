@@ -26,6 +26,10 @@ export interface Session {
   last_message: string | null;
   kind: SessionKind;
   position: number | null;
+  /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
+   * worktree marker). Surfaces the worktree icon regardless of whether Acorn,
+   * `claude -w`, or the user originally created the worktree. */
+  in_worktree: boolean;
 }
 
 export interface Project {
