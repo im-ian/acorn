@@ -3,6 +3,7 @@ import {
   Copy,
   Files,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   Pencil,
   PencilLine,
@@ -60,6 +61,7 @@ interface PaneProps {
  */
 export function Pane({ paneId }: PaneProps) {
   const sessions = useAppStore((s) => s.sessions);
+  const projects = useAppStore((s) => s.projects);
   const pane = useAppStore((s) => s.panes[paneId]);
   const totalPanes = useAppStore((s) => Object.keys(s.panes).length);
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
@@ -138,6 +140,8 @@ export function Pane({ paneId }: PaneProps) {
     await spawnSession(repoPath);
   }
 
+  const hasProjects = projects.length > 0;
+
   return (
     <div
       className="relative flex h-full flex-col bg-bg"
@@ -206,7 +210,13 @@ export function Pane({ paneId }: PaneProps) {
         */}
         {active ? null : (
           <EmptyPane
-            onDoubleClick={handleNewTabFromEmpty}
+            hasProjects={hasProjects}
+            onDoubleClick={
+              hasProjects
+                ? handleNewTabFromEmpty
+                : () =>
+                    window.dispatchEvent(new CustomEvent("acorn:add-project"))
+            }
             onContextMenu={(x, y) => {
               setFocusedPane(paneId);
               setPaneMenu({ x, y });
@@ -245,9 +255,11 @@ function suggestSessionName(repoPath: string, existing: Session[]): string {
 }
 
 function EmptyPane({
+  hasProjects,
   onDoubleClick,
   onContextMenu,
 }: {
+  hasProjects: boolean;
   onDoubleClick: () => void;
   onContextMenu: (x: number, y: number) => void;
 }) {
@@ -263,8 +275,21 @@ function EmptyPane({
       role="button"
       tabIndex={0}
     >
-      <TerminalIcon size={28} className="opacity-40" />
-      <p className="text-xs">Drop a tab here or double-click to start a session</p>
+      {hasProjects ? (
+        <>
+          <TerminalIcon size={28} className="opacity-40" />
+          <p className="text-xs">
+            Drop a tab here or double-click to start a session
+          </p>
+        </>
+      ) : (
+        <>
+          <FolderPlus size={28} className="opacity-40" />
+          <p className="text-xs">
+            No projects yet. Double-click here to add one.
+          </p>
+        </>
+      )}
     </div>
   );
 }
