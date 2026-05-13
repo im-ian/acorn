@@ -11,6 +11,14 @@
 //! The CLI cannot link `persistence::data_dir` without dragging the app's
 //! full module graph into the bin target, so this file re-derives the
 //! same `directories` lookup directly — the two paths must stay in lockstep.
+//!
+//! Debug vs release: `cfg!(debug_assertions)` swaps the project name to
+//! `acorn-dev` so `bun run tauri dev` cannot collide with the installed
+//! app. The sidecar `acorn-ipc` CLI is normally built `--release` (see
+//! `scripts/build-sidecar.sh`), so its fallback resolves to `acorn` even
+//! when the host runs debug. This is fine in practice because every
+//! control-session PTY gets `ACORN_IPC_SOCKET` injected and never reaches
+//! the fallback branch.
 
 use std::path::PathBuf;
 
@@ -27,7 +35,12 @@ pub fn resolve() -> Result<PathBuf, String> {
             return Ok(PathBuf::from(override_path));
         }
     }
-    let project_dirs = ProjectDirs::from("io", "im-ian", "acorn")
+    let app_name = if cfg!(debug_assertions) {
+        "acorn-dev"
+    } else {
+        "acorn"
+    };
+    let project_dirs = ProjectDirs::from("io", "im-ian", app_name)
         .ok_or_else(|| "could not resolve project data directory".to_string())?;
     Ok(project_dirs.data_dir().join(SOCKET_FILE))
 }
