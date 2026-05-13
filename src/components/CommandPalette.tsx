@@ -317,7 +317,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     </Command.Dialog>
   );
 }
-
 // Hidden palette entry. Only renders when the user has typed at least 2
 // characters and the query matches one of the easter-egg trigger words.
 const SHAKE_TRIGGERS = [
@@ -353,4 +352,3 @@ function ShakeTreeItem({ onSelect }: { onSelect: () => void }) {
     </Command.Item>
   );
 }
-

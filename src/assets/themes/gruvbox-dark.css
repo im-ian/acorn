@@ -1,0 +1,14 @@
+:root[data-acorn-theme="gruvbox-dark"] {
+  --color-bg: #282828;
+  --color-bg-elevated: #3c3836;
+  --color-bg-sidebar: #1d2021;
+  --color-fg: #ebdbb2;
+  --color-fg-muted: #a89984;
+  --color-border: #504945;
+  --color-accent: #b8bb26;
+  --color-accent-hover: #d8a657;
+  --color-danger: #fb4934;
+  --color-warning: #fabd2f;
+  --color-terminal-bg: #282828;
+  --color-terminal-fg: #ebdbb2;
+}

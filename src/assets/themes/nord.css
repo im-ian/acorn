@@ -1,0 +1,14 @@
+:root[data-acorn-theme="nord"] {
+  --color-bg: #2e3440;
+  --color-bg-elevated: #3b4252;
+  --color-bg-sidebar: #242933;
+  --color-fg: #eceff4;
+  --color-fg-muted: #aeb8c8;
+  --color-border: #4c566a;
+  --color-accent: #88c0d0;
+  --color-accent-hover: #8fbcbb;
+  --color-danger: #bf616a;
+  --color-warning: #ebcb8b;
+  --color-terminal-bg: #2e3440;
+  --color-terminal-fg: #eceff4;
+}

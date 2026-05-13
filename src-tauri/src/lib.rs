@@ -283,6 +283,7 @@ pub fn run() {
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
+            commands::list_system_fonts,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,
@@ -297,4 +298,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

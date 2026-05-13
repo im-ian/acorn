@@ -1,0 +1,15 @@
+/* @mode light */
+:root[data-acorn-theme="gruvbox-light"] {
+  --color-bg: #fbf1c7;
+  --color-bg-elevated: #ebdbb2;
+  --color-bg-sidebar: #f2e5bc;
+  --color-fg: #3c3836;
+  --color-fg-muted: #7c6f64;
+  --color-border: #d5c4a1;
+  --color-accent: #79740e;
+  --color-accent-hover: #af3a03;
+  --color-danger: #cc241d;
+  --color-warning: #b57614;
+  --color-terminal-bg: #fbf1c7;
+  --color-terminal-fg: #3c3836;
+}

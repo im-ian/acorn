@@ -1,0 +1,14 @@
+:root[data-acorn-theme="catppuccin-mocha"] {
+  --color-bg: #1e1e2e;
+  --color-bg-elevated: #313244;
+  --color-bg-sidebar: #181825;
+  --color-fg: #cdd6f4;
+  --color-fg-muted: #a6adc8;
+  --color-border: #45475a;
+  --color-accent: #89b4fa;
+  --color-accent-hover: #b4befe;
+  --color-danger: #f38ba8;
+  --color-warning: #f9e2af;
+  --color-terminal-bg: #1e1e2e;
+  --color-terminal-fg: #cdd6f4;
+}

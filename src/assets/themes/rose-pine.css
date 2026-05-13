@@ -1,0 +1,14 @@
+:root[data-acorn-theme="rose-pine"] {
+  --color-bg: #191724;
+  --color-bg-elevated: #26233a;
+  --color-bg-sidebar: #15131e;
+  --color-fg: #e0def4;
+  --color-fg-muted: #908caa;
+  --color-border: #403d52;
+  --color-accent: #c4a7e7;
+  --color-accent-hover: #ebbcba;
+  --color-danger: #eb6f92;
+  --color-warning: #f6c177;
+  --color-terminal-bg: #191724;
+  --color-terminal-fg: #e0def4;
+}

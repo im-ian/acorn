@@ -36,6 +36,8 @@ import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
+import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
+import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
 
@@ -80,6 +82,39 @@ function App() {
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
+  const themes = useThemes((s) => s.themes);
+  const refreshThemes = useThemes((s) => s.refresh);
+  const appearance = useSettings((s) => s.settings.appearance);
+
+  useEffect(() => {
+    void refreshThemes();
+  }, [refreshThemes]);
+
+  useEffect(() => {
+    const theme = themes.find((t) => t.id === appearance.themeId) ?? themes[0];
+    if (theme) {
+      applyTheme(theme.id, theme.css);
+    }
+  }, [appearance.themeId, themes]);
+
+  useEffect(() => {
+    if (
+      appearance.background.relativePath &&
+      (appearance.background.applyToApp ||
+        appearance.background.applyToTerminal)
+    ) {
+      void applyBackgroundVars(appearance.background);
+    } else {
+      clearBackgroundVars();
+    }
+  }, [
+    appearance.background.relativePath,
+    appearance.background.fit,
+    appearance.background.opacity,
+    appearance.background.blur,
+    appearance.background.applyToApp,
+    appearance.background.applyToTerminal,
+  ]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
@@ -508,10 +543,13 @@ function App() {
   useHotkeys(bindings);
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-bg text-fg">
-      <UpdateBanner />
+    <div className="acorn-app-shell relative flex h-screen w-screen flex-col bg-bg text-fg">
+      <div className="acorn-bg-app" aria-hidden="true" />
+      <div className="relative z-10">
+        <UpdateBanner />
+      </div>
       <ToastHost />
-      <div className="flex min-h-0 flex-1">
+      <div className="relative z-10 flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
             ref={sidebarPanelRef}
@@ -544,7 +582,9 @@ function App() {
           </Panel>
         </PanelGroup>
       </div>
-      <StatusBar />
+      <div className="relative z-10">
+        <StatusBar />
+      </div>
       <TerminalHost />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <AcornRain />

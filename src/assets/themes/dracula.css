@@ -1,0 +1,14 @@
+:root[data-acorn-theme="dracula"] {
+  --color-bg: #282a36;
+  --color-bg-elevated: #343746;
+  --color-bg-sidebar: #21222c;
+  --color-fg: #f8f8f2;
+  --color-fg-muted: #b7bacf;
+  --color-border: #44475a;
+  --color-accent: #bd93f9;
+  --color-accent-hover: #d6acff;
+  --color-danger: #ff5555;
+  --color-warning: #f1fa8c;
+  --color-terminal-bg: #282a36;
+  --color-terminal-fg: #f8f8f2;
+}
