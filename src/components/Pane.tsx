@@ -1,4 +1,5 @@
 import {
+  CircleX,
   Columns2,
   Copy,
   Files,
@@ -9,6 +10,7 @@ import {
   PencilLine,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  SquareX,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -506,6 +508,7 @@ function TabItem({
         });
       },
     },
+    { type: "separator" },
     {
       label: "Copy Worktree Path",
       icon: <Copy size={12} />,
@@ -543,11 +546,13 @@ function TabItem({
     },
     {
       label: "Close Others",
+      icon: <CircleX size={12} />,
       onClick: onCloseOthers,
       disabled: siblingCount <= 1,
     },
     {
       label: "Close All",
+      icon: <SquareX size={12} />,
       onClick: onCloseAll,
     },
   ];
@@ -743,6 +748,7 @@ function buildPaneMenuItems({
             );
           },
         },
+        { type: "separator" },
         {
           label: "Copy Worktree Path",
           icon: <Copy size={12} />,
