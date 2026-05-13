@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -41,6 +41,14 @@ const sanitizeSchema = {
 interface MarkdownProps {
   content: string;
   className?: string;
+  /**
+   * Optional handler invoked when a GFM task-list checkbox is toggled.
+   * The `index` is the zero-based position of the checkbox in source order
+   * — so the caller can update the underlying body by toggling the Nth
+   * `- [ ]` / `- [x]` marker. Providing this prop also enables the checkbox
+   * (default rendering is read-only).
+   */
+  onTaskToggle?: (index: number, checked: boolean) => void;
 }
 
 const baseComponents: Components = {
@@ -165,7 +173,8 @@ const baseComponents: Components = {
     );
   },
   // img is overridden per-instance in MarkdownImpl so it can hook into the
-  // lightbox state.
+  // lightbox state. The input renderer is overridden too when `onTaskToggle`
+  // is supplied, so this is just the read-only fallback.
   input({ type, checked, disabled }) {
     if (type === "checkbox") {
       return (
@@ -182,10 +191,17 @@ const baseComponents: Components = {
   },
 };
 
-function MarkdownImpl({ content, className }: MarkdownProps) {
+function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
   const [lightbox, setLightbox] = useState<
     { src: string; alt?: string } | null
   >(null);
+
+  // ReactMarkdown walks the tree in source order, so a per-render counter
+  // gives every checkbox a stable zero-based index that lines up with the
+  // Nth task marker in the markdown source. Reset on each render so we
+  // don't accumulate across mounts.
+  const taskCounterRef = useRef(0);
+  taskCounterRef.current = 0;
 
   const components = useMemo<Components>(
     () => ({
@@ -207,8 +223,32 @@ function MarkdownImpl({ content, className }: MarkdownProps) {
           />
         );
       },
+      input({ type, checked, disabled }) {
+        if (type !== "checkbox") return null;
+        if (!onTaskToggle) {
+          return (
+            <input
+              type="checkbox"
+              checked={!!checked}
+              disabled={disabled ?? true}
+              readOnly
+              className="mr-1 align-middle accent-accent"
+            />
+          );
+        }
+        const index = taskCounterRef.current;
+        taskCounterRef.current = index + 1;
+        return (
+          <input
+            type="checkbox"
+            checked={!!checked}
+            onChange={(e) => onTaskToggle(index, e.currentTarget.checked)}
+            className="mr-1 cursor-pointer align-middle accent-accent"
+          />
+        );
+      },
     }),
-    [],
+    [onTaskToggle],
   );
 
   return (
