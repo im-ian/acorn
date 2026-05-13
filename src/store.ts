@@ -409,7 +409,11 @@ export const useAppStore = create<AppStateModel>()(
   async refreshLiveInWorktree() {
     try {
       const map = await api.ptyInWorktreeAll();
-      set({ liveInWorktree: map });
+      // Components do `s.liveInWorktree[id]`; null would crash that access.
+      // Backend returns an object in practice, but the mock fallback path
+      // (and any future RPC that returns null on degraded states) needs the
+      // guard to keep the store contract intact.
+      set({ liveInWorktree: map ?? {} });
     } catch (e) {
       console.debug("[store] refreshLiveInWorktree failed", e);
     }
