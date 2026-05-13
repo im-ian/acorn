@@ -1224,6 +1224,14 @@ pub async fn get_pull_request_commit_diff(
 }
 
 #[tauri::command]
+pub async fn resolve_commit_logins(
+    repo_path: String,
+    shas: Vec<String>,
+) -> AppResult<std::collections::HashMap<String, Option<String>>> {
+    pull_requests::resolve_commit_logins(&PathBuf::from(repo_path), shas)
+}
+
+#[tauri::command]
 pub async fn merge_pull_request(
     repo_path: String,
     number: u64,

@@ -39,6 +39,7 @@ export interface CommitInfo {
   sha: string;
   short_sha: string;
   author: string;
+  author_email: string;
   timestamp: number;
   summary: string;
   body: string;

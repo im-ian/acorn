@@ -234,6 +234,7 @@ pub fn run() {
             commands::list_pull_requests,
             commands::get_pull_request_detail,
             commands::get_pull_request_commit_diff,
+            commands::resolve_commit_logins,
             commands::merge_pull_request,
             commands::close_pull_request,
             commands::update_pull_request_body,
@@ -271,3 +272,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
