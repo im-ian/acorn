@@ -996,6 +996,14 @@ pub async fn get_pull_request_detail(
 }
 
 #[tauri::command]
+pub async fn get_pull_request_commit_diff(
+    repo_path: String,
+    sha: String,
+) -> AppResult<DiffPayload> {
+    pull_requests::get_pull_request_commit_diff(&PathBuf::from(repo_path), &sha)
+}
+
+#[tauri::command]
 pub async fn merge_pull_request(
     repo_path: String,
     number: u64,
