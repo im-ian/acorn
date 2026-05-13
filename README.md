@@ -66,18 +66,16 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
   - 사이드바의 **유휴 / 입력 대기 / 작업 중** 라이브 상태 표시
   - 우측 패널의 todo 리스트
 
-### 💾 에이전트 대화 영속화 (PATH shim)
-- 각 PTY의 `PATH` 앞에 Acorn 번들 shim 디렉토리가 prepend됨 — 사용자가 별도 설치할 게 없음
-- **claude** — Acorn 세션 UUID를 `--session-id`로 자동 주입 → JSONL이 세션과 1:1 매칭, Acorn 재시작 후 같은 셸에서 `claude` 다시 치면 **이전 대화 그대로 복원**
-- **codex** — codex가 자체 발급한 세션 UUID를 첫 실행 후 캡처해 저장 → 이후 `codex` 호출 시 `codex resume <uuid>`로 자동 라우팅
-- 옵션이나 서브커맨드를 명시한 호출(`codex resume`, `claude --help` 등)은 그대로 통과
-- 다른 에이전트(`aider` / `gemini` / `ollama` / `llm`)는 미지원 — shim 없이 그냥 실행
+### 💾 에이전트 대화 영속화
+- Acorn 세션에서 `claude` / `codex`를 띄운 뒤 앱을 껐다 켜도 **이전 대화 그대로 이어서** 사용 가능
+- 별도 설정 / 설치 단계 없음 — 그냥 `claude` 또는 `codex` 치면 자동 적용
+- 사용자가 직접 옵션이나 서브커맨드를 지정한 호출은 그대로 통과
 
-### 🛏️ Background sessions — acornd 데몬 (preview)
-- 별도 백그라운드 데몬(`acornd`)이 PTY를 보유 → **Acorn 앱을 종료·재시작해도 세션 그대로 유지**
-- 기본 ON. Settings → Sessions → Background sessions에서 끄면 in-process로 폴백(앱 종료 시 세션 같이 종료 — 기존 동작)
-- Settings 패널에서 상태/세션 리스트 확인, 재시작·종료 제어
-- 상태 표시줄의 ⚡ 아이콘으로 IPC + 데몬 상태를 한 번에 확인 (드롭다운)
+### 🛏️ Background sessions (preview)
+- Acorn 앱을 종료·재시작해도 **PTY 세션이 그대로 살아 있음** — 다시 열면 화면도 복원
+- 기본 ON. 끄면 기존 동작(앱 종료 시 세션 같이 종료)으로 폴백
+- Settings → Sessions에서 상태 확인, 재시작·종료 제어
+- 상태 표시줄 아이콘 → 드롭다운으로 서비스 상태 한눈에 확인
 
 ### 🛰️ Control session — 에이전트가 형제 세션을 조작 (preview)
 - 한 control session에서 같은 프로젝트의 다른 세션들을 조작하는 오케스트레이션 좌석
