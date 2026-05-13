@@ -189,9 +189,9 @@ function TerminalSettings() {
         label="Font family"
         hint="Comma-separated stack. First family that resolves wins."
       >
-        <TextInput
+        <TerminalFontFamilyInput
           value={settings.terminal.fontFamily}
-          onChange={(e) => patchTerminal({ fontFamily: e.target.value })}
+          onCommit={(fontFamily) => patchTerminal({ fontFamily })}
         />
       </Field>
       <Field label="Font size" hint="In CSS pixels. Range 8–32.">
@@ -258,6 +258,56 @@ function TerminalSettings() {
         </div>
       </Field>
     </section>
+  );
+}
+
+function TerminalFontFamilyInput({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
+  const valueRef = useRef(value);
+  const onCommitRef = useRef(onCommit);
+
+  useEffect(() => {
+    onCommitRef.current = onCommit;
+  }, [onCommit]);
+
+  useEffect(() => {
+    valueRef.current = value;
+    draftRef.current = value;
+    setDraft(value);
+  }, [value]);
+
+  const commitDraft = useCallback(() => {
+    const next = draftRef.current;
+    if (next === valueRef.current) return;
+    valueRef.current = next;
+    onCommitRef.current(next);
+  }, []);
+
+  useEffect(() => () => commitDraft(), [commitDraft]);
+
+  return (
+    <TextInput
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        draftRef.current = next;
+        setDraft(next);
+      }}
+      onBlur={commitDraft}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commitDraft();
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
