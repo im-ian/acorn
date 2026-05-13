@@ -105,7 +105,6 @@ function PortaledTerminal({ session }: { session: Session }) {
     <Terminal
       sessionId={session.id}
       cwd={session.worktree_path}
-      startupMode={session.startup_mode}
       isActive={visiblePaneId !== null}
     />,
     targetRef.current,

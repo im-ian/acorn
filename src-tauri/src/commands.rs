@@ -13,7 +13,7 @@ use crate::pull_requests::{
     PullRequestListing,
 };
 use crate::scrollback;
-use crate::session::{Project, Session, SessionKind, SessionStartupMode, SessionStatus};
+use crate::session::{Project, Session, SessionKind, SessionStatus};
 use crate::session_status;
 use crate::shell_util::shell_quote;
 use crate::state::AppState;
@@ -294,7 +294,6 @@ pub async fn create_session(
     name: String,
     repo_path: String,
     isolated: Option<bool>,
-    startup_mode: Option<SessionStartupMode>,
     kind: Option<SessionKind>,
 ) -> AppResult<Session> {
     let repo = PathBuf::from(&repo_path);
@@ -317,7 +316,6 @@ pub async fn create_session(
         worktree_path,
         branch,
         isolated,
-        startup_mode,
         kind.unwrap_or_default(),
     );
     let inserted = state.sessions.insert(session);
@@ -990,44 +988,6 @@ pub async fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<
     git_ops::web_url_for_commit(&PathBuf::from(repo_path), &sha)
 }
 
-/// Check whether a `claude` CLI transcript already exists on disk for the
-/// given `session_id`. Used by the frontend to decide between `--session-id`
-/// (new conversation) and `--resume` (existing) when (re)spawning claude —
-/// claude refuses `--session-id` for an id that already has a transcript.
-///
-/// Match claude's *current* project-directory encoding for `cwd` only. Older
-/// claude versions preserved `.` in the encoded path; the current version
-/// replaces both `/` and `.` with `-`. An earlier implementation scanned every
-/// subdirectory under `~/.claude/projects/` to dodge the encoding drift, but
-/// that returned true for jsonl files left behind under the old encoding —
-/// after which claude itself, looking only at the new encoded dir, printed a
-/// persistent `error: session not found` on `--resume`. If claude changes its
-/// encoding again, update [`encode_claude_project_dir`].
-#[tauri::command]
-pub async fn claude_session_exists(cwd: String, session_id: String) -> bool {
-    let home = match std::env::var_os("HOME") {
-        Some(v) => PathBuf::from(v),
-        None => return false,
-    };
-    let dir_name = encode_claude_project_dir(&cwd);
-    let jsonl = home
-        .join(".claude")
-        .join("projects")
-        .join(dir_name)
-        .join(format!("{session_id}.jsonl"));
-    jsonl.is_file()
-}
-
-/// Encode `cwd` the way the current `claude` CLI does when locating its
-/// per-project transcript directory under `~/.claude/projects/`. Replaces
-/// `/` and `.` with `-`; everything else (including underscores) is
-/// preserved verbatim.
-fn encode_claude_project_dir(cwd: &str) -> String {
-    cwd.chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect()
-}
-
 /// Spawn an external editor on `path`. Used by the "Open in editor" action
 /// when the user has configured a custom editor command in settings.
 ///
@@ -1157,33 +1117,3 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encodes_plain_repo_path() {
-        assert_eq!(
-            encode_claude_project_dir("/Users/me/Documents/Personal/acorn"),
-            "-Users-me-Documents-Personal-acorn"
-        );
-    }
-
-    #[test]
-    fn encodes_dotted_segment_as_double_dash() {
-        assert_eq!(
-            encode_claude_project_dir(
-                "/Users/me/Documents/Personal/acorn/.claude/worktrees/foo"
-            ),
-            "-Users-me-Documents-Personal-acorn--claude-worktrees-foo"
-        );
-    }
-
-    #[test]
-    fn preserves_underscores() {
-        assert_eq!(
-            encode_claude_project_dir("/Users/me/Documents/GitHub/jtf_web"),
-            "-Users-me-Documents-GitHub-jtf_web"
-        );
-    }
-}

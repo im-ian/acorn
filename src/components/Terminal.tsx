@@ -11,23 +11,15 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
-  resolveStartupCommand,
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
-import type { SessionStartupMode } from "../lib/types";
 import { useAppStore } from "../store";
 
 interface TerminalProps {
   sessionId: string;
   cwd: string;
-  /**
-   * Per-session startup mode persisted on `Session.startup_mode`. `null`
-   * (or omitted) means no per-session preference is recorded; the spawn
-   * falls back to the global `sessionStartup.mode` setting.
-   */
-  startupMode?: SessionStartupMode | null;
   /**
    * When the terminal is hidden behind another tab in the same pane and then
    * made visible again, the DOM renderer can leave the rows blank because it
@@ -92,7 +84,6 @@ function encodeStringToBase64(input: string): string {
 export function Terminal({
   sessionId,
   cwd,
-  startupMode = null,
   isActive = true,
 }: TerminalProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -740,36 +731,6 @@ export function Terminal({
           console.debug("[Terminal] worktree snapshot failed", err);
         }
         if (disposed) return;
-        const startup = resolveStartupCommand(
-          useSettings.getState().settings,
-          startupMode,
-        );
-        // When launching the `claude` CLI, pin the transcript path to our
-        // session UUID. claude refuses `--session-id` for an id that
-        // already has a transcript on disk, so we switch to `--resume <id>`
-        // for restart-after-exit (and reopens of existing sessions).
-        const isClaude =
-          /(?:^|\/)claude$/i.test(startup.command.trim()) &&
-          !startup.args.some(
-            (a) => a === "--session-id" || a === "--resume" || a === "-r",
-          );
-        let args = startup.args;
-        if (isClaude) {
-          let exists = false;
-          try {
-            exists = await invoke<boolean>("claude_session_exists", {
-              cwd,
-              sessionId,
-            });
-          } catch (e) {
-            console.error("[Terminal] claude_session_exists failed", e);
-          }
-          if (disposed) return;
-          args = exists
-            ? [...startup.args, "--resume", sessionId]
-            : [...startup.args, "--session-id", sessionId];
-        }
-        if (disposed) return;
         // Pass the post-fit xterm dimensions so the PTY starts in sync with
         // what the renderer will paint. Otherwise the PTY falls back to
         // 80x24 and zsh-autosuggestions / prompt redraws compute wrap
@@ -778,11 +739,14 @@ export function Terminal({
         // are. The earlier `fit()`-driven `onResize` cannot fix this — it
         // fires before `pty_spawn` and `pty_resize` errors out with
         // "no pty for session".
+        //
+        // Empty command tells the backend to drop into $SHELL — sessions
+        // are always plain terminals.
         await invoke("pty_spawn", {
           sessionId,
           cwd,
-          command: startup.command,
-          args,
+          command: "",
+          args: [],
           env: {},
           cols: term.cols,
           rows: term.rows,

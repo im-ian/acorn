@@ -129,7 +129,6 @@ mod tests {
             PathBuf::from("/tmp/repo"),
             "main".to_string(),
             false,
-            None,
             SessionKind::Control,
         )
     }

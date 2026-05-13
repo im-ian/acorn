@@ -29,7 +29,6 @@ test.describe("terminal: spawn", () => {
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
         // Terminal startup → empty command, args=[]; Rust falls back to $SHELL.
-        startup_mode: "terminal",
       },
     ]);
     // Record every pty_spawn invocation on `window` so the test can read it

@@ -812,14 +812,12 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       n += 1;
     }
     try {
-      // Carry the source session's startup mode and kind onto the duplicate
-      // so the duplicate respawns with the same kind of process and (for
-      // control sessions) preserves its IPC-dispatch role.
+      // Carry the source session's kind onto the duplicate so a control
+      // session stays a control session and keeps its IPC-dispatch role.
       await api.createSession(
         next,
         session.repo_path,
         session.isolated,
-        session.startup_mode,
         session.kind,
       );
       await useAppStore.getState().refreshAll();

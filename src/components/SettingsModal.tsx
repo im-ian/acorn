@@ -16,12 +16,10 @@ import {
   PR_REFRESH_INTERVAL_OPTIONS,
   SESSION_TITLE_OPTIONS,
   type SelectedAgent,
-  type SessionStartupMode,
   type SessionTitleSource,
   type TerminalFontWeight,
   type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
-  selectedAgentLabel,
   useSettings,
 } from "../lib/settings";
 import type { PrStateFilter } from "../lib/types";
@@ -252,59 +250,10 @@ function WeightSelect({ value, onChange }: WeightSelectProps) {
 
 function SessionSettings() {
   const settings = useSettings((s) => s.settings);
-  const patchSessionStartup = useSettings((s) => s.patchSessionStartup);
   const patchSessions = useSettings((s) => s.patchSessions);
-  const mode = settings.sessionStartup.mode;
-  const agentName = selectedAgentLabel(settings);
 
   return (
     <section className="space-y-4">
-      <Field
-        label="Default session startup"
-        hint="What to launch when you create a new session tab."
-      >
-        <div className="flex flex-col gap-1.5">
-          <RadioCard<SessionStartupMode>
-            name="session-startup"
-            value="terminal"
-            current={mode}
-            label="Terminal (default)"
-            description="Launch a plain shell using $SHELL."
-            onSelect={(v) => patchSessionStartup({ mode: v })}
-          />
-          <RadioCard<SessionStartupMode>
-            name="session-startup"
-            value="agent"
-            current={mode}
-            label="Agent"
-            description={`Launch the agent selected under Agents — currently ${agentName}.`}
-            onSelect={(v) => patchSessionStartup({ mode: v })}
-          />
-          <RadioCard<SessionStartupMode>
-            name="session-startup"
-            value="custom"
-            current={mode}
-            label="Custom command"
-            description="Run any executable. Whitespace-separated args supported."
-            onSelect={(v) => patchSessionStartup({ mode: v })}
-          />
-        </div>
-      </Field>
-      {mode === "custom" ? (
-        <Field label="Custom command" hint="Falls back to $SHELL when blank.">
-          <TextInput
-            value={settings.sessionStartup.customCommand}
-            onChange={(e) =>
-              patchSessionStartup({ customCommand: e.target.value })
-            }
-            placeholder="e.g. claude --resume"
-          />
-        </Field>
-      ) : null}
-      <p className="text-[11px] text-fg-muted">
-        Changes apply to <em>new</em> session tabs. Existing terminals keep
-        their current process.
-      </p>
       <Field
         label="Confirm before removing a session"
         hint="Isolated worktrees always prompt because the delete-worktree choice still matters."

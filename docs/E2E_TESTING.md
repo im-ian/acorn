@@ -112,7 +112,6 @@ The mock returns safe values for the boot path so empty UIs render without crash
 | `list_commits`, `list_staged`              | `[]`                                             |
 | `list_pull_requests`                       | `{ items: [], account: null, error: null }`      |
 | `staged_diff`, `commit_diff`               | `{ files: [] }`                                  |
-| `claude_session_exists`                    | `false`                                          |
 | `scrollback_load`                          | `null`                                           |
 | `scrollback_orphan_size` / `_clear`        | `0`                                              |
 | `get_memory_usage`                         | `{ rss_bytes: 0, sessions: [], scrollback_disk_bytes: 0 }` |
