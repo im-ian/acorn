@@ -72,6 +72,15 @@ export function PullRequestDetailModal({
   const [refreshing, setRefreshing] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  // Optimistic body override while a task-list checkbox toggle is in flight
+  // (or after one succeeds, until the next fetch overwrites it). Keyed by
+  // PR identity so a stale override never bleeds into a different PR.
+  const [bodyOverride, setBodyOverride] = useState<{
+    key: string;
+    body: string;
+  } | null>(null);
+  const [bodySaveError, setBodySaveError] = useState<string | null>(null);
+  const bodyWriteSeqRef = useRef(0);
 
   useDialogShortcuts(open !== null, {
     onCancel: onClose,
@@ -88,10 +97,14 @@ export function PullRequestDetailModal({
       setReloadKey(0);
       setMergeDialogOpen(false);
       setCloseDialogOpen(false);
+      setBodyOverride(null);
+      setBodySaveError(null);
       return;
     }
     setListing(null);
     setError(null);
+    setBodyOverride(null);
+    setBodySaveError(null);
   }, [open]);
 
   // Fetch on open and on every refresh bump.
@@ -127,6 +140,51 @@ export function PullRequestDetailModal({
 
   const detail =
     listing && listing.kind === "ok" ? listing.detail : null;
+  const prKey = open ? `${open.repoPath}#${open.number}` : null;
+  // Whenever a fresh detail arrives, the canonical body wins unless we have
+  // an unsynced override from a click that happened mid-fetch. The override
+  // is cleared opportunistically when it matches the server again.
+  useEffect(() => {
+    if (!detail || !prKey) return;
+    setBodyOverride((prev) => {
+      if (!prev || prev.key !== prKey) return null;
+      if (prev.body === detail.body) return null;
+      return prev;
+    });
+  }, [detail, prKey]);
+
+  const displayBody = useMemo(() => {
+    if (!detail || !prKey) return null;
+    if (bodyOverride && bodyOverride.key === prKey) return bodyOverride.body;
+    return detail.body;
+  }, [detail, bodyOverride, prKey]);
+
+  const handleTaskToggle = useCallback(
+    (index: number, checked: boolean) => {
+      if (!open || !detail || !prKey) return;
+      const current =
+        bodyOverride && bodyOverride.key === prKey
+          ? bodyOverride.body
+          : detail.body;
+      const next = toggleTaskMarker(current, index, checked);
+      if (next === null || next === current) return;
+      const seq = ++bodyWriteSeqRef.current;
+      setBodyOverride({ key: prKey, body: next });
+      setBodySaveError(null);
+      api
+        .updatePullRequestBody(open.repoPath, open.number, next)
+        .then(() => {
+          if (seq !== bodyWriteSeqRef.current) return;
+          setReloadKey((k) => k + 1);
+        })
+        .catch((e) => {
+          if (seq !== bodyWriteSeqRef.current) return;
+          setBodyOverride(null);
+          setBodySaveError(String(e));
+        });
+    },
+    [open, detail, prKey, bodyOverride],
+  );
 
   return (
     <>
@@ -159,6 +217,9 @@ export function PullRequestDetailModal({
         ) : (
           <DetailBody
             detail={listing.detail}
+            body={displayBody ?? listing.detail.body}
+            onTaskToggle={handleTaskToggle}
+            bodySaveError={bodySaveError}
             tab={tab}
             onTab={setTab}
             cwd={cwd}
@@ -218,6 +279,9 @@ function ModalShell({
 
 function DetailBody({
   detail,
+  body,
+  onTaskToggle,
+  bodySaveError,
   tab,
   onTab,
   cwd,
@@ -228,6 +292,10 @@ function DetailBody({
   onOpenClose,
 }: {
   detail: PullRequestDetail;
+  /** Optimistically-overridden body (or `detail.body` if no edit is pending). */
+  body: string;
+  onTaskToggle: (index: number, checked: boolean) => void;
+  bodySaveError: string | null;
   tab: DetailTab;
   onTab: (t: DetailTab) => void;
   cwd?: string;
@@ -326,9 +394,14 @@ function DetailBody({
         </div>
       </header>
 
-      {detail.body.trim().length > 0 ? (
+      {body.trim().length > 0 ? (
         <ResizableBody>
-          <Markdown content={detail.body} />
+          <Markdown content={body} onTaskToggle={onTaskToggle} />
+          {bodySaveError ? (
+            <p className="mt-2 text-[10.5px] text-danger">
+              Couldn't save checkbox: {bodySaveError}
+            </p>
+          ) : null}
         </ResizableBody>
       ) : null}
 
@@ -1075,6 +1148,48 @@ function CheckStatusLabel({
   return (
     <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
   );
+}
+
+/**
+ * Toggle the Nth GFM task-list marker in `body` to the requested state.
+ * Returns the new body, or `null` if the index is out of range.
+ *
+ * Walks line-by-line so fenced code blocks (which may contain literal
+ * `- [ ]` text) don't get counted. Matches the same list markers GFM
+ * accepts: `-`, `*`, `+`, `1.`, `1)`.
+ */
+export function toggleTaskMarker(
+  body: string,
+  index: number,
+  checked: boolean,
+): string | null {
+  const lineRe = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\](?=[ \t])/;
+  const fenceRe = /^[ \t]{0,3}(```+|~~~+)/;
+  let inFence = false;
+  let pos = 0;
+  let n = 0;
+  const lines = body.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fenceRe.test(line)) {
+      inFence = !inFence;
+    } else if (!inFence) {
+      const m = lineRe.exec(line);
+      if (m) {
+        if (n === index) {
+          const bracketStart = pos + m[1].length;
+          return (
+            body.slice(0, bracketStart) +
+            `[${checked ? "x" : " "}]` +
+            body.slice(bracketStart + 3)
+          );
+        }
+        n++;
+      }
+    }
+    pos += line.length + 1;
+  }
+  return null;
 }
 
 function formatTimestamp(iso: string): string {

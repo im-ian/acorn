@@ -30,6 +30,12 @@ const sanitizeSchema = {
       "target",
       "rel",
     ],
+    input: [
+      ...(defaultSchema.attributes?.input ?? []),
+      // Stamped by `rehypeTaskIndex` below so the React input component can
+      // map a click back to its source-order checkbox.
+      "dataTaskIndex",
+    ],
   },
   tagNames: [
     ...(defaultSchema.tagNames ?? []),
@@ -38,9 +44,46 @@ const sanitizeSchema = {
   ],
 };
 
+// Walks the HAST tree once (outside React's render cycle, so immune to
+// StrictMode double-invocation) and stamps each task-list checkbox input
+// with a `data-task-index` attribute reflecting its source-order position.
+// Runs after `rehypeRaw` (whose tree-rebuild strips positions) and before
+// `rehypeSanitize`, which is configured above to allow the data attr.
+function rehypeTaskIndex() {
+  return (tree: { children?: unknown[]; [k: string]: unknown }) => {
+    let i = 0;
+    const walk = (node: unknown) => {
+      if (!node || typeof node !== "object") return;
+      const n = node as {
+        type?: string;
+        tagName?: string;
+        properties?: Record<string, unknown>;
+        children?: unknown[];
+      };
+      if (
+        n.type === "element" &&
+        n.tagName === "input" &&
+        n.properties?.type === "checkbox"
+      ) {
+        n.properties = { ...n.properties, dataTaskIndex: i++ };
+      }
+      n.children?.forEach(walk);
+    };
+    walk(tree);
+  };
+}
+
 interface MarkdownProps {
   content: string;
   className?: string;
+  /**
+   * Optional handler invoked when a GFM task-list checkbox is toggled.
+   * The `index` is the zero-based position of the checkbox in source order
+   * — so the caller can update the underlying body by toggling the Nth
+   * `- [ ]` / `- [x]` marker. Providing this prop also enables the checkbox
+   * (default rendering is read-only).
+   */
+  onTaskToggle?: (index: number, checked: boolean) => void;
 }
 
 const baseComponents: Components = {
@@ -165,7 +208,8 @@ const baseComponents: Components = {
     );
   },
   // img is overridden per-instance in MarkdownImpl so it can hook into the
-  // lightbox state.
+  // lightbox state. The input renderer is overridden too when `onTaskToggle`
+  // is supplied, so this is just the read-only fallback.
   input({ type, checked, disabled }) {
     if (type === "checkbox") {
       return (
@@ -182,7 +226,7 @@ const baseComponents: Components = {
   },
 };
 
-function MarkdownImpl({ content, className }: MarkdownProps) {
+function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
   const [lightbox, setLightbox] = useState<
     { src: string; alt?: string } | null
   >(null);
@@ -207,8 +251,46 @@ function MarkdownImpl({ content, className }: MarkdownProps) {
           />
         );
       },
+      input(props) {
+        const { type, checked, disabled } = props;
+        if (type !== "checkbox") return null;
+        if (!onTaskToggle) {
+          return (
+            <input
+              type="checkbox"
+              checked={!!checked}
+              disabled={disabled ?? true}
+              readOnly
+              className="mr-1 align-middle accent-accent"
+            />
+          );
+        }
+        // `rehypeTaskIndex` stamps this on each checkbox input during the
+        // HAST tree walk — a single-pass numbering that survives StrictMode's
+        // double-invocation of the React renderer.
+        const indexRaw = (props as { "data-task-index"?: unknown })[
+          "data-task-index"
+        ];
+        const index =
+          typeof indexRaw === "number"
+            ? indexRaw
+            : typeof indexRaw === "string"
+              ? Number(indexRaw)
+              : -1;
+        return (
+          <input
+            type="checkbox"
+            checked={!!checked}
+            onChange={(e) => {
+              if (!Number.isFinite(index) || index < 0) return;
+              onTaskToggle(index, e.currentTarget.checked);
+            }}
+            className="mr-1 cursor-pointer align-middle accent-accent"
+          />
+        );
+      },
     }),
-    [],
+    [onTaskToggle],
   );
 
   return (
@@ -216,7 +298,11 @@ function MarkdownImpl({ content, className }: MarkdownProps) {
       <div className={cn("text-[11.5px] leading-relaxed text-fg", className)}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
+          rehypePlugins={[
+            rehypeRaw,
+            rehypeTaskIndex,
+            [rehypeSanitize, sanitizeSchema],
+          ]}
           components={components}
         >
           {content}
