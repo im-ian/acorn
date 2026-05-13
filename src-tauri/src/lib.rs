@@ -189,6 +189,7 @@ pub fn run() {
             commands::get_pull_request_detail,
             commands::merge_pull_request,
             commands::close_pull_request,
+            commands::update_pull_request_body,
             commands::generate_pr_commit_message,
             commands::pty_spawn,
             commands::pty_write,

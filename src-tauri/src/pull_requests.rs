@@ -996,6 +996,23 @@ pub fn close_pull_request(repo_path: &Path, number: u64) -> AppResult<()> {
     }
 }
 
+pub fn update_pull_request_body(repo_path: &Path, number: u64, body: &str) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_pr_edit_body(&slug, number, token, body)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account can edit this PR.".to_string(),
+        )),
+    }
+}
+
 fn run_pr_merge(
     slug: &str,
     number: u64,
@@ -1074,6 +1091,56 @@ fn run_pr_close(slug: &str, number: u64, token: &str) -> AppResult<()> {
             .env("GH_HOST", GH_HOST)
             .args(["pr", "close", &number_s, "--repo", slug]);
     })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+/// Pipe the new body via stdin (`--body-file -`) to dodge shell escaping
+/// pitfalls — bodies routinely contain backticks, `$`, and other characters
+/// that would need defensive quoting if passed as `--body "..."`.
+fn run_pr_edit_body(slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let gh_path = cli_resolver::resolve("gh")?;
+    let mut cmd = Command::new(&gh_path);
+    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+        "pr",
+        "edit",
+        &number.to_string(),
+        "--repo",
+        slug,
+        "--body-file",
+        "-",
+    ]);
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                cli_resolver::invalidate("gh");
+            }
+            cli_resolver::spawn_error("gh", e)
+        })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(body.as_bytes())
+            .map_err(|e| AppError::Other(format!("failed writing body to gh: {e}")))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
