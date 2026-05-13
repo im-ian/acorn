@@ -1,4 +1,5 @@
 mod agent_shim;
+mod claude_util;
 mod cli_resolver;
 mod commands;
 pub mod daemon;
@@ -18,6 +19,7 @@ mod shell_env;
 mod shell_util;
 mod state;
 mod todos;
+mod transcript_watcher;
 mod unified_diff;
 mod worktree;
 
@@ -236,6 +238,7 @@ pub fn run() {
                     }
                 })
                 .ok();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -280,6 +283,8 @@ pub fn run() {
             commands::scrollback_orphan_clear,
             commands::read_session_todos,
             commands::detect_session_statuses,
+            commands::detect_session_agent,
+            commands::prepare_claude_fork,
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
