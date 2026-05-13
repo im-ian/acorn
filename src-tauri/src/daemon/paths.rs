@@ -48,6 +48,14 @@ pub const ENV_DAEMON_STREAM_OVERRIDE: &str = "ACORN_DAEMON_STREAM_SOCKET";
 /// Resolve the data directory, creating it on demand. Returns a `PathBuf`
 /// rather than `&Path` because callers typically want to append to it
 /// without re-rooting on each call.
+///
+/// Debug builds resolve `ProjectDirs` against `acorn-dev` so the daemon's
+/// socket / pidfile / log / metadata land in the same isolated data dir
+/// that `bun run tauri dev` uses for the app. Without this the dev app
+/// (`acorn-dev`) and a dev-built `acornd` (`acorn`) would each pick a
+/// different directory and never see each other's sockets. The release
+/// sidecar is built `--release` (see `scripts/build-sidecar.sh`), so it
+/// keeps using `acorn` and stays aligned with the installed app.
 pub fn data_dir() -> std::io::Result<PathBuf> {
     if let Ok(over) = std::env::var(ENV_DATA_DIR_OVERRIDE) {
         if !over.is_empty() {
@@ -56,7 +64,12 @@ pub fn data_dir() -> std::io::Result<PathBuf> {
             return Ok(p);
         }
     }
-    let pd = ProjectDirs::from("io", "im-ian", "acorn").ok_or_else(|| {
+    let app_name = if cfg!(debug_assertions) {
+        "acorn-dev"
+    } else {
+        "acorn"
+    };
+    let pd = ProjectDirs::from("io", "im-ian", app_name).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "could not resolve project data directory",
