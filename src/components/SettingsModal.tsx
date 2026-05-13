@@ -41,7 +41,6 @@ type Tab =
   | "terminal"
   | "agents"
   | "sessions"
-  | "background-sessions"
   | "pull-requests"
   | "appearance"
   | "editor"
@@ -53,7 +52,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
   { id: "agents", label: "Agents" },
   { id: "sessions", label: "Sessions" },
-  { id: "background-sessions", label: "Background sessions" },
   { id: "pull-requests", label: "Pull Requests" },
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
@@ -143,8 +141,6 @@ export function SettingsModal() {
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
-          ) : tab === "background-sessions" ? (
-            <BackgroundSessionsSettings />
           ) : tab === "pull-requests" ? (
             <PullRequestsSettings />
           ) : tab === "appearance" ? (
@@ -277,41 +273,73 @@ function SessionSettings() {
   const patchSessions = useSettings((s) => s.patchSessions);
 
   return (
-    <section className="space-y-4">
-      <Field
-        label="Confirm before removing a session"
-        hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+    <section className="space-y-6">
+      <div className="space-y-4">
+        <Field
+          label="Confirm before removing a session"
+          hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.confirmRemove}
+              onChange={(e) =>
+                patchSessions({ confirmRemove: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Show confirmation dialog
+          </label>
+        </Field>
+        <Field
+          label="Close tab when the process exits"
+          hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
+        >
+          <label className="flex items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.sessions.closeOnExit}
+              onChange={(e) =>
+                patchSessions({ closeOnExit: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Auto-close on exit
+          </label>
+        </Field>
+        <ControlSessionInstallSection />
+      </div>
+      <SettingsGroup
+        title="Background sessions"
+        description="The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
       >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.confirmRemove}
-            onChange={(e) =>
-              patchSessions({ confirmRemove: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Show confirmation dialog
-        </label>
-      </Field>
-      <Field
-        label="Close tab when the process exits"
-        hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.closeOnExit}
-            onChange={(e) =>
-              patchSessions({ closeOnExit: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          Auto-close on exit
-        </label>
-      </Field>
-      <ControlSessionInstallSection />
+        <BackgroundSessionsSettings />
+      </SettingsGroup>
     </section>
+  );
+}
+
+function SettingsGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-3 border-t border-border pt-5">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+          {title}
+        </h3>
+        {description ? (
+          <p className="mt-0.5 text-[11px] text-fg-muted/80">{description}</p>
+        ) : null}
+      </div>
+      {children}
+    </div>
   );
 }
 
