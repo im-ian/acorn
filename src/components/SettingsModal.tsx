@@ -713,6 +713,7 @@ function FontSection({
   const [drafts, setDrafts] = useState<FontSlotDrafts>(() =>
     draftsFromFontSlots(slots),
   );
+  const [activeSlot, setActiveSlot] = useState<0 | 1 | 2 | null>(null);
 
   const allFontOptions = useMemo(() => {
     return Array.from(new Set([...CURATED_MONOSPACE_FONTS, ...systemFonts])).sort(
@@ -774,34 +775,66 @@ function FontSection({
       next[index] = font;
     }
     setDrafts(draftsFromFontSlots(next));
+    setActiveSlot(null);
     onChange(next);
   };
 
   const renderSlot = (index: 0 | 1 | 2, label: string, required: boolean) => {
-    const listId = `acorn-font-slot-${index}`;
+    const listId = `acorn-font-slot-options-${index}`;
     const value = drafts[index];
+    const suggestions = optionsForDraft(value);
+    const showSuggestions = activeSlot === index && suggestions.length > 0;
     return (
       <Field key={index} label={label}>
-        <TextInput
-          list={listId}
-          value={value}
-          onBlur={() => commitSlot(index, value)}
-          onChange={(e) => setDraft(index, e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.currentTarget.blur();
-            } else if (e.key === "Escape") {
-              setDrafts(draftsFromFontSlots(slots));
+        <div className="relative min-w-[14rem]">
+          <TextInput
+            aria-autocomplete="list"
+            aria-controls={showSuggestions ? listId : undefined}
+            value={value}
+            onBlur={() => {
+              commitSlot(index, value);
+              setActiveSlot(null);
+            }}
+            onChange={(e) => {
+              setDraft(index, e.target.value);
+              setActiveSlot(index);
+            }}
+            onFocus={() => setActiveSlot(index)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setDrafts(draftsFromFontSlots(slots));
+                setActiveSlot(null);
+              }
+            }}
+            placeholder={
+              required ? "Search or type a font" : "Optional fallback"
             }
-          }}
-          placeholder={required ? "Search or type a font" : "Optional fallback"}
-          className="min-w-[14rem]"
-        />
-        <datalist id={listId}>
-          {optionsForDraft(value).map((font) => (
-            <option key={font} value={font} />
-          ))}
-        </datalist>
+          />
+          {showSuggestions ? (
+            <div
+              id={listId}
+              role="listbox"
+              className="absolute left-0 right-0 top-full z-50 mt-1 max-h-36 overflow-y-auto rounded-md border border-border bg-bg-elevated py-1 shadow-lg"
+            >
+              {suggestions.map((font) => (
+                <button
+                  key={font}
+                  type="button"
+                  role="option"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    commitSlot(index, font);
+                  }}
+                  className="block w-full px-2 py-1 text-left font-mono text-xs text-fg-muted transition hover:bg-bg hover:text-fg"
+                >
+                  {font}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         {!required && value ? (
           <button
             type="button"

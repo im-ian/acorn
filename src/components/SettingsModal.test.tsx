@@ -105,6 +105,12 @@ function setInputValue(input: HTMLInputElement, value: string) {
   });
 }
 
+function focusInput(input: HTMLInputElement) {
+  act(() => {
+    input.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  });
+}
+
 describe("SettingsModal font controls", () => {
   let root: Root | null = null;
   let container: HTMLDivElement;
@@ -179,9 +185,50 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const firstDatalist = document.querySelector("datalist");
-    expect(firstDatalist?.querySelectorAll("option").length).toBeLessThanOrEqual(
+    const [primary] = fontInputs();
+    focusInput(primary);
+    setInputValue(primary, "");
+
+    const listbox = document.querySelector('[role="listbox"]');
+    expect(listbox?.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(
       40,
     );
+  });
+
+  it("shows clickable font autocomplete suggestions while typing", async () => {
+    mocks.listSystemFonts.mockResolvedValue([
+      "Berkeley Mono",
+      "CommitMono",
+      "Recursive Mono",
+    ]);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const [primary] = fontInputs();
+    const patchAppearance = useSettings.getState().patchAppearance;
+
+    focusInput(primary);
+    setInputValue(primary, "berk");
+
+    const option = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((element) => element.textContent === "Berkeley Mono");
+    expect(option).toBeTruthy();
+
+    act(() => {
+      option?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+
+    expect(primary.value).toBe("Berkeley Mono");
+    expect(patchAppearance).toHaveBeenCalledWith({
+      fontSlots: ["Berkeley Mono", "Fira Code", "Menlo"],
+    });
   });
 });
