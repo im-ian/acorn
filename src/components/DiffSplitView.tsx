@@ -218,11 +218,81 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
 function DiffSplitContent({ entry }: { entry: FileEntry }) {
   const path = entry.file.new_path ?? entry.file.old_path ?? entry.path;
   const highlighted = useHighlightedDiff(entry.lines, path);
+  if (entry.file.is_image) {
+    return <ImageDiffPane file={entry.file} />;
+  }
   return (
     <div className="acorn-selectable min-h-0 flex-1 select-text overflow-auto font-mono text-[11px] leading-5">
       {entry.lines.map((line, i) => (
         <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
       ))}
+    </div>
+  );
+}
+
+function ImageDiffPane({ file }: { file: DiffFile }) {
+  const hasOld = !!file.old_image;
+  const hasNew = !!file.new_image;
+  if (!hasOld && !hasNew) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-xs text-fg-muted">
+        Binary image change (no preview available)
+      </div>
+    );
+  }
+  if (!hasOld) {
+    return (
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <ImagePreview label="Added" src={file.new_image!} accent="add" />
+      </div>
+    );
+  }
+  if (!hasNew) {
+    return (
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <ImagePreview label="Deleted" src={file.old_image!} accent="del" />
+      </div>
+    );
+  }
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-2 gap-3 overflow-auto p-4">
+      <ImagePreview label="Before" src={file.old_image!} accent="del" />
+      <ImagePreview label="After" src={file.new_image!} accent="add" />
+    </div>
+  );
+}
+
+function ImagePreview({
+  label,
+  src,
+  accent,
+}: {
+  label: string;
+  src: string;
+  accent: "add" | "del";
+}) {
+  const ringCls =
+    accent === "add"
+      ? "ring-1 ring-[oklch(35%_0.10_145_/_0.6)]"
+      : "ring-1 ring-[oklch(35%_0.16_25_/_0.6)]";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-fg-muted">
+        {label}
+      </span>
+      <div
+        className={cn(
+          "flex max-h-[60vh] items-center justify-center overflow-hidden rounded bg-bg-elevated/40 p-2",
+          ringCls,
+        )}
+      >
+        <img
+          src={src}
+          alt={label}
+          loading="lazy"
+          className="max-h-full max-w-full object-contain"
+        />
+      </div>
     </div>
   );
 }

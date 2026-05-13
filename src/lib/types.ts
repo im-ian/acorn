@@ -41,6 +41,7 @@ export interface CommitInfo {
   author: string;
   timestamp: number;
   summary: string;
+  body: string;
   pushed: boolean;
 }
 

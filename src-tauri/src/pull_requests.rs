@@ -724,17 +724,51 @@ pub fn get_pull_request_detail(
     match try_with_account(repo_path, &slug, |token| {
         let view = run_pr_view(&slug, number, token)?;
         let diff_text = run_pr_diff(&slug, number, token)?;
-        Ok((view, diff_text))
+        let mut detail = build_detail(number, view, diff_text);
+        // The unified diff `gh pr diff` returns reduces binary changes to a
+        // "Binary files ... differ" line. Enrich image entries with actual
+        // bytes fetched from the head/base refs so the renderer can show
+        // before/after previews instead of that placeholder text.
+        let head = detail.head_branch.clone();
+        let base = detail.base_branch.clone();
+        enrich_image_previews_against_refs(&slug, &head, &base, token, &mut detail.diff);
+        Ok(detail)
     })? {
         AccountOutcome::Ok {
             account,
-            value: (view, diff_text),
-        } => {
-            let detail = build_detail(number, view, diff_text);
-            Ok(PullRequestDetailListing::Ok { account, detail })
-        }
+            value: detail,
+        } => Ok(PullRequestDetailListing::Ok { account, detail }),
         AccountOutcome::NoAccess { accounts } => {
             Ok(PullRequestDetailListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+/// Image enrichment variant used for the overall PR diff. Resolves the
+/// "new" side at the PR's head ref and the "old" side at the base ref.
+fn enrich_image_previews_against_refs(
+    slug: &str,
+    head_ref: &str,
+    base_ref: &str,
+    token: &str,
+    payload: &mut crate::git_ops::DiffPayload,
+) {
+    for file in &mut payload.files {
+        if !file.is_image {
+            continue;
+        }
+        if let Some(path) = file.new_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, head_ref, &path, token) {
+                file.new_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        if let Some(path) = file.old_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, base_ref, &path, token) {
+                file.old_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        if file.new_image.is_some() || file.old_image.is_some() {
+            file.patch.clear();
         }
     }
 }
@@ -875,12 +909,77 @@ pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<Di
             "origin remote is not a GitHub repository".into(),
         ));
     };
-    match try_with_account(repo_path, &slug, |token| run_commit_diff(&slug, sha, token))? {
-        AccountOutcome::Ok { value, .. } => Ok(crate::unified_diff::parse_unified_diff(&value)),
+    match try_with_account(repo_path, &slug, |token| {
+        let diff_text = run_commit_diff(&slug, sha, token)?;
+        let mut payload = crate::unified_diff::parse_unified_diff(&diff_text);
+        // GitHub's `application/vnd.github.diff` reduces binary changes to a
+        // single "Binary files ... differ" sentinel line. Re-fetch the actual
+        // image bytes via the contents API so the renderer can show before /
+        // after previews instead of leaking that sentinel into the patch body.
+        enrich_image_previews(&slug, sha, token, &mut payload);
+        Ok(payload)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
         AccountOutcome::NoAccess { .. } => Err(AppError::Other(format!(
             "no logged-in gh account can access {slug}"
         ))),
     }
+}
+
+/// For every image file in `payload`, fetch the actual blob bytes from
+/// GitHub at `sha` (new side) and `sha^` (old side) and encode them as
+/// `data:` URIs. Misses (deleted file → no `new_path`, parent fetch
+/// failures, files too large for the contents API, etc.) are tolerated:
+/// the renderer falls back to a "no preview available" placeholder.
+fn enrich_image_previews(
+    slug: &str,
+    sha: &str,
+    token: &str,
+    payload: &mut crate::git_ops::DiffPayload,
+) {
+    let parent = format!("{sha}^");
+    for file in &mut payload.files {
+        if !file.is_image {
+            continue;
+        }
+        if let Some(path) = file.new_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, sha, &path, token) {
+                file.new_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        if let Some(path) = file.old_path.clone() {
+            if let Ok(bytes) = fetch_raw_blob(slug, &parent, &path, token) {
+                file.old_image = Some(crate::git_ops::encode_data_uri(&bytes, &path));
+            }
+        }
+        // Once a preview is attached the renderer no longer needs the
+        // "Binary files ... differ" placeholder lurking in the patch body.
+        if file.new_image.is_some() || file.old_image.is_some() {
+            file.patch.clear();
+        }
+    }
+}
+
+fn fetch_raw_blob(slug: &str, git_ref: &str, path: &str, token: &str) -> AppResult<Vec<u8>> {
+    let endpoint = format!("repos/{slug}/contents/{path}?ref={git_ref}");
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw",
+            &endpoint,
+        ]);
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(output.stdout)
 }
 
 fn run_commit_diff(slug: &str, sha: &str, token: &str) -> AppResult<String> {

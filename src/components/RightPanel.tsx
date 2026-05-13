@@ -57,6 +57,11 @@ interface ExpandedDiff {
   payload: DiffPayload;
   title: string;
   subtitle?: string;
+  /**
+   * Commit message body to show above the diff. Populated when expanding a
+   * commit; omitted for staged-diff expansion (no commit context).
+   */
+  body?: string;
 }
 
 const COMMITS_PAGE_SIZE = 50;
@@ -189,6 +194,7 @@ export function RightPanel() {
         payload={expanded?.payload ?? null}
         title={expanded?.title ?? ""}
         subtitle={expanded?.subtitle}
+        body={expanded?.body}
         cwd={repoPath ?? undefined}
         onClose={() => setExpanded(null)}
       />
@@ -626,6 +632,7 @@ function CommitsTab({
         payload,
         title: c.summary,
         subtitle: `${c.short_sha} · ${c.author}`,
+        body: c.body,
       });
     } catch (e) {
       setError(String(e));
@@ -787,6 +794,7 @@ function CommitsTab({
                   payload: diff,
                   title: c?.summary ?? selected.slice(0, 12),
                   subtitle: `${c?.short_sha ?? selected.slice(0, 7)} · ${c?.author ?? ""}`,
+                  body: c?.body,
                 });
               }}
             />
