@@ -638,6 +638,45 @@ describe("createSession", () => {
       window.removeEventListener("acorn:show-control-guide", listener);
     }
   });
+
+  it("inserts the new tab right after the previously-active tab", async () => {
+    // Seed three sessions in REPO_A; reconcile makes "a1" active.
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const a3 = session("a3", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2, a3]);
+    // Move active to "a2" so the next tab should land between a2 and a3.
+    useAppStore.getState().selectSession("a2");
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
+
+    const newSess = session("a4", REPO_A);
+    mockApi.createSession.mockResolvedValueOnce(newSess);
+    mockApi.listSessions.mockResolvedValueOnce([a1, a2, a3, newSess]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    await useAppStore.getState().createSession("new", REPO_A);
+
+    const s = useAppStore.getState();
+    expect(s.panes[s.focusedPaneId].sessionIds).toEqual([
+      "a1",
+      "a2",
+      "a4",
+      "a3",
+    ]);
+    expect(s.activeSessionId).toBe("a4");
+  });
+
+  it("appends when the focused pane has no active tab yet", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const newSess = session("first", REPO_A);
+    mockApi.createSession.mockResolvedValueOnce(newSess);
+    mockApi.listSessions.mockResolvedValueOnce([newSess]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    await useAppStore.getState().createSession("first", REPO_A);
+
+    const s = useAppStore.getState();
+    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["first"]);
+    expect(s.activeSessionId).toBe("first");
+  });
 });
 
 describe("reorderSessions", () => {

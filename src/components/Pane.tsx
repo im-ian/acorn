@@ -21,7 +21,6 @@ import {
 } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store";
-import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import {
   getCurrentDragPayload,
@@ -67,6 +66,7 @@ export function Pane({ paneId }: PaneProps) {
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const selectSession = useAppStore((s) => s.selectSession);
+  const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
@@ -110,18 +110,14 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
 
   // Spawn a new session in the given project. Triggered by double-clicking
-  // the empty pane body or the tab strip. We bypass the store wrapper so we
-  // can grab the new session id and immediately focus its tab in this pane.
+  // the empty pane body or the tab strip. `setFocusedPane` first so
+  // `store.createSession` lands the new tab next to *this* pane's active
+  // tab, then routes through the store wrapper for consistent placement
+  // and selection (browser-style "next to active").
   async function spawnSession(repoPath: string) {
     setFocusedPane(paneId);
     const name = suggestSessionName(repoPath, sessions);
-    try {
-      const created = await api.createSession(name, repoPath, false);
-      await useAppStore.getState().refreshAll();
-      selectSession(created.id);
-    } catch (err) {
-      console.error("[Pane] new session spawn failed", err);
-    }
+    await createSession(name, repoPath, false);
   }
 
   async function handleNewTabFromStrip() {
