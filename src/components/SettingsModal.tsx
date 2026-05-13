@@ -46,6 +46,7 @@ type Tab =
   | "editor"
   | "notifications"
   | "storage"
+  | "experiments"
   | "about";
 
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -57,6 +58,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
   { id: "storage", label: "Storage" },
+  { id: "experiments", label: "Experiments" },
   { id: "about", label: "About" },
 ];
 
@@ -151,6 +153,8 @@ export function SettingsModal() {
             <NotificationSettings />
           ) : tab === "storage" ? (
             <StorageSettings />
+          ) : tab === "experiments" ? (
+            <ExperimentsSettings />
           ) : (
             <AboutSettings />
           )}
@@ -1063,6 +1067,27 @@ type WhatsNewSource =
        */
       isFallback: boolean;
     };
+
+function ExperimentsSettings() {
+  const experiments = useSettings((s) => s.settings.experiments);
+  const patchExperiments = useSettings((s) => s.patchExperiments);
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
+        <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
+        Unfinished features. Behaviour may change between releases; the toggles
+        themselves are stable.
+      </div>
+      <CheckboxRow
+        checked={experiments.stickyPrompt}
+        onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
+        label="Pin last user prompt above terminal"
+        description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
+      />
+    </section>
+  );
+}
 
 function AboutSettings() {
   const currentVersion = useUpdater((s) => s.currentVersion);
