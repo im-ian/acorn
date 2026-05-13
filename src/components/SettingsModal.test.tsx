@@ -173,7 +173,7 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
-  it("edits Appearance UI scale as a percentage", async () => {
+  it("edits Appearance UI scale with presets only", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -183,22 +183,20 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const scaleInput = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Custom UI scale percentage"]',
-    );
+    const scaleSelect = Array.from(
+      document.querySelectorAll<HTMLSelectElement>("select"),
+    ).find((element) => element.value === "100");
 
     expect(document.body.textContent).toContain("UI scale");
-    expect(scaleInput?.value).toBe("100");
-
-    setInputValue(scaleInput as HTMLInputElement, "126");
-
-    expect(useSettings.getState().patchAppearance).not.toHaveBeenCalledWith({
-      uiScalePercent: 125,
-    });
-    expect(scaleInput?.value).toBe("126");
+    expect(
+      document.querySelector('input[aria-label="Custom UI scale percentage"]'),
+    ).toBeNull();
+    expect(scaleSelect?.value).toBe("100");
 
     act(() => {
-      scaleInput?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      if (!scaleSelect) throw new Error("UI scale select not found");
+      scaleSelect.value = "125";
+      scaleSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
     expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({

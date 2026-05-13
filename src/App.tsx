@@ -26,6 +26,7 @@ import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { api } from "./lib/api";
 import { Hotkeys, useHotkeys } from "./lib/hotkeys";
+import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
@@ -520,6 +521,10 @@ function App() {
       [Hotkeys.splitHorizontal]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().splitFocusedPane("vertical");
+      },
+      [Hotkeys.equalizePanes]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
       [Hotkeys.closeTab]: (e: KeyboardEvent) => {
         e.preventDefault();

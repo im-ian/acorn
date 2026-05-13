@@ -35,10 +35,6 @@ import {
   type TerminalFontWeight,
   type TerminalLinkActivation,
   TERMINAL_FONT_WEIGHTS,
-  UI_SCALE_PERCENT_MAX,
-  UI_SCALE_PERCENT_MIN,
-  UI_SCALE_PERCENT_STEP,
-  normalizeUiScalePercent,
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
@@ -579,36 +575,15 @@ function UiScaleSection({
   value: number;
   onChange: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
   const presets = UI_SCALE_PRESETS.includes(
     value as (typeof UI_SCALE_PRESETS)[number],
   )
     ? UI_SCALE_PRESETS
     : [...UI_SCALE_PRESETS, value].sort((a, b) => a - b);
 
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
-
   const commitValue = (next: number) => {
     if (!Number.isFinite(next)) return;
-    const normalized = normalizeUiScalePercent(next, value);
-    setDraft(String(normalized));
-    onChange(normalized);
-  };
-
-  const commitDraft = () => {
-    const raw = draft.trim();
-    if (!raw) {
-      setDraft(String(value));
-      return;
-    }
-    const next = Number(raw);
-    if (!Number.isFinite(next)) {
-      setDraft(String(value));
-      return;
-    }
-    commitValue(next);
+    onChange(next);
   };
 
   return (
@@ -628,26 +603,6 @@ function UiScaleSection({
             </option>
           ))}
         </Select>
-        <TextInput
-          type="number"
-          min={UI_SCALE_PERCENT_MIN}
-          max={UI_SCALE_PERCENT_MAX}
-          step={UI_SCALE_PERCENT_STEP}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commitDraft}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              commitDraft();
-              e.currentTarget.blur();
-            } else if (e.key === "Escape") {
-              setDraft(String(value));
-              e.currentTarget.blur();
-            }
-          }}
-          className="w-24"
-          aria-label="Custom UI scale percentage"
-        />
       </div>
     </Field>
   );

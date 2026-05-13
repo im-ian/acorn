@@ -76,6 +76,23 @@ test.describe("pane / sidebar shortcuts", () => {
     await expect(panes).toHaveCount(3);
   });
 
+  test("$mod+Alt+E dispatches equalize panes", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate(() => {
+      window.addEventListener("acorn:equalize-panes", () => {
+        document.documentElement.dataset.equalizePanes = "true";
+      });
+    });
+
+    await pressHotkey(page, { mod: true, alt: true, key: "e" });
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.equalizePanes),
+      )
+      .toBe("true");
+  });
+
   test("$mod+W triggers the remove-session confirm flow for the active tab", async ({
     page,
     tauri,

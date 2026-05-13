@@ -46,6 +46,7 @@ export const Hotkeys = {
   uiScaleReset: "$mod+0",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
+  equalizePanes: "$mod+Alt+e",
   closeTab: "$mod+w",
   closeEmptyPane: "Escape",
   openSettings: "$mod+Comma",
