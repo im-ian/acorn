@@ -1559,7 +1559,7 @@ function PrRow({
   // Avatar rows get a touch more leading + larger text so the avatar
   // doesn't dominate visually. Plain rows stay compact at the prior size.
   const titleSize = showAvatar ? "text-[13px]" : "text-xs";
-  const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
+  const metaSize = showAvatar ? "text-[12px]" : "text-[10px]";
   return (
     <li
       role="button"
