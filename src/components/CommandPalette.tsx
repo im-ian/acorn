@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Command } from "cmdk";
+import { Command, useCommandState } from "cmdk";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Bot,
@@ -12,6 +12,7 @@ import {
   Sparkles,
   Terminal,
   Trash2,
+  Trees,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
@@ -110,6 +111,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     } finally {
       close();
     }
+  }
+
+  function handleShakeTree() {
+    window.dispatchEvent(new CustomEvent("acorn:shake-tree"));
+    close();
   }
 
   async function handleRestartIpc() {
@@ -273,6 +279,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           </Command.Item>
         </Command.Group>
 
+        <ShakeTreeItem onSelect={handleShakeTree} />
+
         {sessionItems.length > 0 ? (
           <Command.Group heading="Danger zone">
             {sessionItems.map((session) => (
@@ -292,6 +300,42 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         ) : null}
       </Command.List>
     </Command.Dialog>
+  );
+}
+
+// Hidden palette entry. Only renders when the user has typed at least 2
+// characters and the query matches one of the easter-egg trigger words.
+const SHAKE_TRIGGERS = [
+  "shake",
+  "tree",
+  "shake tree",
+  "나무",
+  "흔들",
+  "나무 흔들기",
+  "acorn",
+  "rain",
+  "easter",
+  "도토리",
+];
+
+function ShakeTreeItem({ onSelect }: { onSelect: () => void }) {
+  const search = useCommandState(
+    (state: { search: string }) => state.search,
+  ) as string | undefined;
+  const q = (search ?? "").toLowerCase().trim();
+  const visible =
+    q.length >= 2 &&
+    SHAKE_TRIGGERS.some((t) => t.startsWith(q) || q.includes(t));
+  if (!visible) return null;
+  return (
+    <Command.Item
+      value="shake-tree-acorn-rain"
+      onSelect={onSelect}
+      keywords={SHAKE_TRIGGERS}
+    >
+      <Trees size={14} className="text-accent" />
+      <span>Shake the tree</span>
+    </Command.Item>
   );
 }
 
