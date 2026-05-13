@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::daemon_bridge::DaemonBridge;
+use crate::daemon_stream::StreamRegistry;
 use crate::ipc::server::IpcServerHandle;
 use crate::pty::PtyManager;
 use crate::session::{ProjectStore, SessionStore};
@@ -23,6 +25,17 @@ pub struct AppState {
     /// `None` when bind failed at boot. `ipc_restart` swaps in a new handle
     /// after signaling the previous listener to exit.
     pub ipc_handle: Arc<Mutex<Option<IpcServerHandle>>>,
+    /// Bridge to the out-of-process `acornd` daemon. Owns the cached
+    /// persistent control connection + the killswitch toggle. Always
+    /// constructed; calls short-circuit cleanly when the user has the
+    /// daemon disabled in Settings.
+    pub daemon_bridge: Arc<DaemonBridge>,
+    /// Per-session stream attachments to the daemon. Populated by the
+    /// daemon path of `pty_spawn` and drained by `pty_kill`. Lookup is
+    /// the "is this session daemon-managed and currently attached?"
+    /// check the dispatch helpers use to decide between daemon and
+    /// in-process routing on subsequent calls.
+    pub stream_registry: Arc<StreamRegistry>,
 }
 
 impl AppState {
@@ -34,6 +47,8 @@ impl AppState {
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             ipc_handle: Arc::new(Mutex::new(None)),
+            daemon_bridge: DaemonBridge::new(),
+            stream_registry: StreamRegistry::new(),
         }
     }
 }

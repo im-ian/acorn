@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:sidecar": "cd src-tauri && cargo build --bin acornd --bin acorn-ipc",
     "build": "tsc && vite build",
     "build:sidecar": "./src-tauri/scripts/build-sidecar.sh",
     "preview": "vite preview",
