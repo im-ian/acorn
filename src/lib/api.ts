@@ -248,6 +248,16 @@ export const api = {
     return invoke<string | null>("pty_repo_root", { sessionId });
   },
   /**
+   * Batched live "is the session sitting inside a linked git worktree?"
+   * probe. Returns a map keyed by session id; missing entries mean
+   * "no live PTY, or live cwd is not inside a linked worktree". One
+   * backend syscall sweep covers every session — call this on focus /
+   * after refresh, not on a tight interval.
+   */
+  ptyInWorktreeAll(): Promise<Record<string, boolean>> {
+    return invoke<Record<string, boolean>>("pty_in_worktree_all");
+  },
+  /**
    * Re-point a session at a different worktree directory. Used after an
    * in-PTY command creates a worktree and exits — adopting it lets the next
    * spawn land inside the new worktree instead of the original cwd.

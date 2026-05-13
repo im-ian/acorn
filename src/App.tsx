@@ -115,6 +115,18 @@ function App() {
     return () => document.removeEventListener("focusin", handler);
   }, []);
 
+  // Refresh the "live cwd is inside a linked worktree" map whenever the
+  // window regains focus — the user may have `cd`'d into a worktree (or
+  // out of one) while we were backgrounded, and the icon should reflect
+  // that without waiting for the next session-list refresh.
+  useEffect(() => {
+    const onFocus = () => {
+      void useAppStore.getState().refreshLiveInWorktree();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
   // Sync the daemon killswitch from localStorage into the backend on
   // boot. The backend defaults to ENABLED (Q16), and the frontend
   // localStorage entry is the canonical "user's last choice". On a
