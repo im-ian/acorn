@@ -61,9 +61,8 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 - 단축키로 세션·프로젝트 빠른 순회
 
 ### 🤖 AI 에이전트 세션
-- 세션 시작 명령으로 `claude` / `codex` / `gemini` / `ollama` / `llm` CLI 또는 `$SHELL` / 임의의 커스텀 명령 선택
+- 세션은 항상 `$SHELL`로 시작 — 그 안에서 원하는 AI CLI(`claude` / `codex` / `gemini` / `ollama` / `llm` 등)를 직접 실행
 - 다음 항목은 **Claude Code 전용** — Claude Code의 JSONL transcript(`~/.claude/projects/`) 파싱에 의존:
-  - 세션 ID 기반으로 새 세션 / 이어가기 자동 분기
   - 사이드바의 **유휴 / 입력 대기 / 작업 중** 라이브 상태 표시
   - 우측 패널의 todo 리스트
 
@@ -113,9 +112,8 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 
 ### 🎛️ 설정
 - 터미널 폰트 / 사이즈 / weight 커스터마이즈
-- 세션 시작 명령 선택 (`claude` / `$SHELL` / 사용자 정의)
+- AI 기능(머지 메시지 등)에 쓸 공급자(`claude` / `codex` / `gemini` / `ollama` / `llm` / 커스텀) 선택
 - "Open in editor" 외부 명령 지정
-- AI 기능의 공급자 통합 선택
 - Storage 정리 — orphan worktree, 캐시
 
 ### 📊 상태 표시줄
@@ -148,8 +146,6 @@ bun run tauri build    # 프로덕션 빌드
 ```
 
 > ℹ️ `bun run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/acorn-ipc-...' doesn't exist` 에러로 빌드가 실패합니다. `bun run build:sidecar`가 호스트 타깃에 맞는 바이너리를 빌드하고 올바른 위치에 stage합니다.
-
-> ⚠️ 기본 세션 시작 명령은 `claude` CLI입니다. `$PATH`에 없거나 다른 에이전트를 쓰고 싶다면 Settings → Sessions에서 `codex` / `gemini` / `ollama` / `llm` / `$SHELL` / 임의의 커스텀 명령으로 전환하세요.
 
 ### 테스트
 

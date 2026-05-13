@@ -721,9 +721,8 @@ function AgentSettings() {
   return (
     <section className="space-y-4">
       <p className="rounded-md border border-border bg-bg-sidebar/40 px-3 py-2 text-[11px] text-fg-muted">
-        The selected agent powers every AI feature in acorn — the merge
-        dialog's <em>Generate with AI</em> button and Sessions startup's
-        <em> Agent</em> mode both run whichever CLI is picked here.
+        The selected agent powers acorn's AI features — currently the merge
+        dialog's <em>Generate with AI</em> button.
       </p>
       <Field label="Agent" hint="Choose which AI CLI acorn uses.">
         <div className="flex flex-col gap-1.5">
@@ -734,7 +733,7 @@ function AgentSettings() {
               value={opt.value}
               current={selected}
               label={opt.label}
-              description={`${opt.interactiveHint} · ${opt.oneshotHint}`}
+              description={opt.oneshotHint}
               onSelect={(v) => patchAgents({ selected: v })}
             />
           ))}

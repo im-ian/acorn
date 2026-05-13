@@ -20,38 +20,31 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   label: string;
   /** One-shot invocation hint shown in Settings. */
   oneshotHint: string;
-  /** Interactive PTY invocation hint shown in Settings. */
-  interactiveHint: string;
 }> = [
   {
     value: "claude",
     label: "Claude Code",
     oneshotHint: "claude -p --output-format text",
-    interactiveHint: "claude",
   },
   {
     value: "gemini",
     label: "Gemini CLI",
     oneshotHint: "gemini -p",
-    interactiveHint: "gemini",
   },
   {
     value: "ollama",
     label: "Ollama (local)",
     oneshotHint: "ollama run <model>",
-    interactiveHint: "ollama run <model>",
   },
   {
     value: "llm",
     label: "llm CLI",
     oneshotHint: "llm [-m <model>]",
-    interactiveHint: "llm chat [-m <model>]",
   },
   {
     value: "codex",
     label: "OpenAI Codex CLI",
     oneshotHint: "codex (interactive only)",
-    interactiveHint: "codex",
   },
 ];
 
