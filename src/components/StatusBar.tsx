@@ -106,6 +106,12 @@ export function StatusBar() {
   const { sessions, activeSessionId, activeProject, error, loading } =
     useAppStore();
   const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
+  const showSessionCount = useSettings(
+    (s) => s.settings.statusBar.showSessionCount,
+  );
+  const showSessionStatus = useSettings(
+    (s) => s.settings.statusBar.showSessionStatus,
+  );
   const showGithubAccount = useSettings(
     (s) => s.settings.statusBar.showGithubAccount,
   );
@@ -130,10 +136,14 @@ export function StatusBar() {
             control-session socket or a stopped daemon without leaving
             the main view. */}
         <ServicesStatusButton />
-        <span>sessions: {sessions.length}</span>
-        {active ? (
+        {showSessionCount ? (
+          <span>sessions: {sessions.length}</span>
+        ) : null}
+        {showSessionStatus && active ? (
           <>
-            <span className="text-fg-muted/50">|</span>
+            {showSessionCount ? (
+              <span className="text-fg-muted/50">|</span>
+            ) : null}
             <span>status: {active.status}</span>
           </>
         ) : null}

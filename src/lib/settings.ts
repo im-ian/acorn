@@ -205,6 +205,8 @@ export interface AcornSettings {
    * actually reduces the work acorn does — not just hides the readout.
    */
   statusBar: {
+    showSessionCount: boolean;
+    showSessionStatus: boolean;
     showGithubAccount: boolean;
     showMemory: boolean;
   };
@@ -288,6 +290,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
   },
   statusBar: {
+    showSessionCount: true,
+    showSessionStatus: true,
     showGithubAccount: true,
     showMemory: true,
   },
