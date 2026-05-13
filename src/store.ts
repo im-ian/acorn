@@ -712,12 +712,76 @@ export const useAppStore = create<AppStateModel>()(
   async createSession(name, repoPath, isolated = false, kind = "regular") {
     set({ loading: true, error: null });
     try {
+      // Snapshot the previously-active tab's index in the focused pane so
+      // we can land the new tab right after it (browser-style). Captured
+      // before `api.createSession` so the post-refresh reorder is anchored
+      // to the user's view at hotkey-press time, not the post-reconcile
+      // append position.
+      const beforeSnap = (() => {
+        const s = get();
+        const ws = s.workspaces[repoPath];
+        if (!ws) return null;
+        const paneId = ws.focusedPaneId;
+        const pane = ws.panes[paneId];
+        if (!pane?.activeSessionId) return null;
+        const idx = pane.sessionIds.indexOf(pane.activeSessionId);
+        return idx >= 0 ? { paneId, idx } : null;
+      })();
+
       const created = await api.createSession(name, repoPath, isolated, kind);
       await get().refreshAll();
+
+      // Reorder so the new tab sits immediately after the previously-active
+      // tab in the same pane. `reconcileWorkspace` always appends new
+      // sessions at the end of `focusedPaneId.sessionIds`; this step
+      // converts that to "next to active" without changing reconcile's
+      // boot-time behavior.
+      if (beforeSnap) {
+        set((s) => {
+          const ws = s.workspaces[repoPath];
+          if (!ws) return s;
+          const pane = ws.panes[beforeSnap.paneId];
+          if (!pane) return s;
+          const currentIdx = pane.sessionIds.indexOf(created.id);
+          if (currentIdx < 0) return s;
+          const targetIdx = Math.min(
+            beforeSnap.idx + 1,
+            pane.sessionIds.length - 1,
+          );
+          if (currentIdx === targetIdx) return s;
+          const ids = pane.sessionIds.filter((id) => id !== created.id);
+          ids.splice(targetIdx, 0, created.id);
+          const newPane = { ...pane, sessionIds: ids };
+          const newWs = {
+            ...ws,
+            panes: { ...ws.panes, [beforeSnap.paneId]: newPane },
+          };
+          const workspaces = { ...s.workspaces, [repoPath]: newWs };
+          return {
+            workspaces,
+            ...(s.activeProject === repoPath
+              ? mirrorActive(workspaces, repoPath)
+              : {}),
+          };
+        });
+      }
+
       // Focus the new session so Cmd+T (and any other entry point that goes
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
       get().selectSession(created.id);
+      // Grab keyboard focus for the new session's xterm. rAF defers past the
+      // portal reattach in `TerminalHost` so the slot is mounted in its pane
+      // body by the time `Terminal` calls `term.focus()`.
+      if (typeof window !== "undefined") {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(
+            new CustomEvent("acorn:focus-session", {
+              detail: { sessionId: created.id },
+            }),
+          );
+        });
+      }
       // First-run guidance for control sessions. Gated on a localStorage
       // flag so power users only see it once. App.tsx hosts the modal.
       if (

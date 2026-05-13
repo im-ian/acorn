@@ -119,6 +119,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 
 ### 🎛️ 설정
 - 터미널 폰트 / 사이즈 / weight 커스터마이즈
+- Appearance에서 빌트인/custom theme, 배경 이미지(fit/opacity/blur), 터미널 폰트 3-slot fallback 설정
 - AI 기능(머지 메시지 등)에 쓸 공급자(`claude` / `codex` / `gemini` / `ollama` / `llm` / 커스텀) 선택
 - "Open in editor" 외부 명령 지정
 - Storage 정리 — orphan worktree, 캐시

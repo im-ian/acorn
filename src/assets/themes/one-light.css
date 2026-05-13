@@ -1,0 +1,15 @@
+/* @mode light */
+:root[data-acorn-theme="one-light"] {
+  --color-bg: #fafafa;
+  --color-bg-elevated: #f0f0f0;
+  --color-bg-sidebar: #eaeaeb;
+  --color-fg: #383a42;
+  --color-fg-muted: #696c77;
+  --color-border: #d7d7d9;
+  --color-accent: #4078f2;
+  --color-accent-hover: #2f67d8;
+  --color-danger: #e45649;
+  --color-warning: #c18401;
+  --color-terminal-bg: #fafafa;
+  --color-terminal-fg: #383a42;
+}

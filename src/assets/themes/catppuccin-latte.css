@@ -1,0 +1,15 @@
+/* @mode light */
+:root[data-acorn-theme="catppuccin-latte"] {
+  --color-bg: #eff1f5;
+  --color-bg-elevated: #e6e9ef;
+  --color-bg-sidebar: #dce0e8;
+  --color-fg: #4c4f69;
+  --color-fg-muted: #6c6f85;
+  --color-border: #ccd0da;
+  --color-accent: #1e66f5;
+  --color-accent-hover: #1450c2;
+  --color-danger: #d20f39;
+  --color-warning: #df8e1d;
+  --color-terminal-bg: #eff1f5;
+  --color-terminal-fg: #4c4f69;
+}

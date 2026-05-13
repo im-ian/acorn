@@ -1,6 +1,8 @@
 import {
   Bot,
   ChevronRight,
+  CircleX,
+  Columns2,
   Copy,
   Files,
   FolderOpen,
@@ -10,6 +12,7 @@ import {
   Pencil,
   PencilLine,
   Plus,
+  SquareX,
   Trash2,
   X,
 } from "lucide-react";
@@ -37,9 +40,9 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
-import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
+import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
   type AcornSettings,
@@ -812,19 +815,24 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       n += 1;
     }
     try {
-      // Carry the source session's kind onto the duplicate so a control
-      // session stays a control session and keeps its IPC-dispatch role.
-      await api.createSession(
-        next,
-        session.repo_path,
-        session.isolated,
-        session.kind,
-      );
-      await useAppStore.getState().refreshAll();
+      // Route through the store wrapper so the duplicate gets the same
+      // post-create treatment as Cmd+T and Pane "Duplicate Session": land
+      // next to the active tab, auto-select, and auto-focus xterm. Carries
+      // the source session's `kind` so a control session stays a control
+      // session (preserves its IPC-dispatch role).
+      await useAppStore
+        .getState()
+        .createSession(next, session.repo_path, session.isolated, session.kind);
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);
     }
   }
+
+  const projectSiblings = useMemo(
+    () => sessions.filter((s) => s.repo_path === session.repo_path),
+    [sessions, session.repo_path],
+  );
+  const otherSiblings = projectSiblings.filter((s) => s.id !== session.id);
 
   const sessionMenuItems: ContextMenuItem[] = [
     {
@@ -836,6 +844,14 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Duplicate Session",
       icon: <Files size={12} />,
       onClick: () => void duplicate(),
+    },
+    { type: "separator" },
+    {
+      label: "Equalize Pane Sizes",
+      icon: <Columns2 size={12} />,
+      onClick: () => {
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+      },
     },
     { type: "separator" },
     {
@@ -859,6 +875,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         });
       },
     },
+    { type: "separator" },
     {
       label: "Copy Worktree Path",
       icon: <Copy size={12} />,
@@ -885,6 +902,24 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Remove",
       icon: <Trash2 size={12} />,
       onClick: onRemove,
+    },
+    {
+      label: "Remove Others in Project",
+      icon: <CircleX size={12} />,
+      disabled: otherSiblings.length === 0,
+      onClick: () => {
+        const request = useAppStore.getState().requestRemoveSession;
+        for (const s of otherSiblings) request(s.id);
+      },
+    },
+    {
+      label: "Remove All in Project",
+      icon: <SquareX size={12} />,
+      disabled: projectSiblings.length === 0,
+      onClick: () => {
+        const request = useAppStore.getState().requestRemoveSession;
+        for (const s of projectSiblings) request(s.id);
+      },
     },
   ];
 

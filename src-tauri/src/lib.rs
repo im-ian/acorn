@@ -92,6 +92,23 @@ pub fn run() {
                 .paste()
                 .select_all()
                 .build()?;
+            // Dev-only Reload (Cmd+R) so frontend edits that don't HMR cleanly
+            // can be re-bootstrapped without restarting the whole Tauri host.
+            // The release menu omits it on purpose — Acorn ships as a single
+            // long-lived app and an accidental Cmd+R would drop every PTY's
+            // in-memory state.
+            #[cfg(debug_assertions)]
+            let reload_item = MenuItemBuilder::new("Reload")
+                .id("reload")
+                .accelerator("CmdOrCtrl+R")
+                .build(app)?;
+            #[cfg(debug_assertions)]
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&reload_item)
+                .separator()
+                .fullscreen()
+                .build()?;
+            #[cfg(not(debug_assertions))]
             let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
@@ -110,6 +127,14 @@ pub fn run() {
                 if event.id() == "settings" {
                     if let Err(err) = handle.emit("acorn:open-settings", ()) {
                         tracing::warn!("failed to emit open-settings: {err}");
+                    }
+                }
+                #[cfg(debug_assertions)]
+                if event.id() == "reload" {
+                    if let Some(window) = handle.get_webview_window("main") {
+                        if let Err(err) = window.eval("window.location.reload()") {
+                            tracing::warn!("failed to reload webview: {err}");
+                        }
                     }
                 }
             });
@@ -237,6 +262,7 @@ pub fn run() {
             commands::list_pull_requests,
             commands::get_pull_request_detail,
             commands::get_pull_request_commit_diff,
+            commands::resolve_commit_logins,
             commands::merge_pull_request,
             commands::close_pull_request,
             commands::update_pull_request_body,
@@ -262,6 +288,7 @@ pub fn run() {
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
+            commands::list_system_fonts,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,

@@ -31,10 +31,13 @@ import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
+import { findFocusedSessionId } from "./lib/focus";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
 import { useSettings } from "./lib/settings";
+import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
+import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
 
@@ -79,6 +82,39 @@ function App() {
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
+  const themes = useThemes((s) => s.themes);
+  const refreshThemes = useThemes((s) => s.refresh);
+  const appearance = useSettings((s) => s.settings.appearance);
+
+  useEffect(() => {
+    void refreshThemes();
+  }, [refreshThemes]);
+
+  useEffect(() => {
+    const theme = themes.find((t) => t.id === appearance.themeId) ?? themes[0];
+    if (theme) {
+      applyTheme(theme.id, theme.css);
+    }
+  }, [appearance.themeId, themes]);
+
+  useEffect(() => {
+    if (
+      appearance.background.relativePath &&
+      (appearance.background.applyToApp ||
+        appearance.background.applyToTerminal)
+    ) {
+      void applyBackgroundVars(appearance.background);
+    } else {
+      clearBackgroundVars();
+    }
+  }, [
+    appearance.background.relativePath,
+    appearance.background.fit,
+    appearance.background.opacity,
+    appearance.background.blur,
+    appearance.background.applyToApp,
+    appearance.background.applyToTerminal,
+  ]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
@@ -87,6 +123,32 @@ function App() {
     // from zeroing out the persisted layout.
     void useAppStore.getState().loadInitialStatus().then(() => refreshAll());
   }, [refreshAll]);
+
+  // Keep `focusedPaneId` synced with the terminal whose helper textarea
+  // currently owns DOM focus. The pane body's mousedown listener handles
+  // the click-into-terminal case; this `focusin` syncer covers
+  // keyboard-driven focus moves (Tab cycling, programmatic .focus(),
+  // workspace switches) so every focus-dependent hotkey — Cmd+T, Cmd+W,
+  // Cmd+Shift+D, Cmd+]/[ — targets the pane the user is actually
+  // working in.
+  useEffect(() => {
+    const handler = () => {
+      const sid = findFocusedSessionId();
+      if (!sid) return;
+      const state = useAppStore.getState();
+      if (!state.activeProject) return;
+      const ws = state.workspaces[state.activeProject];
+      if (!ws) return;
+      for (const [pid, pane] of Object.entries(ws.panes)) {
+        if (pane.sessionIds.includes(sid)) {
+          if (ws.focusedPaneId !== pid) state.setFocusedPane(pid);
+          return;
+        }
+      }
+    };
+    document.addEventListener("focusin", handler);
+    return () => document.removeEventListener("focusin", handler);
+  }, []);
 
   // Sync the daemon killswitch from localStorage into the backend on
   // boot. The backend defaults to ENABLED (Q16), and the frontend
@@ -362,22 +424,12 @@ function App() {
       },
       [Hotkeys.clearTerminal]: (e: KeyboardEvent) => {
         // Prefer the terminal whose helper textarea currently owns DOM
-        // focus over `state.activeSessionId`. The store's `focusedPaneId`
-        // only updates on a mouse-down inside a pane, but typing into an
-        // xterm (or pressing a hotkey while the helper textarea has
-        // focus) does not — so Cmd+K would otherwise clear whichever
-        // pane the user last clicked, not the terminal they are actually
-        // working in. Walking up from `document.activeElement` to the
-        // nearest `[data-acorn-terminal-slot]` resolves the terminal the
-        // user is really looking at.
-        let sessionId: string | null = null;
-        const focused = document.activeElement as HTMLElement | null;
-        const slot = focused?.closest<HTMLElement>(
-          "[data-acorn-terminal-slot]",
-        );
-        if (slot?.dataset.acornTerminalSlot) {
-          sessionId = slot.dataset.acornTerminalSlot;
-        }
+        // focus over `state.activeSessionId`. The app-level `focusin`
+        // listener keeps `focusedPaneId` synced for clicks, but a hotkey
+        // pressed *while* an xterm has focus has no intervening event
+        // that would have re-synced — so resolve the real target via
+        // `document.activeElement` walk.
+        let sessionId = findFocusedSessionId();
         // Fall back to the store when focus is elsewhere (sidebar,
         // command palette, an empty pane after a split, etc.). Scan all
         // panes so a freshly-split empty pane doesn't silently no-op the
@@ -491,10 +543,13 @@ function App() {
   useHotkeys(bindings);
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-bg text-fg">
-      <UpdateBanner />
+    <div className="acorn-app-shell relative flex h-screen w-screen flex-col bg-bg text-fg">
+      <div className="acorn-bg-app" aria-hidden="true" />
+      <div className="relative z-10">
+        <UpdateBanner />
+      </div>
       <ToastHost />
-      <div className="flex min-h-0 flex-1">
+      <div className="relative z-10 flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
             ref={sidebarPanelRef}
@@ -527,7 +582,9 @@ function App() {
           </Panel>
         </PanelGroup>
       </div>
-      <StatusBar />
+      <div className="relative z-10">
+        <StatusBar />
+      </div>
       <TerminalHost />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <AcornRain />

@@ -123,6 +123,20 @@ export const api = {
       sha,
     });
   },
+  /**
+   * Batch-resolve git OIDs → GitHub login (when GitHub knows about them).
+   * Missing keys mean we couldn't reach GitHub; `null` values mean the
+   * commit exists but its author doesn't map to a GitHub account.
+   */
+  resolveCommitLogins(
+    repoPath: string,
+    shas: string[],
+  ): Promise<Record<string, string | null>> {
+    return invoke<Record<string, string | null>>("resolve_commit_logins", {
+      repoPath,
+      shas,
+    });
+  },
   mergePullRequest(
     repoPath: string,
     number: number,
@@ -187,6 +201,9 @@ export const api = {
    */
   ipcRestart(): Promise<void> {
     return invoke<void>("ipc_restart");
+  },
+  listSystemFonts(): Promise<string[]> {
+    return invoke<string[]>("list_system_fonts");
   },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });

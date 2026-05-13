@@ -1,4 +1,5 @@
 import {
+  CircleX,
   Columns2,
   Copy,
   Files,
@@ -10,6 +11,7 @@ import {
   PencilLine,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  SquareX,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -38,7 +40,7 @@ import { useSettings } from "../lib/settings";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
-import type { Session, SessionStatus } from "../lib/types";
+import type { Session, SessionKind, SessionStatus } from "../lib/types";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
   idle: "bg-fg-muted",
@@ -68,6 +70,7 @@ export function Pane({ paneId }: PaneProps) {
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const selectSession = useAppStore((s) => s.selectSession);
+  const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
@@ -111,18 +114,17 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
 
   // Spawn a new session in the given project. Triggered by double-clicking
-  // the empty pane body or the tab strip. We bypass the store wrapper so we
-  // can grab the new session id and immediately focus its tab in this pane.
-  async function spawnSession(repoPath: string) {
+  // the empty pane body or the tab strip. `setFocusedPane` first so
+  // `store.createSession` lands the new tab next to *this* pane's active
+  // tab, then routes through the store wrapper for consistent placement
+  // and selection (browser-style "next to active").
+  async function spawnSession(
+    repoPath: string,
+    kind: SessionKind = "regular",
+  ) {
     setFocusedPane(paneId);
     const name = suggestSessionName(repoPath, sessions);
-    try {
-      const created = await api.createSession(name, repoPath, false);
-      await useAppStore.getState().refreshAll();
-      selectSession(created.id);
-    } catch (err) {
-      console.error("[Pane] new session spawn failed", err);
-    }
+    await createSession(name, repoPath, false, kind);
   }
 
   // Fork an existing claude/codex conversation into a new Acorn session.
@@ -240,8 +242,8 @@ export function Pane({ paneId }: PaneProps) {
               splitSide: "after",
             });
           }}
-          onDuplicate={(repoPath) => {
-            void spawnSession(repoPath);
+          onDuplicate={(repoPath, kind) => {
+            void spawnSession(repoPath, kind);
           }}
           onFork={(parent, kind, parentAgentId, isolated) => {
             void forkSession(parent, kind, parentAgentId, isolated);
@@ -369,7 +371,7 @@ interface TabStripProps {
   ) => void;
   onNewTab: () => void;
   onSplitTab: (sessionId: string, direction: Direction) => void;
-  onDuplicate: (repoPath: string) => void;
+  onDuplicate: (repoPath: string, kind: SessionKind) => void;
   onFork: (
     parent: Session,
     kind: "claude" | "codex",
@@ -459,7 +461,7 @@ function TabStrip({
             for (const t of tabs) onClose(t.id);
           }}
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
-          onDuplicate={() => onDuplicate(tab.repo_path)}
+          onDuplicate={() => onDuplicate(tab.repo_path, tab.kind)}
           onFork={(kind, parentAgentId, isolated) =>
             onFork(tab, kind, parentAgentId, isolated)
           }
@@ -652,6 +654,7 @@ function TabItem({
         });
       },
     },
+    { type: "separator" },
     {
       label: "Copy Worktree Path",
       icon: <Copy size={12} />,
@@ -689,11 +692,13 @@ function TabItem({
     },
     {
       label: "Close Others",
+      icon: <CircleX size={12} />,
       onClick: onCloseOthers,
       disabled: siblingCount <= 1,
     },
     {
       label: "Close All",
+      icon: <SquareX size={12} />,
       onClick: onCloseAll,
     },
   ];
@@ -889,6 +894,7 @@ function buildPaneMenuItems({
             );
           },
         },
+        { type: "separator" },
         {
           label: "Copy Worktree Path",
           icon: <Copy size={12} />,

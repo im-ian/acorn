@@ -14,6 +14,19 @@
     "dialog:default",
     "shell:default",
     "fs:default",
+    "fs:read-files",
+    "fs:write-files",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        "$APPLOCALDATA/backgrounds",
+        "$APPLOCALDATA/backgrounds/*",
+        "$APPLOCALDATA/backgrounds/**/*",
+        "$APPLOCALDATA/themes",
+        "$APPLOCALDATA/themes/*",
+        "$APPLOCALDATA/themes/**/*"
+      ]
+    },
     "notification:default",
     "updater:default",
     "process:default"
