@@ -27,6 +27,7 @@ import {
   clearBackgroundVars,
   importBackgroundImage,
 } from "./background";
+import appCss from "../App.css?raw";
 
 beforeEach(() => {
   tauriPathMock.appLocalDataDir.mockResolvedValue("/app/local");
@@ -143,6 +144,17 @@ describe("clearBackgroundVars", () => {
     clearBackgroundVars();
     expect(document.documentElement.style.getPropertyValue("--bg-opacity")).toBe(
       "",
+    );
+  });
+});
+
+describe("background overlay CSS", () => {
+  it("makes app and terminal surfaces translucent when a background is active", () => {
+    expect(appCss).toContain(':root[data-bg-app="on"] .bg-bg');
+    expect(appCss).toContain(':root[data-bg-app="on"] .bg-bg-sidebar');
+    expect(appCss).toContain(".acorn-terminal-shell");
+    expect(appCss).toContain(
+      ':root[data-bg-terminal="on"] .acorn-terminal-shell',
     );
   });
 });

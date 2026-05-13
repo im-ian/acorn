@@ -26,7 +26,25 @@ const GENERIC_FALLBACKS = new Set([
 ]);
 
 function needsQuoting(name: string): boolean {
-  return /\s/.test(name);
+  return /[\s"'\\]/.test(name);
+}
+
+function quoteFontName(name: string): string {
+  return `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+export function sanitizeFontFamilyName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value
+    .trim()
+    .replace(/^["'](.+)["']$/, "$1")
+    .trim();
+
+  if (!trimmed || trimmed.length > 80) return null;
+  if (/[,;\n\r\t]/.test(trimmed)) return null;
+  if (GENERIC_FALLBACKS.has(trimmed)) return null;
+
+  return trimmed;
 }
 
 export function fontStackFromSlots(
@@ -34,11 +52,11 @@ export function fontStackFromSlots(
   fallback: string,
 ): string {
   const cleaned = slots
-    .filter((slot): slot is string => !!slot && slot.trim().length > 0)
-    .map((slot) => slot.trim());
+    .map(sanitizeFontFamilyName)
+    .filter((slot): slot is string => slot !== null);
 
   const parts = cleaned.map((name) =>
-    needsQuoting(name) ? `"${name}"` : name,
+    needsQuoting(name) ? quoteFontName(name) : name,
   );
   parts.push(fallback);
 
@@ -48,7 +66,7 @@ export function fontStackFromSlots(
 export function fontSlotsFromStack(stack: string): string[] {
   return stack
     .split(",")
-    .map((token) => token.trim().replace(/^"(.*)"$/, "$1"))
-    .filter((name) => name.length > 0 && !GENERIC_FALLBACKS.has(name))
+    .map(sanitizeFontFamilyName)
+    .filter((name): name is string => name !== null)
     .slice(0, 3);
 }

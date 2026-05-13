@@ -209,6 +209,7 @@ pub fn run() {
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
+            commands::list_system_fonts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

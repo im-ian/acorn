@@ -5,9 +5,17 @@ import { create } from "zustand";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
 import acornLightCss from "../assets/themes/acorn-light.css?raw";
+import ayuDarkCss from "../assets/themes/ayu-dark.css?raw";
 import catppuccinLatteCss from "../assets/themes/catppuccin-latte.css?raw";
+import catppuccinMochaCss from "../assets/themes/catppuccin-mocha.css?raw";
+import draculaCss from "../assets/themes/dracula.css?raw";
 import githubLightCss from "../assets/themes/github-light.css?raw";
+import gruvboxDarkCss from "../assets/themes/gruvbox-dark.css?raw";
+import gruvboxLightCss from "../assets/themes/gruvbox-light.css?raw";
+import nordCss from "../assets/themes/nord.css?raw";
 import oneDarkProCss from "../assets/themes/one-dark-pro.css?raw";
+import oneLightCss from "../assets/themes/one-light.css?raw";
+import rosePineCss from "../assets/themes/rose-pine.css?raw";
 import solarizedLightCss from "../assets/themes/solarized-light.css?raw";
 import tokyoNightCss from "../assets/themes/tokyo-night.css?raw";
 
@@ -59,6 +67,48 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     source: "builtin",
   },
   {
+    id: "dracula",
+    label: "Dracula",
+    mode: "dark",
+    css: draculaCss,
+    source: "builtin",
+  },
+  {
+    id: "catppuccin-mocha",
+    label: "Catppuccin Mocha",
+    mode: "dark",
+    css: catppuccinMochaCss,
+    source: "builtin",
+  },
+  {
+    id: "gruvbox-dark",
+    label: "Gruvbox Dark",
+    mode: "dark",
+    css: gruvboxDarkCss,
+    source: "builtin",
+  },
+  {
+    id: "nord",
+    label: "Nord",
+    mode: "dark",
+    css: nordCss,
+    source: "builtin",
+  },
+  {
+    id: "rose-pine",
+    label: "Rose Pine",
+    mode: "dark",
+    css: rosePineCss,
+    source: "builtin",
+  },
+  {
+    id: "ayu-dark",
+    label: "Ayu Dark",
+    mode: "dark",
+    css: ayuDarkCss,
+    source: "builtin",
+  },
+  {
     id: "acorn-light",
     label: "Acorn Light",
     mode: "light",
@@ -84,6 +134,20 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     label: "Catppuccin Latte",
     mode: "light",
     css: catppuccinLatteCss,
+    source: "builtin",
+  },
+  {
+    id: "one-light",
+    label: "One Light",
+    mode: "light",
+    css: oneLightCss,
+    source: "builtin",
+  },
+  {
+    id: "gruvbox-light",
+    label: "Gruvbox Light",
+    mode: "light",
+    css: gruvboxLightCss,
     source: "builtin",
   },
 ];

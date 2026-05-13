@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import type { BackgroundFit, BackgroundState } from "./background";
 import {
-  CURATED_MONOSPACE_FONTS,
   fontStackFromSlots,
   fontSlotsFromStack,
+  sanitizeFontFamilyName,
   type CuratedMonospaceFont,
 } from "./fonts";
 import { BUILT_IN_THEMES } from "./themes";
@@ -363,7 +363,6 @@ const VALID_PR_INTERVALS = new Set<number>(
 );
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
-const CURATED_FONT_SET = new Set<string>(CURATED_MONOSPACE_FONTS);
 const VALID_THEME_IDS = new Set<string>(BUILT_IN_THEMES.map((t) => t.id));
 
 function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
@@ -404,9 +403,7 @@ function normalizeFontSlots(
   if (!source) return fallback;
 
   const cleaned = [0, 1, 2].map((index) => {
-    const raw = source[index];
-    if (typeof raw !== "string") return null;
-    return CURATED_FONT_SET.has(raw) ? raw : null;
+    return sanitizeFontFamilyName(source[index]);
   });
 
   if (!cleaned[0]) return fallback;

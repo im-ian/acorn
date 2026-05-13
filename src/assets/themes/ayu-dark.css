@@ -1,0 +1,14 @@
+:root[data-acorn-theme="ayu-dark"] {
+  --color-bg: #0f1419;
+  --color-bg-elevated: #1f2430;
+  --color-bg-sidebar: #0b1016;
+  --color-fg: #e6e1cf;
+  --color-fg-muted: #8a9199;
+  --color-border: #2d3640;
+  --color-accent: #ffb454;
+  --color-accent-hover: #ffc777;
+  --color-danger: #f07178;
+  --color-warning: #ffee99;
+  --color-terminal-bg: #0f1419;
+  --color-terminal-fg: #e6e1cf;
+}

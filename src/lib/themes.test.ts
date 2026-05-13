@@ -12,22 +12,29 @@ afterEach(() => {
 });
 
 describe("BUILT_IN_THEMES", () => {
-  it("ships 7 entries: 3 dark + 4 light", () => {
+  it("ships an expanded set of built-in themes", () => {
     expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual([
       "acorn-dark",
       "one-dark-pro",
       "tokyo-night",
+      "dracula",
+      "catppuccin-mocha",
+      "gruvbox-dark",
+      "nord",
+      "rose-pine",
+      "ayu-dark",
       "acorn-light",
       "github-light",
       "solarized-light",
       "catppuccin-latte",
+      "one-light",
+      "gruvbox-light",
     ]);
-    expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(
-      3,
-    );
+    expect(BUILT_IN_THEMES).toHaveLength(15);
+    expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(9);
     expect(
       BUILT_IN_THEMES.filter((theme) => theme.mode === "light"),
-    ).toHaveLength(4);
+    ).toHaveLength(6);
   });
 
   it("every built-in css passes validation", () => {

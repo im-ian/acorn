@@ -3,6 +3,7 @@ import {
   CURATED_MONOSPACE_FONTS,
   fontStackFromSlots,
   fontSlotsFromStack,
+  sanitizeFontFamilyName,
 } from "./fonts";
 
 describe("CURATED_MONOSPACE_FONTS", () => {
@@ -29,6 +30,12 @@ describe("fontStackFromSlots", () => {
     ).toBe('"JetBrains Mono", "SF Mono", Menlo, monospace');
   });
 
+  it("keeps custom font names and escapes quotes", () => {
+    expect(
+      fontStackFromSlots(['Berkeley "Mono"', "CommitMono", null], "monospace"),
+    ).toBe('"Berkeley \\"Mono\\"", CommitMono, monospace');
+  });
+
   it("skips null/empty slots and appends generic fallback", () => {
     expect(fontStackFromSlots(["Menlo", null, null], "monospace")).toBe(
       "Menlo, monospace",
@@ -39,6 +46,17 @@ describe("fontStackFromSlots", () => {
     expect(fontStackFromSlots([null, null, null], "monospace")).toBe(
       "monospace",
     );
+  });
+});
+
+describe("sanitizeFontFamilyName", () => {
+  it("accepts custom system font names", () => {
+    expect(sanitizeFontFamilyName("  Berkeley Mono  ")).toBe("Berkeley Mono");
+  });
+
+  it("rejects comma-separated stacks and generic fallbacks", () => {
+    expect(sanitizeFontFamilyName("A, B")).toBeNull();
+    expect(sanitizeFontFamilyName("monospace")).toBeNull();
   });
 });
 

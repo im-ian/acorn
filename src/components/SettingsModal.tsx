@@ -7,7 +7,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import {
   importBackgroundImage,
@@ -700,9 +700,35 @@ function FontSection({
   slots: FontSlots;
   onChange: (slots: FontSlots) => void;
 }) {
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const fontOptions = useMemo(() => {
+    return Array.from(new Set([...CURATED_MONOSPACE_FONTS, ...systemFonts])).sort(
+      (a, b) => a.localeCompare(b),
+    );
+  }, [systemFonts]);
+
+  const refreshSystemFonts = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setSystemFonts(await api.listSystemFonts());
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSystemFonts();
+  }, [refreshSystemFonts]);
+
   const setSlot = (index: 0 | 1 | 2, value: string) => {
     const next: FontSlots = [...slots] as FontSlots;
-    const font = value === "" ? null : value;
+    const font = value.trim() === "" ? null : value.trim();
     if (index === 0) {
       if (!font) return;
       next[0] = font;
@@ -712,29 +738,57 @@ function FontSection({
     onChange(next);
   };
 
-  const renderSlot = (index: 0 | 1 | 2, label: string, required: boolean) => (
+  const renderSlot = (index: 0 | 1 | 2, label: string, required: boolean) => {
+    const listId = `acorn-font-slot-${index}`;
+    return (
     <Field key={index} label={label}>
-      <Select
+      <TextInput
+        list={listId}
         value={slots[index] ?? ""}
         onChange={(e) => setSlot(index, e.target.value)}
+        placeholder={required ? "Search or type a font" : "Optional fallback"}
         className="min-w-[14rem]"
-      >
-        {!required ? <option value="">— Skip</option> : null}
-        {CURATED_MONOSPACE_FONTS.map((font) => (
-          <option key={font} value={font}>
-            {font}
-          </option>
+      />
+      <datalist id={listId}>
+        {fontOptions.map((font) => (
+          <option key={font} value={font} />
         ))}
-      </Select>
+      </datalist>
+      {!required && slots[index] ? (
+        <button
+          type="button"
+          onClick={() => setSlot(index, "")}
+          className="mt-1 text-[11px] text-fg-muted transition hover:text-fg"
+        >
+          Clear
+        </button>
+      ) : null}
     </Field>
-  );
+    );
+  };
 
   return (
     <Field
       label="Terminal font"
-      hint="Fallback order for terminal text. A generic monospace fallback is appended automatically."
+      hint="Search installed system fonts or type any font family. A generic monospace fallback is appended automatically."
     >
       <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
+          <button
+            type="button"
+            onClick={() => void refreshSystemFonts()}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 transition hover:text-fg disabled:opacity-60"
+            disabled={loading}
+          >
+            <RefreshCcw size={12} /> {loading ? "Scanning..." : "Refresh fonts"}
+          </button>
+          <span>
+            {systemFonts.length > 0
+              ? `${systemFonts.length} system fonts indexed`
+              : "Curated fonts available"}
+          </span>
+          {loadError ? <span className="text-danger">{loadError}</span> : null}
+        </div>
         {renderSlot(0, "Primary", true)}
         {renderSlot(1, "Secondary", false)}
         {renderSlot(2, "Tertiary", false)}

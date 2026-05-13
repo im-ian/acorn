@@ -67,6 +67,28 @@ describe("appearance settings migration", () => {
     );
   });
 
+  it("keeps custom system font names that are not in the curated seed list", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        appearance: { fontSlots: ["CommitMono", "Berkeley Mono", null] },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+    const settings = useSettings.getState().settings;
+
+    expect(settings.appearance.fontSlots).toEqual([
+      "CommitMono",
+      "Berkeley Mono",
+      null,
+    ]);
+    expect(settings.terminal.fontFamily).toBe(
+      fontStackFromSlots(["CommitMono", "Berkeley Mono", null], "monospace"),
+    );
+  });
+
   it("migrates legacy terminal.fontFamily into appearance.fontSlots when slots are missing", async () => {
     localStorage.setItem(
       STORAGE_KEY,
