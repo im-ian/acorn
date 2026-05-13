@@ -1,0 +1,28 @@
+# Acorn zsh env init.
+#
+# Acorn redirects `ZDOTDIR` to its staged dir on PTY spawn so the staged
+# `.zshrc` can install an OSC 7 emitter. zsh resolves `.zshenv` relative
+# to `$ZDOTDIR` too, so without this file the user's real `.zshenv` —
+# typically the only place rustup, asdf, and similar installers drop
+# `. "$HOME/.cargo/env"` style PATH bootstrapping — would never load
+# inside Acorn sessions.
+#
+# Forward to the user's `.zshenv`, then pin `ZDOTDIR` back to Acorn's
+# staged dir so `.zshrc` / `.zlogin` still hit our files. If the user's
+# `.zshenv` reset `ZDOTDIR` itself (XDG `~/.config/zsh` pattern), remember
+# the new target via `ACORN_USER_ZDOTDIR` so the staged `.zshrc` can
+# source the user's real rc.
+
+_acorn_zd=$ZDOTDIR
+if [ -n "${ACORN_USER_ZDOTDIR-}" ]; then
+    [ -f "$ACORN_USER_ZDOTDIR/.zshenv" ] && . "$ACORN_USER_ZDOTDIR/.zshenv"
+elif [ -f "$HOME/.zshenv" ]; then
+    . "$HOME/.zshenv"
+fi
+# If user .zshenv reset ZDOTDIR, treat that as their real rc dir for
+# .zshrc lookup. Otherwise keep whatever Acorn injected.
+if [ "$ZDOTDIR" != "$_acorn_zd" ]; then
+    ACORN_USER_ZDOTDIR=$ZDOTDIR
+fi
+ZDOTDIR=$_acorn_zd
+unset _acorn_zd
