@@ -1,6 +1,8 @@
 import {
   Bot,
   ChevronRight,
+  CircleX,
+  Columns2,
   Copy,
   Files,
   FolderOpen,
@@ -10,6 +12,7 @@ import {
   Pencil,
   PencilLine,
   Plus,
+  SquareX,
   Trash2,
   X,
 } from "lucide-react";
@@ -40,6 +43,7 @@ import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
+import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
   type AcornSettings,
@@ -826,6 +830,12 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
     }
   }
 
+  const projectSiblings = useMemo(
+    () => sessions.filter((s) => s.repo_path === session.repo_path),
+    [sessions, session.repo_path],
+  );
+  const otherSiblings = projectSiblings.filter((s) => s.id !== session.id);
+
   const sessionMenuItems: ContextMenuItem[] = [
     {
       label: "Rename",
@@ -836,6 +846,14 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Duplicate Session",
       icon: <Files size={12} />,
       onClick: () => void duplicate(),
+    },
+    { type: "separator" },
+    {
+      label: "Equalize Pane Sizes",
+      icon: <Columns2 size={12} />,
+      onClick: () => {
+        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+      },
     },
     { type: "separator" },
     {
@@ -859,6 +877,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         });
       },
     },
+    { type: "separator" },
     {
       label: "Copy Worktree Path",
       icon: <Copy size={12} />,
@@ -885,6 +904,24 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       label: "Remove",
       icon: <Trash2 size={12} />,
       onClick: onRemove,
+    },
+    {
+      label: "Remove Others in Project",
+      icon: <CircleX size={12} />,
+      disabled: otherSiblings.length === 0,
+      onClick: () => {
+        const request = useAppStore.getState().requestRemoveSession;
+        for (const s of otherSiblings) request(s.id);
+      },
+    },
+    {
+      label: "Remove All in Project",
+      icon: <SquareX size={12} />,
+      disabled: projectSiblings.length === 0,
+      onClick: () => {
+        const request = useAppStore.getState().requestRemoveSession;
+        for (const s of projectSiblings) request(s.id);
+      },
     },
   ];
 
