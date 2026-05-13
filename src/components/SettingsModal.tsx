@@ -497,6 +497,17 @@ function PullRequestsSettings() {
         Manual refresh (the icon in the PRs tab) always works regardless of
         this interval.
       </p>
+      <Field
+        label="List density"
+        hint="Author avatars make rows easier to scan at a glance, but each row gets thicker."
+      >
+        <CheckboxRow
+          label="Show author avatars"
+          description="Render the GitHub avatar next to each PR row."
+          checked={settings.pullRequests.showAvatars}
+          onChange={(v) => patchPullRequests({ showAvatars: v })}
+        />
+      </Field>
     </section>
   );
 }

@@ -11,6 +11,7 @@ import {
   Globe,
   ListTodo,
   Maximize2,
+  Search,
   X,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -34,6 +35,7 @@ import type {
   StagedFile,
   TodoItem,
 } from "../lib/types";
+import { AuthorAvatar } from "./AuthorAvatar";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
@@ -42,7 +44,14 @@ import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
-import { CommandHint, RefreshButton } from "./ui";
+import {
+  CommandHint,
+  Modal,
+  ModalHeader,
+  RefreshButton,
+  TextInput,
+} from "./ui";
+import { useDialogShortcuts } from "../lib/dialog";
 
 interface ExpandedDiff {
   payload: DiffPayload;
@@ -72,6 +81,10 @@ export function RightPanel() {
     repoPath: string;
     number: number;
   } | null>(null);
+  // Open state for the PR search modal. Carries `repoPath` so the modal can
+  // run its own search fetches scoped to whichever repo was active when
+  // search was triggered.
+  const [prSearch, setPrSearch] = useState<{ repoPath: string } | null>(null);
   // Bumped from the PR detail modal after a merge/close so the PRs tab
   // refetches without waiting for the next polling tick.
   const [prListVersion, setPrListVersion] = useState(0);
@@ -165,6 +178,7 @@ export function RightPanel() {
             key={repoPath}
             repoPath={repoPath}
             onOpenDetail={(number) => setPrDetail({ repoPath, number })}
+            onOpenSearch={() => setPrSearch({ repoPath })}
             refreshKey={prListVersion}
           />
         ) : (
@@ -177,6 +191,15 @@ export function RightPanel() {
         subtitle={expanded?.subtitle}
         cwd={repoPath ?? undefined}
         onClose={() => setExpanded(null)}
+      />
+      <PullRequestSearchModal
+        open={prSearch}
+        detailOpen={prDetail !== null}
+        onClose={() => setPrSearch(null)}
+        onOpenDetail={(number) => {
+          if (!prSearch) return;
+          setPrDetail({ repoPath: prSearch.repoPath, number });
+        }}
       />
       <PullRequestDetailModal
         open={prDetail}
@@ -1013,26 +1036,24 @@ const PR_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
   { value: "all", label: "All" },
 ];
 
-function PullRequestsTab({
-  repoPath,
-  onOpenDetail,
-  refreshKey,
-}: {
-  repoPath: string;
-  onOpenDetail: (number: number) => void;
-  /** Bumped by the parent to force an out-of-band refetch (e.g. after a PR is merged via the modal). */
-  refreshKey: number;
-}) {
-  const defaultPrState = useSettings(
-    (s) => s.settings.pullRequests.defaultState,
-  );
-  const refreshIntervalMs = useSettings(
-    (s) => s.settings.pullRequests.refreshIntervalMs,
-  );
-  const [stateFilter, setStateFilter] = useState<PrStateFilter>(defaultPrState);
-  const [listing, setListing] = useState<PullRequestListing | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+/** Initial page size and per-scroll growth increment for PR list pagination. */
+const PR_PAGE_SIZE = 50;
+/** Backend clamps to 1000; mirror that here so the UI stops growing the limit. */
+const PR_PAGE_MAX = 1000;
+
+/**
+ * Shared PR row actions: context menu, copy/open helpers, and the
+ * merge/close dialog overlays. Lets the PRs tab and the search modal
+ * render the same right-click menu without duplicating handlers or state.
+ *
+ * `onMutated` fires after a merge or close so callers can refetch their
+ * own listing.
+ */
+function usePrRowActions(
+  repoPath: string,
+  onOpenDetail: (number: number) => void,
+  onMutated?: () => void,
+) {
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -1046,64 +1067,10 @@ function PullRequestsTab({
     number: number;
     detail: PullRequestDetail;
   } | null>(null);
+  const [error, setError] = useState<string | null>(null);
   // Bumped on every detail fetch / dialog dismiss so stale getPullRequestDetail
   // responses can't open a dialog after the user moved on.
   const dialogEpochRef = useRef(0);
-  const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
-
-  const fetchPrs = useCallback(
-    async (signal?: { cancelled: boolean }) => {
-      setLoading(true);
-      try {
-        const result = await api.listPullRequests(repoPath, stateFilter);
-        if (signal?.cancelled) return;
-        setListing(result);
-        setError(null);
-        setPrAccountForRepo(
-          repoPath,
-          result.kind === "ok" ? result.account : null,
-        );
-      } catch (e) {
-        if (signal?.cancelled) return;
-        setError(String(e));
-      } finally {
-        if (!signal?.cancelled) setLoading(false);
-      }
-    },
-    [repoPath, stateFilter, setPrAccountForRepo],
-  );
-
-  useEffect(() => {
-    // Drop the prior project's listing so the panel renders skeletons during
-    // the next fetch instead of flashing stale PR rows for the old repo.
-    setListing(null);
-    setError(null);
-    const signal = { cancelled: false };
-    void fetchPrs(signal);
-    const handle = setInterval(() => {
-      void fetchPrs(signal);
-    }, refreshIntervalMs);
-    return () => {
-      signal.cancelled = true;
-      clearInterval(handle);
-    };
-  }, [fetchPrs, refreshIntervalMs]);
-
-  // Out-of-band refresh when the parent bumps `refreshKey` (e.g. PR merged via
-  // the detail modal). Skip the very first render since the effect above
-  // already kicks off the initial fetch.
-  const firstRefreshKeyRender = useRef(true);
-  useEffect(() => {
-    if (firstRefreshKeyRender.current) {
-      firstRefreshKeyRender.current = false;
-      return;
-    }
-    const signal = { cancelled: false };
-    void fetchPrs(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [refreshKey, fetchPrs]);
 
   async function copyText(text: string) {
     try {
@@ -1121,7 +1088,9 @@ function PullRequestsTab({
     }
   }
 
-  async function loadDetailFor(pr: PullRequestInfo): Promise<PullRequestDetail | null> {
+  async function loadDetailFor(
+    pr: PullRequestInfo,
+  ): Promise<PullRequestDetail | null> {
     const epoch = ++dialogEpochRef.current;
     try {
       const listing = await api.getPullRequestDetail(repoPath, pr.number);
@@ -1153,6 +1122,212 @@ function PullRequestsTab({
     setCloseFor({ number: pr.number, detail });
   }
 
+  function openContextMenu(
+    e: React.MouseEvent<HTMLLIElement>,
+    pr: PullRequestInfo,
+  ) {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, pr });
+  }
+
+  const overlays = (
+    <>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={
+          menu
+            ? ([
+                {
+                  label: "Open detail",
+                  icon: <Maximize2 size={12} />,
+                  onClick: () => onOpenDetail(menu.pr.number),
+                },
+                {
+                  label: "Open in browser",
+                  icon: <ExternalLink size={12} />,
+                  onClick: () => void openPrInBrowser(menu.pr),
+                },
+                { type: "separator" },
+                {
+                  label: "Copy PR number",
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(`#${menu.pr.number}`),
+                },
+                {
+                  label: "Copy URL",
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(menu.pr.url),
+                },
+                {
+                  label: `Copy branch (${menu.pr.head_branch})`,
+                  icon: <Copy size={12} />,
+                  onClick: () => void copyText(menu.pr.head_branch),
+                },
+                { type: "separator" },
+                {
+                  label: "Merge…",
+                  icon: <GitMerge size={12} />,
+                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
+                  onClick: () => void openMergeFor(menu.pr),
+                },
+                {
+                  label: "Close…",
+                  icon: <GitPullRequestClosed size={12} />,
+                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
+                  onClick: () => void openCloseFor(menu.pr),
+                },
+              ] satisfies ContextMenuItem[])
+            : []
+        }
+        onClose={() => setMenu(null)}
+      />
+      <MergePullRequestDialog
+        open={mergeFor !== null}
+        repoPath={repoPath}
+        detail={mergeFor?.detail ?? null}
+        onClose={() => {
+          dialogEpochRef.current += 1;
+          setMergeFor(null);
+        }}
+        onMerged={() => {
+          dialogEpochRef.current += 1;
+          setMergeFor(null);
+          onMutated?.();
+        }}
+      />
+      <ClosePullRequestDialog
+        open={closeFor !== null}
+        repoPath={repoPath}
+        detail={closeFor?.detail ?? null}
+        onClose={() => {
+          dialogEpochRef.current += 1;
+          setCloseFor(null);
+        }}
+        onClosed={() => {
+          dialogEpochRef.current += 1;
+          setCloseFor(null);
+          onMutated?.();
+        }}
+      />
+    </>
+  );
+
+  return { openContextMenu, overlays, error };
+}
+
+function PullRequestsTab({
+  repoPath,
+  onOpenDetail,
+  onOpenSearch,
+  refreshKey,
+}: {
+  repoPath: string;
+  onOpenDetail: (number: number) => void;
+  onOpenSearch: () => void;
+  /** Bumped by the parent to force an out-of-band refetch (e.g. after a PR is merged via the modal). */
+  refreshKey: number;
+}) {
+  const defaultPrState = useSettings(
+    (s) => s.settings.pullRequests.defaultState,
+  );
+  const refreshIntervalMs = useSettings(
+    (s) => s.settings.pullRequests.refreshIntervalMs,
+  );
+  const showAvatars = useSettings(
+    (s) => s.settings.pullRequests.showAvatars,
+  );
+  const [stateFilter, setStateFilter] = useState<PrStateFilter>(defaultPrState);
+  const [listing, setListing] = useState<PullRequestListing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // Grows by PR_PAGE_SIZE each time the user scrolls to the bottom. Resets on
+  // project / state-filter change so a fresh context starts at one page.
+  const [limit, setLimit] = useState(PR_PAGE_SIZE);
+  const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
+
+  const fetchPrs = useCallback(
+    async (signal?: { cancelled: boolean }) => {
+      setLoading(true);
+      try {
+        const result = await api.listPullRequests(repoPath, stateFilter, limit);
+        if (signal?.cancelled) return;
+        setListing(result);
+        setError(null);
+        setPrAccountForRepo(
+          repoPath,
+          result.kind === "ok" ? result.account : null,
+        );
+      } catch (e) {
+        if (signal?.cancelled) return;
+        setError(String(e));
+      } finally {
+        if (!signal?.cancelled) setLoading(false);
+      }
+    },
+    [repoPath, stateFilter, limit, setPrAccountForRepo],
+  );
+
+  // Reset list state on context change (project / filter) but NOT on limit
+  // growth — keeping the existing rows during a "load more" prevents the
+  // skeleton from flashing while the larger page lands.
+  useEffect(() => {
+    setListing(null);
+    setError(null);
+    setLimit(PR_PAGE_SIZE);
+  }, [repoPath, stateFilter]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void fetchPrs(signal);
+    const handle = setInterval(() => {
+      void fetchPrs(signal);
+    }, refreshIntervalMs);
+    return () => {
+      signal.cancelled = true;
+      clearInterval(handle);
+    };
+  }, [fetchPrs, refreshIntervalMs]);
+
+  // Out-of-band refresh when the parent bumps `refreshKey` (e.g. PR merged via
+  // the detail modal). Skip the very first render since the effect above
+  // already kicks off the initial fetch.
+  const firstRefreshKeyRender = useRef(true);
+  useEffect(() => {
+    if (firstRefreshKeyRender.current) {
+      firstRefreshKeyRender.current = false;
+      return;
+    }
+    const signal = { cancelled: false };
+    void fetchPrs(signal);
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [refreshKey, fetchPrs]);
+
+  const rowActions = usePrRowActions(repoPath, onOpenDetail, () => {
+    void fetchPrs();
+  });
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (loading) return;
+    if (!listing || listing.kind !== "ok") return;
+    // Fewer items than the page size means gh returned everything — nothing
+    // more to load. limit hitting the backend clamp is also terminal.
+    if (listing.items.length < limit) return;
+    if (limit >= PR_PAGE_MAX) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+      setLimit((prev) => Math.min(prev + PR_PAGE_SIZE, PR_PAGE_MAX));
+    }
+  }
+
+  const reachedMax =
+    listing?.kind === "ok" &&
+    listing.items.length >= limit &&
+    limit >= PR_PAGE_MAX;
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
@@ -1171,16 +1346,29 @@ function PullRequestsTab({
             {opt.label}
           </button>
         ))}
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          aria-label="Search pull requests"
+          title="Search pull requests"
+          className="ml-auto rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+        >
+          <Search size={12} />
+        </button>
         <RefreshButton
           onClick={() => void fetchPrs()}
           loading={loading}
           size={12}
-          className="ml-auto"
         />
       </div>
-      <div className="flex-1 overflow-x-hidden overflow-y-auto">
-        {error ? (
-          <div className="p-3 text-xs text-danger">{error}</div>
+      <div
+        className="flex-1 overflow-x-hidden overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        {error || rowActions.error ? (
+          <div className="p-3 text-xs text-danger">
+            {error ?? rowActions.error}
+          </div>
         ) : !listing ? (
           <PrSkeletonList count={10} />
         ) : listing.kind === "not_github" ? (
@@ -1196,151 +1384,28 @@ function PullRequestsTab({
         ) : (
           <ul className="text-xs">
             {listing.items.map((pr) => (
-              <li
+              <PrRow
                 key={pr.number}
-                role="button"
-                tabIndex={0}
-                onDoubleClick={() => onOpenDetail(pr.number)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setMenu({ x: e.clientX, y: e.clientY, pr });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    onOpenDetail(pr.number);
-                  }
-                }}
-                className="flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition hover:bg-bg-elevated/50 focus-visible:outline-none focus-visible:bg-bg-elevated/60"
-              >
-                <span className="flex w-full min-w-0 items-center gap-2">
-                  <span className="shrink-0 font-mono text-fg-muted">
-                    #{pr.number}
-                  </span>
-                  <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
-                  <Tooltip label={pr.title} side="top" multiline className="flex! min-w-0 flex-1">
-                    <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
-                  </Tooltip>
-                </span>
-                <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-fg-muted">
-                  <span className="truncate">{pr.author}</span>
-                  <span className="opacity-50">·</span>
-                  <span className="flex min-w-0 items-center gap-1">
-                    <Tooltip
-                      label={`${pr.head_branch} → ${pr.base_branch}`}
-                      side="top"
-                      multiline
-                      className="min-w-0"
-                    >
-                      <span className="flex min-w-0 items-center gap-1 font-mono">
-                        <span className="truncate">{pr.head_branch}</span>
-                        <span className="shrink-0">→</span>
-                        <span className="truncate">{pr.base_branch}</span>
-                      </span>
-                    </Tooltip>
-                    <PrChecksBadge checks={pr.checks} />
-                  </span>
-                  <span className="shrink-0 opacity-50">·</span>
-                  <Tooltip
-                    label={absoluteTime(toUnixSeconds(pr.updated_at))}
-                    side="top"
-                    className="shrink-0"
-                  >
-                    <span className="whitespace-nowrap font-mono">
-                      {relativeTime(toUnixSeconds(pr.updated_at))}
-                    </span>
-                  </Tooltip>
-                </span>
-              </li>
+                pr={pr}
+                showAvatar={showAvatars}
+                onOpen={() => onOpenDetail(pr.number)}
+                onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
+              />
             ))}
+            {loading && listing.items.length >= limit ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                Loading more…
+              </li>
+            ) : null}
+            {reachedMax ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                Showing first {PR_PAGE_MAX}. Use search to find older PRs.
+              </li>
+            ) : null}
           </ul>
         )}
       </div>
-      <ContextMenu
-        open={menu !== null}
-        x={menu?.x ?? 0}
-        y={menu?.y ?? 0}
-        items={
-          menu
-            ? ([
-                {
-                  label: "Open detail",
-                  icon: <Maximize2 size={12} />,
-                  onClick: () => {
-                    onOpenDetail(menu.pr.number);
-                  },
-                },
-                {
-                  label: "Open in browser",
-                  icon: <ExternalLink size={12} />,
-                  onClick: () => {
-                    void openPrInBrowser(menu.pr);
-                  },
-                },
-                {
-                  label: "Copy URL",
-                  icon: <Copy size={12} />,
-                  onClick: () => {
-                    void copyText(menu.pr.url);
-                  },
-                },
-                {
-                  label: `Copy branch (${menu.pr.head_branch})`,
-                  icon: <Copy size={12} />,
-                  onClick: () => {
-                    void copyText(menu.pr.head_branch);
-                  },
-                },
-                { type: "separator" },
-                {
-                  label: "Merge…",
-                  icon: <GitMerge size={12} />,
-                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
-                  onClick: () => {
-                    void openMergeFor(menu.pr);
-                  },
-                },
-                {
-                  label: "Close…",
-                  icon: <GitPullRequestClosed size={12} />,
-                  disabled: menu.pr.state.toUpperCase() !== "OPEN",
-                  onClick: () => {
-                    void openCloseFor(menu.pr);
-                  },
-                },
-              ] satisfies ContextMenuItem[])
-            : []
-        }
-        onClose={() => setMenu(null)}
-      />
-      <MergePullRequestDialog
-        open={mergeFor !== null}
-        repoPath={repoPath}
-        detail={mergeFor?.detail ?? null}
-        onClose={() => {
-          dialogEpochRef.current += 1;
-          setMergeFor(null);
-        }}
-        onMerged={() => {
-          dialogEpochRef.current += 1;
-          setMergeFor(null);
-          void fetchPrs();
-        }}
-      />
-      <ClosePullRequestDialog
-        open={closeFor !== null}
-        repoPath={repoPath}
-        detail={closeFor?.detail ?? null}
-        onClose={() => {
-          dialogEpochRef.current += 1;
-          setCloseFor(null);
-        }}
-        onClosed={() => {
-          dialogEpochRef.current += 1;
-          setCloseFor(null);
-          void fetchPrs();
-        }}
-      />
+      {rowActions.overlays}
     </div>
   );
 }
@@ -1457,4 +1522,338 @@ function toUnixSeconds(iso: string): number {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return Math.floor(Date.now() / 1000);
   return Math.floor(ms / 1000);
+}
+
+/**
+ * Shared row used by the PRs tab and the PR search modal. Keeps the visual
+ * shape identical across both surfaces so the search modal feels like a
+ * filtered view of the same list.
+ */
+function PrRow({
+  pr,
+  onOpen,
+  onContextMenu,
+  surface = "panel",
+  showAvatar = false,
+}: {
+  pr: PullRequestInfo;
+  onOpen: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLLIElement>) => void;
+  /**
+   * Background context the row sits on. `panel` is the right-panel
+   * (`bg-bg`), `dialog` is the modal surface (`bg-bg-elevated`) — each
+   * needs a different hover color to actually feel interactive.
+   */
+  surface?: "panel" | "dialog";
+  /**
+   * Render the author's GitHub avatar to the left of the row. Bumps the
+   * row's vertical footprint slightly in exchange for at-a-glance author
+   * recognition. Controlled by the `pullRequests.showAvatars` setting.
+   */
+  showAvatar?: boolean;
+}) {
+  const hoverBg =
+    surface === "dialog"
+      ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
+      : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
+  // Avatar rows get a touch more leading + larger text so the avatar
+  // doesn't dominate visually. Plain rows stay compact at the prior size.
+  const titleSize = showAvatar ? "text-[13px]" : "text-xs";
+  const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      onDoubleClick={onOpen}
+      onContextMenu={onContextMenu}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className={cn(
+        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
+        hoverBg,
+      )}
+    >
+      <span
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2",
+          titleSize,
+        )}
+      >
+        <span className="shrink-0 font-mono text-fg-muted">#{pr.number}</span>
+        <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
+        <Tooltip
+          label={pr.title}
+          side="top"
+          multiline
+          className="flex! min-w-0 flex-1"
+        >
+          <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
+        </Tooltip>
+      </span>
+      <span
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2 text-fg-muted",
+          metaSize,
+        )}
+      >
+        <span className="flex min-w-0 shrink-0 items-center gap-1.5">
+          {showAvatar ? <AuthorAvatar login={pr.author} size={14} /> : null}
+          <span className="truncate">{pr.author}</span>
+        </span>
+        <span className="opacity-50">·</span>
+        <span className="flex min-w-0 items-center gap-1">
+          <Tooltip
+            label={`${pr.head_branch} → ${pr.base_branch}`}
+            side="top"
+            multiline
+            className="min-w-0"
+          >
+            <span className="flex min-w-0 items-center gap-1 font-mono">
+              <span className="truncate">{pr.head_branch}</span>
+              <span className="shrink-0">→</span>
+              <span className="truncate">{pr.base_branch}</span>
+            </span>
+          </Tooltip>
+          <PrChecksBadge checks={pr.checks} />
+        </span>
+        <span className="shrink-0 opacity-50">·</span>
+        <Tooltip
+          label={absoluteTime(toUnixSeconds(pr.updated_at))}
+          side="top"
+          className="shrink-0"
+        >
+          <span className="whitespace-nowrap font-mono">
+            {relativeTime(toUnixSeconds(pr.updated_at))}
+          </span>
+        </Tooltip>
+      </span>
+    </li>
+  );
+}
+
+const PR_SEARCH_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "open", label: "Open" },
+  { value: "closed", label: "Closed" },
+  { value: "merged", label: "Merged" },
+];
+
+/**
+ * Modal-scoped PR search. Queries gh server-side via `--search`, so it
+ * reaches every PR in the repo rather than filtering the (capped) list that
+ * the PRs tab currently displays. Empty query → no fetch; results paginate
+ * by growing `limit` on scroll, mirroring the main tab's pattern.
+ */
+function PullRequestSearchModal({
+  open,
+  detailOpen,
+  onClose,
+  onOpenDetail,
+}: {
+  open: { repoPath: string } | null;
+  /**
+   * True while the PR detail modal stacks on top. Used to suppress this
+   * modal's ESC handler so the top-of-stack closes first.
+   */
+  detailOpen: boolean;
+  onClose: () => void;
+  onOpenDetail: (number: number) => void;
+}) {
+  const repoPath = open?.repoPath ?? null;
+  const showAvatars = useSettings(
+    (s) => s.settings.pullRequests.showAvatars,
+  );
+  const [rawQuery, setRawQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<PrStateFilter>("all");
+  const [listing, setListing] = useState<PullRequestListing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [limit, setLimit] = useState(PR_PAGE_SIZE);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Refetch trigger used by row actions after a merge/close so the modal
+  // updates without the user reopening it.
+  const [refetchTick, setRefetchTick] = useState(0);
+  const rowActions = usePrRowActions(
+    repoPath ?? "",
+    onOpenDetail,
+    () => setRefetchTick((v) => v + 1),
+  );
+
+  useDialogShortcuts(open !== null && !detailOpen, { onCancel: onClose });
+
+  // Wipe transient state every time the modal opens so a reopen never shows
+  // results from the previous session.
+  useEffect(() => {
+    if (!open) return;
+    setRawQuery("");
+    setDebouncedQuery("");
+    setStateFilter("all");
+    setListing(null);
+    setError(null);
+    setLimit(PR_PAGE_SIZE);
+    // Defer focus until after the portal mounts so autoFocus on the input
+    // wins over Modal's own focus handling.
+    queueMicrotask(() => inputRef.current?.focus());
+  }, [open]);
+
+  // Debounce the input so typing doesn't fire a `gh` spawn per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(rawQuery.trim()), 250);
+    return () => clearTimeout(t);
+  }, [rawQuery]);
+
+  // Reset pagination when the search inputs change — a new query starts at
+  // the first page rather than inheriting the previous query's growth.
+  useEffect(() => {
+    setLimit(PR_PAGE_SIZE);
+    setListing(null);
+  }, [debouncedQuery, stateFilter]);
+
+  useEffect(() => {
+    if (!open || !repoPath) return;
+    if (!debouncedQuery) {
+      setListing(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    const signal = { cancelled: false };
+    setLoading(true);
+    api
+      .listPullRequests(repoPath, stateFilter, limit, debouncedQuery)
+      .then((result) => {
+        if (signal.cancelled) return;
+        setListing(result);
+        setError(null);
+      })
+      .catch((e) => {
+        if (signal.cancelled) return;
+        setError(String(e));
+      })
+      .finally(() => {
+        if (!signal.cancelled) setLoading(false);
+      });
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [open, repoPath, debouncedQuery, stateFilter, limit, refetchTick]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (loading) return;
+    if (!listing || listing.kind !== "ok") return;
+    if (listing.items.length < limit) return;
+    if (limit >= PR_PAGE_MAX) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+      setLimit((prev) => Math.min(prev + PR_PAGE_SIZE, PR_PAGE_MAX));
+    }
+  }
+
+  const reachedMax =
+    listing?.kind === "ok" &&
+    listing.items.length >= limit &&
+    limit >= PR_PAGE_MAX;
+
+  return (
+    <Modal
+      open={open !== null}
+      onClose={onClose}
+      variant="dialog"
+      size="2xl"
+      ariaLabel="Search pull requests"
+    >
+      <ModalHeader
+        title="Search pull requests"
+        icon={<Search size={14} className="text-fg-muted" />}
+        variant="dialog"
+        onClose={onClose}
+      />
+      <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+        <TextInput
+          ref={inputRef}
+          value={rawQuery}
+          onChange={(e) => setRawQuery(e.currentTarget.value)}
+          placeholder="Search title, author, label, branch…"
+          autoFocus
+        />
+        <div className="flex items-center gap-1 text-[11px]">
+          {PR_SEARCH_STATE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setStateFilter(opt.value)}
+              className={cn(
+                "rounded px-2 py-0.5 transition",
+                stateFilter === opt.value
+                  ? "bg-bg text-fg"
+                  : "text-fg-muted hover:text-fg",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+          {loading ? (
+            <span className="ml-auto text-fg-muted">Searching…</span>
+          ) : listing?.kind === "ok" ? (
+            <span className="ml-auto font-mono text-fg-muted">
+              {listing.items.length}
+              {listing.items.length >= limit && limit < PR_PAGE_MAX ? "+" : ""}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div
+        className="h-[60vh] overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        {!debouncedQuery ? (
+          <Empty msg="Type to search pull requests." />
+        ) : error || rowActions.error ? (
+          <div className="p-3 text-xs text-danger">
+            {error ?? rowActions.error}
+          </div>
+        ) : !listing ? (
+          <PrSkeletonList count={6} />
+        ) : listing.kind === "not_github" ? (
+          <Empty msg="Origin remote is not a GitHub repository." />
+        ) : listing.kind === "no_access" ? (
+          <div className="p-3 text-xs text-fg-muted">
+            No logged-in gh account can access this repo.
+          </div>
+        ) : listing.items.length === 0 ? (
+          <Empty msg="No matching pull requests." />
+        ) : (
+          <ul className="text-xs">
+            {listing.items.map((pr) => (
+              <PrRow
+                key={pr.number}
+                pr={pr}
+                surface="dialog"
+                showAvatar={showAvatars}
+                onOpen={() => onOpenDetail(pr.number)}
+                onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
+              />
+            ))}
+            {loading && listing.items.length >= limit ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                Loading more…
+              </li>
+            ) : null}
+            {reachedMax ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                Showing first {PR_PAGE_MAX}. Refine the query for older PRs.
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </div>
+      {rowActions.overlays}
+    </Modal>
+  );
 }

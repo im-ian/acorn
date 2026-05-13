@@ -102,11 +102,13 @@ export const api = {
     repoPath: string,
     state: PrStateFilter = "open",
     limit = 50,
+    query: string | null = null,
   ): Promise<PullRequestListing> {
     return invoke<PullRequestListing>("list_pull_requests", {
       repoPath,
       state,
       limit,
+      query,
     });
   },
   getPullRequestDetail(
