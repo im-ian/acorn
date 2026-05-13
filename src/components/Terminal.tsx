@@ -34,19 +34,47 @@ interface PtyOutputPayload {
 }
 
 const TERMINAL_BG = "#1f2326";
+const TERMINAL_FG = "#ededed";
 
-const TERMINAL_THEME: ITheme = {
-  background: TERMINAL_BG, foreground: "#ededed", cursor: "#ededed",
-  cursorAccent: TERMINAL_BG, selectionBackground: "#3a3f44",
-  scrollbarSliderBackground: "rgba(255, 255, 255, 0.08)",
-  scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.16)",
-  scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.24)",
-  black: TERMINAL_BG, red: "#e06c75", green: "#98c379", yellow: "#e5c07b",
-  blue: "#61afef", magenta: "#c678dd", cyan: "#56b6c2", white: "#ededed",
-  brightBlack: "#5c6370", brightRed: "#e06c75", brightGreen: "#98c379",
-  brightYellow: "#e5c07b", brightBlue: "#61afef", brightMagenta: "#c678dd",
-  brightCyan: "#56b6c2", brightWhite: "#ffffff",
-};
+function readThemeColor(varName: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(varName)
+    .trim();
+  return value || fallback;
+}
+
+function buildXtermTheme(): ITheme {
+  const background = readThemeColor("--color-terminal-bg", TERMINAL_BG);
+  const foreground = readThemeColor("--color-terminal-fg", TERMINAL_FG);
+
+  return {
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
+    selectionBackground: "#3a3f44",
+    scrollbarSliderBackground: "rgba(255, 255, 255, 0.08)",
+    scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.16)",
+    scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.24)",
+    black: background,
+    red: "#e06c75",
+    green: "#98c379",
+    yellow: "#e5c07b",
+    blue: "#61afef",
+    magenta: "#c678dd",
+    cyan: "#56b6c2",
+    white: foreground,
+    brightBlack: "#5c6370",
+    brightRed: "#e06c75",
+    brightGreen: "#98c379",
+    brightYellow: "#e5c07b",
+    brightBlue: "#61afef",
+    brightMagenta: "#c678dd",
+    brightCyan: "#56b6c2",
+    brightWhite: "#ffffff",
+  };
+}
 
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
@@ -98,7 +126,7 @@ export function Terminal({
     // are applied live via the subscription below.
     const initialSettings = useSettings.getState().settings;
     const term = new XTerm({
-      theme: TERMINAL_THEME,
+      theme: buildXtermTheme(),
       fontFamily: initialSettings.terminal.fontFamily,
       fontSize: initialSettings.terminal.fontSize,
       fontWeight: initialSettings.terminal.fontWeight,
@@ -164,6 +192,23 @@ export function Terminal({
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
 
+    let themeFrame: number | null = null;
+    const scheduleThemeRefresh = () => {
+      if (themeFrame !== null) {
+        cancelAnimationFrame(themeFrame);
+      }
+      themeFrame = requestAnimationFrame(() => {
+        themeFrame = null;
+        term.options.theme = buildXtermTheme();
+        try {
+          fitAddon.fit();
+        } catch {
+          // ignore — ResizeObserver will retry
+        }
+      });
+    };
+    scheduleThemeRefresh();
+
     // Live-apply terminal font setting changes without reinitialising xterm.
     const unsubSettings = useSettings.subscribe((state, prev) => {
       const next = state.settings.terminal;
@@ -191,6 +236,9 @@ export function Terminal({
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
+      }
+      if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
+        scheduleThemeRefresh();
       }
       if (changed) {
         try {
@@ -1020,6 +1068,10 @@ export function Terminal({
     return () => {
       disposed = true;
       unsubSettings();
+      if (themeFrame !== null) {
+        cancelAnimationFrame(themeFrame);
+        themeFrame = null;
+      }
       unregisterScrollbackFlusher();
       if (scrollbackSaveTimer !== null) {
         window.clearTimeout(scrollbackSaveTimer);
@@ -1122,9 +1174,14 @@ export function Terminal({
   return (
     <div
       className="relative h-full w-full"
-      style={{ padding: "16px 8px", background: TERMINAL_BG }}
+      style={{
+        padding: "16px 8px",
+        background: "var(--color-terminal-bg, #1f2326)",
+        overflow: "hidden",
+      }}
     >
-      <div ref={containerRef} className="acorn-terminal h-full w-full" />
+      <div className="acorn-bg-terminal" aria-hidden="true" />
+      <div ref={containerRef} className="acorn-terminal relative z-10 h-full w-full" />
     </div>
   );
 }

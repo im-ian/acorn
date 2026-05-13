@@ -477,7 +477,8 @@ function App() {
   useHotkeys(bindings);
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-bg text-fg">
+    <div className="relative flex h-screen w-screen flex-col bg-bg text-fg">
+      <div className="acorn-bg-app" aria-hidden="true" />
       <UpdateBanner />
       <ToastHost />
       <div className="flex min-h-0 flex-1">

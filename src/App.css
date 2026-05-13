@@ -29,6 +29,28 @@
   border-radius: 4px;
 }
 
+.acorn-bg-app,
+.acorn-bg-terminal {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: var(--bg-image-url, none);
+  background-size: var(--bg-fit-size, cover);
+  background-repeat: var(--bg-fit-repeat, no-repeat);
+  background-position: center;
+  opacity: var(--bg-opacity, 0);
+  filter: blur(var(--bg-blur, 0px));
+}
+
+:root:not([data-bg-app="on"]) .acorn-bg-app {
+  display: none;
+}
+
+:root:not([data-bg-terminal="on"]) .acorn-bg-terminal {
+  display: none;
+}
+
 * {
   box-sizing: border-box;
 }
