@@ -28,6 +28,7 @@ import {
   importBackgroundImage,
 } from "./background";
 import appCss from "../App.css?raw";
+import terminalSource from "../components/Terminal.tsx?raw";
 
 beforeEach(() => {
   tauriPathMock.appLocalDataDir.mockResolvedValue("/app/local");
@@ -150,11 +151,28 @@ describe("clearBackgroundVars", () => {
 
 describe("background overlay CSS", () => {
   it("makes app and terminal surfaces translucent when a background is active", () => {
-    expect(appCss).toContain(':root[data-bg-app="on"] .bg-bg');
-    expect(appCss).toContain(':root[data-bg-app="on"] .bg-bg-sidebar');
+    expect(appCss).toContain(':root[data-bg-app="on"] .acorn-app-shell .bg-bg');
+    expect(appCss).toContain(
+      ':root[data-bg-app="on"] .acorn-app-shell .bg-bg-sidebar',
+    );
     expect(appCss).toContain(".acorn-terminal-shell");
     expect(appCss).toContain(
       ':root[data-bg-terminal="on"] .acorn-terminal-shell',
     );
+  });
+
+  it("keeps foreground surfaces translucent enough for the image to be visible", () => {
+    expect(appCss).toContain("var(--color-bg) 64%");
+    expect(appCss).toContain("var(--color-bg-sidebar) 62%");
+    expect(appCss).toContain("var(--color-bg-elevated) 66%");
+    expect(appCss).toContain("var(--color-terminal-bg, #1f2326) 62%");
+  });
+
+  it("lets the xterm renderer show the terminal background image", () => {
+    expect(terminalSource).toContain("allowTransparency: true");
+    expect(terminalSource).toContain(
+      'background: useTransparentBackground ? "rgba(0, 0, 0, 0)"',
+    );
+    expect(terminalSource).toContain("nextBackground.applyToTerminal");
   });
 });

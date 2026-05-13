@@ -51,18 +51,18 @@
   display: none;
 }
 
-:root[data-bg-app="on"] .bg-bg {
-  background-color: color-mix(in srgb, var(--color-bg) 82%, transparent) !important;
+:root[data-bg-app="on"] .acorn-app-shell .bg-bg {
+  background-color: color-mix(in srgb, var(--color-bg) 64%, transparent) !important;
 }
 
-:root[data-bg-app="on"] .bg-bg-sidebar,
-:root[data-bg-app="on"] [class*="bg-bg-sidebar/"] {
-  background-color: color-mix(in srgb, var(--color-bg-sidebar) 82%, transparent) !important;
+:root[data-bg-app="on"] .acorn-app-shell .bg-bg-sidebar,
+:root[data-bg-app="on"] .acorn-app-shell [class*="bg-bg-sidebar/"] {
+  background-color: color-mix(in srgb, var(--color-bg-sidebar) 62%, transparent) !important;
 }
 
-:root[data-bg-app="on"] .bg-bg-elevated,
-:root[data-bg-app="on"] [class*="bg-bg-elevated/"] {
-  background-color: color-mix(in srgb, var(--color-bg-elevated) 84%, transparent) !important;
+:root[data-bg-app="on"] .acorn-app-shell .bg-bg-elevated,
+:root[data-bg-app="on"] .acorn-app-shell [class*="bg-bg-elevated/"] {
+  background-color: color-mix(in srgb, var(--color-bg-elevated) 66%, transparent) !important;
 }
 
 .acorn-terminal-shell {
@@ -72,7 +72,7 @@
 :root[data-bg-terminal="on"] .acorn-terminal-shell {
   background: color-mix(
     in srgb,
-    var(--color-terminal-bg, #1f2326) 78%,
+    var(--color-terminal-bg, #1f2326) 62%,
     transparent
   );
 }

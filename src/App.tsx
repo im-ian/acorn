@@ -477,11 +477,11 @@ function App() {
   useHotkeys(bindings);
 
   return (
-    <div className="relative flex h-screen w-screen flex-col bg-bg text-fg">
+    <div className="acorn-app-shell relative flex h-screen w-screen flex-col bg-bg text-fg">
       <div className="acorn-bg-app" aria-hidden="true" />
       <UpdateBanner />
       <ToastHost />
-      <div className="flex min-h-0 flex-1">
+      <div className="relative z-10 flex min-h-0 flex-1">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
             ref={sidebarPanelRef}
@@ -514,7 +514,9 @@ function App() {
           </Panel>
         </PanelGroup>
       </div>
-      <StatusBar />
+      <div className="relative z-10">
+        <StatusBar />
+      </div>
       <TerminalHost />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <ControlSessionGuideModal

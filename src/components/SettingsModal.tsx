@@ -585,6 +585,7 @@ function BackgroundSection({
         relativePath: result.relativePath,
         fileName: result.fileName,
         applyToApp: true,
+        applyToTerminal: true,
       });
     } catch (err) {
       setPickError(err instanceof Error ? err.message : String(err));

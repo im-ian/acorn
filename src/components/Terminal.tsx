@@ -9,6 +9,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
+import type { BackgroundState } from "../lib/background";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
   useSettings,
@@ -44,12 +45,16 @@ function readThemeColor(varName: string, fallback: string): string {
   return value || fallback;
 }
 
-function buildXtermTheme(): ITheme {
+function terminalBackgroundActive(background: BackgroundState): boolean {
+  return Boolean(background.relativePath && background.applyToTerminal);
+}
+
+function buildXtermTheme(useTransparentBackground = false): ITheme {
   const background = readThemeColor("--color-terminal-bg", TERMINAL_BG);
   const foreground = readThemeColor("--color-terminal-fg", TERMINAL_FG);
 
   return {
-    background,
+    background: useTransparentBackground ? "rgba(0, 0, 0, 0)" : background,
     foreground,
     cursor: foreground,
     cursorAccent: background,
@@ -126,7 +131,10 @@ export function Terminal({
     // are applied live via the subscription below.
     const initialSettings = useSettings.getState().settings;
     const term = new XTerm({
-      theme: buildXtermTheme(),
+      theme: buildXtermTheme(
+        terminalBackgroundActive(initialSettings.appearance.background),
+      ),
+      allowTransparency: true,
       fontFamily: initialSettings.terminal.fontFamily,
       fontSize: initialSettings.terminal.fontSize,
       fontWeight: initialSettings.terminal.fontWeight,
@@ -199,7 +207,11 @@ export function Terminal({
       }
       themeFrame = requestAnimationFrame(() => {
         themeFrame = null;
-        term.options.theme = buildXtermTheme();
+        term.options.theme = buildXtermTheme(
+          terminalBackgroundActive(
+            useSettings.getState().settings.appearance.background,
+          ),
+        );
         try {
           fitAddon.fit();
         } catch {
@@ -238,6 +250,14 @@ export function Terminal({
         linkActivation = next.linkActivation;
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
+        scheduleThemeRefresh();
+      }
+      const nextBackground = state.settings.appearance.background;
+      const previousBackground = prev.settings.appearance.background;
+      if (
+        nextBackground.relativePath !== previousBackground.relativePath ||
+        nextBackground.applyToTerminal !== previousBackground.applyToTerminal
+      ) {
         scheduleThemeRefresh();
       }
       if (changed) {

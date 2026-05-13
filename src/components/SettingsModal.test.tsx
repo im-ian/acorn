@@ -3,7 +3,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  importBackgroundImage: vi.fn<
+    (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
+  >(),
   listSystemFonts: vi.fn<() => Promise<string[]>>(),
+  removeBackgroundImage: vi.fn<() => Promise<void>>(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -13,8 +17,8 @@ vi.mock("../lib/api", () => ({
 }));
 
 vi.mock("../lib/background", () => ({
-  importBackgroundImage: vi.fn(),
-  removeBackgroundImage: vi.fn(),
+  importBackgroundImage: mocks.importBackgroundImage,
+  removeBackgroundImage: mocks.removeBackgroundImage,
 }));
 
 vi.mock("../lib/notifications", () => ({
@@ -122,7 +126,12 @@ describe("SettingsModal font controls", () => {
       }
     ).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
+    mocks.importBackgroundImage.mockResolvedValue({
+      fileName: "wallpaper.png",
+      relativePath: "backgrounds/wallpaper.png",
+    });
     mocks.listSystemFonts.mockResolvedValue([]);
+    mocks.removeBackgroundImage.mockResolvedValue(undefined);
     useSettings.setState({
       open: true,
       settings: cloneSettings(),
@@ -301,6 +310,78 @@ describe("SettingsModal font controls", () => {
 
     expect(patchAppearance).toHaveBeenCalledWith({
       fontSlots: ["JetBrains Mono", null, "Menlo"],
+    });
+  });
+});
+
+describe("SettingsModal background controls", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT?: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
+    mocks.importBackgroundImage.mockResolvedValue({
+      fileName: "wallpaper.png",
+      relativePath: "backgrounds/wallpaper.png",
+    });
+    mocks.listSystemFonts.mockResolvedValue([]);
+    mocks.removeBackgroundImage.mockResolvedValue(undefined);
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+      patchAppearance: vi.fn(),
+    });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => root?.unmount());
+    }
+    root = null;
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  it("applies a picked image to both app and terminal by default", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const fileInput = document.querySelector<HTMLInputElement>(
+      'input[type="file"]',
+    );
+    const file = new File([new Uint8Array([1, 2, 3])], "wallpaper.png", {
+      type: "image/png",
+    });
+    Object.defineProperty(fileInput, "files", {
+      configurable: true,
+      value: [file],
+    });
+
+    await act(async () => {
+      fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
+      background: {
+        relativePath: "backgrounds/wallpaper.png",
+        fileName: "wallpaper.png",
+        applyToApp: true,
+        applyToTerminal: true,
+      },
     });
   });
 });
