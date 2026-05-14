@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, type DaemonSessionSummary, type DaemonStatus } from "../lib/api";
 import { cn } from "../lib/cn";
+import { Tooltip } from "./Tooltip";
 import { CheckboxRow, Field } from "./ui";
 
 /**
@@ -279,16 +280,42 @@ function SessionsList({
   if (sessions === null) {
     return <p className="text-xs text-fg-muted">Loading…</p>;
   }
-  if (sessions.length === 0) {
+  const hasDead = sessions.some((s) => !s.alive);
+  // Stable synthetic example so the user can see what a Restore-capable
+  // row looks like in environments where every tracked PTY is still
+  // alive. Rendered visually-distinct and non-interactive — never
+  // round-trips to the daemon.
+  const exampleRow: DaemonSessionSummary | null = hasDead
+    ? null
+    : {
+        id: "00000000-0000-0000-0000-000000000000",
+        name: "example-restorable-session",
+        kind: "regular",
+        alive: false,
+        repo_path: null,
+        branch: null,
+        agent_kind: null,
+      };
+  if (sessions.length === 0 && !exampleRow) {
     return <p className="text-xs text-fg-muted">No sessions tracked.</p>;
   }
+  const rendered: { row: DaemonSessionSummary; isExample: boolean }[] = [
+    ...sessions.map((s) => ({ row: s, isExample: false })),
+    ...(exampleRow ? [{ row: exampleRow, isExample: true }] : []),
+  ];
   return (
     <div className="space-y-2">
       <ul className="divide-y divide-border rounded border border-border bg-bg-elevated text-xs">
-        {sessions.map((s) => {
+        {rendered.map(({ row: s, isExample }) => {
           const busy = rowBusy === s.id;
           return (
-            <li key={s.id} className="flex items-center gap-2 px-3 py-1.5">
+            <li
+              key={s.id}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5",
+                isExample && "opacity-60",
+              )}
+            >
               <span
                 className={cn(
                   "font-mono text-[10px]",
@@ -300,11 +327,18 @@ function SessionsList({
               <span className="flex flex-1 items-center gap-1.5 truncate font-mono">
                 <span className="truncate">{s.name}</span>
                 {s.kind === "control" ? (
-                  <Bot
-                    size={12}
-                    className="shrink-0 text-fg-muted"
-                    aria-label="Control session"
-                  />
+                  <Tooltip label="Control session" side="top">
+                    <Bot
+                      size={12}
+                      className="shrink-0 text-fg-muted"
+                      aria-label="Control session"
+                    />
+                  </Tooltip>
+                ) : null}
+                {isExample ? (
+                  <span className="rounded border border-dashed border-border px-1 text-[9px] uppercase tracking-wide text-fg-muted">
+                    example
+                  </span>
                 ) : null}
               </span>
               {s.agent_kind ? (
@@ -314,50 +348,66 @@ function SessionsList({
               ) : null}
               <div className="flex items-center gap-1">
                 {s.alive ? (
-                  <RowButton
-                    title="Kill PTY"
-                    busy={busy}
-                    onClick={() =>
-                      void runRowAction(s.id, () =>
-                        api.daemonKillSession(s.id),
-                      )
-                    }
-                    tone="danger"
-                  >
-                    <Power size={11} />
-                    <span>Kill</span>
-                  </RowButton>
+                  <Tooltip label="Kill PTY" side="top">
+                    <RowButton
+                      busy={busy}
+                      onClick={() =>
+                        void runRowAction(s.id, () =>
+                          api.daemonKillSession(s.id),
+                        )
+                      }
+                      tone="danger"
+                      aria-label="Kill PTY"
+                    >
+                      <Power size={12} />
+                    </RowButton>
+                  </Tooltip>
                 ) : (
+                  <Tooltip
+                    label={
+                      isExample
+                        ? "Preview only — no real PTY behind this row"
+                        : "Adopt this session back into Acorn's sidebar"
+                    }
+                    side="top"
+                  >
+                    <RowButton
+                      busy={busy}
+                      disabled={isExample}
+                      onClick={() =>
+                        void runRowAction(s.id, () =>
+                          api.daemonAdoptSession(s.id),
+                        )
+                      }
+                      aria-label="Restore session"
+                    >
+                      <Undo2 size={12} />
+                    </RowButton>
+                  </Tooltip>
+                )}
+                <Tooltip
+                  label={
+                    isExample
+                      ? "Preview only — no real PTY behind this row"
+                      : s.alive
+                        ? "Kill first, then forget"
+                        : "Remove this row from the daemon registry"
+                  }
+                  side="top"
+                >
                   <RowButton
-                    title="Adopt this session back into Acorn's sidebar"
                     busy={busy}
+                    disabled={s.alive || isExample}
                     onClick={() =>
                       void runRowAction(s.id, () =>
-                        api.daemonAdoptSession(s.id),
+                        api.daemonForgetSession(s.id),
                       )
                     }
+                    aria-label="Forget session"
                   >
-                    <Undo2 size={11} />
-                    <span>Restore</span>
+                    <Trash2 size={12} />
                   </RowButton>
-                )}
-                <RowButton
-                  title={
-                    s.alive
-                      ? "Kill first, then forget"
-                      : "Remove this row from the daemon registry"
-                  }
-                  busy={busy}
-                  disabled={s.alive}
-                  onClick={() =>
-                    void runRowAction(s.id, () =>
-                      api.daemonForgetSession(s.id),
-                    )
-                  }
-                >
-                  <Trash2 size={11} />
-                  <span>Forget</span>
-                </RowButton>
+                </Tooltip>
               </div>
             </li>
           );
@@ -377,30 +427,30 @@ function RowButton({
   busy,
   onClick,
   children,
-  title,
   disabled,
   tone,
+  "aria-label": ariaLabel,
 }: {
   busy: boolean;
   onClick: () => void;
   children: React.ReactNode;
-  title: string;
   disabled?: boolean;
   tone?: "danger";
+  "aria-label": string;
 }) {
   return (
     <button
       type="button"
-      title={title}
+      aria-label={ariaLabel}
       onClick={onClick}
       disabled={busy || disabled}
       className={cn(
-        "flex items-center gap-1 rounded border border-border bg-bg px-1.5 py-0.5 text-[11px] transition",
+        "flex h-6 w-6 items-center justify-center rounded border border-border bg-bg transition",
         "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-40",
         tone === "danger" ? "text-danger" : "text-fg",
       )}
     >
-      {busy ? <Loader2 size={11} className="animate-spin" /> : children}
+      {busy ? <Loader2 size={12} className="animate-spin" /> : children}
     </button>
   );
 }
