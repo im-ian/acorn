@@ -291,42 +291,16 @@ function SessionsList({
   if (sessions === null) {
     return <p className="text-xs text-fg-muted">Loading…</p>;
   }
-  const hasDead = sessions.some((s) => !s.alive);
-  // Stable synthetic example so the user can see what a Restore-capable
-  // row looks like in environments where every tracked PTY is still
-  // alive. Rendered visually-distinct and non-interactive — never
-  // round-trips to the daemon.
-  const exampleRow: DaemonSessionSummary | null = hasDead
-    ? null
-    : {
-        id: "00000000-0000-0000-0000-000000000000",
-        name: "example-restorable-session",
-        kind: "regular",
-        alive: false,
-        repo_path: null,
-        branch: null,
-        agent_kind: null,
-      };
-  if (sessions.length === 0 && !exampleRow) {
+  if (sessions.length === 0) {
     return <p className="text-xs text-fg-muted">No sessions tracked.</p>;
   }
-  const rendered: { row: DaemonSessionSummary; isExample: boolean }[] = [
-    ...sessions.map((s) => ({ row: s, isExample: false })),
-    ...(exampleRow ? [{ row: exampleRow, isExample: true }] : []),
-  ];
   return (
     <div className="space-y-2">
       <ul className="divide-y divide-border rounded border border-border bg-bg-elevated text-xs">
-        {rendered.map(({ row: s, isExample }) => {
+        {sessions.map((s) => {
           const busy = rowBusy === s.id;
           return (
-            <li
-              key={s.id}
-              className={cn(
-                "flex items-center gap-2 px-3 py-1.5",
-                isExample && "opacity-60",
-              )}
-            >
+            <li key={s.id} className="flex items-center gap-2 px-3 py-1.5">
               <span
                 className={cn(
                   "font-mono text-[10px]",
@@ -337,11 +311,7 @@ function SessionsList({
               </span>
               <span className="flex flex-1 items-center gap-1.5 truncate font-mono">
                 <Tooltip
-                  label={
-                    isExample
-                      ? "Synthetic preview row — not backed by a real PTY"
-                      : renderAppMetaTooltip(appById.get(s.id), s)
-                  }
+                  label={renderAppMetaTooltip(appById.get(s.id), s)}
                   side="top"
                   multiline
                 >
@@ -372,11 +342,6 @@ function SessionsList({
                     />
                   </Tooltip>
                 ) : null}
-                {isExample ? (
-                  <span className="rounded border border-dashed border-border px-1 text-[9px] uppercase tracking-wide text-fg-muted">
-                    example
-                  </span>
-                ) : null}
               </span>
               {s.agent_kind ? (
                 <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-fg-muted">
@@ -401,16 +366,11 @@ function SessionsList({
                   </Tooltip>
                 ) : (
                   <Tooltip
-                    label={
-                      isExample
-                        ? "Preview only — no real PTY behind this row"
-                        : "Adopt this session back into Acorn's sidebar"
-                    }
+                    label="Adopt this session back into Acorn's sidebar"
                     side="top"
                   >
                     <RowButton
                       busy={busy}
-                      disabled={isExample}
                       onClick={() =>
                         void runRowAction(s.id, () =>
                           api.daemonAdoptSession(s.id),
@@ -424,17 +384,15 @@ function SessionsList({
                 )}
                 <Tooltip
                   label={
-                    isExample
-                      ? "Preview only — no real PTY behind this row"
-                      : s.alive
-                        ? "Kill first, then forget"
-                        : "Remove this row from the daemon registry"
+                    s.alive
+                      ? "Kill first, then forget"
+                      : "Remove this row from the daemon registry"
                   }
                   side="top"
                 >
                   <RowButton
                     busy={busy}
-                    disabled={s.alive || isExample}
+                    disabled={s.alive}
                     onClick={() =>
                       void runRowAction(s.id, () =>
                         api.daemonForgetSession(s.id),
