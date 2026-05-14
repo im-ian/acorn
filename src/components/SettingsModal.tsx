@@ -1380,7 +1380,7 @@ function ExperimentsSettings() {
           patchExperiments({ cjkCellWidthHeuristic: checked })
         }
         label="CJK terminal cell-width correction"
-        description="Heuristic for CJK monospaced fonts (D2Coding, Sarasa Mono, etc.): when `W` and `가` measure the same width, halves the cell width so Hangul/Han glyphs sit on the cell grid. Skipped when widths differ, so ASCII fonts with system CJK fallback are not corrected. Off by default."
+        description="Heuristic for CJK monospaced fonts (D2Coding, Sarasa Mono, etc.): when `W` and `가` measure the same width, halves the cell width so Hangul/Han glyphs sit on the cell grid. Skipped when widths differ, so ASCII fonts with system CJK fallback are not corrected. Known limitation: tab switches can briefly show a 1-frame glyph-size flicker as xterm's resize path resets `cell.width` to the natural W advance before the addon reapplies the halved value. Off by default."
       />
     </section>
   );
