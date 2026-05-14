@@ -12,10 +12,10 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { LayoutRenderer } from "./components/LayoutRenderer";
-import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
+import { AgentResumeModal } from "./components/AgentResumeModal";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -25,12 +25,18 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { api } from "./lib/api";
+import { api, type AgentKind, type ResumeCandidate } from "./lib/api";
 import {
   Hotkeys,
   shouldUseTinykeysToggleMultiInputFallback,
   useHotkeys,
 } from "./lib/hotkeys";
+import {
+  EQUALIZE_PANES_EVENT,
+  EXPAND_PANEL_EVENT,
+  type ExpandPanelDetail,
+  RESET_PANEL_SIZES_EVENT,
+} from "./lib/layoutEvents";
 import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
@@ -39,7 +45,11 @@ import { findFocusedSessionId } from "./lib/focus";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
-import { useSettings } from "./lib/settings";
+import {
+  normalizeUiScalePercent,
+  UI_SCALE_PERCENT_STEP,
+  useSettings,
+} from "./lib/settings";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
@@ -47,6 +57,11 @@ import { useAppStore } from "./store";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
+
+const SIDEBAR_DEFAULT_SIZE = 18;
+const SIDEBAR_MIN_SIZE = 12;
+const RIGHT_PANEL_DEFAULT_SIZE = 26;
+const RIGHT_PANEL_MIN_SIZE = 16;
 
 function focusPanel(id: "sidebar" | "main" | "right") {
   const panel = document.querySelector(
@@ -61,6 +76,16 @@ function focusPanel(id: "sidebar" | "main" | "right") {
     ) as HTMLElement | null) ??
     (panel.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
   target?.focus();
+}
+
+function updateUiScalePercent(delta: number) {
+  const settings = useSettings.getState().settings;
+  useSettings.getState().patchAppearance({
+    uiScalePercent: normalizeUiScalePercent(
+      settings.appearance.uiScalePercent + delta,
+      settings.appearance.uiScalePercent,
+    ),
+  });
 }
 
 function focusPaneTerminal(paneId: string) {
@@ -105,6 +130,10 @@ function App() {
     : [];
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const [resumeCandidates, setResumeCandidates] = useState<
+    Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
+  >(new Map());
 
   const toggleMultiInput = useCallback(() => {
     const enabled = useAppStore.getState().toggleMultiInput();
@@ -147,6 +176,89 @@ function App() {
     appearance.background.applyToApp,
     appearance.background.applyToTerminal,
   ]);
+
+  // Probe every persisted session for a "이전 대화" candidate exactly
+  // once per Acorn launch — at mount, not on focus. The intended UX is
+  // "boot Acorn after a system off-and-on, get a one-shot prompt per
+  // session to pick up where I left off", which includes sessions that
+  // live in non-focused panes (multi-pane layouts) where `activeSessionId`
+  // alone would never surface them. Results land in `resumeCandidates`
+  // keyed by session id; the rendered modal is a pure derivation of
+  // `activeSessionId × resumeCandidates`, so dismissal only needs to
+  // drop the entry — no separate "currently shown" state to keep in
+  // sync.
+  // Probe each session for a "이전 대화" candidate exactly once per
+  // Acorn launch. Per-session ref dedup so the effect re-firing when
+  // zustand pushes a new `sessions` array reference (boot rehydrate,
+  // reconcile, refresh) does NOT re-probe sessions we already checked.
+  // That dedup is what holds the "cold boot only" UX promise: after
+  // the user finishes a claude run and the persister updates
+  // `claude.id`, the in-memory map stays stable, so the modal never
+  // pops mid-session.
+  const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+  const resumeModalEnabled = useSettings(
+    (s) => s.settings.experiments.resumeModal,
+  );
+  const probedSessionsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!resumeModalEnabled) return;
+    const toProbe = sessionIds.filter(
+      (sid) => !probedSessionsRef.current.has(sid),
+    );
+    if (toProbe.length === 0) return;
+    // Mark *before* the await so a concurrent effect run (caused by
+    // the same `sessions` array re-emitting a new reference during
+    // boot) does not race to launch a duplicate probe for the same
+    // id. We deliberately do NOT use an `if (cancelled) return` gate
+    // on the `.then` — when the effect re-runs and cleans the prior
+    // run, the in-flight probe still needs to land its result, and
+    // the functional `setResumeCandidates(prev => ...)` is race-safe.
+    for (const sid of toProbe) probedSessionsRef.current.add(sid);
+    void Promise.all(
+      toProbe.map(async (sid) => {
+        const [claude, codex] = await Promise.all([
+          api.getClaudeResumeCandidate(sid).catch(() => null),
+          api.getCodexResumeCandidate(sid).catch(() => null),
+        ]);
+        const pick = pickResumeCandidate(claude, codex);
+        return pick ? ([sid, pick] as const) : null;
+      }),
+    )
+      .then((entries) => {
+        const additions = entries.filter(
+          (e): e is readonly [string, { agent: AgentKind; candidate: ResumeCandidate }] =>
+            e !== null,
+        );
+        if (additions.length === 0) return;
+        setResumeCandidates((prev) => {
+          const next = new Map(prev);
+          for (const [sid, pick] of additions) next.set(sid, pick);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Best-effort probe — failures here just mean a session won't
+        // surface its modal on this boot. The next launch retries.
+      });
+  }, [sessionIds, resumeModalEnabled]);
+
+  const resumeCandidate = useMemo(() => {
+    if (!activeSessionId) return null;
+    const entry = resumeCandidates.get(activeSessionId);
+    if (!entry) return null;
+    return {
+      sessionId: activeSessionId,
+      agent: entry.agent,
+      candidate: entry.candidate,
+    };
+  }, [activeSessionId, resumeCandidates]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--acorn-ui-scale",
+      String(appearance.uiScalePercent / 100),
+    );
+  }, [appearance.uiScalePercent]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
@@ -294,6 +406,42 @@ function App() {
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
   }, [pendingRemove, clearPendingRemove, removeSession]);
+
+  // Restore the root layout (sidebar + right panel) and equalize the
+  // workspace pane splits when the command palette fires the reset event.
+  // Useful when the user has nudged the 1px handle into a barely-visible
+  // strip and wants a one-shot way back to the default layout.
+  useEffect(() => {
+    const handler = () => {
+      sidebarPanelRef.current?.expand();
+      sidebarPanelRef.current?.resize(SIDEBAR_DEFAULT_SIZE);
+      rightPanelRef.current?.expand();
+      rightPanelRef.current?.resize(RIGHT_PANEL_DEFAULT_SIZE);
+      window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+    };
+    window.addEventListener(RESET_PANEL_SIZES_EVENT, handler);
+    return () => window.removeEventListener(RESET_PANEL_SIZES_EVENT, handler);
+  }, []);
+
+  // ResizeHandle dispatches this on double-click when the adjacent panel
+  // is collapsed. Expand to minSize via the imperative ref so the panel
+  // animates from its current state instead of jumping straight to the
+  // last user-set size.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<ExpandPanelDetail>).detail;
+      if (!detail) return;
+      if (detail.panelId === "sidebar") {
+        sidebarPanelRef.current?.expand();
+        sidebarPanelRef.current?.resize(SIDEBAR_MIN_SIZE);
+      } else if (detail.panelId === "right") {
+        rightPanelRef.current?.expand();
+        rightPanelRef.current?.resize(RIGHT_PANEL_MIN_SIZE);
+      }
+    };
+    window.addEventListener(EXPAND_PANEL_EVENT, handler);
+    return () => window.removeEventListener(EXPAND_PANEL_EVENT, handler);
+  }, []);
 
   // Surface the one-time guide modal after the first control-session
   // creation. The store dispatches `acorn:show-control-guide` only when the
@@ -540,6 +688,26 @@ function App() {
         e.preventDefault();
         useAppStore.getState().setRightTab("prs");
       },
+      [Hotkeys.uiScaleDown]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleDownShift]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleUp]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleUpShift]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleReset]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useSettings.getState().patchAppearance({ uiScalePercent: 100 });
+      },
       [Hotkeys.toggleMultiInput]: (e: KeyboardEvent) => {
         e.preventDefault();
         if (!shouldUseTinykeysToggleMultiInputFallback()) return;
@@ -643,8 +811,8 @@ function App() {
             ref={sidebarPanelRef}
             id="sidebar"
             order={1}
-            defaultSize={18}
-            minSize={12}
+            defaultSize={SIDEBAR_DEFAULT_SIZE}
+            minSize={SIDEBAR_MIN_SIZE}
             maxSize={40}
             collapsible
             collapsedSize={0}
@@ -660,8 +828,8 @@ function App() {
             ref={rightPanelRef}
             id="right"
             order={3}
-            defaultSize={26}
-            minSize={16}
+            defaultSize={RIGHT_PANEL_DEFAULT_SIZE}
+            minSize={RIGHT_PANEL_MIN_SIZE}
             maxSize={50}
             collapsible
             collapsedSize={0}
@@ -686,6 +854,21 @@ function App() {
         }}
       />
       <SettingsModal />
+      <AgentResumeModal
+        sessionId={resumeCandidate?.sessionId ?? ""}
+        agent={resumeCandidate?.agent ?? "claude"}
+        candidate={resumeCandidate?.candidate ?? null}
+        onDismiss={() => {
+          const dismissed = resumeCandidate?.sessionId;
+          if (!dismissed) return;
+          setResumeCandidates((prev) => {
+            if (!prev.has(dismissed)) return prev;
+            const next = new Map(prev);
+            next.delete(dismissed);
+            return next;
+          });
+        }}
+      />
       <RemoveSessionDialog
         session={pendingRemove}
         onClose={(choice) => {
@@ -707,6 +890,26 @@ function App() {
       />
     </div>
   );
+}
+
+/**
+ * Decide which agent's resume candidate to show first when both are
+ * non-null. Larger `lastActivityUnix` wins so the user is offered the
+ * conversation they most recently touched. `lastActivityUnix === 0`
+ * means the transcript path could not be stat'd; treat as oldest.
+ */
+function pickResumeCandidate(
+  claude: ResumeCandidate | null,
+  codex: ResumeCandidate | null,
+): { agent: AgentKind; candidate: ResumeCandidate } | null {
+  if (claude && codex) {
+    return claude.lastActivityUnix >= codex.lastActivityUnix
+      ? { agent: "claude", candidate: claude }
+      : { agent: "codex", candidate: codex };
+  }
+  if (claude) return { agent: "claude", candidate: claude };
+  if (codex) return { agent: "codex", candidate: codex };
+  return null;
 }
 
 export default App;

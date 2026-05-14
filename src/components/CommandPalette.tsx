@@ -6,6 +6,7 @@ import {
   GitBranch,
   GitCommit,
   GitPullRequest,
+  LayoutTemplate,
   ListChecks,
   ListPlus,
   Plus,
@@ -15,6 +16,7 @@ import {
   Trash2,
   Trees,
 } from "lucide-react";
+import { RESET_PANEL_SIZES_EVENT } from "../lib/layoutEvents";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -84,6 +86,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleSetTab(tab: "todos" | "commits" | "staged" | "prs") {
     useAppStore.getState().setRightTab(tab);
+    close();
+  }
+
+  function handleResetPanelSizes() {
+    window.dispatchEvent(new CustomEvent(RESET_PANEL_SIZES_EVENT));
     close();
   }
 
@@ -258,6 +265,24 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             <GitPullRequest size={14} className="text-fg-muted" />
             <span>View Pull Requests</span>
+          </Command.Item>
+          <Command.Item
+            value="reset-panel-sizes"
+            onSelect={handleResetPanelSizes}
+            keywords={[
+              "reset",
+              "restore",
+              "panel",
+              "sidebar",
+              "layout",
+              "size",
+              "default",
+              "복구",
+              "초기화",
+            ]}
+          >
+            <LayoutTemplate size={14} className="text-fg-muted" />
+            <span>Reset panel sizes</span>
           </Command.Item>
         </Command.Group>
 

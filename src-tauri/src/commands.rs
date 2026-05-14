@@ -5,12 +5,13 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
+use crate::agent_resume;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::pull_requests::{
     self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
-    PullRequestListing,
+    PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
 };
 use crate::scrollback;
 use crate::session::{Project, Session, SessionKind, SessionStatus};
@@ -607,11 +608,11 @@ pub fn update_session_worktree(
 #[derive(Serialize, Default)]
 pub struct AgentDetection {
     /// Parent claude session id when a claude transcript is present at
-    /// `~/.claude/projects/<slug>/<session-id>.jsonl`. Today this equals the
-    /// Acorn session UUID (claude shim runs `--session-id $ACORN_RESUME_TOKEN`
-    /// = Acorn UUID), so the parent id we pass to `claude --resume` is just
-    /// the Acorn session id. Kept as a separate field so the contract stays
-    /// stable if the shim ever stops reusing the Acorn UUID.
+    /// `~/.claude/projects/<slug>/<uuid>.jsonl`. This is whatever UUID
+    /// claude minted for its most recent run in this Acorn session —
+    /// observed live by `transcript_watcher` and mirrored to
+    /// `<state_dir>/claude.id` by the shim. It is *not* guaranteed to
+    /// equal the Acorn session UUID.
     pub claude: Option<String>,
     /// Codex session UUID captured by the codex shim in
     /// `<state_dir>/codex.id` after the first zero-arg `codex` run.
@@ -846,37 +847,25 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
-    // The Acorn session UUID doubles as the resume token. claude's
-    // `--session-id` names the JSONL transcript at
-    // `~/.claude/projects/<repo-slug>/<id>.jsonl`, and
-    // `session_status::detect` looks the file up by Acorn's session
-    // id verbatim — minting a separate UUID would break that lookup
-    // and leave status detection on the descendant-process fallback.
-    // `ACORN_AGENT_STATE_DIR` is the per-session scratch directory
-    // the codex shim writes its captured `codex.id` into.
+    // `ACORN_RESUME_TOKEN` carries the Acorn session UUID. Older builds
+    // used the value inside a PATH-based shim to auto-inject claude's
+    // `--session-id`; the shim is gone (filesystem-watcher persister
+    // replaces it — see `agent_resume_persister`), but the env var is
+    // left in place so user scripts that address the running Acorn
+    // session by UUID keep working. `ACORN_AGENT_STATE_DIR` is no
+    // longer needed inside the PTY (the persister writes to the same
+    // path from the Rust side), but we keep it exposed so end-user
+    // scripts that wanted to introspect Acorn state can still do so.
     let resume_token = id.to_string();
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
         .or_insert_with(|| resume_token.clone());
-    if let Ok(state_dir) = crate::agent_shim::ensure_session_state_dir(id) {
+    if let Ok(state_dir) = crate::agent_resume::ensure_session_state_dir(id) {
         effective_env
             .entry("ACORN_AGENT_STATE_DIR".to_string())
             .or_insert_with(|| state_dir.display().to_string());
     } else {
-        tracing::warn!(%id, "agent state dir setup failed; codex shim will skip resume tracking");
-    }
-    if let Ok(shim_dir) = crate::agent_shim::ensure_shim_dir() {
-        let existing = effective_env
-            .get("PATH")
-            .cloned()
-            .or_else(|| std::env::var("PATH").ok())
-            .unwrap_or_default();
-        effective_env.insert(
-            "PATH".to_string(),
-            crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
-        );
-    } else {
-        tracing::warn!(%id, "agent shim dir setup failed; claude/codex resume helpers will not be active");
+        tracing::warn!(%id, "agent state dir setup failed; resume modal will be inactive for this session");
     }
 
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
@@ -1638,6 +1627,22 @@ pub async fn update_pull_request_body(
 }
 
 #[tauri::command]
+pub async fn list_workflow_runs(
+    repo_path: String,
+    limit: Option<u32>,
+) -> AppResult<WorkflowRunsListing> {
+    pull_requests::list_workflow_runs(&PathBuf::from(repo_path), limit.unwrap_or(50))
+}
+
+#[tauri::command]
+pub async fn get_workflow_run_detail(
+    repo_path: String,
+    run_id: u64,
+) -> AppResult<WorkflowRunDetailListing> {
+    pull_requests::get_workflow_run_detail(&PathBuf::from(repo_path), run_id)
+}
+
+#[tauri::command]
 pub async fn generate_pr_commit_message(
     repo_path: String,
     number: u64,
@@ -1678,6 +1683,125 @@ pub(crate) fn create_unique_worktree(
         candidate = format!("{base}-{n}");
         n += 1;
     }
+}
+
+/// Surface the "이전 Claude 대화 있음" candidate for a session — used by
+/// the frontend modal that pops on session focus. `None` means there is
+/// nothing the user needs to decide about (no claude has run, or the
+/// last id is already acknowledged, or claude is currently active in
+/// this session's PTY tree and the modal would be redundant).
+#[tauri::command]
+pub fn get_claude_resume_candidate(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<agent_resume::ResumeCandidate>> {
+    let id = parse_id(&session_id)?;
+    if agent_is_running_in_session(&state, &id, "claude") {
+        return Ok(None);
+    }
+    agent_resume::claude_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Codex equivalent of `get_claude_resume_candidate`. Codex auto-resume
+/// (which the deleted shim used to perform) is gone; the user now picks
+/// the resume target through the modal whenever a fresh codex UUID lands
+/// in the per-session state file.
+#[tauri::command]
+pub fn get_codex_resume_candidate(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<agent_resume::ResumeCandidate>> {
+    let id = parse_id(&session_id)?;
+    if agent_is_running_in_session(&state, &id, "codex") {
+        return Ok(None);
+    }
+    agent_resume::codex_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Mark the current `claude.id` as seen so the modal does not pop again
+/// for the same UUID. Invoked by every modal-button handler (이어하기 /
+/// ID 복사 / 취소) — the only thing that revives the candidate is a
+/// *new* JSONL appearing under a different UUID.
+#[tauri::command]
+pub fn acknowledge_claude_resume(session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    agent_resume::acknowledge_claude_resume(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Codex equivalent of `acknowledge_claude_resume`.
+#[tauri::command]
+pub fn acknowledge_codex_resume(session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    agent_resume::acknowledge_codex_resume(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// `true` when a process matching `basename` is alive anywhere in the
+/// session's PTY descendant tree. Cheap process-table scan — fine on
+/// the focus path which fires at most a few times per second.
+fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &str) -> bool {
+    let Some(root) = state
+        .stream_registry
+        .pid(session_id)
+        .or_else(|| state.pty.child_pid(session_id))
+    else {
+        return false;
+    };
+    // Refresh with exe + cmd populated — `ProcessRefreshKind::new()`
+    // alone gives an empty config on sysinfo 0.32, so `proc.exe()` and
+    // `proc.cmd()` come back as `None` and the basename match always
+    // fails. That silently flipped the suppression off and let the
+    // modal pop for sessions whose claude was still mid-conversation.
+    let refresh = ProcessRefreshKind::new()
+        .with_exe(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always);
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+    let mut frontier: Vec<Pid> = vec![Pid::from_u32(root)];
+    let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();
+    while let Some(pid) = frontier.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        if let Some(proc) = sys.process(pid) {
+            if process_basename_matches(proc, basename) {
+                return true;
+            }
+        }
+        for (child_pid, child) in sys.processes() {
+            if child.parent() == Some(pid) && !visited.contains(child_pid) {
+                frontier.push(*child_pid);
+            }
+        }
+    }
+    false
+}
+
+/// Match a process by `target` against any of: exe-path basename,
+/// `proc.name()`, or argv[0] basename. macOS `p_comm` is truncated to
+/// 16 chars and can land as a full path *or* a basename depending on
+/// how the process was invoked; sysinfo can also surface either form
+/// from `exe()` (resolved via `proc_pidinfo`). Checking every channel
+/// makes the detection robust against the user's `claude` binary
+/// being a Bun-compiled symlink target rather than a script.
+fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    let basename = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
+    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
+        if basename(exe) == target {
+            return true;
+        }
+    }
+    if let Some(name) = proc.name().to_str() {
+        if name == target || basename(name) == target {
+            return true;
+        }
+    }
+    if let Some(first) = proc.cmd().first() {
+        let s = first.to_string_lossy();
+        if basename(&s) == target {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {

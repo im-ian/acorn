@@ -116,6 +116,9 @@ export function StatusBar() {
   const showGithubAccount = useSettings(
     (s) => s.settings.statusBar.showGithubAccount,
   );
+  const showWorkingDirectory = useSettings(
+    (s) => s.settings.statusBar.showWorkingDirectory,
+  );
   const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
   const memory = useMemoryUsage(MEMORY_POLL_MS, showMemory);
@@ -130,7 +133,12 @@ export function StatusBar() {
 
   return (
     <>
-      <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
+      {/* `overflow-hidden` + `whitespace-nowrap` on inline children keeps
+          the bar at a strict h-7 even at narrow widths. Without it, the
+          branch text wraps inside its span, the row grows to two lines,
+          and Terminal's ResizeObserver fires SIGWINCH mid-claude-launch —
+          which leaves cursor/cells offset until a tab-switch refit. */}
+      <footer className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         {/* Left: aggregate counters about acorn itself — total sessions and
             the active session's lifecycle status. The IPC and daemon
             buttons sit first so the user can recover from a dead
@@ -138,14 +146,14 @@ export function StatusBar() {
             the main view. */}
         <ServicesStatusButton />
         {showSessionCount ? (
-          <span>sessions: {sessions.length}</span>
+          <span className="whitespace-nowrap">sessions: {sessions.length}</span>
         ) : null}
         {showSessionStatus && active ? (
           <>
             {showSessionCount ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span>status: {active.status}</span>
+            <span className="whitespace-nowrap">status: {active.status}</span>
           </>
         ) : null}
         {multiInputEnabled ? (
@@ -153,7 +161,7 @@ export function StatusBar() {
             {showSessionCount || (showSessionStatus && active) ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span className="rounded bg-accent/15 px-1.5 py-0.5 text-accent">
+            <span className="whitespace-nowrap rounded bg-accent/15 px-1.5 py-0.5 text-accent">
               multi-input: on
             </span>
           </>
@@ -161,17 +169,19 @@ export function StatusBar() {
 
         {/* Right: per-active-session context — gh account, branch, working
             directory, memory. Grouped together so the eye scans them as
-            "where am I right now?". */}
+            "where am I right now?". `min-w-0` lets the truncatable
+            children (branch, path) shrink instead of forcing the row
+            wider than the footer. */}
         <span className="ml-auto flex min-w-0 items-center gap-3">
-          {loading ? <span>working...</span> : null}
+          {loading ? <span className="whitespace-nowrap">working...</span> : null}
           {error ? (
             <Tooltip label={error} side="top" multiline>
-              <span className="truncate text-danger">error: {error}</span>
+              <span className="truncate whitespace-nowrap text-danger">error: {error}</span>
             </Tooltip>
           ) : null}
           {showGithubAccount && prAccount ? (
             <Tooltip label={`PRs listed via gh account ${prAccount}`} side="top">
-              <span className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
+              <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
                 <GitHubMark />
                 {prAccount}
               </span>
@@ -180,14 +190,16 @@ export function StatusBar() {
           {active ? (
             <>
               <span className="text-fg-muted/50">|</span>
-              <span>branch: {active.branch}</span>
+              <span className="min-w-0 truncate whitespace-nowrap">
+                branch: {active.branch}
+              </span>
             </>
           ) : null}
-          {active && displayPath ? (
+          {showWorkingDirectory && active && displayPath ? (
             <>
               <span className="text-fg-muted/50">|</span>
               <Tooltip label={active.worktree_path} side="top" multiline>
-                <span className="truncate text-right text-fg-muted">
+                <span className="min-w-0 truncate whitespace-nowrap text-right text-fg-muted">
                   {displayPath}
                 </span>
               </Tooltip>
@@ -201,7 +213,7 @@ export function StatusBar() {
                   type="button"
                   disabled={!memory}
                   onClick={() => setBreakdownOpen(true)}
-                  className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+                  className="whitespace-nowrap rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
                 >
                   memory: {memory ? formatBytes(memory.bytes) : "–"}
                 </button>

@@ -38,7 +38,6 @@ import {
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
-import type { PrStateFilter } from "../lib/types";
 import {
   CheckboxRow,
   CommandHint,
@@ -56,7 +55,7 @@ type Tab =
   | "terminal"
   | "agents"
   | "sessions"
-  | "pull-requests"
+  | "github"
   | "appearance"
   | "editor"
   | "notifications"
@@ -68,7 +67,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
   { id: "agents", label: "Agents" },
   { id: "sessions", label: "Sessions" },
-  { id: "pull-requests", label: "Pull Requests" },
+  { id: "github", label: "GitHub" },
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
@@ -158,8 +157,8 @@ export function SettingsModal() {
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
-          ) : tab === "pull-requests" ? (
-            <PullRequestsSettings />
+          ) : tab === "github" ? (
+            <GithubSettings />
           ) : tab === "appearance" ? (
             <AppearanceSettings />
           ) : tab === "editor" ? (
@@ -518,39 +517,20 @@ function ControlSessionInstallSection() {
   );
 }
 
-function PullRequestsSettings() {
+function GithubSettings() {
   const settings = useSettings((s) => s.settings);
-  const patchPullRequests = useSettings((s) => s.patchPullRequests);
+  const patchGithub = useSettings((s) => s.patchGithub);
 
   return (
     <section className="space-y-4">
       <Field
-        label="Default tab"
-        hint="Filter pre-selected when the PRs panel first opens for a repo. Switching tabs by hand still works as before."
-      >
-        <Select
-          value={settings.pullRequests.defaultState}
-          onChange={(e) =>
-            patchPullRequests({
-              defaultState: e.target.value as PrStateFilter,
-            })
-          }
-          className="w-48"
-        >
-          <option value="open">Open</option>
-          <option value="closed">Closed</option>
-          <option value="merged">Merged</option>
-          <option value="all">All</option>
-        </Select>
-      </Field>
-      <Field
         label="Refresh interval"
-        hint="How often the PRs tab auto-refetches from gh. Lower values feel snappier but spend more API budget."
+        hint="How often the PRs and Actions tabs auto-refetch from gh. Lower values feel snappier but spend more API budget."
       >
         <Select
-          value={settings.pullRequests.refreshIntervalMs}
+          value={settings.github.refreshIntervalMs}
           onChange={(e) =>
-            patchPullRequests({
+            patchGithub({
               refreshIntervalMs: Number(e.target.value),
             })
           }
@@ -564,8 +544,8 @@ function PullRequestsSettings() {
         </Select>
       </Field>
       <p className="text-[11px] text-fg-muted">
-        Manual refresh (the icon in the PRs tab) always works regardless of
-        this interval.
+        Manual refresh (the icon in each tab) always works regardless of this
+        interval.
       </p>
       <Field
         label="List density"
@@ -574,8 +554,8 @@ function PullRequestsSettings() {
         <CheckboxRow
           label="Show author avatars"
           description="Render the GitHub avatar next to each PR row."
-          checked={settings.pullRequests.showAvatars}
-          onChange={(v) => patchPullRequests({ showAvatars: v })}
+          checked={settings.github.showAvatars}
+          onChange={(v) => patchGithub({ showAvatars: v })}
         />
       </Field>
     </section>
@@ -596,6 +576,10 @@ function AppearanceSettings() {
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
       />
+      <UiScaleSection
+        value={appearance.uiScalePercent}
+        onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
+      />
       <BackgroundSection
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
@@ -609,6 +593,48 @@ function AppearanceSettings() {
         patch={patchStatusBar}
       />
     </section>
+  );
+}
+
+const UI_SCALE_PRESETS = [75, 80, 90, 100, 110, 125, 150] as const;
+
+function UiScaleSection({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const presets = UI_SCALE_PRESETS.includes(
+    value as (typeof UI_SCALE_PRESETS)[number],
+  )
+    ? UI_SCALE_PRESETS
+    : [...UI_SCALE_PRESETS, value].sort((a, b) => a - b);
+
+  const commitValue = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    onChange(next);
+  };
+
+  return (
+    <Field
+      label="UI scale"
+      hint="Scales the app chrome in 5% steps. Terminal text keeps its separate size setting."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={String(value)}
+          onChange={(e) => commitValue(Number(e.target.value))}
+          className="w-32"
+        >
+          {presets.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}%
+            </option>
+          ))}
+        </Select>
+      </div>
+    </Field>
   );
 }
 
@@ -925,6 +951,12 @@ function StatusBarSection({
           description="The `gh` account used to list pull requests for the active repo."
           checked={statusBar.showGithubAccount}
           onChange={(v) => patch({ showGithubAccount: v })}
+        />
+        <CheckboxRow
+          label="Working directory"
+          description="The active session's worktree path (tildified against $HOME)."
+          checked={statusBar.showWorkingDirectory}
+          onChange={(v) => patch({ showWorkingDirectory: v })}
         />
         <CheckboxRow
           label="Memory usage"
@@ -1381,6 +1413,12 @@ function ExperimentsSettings() {
         }
         label="CJK terminal cell-width correction"
         description="Heuristic for CJK monospaced fonts (D2Coding, Sarasa Mono, etc.): when `W` and `가` measure the same width, halves the cell width so Hangul/Han glyphs sit on the cell grid. Skipped when widths differ, so ASCII fonts with system CJK fallback are not corrected. Known limitation: tab switches can briefly show a 1-frame glyph-size flicker as xterm's resize path resets `cell.width` to the natural W advance before the addon reapplies the halved value. Off by default."
+      />
+      <CheckboxRow
+        checked={experiments.resumeModal}
+        onChange={(checked) => patchExperiments({ resumeModal: checked })}
+        label='Show "Resume previous conversation" modal at cold boot'
+        description="On Acorn launch, probes every persisted session for an unfinished claude or codex transcript and pops a one-shot modal when you focus the session so you can pick up where you left off. Disable to suppress the modal entirely."
       />
     </section>
   );

@@ -55,7 +55,6 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   },
 ];
 
-import type { PrStateFilter } from "./types";
 
 /**
  * Allowed PRs-tab refresh intervals shown in the Settings UI. Picked to
@@ -74,6 +73,10 @@ export const PR_REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
   { value: 300_000, label: "5 minutes" },
   { value: 600_000, label: "10 minutes" },
 ];
+
+export const UI_SCALE_PERCENT_MIN = 75;
+export const UI_SCALE_PERCENT_MAX = 150;
+export const UI_SCALE_PERCENT_STEP = 5;
 
 export type TerminalFontWeight =
   | 100
@@ -214,17 +217,16 @@ export interface AcornSettings {
     showSessionCount: boolean;
     showSessionStatus: boolean;
     showGithubAccount: boolean;
+    showWorkingDirectory: boolean;
     showMemory: boolean;
   };
-  pullRequests: {
-    /** Tab pre-selected when the PRs panel first mounts for a repo. */
-    defaultState: PrStateFilter;
-    /** Auto-refresh cadence for the PRs tab in milliseconds. */
+  github: {
+    /** Auto-refresh cadence for the PRs and Actions tabs in milliseconds. */
     refreshIntervalMs: number;
     /**
-     * Show the author's GitHub avatar on each PR row. Trades a thicker
-     * row for at-a-glance author recognition, mirroring the PR detail
-     * modal which already shows avatars in its header / conversation.
+     * Show the author's GitHub avatar on PR rows. Trades a thicker row
+     * for at-a-glance author recognition, mirroring the PR detail modal
+     * which already shows avatars in its header / conversation.
      */
     showAvatars: boolean;
   };
@@ -266,6 +268,7 @@ export interface AcornSettings {
     themeId: string;
     background: BackgroundState;
     fontSlots: [string, string | null, string | null];
+    uiScalePercent: number;
   };
   /**
    * Opt-in toggles for unfinished features. Anything under here is
@@ -290,6 +293,15 @@ export interface AcornSettings {
      * unrelated terminal layouts.
      */
     cjkCellWidthHeuristic: boolean;
+    /**
+     * Cold-boot "Resume previous conversation" modal for claude / codex.
+     * On Acorn launch, probes every persisted session for an unfinished
+     * agent transcript and pops a one-shot modal when the user focuses
+     * one. Disable to suppress the modal entirely (the underlying
+     * `claude.id` / `codex.id` files still get written by the persister
+     * for future debugging).
+     */
+    resumeModal: boolean;
   };
 }
 
@@ -330,10 +342,10 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     showSessionCount: true,
     showSessionStatus: true,
     showGithubAccount: true,
+    showWorkingDirectory: true,
     showMemory: true,
   },
-  pullRequests: {
-    defaultState: "open",
+  github: {
     refreshIntervalMs: 60_000,
     showAvatars: true,
   },
@@ -362,10 +374,12 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       applyToTerminal: false,
     },
     fontSlots: ["JetBrains Mono", "Fira Code", "Menlo"],
+    uiScalePercent: 100,
   },
   experiments: {
     stickyPrompt: false,
     cjkCellWidthHeuristic: false,
+    resumeModal: true,
   },
 };
 
@@ -379,13 +393,6 @@ const VALID_AGENTS = new Set<AgentProvider>([
   "ollama",
   "llm",
   "codex",
-]);
-
-const VALID_PR_STATES = new Set<PrStateFilter>([
-  "open",
-  "closed",
-  "merged",
-  "all",
 ]);
 
 const VALID_PR_INTERVALS = new Set<number>(
@@ -409,6 +416,15 @@ function clamp01(v: unknown, fallback: number): number {
 function clampBlur(v: unknown, fallback: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
   return Math.max(0, Math.min(24, v));
+}
+
+export function normalizeUiScalePercent(v: unknown, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const clamped = Math.max(
+    UI_SCALE_PERCENT_MIN,
+    Math.min(UI_SCALE_PERCENT_MAX, v),
+  );
+  return Math.round(clamped / UI_SCALE_PERCENT_STEP) * UI_SCALE_PERCENT_STEP;
 }
 
 function normalizeThemeId(v: unknown, fallback: string): string {
@@ -450,13 +466,6 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   // Clamp to the same range the Stepper enforces in the UI so a hand-
   // edited localStorage value can't make the terminal unusable.
   return Math.max(1.0, Math.min(2.0, v));
-}
-
-function normalizePrState(v: unknown, fallback: PrStateFilter): PrStateFilter {
-  if (typeof v === "string" && VALID_PR_STATES.has(v as PrStateFilter)) {
-    return v as PrStateFilter;
-  }
-  return fallback;
 }
 
 function normalizePrInterval(v: unknown, fallback: number): number {
@@ -519,13 +528,21 @@ interface LegacyCommitMessage {
   llmModel?: string;
 }
 
+interface LegacyPullRequests {
+  refreshIntervalMs?: number;
+  showAvatars?: boolean;
+}
+
 function loadSettings(): AcornSettings {
   if (typeof localStorage === "undefined") return DEFAULT_SETTINGS;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw) as
-      | (Partial<AcornSettings> & { commitMessage?: LegacyCommitMessage })
+      | (Partial<AcornSettings> & {
+          commitMessage?: LegacyCommitMessage;
+          pullRequests?: LegacyPullRequests;
+        })
       | null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
@@ -571,6 +588,10 @@ function loadSettings(): AcornSettings {
       fontSlots: normalizeFontSlots(
         appearanceRaw.fontSlots,
         DEFAULT_SETTINGS.appearance.fontSlots,
+      ),
+      uiScalePercent: normalizeUiScalePercent(
+        appearanceRaw.uiScalePercent,
+        DEFAULT_SETTINGS.appearance.uiScalePercent,
       ),
       background: {
         relativePath:
@@ -650,19 +671,22 @@ function loadSettings(): AcornSettings {
         ...DEFAULT_SETTINGS.statusBar,
         ...(parsed.statusBar ?? {}),
       },
-      pullRequests: {
-        defaultState: normalizePrState(
-          parsed.pullRequests?.defaultState,
-          DEFAULT_SETTINGS.pullRequests.defaultState,
-        ),
+      github: {
+        // Backwards compat: legacy persisted settings store these fields
+        // under `pullRequests`. Fall through to that key when the new
+        // `github` slot is missing so existing users don't lose their
+        // refresh interval / avatar toggle on first launch after rename.
         refreshIntervalMs: normalizePrInterval(
-          parsed.pullRequests?.refreshIntervalMs,
-          DEFAULT_SETTINGS.pullRequests.refreshIntervalMs,
+          parsed.github?.refreshIntervalMs ??
+            parsed.pullRequests?.refreshIntervalMs,
+          DEFAULT_SETTINGS.github.refreshIntervalMs,
         ),
         showAvatars:
-          typeof parsed.pullRequests?.showAvatars === "boolean"
-            ? parsed.pullRequests.showAvatars
-            : DEFAULT_SETTINGS.pullRequests.showAvatars,
+          typeof parsed.github?.showAvatars === "boolean"
+            ? parsed.github.showAvatars
+            : typeof parsed.pullRequests?.showAvatars === "boolean"
+              ? parsed.pullRequests.showAvatars
+              : DEFAULT_SETTINGS.github.showAvatars,
       },
       sessionDisplay: {
         title: normalizeSessionTitle(
@@ -694,6 +718,10 @@ function loadSettings(): AcornSettings {
           typeof parsed.experiments?.cjkCellWidthHeuristic === "boolean"
             ? parsed.experiments.cjkCellWidthHeuristic
             : DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
+        resumeModal:
+          typeof parsed.experiments?.resumeModal === "boolean"
+            ? parsed.experiments.resumeModal
+            : DEFAULT_SETTINGS.experiments.resumeModal,
       },
     };
   } catch {
@@ -740,7 +768,7 @@ interface SettingsState {
     },
   ) => void;
   patchStatusBar: (patch: Partial<AcornSettings["statusBar"]>) => void;
-  patchPullRequests: (patch: Partial<AcornSettings["pullRequests"]>) => void;
+  patchGithub: (patch: Partial<AcornSettings["github"]>) => void;
   patchSessionDisplay: (
     patch: Partial<
       Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
@@ -844,11 +872,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
       persist(next);
       return { settings: next };
     }),
-  patchPullRequests: (patch) =>
+  patchGithub: (patch) =>
     set((s) => {
       const next: AcornSettings = {
         ...s.settings,
-        pullRequests: { ...s.settings.pullRequests, ...patch },
+        github: { ...s.settings.github, ...patch },
       };
       persist(next);
       return { settings: next };

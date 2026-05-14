@@ -27,7 +27,7 @@ const ZSHRC_BODY: &str = include_str!("../shell-init/zshrc");
 /// Materialise the shell-init dir under Acorn's data dir, returning the
 /// path callers should hand to `ZDOTDIR` on PTY spawn. Idempotent — the
 /// body is rewritten every call so a shipped fix lands without a data
-/// dir version bump (same convention as `agent_shim::ensure_shim_dir`).
+/// dir version bump.
 pub fn ensure_shell_init_dir() -> io::Result<PathBuf> {
     ensure_shell_init_dir_at(&crate::daemon::paths::data_dir()?)
 }

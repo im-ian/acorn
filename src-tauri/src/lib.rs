@@ -1,4 +1,5 @@
-mod agent_shim;
+mod agent_resume;
+mod agent_resume_persister;
 mod claude_util;
 mod cli_resolver;
 mod commands;
@@ -11,6 +12,7 @@ mod git_ops;
 mod ipc;
 mod persistence;
 mod pty;
+mod pty_env;
 mod pull_requests;
 mod scrollback;
 mod session;
@@ -255,6 +257,11 @@ pub fn run() {
                 })
                 .ok();
 
+            // Watcher that mirrors live agent transcripts into per-session
+            // `claude.id` / `codex.id` files. The focus-time resume modal
+            // reads those files; no shim or PATH injection is required.
+            agent_resume_persister::spawn(state.inner().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -283,6 +290,8 @@ pub fn run() {
             commands::close_pull_request,
             commands::update_pull_request_body,
             commands::generate_pr_commit_message,
+            commands::list_workflow_runs,
+            commands::get_workflow_run_detail,
             commands::pty_spawn,
             commands::pty_write,
             commands::pty_resize,
@@ -307,6 +316,10 @@ pub fn run() {
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
             commands::list_system_fonts,
+            commands::get_claude_resume_candidate,
+            commands::acknowledge_claude_resume,
+            commands::get_codex_resume_candidate,
+            commands::acknowledge_codex_resume,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,
@@ -317,6 +330,7 @@ pub fn run() {
             daemon_commands::daemon_resize,
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
+            daemon_commands::daemon_adopt_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
