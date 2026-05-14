@@ -371,12 +371,42 @@ export const api = {
     return invoke<DaemonSessionSummary[]>("daemon_list_sessions");
   },
   /**
-   * Resolve the "이전 Claude 대화 있음" candidate for a session. The shim
-   * writes `claude.id` after every fresh bare-flag claude run, and the
-   * app surfaces it via this command on session focus. Returns `null`
-   * when there is nothing to offer — no claude has run, the user already
-   * dismissed the modal for this UUID, or claude is actively running in
-   * the PTY tree (in which case the modal would be redundant).
+   * Kill a daemon-owned PTY. Equivalent to closing the shell inside the
+   * session — the row stays in the daemon registry (with `alive=false`)
+   * until `daemonForgetSession` is also called.
+   */
+  daemonKillSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_kill_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Remove a dead session row from the daemon registry. The daemon
+   * rejects this for sessions still alive — caller must kill first.
+   */
+  daemonForgetSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_forget_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Reconstruct an app-side session row from a daemon-owned PTY the
+   * app has lost track of. Pulls name/kind/repo_path/branch from the
+   * daemon's session metadata. Idempotent.
+   */
+  daemonAdoptSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_adopt_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Resolve the "이전 Claude 대화 있음" candidate for a session. The
+   * filesystem watcher writes `claude.id` after every fresh bare-flag
+   * claude run, and the app surfaces it via this command on session
+   * focus. Returns `null` when there is nothing to offer — no claude
+   * has run, the user already dismissed the modal for this UUID, or
+   * claude is actively running in the PTY tree (in which case the
+   * modal would be redundant).
    */
   getClaudeResumeCandidate(
     sessionId: string,

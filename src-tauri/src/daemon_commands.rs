@@ -257,6 +257,89 @@ pub fn daemon_forget_session(
     state.daemon_bridge.forget(id).map_err(|e| e.to_string())
 }
 
+/// Reconstruct an app-side `Session` row from a daemon-owned PTY the app
+/// has lost track of (typical cause: user deleted the session row while
+/// the daemon kept the PTY). Idempotent — if the app already has a row
+/// for this id, returns it untouched.
+///
+/// Pulls metadata (name, kind, repo_path, branch) straight from the
+/// daemon's `SessionSummary`. The daemon must still know this id; pass
+/// `force` semantics through by always querying `list_sessions` first.
+#[tauri::command]
+pub fn daemon_adopt_session(
+    target_session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let id =
+        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+
+    if state.sessions.get(&id).is_ok() {
+        return Ok(());
+    }
+
+    let summary = state
+        .daemon_bridge
+        .list_sessions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("daemon does not know session {id}"))?;
+
+    let repo_path = summary
+        .repo_path
+        .clone()
+        .ok_or_else(|| "daemon session has no repo_path — cannot adopt".to_string())?;
+    // Branch is informational — leave empty when the daemon never knew
+    // it. Synthesizing "main" would silently lie for repos on master /
+    // trunk / detached HEAD; UI tolerates the empty string.
+    let branch = summary.branch.clone().unwrap_or_default();
+
+    let kind = match summary.kind {
+        crate::daemon::protocol::SessionKind::Regular => crate::session::SessionKind::Regular,
+        crate::daemon::protocol::SessionKind::Control => crate::session::SessionKind::Control,
+    };
+
+    let project_name = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| repo_path.display().to_string());
+    state
+        .projects
+        .ensure(repo_path.clone(), project_name);
+
+    let now = chrono::Utc::now();
+    let session = crate::session::Session {
+        id,
+        name: summary.name.clone(),
+        repo_path: repo_path.clone(),
+        // No way to recover the original worktree path from daemon
+        // metadata. Fall back to repo_path; the user can `cd` inside the
+        // attached PTY if needed. `in_worktree` is recomputed at list
+        // time so it self-corrects if repo_path is itself a worktree.
+        worktree_path: repo_path,
+        branch,
+        isolated: false,
+        status: crate::session::SessionStatus::Idle,
+        created_at: now,
+        updated_at: now,
+        last_message: None,
+        kind,
+        position: None,
+        daemon_session_id: Some(id),
+        agent_resume_token: Some(id.to_string()),
+        in_worktree: false,
+    };
+    state.sessions.insert(session);
+
+    if let Err(e) = crate::persistence::save_sessions(&state.sessions.list()) {
+        tracing::warn!("failed to persist sessions after adopt: {e}");
+    }
+    if let Err(e) = crate::persistence::save_projects(&state.projects.list()) {
+        tracing::warn!("failed to persist projects after adopt: {e}");
+    }
+    Ok(())
+}
+
 fn parse_kind(kind: &str) -> Result<SessionKind, String> {
     match kind {
         "regular" => Ok(SessionKind::Regular),
