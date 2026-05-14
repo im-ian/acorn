@@ -172,6 +172,37 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).not.toContain("Refresh fonts");
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
+
+  it("edits Appearance UI scale with presets only", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const scaleSelect = Array.from(
+      document.querySelectorAll<HTMLSelectElement>("select"),
+    ).find((element) => element.value === "100");
+
+    expect(document.body.textContent).toContain("UI scale");
+    expect(
+      document.querySelector('input[aria-label="Custom UI scale percentage"]'),
+    ).toBeNull();
+    expect(scaleSelect?.value).toBe("100");
+
+    act(() => {
+      if (!scaleSelect) throw new Error("UI scale select not found");
+      scaleSelect.value = "125";
+      scaleSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
+      uiScalePercent: 125,
+    });
+  });
 });
 
 describe("SettingsModal background controls", () => {

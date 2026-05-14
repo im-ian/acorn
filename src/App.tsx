@@ -12,7 +12,6 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { LayoutRenderer } from "./components/LayoutRenderer";
-import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
@@ -31,6 +30,7 @@ import {
   shouldUseTinykeysToggleMultiInputFallback,
   useHotkeys,
 } from "./lib/hotkeys";
+import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
@@ -39,7 +39,11 @@ import { findFocusedSessionId } from "./lib/focus";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
-import { useSettings } from "./lib/settings";
+import {
+  normalizeUiScalePercent,
+  UI_SCALE_PERCENT_STEP,
+  useSettings,
+} from "./lib/settings";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
@@ -61,6 +65,16 @@ function focusPanel(id: "sidebar" | "main" | "right") {
     ) as HTMLElement | null) ??
     (panel.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
   target?.focus();
+}
+
+function updateUiScalePercent(delta: number) {
+  const settings = useSettings.getState().settings;
+  useSettings.getState().patchAppearance({
+    uiScalePercent: normalizeUiScalePercent(
+      settings.appearance.uiScalePercent + delta,
+      settings.appearance.uiScalePercent,
+    ),
+  });
 }
 
 function focusPaneTerminal(paneId: string) {
@@ -147,6 +161,13 @@ function App() {
     appearance.background.applyToApp,
     appearance.background.applyToTerminal,
   ]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--acorn-ui-scale",
+      String(appearance.uiScalePercent / 100),
+    );
+  }, [appearance.uiScalePercent]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
@@ -539,6 +560,26 @@ function App() {
       [Hotkeys.togglePrs]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().setRightTab("prs");
+      },
+      [Hotkeys.uiScaleDown]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleDownShift]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleUp]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleUpShift]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleReset]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useSettings.getState().patchAppearance({ uiScalePercent: 100 });
       },
       [Hotkeys.toggleMultiInput]: (e: KeyboardEvent) => {
         e.preventDefault();

@@ -75,6 +75,10 @@ export const PR_REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
   { value: 600_000, label: "10 minutes" },
 ];
 
+export const UI_SCALE_PERCENT_MIN = 75;
+export const UI_SCALE_PERCENT_MAX = 150;
+export const UI_SCALE_PERCENT_STEP = 5;
+
 export type TerminalFontWeight =
   | 100
   | 200
@@ -266,6 +270,7 @@ export interface AcornSettings {
     themeId: string;
     background: BackgroundState;
     fontSlots: [string, string | null, string | null];
+    uiScalePercent: number;
   };
   /**
    * Opt-in toggles for unfinished features. Anything under here is
@@ -352,6 +357,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       applyToTerminal: false,
     },
     fontSlots: ["JetBrains Mono", "Fira Code", "Menlo"],
+    uiScalePercent: 100,
   },
   experiments: {
     stickyPrompt: false,
@@ -398,6 +404,15 @@ function clamp01(v: unknown, fallback: number): number {
 function clampBlur(v: unknown, fallback: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
   return Math.max(0, Math.min(24, v));
+}
+
+export function normalizeUiScalePercent(v: unknown, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const clamped = Math.max(
+    UI_SCALE_PERCENT_MIN,
+    Math.min(UI_SCALE_PERCENT_MAX, v),
+  );
+  return Math.round(clamped / UI_SCALE_PERCENT_STEP) * UI_SCALE_PERCENT_STEP;
 }
 
 function normalizeThemeId(v: unknown, fallback: string): string {
@@ -560,6 +575,10 @@ function loadSettings(): AcornSettings {
       fontSlots: normalizeFontSlots(
         appearanceRaw.fontSlots,
         DEFAULT_SETTINGS.appearance.fontSlots,
+      ),
+      uiScalePercent: normalizeUiScalePercent(
+        appearanceRaw.uiScalePercent,
+        DEFAULT_SETTINGS.appearance.uiScalePercent,
       ),
       background: {
         relativePath:
