@@ -1,55 +1,38 @@
 import { describe, expect, it } from "vitest";
-import {
-  calculateCellWidthFromSample,
-  patchTerminalCellMeasurements,
-  selectCjkMeasurementSample,
-  shouldPatchTerminalCellMeasurements,
-} from "./terminal-cjk-cell-width-addon";
+import { patchTerminalCellMeasurements } from "./terminal-cjk-cell-width-addon";
 
 describe("terminal CJK cell width patch", () => {
-  it("only enables the measurement patch for known CJK terminal fonts", () => {
-    expect(shouldPatchTerminalCellMeasurements('"D2Coding", monospace')).toBe(
-      true,
-    );
-    expect(shouldPatchTerminalCellMeasurements('"Sarasa Mono K", monospace')).toBe(
-      true,
-    );
-    expect(
-      shouldPatchTerminalCellMeasurements('"Noto Sans Mono CJK KR", monospace'),
-    ).toBe(true);
-    expect(shouldPatchTerminalCellMeasurements("JetBrains Mono, monospace")).toBe(
-      false,
-    );
+  it("treats differing W and Hangul measurements as ASCII and leaves spacing untouched", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "W") return 8;
+          if (chars === "가") return 13;
+          return 16;
+        },
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer).not.toHaveProperty("__acornCjkCellPatch");
+    expect(rowContainer.style.letterSpacing).toBe("");
+    expect(rowFactory).not.toHaveProperty("defaultSpacing");
   });
 
-  it("selects a measurement sample that matches the CJK font family", () => {
-    expect(selectCjkMeasurementSample('"D2Coding", monospace')).toBe("가");
-    expect(selectCjkMeasurementSample('"Sarasa Mono K", monospace')).toBe("가");
-    expect(selectCjkMeasurementSample('"Sarasa Mono J", monospace')).toBe("あ");
-    expect(selectCjkMeasurementSample('"Sarasa Mono SC", monospace')).toBe("汉");
-    expect(selectCjkMeasurementSample('"Sarasa Mono TC", monospace')).toBe("漢");
-    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK KR", monospace')).toBe(
-      "가",
-    );
-    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK JP", monospace')).toBe(
-      "あ",
-    );
-    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK SC", monospace')).toBe(
-      "汉",
-    );
-    expect(selectCjkMeasurementSample('"Noto Sans Mono CJK TC", monospace')).toBe(
-      "漢",
-    );
-    expect(selectCjkMeasurementSample("JetBrains Mono, monospace")).toBeNull();
-  });
-
-  it("calculates the terminal cell width from half of a wide CJK sample", () => {
-    expect(calculateCellWidthFromSample(13, 2)).toBe(6.5);
-    expect(calculateCellWidthFromSample(16, 2)).toBe(8);
-    expect(calculateCellWidthFromSample(0, 2)).toBeNull();
-  });
-
-  it("sets the caret cell width from the CJK sample and refreshes visible rows", () => {
+  it("uses half of the shared W/Hangul width as one cell", () => {
     const rowContainer = document.createElement("div");
     const rowFactory = {};
     const renderer = {
@@ -59,8 +42,11 @@ describe("terminal CJK cell width patch", () => {
       _rowElements: [document.createElement("div")],
       _widthCache: {
         clear: () => undefined,
-        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
-          chars === "가" ? 13 : 8,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "가" || chars === "漢") return 8;
+          if (chars === "あ" || chars === "汉") return 16;
+          return 8;
+        },
       },
       dimensions: {
         css: {
@@ -71,27 +57,25 @@ describe("terminal CJK cell width patch", () => {
     };
     const refreshCalls: Array<[number, number]> = [];
     const terminal = {
-      options: { fontFamily: '"D2Coding", monospace' },
       cols: 6,
       rows: 6,
       refresh: (start: number, end: number) => refreshCalls.push([start, end]),
       _core: {
         _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
       },
     };
 
     patchTerminalCellMeasurements(terminal);
 
-    expect(renderer.dimensions.css.cell.width).toBe(6.5);
-    expect(renderer.dimensions.css.canvas.width).toBe(39);
-    expect(renderer._rowElements[0].style.width).toBe("39px");
-    expect(rowContainer.style.letterSpacing).toBe("-1.5px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: -1.5 });
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(renderer.dimensions.css.canvas.width).toBe(24);
+    expect(renderer._rowElements[0].style.width).toBe("24px");
+    expect(rowContainer.style.letterSpacing).toBe("-4px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
     expect(refreshCalls).toEqual([[0, 5]]);
   });
 
-  it("keeps repeated CJK calibration stable when W measurement includes existing letter spacing", () => {
+  it("leaves spacing untouched when W and Hangul measurements differ", () => {
     const rowContainer = document.createElement("div");
     const rowFactory = {};
     const renderer = {
@@ -100,7 +84,46 @@ describe("terminal CJK cell width patch", () => {
       _widthCache: {
         clear: () => undefined,
         get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
-          if (chars === "가") return 13;
+          if (chars === "W") return 8;
+          if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") return 16;
+          return 8;
+        },
+      },
+      dimensions: {
+        css: {
+          cell: { width: 8 },
+          canvas: { width: 48 },
+        },
+      },
+    };
+    const terminal = {
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer).not.toHaveProperty("__acornCjkCellPatch");
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(renderer.dimensions.css.canvas.width).toBe(48);
+    expect(rowContainer.style.letterSpacing).toBe("");
+    expect(rowFactory).not.toHaveProperty("defaultSpacing");
+  });
+
+  it("keeps repeated automatic calibration stable when W measurement includes existing letter spacing", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") {
+            return 8;
+          }
           if (chars === "W") {
             const spacing = Number.parseFloat(rowContainer.style.letterSpacing);
             return 8 + (Number.isFinite(spacing) ? spacing : 0);
@@ -111,54 +134,19 @@ describe("terminal CJK cell width patch", () => {
       dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
     };
     const terminal = {
-      options: { fontFamily: '"D2Coding", monospace' },
       cols: 6,
       _core: {
         _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
       },
     };
 
     patchTerminalCellMeasurements(terminal);
     patchTerminalCellMeasurements(terminal);
 
-    expect(renderer.dimensions.css.cell.width).toBe(6.5);
-    expect(rowContainer.style.letterSpacing).toBe("-1.5px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: -1.5 });
-  });
-
-  it("uses the matching CJK sample when deriving non-Korean CJK cell width", () => {
-    const rowContainer = document.createElement("div");
-    const rowFactory = {};
-    const renderer = {
-      _rowContainer: rowContainer,
-      _rowFactory: rowFactory,
-      _rowElements: [document.createElement("div")],
-      _widthCache: {
-        clear: () => undefined,
-        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
-          if (chars === "あ") return 15;
-          if (chars === "가") return 11;
-          return 8;
-        },
-      },
-      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
-    };
-    const terminal = {
-      options: { fontFamily: '"Noto Sans Mono CJK JP", monospace' },
-      cols: 6,
-      _core: {
-        _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
-      },
-    };
-
-    patchTerminalCellMeasurements(terminal);
-
-    expect(renderer.dimensions.css.cell.width).toBe(7.5);
-    expect(renderer.dimensions.css.canvas.width).toBe(45);
-    expect(rowContainer.style.letterSpacing).toBe("-0.5px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: -0.5 });
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(renderer.dimensions.css.canvas.width).toBe(24);
+    expect(rowContainer.style.letterSpacing).toBe("-4px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
   });
 
   it("keeps CJK width cache measurements unclamped so row rendering applies per-glyph spacing", () => {
@@ -168,29 +156,32 @@ describe("terminal CJK cell width patch", () => {
       _rowFactory: {},
       _widthCache: {
         clear: () => undefined,
-        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
-          chars === "가" ? 13 : 8,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") {
+            return 8;
+          }
+          return 8;
+        },
       },
       dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
     };
     const terminal = {
-      options: { fontFamily: '"D2Coding", monospace' },
       cols: 6,
       _core: {
         _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
       },
     };
 
     patchTerminalCellMeasurements(terminal);
 
-    expect(renderer._widthCache.get("가", false, false)).toBe(13);
+    expect(renderer._widthCache.get("가", false, false)).toBe(8);
     expect(renderer._widthCache.get("A", false, false)).toBe(8);
   });
 
-  it("restores xterm default spacing when switching away from CJK fonts", () => {
+  it("uses W as one cell when W and Hangul measurements no longer match", () => {
     const rowContainer = document.createElement("div");
     const rowFactory = {};
+    let wideGlyphWidth = 7;
     const renderer = {
       _rowContainer: rowContainer,
       _rowFactory: rowFactory,
@@ -201,91 +192,144 @@ describe("terminal CJK cell width patch", () => {
       _rowElements: [document.createElement("div")],
       _widthCache: {
         clear: () => undefined,
-        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
-          chars === "가" ? 13 : 7,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "W") return 7;
+          if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") {
+            return wideGlyphWidth;
+          }
+          return 7;
+        },
       },
       dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
     };
     const terminal = {
-      options: { fontFamily: '"D2Coding", monospace' },
       cols: 6,
       _core: {
         _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
       },
     };
 
     patchTerminalCellMeasurements(terminal);
-    expect(renderer.dimensions.css.cell.width).toBe(6.5);
-    expect(rowContainer.style.letterSpacing).toBe("-0.5px");
+    expect(renderer.dimensions.css.cell.width).toBe(3.5);
+    expect(rowContainer.style.letterSpacing).toBe("-3.5px");
 
-    terminal.options.fontFamily = "JetBrains Mono, monospace";
+    wideGlyphWidth = 16;
     patchTerminalCellMeasurements(terminal);
 
-    expect(rowContainer.style.letterSpacing).toBe("1px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: 1 });
-    expect(renderer._widthCache.get("가", false, false)).toBe(13);
+    expect(rowContainer.style.letterSpacing).toBe("0px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: 0 });
+    expect(renderer.dimensions.css.cell.width).toBe(7);
+    expect(renderer.dimensions.css.canvas.width).toBe(42);
+  });
+
+  it("recovers global cell width from the legacy CJK basis patch when auto patching", () => {
+    const rowContainer = document.createElement("div");
+    const rowElement = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _setDefaultSpacing: () => undefined,
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
+          chars === "W" ? 8 : 8,
+      },
+      __acornCjkCellPatch: {
+        originalSetDefaultSpacing: () => undefined,
+        originalCellWidth: 8,
+        originalCanvasWidth: 48,
+      },
+      dimensions: { css: { cell: { width: 6.5 }, canvas: { width: 39 } } },
+    };
+    rowElement.style.width = "39px";
+    const terminal = {
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(renderer.dimensions.css.canvas.width).toBe(24);
+    expect(rowElement.style.width).toBe("24px");
+    expect(rowContainer.style.letterSpacing).toBe("-4px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
+  });
+
+  it("recovers global cell width from the legacy CJK basis patch when auto patching is unnecessary", () => {
+    const rowContainer = document.createElement("div");
+    const rowElement = document.createElement("div");
+    const rowFactory = { defaultSpacing: -1.5 };
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _setDefaultSpacing: () => undefined,
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string) => (chars === "W" ? 8 : 16),
+      },
+      __acornCjkCellPatch: {
+        originalCellWidth: 8,
+        originalCanvasWidth: 48,
+      },
+      dimensions: { css: { cell: { width: 6.5 }, canvas: { width: 39 } } },
+    };
+    rowContainer.style.letterSpacing = "-1.5px";
+    rowElement.style.width = "39px";
+    const terminal = {
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(renderer.dimensions.css.canvas.width).toBe(48);
+    expect(rowElement.style.width).toBe("48px");
+    expect("_setDefaultSpacing" in renderer).toBe(false);
+    expect(rowContainer.style.letterSpacing).toBe("");
+    expect("defaultSpacing" in rowFactory).toBe(false);
   });
 
   it("removes the patched spacing hook when restoring without an original hook", () => {
     const rowContainer = document.createElement("div");
     const rowFactory = {};
+    let wideGlyphWidth = 8;
     const renderer = {
       _rowContainer: rowContainer,
       _rowFactory: rowFactory,
       _widthCache: {
         clear: () => undefined,
         get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
-          chars === "가" ? 13 : 8,
+          chars === "W" ? 8 : wideGlyphWidth,
       },
       dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
     };
     const terminal = {
-      options: { fontFamily: '"D2Coding", monospace' },
       cols: 6,
       _core: {
         _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
       },
     };
 
     patchTerminalCellMeasurements(terminal);
     expect("_setDefaultSpacing" in renderer).toBe(true);
-    expect(rowContainer.style.letterSpacing).toBe("-1.5px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: -1.5 });
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(rowContainer.style.letterSpacing).toBe("-4px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
 
-    terminal.options.fontFamily = "JetBrains Mono, monospace";
+    wideGlyphWidth = 16;
     patchTerminalCellMeasurements(terminal);
 
     expect("_setDefaultSpacing" in renderer).toBe(false);
     expect(rowContainer.style.letterSpacing).toBe("");
     expect("defaultSpacing" in rowFactory).toBe(false);
-  });
-
-  it("falls back to ASCII default spacing when the CJK sample cannot be measured", () => {
-    const rowContainer = document.createElement("div");
-    const rowFactory = {};
-    const renderer = {
-      _rowContainer: rowContainer,
-      _rowFactory: rowFactory,
-      _widthCache: {
-        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
-          chars === "W" ? 7 : 0,
-      },
-      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
-    };
-    const terminal = {
-      options: { fontFamily: '"D2Coding", monospace' },
-      cols: 6,
-      _core: {
-        _renderService: { _renderer: { value: renderer } },
-        _unicodeService: { getStringCellWidth: () => 2 },
-      },
-    };
-
-    patchTerminalCellMeasurements(terminal);
-
-    expect(rowContainer.style.letterSpacing).toBe("1px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: 1 });
   });
 });

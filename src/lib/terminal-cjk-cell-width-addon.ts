@@ -11,6 +11,10 @@ interface DomRenderer {
   _widthCache?: WidthCache;
   __acornCjkCellPatch?: {
     originalSetDefaultSpacing?: () => void;
+    // Legacy fields from the previous CJK-basis implementation. Keep reading
+    // them so dev/HMR sessions can recover without recreating the terminal.
+    originalCellWidth?: number;
+    originalCanvasWidth?: number;
   };
   dimensions?: {
     css?: {
@@ -25,9 +29,6 @@ interface DomRenderer {
 }
 
 interface TerminalInternals {
-  options: {
-    fontFamily?: string;
-  };
   cols?: number;
   rows?: number;
   refresh?: (start: number, end: number) => void;
@@ -43,42 +44,7 @@ interface TerminalInternals {
   };
 }
 
-const CJK_FONT_RE = /(?:D2Coding|Sarasa|CJK|Noto Sans Mono CJK)/i;
-const CJK_OR_WIDE_RE =
-  /[\u1100-\u11ff\u2e80-\u303f\u3130-\u318f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff01-\uff60\uffe0-\uffe6]/;
-const CJK_FONT_SAMPLES: Array<[RegExp, string]> = [
-  [/(?:D2Coding|Sarasa\s+Mono\s+K|CJK\s+KR|Korean|Hangul|Malgun|Apple\s+SD\s+Gothic)/i, "가"],
-  [/(?:Sarasa\s+Mono\s+J|CJK\s+JP|Japanese|Hiragino|Yu\s+Gothic|Meiryo)/i, "あ"],
-  [/(?:Sarasa\s+Mono\s+SC|CJK\s+SC|CJK\s+CN|Simplified|PingFang\s+SC|Microsoft\s+YaHei)/i, "汉"],
-  [/(?:Sarasa\s+Mono\s+TC|CJK\s+TC|CJK\s+HK|Traditional|PingFang\s+TC|MingLiU)/i, "漢"],
-  [/(?:Sarasa|CJK|Chinese)/i, "漢"],
-];
-
-export function shouldPatchTerminalCellMeasurements(
-  fontFamily: string | undefined,
-): boolean {
-  return !!fontFamily && CJK_FONT_RE.test(fontFamily);
-}
-
-export function selectCjkMeasurementSample(
-  fontFamily: string | undefined,
-): string | null {
-  if (!fontFamily) return null;
-  for (const [pattern, sample] of CJK_FONT_SAMPLES) {
-    if (pattern.test(fontFamily)) return sample;
-  }
-  return null;
-}
-
-export function calculateCellWidthFromSample(
-  measuredSampleWidth: number,
-  sampleCells: number,
-): number | null {
-  if (measuredSampleWidth <= 0 || sampleCells <= 0) {
-    return null;
-  }
-  return measuredSampleWidth / sampleCells;
-}
+const CELL_WIDTH_EPSILON = 0.25;
 
 export function patchTerminalCellMeasurements(term: TerminalInternals): void {
   const renderer = term._core?._renderService?._renderer?.value;
@@ -87,26 +53,49 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     return;
   }
 
-  if (!shouldPatchTerminalCellMeasurements(term.options.fontFamily)) {
+  restoreLegacyCellWidthPatch(renderer);
+  const targetCellWidth = measureTargetCellWidth(renderer, widthCache);
+  if (targetCellWidth === null) {
     restoreTerminalCellMeasurements(renderer, widthCache);
+    return;
+  }
+
+  const originalCellWidth =
+    renderer.__acornCjkCellPatch?.originalCellWidth ?? getCellWidth(renderer);
+  if (
+    renderer.__acornCjkCellPatch &&
+    !widthsDiffer(targetCellWidth, originalCellWidth)
+  ) {
+    restoreTerminalCellMeasurements(renderer, widthCache);
+    return;
+  }
+
+  if (
+    !renderer.__acornCjkCellPatch &&
+    !widthsDiffer(targetCellWidth, getCellWidth(renderer))
+  ) {
     return;
   }
 
   if (!renderer.__acornCjkCellPatch) {
     renderer.__acornCjkCellPatch = {
       originalSetDefaultSpacing: renderer._setDefaultSpacing?.bind(renderer),
+      originalCellWidth: getCellWidth(renderer),
+      originalCanvasWidth: renderer.dimensions?.css?.canvas?.width,
     };
     renderer._setDefaultSpacing = () => {
-      if (!shouldPatchTerminalCellMeasurements(term.options.fontFamily)) {
+      restoreLegacyCellWidthPatch(renderer);
+      const targetCellWidth = measureTargetCellWidth(renderer, widthCache);
+      if (targetCellWidth === null) {
         restoreTerminalCellMeasurements(renderer, widthCache);
         return;
       }
-      recalibrateDefaultSpacing(term, renderer, widthCache);
+      recalibrateDefaultSpacing(term, renderer, widthCache, targetCellWidth);
     };
   }
 
   widthCache.clear?.();
-  recalibrateDefaultSpacing(term, renderer, widthCache);
+  recalibrateDefaultSpacing(term, renderer, widthCache, targetCellWidth);
 
   if (typeof term.rows === "number" && term.rows > 0) {
     term.refresh?.(0, term.rows - 1);
@@ -121,6 +110,7 @@ function restoreTerminalCellMeasurements(
   if (!patch) return;
 
   const originalSetDefaultSpacing = patch.originalSetDefaultSpacing;
+  restoreLegacyCellWidthPatch(renderer);
   delete renderer.__acornCjkCellPatch;
 
   if (originalSetDefaultSpacing) {
@@ -139,19 +129,73 @@ function restoreTerminalCellMeasurements(
   originalSetDefaultSpacing?.();
 }
 
+function restoreLegacyCellWidthPatch(renderer: DomRenderer): void {
+  const patch = renderer.__acornCjkCellPatch;
+  const css = renderer.dimensions?.css;
+  if (
+    typeof patch?.originalCellWidth === "number" &&
+    Number.isFinite(patch.originalCellWidth) &&
+    css?.cell
+  ) {
+    css.cell.width = patch.originalCellWidth;
+  }
+  if (
+    typeof patch?.originalCanvasWidth === "number" &&
+    Number.isFinite(patch.originalCanvasWidth) &&
+    css?.canvas
+  ) {
+    css.canvas.width = patch.originalCanvasWidth;
+    for (const rowElement of renderer._rowElements ?? []) {
+      rowElement.style.width = `${css.canvas.width}px`;
+    }
+  }
+}
+
 function getCellWidth(renderer: DomRenderer): number {
   return renderer.dimensions?.css?.cell?.width ?? 0;
 }
 
-function getStringCellWidth(term: TerminalInternals, text: string): number {
-  const width = term._core?._unicodeService?.getStringCellWidth?.(text);
-  if (typeof width === "number" && width > 0) return width;
+function widthsDiffer(a: number, b: number): boolean {
+  return Math.abs(a - b) > CELL_WIDTH_EPSILON;
+}
 
-  let fallback = 0;
-  for (const char of text) {
-    fallback += CJK_OR_WIDE_RE.test(char) ? 2 : 1;
+function measureTargetCellWidth(
+  renderer: DomRenderer,
+  widthCache: WidthCache,
+): number | null {
+  if (renderer._rowContainer) {
+    renderer._rowContainer.style.letterSpacing = "";
   }
-  return fallback;
+  widthCache.clear?.();
+
+  const asciiWidth = widthCache.get("W", false, false);
+  const hangulWidth = widthCache.get("가", false, false);
+  if (asciiWidth <= 0 || hangulWidth <= 0) return null;
+
+  return widthsDiffer(asciiWidth, hangulWidth) ? asciiWidth : asciiWidth / 2;
+}
+
+function recalibrateDefaultSpacing(
+  term: TerminalInternals,
+  renderer: DomRenderer,
+  widthCache: WidthCache,
+  cellWidth: number,
+): void {
+  if (renderer._rowContainer) {
+    renderer._rowContainer.style.letterSpacing = "";
+  }
+
+  applyCellWidth(term, renderer, cellWidth);
+
+  const spacing = cellWidth - widthCache.get("W", false, false);
+  if (!Number.isFinite(spacing)) return;
+
+  if (renderer._rowContainer) {
+    renderer._rowContainer.style.letterSpacing = `${spacing}px`;
+  }
+  if (renderer._rowFactory) {
+    renderer._rowFactory.defaultSpacing = spacing;
+  }
 }
 
 function applyCellWidth(
@@ -168,32 +212,5 @@ function applyCellWidth(
     for (const rowElement of renderer._rowElements ?? []) {
       rowElement.style.width = `${css.canvas.width}px`;
     }
-  }
-}
-
-function recalibrateDefaultSpacing(
-  term: TerminalInternals,
-  renderer: DomRenderer,
-  widthCache: WidthCache,
-): void {
-  if (renderer._rowContainer) {
-    renderer._rowContainer.style.letterSpacing = "";
-  }
-
-  const sample = selectCjkMeasurementSample(term.options.fontFamily);
-  const measuredSampleWidth =
-    sample === null ? 0 : widthCache.get(sample, false, false);
-  const sampleCells = sample === null ? 0 : getStringCellWidth(term, sample);
-  const cellWidth =
-    calculateCellWidthFromSample(measuredSampleWidth, sampleCells) ??
-    getCellWidth(renderer);
-  applyCellWidth(term, renderer, cellWidth);
-
-  const spacing = cellWidth - widthCache.get("W", false, false);
-  if (renderer._rowContainer) {
-    renderer._rowContainer.style.letterSpacing = `${spacing}px`;
-  }
-  if (renderer._rowFactory) {
-    renderer._rowFactory.defaultSpacing = spacing;
   }
 }
