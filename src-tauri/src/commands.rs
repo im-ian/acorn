@@ -10,7 +10,7 @@ use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::pull_requests::{
     self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
-    PullRequestListing,
+    PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
 };
 use crate::scrollback;
 use crate::session::{Project, Session, SessionKind, SessionStatus};
@@ -1635,6 +1635,22 @@ pub async fn update_pull_request_body(
     body: String,
 ) -> AppResult<()> {
     pull_requests::update_pull_request_body(&PathBuf::from(repo_path), number, &body)
+}
+
+#[tauri::command]
+pub async fn list_workflow_runs(
+    repo_path: String,
+    limit: Option<u32>,
+) -> AppResult<WorkflowRunsListing> {
+    pull_requests::list_workflow_runs(&PathBuf::from(repo_path), limit.unwrap_or(50))
+}
+
+#[tauri::command]
+pub async fn get_workflow_run_detail(
+    repo_path: String,
+    run_id: u64,
+) -> AppResult<WorkflowRunDetailListing> {
+    pull_requests::get_workflow_run_detail(&PathBuf::from(repo_path), run_id)
 }
 
 #[tauri::command]

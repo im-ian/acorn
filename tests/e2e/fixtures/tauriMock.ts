@@ -42,6 +42,12 @@ export const tauriMockSource = `
     if (cmd === 'list_pull_requests') {
       return Promise.resolve({ items: [], account: null, error: null });
     }
+    if (cmd === 'list_workflow_runs') {
+      return Promise.resolve({ kind: 'not_github' });
+    }
+    if (cmd === 'get_workflow_run_detail') {
+      return Promise.resolve({ kind: 'not_github' });
+    }
     if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
     if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
     if (cmd === 'scrollback_load') return Promise.resolve(null);
