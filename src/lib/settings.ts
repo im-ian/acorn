@@ -284,6 +284,16 @@ export interface AcornSettings {
      */
     stickyPrompt: boolean;
     /**
+     * Heuristic CJK terminal cell-width correction. Compares rendered
+     * widths of `W` and `가`; if equal, treats the font as a CJK
+     * monospaced face and halves the cell width so Hangul/Han glyphs
+     * align to the cell grid. Off by default — the heuristic does not
+     * cover system-fallback CJK rendering (ASCII-only font + OS
+     * fallback for `가`), and aggressive cell-width edits can break
+     * unrelated terminal layouts.
+     */
+    cjkCellWidthHeuristic: boolean;
+    /**
      * Cold-boot "Resume previous conversation" modal for claude / codex.
      * On Acorn launch, probes every persisted session for an unfinished
      * agent transcript and pops a one-shot modal when the user focuses
@@ -368,6 +378,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   experiments: {
     stickyPrompt: false,
+    cjkCellWidthHeuristic: false,
     resumeModal: true,
   },
 };
@@ -703,6 +714,10 @@ function loadSettings(): AcornSettings {
           typeof parsed.experiments?.stickyPrompt === "boolean"
             ? parsed.experiments.stickyPrompt
             : DEFAULT_SETTINGS.experiments.stickyPrompt,
+        cjkCellWidthHeuristic:
+          typeof parsed.experiments?.cjkCellWidthHeuristic === "boolean"
+            ? parsed.experiments.cjkCellWidthHeuristic
+            : DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
         resumeModal:
           typeof parsed.experiments?.resumeModal === "boolean"
             ? parsed.experiments.resumeModal

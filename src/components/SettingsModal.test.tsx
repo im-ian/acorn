@@ -98,6 +98,12 @@ function setInputValue(input: HTMLInputElement, value: string) {
   });
 }
 
+function blurInput(input: HTMLInputElement) {
+  act(() => {
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+}
+
 describe("SettingsModal font controls", () => {
   let root: Root | null = null;
   let container: HTMLDivElement;
@@ -133,7 +139,7 @@ describe("SettingsModal font controls", () => {
     vi.clearAllMocks();
   });
 
-  it("edits terminal fontFamily as a comma-separated stack", async () => {
+  it("buffers terminal fontFamily edits until the field loses focus", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -152,6 +158,10 @@ describe("SettingsModal font controls", () => {
       fontFamily as HTMLInputElement,
       '"Berkeley Mono", Menlo, monospace',
     );
+
+    expect(patchTerminal).not.toHaveBeenCalled();
+
+    blurInput(fontFamily as HTMLInputElement);
 
     expect(patchTerminal).toHaveBeenCalledWith({
       fontFamily: '"Berkeley Mono", Menlo, monospace',
