@@ -17,6 +17,10 @@ import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
+  patchTerminalCellMeasurements,
+  unpatchTerminalCellMeasurements,
+} from "../lib/terminal-cjk-cell-width-addon";
+import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
@@ -289,8 +293,15 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
-    try {
+    const fitWithCellMeasurements = () => {
+      const cjkEnabled =
+        useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
+      if (cjkEnabled) patchTerminalCellMeasurements(term);
       fitAddon.fit();
+      if (cjkEnabled) patchTerminalCellMeasurements(term);
+    };
+    try {
+      fitWithCellMeasurements();
     } catch {
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
@@ -376,6 +387,15 @@ export function Terminal({
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
       }
+      const cjkNow = state.settings.experiments.cjkCellWidthHeuristic;
+      const cjkPrev = prev.settings.experiments.cjkCellWidthHeuristic;
+      if (cjkNow !== cjkPrev) {
+        if (cjkNow) {
+          patchTerminalCellMeasurements(term);
+        } else {
+          unpatchTerminalCellMeasurements(term);
+        }
+      }
       const nextBackground = state.settings.appearance.background;
       const previousBackground = prev.settings.appearance.background;
       if (
@@ -386,7 +406,7 @@ export function Terminal({
       }
       if (changed) {
         try {
-          fitAddon.fit();
+          fitWithCellMeasurements();
         } catch {
           // ignore — ResizeObserver will retry
         }
@@ -965,7 +985,7 @@ export function Terminal({
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null;
         try {
-          fitAddon.fit();
+          fitWithCellMeasurements();
         } catch (err) {
           console.error("[Terminal] fit failed", err);
         }

@@ -188,9 +188,9 @@ function TerminalSettings() {
         label="Font family"
         hint="Comma-separated stack. First family that resolves wins."
       >
-        <TextInput
+        <TerminalFontFamilyInput
           value={settings.terminal.fontFamily}
-          onChange={(e) => patchTerminal({ fontFamily: e.target.value })}
+          onCommit={(fontFamily) => patchTerminal({ fontFamily })}
         />
       </Field>
       <Field label="Font size" hint="In CSS pixels. Range 8–32.">
@@ -257,6 +257,56 @@ function TerminalSettings() {
         </div>
       </Field>
     </section>
+  );
+}
+
+function TerminalFontFamilyInput({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
+  const valueRef = useRef(value);
+  const onCommitRef = useRef(onCommit);
+
+  useEffect(() => {
+    onCommitRef.current = onCommit;
+  }, [onCommit]);
+
+  useEffect(() => {
+    valueRef.current = value;
+    draftRef.current = value;
+    setDraft(value);
+  }, [value]);
+
+  const commitDraft = useCallback(() => {
+    const next = draftRef.current;
+    if (next === valueRef.current) return;
+    valueRef.current = next;
+    onCommitRef.current(next);
+  }, []);
+
+  useEffect(() => () => commitDraft(), [commitDraft]);
+
+  return (
+    <TextInput
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        draftRef.current = next;
+        setDraft(next);
+      }}
+      onBlur={commitDraft}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commitDraft();
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -1355,6 +1405,14 @@ function ExperimentsSettings() {
         onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
         label="Pin last user prompt above terminal"
         description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
+      />
+      <CheckboxRow
+        checked={experiments.cjkCellWidthHeuristic}
+        onChange={(checked) =>
+          patchExperiments({ cjkCellWidthHeuristic: checked })
+        }
+        label="CJK terminal cell-width correction"
+        description="Heuristic for CJK monospaced fonts (D2Coding, Sarasa Mono, etc.): when `W` and `가` measure the same width, halves the cell width so Hangul/Han glyphs sit on the cell grid. Skipped when widths differ, so ASCII fonts with system CJK fallback are not corrected. Known limitation: tab switches can briefly show a 1-frame glyph-size flicker as xterm's resize path resets `cell.width` to the natural W advance before the addon reapplies the halved value. Off by default."
       />
       <CheckboxRow
         checked={experiments.resumeModal}
