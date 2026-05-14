@@ -16,7 +16,10 @@ import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
-import { patchTerminalCellMeasurements } from "../lib/terminal-cjk-cell-width-addon";
+import {
+  patchTerminalCellMeasurements,
+  unpatchTerminalCellMeasurements,
+} from "../lib/terminal-cjk-cell-width-addon";
 import {
   useSettings,
   type TerminalLinkActivation,
@@ -291,9 +294,11 @@ export function Terminal({
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
     const fitWithCellMeasurements = () => {
-      patchTerminalCellMeasurements(term);
+      const cjkEnabled =
+        useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
+      if (cjkEnabled) patchTerminalCellMeasurements(term);
       fitAddon.fit();
-      patchTerminalCellMeasurements(term);
+      if (cjkEnabled) patchTerminalCellMeasurements(term);
     };
     try {
       fitWithCellMeasurements();
@@ -381,6 +386,15 @@ export function Terminal({
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
+      }
+      const cjkNow = state.settings.experiments.cjkCellWidthHeuristic;
+      const cjkPrev = prev.settings.experiments.cjkCellWidthHeuristic;
+      if (cjkNow !== cjkPrev) {
+        if (cjkNow) {
+          patchTerminalCellMeasurements(term);
+        } else {
+          unpatchTerminalCellMeasurements(term);
+        }
       }
       const nextBackground = state.settings.appearance.background;
       const previousBackground = prev.settings.appearance.background;

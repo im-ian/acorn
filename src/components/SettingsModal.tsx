@@ -1374,6 +1374,14 @@ function ExperimentsSettings() {
         label="Pin last user prompt above terminal"
         description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
       />
+      <CheckboxRow
+        checked={experiments.cjkCellWidthHeuristic}
+        onChange={(checked) =>
+          patchExperiments({ cjkCellWidthHeuristic: checked })
+        }
+        label="CJK terminal cell-width correction"
+        description="Heuristic for CJK monospaced fonts (D2Coding, Sarasa Mono, etc.): when `W` and `가` measure the same width, halves the cell width so Hangul/Han glyphs sit on the cell grid. Skipped when widths differ, so ASCII fonts with system CJK fallback are not corrected. Off by default."
+      />
     </section>
   );
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { patchTerminalCellMeasurements } from "./terminal-cjk-cell-width-addon";
+import {
+  patchTerminalCellMeasurements,
+  unpatchTerminalCellMeasurements,
+} from "./terminal-cjk-cell-width-addon";
 
 describe("terminal CJK cell width patch", () => {
   it("treats differing W and Hangul measurements as ASCII and leaves spacing untouched", () => {
@@ -331,5 +334,71 @@ describe("terminal CJK cell width patch", () => {
     expect("_setDefaultSpacing" in renderer).toBe(false);
     expect(rowContainer.style.letterSpacing).toBe("");
     expect("defaultSpacing" in rowFactory).toBe(false);
+  });
+
+  it("unpatch restores cell metrics and clears the patch marker", () => {
+    const rowContainer = document.createElement("div");
+    const rowElement = document.createElement("div");
+    const rowFactory = {};
+    const refreshCalls: Array<[number, number]> = [];
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
+          chars === "W" || chars === "가" || chars === "あ" || chars === "汉" || chars === "漢"
+            ? 8
+            : 8,
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      cols: 6,
+      rows: 6,
+      refresh: (start: number, end: number) => refreshCalls.push([start, end]),
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(renderer).toHaveProperty("__acornCjkCellPatch");
+
+    unpatchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(renderer.dimensions.css.canvas.width).toBe(48);
+    expect(rowElement.style.width).toBe("48px");
+    expect(rowContainer.style.letterSpacing).toBe("");
+    expect("defaultSpacing" in rowFactory).toBe(false);
+    expect(renderer).not.toHaveProperty("__acornCjkCellPatch");
+    expect(refreshCalls).toContainEqual([0, 5]);
+  });
+
+  it("unpatch is a no-op when no patch is active", () => {
+    const renderer = {
+      _rowContainer: document.createElement("div"),
+      _rowFactory: {},
+      _widthCache: {
+        clear: () => undefined,
+        get: () => 8,
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const refreshCalls: Array<[number, number]> = [];
+    const terminal = {
+      cols: 6,
+      rows: 6,
+      refresh: (start: number, end: number) => refreshCalls.push([start, end]),
+      _core: { _renderService: { _renderer: { value: renderer } } },
+    };
+
+    unpatchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(refreshCalls).toEqual([]);
   });
 });

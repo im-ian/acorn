@@ -280,6 +280,16 @@ export interface AcornSettings {
      * naturally clears the banner along with the rest of the scrollback.
      */
     stickyPrompt: boolean;
+    /**
+     * Heuristic CJK terminal cell-width correction. Compares rendered
+     * widths of `W` and `가`; if equal, treats the font as a CJK
+     * monospaced face and halves the cell width so Hangul/Han glyphs
+     * align to the cell grid. Off by default — the heuristic does not
+     * cover system-fallback CJK rendering (ASCII-only font + OS
+     * fallback for `가`), and aggressive cell-width edits can break
+     * unrelated terminal layouts.
+     */
+    cjkCellWidthHeuristic: boolean;
   };
 }
 
@@ -355,6 +365,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   experiments: {
     stickyPrompt: false,
+    cjkCellWidthHeuristic: false,
   },
 };
 
@@ -679,6 +690,10 @@ function loadSettings(): AcornSettings {
           typeof parsed.experiments?.stickyPrompt === "boolean"
             ? parsed.experiments.stickyPrompt
             : DEFAULT_SETTINGS.experiments.stickyPrompt,
+        cjkCellWidthHeuristic:
+          typeof parsed.experiments?.cjkCellWidthHeuristic === "boolean"
+            ? parsed.experiments.cjkCellWidthHeuristic
+            : DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
       },
     };
   } catch {

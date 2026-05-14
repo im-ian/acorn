@@ -102,6 +102,20 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
   }
 }
 
+export function unpatchTerminalCellMeasurements(term: TerminalInternals): void {
+  const renderer = term._core?._renderService?._renderer?.value;
+  const widthCache = renderer?._widthCache;
+  if (!renderer || !widthCache || typeof widthCache.get !== "function") {
+    return;
+  }
+  if (!renderer.__acornCjkCellPatch) return;
+
+  restoreTerminalCellMeasurements(renderer, widthCache);
+  if (typeof term.rows === "number" && term.rows > 0) {
+    term.refresh?.(0, term.rows - 1);
+  }
+}
+
 function restoreTerminalCellMeasurements(
   renderer: DomRenderer,
   widthCache: WidthCache,
