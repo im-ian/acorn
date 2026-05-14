@@ -132,9 +132,14 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&spec.cwd);
-        for (k, v) in &spec.env {
-            cmd.env(k, v);
-        }
+        // Apply the same TERM/COLORTERM/LANG/shell-env layering the
+        // in-process `pty::PtyManager` uses, then a backstop that refuses
+        // an empty `TERM` / `COLORTERM`. Without this the daemon path
+        // shipped raw caller env to the child, which left zsh with an
+        // empty TERM whenever the daemon process inherited a sanitized
+        // env from launchd-launched Acorn — surfacing as #166's redraw /
+        // color regressions whenever the daemon killswitch was on.
+        crate::pty_env::apply_layered_env(&mut cmd, spec.env.clone());
 
         let child = pair
             .slave

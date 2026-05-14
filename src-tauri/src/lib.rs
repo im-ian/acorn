@@ -11,6 +11,7 @@ mod git_ops;
 mod ipc;
 mod persistence;
 mod pty;
+mod pty_env;
 mod pull_requests;
 mod scrollback;
 mod session;
