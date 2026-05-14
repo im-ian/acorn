@@ -347,6 +347,22 @@ function SessionsList({
                 >
                   <span className="truncate cursor-help">{s.name}</span>
                 </Tooltip>
+                {(() => {
+                  const app = appById.get(s.id);
+                  if (!app) return null;
+                  const ts = Date.parse(app.updated_at);
+                  if (Number.isNaN(ts)) return null;
+                  return (
+                    <Tooltip
+                      label={new Date(ts).toLocaleString()}
+                      side="top"
+                    >
+                      <span className="shrink-0 cursor-help text-[10px] text-fg-muted">
+                        {formatRelativeTime(ts)}
+                      </span>
+                    </Tooltip>
+                  );
+                })()}
                 {s.kind === "control" ? (
                   <Tooltip label="Control session" side="top">
                     <Bot
@@ -442,6 +458,21 @@ function SessionsList({
       ) : null}
     </div>
   );
+}
+
+function formatRelativeTime(timestampMs: number): string {
+  const diffSec = Math.round((Date.now() - timestampMs) / 1000);
+  if (diffSec < 60) return `${Math.max(0, diffSec)}s ago`;
+  const min = Math.round(diffSec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(diffSec / 3600);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(diffSec / 86400);
+  if (day < 30) return `${day}d ago`;
+  const mo = Math.round(diffSec / (86400 * 30));
+  if (mo < 12) return `${mo}mo ago`;
+  const yr = Math.round(diffSec / (86400 * 365));
+  return `${yr}y ago`;
 }
 
 function renderAppMetaTooltip(
