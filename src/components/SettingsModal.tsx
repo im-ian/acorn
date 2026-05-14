@@ -923,6 +923,12 @@ function StatusBarSection({
           onChange={(v) => patch({ showGithubAccount: v })}
         />
         <CheckboxRow
+          label="Working directory"
+          description="The active session's worktree path (tildified against $HOME)."
+          checked={statusBar.showWorkingDirectory}
+          onChange={(v) => patch({ showWorkingDirectory: v })}
+        />
+        <CheckboxRow
           label="Memory usage"
           description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
           checked={statusBar.showMemory}

@@ -218,6 +218,7 @@ export interface AcornSettings {
     showSessionCount: boolean;
     showSessionStatus: boolean;
     showGithubAccount: boolean;
+    showWorkingDirectory: boolean;
     showMemory: boolean;
   };
   pullRequests: {
@@ -325,6 +326,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     showSessionCount: true,
     showSessionStatus: true,
     showGithubAccount: true,
+    showWorkingDirectory: true,
     showMemory: true,
   },
   pullRequests: {
