@@ -47,6 +47,7 @@ describe("appearance settings migration", () => {
       DEFAULT_SETTINGS.appearance.fontSlots,
     );
     expect(settings.appearance.background.relativePath).toBeNull();
+    expect(settings.appearance.uiScalePercent).toBe(100);
   });
 
   it("keeps terminal.fontFamily as the source of truth on load", async () => {
@@ -182,5 +183,29 @@ describe("appearance settings migration", () => {
     expect(background.fit).toBe("cover");
     expect(background.opacity).toBe(1);
     expect(background.blur).toBe(0);
+  });
+
+  it("clamps and snaps stored UI scale percentage", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { uiScalePercent: 152 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.uiScalePercent).toBe(150);
+  });
+
+  it("falls back to default UI scale when stored value is invalid", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { uiScalePercent: "large" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.uiScalePercent).toBe(100);
   });
 });

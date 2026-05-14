@@ -526,6 +526,10 @@ function AppearanceSettings() {
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
       />
+      <UiScaleSection
+        value={appearance.uiScalePercent}
+        onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
+      />
       <BackgroundSection
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
@@ -539,6 +543,48 @@ function AppearanceSettings() {
         patch={patchStatusBar}
       />
     </section>
+  );
+}
+
+const UI_SCALE_PRESETS = [75, 80, 90, 100, 110, 125, 150] as const;
+
+function UiScaleSection({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const presets = UI_SCALE_PRESETS.includes(
+    value as (typeof UI_SCALE_PRESETS)[number],
+  )
+    ? UI_SCALE_PRESETS
+    : [...UI_SCALE_PRESETS, value].sort((a, b) => a - b);
+
+  const commitValue = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    onChange(next);
+  };
+
+  return (
+    <Field
+      label="UI scale"
+      hint="Scales the app chrome in 5% steps. Terminal text keeps its separate size setting."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={String(value)}
+          onChange={(e) => commitValue(Number(e.target.value))}
+          className="w-32"
+        >
+          {presets.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}%
+            </option>
+          ))}
+        </Select>
+      </div>
+    </Field>
   );
 }
 
@@ -855,6 +901,12 @@ function StatusBarSection({
           description="The `gh` account used to list pull requests for the active repo."
           checked={statusBar.showGithubAccount}
           onChange={(v) => patch({ showGithubAccount: v })}
+        />
+        <CheckboxRow
+          label="Working directory"
+          description="The active session's worktree path (tildified against $HOME)."
+          checked={statusBar.showWorkingDirectory}
+          onChange={(v) => patch({ showWorkingDirectory: v })}
         />
         <CheckboxRow
           label="Memory usage"
