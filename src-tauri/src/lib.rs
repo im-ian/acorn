@@ -1,4 +1,5 @@
-mod agent_shim;
+mod agent_resume;
+mod agent_resume_persister;
 mod claude_util;
 mod cli_resolver;
 mod commands;
@@ -256,6 +257,11 @@ pub fn run() {
                 })
                 .ok();
 
+            // Watcher that mirrors live agent transcripts into per-session
+            // `claude.id` / `codex.id` files. The focus-time resume modal
+            // reads those files; no shim or PATH injection is required.
+            agent_resume_persister::spawn(state.inner().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -310,6 +316,10 @@ pub fn run() {
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
             commands::list_system_fonts,
+            commands::get_claude_resume_candidate,
+            commands::acknowledge_claude_resume,
+            commands::get_codex_resume_candidate,
+            commands::acknowledge_codex_resume,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,
