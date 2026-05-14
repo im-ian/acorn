@@ -97,7 +97,10 @@ test.describe("agent resume modal", () => {
         (window as unknown as { __ACORN_ACKED__?: string[] }).__ACORN_ACKED__ ??
         [],
     );
-    expect(acked).toContain(SESSION.id);
+    // Resume is the one button that does NOT ack — the user signalled
+    // they want to keep working with this conversation, so subsequent
+    // exits should re-offer the modal at the next cold boot.
+    expect(acked).not.toContain(SESSION.id);
   });
 
   test("focusing a session with a codex candidate dispatches `codex resume`", async ({
@@ -162,7 +165,8 @@ test.describe("agent resume modal", () => {
         (window as unknown as { __ACORN_CODEX_ACKED__?: string[] })
           .__ACORN_CODEX_ACKED__ ?? [],
     );
-    expect(acked).toContain(SESSION.id);
+    // Same rule as the claude case: Resume must not ack.
+    expect(acked).not.toContain(SESSION.id);
   });
 
   test("Cancel writes a shell-comment hint with the resume command", async ({
