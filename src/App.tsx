@@ -12,7 +12,12 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { LayoutRenderer } from "./components/LayoutRenderer";
-import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
+import {
+  EQUALIZE_PANES_EVENT,
+  EXPAND_PANEL_EVENT,
+  type ExpandPanelDetail,
+  RESET_PANEL_SIZES_EVENT,
+} from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
@@ -47,6 +52,11 @@ import { useAppStore } from "./store";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
+
+const SIDEBAR_DEFAULT_SIZE = 18;
+const SIDEBAR_MIN_SIZE = 12;
+const RIGHT_PANEL_DEFAULT_SIZE = 26;
+const RIGHT_PANEL_MIN_SIZE = 16;
 
 function focusPanel(id: "sidebar" | "main" | "right") {
   const panel = document.querySelector(
@@ -294,6 +304,42 @@ function App() {
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
   }, [pendingRemove, clearPendingRemove, removeSession]);
+
+  // Restore the root layout (sidebar + right panel) and equalize the
+  // workspace pane splits when the command palette fires the reset event.
+  // Useful when the user has nudged the 1px handle into a barely-visible
+  // strip and wants a one-shot way back to the default layout.
+  useEffect(() => {
+    const handler = () => {
+      sidebarPanelRef.current?.expand();
+      sidebarPanelRef.current?.resize(SIDEBAR_DEFAULT_SIZE);
+      rightPanelRef.current?.expand();
+      rightPanelRef.current?.resize(RIGHT_PANEL_DEFAULT_SIZE);
+      window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+    };
+    window.addEventListener(RESET_PANEL_SIZES_EVENT, handler);
+    return () => window.removeEventListener(RESET_PANEL_SIZES_EVENT, handler);
+  }, []);
+
+  // ResizeHandle dispatches this on double-click when the adjacent panel
+  // is collapsed. Expand to minSize via the imperative ref so the panel
+  // animates from its current state instead of jumping straight to the
+  // last user-set size.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<ExpandPanelDetail>).detail;
+      if (!detail) return;
+      if (detail.panelId === "sidebar") {
+        sidebarPanelRef.current?.expand();
+        sidebarPanelRef.current?.resize(SIDEBAR_MIN_SIZE);
+      } else if (detail.panelId === "right") {
+        rightPanelRef.current?.expand();
+        rightPanelRef.current?.resize(RIGHT_PANEL_MIN_SIZE);
+      }
+    };
+    window.addEventListener(EXPAND_PANEL_EVENT, handler);
+    return () => window.removeEventListener(EXPAND_PANEL_EVENT, handler);
+  }, []);
 
   // Surface the one-time guide modal after the first control-session
   // creation. The store dispatches `acorn:show-control-guide` only when the
@@ -643,8 +689,8 @@ function App() {
             ref={sidebarPanelRef}
             id="sidebar"
             order={1}
-            defaultSize={18}
-            minSize={12}
+            defaultSize={SIDEBAR_DEFAULT_SIZE}
+            minSize={SIDEBAR_MIN_SIZE}
             maxSize={40}
             collapsible
             collapsedSize={0}
@@ -660,8 +706,8 @@ function App() {
             ref={rightPanelRef}
             id="right"
             order={3}
-            defaultSize={26}
-            minSize={16}
+            defaultSize={RIGHT_PANEL_DEFAULT_SIZE}
+            minSize={RIGHT_PANEL_MIN_SIZE}
             maxSize={50}
             collapsible
             collapsedSize={0}
