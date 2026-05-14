@@ -1619,3 +1619,364 @@ fn run_ai_oneshot(command: &str, args: &[String], prompt: &str) -> AppResult<Str
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
+
+/// Single GitHub Actions workflow run. Mirrors the fields the Actions tab
+/// shows; richer detail (jobs, logs) intentionally omitted — clicking a row
+/// opens the run on GitHub where the user already has the full UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRun {
+    pub id: u64,
+    /// `displayTitle` from gh — the commit message the run was triggered for,
+    /// or the manually entered title for `workflow_dispatch` runs.
+    pub display_title: String,
+    pub workflow_name: String,
+    /// `queued` | `in_progress` | `completed` | `requested` | `waiting` |
+    /// `pending` (gh REST status field, lower-case).
+    pub status: String,
+    /// `success` | `failure` | `cancelled` | `skipped` | `neutral` |
+    /// `timed_out` | `action_required` | `startup_failure`. None while the
+    /// run is still in progress.
+    pub conclusion: Option<String>,
+    /// Trigger event: `push`, `pull_request`, `workflow_dispatch`, ...
+    pub event: String,
+    pub head_branch: Option<String>,
+    pub head_sha: String,
+    pub url: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub attempt: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowRunsListing {
+    Ok {
+        items: Vec<WorkflowRun>,
+        account: String,
+    },
+    NotGithub,
+    NoAccess {
+        slug: String,
+        accounts: Vec<AccountSummary>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct GhWorkflowRun {
+    #[serde(rename = "databaseId")]
+    database_id: u64,
+    #[serde(rename = "displayTitle", default)]
+    display_title: String,
+    #[serde(rename = "name", default)]
+    name: String,
+    #[serde(rename = "workflowName", default)]
+    workflow_name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    event: String,
+    #[serde(rename = "headBranch", default)]
+    head_branch: Option<String>,
+    #[serde(rename = "headSha", default)]
+    head_sha: String,
+    #[serde(default)]
+    url: String,
+    #[serde(rename = "createdAt", default)]
+    created_at: String,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: String,
+    #[serde(default = "default_attempt")]
+    attempt: u32,
+}
+
+fn default_attempt() -> u32 {
+    1
+}
+
+pub fn list_workflow_runs(repo_path: &Path, limit: u32) -> AppResult<WorkflowRunsListing> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(WorkflowRunsListing::NotGithub);
+    };
+
+    match try_with_account(repo_path, &slug, |token| run_workflow_list(&slug, token, limit))? {
+        AccountOutcome::Ok { account, value } => Ok(WorkflowRunsListing::Ok {
+            items: value,
+            account,
+        }),
+        AccountOutcome::NoAccess { accounts } => {
+            Ok(WorkflowRunsListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+fn run_workflow_list(slug: &str, token: &str, limit: u32) -> AppResult<Vec<WorkflowRun>> {
+    let limit = limit.clamp(1, 200);
+    let limit_s = limit.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "run",
+            "list",
+            "--repo",
+            slug,
+            "--limit",
+            &limit_s,
+            "--json",
+            "databaseId,displayTitle,name,workflowName,status,conclusion,event,\
+             headBranch,headSha,url,createdAt,updatedAt,attempt",
+        ]);
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    let raw: Vec<GhWorkflowRun> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
+
+    Ok(raw
+        .into_iter()
+        .map(|r| {
+            let workflow_name = if !r.workflow_name.is_empty() {
+                r.workflow_name
+            } else {
+                r.name
+            };
+            WorkflowRun {
+                id: r.database_id,
+                display_title: r.display_title,
+                workflow_name,
+                status: r.status,
+                conclusion: r.conclusion,
+                event: r.event,
+                head_branch: r.head_branch.filter(|s| !s.is_empty()),
+                head_sha: r.head_sha,
+                url: r.url,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+                attempt: r.attempt,
+            }
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowJobStep {
+    pub name: String,
+    pub number: u32,
+    pub status: String,
+    pub conclusion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowJob {
+    pub id: u64,
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub url: String,
+    pub steps: Vec<WorkflowJobStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRunDetail {
+    pub id: u64,
+    pub display_title: String,
+    pub workflow_name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub event: String,
+    pub head_branch: Option<String>,
+    pub head_sha: String,
+    pub url: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub started_at: Option<String>,
+    pub attempt: u32,
+    pub jobs: Vec<WorkflowJob>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowRunDetailListing {
+    Ok {
+        account: String,
+        detail: WorkflowRunDetail,
+    },
+    NotGithub,
+    NoAccess {
+        slug: String,
+        accounts: Vec<AccountSummary>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct GhWorkflowJobStep {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    number: u32,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhWorkflowJob {
+    #[serde(rename = "databaseId", default)]
+    database_id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(rename = "startedAt", default)]
+    started_at: Option<String>,
+    #[serde(rename = "completedAt", default)]
+    completed_at: Option<String>,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    steps: Vec<GhWorkflowJobStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhWorkflowRunDetail {
+    #[serde(rename = "databaseId")]
+    database_id: u64,
+    #[serde(rename = "displayTitle", default)]
+    display_title: String,
+    #[serde(rename = "name", default)]
+    name: String,
+    #[serde(rename = "workflowName", default)]
+    workflow_name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    event: String,
+    #[serde(rename = "headBranch", default)]
+    head_branch: Option<String>,
+    #[serde(rename = "headSha", default)]
+    head_sha: String,
+    #[serde(default)]
+    url: String,
+    #[serde(rename = "createdAt", default)]
+    created_at: String,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: String,
+    #[serde(rename = "startedAt", default)]
+    started_at: Option<String>,
+    #[serde(default = "default_attempt")]
+    attempt: u32,
+    #[serde(default)]
+    jobs: Vec<GhWorkflowJob>,
+}
+
+pub fn get_workflow_run_detail(
+    repo_path: &Path,
+    run_id: u64,
+) -> AppResult<WorkflowRunDetailListing> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(WorkflowRunDetailListing::NotGithub);
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_workflow_view(&slug, token, run_id)
+    })? {
+        AccountOutcome::Ok { account, value } => Ok(WorkflowRunDetailListing::Ok {
+            account,
+            detail: value,
+        }),
+        AccountOutcome::NoAccess { accounts } => {
+            Ok(WorkflowRunDetailListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<WorkflowRunDetail> {
+    let id_s = run_id.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "run",
+            "view",
+            &id_s,
+            "--repo",
+            slug,
+            "--json",
+            "databaseId,displayTitle,name,workflowName,status,conclusion,event,\
+             headBranch,headSha,url,createdAt,updatedAt,startedAt,attempt,jobs",
+        ]);
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    let raw: GhWorkflowRunDetail = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
+
+    let workflow_name = if !raw.workflow_name.is_empty() {
+        raw.workflow_name
+    } else {
+        raw.name
+    };
+    let jobs = raw
+        .jobs
+        .into_iter()
+        .map(|j| WorkflowJob {
+            id: j.database_id,
+            name: j.name,
+            status: j.status,
+            conclusion: j.conclusion,
+            started_at: j.started_at,
+            completed_at: j.completed_at,
+            url: j.url,
+            steps: j
+                .steps
+                .into_iter()
+                .map(|s| WorkflowJobStep {
+                    name: s.name,
+                    number: s.number,
+                    status: s.status,
+                    conclusion: s.conclusion,
+                })
+                .collect(),
+        })
+        .collect();
+
+    Ok(WorkflowRunDetail {
+        id: raw.database_id,
+        display_title: raw.display_title,
+        workflow_name,
+        status: raw.status,
+        conclusion: raw.conclusion,
+        event: raw.event,
+        head_branch: raw.head_branch.filter(|s| !s.is_empty()),
+        head_sha: raw.head_sha,
+        url: raw.url,
+        created_at: raw.created_at,
+        updated_at: raw.updated_at,
+        started_at: raw.started_at,
+        attempt: raw.attempt,
+        jobs,
+    })
+}

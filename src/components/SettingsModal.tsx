@@ -38,7 +38,6 @@ import {
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
-import type { PrStateFilter } from "../lib/types";
 import {
   CheckboxRow,
   CommandHint,
@@ -56,7 +55,7 @@ type Tab =
   | "terminal"
   | "agents"
   | "sessions"
-  | "pull-requests"
+  | "github"
   | "appearance"
   | "editor"
   | "notifications"
@@ -68,7 +67,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "terminal", label: "Terminal" },
   { id: "agents", label: "Agents" },
   { id: "sessions", label: "Sessions" },
-  { id: "pull-requests", label: "Pull Requests" },
+  { id: "github", label: "GitHub" },
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
   { id: "notifications", label: "Notifications" },
@@ -158,8 +157,8 @@ export function SettingsModal() {
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
-          ) : tab === "pull-requests" ? (
-            <PullRequestsSettings />
+          ) : tab === "github" ? (
+            <GithubSettings />
           ) : tab === "appearance" ? (
             <AppearanceSettings />
           ) : tab === "editor" ? (
@@ -468,39 +467,20 @@ function ControlSessionInstallSection() {
   );
 }
 
-function PullRequestsSettings() {
+function GithubSettings() {
   const settings = useSettings((s) => s.settings);
-  const patchPullRequests = useSettings((s) => s.patchPullRequests);
+  const patchGithub = useSettings((s) => s.patchGithub);
 
   return (
     <section className="space-y-4">
       <Field
-        label="Default tab"
-        hint="Filter pre-selected when the PRs panel first opens for a repo. Switching tabs by hand still works as before."
-      >
-        <Select
-          value={settings.pullRequests.defaultState}
-          onChange={(e) =>
-            patchPullRequests({
-              defaultState: e.target.value as PrStateFilter,
-            })
-          }
-          className="w-48"
-        >
-          <option value="open">Open</option>
-          <option value="closed">Closed</option>
-          <option value="merged">Merged</option>
-          <option value="all">All</option>
-        </Select>
-      </Field>
-      <Field
         label="Refresh interval"
-        hint="How often the PRs tab auto-refetches from gh. Lower values feel snappier but spend more API budget."
+        hint="How often the PRs and Actions tabs auto-refetch from gh. Lower values feel snappier but spend more API budget."
       >
         <Select
-          value={settings.pullRequests.refreshIntervalMs}
+          value={settings.github.refreshIntervalMs}
           onChange={(e) =>
-            patchPullRequests({
+            patchGithub({
               refreshIntervalMs: Number(e.target.value),
             })
           }
@@ -514,8 +494,8 @@ function PullRequestsSettings() {
         </Select>
       </Field>
       <p className="text-[11px] text-fg-muted">
-        Manual refresh (the icon in the PRs tab) always works regardless of
-        this interval.
+        Manual refresh (the icon in each tab) always works regardless of this
+        interval.
       </p>
       <Field
         label="List density"
@@ -524,8 +504,8 @@ function PullRequestsSettings() {
         <CheckboxRow
           label="Show author avatars"
           description="Render the GitHub avatar next to each PR row."
-          checked={settings.pullRequests.showAvatars}
-          onChange={(v) => patchPullRequests({ showAvatars: v })}
+          checked={settings.github.showAvatars}
+          onChange={(v) => patchGithub({ showAvatars: v })}
         />
       </Field>
     </section>

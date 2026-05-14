@@ -16,7 +16,7 @@ import {
   splitPaneInLayout,
 } from "./lib/layout";
 
-type RightTab = "todos" | "commits" | "staged" | "prs";
+type RightTab = "todos" | "commits" | "staged" | "prs" | "actions";
 
 const ROOT_PANE_ID: PaneId = "root";
 

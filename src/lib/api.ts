@@ -15,6 +15,8 @@ import type {
   SessionStatus,
   StagedFile,
   TodoItem,
+  WorkflowRunDetailListing,
+  WorkflowRunsListing,
 } from "./types";
 
 export interface LoadStatus {
@@ -179,6 +181,24 @@ export const api = {
       method,
       command,
       args,
+    });
+  },
+  listWorkflowRuns(
+    repoPath: string,
+    limit = 50,
+  ): Promise<WorkflowRunsListing> {
+    return invoke<WorkflowRunsListing>("list_workflow_runs", {
+      repoPath,
+      limit,
+    });
+  },
+  getWorkflowRunDetail(
+    repoPath: string,
+    runId: number,
+  ): Promise<WorkflowRunDetailListing> {
+    return invoke<WorkflowRunDetailListing>("get_workflow_run_detail", {
+      repoPath,
+      runId,
     });
   },
   getMemoryUsage(): Promise<MemoryUsage> {
