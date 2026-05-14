@@ -289,7 +289,10 @@ pub fn daemon_adopt_session(
         .repo_path
         .clone()
         .ok_or_else(|| "daemon session has no repo_path — cannot adopt".to_string())?;
-    let branch = summary.branch.clone().unwrap_or_else(|| "main".to_string());
+    // Branch is informational — leave empty when the daemon never knew
+    // it. Synthesizing "main" would silently lie for repos on master /
+    // trunk / detached HEAD; UI tolerates the empty string.
+    let branch = summary.branch.clone().unwrap_or_default();
 
     let kind = match summary.kind {
         crate::daemon::protocol::SessionKind::Regular => crate::session::SessionKind::Regular,

@@ -1356,6 +1356,12 @@ function ExperimentsSettings() {
         label="Pin last user prompt above terminal"
         description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
       />
+      <CheckboxRow
+        checked={experiments.resumeModal}
+        onChange={(checked) => patchExperiments({ resumeModal: checked })}
+        label='Show "Resume previous conversation" modal at cold boot'
+        description="On Acorn launch, probes every persisted session for an unfinished claude or codex transcript and pops a one-shot modal when you focus the session so you can pick up where you left off. Disable to suppress the modal entirely."
+      />
     </section>
   );
 }

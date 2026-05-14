@@ -104,6 +104,14 @@ export const tauriMockSource = `
     if (cmd === 'daemon_kill_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_forget_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_adopt_session') return Promise.resolve(undefined);
+    // Resume modal probes every session focus for both claude and codex.
+    // Default to "no candidate" so non-resume E2Es never see the modal;
+    // tests that exercise the modal override this via __ACORN_MOCK_HANDLERS__.
+    if (cmd === 'get_claude_resume_candidate') return Promise.resolve(null);
+    if (cmd === 'get_codex_resume_candidate') return Promise.resolve(null);
+    if (cmd === 'acknowledge_claude_resume') return Promise.resolve(undefined);
+    if (cmd === 'acknowledge_codex_resume') return Promise.resolve(undefined);
+    if (cmd === 'pty_write') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);
   }
