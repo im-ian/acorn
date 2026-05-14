@@ -1,4 +1,12 @@
-import { Power, RefreshCcw, Loader2, AlertTriangle } from "lucide-react";
+import {
+  Power,
+  RefreshCcw,
+  Loader2,
+  AlertTriangle,
+  Bot,
+  Trash2,
+  Undo2,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { api, type DaemonSessionSummary, type DaemonStatus } from "../lib/api";
@@ -217,7 +225,12 @@ export function BackgroundSessionsSettings() {
         label="Sessions"
         hint="Every PTY the daemon currently tracks. Dead rows can be forgotten from the daemon side; their app metadata stays so you can resume from disk if the agent supports it."
       >
-        <SessionsList sessions={sessions} enabled={enabled} running={running} />
+        <SessionsList
+          sessions={sessions}
+          enabled={enabled}
+          running={running}
+          onRefresh={refresh}
+        />
       </Field>
     </section>
   );
@@ -227,11 +240,32 @@ function SessionsList({
   sessions,
   enabled,
   running,
+  onRefresh,
 }: {
   sessions: DaemonSessionSummary[] | null;
   enabled: boolean;
   running: boolean;
+  onRefresh: () => Promise<void>;
 }) {
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+
+  const runRowAction = useCallback(
+    async (id: string, fn: () => Promise<void>) => {
+      setRowBusy(id);
+      setRowError(null);
+      try {
+        await fn();
+        await onRefresh();
+      } catch (err) {
+        setRowError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setRowBusy(null);
+      }
+    },
+    [onRefresh],
+  );
+
   if (!enabled) {
     return (
       <p className="text-xs text-fg-muted">
@@ -249,27 +283,125 @@ function SessionsList({
     return <p className="text-xs text-fg-muted">No sessions tracked.</p>;
   }
   return (
-    <ul className="divide-y divide-border rounded border border-border bg-bg-elevated text-xs">
-      {sessions.map((s) => (
-        <li key={s.id} className="flex items-center gap-2 px-3 py-1.5">
-          <span
-            className={cn(
-              "font-mono text-[10px]",
-              s.alive ? "text-accent" : "text-fg-muted",
-            )}
-          >
-            {s.alive ? "●" : "○"}
-          </span>
-          <span className="flex-1 truncate font-mono">{s.name}</span>
-          <span className="text-fg-muted">{s.kind}</span>
-          {s.agent_kind ? (
-            <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-fg-muted">
-              {s.agent_kind}
-            </span>
-          ) : null}
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-2">
+      <ul className="divide-y divide-border rounded border border-border bg-bg-elevated text-xs">
+        {sessions.map((s) => {
+          const busy = rowBusy === s.id;
+          return (
+            <li key={s.id} className="flex items-center gap-2 px-3 py-1.5">
+              <span
+                className={cn(
+                  "font-mono text-[10px]",
+                  s.alive ? "text-accent" : "text-fg-muted",
+                )}
+              >
+                {s.alive ? "●" : "○"}
+              </span>
+              <span className="flex flex-1 items-center gap-1.5 truncate font-mono">
+                <span className="truncate">{s.name}</span>
+                {s.kind === "control" ? (
+                  <Bot
+                    size={12}
+                    className="shrink-0 text-fg-muted"
+                    aria-label="Control session"
+                  />
+                ) : null}
+              </span>
+              {s.agent_kind ? (
+                <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-fg-muted">
+                  {s.agent_kind}
+                </span>
+              ) : null}
+              <div className="flex items-center gap-1">
+                {s.alive ? (
+                  <RowButton
+                    title="Kill PTY"
+                    busy={busy}
+                    onClick={() =>
+                      void runRowAction(s.id, () =>
+                        api.daemonKillSession(s.id),
+                      )
+                    }
+                    tone="danger"
+                  >
+                    <Power size={11} />
+                    <span>Kill</span>
+                  </RowButton>
+                ) : (
+                  <RowButton
+                    title="Adopt this session back into Acorn's sidebar"
+                    busy={busy}
+                    onClick={() =>
+                      void runRowAction(s.id, () =>
+                        api.daemonAdoptSession(s.id),
+                      )
+                    }
+                  >
+                    <Undo2 size={11} />
+                    <span>Restore</span>
+                  </RowButton>
+                )}
+                <RowButton
+                  title={
+                    s.alive
+                      ? "Kill first, then forget"
+                      : "Remove this row from the daemon registry"
+                  }
+                  busy={busy}
+                  disabled={s.alive}
+                  onClick={() =>
+                    void runRowAction(s.id, () =>
+                      api.daemonForgetSession(s.id),
+                    )
+                  }
+                >
+                  <Trash2 size={11} />
+                  <span>Forget</span>
+                </RowButton>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {rowError ? (
+        <div className="flex items-start gap-1 text-xs text-danger">
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+          <span className="font-mono">{rowError}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RowButton({
+  busy,
+  onClick,
+  children,
+  title,
+  disabled,
+  tone,
+}: {
+  busy: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  title: string;
+  disabled?: boolean;
+  tone?: "danger";
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={busy || disabled}
+      className={cn(
+        "flex items-center gap-1 rounded border border-border bg-bg px-1.5 py-0.5 text-[11px] transition",
+        "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-40",
+        tone === "danger" ? "text-danger" : "text-fg",
+      )}
+    >
+      {busy ? <Loader2 size={11} className="animate-spin" /> : children}
+    </button>
   );
 }
 

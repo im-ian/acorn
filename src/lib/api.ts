@@ -370,6 +370,35 @@ export const api = {
   daemonListSessions(): Promise<DaemonSessionSummary[]> {
     return invoke<DaemonSessionSummary[]>("daemon_list_sessions");
   },
+  /**
+   * Kill a daemon-owned PTY. Equivalent to closing the shell inside the
+   * session — the row stays in the daemon registry (with `alive=false`)
+   * until `daemonForgetSession` is also called.
+   */
+  daemonKillSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_kill_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Remove a dead session row from the daemon registry. The daemon
+   * rejects this for sessions still alive — caller must kill first.
+   */
+  daemonForgetSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_forget_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Reconstruct an app-side session row from a daemon-owned PTY the
+   * app has lost track of. Pulls name/kind/repo_path/branch from the
+   * daemon's session metadata. Idempotent.
+   */
+  daemonAdoptSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_adopt_session", {
+      targetSessionId,
+    });
+  },
 };
 
 export interface DaemonStatus {

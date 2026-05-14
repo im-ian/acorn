@@ -103,6 +103,7 @@ export const tauriMockSource = `
     if (cmd === 'daemon_resize') return Promise.resolve(undefined);
     if (cmd === 'daemon_kill_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_forget_session') return Promise.resolve(undefined);
+    if (cmd === 'daemon_adopt_session') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);
   }

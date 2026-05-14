@@ -320,6 +320,7 @@ pub fn run() {
             daemon_commands::daemon_resize,
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
+            daemon_commands::daemon_adopt_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
