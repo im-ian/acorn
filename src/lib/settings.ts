@@ -283,6 +283,15 @@ export interface AcornSettings {
      * naturally clears the banner along with the rest of the scrollback.
      */
     stickyPrompt: boolean;
+    /**
+     * Cold-boot "Resume previous conversation" modal for claude / codex.
+     * On Acorn launch, probes every persisted session for an unfinished
+     * agent transcript and pops a one-shot modal when the user focuses
+     * one. Disable to suppress the modal entirely (the underlying
+     * `claude.id` / `codex.id` files still get written by the persister
+     * for future debugging).
+     */
+    resumeModal: boolean;
   };
 }
 
@@ -359,6 +368,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   experiments: {
     stickyPrompt: false,
+    resumeModal: true,
   },
 };
 
@@ -693,6 +703,10 @@ function loadSettings(): AcornSettings {
           typeof parsed.experiments?.stickyPrompt === "boolean"
             ? parsed.experiments.stickyPrompt
             : DEFAULT_SETTINGS.experiments.stickyPrompt,
+        resumeModal:
+          typeof parsed.experiments?.resumeModal === "boolean"
+            ? parsed.experiments.resumeModal
+            : DEFAULT_SETTINGS.experiments.resumeModal,
       },
     };
   } catch {

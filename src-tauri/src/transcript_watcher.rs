@@ -277,9 +277,13 @@ fn find_recent_codex_jsonl(
         if mtime < process_start {
             continue;
         }
-        candidates.push((path, mtime));
+        let created = meta.created().unwrap_or(mtime);
+        candidates.push((path, created));
     }
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    // See `pick_newest_unassigned_jsonl`: rank by proximity of file
+    // birth time to process start so two concurrent codex runs in the
+    // same cwd do not swap rollouts on each other.
+    candidates.sort_by_key(|c| time_distance(c.1, process_start));
     for (path, _) in candidates {
         let Some(transcript_cwd) = read_codex_transcript_cwd(&path) else {
             continue;
@@ -351,7 +355,13 @@ fn pick_newest_unassigned_jsonl(
     process_start: SystemTime,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
-    let mut candidates: Vec<(PathBuf, SystemTime)> = Vec::new();
+    // We track two timestamps per candidate. `created` (file birth
+    // time, falling back to mtime when btime is unavailable) is what
+    // we rank by: when two `claude` processes run concurrently in the
+    // same cwd, the one whose JSONL was *born* closest to the
+    // process's own start time is its transcript. `mtime` is still
+    // used as a recency filter so stale years-old files don't surface.
+    let mut candidates: Vec<(PathBuf, SystemTime, SystemTime)> = Vec::new();
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -371,15 +381,31 @@ fn pick_newest_unassigned_jsonl(
         if mtime < process_start {
             continue;
         }
-        candidates.push((path, mtime));
+        let created = meta.created().unwrap_or(mtime);
+        candidates.push((path, created, mtime));
     }
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
-    for (path, _) in candidates {
+    // Earliest birth time *after* process_start is the best match —
+    // mtime-DESC order would hand the active live claude's JSONL
+    // (mtime keeps advancing) to a younger sibling claude in the same
+    // cwd, cross-contaminating their session-id capture. Ranking by
+    // proximity of `created` to `process_start` keeps each claude
+    // paired with the file it actually opened.
+    candidates.sort_by_key(|c| time_distance(c.1, process_start));
+    for (path, _, _) in candidates {
         if let Some(uuid) = extract_uuid_from_path(&path) {
             return Some((path, uuid));
         }
     }
     None
+}
+
+/// Absolute difference between two `SystemTime`s as seconds. Saturates
+/// to `u64::MAX` if the duration is unrepresentable.
+fn time_distance(a: SystemTime, b: SystemTime) -> u64 {
+    a.duration_since(b)
+        .or_else(|_| b.duration_since(a))
+        .map(|d| d.as_secs())
+        .unwrap_or(u64::MAX)
 }
 
 /// Both claude `<uuid>.jsonl` and codex `rollout-<ts>-<uuid>.jsonl` end
