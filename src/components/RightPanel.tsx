@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Activity,
   Check,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  CircleX,
   Copy,
   ExternalLink,
   FileDiff,
@@ -9,8 +14,10 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   Globe,
+  Loader2,
   ListTodo,
   Maximize2,
+  MinusCircle,
   Search,
   X,
 } from "lucide-react";
@@ -34,6 +41,12 @@ import type {
   PullRequestListing,
   StagedFile,
   TodoItem,
+  WorkflowJob,
+  WorkflowJobStep,
+  WorkflowRun,
+  WorkflowRunDetail,
+  WorkflowRunDetailListing,
+  WorkflowRunsListing,
 } from "../lib/types";
 import { AuthorAvatar } from "./AuthorAvatar";
 import { loginFromEmail } from "./AuthorTag";
@@ -50,6 +63,7 @@ import {
   Modal,
   ModalHeader,
   RefreshButton,
+  Select,
   TextInput,
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
@@ -151,6 +165,12 @@ export function RightPanel() {
           active={rightTab === "prs"}
           onClick={() => setRightTab("prs")}
         />
+        <TabButton
+          icon={<Activity size={14} />}
+          label="Actions"
+          active={rightTab === "actions"}
+          onClick={() => setRightTab("actions")}
+        />
       </nav>
       <div className="flex-1 overflow-hidden">
         {rightTab === "todos" ? (
@@ -182,14 +202,20 @@ export function RightPanel() {
           ) : (
             <Empty msg="No project selected" />
           )
+        ) : rightTab === "prs" ? (
+          repoPath ? (
+            <PullRequestsTab
+              key={repoPath}
+              repoPath={repoPath}
+              onOpenDetail={(number) => setPrDetail({ repoPath, number })}
+              onOpenSearch={() => setPrSearch({ repoPath })}
+              refreshKey={prListVersion}
+            />
+          ) : (
+            <Empty msg="No project selected" />
+          )
         ) : repoPath ? (
-          <PullRequestsTab
-            key={repoPath}
-            repoPath={repoPath}
-            onOpenDetail={(number) => setPrDetail({ repoPath, number })}
-            onOpenSearch={() => setPrSearch({ repoPath })}
-            refreshKey={prListVersion}
-          />
+          <ActionsTab key={repoPath} repoPath={repoPath} />
         ) : (
           <Empty msg="No project selected" />
         )}
@@ -1350,16 +1376,11 @@ function PullRequestsTab({
   /** Bumped by the parent to force an out-of-band refetch (e.g. after a PR is merged via the modal). */
   refreshKey: number;
 }) {
-  const defaultPrState = useSettings(
-    (s) => s.settings.pullRequests.defaultState,
-  );
   const refreshIntervalMs = useSettings(
-    (s) => s.settings.pullRequests.refreshIntervalMs,
+    (s) => s.settings.github.refreshIntervalMs,
   );
-  const showAvatars = useSettings(
-    (s) => s.settings.pullRequests.showAvatars,
-  );
-  const [stateFilter, setStateFilter] = useState<PrStateFilter>(defaultPrState);
+  const showAvatars = useSettings((s) => s.settings.github.showAvatars);
+  const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const [listing, setListing] = useState<PullRequestListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1531,6 +1552,617 @@ function PullRequestsTab({
   );
 }
 
+const WORKFLOW_RUNS_LIMIT = 50;
+const ALL_WORKFLOWS = "__all__";
+
+function ActionsTab({ repoPath }: { repoPath: string }) {
+  const refreshIntervalMs = useSettings(
+    (s) => s.settings.github.refreshIntervalMs,
+  );
+  const [listing, setListing] = useState<WorkflowRunsListing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [workflowFilter, setWorkflowFilter] = useState<string>(ALL_WORKFLOWS);
+  const [detailRunId, setDetailRunId] = useState<number | null>(null);
+
+  const fetchRuns = useCallback(
+    async (signal?: { cancelled: boolean }) => {
+      setLoading(true);
+      try {
+        const result = await api.listWorkflowRuns(repoPath, WORKFLOW_RUNS_LIMIT);
+        if (signal?.cancelled) return;
+        setListing(result);
+        setError(null);
+      } catch (e) {
+        if (signal?.cancelled) return;
+        setError(String(e));
+      } finally {
+        if (!signal?.cancelled) setLoading(false);
+      }
+    },
+    [repoPath],
+  );
+
+  useEffect(() => {
+    setListing(null);
+    setError(null);
+    setWorkflowFilter(ALL_WORKFLOWS);
+    setDetailRunId(null);
+  }, [repoPath]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void fetchRuns(signal);
+    const handle = setInterval(() => {
+      void fetchRuns(signal);
+    }, refreshIntervalMs);
+    return () => {
+      signal.cancelled = true;
+      clearInterval(handle);
+    };
+  }, [fetchRuns, refreshIntervalMs]);
+
+  const workflowNames =
+    listing?.kind === "ok"
+      ? Array.from(new Set(listing.items.map((r) => r.workflow_name))).sort()
+      : [];
+  const visibleItems =
+    listing?.kind === "ok"
+      ? workflowFilter === ALL_WORKFLOWS
+        ? listing.items
+        : listing.items.filter((r) => r.workflow_name === workflowFilter)
+      : [];
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+        <Select
+          value={workflowFilter}
+          onChange={(e) => setWorkflowFilter(e.target.value)}
+          aria-label="Filter by workflow"
+          disabled={listing?.kind !== "ok" || workflowNames.length === 0}
+          className="min-w-0 max-w-full flex-1 truncate"
+        >
+          <option value={ALL_WORKFLOWS}>All workflows</option>
+          {workflowNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </Select>
+        <RefreshButton
+          onClick={() => void fetchRuns()}
+          loading={loading}
+          size={12}
+        />
+      </div>
+      <div className="flex-1 overflow-x-hidden overflow-y-auto">
+        {error ? (
+          <div className="p-3 text-xs text-danger">{error}</div>
+        ) : !listing ? (
+          <PrSkeletonList count={8} />
+        ) : listing.kind === "not_github" ? (
+          <Empty msg="Origin remote is not a GitHub repository." />
+        ) : listing.kind === "no_access" ? (
+          <NoAccessBanner
+            slug={listing.slug}
+            accounts={listing.accounts}
+            repoPath={repoPath}
+          />
+        ) : visibleItems.length === 0 ? (
+          <Empty
+            msg={
+              listing.items.length === 0
+                ? "No workflow runs yet."
+                : "No runs match this filter."
+            }
+          />
+        ) : (
+          <ul className="text-xs">
+            {visibleItems.map((run) => (
+              <WorkflowRunRow
+                key={run.id}
+                run={run}
+                onOpenDetail={() => setDetailRunId(run.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+      <WorkflowRunDetailModal
+        open={detailRunId !== null}
+        repoPath={repoPath}
+        runId={detailRunId}
+        onClose={() => setDetailRunId(null)}
+      />
+    </div>
+  );
+}
+
+function WorkflowRunRow({
+  run,
+  onOpenDetail,
+}: {
+  run: WorkflowRun;
+  onOpenDetail: () => void;
+}) {
+  const updated = toUnixSeconds(run.updated_at);
+  const startedRelative = updated > 0 ? relativeTime(updated) : "";
+  const startedAbsolute = updated > 0 ? absoluteTime(updated) : "";
+  const title =
+    run.display_title.trim().length > 0
+      ? run.display_title
+      : `${run.workflow_name} run`;
+  const branch = run.head_branch?.trim() ?? "";
+
+  return (
+    <li>
+      <button
+        type="button"
+        onDoubleClick={onOpenDetail}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onOpenDetail();
+          }
+        }}
+        className={cn(
+          "flex w-full items-start gap-2 border-b border-border/40 px-3 py-2 text-left",
+          "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
+        )}
+        title="Double-click to view details"
+      >
+        <span className="mt-0.5 flex shrink-0 items-center">
+          <WorkflowRunStatusIcon
+            status={run.status}
+            conclusion={run.conclusion}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-fg">{title}</div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
+            <span className="truncate">{run.workflow_name}</span>
+            <span className="opacity-50">·</span>
+            <span className="truncate">{run.event}</span>
+            {branch ? (
+              <>
+                <span className="opacity-50">·</span>
+                <span className="truncate font-mono">{branch}</span>
+              </>
+            ) : null}
+            {run.attempt > 1 ? (
+              <>
+                <span className="opacity-50">·</span>
+                <span>retry #{run.attempt}</span>
+              </>
+            ) : null}
+          </div>
+        </div>
+        {startedRelative ? (
+          <Tooltip label={startedAbsolute}>
+            <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
+              {startedRelative}
+            </span>
+          </Tooltip>
+        ) : null}
+      </button>
+    </li>
+  );
+}
+
+function WorkflowRunDetailModal({
+  open,
+  repoPath,
+  runId,
+  onClose,
+}: {
+  open: boolean;
+  repoPath: string;
+  runId: number | null;
+  onClose: () => void;
+}) {
+  const refreshIntervalMs = useSettings(
+    (s) => s.settings.github.refreshIntervalMs,
+  );
+  const [listing, setListing] = useState<WorkflowRunDetailListing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || runId == null) {
+      setListing(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchDetail = (showSpinner: boolean) => {
+      if (showSpinner) setLoading(true);
+      return api
+        .getWorkflowRunDetail(repoPath, runId)
+        .then((result) => {
+          if (cancelled) return result;
+          setListing(result);
+          setError(null);
+          return result;
+        })
+        .catch((e) => {
+          if (cancelled) return null;
+          setError(String(e));
+          return null;
+        })
+        .finally(() => {
+          if (!cancelled && showSpinner) setLoading(false);
+        });
+    };
+
+    setListing(null);
+    setError(null);
+    void fetchDetail(true);
+
+    // Poll while the run is still going. Stops automatically once a
+    // completed status lands so finished runs don't keep hitting `gh`.
+    const handle = window.setInterval(() => {
+      setListing((current) => {
+        const stillRunning =
+          current?.kind !== "ok" ||
+          current.detail.status.toLowerCase() !== "completed";
+        if (stillRunning) void fetchDetail(false);
+        return current;
+      });
+    }, refreshIntervalMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [open, repoPath, runId, refreshIntervalMs]);
+
+  useDialogShortcuts(open, { onCancel: onClose });
+
+  const detail = listing?.kind === "ok" ? listing.detail : null;
+  const title =
+    detail?.display_title.trim().length
+      ? detail.display_title
+      : detail?.workflow_name ?? "Workflow run";
+  const subtitle = detail ? (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <span>{detail.workflow_name}</span>
+      <span className="opacity-50">·</span>
+      <span>{detail.event}</span>
+      {detail.head_branch ? (
+        <>
+          <span className="opacity-50">·</span>
+          <span className="font-mono">{detail.head_branch}</span>
+        </>
+      ) : null}
+      {detail.attempt > 1 ? (
+        <>
+          <span className="opacity-50">·</span>
+          <span>retry #{detail.attempt}</span>
+        </>
+      ) : null}
+    </span>
+  ) : undefined;
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      variant="dialog"
+      size="2xl"
+      className="flex h-[36rem] flex-col"
+    >
+      <ModalHeader
+        title={title}
+        subtitle={subtitle}
+        variant="dialog"
+        icon={
+          <span className="mt-0.5 flex self-start">
+            {detail ? (
+              <WorkflowRunStatusIcon
+                status={detail.status}
+                conclusion={detail.conclusion}
+              />
+            ) : (
+              <Activity size={14} className="text-fg-muted" />
+            )}
+          </span>
+        }
+        actions={
+          detail?.url ? (
+            <button
+              type="button"
+              onClick={() => void openUrl(detail.url)}
+              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              title="Open on GitHub"
+            >
+              <ExternalLink size={12} />
+              GitHub
+            </button>
+          ) : null
+        }
+        onClose={onClose}
+      />
+      <div className="flex-1 min-h-0 overflow-y-auto text-xs">
+        <div className="px-4 py-3">
+        {error ? (
+          <div className="p-2 text-danger">{error}</div>
+        ) : loading || !listing ? (
+          <WorkflowRunDetailSkeleton />
+        ) : listing.kind === "not_github" ? (
+          <Empty msg="Origin remote is not a GitHub repository." />
+        ) : listing.kind === "no_access" ? (
+          <NoAccessBanner
+            slug={listing.slug}
+            accounts={listing.accounts}
+            repoPath={repoPath}
+          />
+        ) : (
+          <WorkflowRunDetailBody detail={listing.detail} />
+        )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function WorkflowRunDetailSkeleton() {
+  return (
+    <div className="space-y-3 animate-pulse">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="contents">
+            <dt>
+              <span className="block h-3 w-16 rounded bg-border/60" />
+            </dt>
+            <dd>
+              <span
+                className="block h-3 rounded bg-border/40"
+                style={{ width: `${40 + ((i * 37) % 50)}%` }}
+              />
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <div>
+        <span className="mb-1.5 block h-3 w-20 rounded bg-border/60" />
+        <ul className="space-y-1.5">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-2 rounded border border-border/60 bg-bg/40 px-2 py-2"
+            >
+              <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-border/60" />
+              <span
+                className="h-3 rounded bg-border/40"
+                style={{ width: `${50 + ((i * 23) % 30)}%` }}
+              />
+              <span className="ml-auto h-3 w-10 rounded bg-border/40" />
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
+  const created = toUnixSeconds(detail.created_at);
+  const updated = toUnixSeconds(detail.updated_at);
+  const totalDuration = formatRunDuration(
+    detail.started_at ?? detail.created_at,
+    detail.status,
+    detail.updated_at,
+  );
+  return (
+    <div className="space-y-3">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-fg-muted">
+        <dt className="opacity-70">Status</dt>
+        <dd className="text-fg">
+          {detail.status}
+          {detail.conclusion ? ` · ${detail.conclusion}` : ""}
+        </dd>
+        {totalDuration ? (
+          <>
+            <dt className="opacity-70">Total duration</dt>
+            <dd className="text-fg">
+              {totalDuration}
+              {detail.status.toLowerCase() !== "completed" ? (
+                <span className="ml-1 text-fg-muted">(running)</span>
+              ) : null}
+            </dd>
+          </>
+        ) : null}
+        <dt className="opacity-70">Attempt</dt>
+        <dd className="text-fg">
+          #{detail.attempt}
+          {detail.attempt > 1 ? (
+            <span className="ml-1 text-fg-muted">(retried)</span>
+          ) : null}
+        </dd>
+        <dt className="opacity-70">Commit</dt>
+        <dd className="font-mono text-fg">{detail.head_sha.slice(0, 7)}</dd>
+        {created > 0 ? (
+          <>
+            <dt className="opacity-70">Created</dt>
+            <dd className="text-fg">{absoluteTime(created)}</dd>
+          </>
+        ) : null}
+        {updated > 0 ? (
+          <>
+            <dt className="opacity-70">Updated</dt>
+            <dd className="text-fg">{absoluteTime(updated)}</dd>
+          </>
+        ) : null}
+      </dl>
+      <div>
+        <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-muted">
+          Jobs ({detail.jobs.length})
+        </div>
+        {detail.jobs.length === 0 ? (
+          <div className="text-[11px] text-fg-muted">No jobs reported.</div>
+        ) : (
+          <ul className="rounded border border-border/60 divide-y divide-border/40">
+            {detail.jobs.map((job) => (
+              <WorkflowJobRow key={job.id} job={job} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowJobRow({ job }: { job: WorkflowJob }) {
+  const [expanded, setExpanded] = useState(false);
+  const duration = formatJobDuration(job.started_at, job.completed_at);
+  return (
+    <li className="bg-bg/40">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className={cn(
+          "flex w-full items-center gap-2 px-2 py-1.5 text-left transition",
+          "sticky top-0 z-10 bg-bg-elevated hover:bg-bg-sidebar",
+          expanded ? "border-b border-border/40" : "",
+        )}
+      >
+        <WorkflowRunStatusIcon
+          status={job.status}
+          conclusion={job.conclusion}
+        />
+        <span className="min-w-0 flex-1 truncate text-xs text-fg">
+          {job.name}
+        </span>
+        {duration ? (
+          <span className="shrink-0 text-[11px] text-fg-muted">{duration}</span>
+        ) : null}
+        {job.url ? (
+          <span
+            role="link"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              void openUrl(job.url);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                void openUrl(job.url);
+              }
+            }}
+            className="shrink-0 cursor-pointer rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+            title="Open job on GitHub"
+          >
+            <ExternalLink size={11} />
+          </span>
+        ) : null}
+      </button>
+      {expanded && job.steps.length > 0 ? (
+        <ol className="space-y-0.5 px-2 py-1.5 text-xs">
+          {job.steps.map((step) => (
+            <WorkflowStepRow key={`${step.number}-${step.name}`} step={step} />
+          ))}
+        </ol>
+      ) : null}
+    </li>
+  );
+}
+
+function WorkflowStepRow({ step }: { step: WorkflowJobStep }) {
+  return (
+    <li className="flex items-center gap-2">
+      <span className="w-5 shrink-0 text-right font-mono text-[11px] text-fg-muted">
+        {step.number}
+      </span>
+      <WorkflowRunStatusIcon
+        status={step.status}
+        conclusion={step.conclusion}
+      />
+      <span className="min-w-0 flex-1 truncate text-xs text-fg">
+        {step.name}
+      </span>
+    </li>
+  );
+}
+
+function formatRunDuration(
+  startedAt: string,
+  status: string,
+  updatedAt: string,
+): string {
+  const start = toUnixSeconds(startedAt);
+  if (start <= 0) return "";
+  const completed = status.toLowerCase() === "completed";
+  const end = completed
+    ? toUnixSeconds(updatedAt) || Math.floor(Date.now() / 1000)
+    : Math.floor(Date.now() / 1000);
+  return formatDurationSeconds(Math.max(0, end - start));
+}
+
+function formatDurationSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  if (minutes < 60) return rem === 0 ? `${minutes}m` : `${minutes}m ${rem}s`;
+  const hours = Math.floor(minutes / 60);
+  const minRem = minutes % 60;
+  return minRem === 0 ? `${hours}h` : `${hours}h ${minRem}m`;
+}
+
+function formatJobDuration(
+  startedAt: string | null,
+  completedAt: string | null,
+): string {
+  if (!startedAt) return "";
+  const start = toUnixSeconds(startedAt);
+  if (start <= 0) return "";
+  const end = completedAt ? toUnixSeconds(completedAt) : Math.floor(Date.now() / 1000);
+  return formatDurationSeconds(Math.max(0, end - start));
+}
+
+function WorkflowRunStatusIcon({
+  status,
+  conclusion,
+}: {
+  status: string;
+  conclusion: string | null;
+}) {
+  const s = status.toLowerCase();
+  if (s !== "completed") {
+    if (s === "queued" || s === "pending" || s === "waiting" || s === "requested") {
+      return (
+        <CircleDashed size={14} className="shrink-0 text-fg-muted" />
+      );
+    }
+    // in_progress and anything else still running
+    return (
+      <Loader2
+        size={14}
+        className="shrink-0 animate-spin text-accent"
+      />
+    );
+  }
+  switch ((conclusion ?? "").toLowerCase()) {
+    case "success":
+      return <CircleCheck size={14} className="shrink-0 text-emerald-400" />;
+    case "failure":
+    case "timed_out":
+    case "startup_failure":
+      return <CircleX size={14} className="shrink-0 text-rose-400" />;
+    case "cancelled":
+      return <MinusCircle size={14} className="shrink-0 text-fg-muted" />;
+    case "action_required":
+      return <CircleAlert size={14} className="shrink-0 text-amber-400" />;
+    case "skipped":
+    case "neutral":
+      return <MinusCircle size={14} className="shrink-0 text-fg-muted" />;
+    default:
+      return <CircleDashed size={14} className="shrink-0 text-fg-muted" />;
+  }
+}
+
 function NoAccessBanner({
   slug,
   accounts,
@@ -1669,7 +2301,7 @@ function PrRow({
   /**
    * Render the author's GitHub avatar to the left of the row. Bumps the
    * row's vertical footprint slightly in exchange for at-a-glance author
-   * recognition. Controlled by the `pullRequests.showAvatars` setting.
+   * recognition. Controlled by the `github.showAvatars` setting.
    */
   showAvatar?: boolean;
 }) {
@@ -1785,9 +2417,7 @@ function PullRequestSearchModal({
   onOpenDetail: (number: number) => void;
 }) {
   const repoPath = open?.repoPath ?? null;
-  const showAvatars = useSettings(
-    (s) => s.settings.pullRequests.showAvatars,
-  );
+  const showAvatars = useSettings((s) => s.settings.github.showAvatars);
   const [rawQuery, setRawQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("all");

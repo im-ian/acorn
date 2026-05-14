@@ -283,6 +283,8 @@ pub fn run() {
             commands::close_pull_request,
             commands::update_pull_request_body,
             commands::generate_pr_commit_message,
+            commands::list_workflow_runs,
+            commands::get_workflow_run_detail,
             commands::pty_spawn,
             commands::pty_write,
             commands::pty_resize,

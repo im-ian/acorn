@@ -55,7 +55,6 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   },
 ];
 
-import type { PrStateFilter } from "./types";
 
 /**
  * Allowed PRs-tab refresh intervals shown in the Settings UI. Picked to
@@ -221,15 +220,13 @@ export interface AcornSettings {
     showWorkingDirectory: boolean;
     showMemory: boolean;
   };
-  pullRequests: {
-    /** Tab pre-selected when the PRs panel first mounts for a repo. */
-    defaultState: PrStateFilter;
-    /** Auto-refresh cadence for the PRs tab in milliseconds. */
+  github: {
+    /** Auto-refresh cadence for the PRs and Actions tabs in milliseconds. */
     refreshIntervalMs: number;
     /**
-     * Show the author's GitHub avatar on each PR row. Trades a thicker
-     * row for at-a-glance author recognition, mirroring the PR detail
-     * modal which already shows avatars in its header / conversation.
+     * Show the author's GitHub avatar on PR rows. Trades a thicker row
+     * for at-a-glance author recognition, mirroring the PR detail modal
+     * which already shows avatars in its header / conversation.
      */
     showAvatars: boolean;
   };
@@ -329,8 +326,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     showWorkingDirectory: true,
     showMemory: true,
   },
-  pullRequests: {
-    defaultState: "open",
+  github: {
     refreshIntervalMs: 60_000,
     showAvatars: true,
   },
@@ -376,13 +372,6 @@ const VALID_AGENTS = new Set<AgentProvider>([
   "ollama",
   "llm",
   "codex",
-]);
-
-const VALID_PR_STATES = new Set<PrStateFilter>([
-  "open",
-  "closed",
-  "merged",
-  "all",
 ]);
 
 const VALID_PR_INTERVALS = new Set<number>(
@@ -458,13 +447,6 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   return Math.max(1.0, Math.min(2.0, v));
 }
 
-function normalizePrState(v: unknown, fallback: PrStateFilter): PrStateFilter {
-  if (typeof v === "string" && VALID_PR_STATES.has(v as PrStateFilter)) {
-    return v as PrStateFilter;
-  }
-  return fallback;
-}
-
 function normalizePrInterval(v: unknown, fallback: number): number {
   if (typeof v === "number" && VALID_PR_INTERVALS.has(v)) return v;
   return fallback;
@@ -525,13 +507,21 @@ interface LegacyCommitMessage {
   llmModel?: string;
 }
 
+interface LegacyPullRequests {
+  refreshIntervalMs?: number;
+  showAvatars?: boolean;
+}
+
 function loadSettings(): AcornSettings {
   if (typeof localStorage === "undefined") return DEFAULT_SETTINGS;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw) as
-      | (Partial<AcornSettings> & { commitMessage?: LegacyCommitMessage })
+      | (Partial<AcornSettings> & {
+          commitMessage?: LegacyCommitMessage;
+          pullRequests?: LegacyPullRequests;
+        })
       | null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
@@ -660,19 +650,22 @@ function loadSettings(): AcornSettings {
         ...DEFAULT_SETTINGS.statusBar,
         ...(parsed.statusBar ?? {}),
       },
-      pullRequests: {
-        defaultState: normalizePrState(
-          parsed.pullRequests?.defaultState,
-          DEFAULT_SETTINGS.pullRequests.defaultState,
-        ),
+      github: {
+        // Backwards compat: legacy persisted settings store these fields
+        // under `pullRequests`. Fall through to that key when the new
+        // `github` slot is missing so existing users don't lose their
+        // refresh interval / avatar toggle on first launch after rename.
         refreshIntervalMs: normalizePrInterval(
-          parsed.pullRequests?.refreshIntervalMs,
-          DEFAULT_SETTINGS.pullRequests.refreshIntervalMs,
+          parsed.github?.refreshIntervalMs ??
+            parsed.pullRequests?.refreshIntervalMs,
+          DEFAULT_SETTINGS.github.refreshIntervalMs,
         ),
         showAvatars:
-          typeof parsed.pullRequests?.showAvatars === "boolean"
-            ? parsed.pullRequests.showAvatars
-            : DEFAULT_SETTINGS.pullRequests.showAvatars,
+          typeof parsed.github?.showAvatars === "boolean"
+            ? parsed.github.showAvatars
+            : typeof parsed.pullRequests?.showAvatars === "boolean"
+              ? parsed.pullRequests.showAvatars
+              : DEFAULT_SETTINGS.github.showAvatars,
       },
       sessionDisplay: {
         title: normalizeSessionTitle(
@@ -746,7 +739,7 @@ interface SettingsState {
     },
   ) => void;
   patchStatusBar: (patch: Partial<AcornSettings["statusBar"]>) => void;
-  patchPullRequests: (patch: Partial<AcornSettings["pullRequests"]>) => void;
+  patchGithub: (patch: Partial<AcornSettings["github"]>) => void;
   patchSessionDisplay: (
     patch: Partial<
       Omit<AcornSettings["sessionDisplay"], "metadata" | "icons">
@@ -850,11 +843,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
       persist(next);
       return { settings: next };
     }),
-  patchPullRequests: (patch) =>
+  patchGithub: (patch) =>
     set((s) => {
       const next: AcornSettings = {
         ...s.settings,
-        pullRequests: { ...s.settings.pullRequests, ...patch },
+        github: { ...s.settings.github, ...patch },
       };
       persist(next);
       return { settings: next };
