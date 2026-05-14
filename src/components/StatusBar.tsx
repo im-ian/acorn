@@ -116,6 +116,9 @@ export function StatusBar() {
   const showGithubAccount = useSettings(
     (s) => s.settings.statusBar.showGithubAccount,
   );
+  const showWorkingDirectory = useSettings(
+    (s) => s.settings.statusBar.showWorkingDirectory,
+  );
   const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
   const memory = useMemoryUsage(MEMORY_POLL_MS, showMemory);
@@ -183,7 +186,7 @@ export function StatusBar() {
               <span>branch: {active.branch}</span>
             </>
           ) : null}
-          {active && displayPath ? (
+          {showWorkingDirectory && active && displayPath ? (
             <>
               <span className="text-fg-muted/50">|</span>
               <Tooltip label={active.worktree_path} side="top" multiline>
