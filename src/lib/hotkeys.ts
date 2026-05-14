@@ -39,6 +39,11 @@ export const Hotkeys = {
   toggleCommits: "$mod+Shift+c",
   toggleStaged: "$mod+Shift+s",
   togglePrs: "$mod+Shift+p",
+  uiScaleDown: "$mod+-",
+  uiScaleDownShift: "$mod+Shift+Minus",
+  uiScaleUp: "$mod+=",
+  uiScaleUpShift: "$mod+Shift+Equal",
+  uiScaleReset: "$mod+0",
   toggleMultiInput: "$mod+Alt+i",
   focusPaneLeft: "$mod+Alt+ArrowLeft",
   focusPaneRight: "$mod+Alt+ArrowRight",
@@ -46,10 +51,7 @@ export const Hotkeys = {
   focusPaneDown: "$mod+Alt+ArrowDown",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
-  // Cmd+= mirrors VS Code's "Workbench: Toggle Centered Layout" pattern of
-  // using = for equal/centered actions. Avoid Cmd+Alt+0 which collides with
-  // browser zoom-reset behavior in some webviews.
-  equalizePanes: "$mod+=",
+  equalizePanes: "$mod+Alt+e",
   closeTab: "$mod+w",
   closeEmptyPane: "Escape",
   openSettings: "$mod+Comma",
