@@ -452,8 +452,8 @@ function renderAppMetaTooltip(
   if (app) {
     rows.push({ label: "Tab", value: app.name });
     rows.push({ label: "Branch", value: app.branch });
-    rows.push({ label: "Worktree", value: app.worktree_path });
     rows.push({ label: "Status", value: app.status });
+    rows.push({ label: "Worktree", value: app.worktree_path });
     if (app.last_message) {
       rows.push({ label: "Last", value: app.last_message });
     }
