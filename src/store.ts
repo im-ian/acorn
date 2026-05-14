@@ -6,8 +6,10 @@ import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideMod
 import {
   type Direction,
   type LayoutNode,
+  type PaneFocusDirection,
   type PaneId,
   type SplitSide,
+  findAdjacentPaneId,
   listPaneIds,
   makePaneNode,
   removePaneFromLayout,
@@ -66,6 +68,7 @@ interface AppStateModel {
    * resolver, so the value is in-memory only and never persisted.
    */
   pendingTerminalInput: Record<string, string>;
+  multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
   pendingRemoveId: string | null;
@@ -81,8 +84,19 @@ interface AppStateModel {
    * results in a non-empty backend session list.
    */
   sessionsLoadedCleanly: boolean;
+  /**
+   * Session ids whose *live* PTY cwd resolves inside a linked git worktree
+   * (`.git` is a file). Separate from `Session.in_worktree`, which only
+   * reflects the recorded `worktree_path` at spawn / adoption time — this
+   * map catches the user typing `cd /some/other/worktree` interactively.
+   * Populated event-driven (after `refreshSessions` and on window focus),
+   * never on an interval, so the batched probe stays cheap.
+   */
+  liveInWorktree: Record<string, boolean>;
   loadInitialStatus: () => Promise<void>;
   refreshSessions: () => Promise<void>;
+  /** Re-probe every session's live cwd in one batched backend call. */
+  refreshLiveInWorktree: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   refreshAll: () => Promise<void>;
   /** Probe session liveness via JSONL transcripts; updates session statuses
@@ -91,6 +105,7 @@ interface AppStateModel {
   selectSession: (id: string | null) => void;
   setActiveProject: (repoPath: string) => void;
   setFocusedPane: (paneId: PaneId) => void;
+  focusAdjacentPane: (direction: PaneFocusDirection) => void;
   splitFocusedPane: (direction: Direction) => void;
   closeFocusedTab: () => void;
   closePane: (paneId: PaneId) => void;
@@ -120,6 +135,7 @@ interface AppStateModel {
   setPendingTerminalInput: (sessionId: string, command: string) => void;
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => string | null;
+  toggleMultiInput: () => boolean;
 }
 
 let paneCounter = 0;
@@ -338,11 +354,13 @@ export const useAppStore = create<AppStateModel>()(
   rightTab: "commits",
   prAccountByRepo: {},
   pendingTerminalInput: {},
+  multiInputEnabled: false,
   loading: false,
   error: null,
   pendingRemoveId: null,
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
+  liveInWorktree: {},
 
   async loadInitialStatus() {
     try {
@@ -388,8 +406,22 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
         };
       });
+      void get().refreshLiveInWorktree();
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
+    }
+  },
+
+  async refreshLiveInWorktree() {
+    try {
+      const map = await api.ptyInWorktreeAll();
+      // Components do `s.liveInWorktree[id]`; null would crash that access.
+      // Backend returns an object in practice, but the mock fallback path
+      // (and any future RPC that returns null on degraded states) needs the
+      // guard to keep the store contract intact.
+      set({ liveInWorktree: map ?? {} });
+    } catch (e) {
+      console.debug("[store] refreshLiveInWorktree failed", e);
     }
   },
 
@@ -519,6 +551,21 @@ export const useAppStore = create<AppStateModel>()(
         if (!ws.panes[paneId]) return ws;
         if (ws.focusedPaneId === paneId) return ws;
         return { ...ws, focusedPaneId: paneId };
+      });
+      return patch ?? s;
+    });
+  },
+
+  focusAdjacentPane(direction) {
+    set((s) => {
+      const patch = updateActiveWorkspace(s, (ws) => {
+        const nextPaneId = findAdjacentPaneId(
+          ws.layout,
+          ws.focusedPaneId,
+          direction,
+        );
+        if (!nextPaneId || !ws.panes[nextPaneId]) return ws;
+        return { ...ws, focusedPaneId: nextPaneId };
       });
       return patch ?? s;
     });
@@ -981,6 +1028,15 @@ export const useAppStore = create<AppStateModel>()(
       return { pendingTerminalInput: rest };
     });
     return consumed;
+  },
+
+  toggleMultiInput() {
+    let enabled = false;
+    set((s) => {
+      enabled = !s.multiInputEnabled;
+      return { multiInputEnabled: enabled };
+    });
+    return enabled;
   },
     }),
     {

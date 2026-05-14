@@ -21,6 +21,13 @@
   background-color: transparent !important;
 }
 
+.acorn-terminal-inactive .xterm-cursor,
+.acorn-terminal-inactive .xterm-cursor.xterm-cursor-block {
+  outline: 1px solid color-mix(in oklab, var(--color-fg-muted) 70%, transparent);
+  background-color: transparent !important;
+  opacity: 0.55;
+}
+
 .acorn-terminal .xterm-scrollable-element > .scrollbar.vertical {
   width: 6px !important;
 }

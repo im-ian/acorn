@@ -44,6 +44,11 @@ export const Hotkeys = {
   uiScaleUp: "$mod+=",
   uiScaleUpShift: "$mod+Shift+Equal",
   uiScaleReset: "$mod+0",
+  toggleMultiInput: "$mod+Alt+i",
+  focusPaneLeft: "$mod+Alt+ArrowLeft",
+  focusPaneRight: "$mod+Alt+ArrowRight",
+  focusPaneUp: "$mod+Alt+ArrowUp",
+  focusPaneDown: "$mod+Alt+ArrowDown",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
   equalizePanes: "$mod+Alt+e",
@@ -68,6 +73,19 @@ export type HotkeyId = keyof typeof Hotkeys;
 export type HotkeyHandler = (event: KeyboardEvent) => void;
 
 export type HotkeyBindings = Record<string, HotkeyHandler>;
+
+type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
+
+function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in (window as TauriRuntimeWindow)
+  );
+}
+
+export function shouldUseTinykeysToggleMultiInputFallback(): boolean {
+  return !isTauriRuntime();
+}
 
 /**
  * Subscribes the given keybinding map to `window` for the lifetime of the

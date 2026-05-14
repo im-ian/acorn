@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Panel,
   PanelGroup,
@@ -25,7 +25,11 @@ import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { api } from "./lib/api";
-import { Hotkeys, useHotkeys } from "./lib/hotkeys";
+import {
+  Hotkeys,
+  shouldUseTinykeysToggleMultiInputFallback,
+  useHotkeys,
+} from "./lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import {
   startNotificationClickHandler,
@@ -73,6 +77,27 @@ function updateUiScalePercent(delta: number) {
   });
 }
 
+function focusPaneTerminal(paneId: string) {
+  const escaped =
+    typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(paneId)
+      : paneId.replace(/(["\\\]\[])/g, "\\$1");
+  const pane = document.querySelector(
+    `[data-pane-body="${escaped}"]`,
+  ) as HTMLElement | null;
+  const target =
+    (pane?.querySelector(".xterm-helper-textarea") as HTMLElement | null) ??
+    (pane?.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
+  target?.focus();
+}
+
+function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
+  useAppStore.getState().focusAdjacentPane(direction);
+  requestAnimationFrame(() => {
+    focusPaneTerminal(useAppStore.getState().focusedPaneId);
+  });
+}
+
 function App() {
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
@@ -94,6 +119,13 @@ function App() {
     : [];
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
+
+  const toggleMultiInput = useCallback(() => {
+    const enabled = useAppStore.getState().toggleMultiInput();
+    useToasts
+      .getState()
+      .show(enabled ? "Multi-input on." : "Multi-input off.");
+  }, []);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
   const themes = useThemes((s) => s.themes);
@@ -169,6 +201,41 @@ function App() {
     };
     document.addEventListener("focusin", handler);
     return () => document.removeEventListener("focusin", handler);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>("acorn:toggle-multi-input", () => {
+      toggleMultiInput();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach multi-input listener", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [toggleMultiInput]);
+
+  // Refresh the "live cwd is inside a linked worktree" map whenever the
+  // window regains focus — the user may have `cd`'d into a worktree (or
+  // out of one) while we were backgrounded, and the icon should reflect
+  // that without waiting for the next session-list refresh.
+  useEffect(() => {
+    const onFocus = () => {
+      void useAppStore.getState().refreshLiveInWorktree();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   // Sync the daemon killswitch from localStorage into the backend on
@@ -513,6 +580,27 @@ function App() {
       [Hotkeys.uiScaleReset]: (e: KeyboardEvent) => {
         e.preventDefault();
         useSettings.getState().patchAppearance({ uiScalePercent: 100 });
+      },
+      [Hotkeys.toggleMultiInput]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        if (!shouldUseTinykeysToggleMultiInputFallback()) return;
+        toggleMultiInput();
+      },
+      [Hotkeys.focusPaneLeft]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("left");
+      },
+      [Hotkeys.focusPaneRight]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("right");
+      },
+      [Hotkeys.focusPaneUp]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("up");
+      },
+      [Hotkeys.focusPaneDown]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("down");
       },
       [Hotkeys.splitVertical]: (e: KeyboardEvent) => {
         e.preventDefault();

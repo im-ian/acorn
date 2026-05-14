@@ -1,4 +1,5 @@
 mod agent_shim;
+mod claude_util;
 mod cli_resolver;
 mod commands;
 pub mod daemon;
@@ -15,9 +16,11 @@ mod scrollback;
 mod session;
 mod session_status;
 mod shell_env;
+mod shell_init;
 mod shell_util;
 mod state;
 mod todos;
+mod transcript_watcher;
 mod unified_diff;
 mod worktree;
 
@@ -90,6 +93,10 @@ pub fn run() {
                 .paste()
                 .select_all()
                 .build()?;
+            let multi_input_item = MenuItemBuilder::new("Toggle Multi Input")
+                .id("toggle-multi-input")
+                .accelerator("CmdOrCtrl+Alt+I")
+                .build(app)?;
             // Dev-only Reload (Cmd+R) so frontend edits that don't HMR cleanly
             // can be re-bootstrapped without restarting the whole Tauri host.
             // The release menu omits it on purpose — Acorn ships as a single
@@ -102,12 +109,18 @@ pub fn run() {
                 .build(app)?;
             #[cfg(debug_assertions)]
             let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&multi_input_item)
+                .separator()
                 .item(&reload_item)
                 .separator()
                 .fullscreen()
                 .build()?;
             #[cfg(not(debug_assertions))]
-            let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&multi_input_item)
+                .separator()
+                .fullscreen()
+                .build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
                 .maximize()
@@ -125,6 +138,11 @@ pub fn run() {
                 if event.id() == "settings" {
                     if let Err(err) = handle.emit("acorn:open-settings", ()) {
                         tracing::warn!("failed to emit open-settings: {err}");
+                    }
+                }
+                if event.id() == "toggle-multi-input" {
+                    if let Err(err) = handle.emit("acorn:toggle-multi-input", ()) {
+                        tracing::warn!("failed to emit toggle-multi-input: {err}");
                     }
                 }
                 #[cfg(debug_assertions)]
@@ -236,6 +254,7 @@ pub fn run() {
                     }
                 })
                 .ok();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -271,6 +290,8 @@ pub fn run() {
             commands::pty_reload_shell_env,
             commands::pty_cwd,
             commands::pty_repo_root,
+            commands::pty_in_worktree_all,
+            commands::is_path_linked_worktree,
             commands::update_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,
@@ -280,6 +301,8 @@ pub fn run() {
             commands::scrollback_orphan_clear,
             commands::read_session_todos,
             commands::detect_session_statuses,
+            commands::detect_session_agent,
+            commands::prepare_claude_fork,
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
