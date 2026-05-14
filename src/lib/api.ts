@@ -360,9 +360,22 @@ export const api = {
    */
   getClaudeResumeCandidate(
     sessionId: string,
-  ): Promise<ClaudeResumeCandidate | null> {
-    return invoke<ClaudeResumeCandidate | null>(
+  ): Promise<ResumeCandidate | null> {
+    return invoke<ResumeCandidate | null>(
       "get_claude_resume_candidate",
+      { sessionId },
+    );
+  },
+  /**
+   * Codex equivalent of `getClaudeResumeCandidate`. Returns the codex
+   * rollout UUID + preview the user is being offered to resume, or
+   * `null` when there's nothing to surface.
+   */
+  getCodexResumeCandidate(
+    sessionId: string,
+  ): Promise<ResumeCandidate | null> {
+    return invoke<ResumeCandidate | null>(
+      "get_codex_resume_candidate",
       { sessionId },
     );
   },
@@ -373,6 +386,10 @@ export const api = {
    */
   acknowledgeClaudeResume(sessionId: string): Promise<void> {
     return invoke<void>("acknowledge_claude_resume", { sessionId });
+  },
+  /** Codex equivalent of `acknowledgeClaudeResume`. */
+  acknowledgeCodexResume(sessionId: string): Promise<void> {
+    return invoke<void>("acknowledge_codex_resume", { sessionId });
   },
   /**
    * Write raw bytes to a session's PTY master (i.e. as if the user
@@ -397,7 +414,10 @@ function encodeStringToBase64(input: string): string {
   return btoa(binary);
 }
 
-export interface ClaudeResumeCandidate {
+/** Which user-invoked agent a resume candidate belongs to. */
+export type AgentKind = "claude" | "codex";
+
+export interface ResumeCandidate {
   /** JSONL transcript UUID the user is being offered to resume. */
   uuid: string;
   /** Unix seconds of the transcript file's mtime. `0` when unknown. */

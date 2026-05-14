@@ -5,7 +5,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
-use crate::agent_shim;
+use crate::agent_resume;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
@@ -847,36 +847,25 @@ pub async fn pty_spawn<R: Runtime>(
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
-    // `ACORN_RESUME_TOKEN` carries the Acorn session UUID. The shim no
-    // longer reads it (auto-resume is gated behind the focus-time
-    // modal), but the env var is left in place so user scripts that
-    // address the running Acorn session by UUID keep working.
-    // `ACORN_AGENT_STATE_DIR` is the per-session scratch directory
-    // both the claude and codex shims write their captured ids into
-    // (`claude.id`, `codex.id`) for the modal to read.
+    // `ACORN_RESUME_TOKEN` carries the Acorn session UUID. Older builds
+    // used the value inside a PATH-based shim to auto-inject claude's
+    // `--session-id`; the shim is gone (filesystem-watcher persister
+    // replaces it — see `agent_resume_persister`), but the env var is
+    // left in place so user scripts that address the running Acorn
+    // session by UUID keep working. `ACORN_AGENT_STATE_DIR` is no
+    // longer needed inside the PTY (the persister writes to the same
+    // path from the Rust side), but we keep it exposed so end-user
+    // scripts that wanted to introspect Acorn state can still do so.
     let resume_token = id.to_string();
     effective_env
         .entry("ACORN_RESUME_TOKEN".to_string())
         .or_insert_with(|| resume_token.clone());
-    if let Ok(state_dir) = crate::agent_shim::ensure_session_state_dir(id) {
+    if let Ok(state_dir) = crate::agent_resume::ensure_session_state_dir(id) {
         effective_env
             .entry("ACORN_AGENT_STATE_DIR".to_string())
             .or_insert_with(|| state_dir.display().to_string());
     } else {
-        tracing::warn!(%id, "agent state dir setup failed; codex shim will skip resume tracking");
-    }
-    if let Ok(shim_dir) = crate::agent_shim::ensure_shim_dir() {
-        let existing = effective_env
-            .get("PATH")
-            .cloned()
-            .or_else(|| std::env::var("PATH").ok())
-            .unwrap_or_default();
-        effective_env.insert(
-            "PATH".to_string(),
-            crate::ipc::cli_path::prepend_to_path(&shim_dir, &existing),
-        );
-    } else {
-        tracing::warn!(%id, "agent shim dir setup failed; claude/codex resume helpers will not be active");
+        tracing::warn!(%id, "agent state dir setup failed; resume modal will be inactive for this session");
     }
 
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
@@ -1689,12 +1678,28 @@ pub(crate) fn create_unique_worktree(
 pub fn get_claude_resume_candidate(
     state: State<'_, AppState>,
     session_id: String,
-) -> AppResult<Option<agent_shim::ClaudeResumeCandidate>> {
+) -> AppResult<Option<agent_resume::ResumeCandidate>> {
     let id = parse_id(&session_id)?;
-    if claude_is_running_in_session(&state, &id) {
+    if agent_is_running_in_session(&state, &id, "claude") {
         return Ok(None);
     }
-    agent_shim::claude_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+    agent_resume::claude_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Codex equivalent of `get_claude_resume_candidate`. Codex auto-resume
+/// (which the deleted shim used to perform) is gone; the user now picks
+/// the resume target through the modal whenever a fresh codex UUID lands
+/// in the per-session state file.
+#[tauri::command]
+pub fn get_codex_resume_candidate(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<agent_resume::ResumeCandidate>> {
+    let id = parse_id(&session_id)?;
+    if agent_is_running_in_session(&state, &id, "codex") {
+        return Ok(None);
+    }
+    agent_resume::codex_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
 }
 
 /// Mark the current `claude.id` as seen so the modal does not pop again
@@ -1704,13 +1709,20 @@ pub fn get_claude_resume_candidate(
 #[tauri::command]
 pub fn acknowledge_claude_resume(session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    agent_shim::acknowledge_claude_resume(id).map_err(|e| AppError::Other(e.to_string()))
+    agent_resume::acknowledge_claude_resume(id).map_err(|e| AppError::Other(e.to_string()))
 }
 
-/// `true` when a `claude` process is alive anywhere in the session's
-/// PTY descendant tree. Cheap process-table scan — fine on the focus
-/// path which fires at most a few times per second.
-fn claude_is_running_in_session(state: &AppState, session_id: &Uuid) -> bool {
+/// Codex equivalent of `acknowledge_claude_resume`.
+#[tauri::command]
+pub fn acknowledge_codex_resume(session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    agent_resume::acknowledge_codex_resume(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// `true` when a process matching `basename` is alive anywhere in the
+/// session's PTY descendant tree. Cheap process-table scan — fine on
+/// the focus path which fires at most a few times per second.
+fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &str) -> bool {
     let Some(root) = state
         .stream_registry
         .pid(session_id)
@@ -1718,14 +1730,16 @@ fn claude_is_running_in_session(state: &AppState, session_id: &Uuid) -> bool {
     else {
         return false;
     };
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new(),
-    );
+    // Refresh with exe + cmd populated — `ProcessRefreshKind::new()`
+    // alone gives an empty config on sysinfo 0.32, so `proc.exe()` and
+    // `proc.cmd()` come back as `None` and the basename match always
+    // fails. That silently flipped the suppression off and let the
+    // modal pop for sessions whose claude was still mid-conversation.
+    let refresh = ProcessRefreshKind::new()
+        .with_exe(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always);
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
     let mut frontier: Vec<Pid> = vec![Pid::from_u32(root)];
     let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();
     while let Some(pid) = frontier.pop() {
@@ -1733,7 +1747,7 @@ fn claude_is_running_in_session(state: &AppState, session_id: &Uuid) -> bool {
             continue;
         }
         if let Some(proc) = sys.process(pid) {
-            if is_claude_process(proc) {
+            if process_basename_matches(proc, basename) {
                 return true;
             }
         }
@@ -1746,19 +1760,32 @@ fn claude_is_running_in_session(state: &AppState, session_id: &Uuid) -> bool {
     false
 }
 
-/// Match `claude` by argv[0] basename. The shim itself is also named
-/// `claude`, but it `exec`s the real binary on every passthrough path
-/// and runs real claude as a child on the snapshot path — both leave a
-/// process called `claude` in the descendant tree when the user is
-/// actively chatting, so basename matching is enough.
-fn is_claude_process(proc: &sysinfo::Process) -> bool {
-    let argv = proc.cmd();
-    let Some(first) = argv.first() else {
-        return false;
-    };
-    let s = first.to_string_lossy();
-    let base = s.rsplit('/').next().unwrap_or(s.as_ref());
-    base == "claude"
+/// Match a process by `target` against any of: exe-path basename,
+/// `proc.name()`, or argv[0] basename. macOS `p_comm` is truncated to
+/// 16 chars and can land as a full path *or* a basename depending on
+/// how the process was invoked; sysinfo can also surface either form
+/// from `exe()` (resolved via `proc_pidinfo`). Checking every channel
+/// makes the detection robust against the user's `claude` binary
+/// being a Bun-compiled symlink target rather than a script.
+fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    let basename = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
+    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
+        if basename(exe) == target {
+            return true;
+        }
+    }
+    if let Some(name) = proc.name().to_str() {
+        if name == target || basename(name) == target {
+            return true;
+        }
+    }
+    if let Some(first) = proc.cmd().first() {
+        let s = first.to_string_lossy();
+        if basename(&s) == target {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {

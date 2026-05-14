@@ -16,7 +16,7 @@ import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
-import { ClaudeResumeModal } from "./components/ClaudeResumeModal";
+import { AgentResumeModal } from "./components/AgentResumeModal";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -26,7 +26,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { api, type ClaudeResumeCandidate } from "./lib/api";
+import { api, type AgentKind, type ResumeCandidate } from "./lib/api";
 import {
   Hotkeys,
   shouldUseTinykeysToggleMultiInputFallback,
@@ -107,10 +107,9 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const [resumeCandidate, setResumeCandidate] = useState<{
-    sessionId: string;
-    candidate: ClaudeResumeCandidate;
-  } | null>(null);
+  const [resumeCandidates, setResumeCandidates] = useState<
+    Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
+  >(new Map());
 
   const toggleMultiInput = useCallback(() => {
     const enabled = useAppStore.getState().toggleMultiInput();
@@ -154,41 +153,81 @@ function App() {
     appearance.background.applyToTerminal,
   ]);
 
-  // Probe the focused session for a "이전 Claude 대화" candidate. The
-  // backend already gates on (no claude.id, acknowledged, or claude
-  // currently running) so a `null` reply is the common case. We
-  // intentionally fire on every change of `activeSessionId` — including
-  // back-and-forth focus moves — because the user may have started a
-  // new claude in between, and the dedup is the `claude.id` ↔
-  // `claude.id.acknowledged` comparison the backend performs.
+  // Probe every persisted session for a "이전 대화" candidate exactly
+  // once per Acorn launch — at mount, not on focus. The intended UX is
+  // "boot Acorn after a system off-and-on, get a one-shot prompt per
+  // session to pick up where I left off", which includes sessions that
+  // live in non-focused panes (multi-pane layouts) where `activeSessionId`
+  // alone would never surface them. Results land in `resumeCandidates`
+  // keyed by session id; the rendered modal is a pure derivation of
+  // `activeSessionId × resumeCandidates`, so dismissal only needs to
+  // drop the entry — no separate "currently shown" state to keep in
+  // sync.
+  // Probe each session for a "이전 대화" candidate exactly once per
+  // Acorn launch. Per-session ref dedup so the effect re-firing when
+  // zustand pushes a new `sessions` array reference (boot rehydrate,
+  // reconcile, refresh) does NOT re-probe sessions we already checked.
+  // That dedup is what holds the "cold boot only" UX promise: after
+  // the user finishes a claude run and the persister updates
+  // `claude.id`, the in-memory map stays stable, so the modal never
+  // pops mid-session.
+  const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+  const resumeModalEnabled = useSettings(
+    (s) => s.settings.experiments.resumeModal,
+  );
+  const probedSessionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!activeSessionId) {
-      setResumeCandidate(null);
-      return;
-    }
-    let cancelled = false;
-    void api
-      .getClaudeResumeCandidate(activeSessionId)
-      .then((candidate) => {
-        if (cancelled) return;
-        if (candidate) {
-          setResumeCandidate({ sessionId: activeSessionId, candidate });
-        } else {
-          setResumeCandidate((prev) =>
-            prev?.sessionId === activeSessionId ? null : prev,
-          );
-        }
-      })
-      .catch((err: unknown) => {
-        console.error(
-          "[App] getClaudeResumeCandidate failed",
-          err,
+    if (!resumeModalEnabled) return;
+    const toProbe = sessionIds.filter(
+      (sid) => !probedSessionsRef.current.has(sid),
+    );
+    if (toProbe.length === 0) return;
+    // Mark *before* the await so a concurrent effect run (caused by
+    // the same `sessions` array re-emitting a new reference during
+    // boot) does not race to launch a duplicate probe for the same
+    // id. We deliberately do NOT use an `if (cancelled) return` gate
+    // on the `.then` — when the effect re-runs and cleans the prior
+    // run, the in-flight probe still needs to land its result, and
+    // the functional `setResumeCandidates(prev => ...)` is race-safe.
+    for (const sid of toProbe) probedSessionsRef.current.add(sid);
+    void Promise.all(
+      toProbe.map(async (sid) => {
+        const [claude, codex] = await Promise.all([
+          api.getClaudeResumeCandidate(sid).catch(() => null),
+          api.getCodexResumeCandidate(sid).catch(() => null),
+        ]);
+        const pick = pickResumeCandidate(claude, codex);
+        return pick ? ([sid, pick] as const) : null;
+      }),
+    )
+      .then((entries) => {
+        const additions = entries.filter(
+          (e): e is readonly [string, { agent: AgentKind; candidate: ResumeCandidate }] =>
+            e !== null,
         );
+        if (additions.length === 0) return;
+        setResumeCandidates((prev) => {
+          const next = new Map(prev);
+          for (const [sid, pick] of additions) next.set(sid, pick);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Best-effort probe — failures here just mean a session won't
+        // surface its modal on this boot. The next launch retries.
       });
-    return () => {
-      cancelled = true;
+  }, [sessionIds, resumeModalEnabled]);
+
+  const resumeCandidate = useMemo(() => {
+    if (!activeSessionId) return null;
+    const entry = resumeCandidates.get(activeSessionId);
+    if (!entry) return null;
+    return {
+      sessionId: activeSessionId,
+      agent: entry.agent,
+      candidate: entry.candidate,
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, resumeCandidates]);
 
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
@@ -728,10 +767,20 @@ function App() {
         }}
       />
       <SettingsModal />
-      <ClaudeResumeModal
+      <AgentResumeModal
         sessionId={resumeCandidate?.sessionId ?? ""}
+        agent={resumeCandidate?.agent ?? "claude"}
         candidate={resumeCandidate?.candidate ?? null}
-        onDismiss={() => setResumeCandidate(null)}
+        onDismiss={() => {
+          const dismissed = resumeCandidate?.sessionId;
+          if (!dismissed) return;
+          setResumeCandidates((prev) => {
+            if (!prev.has(dismissed)) return prev;
+            const next = new Map(prev);
+            next.delete(dismissed);
+            return next;
+          });
+        }}
       />
       <RemoveSessionDialog
         session={pendingRemove}
@@ -754,6 +803,26 @@ function App() {
       />
     </div>
   );
+}
+
+/**
+ * Decide which agent's resume candidate to show first when both are
+ * non-null. Larger `lastActivityUnix` wins so the user is offered the
+ * conversation they most recently touched. `lastActivityUnix === 0`
+ * means the transcript path could not be stat'd; treat as oldest.
+ */
+function pickResumeCandidate(
+  claude: ResumeCandidate | null,
+  codex: ResumeCandidate | null,
+): { agent: AgentKind; candidate: ResumeCandidate } | null {
+  if (claude && codex) {
+    return claude.lastActivityUnix >= codex.lastActivityUnix
+      ? { agent: "claude", candidate: claude }
+      : { agent: "codex", candidate: codex };
+  }
+  if (claude) return { agent: "claude", candidate: claude };
+  if (codex) return { agent: "codex", candidate: codex };
+  return null;
 }
 
 export default App;
