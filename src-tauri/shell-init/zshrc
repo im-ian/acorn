@@ -42,6 +42,14 @@ _acorn_prepend_path() {
 unset -f _acorn_prepend_path
 export PATH
 
+if [ -n "${ACORN_SESSION_ID-}" ] && [ -z "${ACORN_CONTROL_BANNER_SHOWN-}" ]; then
+    export ACORN_CONTROL_BANNER_SHOWN=1
+    printf '%s\n' \
+        'Acorn control session ready.' \
+        'Agents can run: acorn-ipc context' \
+        '"new session" means an Acorn sibling terminal session.'
+fi
+
 _acorn_osc7() {
     printf '\e]7;file://%s%s\e\\' "${HOST:-${HOSTNAME-localhost}}" "$PWD"
 }
