@@ -148,9 +148,7 @@ mod tests {
 
     #[test]
     fn staged_rev_is_nonempty_hex() {
-        // build.rs stamps `ACORN_STAGED_REV` as a 16-char hex FNV-1a
-        // digest. Both length and charset are part of the contract —
-        // reconcile code grep-matches on this format.
+        // 16-char lowercase hex — the format `build.rs` commits to.
         assert_eq!(STAGED_REV.len(), 16, "expected 16-char hex, got {:?}", STAGED_REV);
         assert!(
             STAGED_REV.chars().all(|c| c.is_ascii_hexdigit()),

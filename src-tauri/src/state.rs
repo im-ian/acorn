@@ -38,12 +38,9 @@ pub struct AppState {
     /// in-process routing on subsequent calls.
     pub stream_registry: Arc<StreamRegistry>,
     /// Result of the boot-time staged-dotfile reconcile. `Some` when
-    /// the daemon held PTYs from an older build with different rc
-    /// bodies, `None` when everything was in sync (or reconcile did
-    /// not run yet). Frontend pulls this via `staged_rev_mismatch_status`
-    /// at mount; the same `acorn:staged-rev-mismatch` event is also
-    /// emitted at the end of reconcile but the pull is what's
-    /// authoritative, so a listener registered after the emit still
+    /// the daemon owns PTYs spawned against older rc bodies; `None`
+    /// when in sync or reconcile has not run. Frontend pulls this at
+    /// mount so a listener registered after the matching emit still
     /// sees the prompt.
     pub staged_rev_mismatch: Arc<Mutex<Option<StagedRevMismatch>>>,
 }

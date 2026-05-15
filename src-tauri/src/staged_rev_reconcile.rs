@@ -1,21 +1,17 @@
 //! Boot-time staged-dotfile reconcile.
 //!
-//! `acornd` may still own PTY sessions spawned by an older Acorn build
-//! whose staged zsh dotfiles were different. Reattaching to those PTYs
-//! leaves the user typing into a ZLE wired up against the old `.zshrc`
-//! while the new body is materialised on disk — surfaces as duplicated
+//! `acornd` outlives the Acorn app, so a pulled-in update with a new
+//! `shell-init/` body leaves the daemon attached to PTYs running
+//! against the previous `.zshrc`. The user types into a ZLE that
+//! disagrees with the on-disk dotfile — surfaces as duplicated
 //! keystrokes / broken prompt redraws.
 //!
 //! Compare each alive daemon session's `staged_rev` against the
-//! current [`shell_init::STAGED_REV`](crate::shell_init::STAGED_REV).
-//! Any mismatch emits an `acorn:staged-rev-mismatch` event the
-//! frontend prompts on; the user-confirmed restart path is
-//! `daemon_restart` (which respawns every session against the new
-//! dotfiles).
-//!
-//! Sessions with `staged_rev == None` are also treated as stale —
-//! they were spawned by a build that pre-dates the fingerprint and
-//! therefore can't be proven up-to-date.
+//! build's [`shell_init::STAGED_REV`](crate::shell_init::STAGED_REV);
+//! any mismatch (including legacy `staged_rev == None` from
+//! pre-fingerprint builds) emits `acorn:staged-rev-mismatch` and
+//! caches the result on `AppState` so the frontend prompt can pull
+//! it at mount.
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -32,14 +28,11 @@ pub struct StagedRevMismatch {
 }
 
 /// Compare the daemon's session staged-revs against the build's
-/// `STAGED_REV`. On mismatch, both store the result in `state` (so
-/// the frontend can pull it via `commands::staged_rev_mismatch_status`
-/// at mount — defeating the listener-mount race) and emit
-/// [`EVENT_STAGED_REV_MISMATCH`] for already-mounted listeners.
-///
-/// Always overwrites `state.staged_rev_mismatch` — clearing it back
-/// to `None` when reconcile finds nothing stale, so a `daemon_restart`
-/// followed by a re-reconcile correctly retracts an earlier prompt.
+/// `STAGED_REV`. Store the result on `state` (pulled at mount via
+/// `commands::staged_rev_mismatch_status` — defeats the listener
+/// race) and emit [`EVENT_STAGED_REV_MISMATCH`] for already-mounted
+/// listeners. Both branches overwrite the cache, so a re-reconcile
+/// that finds nothing stale correctly retracts an earlier prompt.
 pub fn reconcile<R: Runtime>(app: &AppHandle<R>, state: &AppState, bridge: &DaemonBridge) {
     if !bridge.is_enabled() {
         *state.staged_rev_mismatch.lock() = None;

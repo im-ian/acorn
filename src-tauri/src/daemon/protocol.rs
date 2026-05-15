@@ -326,11 +326,8 @@ pub struct SessionSummary {
     pub is_source: bool,
     /// Fingerprint of the staged zsh dotfile bodies the session was
     /// spawned against (see `shell_init::STAGED_REV`). `None` for
-    /// sessions spawned by builds that pre-date the fingerprint, or
-    /// when the spawn caller did not pass `ACORN_STAGED_REV` in
-    /// `SpawnSpec.env`. The app reconcile compares this against its
-    /// own `STAGED_REV` on boot — a mismatch means the live PTY is
-    /// running against stale rc bodies and should be force-respawned.
+    /// sessions spawned by builds that pre-date the fingerprint —
+    /// treated as stale by the app reconcile.
     #[serde(default)]
     pub staged_rev: Option<String>,
 }

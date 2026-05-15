@@ -259,14 +259,10 @@ pub fn run() {
                         tracing::warn!(error = %err, "daemon boot spawn failed");
                         return;
                     }
-                    // The daemon may still hold PTYs spawned by an
-                    // older Acorn build with different staged
-                    // dotfile bodies; reattaching would let the user
-                    // type into a ZLE wired against stale rc files.
-                    // Cache the result on AppState so the frontend
-                    // pull (`staged_rev_mismatch_status`) wins even
-                    // when the matching listener mounts after the
-                    // emit.
+                    // Detect stale daemon sessions (older `shell-init/`
+                    // bodies); the reconcile caches its verdict on
+                    // AppState so the frontend prompt survives a
+                    // listener-mount-after-emit race.
                     staged_rev_reconcile::reconcile(
                         &app_for_boot,
                         &state_for_boot,

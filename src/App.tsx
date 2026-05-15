@@ -161,13 +161,10 @@ function App() {
   }, [refreshThemes]);
 
   useEffect(() => {
-    // Boot-time reconcile result lands in two places: a one-shot
-    // emit (caught by the listener below) and the AppState cache
-    // (pulled here at mount). The cache makes us race-proof — if
-    // the daemon boot thread emits before this listener attaches,
-    // the pull still finds the stored result. Each subsequent
-    // reconcile (e.g. after `daemon_restart`) updates the cache
-    // and re-emits, so both paths converge.
+    // Pull at mount + listen. The pull defeats a listener-mount-
+    // after-emit race: if the daemon boot thread reconciled before
+    // this effect attached, the AppState cache still holds the
+    // result.
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
     void api

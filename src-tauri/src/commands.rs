@@ -865,13 +865,10 @@ pub async fn pty_spawn<R: Runtime>(
             .or_insert_with(|| home.to_string_lossy().into_owned());
     }
 
-    // Stamp every PTY child with the staged-dotfile fingerprint. The
-    // daemon stores this on its `DaemonSession` row and surfaces it
-    // back via `ListSessions`, so a reboot-time reconcile can spot a
-    // session that survived from an older build (different staged rc
-    // bodies) and force-respawn it before the user types into a ZLE
-    // that has stale dotfile state. Always overwritten — callers do
-    // not get to forge a stale rev.
+    // Stamp the staged-dotfile fingerprint so the daemon can store
+    // it per session and the app's boot reconcile can spot sessions
+    // that survived from an older build. Always overwrites — callers
+    // do not get to forge a stale rev.
     effective_env.insert(
         "ACORN_STAGED_REV".to_string(),
         crate::shell_init::STAGED_REV.to_string(),

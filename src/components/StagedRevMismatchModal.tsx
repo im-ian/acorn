@@ -10,22 +10,11 @@ interface StagedRevMismatchModalProps {
 }
 
 /**
- * Boot-time prompt shown when `acornd` still owns PTY sessions that
- * were spawned against a different staged-dotfile revision than the
- * running build (typically: user pulled a new Acorn build whose
- * `shell-init/` rc bodies differ, but the daemon survived the app
- * update). Reattaching to those PTYs leaves the user typing into a
- * ZLE wired up against the old `.zshrc`, surfacing as duplicated
+ * Boot-time prompt shown when `acornd` still owns PTY sessions
+ * spawned against an older `shell-init/` revision than the running
+ * build. Reattaching to those PTYs leaves the user typing into a
+ * ZLE wired up against the old `.zshrc` — surfaces as duplicated
  * keystrokes / broken prompt redraws.
- *
- * Two paths out:
- *
- * - **Restart sessions**: ask the daemon to shut down (kills every
- *   stale PTY) then reload the webview so Terminal components
- *   re-mount and re-spawn against the new dotfiles via the freshly
- *   started daemon.
- * - **Later**: acknowledge so the prompt does not re-pop within
- *   the session; the same check fires on next app boot.
  */
 export function StagedRevMismatchModal({
   mismatch,
