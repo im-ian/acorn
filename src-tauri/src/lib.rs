@@ -17,6 +17,7 @@ mod pull_requests;
 mod scrollback;
 mod session;
 mod session_status;
+mod shell_args;
 mod shell_env;
 mod shell_init;
 mod shell_util;

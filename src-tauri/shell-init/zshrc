@@ -1,32 +1,57 @@
-# Acorn zsh init.
+# Acorn zsh interactive init.
 #
-# Sourced because Acorn sets `ZDOTDIR` to its own staged dir before spawning
-# the PTY. This file restores the user's real `ZDOTDIR`, sources their
-# `.zshrc` so their configuration still runs, then appends an OSC 7
-# emitter so the terminal learns the live cwd after every command without
-# the host having to poll `proc_pidinfo`.
+# Sourced because Acorn sets `ZDOTDIR` to its own staged dir before
+# spawning the PTY. zsh resolves `.zshrc` (and `.zprofile` / `.zlogin`)
+# off `$ZDOTDIR`, so without this file the user's real `.zshrc` would
+# be skipped.
 #
-# OSC 7 (`\e]7;file://<host><pwd>\e\\`) is the de-facto "current directory"
-# protocol shared by iTerm2, GNOME Terminal, Wezterm, Kitty, VS Code, etc.
-# Acorn's xterm.js handler treats every emit as the new live cwd for the
-# session and updates the worktree-icon condition in O(1) — no system scan.
+# Source the user's real `.zshrc` with `ZDOTDIR` temporarily pointing
+# at their dir (so any `$ZDOTDIR`-relative paths inside their rc keep
+# working), then restore Acorn's staged dir. `ACORN_USER_ZDOTDIR` is
+# preserved across this file because the staged `.zlogin` reads it
+# too; the `.zshenv` forwarder is the only place we permanently
+# rebase `ZDOTDIR`.
+#
+# After the user's rc runs we append an OSC 7 emitter so the host
+# learns the live cwd after every command without polling
+# `proc_pidinfo`, and re-prepend Acorn's IPC CLI directory in case
+# the user's rc reset `$PATH` entirely (`export PATH="…"` patterns).
+#
+# OSC 7 (`\e]7;file://<host><pwd>\e\\`) is the de-facto "current
+# directory" protocol shared by iTerm2, GNOME Terminal, Wezterm,
+# Kitty, VS Code, etc. Acorn's xterm.js handler treats every emit as
+# the new live cwd for the session and updates the worktree-icon
+# condition in O(1) — no system scan.
 
-if [ -n "${ACORN_USER_ZDOTDIR-}" ]; then
-    ZDOTDIR=$ACORN_USER_ZDOTDIR
-else
-    ZDOTDIR=$HOME
-fi
-unset ACORN_USER_ZDOTDIR
+_acorn_zd_save=$ZDOTDIR
+_acorn_user_zd=${ACORN_USER_ZDOTDIR:-$HOME}
+ZDOTDIR=$_acorn_user_zd
 [ -f "$ZDOTDIR/.zshrc" ] && source "$ZDOTDIR/.zshrc"
+ZDOTDIR=$_acorn_zd_save
+unset _acorn_zd_save _acorn_user_zd
+
+# Re-prepend Acorn-managed PATH entries if the user's rc replaced
+# PATH wholesale. Idempotent — duplicate entries are skipped.
+_acorn_prepend_path() {
+    case ":$PATH:" in
+        *":$1:"*) ;;
+        *) PATH=$1${PATH:+:$PATH} ;;
+    esac
+}
+[ -n "${ACORN_CLI_DIR-}" ] && _acorn_prepend_path "$ACORN_CLI_DIR"
+unset -f _acorn_prepend_path
+export PATH
 
 _acorn_osc7() {
     printf '\e]7;file://%s%s\e\\' "${HOST:-${HOSTNAME-localhost}}" "$PWD"
 }
-# precmd_functions is the canonical "run before each prompt" hook list in
-# zsh. typeset -gaU keeps it global, array-typed, and dedup'd so a repeated
-# `source` of this file (e.g. `exec zsh`) doesn't stack duplicate emitters.
+# precmd_functions is the canonical "run before each prompt" hook list
+# in zsh. `typeset -gaU` keeps it global, array-typed, and dedup'd so
+# a repeated `source` of this file (e.g. `exec zsh`) doesn't stack
+# duplicate emitters.
 typeset -gaU precmd_functions
 precmd_functions+=(_acorn_osc7)
-# Emit once immediately so the host gets the spawn cwd before the user runs
-# anything — without this, the icon waits for the first prompt.
+# Emit once immediately so the host gets the spawn cwd before the
+# user runs anything — without this, the icon waits for the first
+# prompt.
 _acorn_osc7

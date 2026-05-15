@@ -1,0 +1,19 @@
+# Acorn zsh login profile init.
+#
+# Acorn spawns the user's `$SHELL` with `-l` (matching macOS Terminal.app /
+# iTerm2 / VS Code), so zsh runs `.zprofile` before `.zshrc`. Because
+# Acorn redirects `ZDOTDIR` to its staged dir, zsh looks for `.zprofile`
+# there — without this file the user's real `.zprofile` (typically
+# `eval "$(/opt/homebrew/bin/brew shellenv)"`, `nvm`, `rbenv`, manual
+# PATH bootstrapping) would silently be skipped.
+#
+# Source the user's real `.zprofile` with `ZDOTDIR` temporarily pointing
+# at their dir, then restore Acorn's staged dir so subsequent stage
+# files (`.zshrc`, `.zlogin`) keep resolving to our forwarders.
+
+_acorn_zd_save=$ZDOTDIR
+_acorn_user_zd=${ACORN_USER_ZDOTDIR:-$HOME}
+ZDOTDIR=$_acorn_user_zd
+[ -f "$ZDOTDIR/.zprofile" ] && source "$ZDOTDIR/.zprofile"
+ZDOTDIR=$_acorn_zd_save
+unset _acorn_zd_save _acorn_user_zd
