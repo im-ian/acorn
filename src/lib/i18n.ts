@@ -28,6 +28,7 @@ type StringPath<T> = {
 }[keyof T & string];
 
 export type TranslationKey = StringPath<LocaleTree>;
+export type Translator = (key: TranslationKey) => string;
 
 const TRANSLATIONS: Record<Language, LocaleTree> = {
   en,
@@ -47,6 +48,6 @@ export function translate(language: Language, key: TranslationKey): string {
   return lookup(TRANSLATIONS[language], key);
 }
 
-export function createTranslator(language: Language) {
+export function createTranslator(language: Language): Translator {
   return (key: TranslationKey) => translate(language, key);
 }
