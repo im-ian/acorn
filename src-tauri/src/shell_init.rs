@@ -86,7 +86,6 @@ mod tests {
         assert!(body.contains("_acorn_osc7"));
         assert!(body.contains("precmd_functions"));
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
-        assert!(body.contains("ACORN_SHIM_DIR"));
         assert!(body.contains("ACORN_CLI_DIR"));
         // Restore ZDOTDIR before .zlogin runs (otherwise the staged
         // .zlogin would resolve to the user's dir on its own).

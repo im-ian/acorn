@@ -14,9 +14,8 @@
 #
 # After the user's rc runs we append an OSC 7 emitter so the host
 # learns the live cwd after every command without polling
-# `proc_pidinfo`, and re-prepend Acorn's shim / IPC CLI directories
-# in case the user's rc reset `$PATH` entirely (`export PATH="…"`
-# patterns).
+# `proc_pidinfo`, and re-prepend Acorn's IPC CLI directory in case
+# the user's rc reset `$PATH` entirely (`export PATH="…"` patterns).
 #
 # OSC 7 (`\e]7;file://<host><pwd>\e\\`) is the de-facto "current
 # directory" protocol shared by iTerm2, GNOME Terminal, Wezterm,
@@ -39,7 +38,6 @@ _acorn_prepend_path() {
         *) PATH=$1${PATH:+:$PATH} ;;
     esac
 }
-[ -n "${ACORN_SHIM_DIR-}" ] && _acorn_prepend_path "$ACORN_SHIM_DIR"
 [ -n "${ACORN_CLI_DIR-}" ] && _acorn_prepend_path "$ACORN_CLI_DIR"
 unset -f _acorn_prepend_path
 export PATH
