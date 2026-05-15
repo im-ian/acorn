@@ -27,6 +27,10 @@ import {
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
+import {
+  chooseWorktreeToAdoptAfterExit,
+  type WorktreeAdoptionIntent,
+} from "../lib/worktreeAdoption";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
 
@@ -995,11 +999,12 @@ export function Terminal({
 
     let exited = false;
     // Snapshot of linked worktrees taken right before each PTY spawn. On exit
-    // we re-fetch and compare; a fresh entry means the just-exited child
-    // (most often `claude --worktree`) added a worktree, and we adopt it as
-    // this session's new home instead of letting the user fall into the
-    // "press Enter to respawn in the same old cwd" dead end.
+    // we re-fetch and compare only when this spawn cycle carried an explicit
+    // adoption intent. A repo-global "new worktree appeared" diff is not
+    // enough evidence: another tab, agent, or external terminal may have
+    // created it while this shell was idle.
     let worktreeSnapshot: Set<string> = new Set();
+    let worktreeAdoptionIntent: WorktreeAdoptionIntent = { kind: "none" };
 
     async function spawnPty() {
       if (disposed) return;
@@ -1053,7 +1058,10 @@ export function Terminal({
         // mount/cleanup/mount sequence. Re-check `disposed` so we do not
         // pty_write into a session whose PTY has already been killed.
         if (queued && !disposed) {
-          const payload = encodeStringToBase64(queued + "\r");
+          if (queued.adoptWorktreeOnExit) {
+            worktreeAdoptionIntent = { kind: "after-exit" };
+          }
+          const payload = encodeStringToBase64(queued.command + "\r");
           invoke("pty_write", { sessionId, data: payload }).catch(
             (err: unknown) => {
               console.error("[Terminal] pending pty_write failed", err);
@@ -1111,25 +1119,20 @@ export function Terminal({
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
           if (disposed) return;
-          // Did the just-exited child add a new worktree? Most common cause:
-          // user ran `claude --worktree` (or typed `claude -w`), which on
-          // its own *creates the worktree and exits without putting you
-          // inside it*. Without this branch the user sees a silent exit
-          // and ends up trapped at the press-Enter prompt in the original
-          // cwd, defeating the point. Adopt the new worktree so the next
-          // spawn — triggered by the cwd-prop change after the store update
-          // — lands inside it.
+          // If Acorn queued a command that explicitly asked for worktree
+          // adoption, check whether that spawn cycle produced a new linked
+          // worktree. Plain user `exit` must not adopt unrelated worktrees
+          // created elsewhere in the same repo.
           void (async () => {
             let adoptedPath: string | null = null;
             try {
               const current = await api.gitWorktrees(cwd);
               if (disposed) return;
-              const fresh = current.filter((p) => !worktreeSnapshot.has(p));
-              if (fresh.length > 0) {
-                // Pick the last (most recently appended in libgit2's
-                // enumeration) when the child added several in one run.
-                adoptedPath = fresh[fresh.length - 1];
-              }
+              adoptedPath = chooseWorktreeToAdoptAfterExit({
+                before: [...worktreeSnapshot],
+                after: current,
+                intent: worktreeAdoptionIntent,
+              });
             } catch (err) {
               console.warn(
                 "[Terminal] worktree adoption check failed",
@@ -1137,6 +1140,7 @@ export function Terminal({
               );
             }
             if (disposed) return;
+            worktreeAdoptionIntent = { kind: "none" };
             if (adoptedPath) {
               const name = adoptedPath.split("/").pop() || adoptedPath;
               useToasts.getState().show(`Adopted new worktree: ${name}`);

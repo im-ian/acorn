@@ -311,6 +311,11 @@ pub struct SessionSummary {
     /// `true` while the PTY child is alive; `false` once it has exited.
     /// Dead sessions remain in metadata until `ForgetSession`.
     pub alive: bool,
+    /// Working directory the PTY child was spawned in. The app uses this
+    /// when reconstructing a daemon-owned session row so linked-worktree
+    /// sessions do not collapse back to the project root.
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
     pub repo_path: Option<std::path::PathBuf>,
     pub branch: Option<String>,
     pub agent_kind: Option<AgentKind>,
@@ -427,6 +432,27 @@ mod tests {
         let s = serde_json::to_string(&f).unwrap();
         let parsed: StreamFrame = serde_json::from_str(&s).unwrap();
         assert_eq!(parsed, f);
+    }
+
+    #[test]
+    fn session_summary_roundtrips_spawn_cwd() {
+        let summary = SessionSummary {
+            id: Uuid::new_v4(),
+            name: "shell".into(),
+            kind: SessionKind::Regular,
+            alive: true,
+            repo_path: Some("/repo".into()),
+            cwd: Some("/repo/.acorn/worktrees/feature".into()),
+            branch: Some("feature".into()),
+            agent_kind: None,
+            pid: Some(1234),
+            is_source: false,
+            staged_rev: Some("abc123".into()),
+        };
+
+        let s = serde_json::to_string(&summary).unwrap();
+        let parsed: SessionSummary = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed.cwd, summary.cwd);
     }
 
     #[test]

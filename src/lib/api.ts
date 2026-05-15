@@ -522,6 +522,7 @@ export interface DaemonSessionSummary {
   name: string;
   kind: "regular" | "control";
   alive: boolean;
+  cwd: string | null;
   repo_path: string | null;
   branch: string | null;
   agent_kind: string | null;
