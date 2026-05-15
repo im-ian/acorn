@@ -837,15 +837,33 @@ pub async fn pty_spawn<R: Runtime>(
     if state.pty.contains(&id) || state.stream_registry.contains(&id) {
         return Ok(());
     }
-    // Sessions always spawn the user's interactive `$SHELL`.
+    // Sessions always spawn the user's interactive `$SHELL` in login
+    // mode so `.zprofile` / `.bash_profile` / `.profile` run — matches
+    // macOS Terminal.app / iTerm2 / VS Code so the PTY feels identical
+    // to opening the user's native terminal.
     let resolved_command = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let resolved_args: Vec<String> = Vec::new();
+    let resolved_args: Vec<String> = crate::shell_args::login_args_for(&resolved_command);
     // Inject IPC env vars for control sessions so the user's shell (and any
     // agent it launches) can address the running app via the `acorn-ipc`
     // CLI without per-session configuration. Only control sessions get the
     // env; regular sessions stay sandboxed from the IPC surface.
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
+
+    // PTY children get the same SHELL/HOME their dotfiles expect to
+    // see. portable-pty inherits these from Acorn's own env in
+    // practice, but being explicit prevents drift when Acorn is
+    // launched by launchd (which sanitises HOME) or via a wrapper
+    // that overrode SHELL — both manifest as zsh refusing to honor
+    // `~` expansion or `$SHELL`-gated logic in user dotfiles.
+    effective_env
+        .entry("SHELL".to_string())
+        .or_insert_with(|| resolved_command.clone());
+    if let Some(home) = std::env::var_os("HOME") {
+        effective_env
+            .entry("HOME".to_string())
+            .or_insert_with(|| home.to_string_lossy().into_owned());
+    }
 
     // `ACORN_RESUME_TOKEN` carries the Acorn session UUID. Older builds
     // used the value inside a PATH-based shim to auto-inject claude's
@@ -927,6 +945,13 @@ pub async fn pty_spawn<R: Runtime>(
                     "PATH".to_string(),
                     crate::ipc::cli_path::prepend_to_path(&bin_dir, &existing),
                 );
+                // Expose the dir so the staged `.zshrc` can re-prepend
+                // the IPC CLI entry after the user's rc runs — covers
+                // `export PATH="…"` patterns that wipe Acorn's earlier
+                // prepend.
+                effective_env
+                    .entry("ACORN_CLI_DIR".to_string())
+                    .or_insert_with(|| bin_dir.display().to_string());
             }
             // Drop the primer in a worktree-local marker file so whichever
             // agent the user invokes inside the shell can read the IPC
