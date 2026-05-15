@@ -59,8 +59,16 @@ export const api = {
   addProject(repoPath: string): Promise<Project> {
     return invoke<Project>("add_project", { repoPath });
   },
-  createNewProject(parentPath: string, name: string): Promise<Project> {
-    return invoke<Project>("create_new_project", { parentPath, name });
+  createNewProject(
+    parentPath: string,
+    name: string,
+    ignoreSafeName = false,
+  ): Promise<Project> {
+    return invoke<Project>("create_new_project", {
+      parentPath,
+      name,
+      ignoreSafeName,
+    });
   },
   removeProject(
     repoPath: string,
