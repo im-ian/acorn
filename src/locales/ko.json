@@ -1,16 +1,30 @@
 {
-  "settings.title": "설정",
-  "settings.reset": "기본값으로 재설정",
-  "settings.tabs.terminal": "터미널",
-  "settings.tabs.agents": "에이전트",
-  "settings.tabs.sessions": "세션",
-  "settings.tabs.github": "GitHub",
-  "settings.tabs.appearance": "모양",
-  "settings.tabs.editor": "편집기",
-  "settings.tabs.notifications": "알림",
-  "settings.tabs.storage": "저장 공간",
-  "settings.tabs.experiments": "실험 기능",
-  "settings.tabs.about": "정보",
-  "settings.language.label": "언어",
-  "settings.language.hint": "Acorn 인터페이스에 사용할 언어입니다. 새 번역은 점진적으로 추가됩니다."
+  "settings": {
+    "title": "설정",
+    "reset": "기본값으로 재설정",
+    "tabs": {
+      "terminal": "터미널",
+      "agents": "에이전트",
+      "sessions": "세션",
+      "github": "GitHub",
+      "appearance": "모양",
+      "editor": "편집기",
+      "notifications": "알림",
+      "storage": "저장 공간",
+      "experiments": "실험 기능",
+      "about": "정보"
+    },
+    "language": {
+      "label": "언어",
+      "hint": "Acorn 인터페이스에 사용할 언어입니다. 새 번역은 점진적으로 추가됩니다."
+    }
+  },
+  "app": {},
+  "sidebar": {},
+  "pane": {},
+  "rightPanel": {},
+  "fileExplorer": {},
+  "dialogs": {},
+  "commandPalette": {},
+  "backgroundSessions": {}
 }
