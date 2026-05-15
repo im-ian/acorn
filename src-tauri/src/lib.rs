@@ -274,6 +274,7 @@ pub fn run() {
             commands::rename_session,
             commands::list_projects,
             commands::add_project,
+            commands::create_new_project,
             commands::remove_project,
             commands::reorder_projects,
             commands::reorder_sessions,

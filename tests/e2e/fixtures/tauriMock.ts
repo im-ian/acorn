@@ -30,6 +30,14 @@ export const tauriMockSource = `
   function appDefault(cmd) {
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
+    if (cmd === 'create_new_project') {
+      return Promise.resolve({
+        repo_path: '/tmp/new-project',
+        name: 'new-project',
+        created_at: '2026-01-01T00:00:00Z',
+        position: 0,
+      });
+    }
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
     if (cmd === 'detect_session_agent') {
       return Promise.resolve({ claude: null, codex: null });
