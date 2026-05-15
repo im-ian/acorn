@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::{AppHandle, Runtime, State};
@@ -484,6 +484,56 @@ pub fn add_project(state: State<'_, AppState>, repo_path: String) -> AppResult<P
     let project = state.projects.ensure(path.clone(), project_basename(&path));
     persist(&state);
     Ok(project)
+}
+
+#[tauri::command]
+pub fn create_new_project(
+    state: State<'_, AppState>,
+    parent_path: String,
+    name: String,
+) -> AppResult<Project> {
+    let name = validate_new_project_name(&name)?;
+    let parent = PathBuf::from(&parent_path);
+    if !parent.is_dir() {
+        return Err(AppError::InvalidPath(parent_path));
+    }
+    let parent = parent.canonicalize()?;
+    let target = parent.join(name);
+    if target.exists() {
+        return Err(AppError::Other(format!(
+            "project directory already exists: {}",
+            target.display()
+        )));
+    }
+
+    std::fs::create_dir(&target)?;
+    if let Err(err) = git2::Repository::init(&target) {
+        let _ = std::fs::remove_dir(&target);
+        return Err(AppError::Git(err));
+    }
+
+    let project = state.projects.ensure(target.clone(), project_basename(&target));
+    persist(&state);
+    Ok(project)
+}
+
+fn validate_new_project_name(name: &str) -> AppResult<&str> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Other("project name is required".into()));
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(AppError::Other(
+            "project name must be a single folder name".into(),
+        ));
+    }
+    let mut components = Path::new(trimmed).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(trimmed),
+        _ => Err(AppError::Other(
+            "project name must be a single folder name".into(),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -1820,7 +1870,7 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::font_name_from_path;
+    use super::{font_name_from_path, validate_new_project_name};
     use std::path::Path;
 
     #[test]
@@ -1837,5 +1887,19 @@ mod tests {
             font_name_from_path(Path::new("/tmp/GeistMono-ThinItalic.ttf")),
             Some("GeistMono".to_string())
         );
+    }
+
+    #[test]
+    fn validate_new_project_name_accepts_single_folder_name() {
+        assert_eq!(validate_new_project_name(" fresh-app ").unwrap(), "fresh-app");
+    }
+
+    #[test]
+    fn validate_new_project_name_rejects_path_like_names() {
+        assert!(validate_new_project_name("").is_err());
+        assert!(validate_new_project_name("../fresh-app").is_err());
+        assert!(validate_new_project_name("parent/fresh-app").is_err());
+        assert!(validate_new_project_name("parent\\fresh-app").is_err());
+        assert!(validate_new_project_name(".").is_err());
     }
 }
