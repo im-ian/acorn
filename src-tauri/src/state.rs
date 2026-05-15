@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 
 use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
+use crate::fs_explorer::WatcherState;
 use crate::ipc::server::IpcServerHandle;
 use crate::pty::PtyManager;
 use crate::session::{ProjectStore, SessionStore};
@@ -43,6 +44,10 @@ pub struct AppState {
     /// mount so a listener registered after the matching emit still
     /// sees the prompt.
     pub staged_rev_mismatch: Arc<Mutex<Option<StagedRevMismatch>>>,
+    /// Filesystem watcher for the right-panel file explorer. Holds a single
+    /// recursive watcher rooted at the active session's cwd; rebound by
+    /// `fs_watch_set_root` whenever the active tab (or its cwd) changes.
+    pub fs_watcher: Arc<WatcherState>,
 }
 
 impl AppState {
@@ -57,6 +62,7 @@ impl AppState {
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),
             staged_rev_mismatch: Arc::new(Mutex::new(None)),
+            fs_watcher: WatcherState::new(),
         }
     }
 }

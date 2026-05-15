@@ -492,7 +492,106 @@ export const api = {
     const encoded = encodeStringToBase64(data);
     return invoke<void>("pty_write", { sessionId, data: encoded });
   },
+  fsListDir(
+    path: string,
+    showHidden: boolean,
+    respectGitignore: boolean,
+  ): Promise<FsListResult> {
+    return invoke<FsListResult>("fs_list_dir", {
+      path,
+      showHidden,
+      respectGitignore,
+    });
+  },
+  fsRename(from: string, to: string): Promise<void> {
+    return invoke<void>("fs_rename", { from, to });
+  },
+  fsTrash(path: string): Promise<void> {
+    return invoke<void>("fs_trash", { path });
+  },
+  fsReveal(path: string): Promise<void> {
+    return invoke<void>("fs_reveal", { path });
+  },
+  fsOpenDefault(path: string): Promise<void> {
+    return invoke<void>("fs_open_default", { path });
+  },
+  fsShellEditor(): Promise<string> {
+    return invoke<string>("fs_shell_editor");
+  },
+  fsGitStatus(
+    repoRoot: string,
+  ): Promise<Record<string, FsGitStatusEntry>> {
+    return invoke<Record<string, FsGitStatusEntry>>("fs_git_status", {
+      repoRoot,
+    });
+  },
+  fsGitBranch(repoRoot: string): Promise<string> {
+    return invoke<string>("fs_git_branch", { repoRoot });
+  },
+  fsReadFile(path: string): Promise<FsReadFileResult> {
+    return invoke<FsReadFileResult>("fs_read_file", { path });
+  },
+  fsGitDiffLines(path: string): Promise<FsLineDiffEntry[]> {
+    return invoke<FsLineDiffEntry[]>("fs_git_diff_lines", { path });
+  },
+  fsWatchSetRoot(path: string | null): Promise<void> {
+    return invoke<void>("fs_watch_set_root", { path });
+  },
 };
+
+/** Mirror of `crate::fs_explorer::FileEntry`. */
+export interface FsEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size: number;
+  modified_ms: number;
+  gitignored: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::ListResult`. */
+export interface FsListResult {
+  entries: FsEntry[];
+  repo_root: string | null;
+}
+
+/** Event payload from the backend fs watcher. */
+export interface FsChangePayload {
+  paths: string[];
+}
+
+export const FS_CHANGED_EVENT = "acorn:fs-changed";
+
+/** Per-path git status bucket. Mirrors `crate::fs_explorer::classify_status`. */
+export type FsGitStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "conflicted"
+  | "clean";
+
+/** Mirror of `crate::fs_explorer::GitStatusEntry`. */
+export interface FsGitStatusEntry {
+  kind: FsGitStatus;
+  additions: number;
+  deletions: number;
+}
+
+/** Mirror of `crate::fs_explorer::ReadFileResult`. */
+export interface FsReadFileResult {
+  content: string;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::LineDiffEntry`. */
+export interface FsLineDiffEntry {
+  line: number;
+  kind: "added" | "modified" | "deleted";
+}
 
 function encodeStringToBase64(input: string): string {
   const bytes = new TextEncoder().encode(input);

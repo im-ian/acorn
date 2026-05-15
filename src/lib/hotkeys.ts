@@ -39,6 +39,7 @@ export const Hotkeys = {
   toggleCommits: "$mod+Shift+c",
   toggleStaged: "$mod+Shift+s",
   togglePrs: "$mod+Shift+p",
+  toggleFiles: "$mod+Shift+e",
   uiScaleDown: "$mod+-",
   uiScaleDownShift: "$mod+Shift+Minus",
   uiScaleUp: "$mod+=",

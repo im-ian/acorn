@@ -11,7 +11,7 @@ export type SessionStatus =
  * dispatch commands to other sessions in the same project. Persisted
  * sessions without this field load as `"regular"` from the backend.
  */
-export type SessionKind = "regular" | "control";
+export type SessionKind = "regular" | "control" | "viewer";
 
 export interface Session {
   id: string;

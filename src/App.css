@@ -124,6 +124,11 @@ textarea,
   user-select: text;
 }
 
+.acorn-selectable,
+.acorn-selectable * {
+  -webkit-user-drag: auto;
+}
+
 .acorn-terminal,
 .acorn-terminal * {
   cursor: text;

@@ -737,6 +737,23 @@ function App() {
         e.preventDefault();
         useAppStore.getState().setRightTab("prs");
       },
+      [Hotkeys.toggleFiles]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        const panel = rightPanelRef.current;
+        const state = useAppStore.getState();
+        if (!panel) {
+          state.setRightTab("files");
+          return;
+        }
+        if (panel.isCollapsed()) {
+          panel.expand();
+          state.setRightTab("files");
+        } else if (state.rightTab === "files") {
+          panel.collapse();
+        } else {
+          state.setRightTab("files");
+        }
+      },
       [Hotkeys.uiScaleDown]: (e: KeyboardEvent) => {
         e.preventDefault();
         updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
