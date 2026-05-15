@@ -20,6 +20,7 @@ import {
   createTranslator,
   LANGUAGE_OPTIONS,
   type Language,
+  type TranslationKey,
 } from "../lib/i18n";
 import { sendTestNotification } from "../lib/notifications";
 import {
@@ -68,7 +69,7 @@ type Tab =
   | "experiments"
   | "about";
 
-const TABS: Array<{ id: Tab; labelKey: string }> = [
+const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "terminal", labelKey: "settings.tabs.terminal" },
   { id: "agents", labelKey: "settings.tabs.agents" },
   { id: "sessions", labelKey: "settings.tabs.sessions" },
