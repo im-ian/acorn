@@ -175,6 +175,18 @@ function buildDirtyAncestors(
   return out;
 }
 
+/**
+ * POSIX shell-quote a path with single quotes. Inside `'…'` every byte
+ * except `'` is literal — even newlines, `!`, `$`, backticks. The only
+ * escape needed is closing the quote, inserting a literal `'`, and
+ * reopening: `'\''`. Safer than the double-quote + char-class regex
+ * dance because it cannot be defeated by history expansion or by an
+ * unescaped metacharacter that we forgot to list.
+ */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 function relativeTo(base: string, abs: string): string {
   const b = base.endsWith("/") ? base : base + "/";
   if (abs === base) return ".";
@@ -391,6 +403,16 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
   }, [rootPath]);
 
+  // The watcher listener needs the *current* cache to decide which
+  // directories to refresh, but rebinding the listener every cache
+  // write would tear down + recreate the Tauri subscription on every
+  // expand. Track the latest cache in a ref so the listener stays
+  // alive while still seeing fresh state inside its flush callback.
+  const cacheRef = useRef(cache);
+  useEffect(() => {
+    cacheRef.current = cache;
+  }, [cache]);
+
   // Listen for backend fs-changed events and refresh the parent dir of
   // each changed path. Backend emits raw notify events, no debouncing —
   // collapse here within a 100ms window to avoid refresh storms.
@@ -402,8 +424,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       flushTimer = null;
       const toFetch = Array.from(pending);
       pending.clear();
+      const current = cacheRef.current;
       for (const dir of toFetch) {
-        if (cache[dir] || dir === rootPath) {
+        if (current[dir] || dir === rootPath) {
           void fetchDir(dir);
         }
       }
@@ -421,7 +444,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (flushTimer) clearTimeout(flushTimer);
       if (cancel) cancel();
     };
-  }, [rootPath, fetchDir, cache, refreshGitStatus]);
+  }, [rootPath, fetchDir, refreshGitStatus]);
 
   const toggleDir = useCallback(
     (path: string) => {
@@ -460,8 +483,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         await api.fsOpenDefault(entry.path);
         return;
       }
-      const escaped = entry.path.replace(/(["\\$`])/g, "\\$1");
-      await api.ptyWrite(sid, `$EDITOR "${escaped}"\n`);
+      await api.ptyWrite(sid, `$EDITOR ${shellQuote(entry.path)}\n`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -684,7 +706,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (session) {
         state.setPendingTerminalInput(
           session.id,
-          `cd "${folderPath.replace(/(["\\$`])/g, "\\$1")}"\n`,
+          `cd ${shellQuote(folderPath)}\n`,
         );
       }
     } catch (e) {
@@ -1361,7 +1383,7 @@ function EntryRow({
           if (!entry.is_dir) {
             setFileDragPayload(e, { path: entry.path });
           }
-          const quoted = `"${entry.path.replace(/(["\\$`])/g, "\\$1")}"`;
+          const quoted = shellQuote(entry.path);
           try {
             e.dataTransfer.setData("text/plain", quoted);
             e.dataTransfer.setData("text/uri-list", `file://${entry.path}`);

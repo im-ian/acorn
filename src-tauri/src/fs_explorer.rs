@@ -171,6 +171,12 @@ pub fn fs_list_dir(
 }
 
 fn reject_dangerous(p: &Path) -> AppResult<()> {
+    // Require absolute paths so relative arguments cannot resolve against
+    // the process CWD (e.g., the app bundle) and overwrite something
+    // outside the user's intended folder.
+    if !p.is_absolute() {
+        return Err(AppError::InvalidPath("absolute path required".into()));
+    }
     for c in p.components() {
         if matches!(c, Component::ParentDir) {
             return Err(AppError::InvalidPath(
@@ -211,6 +217,7 @@ pub fn fs_trash(path: String) -> AppResult<()> {
 #[tauri::command]
 pub fn fs_reveal(path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
+    reject_dangerous(&p)?;
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
@@ -247,6 +254,7 @@ pub fn fs_reveal(path: String) -> AppResult<()> {
 #[tauri::command]
 pub fn fs_open_default(path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
+    reject_dangerous(&p)?;
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
@@ -435,6 +443,7 @@ const VIEWER_MAX_BYTES: u64 = 2 * 1024 * 1024;
 #[tauri::command]
 pub fn fs_read_file(path: String) -> AppResult<ReadFileResult> {
     let p = PathBuf::from(&path);
+    reject_dangerous(&p)?;
     if !p.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
@@ -479,6 +488,7 @@ pub struct LineDiffEntry {
 #[tauri::command]
 pub fn fs_git_diff_lines(path: String) -> AppResult<Vec<LineDiffEntry>> {
     let target = PathBuf::from(&path);
+    reject_dangerous(&target)?;
     if !target.is_file() {
         return Ok(Vec::new());
     }
