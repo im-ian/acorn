@@ -5,7 +5,9 @@ import {
   type AgentKind,
   type ResumeCandidate,
 } from "../lib/api";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal } from "./ui/Modal";
 import { ModalHeader } from "./ui/ModalHeader";
 
@@ -27,21 +29,25 @@ interface AgentResumeModalProps {
 
 interface AgentCopy {
   resumeCommand: (uuid: string) => string;
-  bodyParagraph: string;
+  bodyKey: DialogTranslationKey;
   ariaLabelledBy: string;
+}
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
 }
 
 const COPY: Record<AgentKind, AgentCopy> = {
   claude: {
     resumeCommand: (uuid) => `claude --resume ${uuid}`,
-    bodyParagraph:
-      "There's a Claude conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
+    bodyKey: "dialogs.agentResume.bodyClaude",
     ariaLabelledBy: "acorn-claude-resume-title",
   },
   codex: {
     resumeCommand: (uuid) => `codex resume ${uuid}`,
-    bodyParagraph:
-      "There's a Codex conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
+    bodyKey: "dialogs.agentResume.bodyCodex",
     ariaLabelledBy: "acorn-codex-resume-title",
   },
 };
@@ -65,12 +71,13 @@ export function AgentResumeModal({
   candidate,
   onDismiss,
 }: AgentResumeModalProps): ReactElement | null {
+  const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const copy = COPY[agent];
 
   const lastActivityLabel = useMemo(
-    () => formatRelativeTime(candidate?.lastActivityUnix ?? 0),
-    [candidate?.lastActivityUnix],
+    () => formatRelativeTime(candidate?.lastActivityUnix ?? 0, t),
+    [candidate?.lastActivityUnix, t],
   );
 
   if (!candidate) return null;
@@ -103,8 +110,8 @@ export function AgentResumeModal({
   const handleCopy = () => {
     void navigator.clipboard
       .writeText(candidate.uuid)
-      .then(() => showToast("Session ID copied"))
-      .catch(() => showToast("Failed to copy to clipboard"));
+      .then(() => showToast(dt(t, "dialogs.agentResume.sessionIdCopied")))
+      .catch(() => showToast(dt(t, "dialogs.agentResume.copyFailed")));
     onDismiss();
     ack();
   };
@@ -140,7 +147,7 @@ export function AgentResumeModal({
       ariaLabelledBy={copy.ariaLabelledBy}
     >
       <ModalHeader
-        title="Resume previous conversation"
+        title={dt(t, "dialogs.agentResume.title")}
         subtitle={lastActivityLabel}
         titleId={copy.ariaLabelledBy}
         icon={
@@ -152,7 +159,7 @@ export function AgentResumeModal({
         onClose={dismiss}
       />
       <div className="space-y-3 px-4 py-4 text-xs">
-        <p className="text-fg-muted">{copy.bodyParagraph}</p>
+        <p className="text-fg-muted">{dt(t, copy.bodyKey)}</p>
         {candidate.preview ? (
           <blockquote className="border-l-2 border-border-emphasis bg-bg-elevated/60 px-3 py-2 italic text-fg-muted">
             “{candidate.preview}”
@@ -168,7 +175,7 @@ export function AgentResumeModal({
           onClick={handleCancelWithHint}
           className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
-          Cancel
+          {dt(t, "dialogs.common.cancel")}
         </button>
         <button
           type="button"
@@ -176,7 +183,7 @@ export function AgentResumeModal({
           className="inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           <Copy size={12} />
-          Copy ID
+          {dt(t, "dialogs.agentResume.copyId")}
         </button>
         <button
           type="button"
@@ -184,24 +191,34 @@ export function AgentResumeModal({
           className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90"
         >
           <Play size={12} />
-          Resume
+          {dt(t, "dialogs.agentResume.resume")}
         </button>
       </footer>
     </Modal>
   );
 }
 
-function formatRelativeTime(unixSeconds: number): string {
-  if (unixSeconds <= 0) return "Last activity unknown";
+function formatRelativeTime(unixSeconds: number, t: Translator): string {
+  if (unixSeconds <= 0) return dt(t, "dialogs.agentResume.lastActivityUnknown");
   const nowMs = Date.now();
   const thenMs = unixSeconds * 1000;
   const diffSec = Math.max(0, Math.floor((nowMs - thenMs) / 1000));
-  if (diffSec < 60) return "Just now";
+  if (diffSec < 60) return dt(t, "dialogs.agentResume.justNow");
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `~${diffMin} min ago`;
+  if (diffMin < 60) {
+    return `~${diffMin} ${dt(t, "dialogs.agentResume.minutesAgo")}`;
+  }
   const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `~${diffHr} hr ago`;
+  if (diffHr < 24) {
+    return `~${diffHr} ${dt(t, "dialogs.agentResume.hoursAgo")}`;
+  }
   const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? "" : "s"} ago`;
+  if (diffDay < 7) {
+    return `${diffDay} ${
+      diffDay === 1
+        ? dt(t, "dialogs.agentResume.dayAgo")
+        : dt(t, "dialogs.agentResume.daysAgo")
+    }`;
+  }
   return new Date(thenMs).toLocaleDateString();
 }

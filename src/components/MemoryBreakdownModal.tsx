@@ -1,8 +1,16 @@
 import { useMemo } from "react";
 import type { MemoryProcess } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader } from "./ui";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface MemoryBreakdownModalProps {
   open: boolean;
@@ -115,6 +123,7 @@ export function MemoryBreakdownModal({
   processes,
   onClose,
 }: MemoryBreakdownModalProps) {
+  const t = useTranslation();
   useDialogShortcuts(open, {
     onCancel: onClose,
     onConfirm: onClose,
@@ -131,9 +140,9 @@ export function MemoryBreakdownModal({
       ariaLabelledBy="memory-breakdown-title"
     >
       <ModalHeader
-        title="Memory breakdown"
+        title={dt(t, "dialogs.memoryBreakdown.title")}
         titleId="memory-breakdown-title"
-        subtitle={`total (RSS, sum): ${formatBytes(totalBytes)} · ${processes.length} processes`}
+        subtitle={`${dt(t, "dialogs.memoryBreakdown.totalRssSum")}: ${formatBytes(totalBytes)} · ${processes.length} ${dt(t, "dialogs.memoryBreakdown.processes")}`}
         onClose={onClose}
       />
 
@@ -141,18 +150,26 @@ export function MemoryBreakdownModal({
         <table className="w-full font-mono text-xs">
           <thead className="sticky top-0 bg-bg-sidebar text-fg-muted">
             <tr className="border-b border-border">
-              <th className="px-4 py-2 text-left font-medium">PID</th>
-              <th className="px-4 py-2 text-left font-medium">Process tree</th>
-              <th className="px-4 py-2 text-right font-medium">RSS</th>
+              <th className="px-4 py-2 text-left font-medium">
+                {dt(t, "dialogs.memoryBreakdown.pid")}
+              </th>
+              <th className="px-4 py-2 text-left font-medium">
+                {dt(t, "dialogs.memoryBreakdown.processTree")}
+              </th>
+              <th className="px-4 py-2 text-right font-medium">
+                {dt(t, "dialogs.memoryBreakdown.rss")}
+              </th>
               <th className="px-4 py-2 text-right font-medium">
                 <Tooltip
-                  label="Sum of this process and all descendants"
+                  label={dt(t, "dialogs.memoryBreakdown.subtreeTooltip")}
                   side="bottom"
                 >
-                  <span>Subtree</span>
+                  <span>{dt(t, "dialogs.memoryBreakdown.subtree")}</span>
                 </Tooltip>
               </th>
-              <th className="px-4 py-2 text-right font-medium">Share</th>
+              <th className="px-4 py-2 text-right font-medium">
+                {dt(t, "dialogs.memoryBreakdown.share")}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -203,9 +220,7 @@ export function MemoryBreakdownModal({
       </div>
 
       <footer className="shrink-0 border-t border-border px-4 py-2 font-mono text-[11px] text-fg-muted">
-        Tree ordered by parent→child (DFS). Siblings sorted by subtree RSS desc.
-        Sum-of-RSS overcounts shared memory; WebView helpers and PTY children
-        (claude, node) included.
+        {dt(t, "dialogs.memoryBreakdown.footer")}
       </footer>
     </Modal>
   );
