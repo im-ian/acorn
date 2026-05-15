@@ -43,6 +43,28 @@ describe("chooseWorktreeToAdoptAfterExit", () => {
       }),
     ).toBeNull();
   });
+
+  it("adopts a fresh worktree observed as this session's live cwd", () => {
+    expect(
+      chooseWorktreeToAdoptAfterExit({
+        before,
+        after,
+        intent: { kind: "none" },
+        observedLinkedWorktreePath: "/repo/.claude/worktrees/fresh",
+      }),
+    ).toBe("/repo/.claude/worktrees/fresh");
+  });
+
+  it("does not adopt an unobserved fresh worktree", () => {
+    expect(
+      chooseWorktreeToAdoptAfterExit({
+        before,
+        after,
+        intent: { kind: "none" },
+        observedLinkedWorktreePath: "/repo/.claude/worktrees/other",
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("commandRequestsWorktreeAdoption", () => {

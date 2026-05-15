@@ -1373,13 +1373,18 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
 /// touching the system process table.
 #[tauri::command]
 pub fn is_path_linked_worktree(path: String) -> bool {
+    linked_worktree_root(path).is_some()
+}
+
+#[tauri::command]
+pub fn linked_worktree_root(path: String) -> Option<String> {
     let p = PathBuf::from(&path);
     let Ok(repo) = git2::Repository::discover(&p) else {
-        return false;
+        return None;
     };
     repo.workdir()
-        .map(worktree::is_linked_worktree_root)
-        .unwrap_or(false)
+        .filter(|workdir| worktree::is_linked_worktree_root(workdir))
+        .map(|workdir| workdir.to_string_lossy().into_owned())
 }
 
 /// Batched live-cwd → "is linked worktree" probe for every session that has

@@ -326,6 +326,15 @@ export const api = {
     return invoke<boolean>("is_path_linked_worktree", { path });
   },
   /**
+   * Resolve an arbitrary path to the root of its enclosing linked git
+   * worktree. Returns null when the path is outside git or belongs to the
+   * main checkout. Used to remember a session-specific adoption candidate
+   * without relying on repo-global worktree diffs alone.
+   */
+  linkedWorktreeRoot(path: string): Promise<string | null> {
+    return invoke<string | null>("linked_worktree_root", { path });
+  },
+  /**
    * Re-point a session at a different worktree directory. Used after an
    * in-PTY command creates a worktree and exits — adopting it lets the next
    * spawn land inside the new worktree instead of the original cwd.
