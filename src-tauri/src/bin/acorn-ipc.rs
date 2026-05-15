@@ -22,7 +22,9 @@ mod proto;
 #[path = "../ipc/socket_path.rs"]
 mod socket_path;
 
-use proto::{Envelope, ErrorCode, Request, Response, SessionSummary, PROTOCOL_VERSION};
+use proto::{
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
+};
 
 const ENV_SESSION_ID: &str = "ACORN_SESSION_ID";
 
@@ -57,6 +59,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print the Acorn control-session context an agent should load.
+    Context,
     /// List the sessions in your project, including this control session.
     ListSessions,
     /// Send raw keys to a target session. `<DATA>` is forwarded verbatim;
@@ -85,6 +89,10 @@ enum Command {
         /// command across two lines and never run it.
         #[arg(long)]
         enter: bool,
+        /// Allow touching a user-owned session or one owned by another control
+        /// session. Use only for direct user requests.
+        #[arg(long = "allow-foreign")]
+        allow_foreign: bool,
     },
     /// Print the recent output of a target session.
     ReadBuffer {
@@ -94,6 +102,10 @@ enum Command {
         /// Max bytes to fetch from the session's tail buffer (server cap: 4 MiB).
         #[arg(long, default_value_t = 65_536)]
         max_bytes: usize,
+        /// Allow reading a user-owned session or one owned by another control
+        /// session. Use only for direct user requests.
+        #[arg(long = "allow-foreign")]
+        allow_foreign: bool,
     },
     /// Create a new regular session in this project.
     NewSession {
@@ -102,18 +114,30 @@ enum Command {
         /// Create the session inside a fresh git worktree.
         #[arg(long)]
         isolated: bool,
+        /// Assign ownership for the created session: `me` (default) marks it as
+        /// this controller's worker; `user` opts out of controller ownership.
+        #[arg(long, value_parser = ["me", "user"])]
+        owner: Option<String>,
     },
     /// Focus a session in the app UI.
     SelectSession {
         /// UUID of the target session.
         #[arg(short = 't', long = "target")]
         target: String,
+        /// Allow focusing a user-owned session or one owned by another control
+        /// session. Use only for direct user requests.
+        #[arg(long = "allow-foreign")]
+        allow_foreign: bool,
     },
     /// Kill a session (close the PTY, drop the session from state).
     KillSession {
         /// UUID of the target session.
         #[arg(short = 't', long = "target")]
         target: String,
+        /// Allow killing a user-owned session or one owned by another control
+        /// session. Use only for direct user requests.
+        #[arg(long = "allow-foreign")]
+        allow_foreign: bool,
     },
     /// Report IPC reachability: socket path, file presence, and whether
     /// the in-app server accepts connections. No `ACORN_SESSION_ID`
@@ -188,12 +212,14 @@ fn main() -> ExitCode {
 
 fn build_request(cmd: &Command) -> Result<Request, String> {
     Ok(match cmd {
+        Command::Context => Request::Context,
         Command::ListSessions => Request::ListSessions,
         Command::SendKeys {
             target,
             data,
             raw_base64,
             enter,
+            allow_foreign,
         } => {
             let data_b64 = match (raw_base64, data) {
                 (Some(b64), _) => b64.clone(),
@@ -208,30 +234,51 @@ fn build_request(cmd: &Command) -> Result<Request, String> {
                     if *enter {
                         base64::engine::general_purpose::STANDARD.encode(b"\r")
                     } else {
-                        return Err(
-                            "send-keys needs --data, --raw-base64, or --enter".to_string()
-                        );
+                        return Err("send-keys needs --data, --raw-base64, or --enter".to_string());
                     }
                 }
             };
             Request::SendKeys {
                 target_session_id: target.clone(),
                 data_b64,
+                allow_foreign: *allow_foreign,
             }
         }
-        Command::ReadBuffer { target, max_bytes } => Request::ReadBuffer {
+        Command::ReadBuffer {
+            target,
+            max_bytes,
+            allow_foreign,
+        } => Request::ReadBuffer {
             target_session_id: target.clone(),
             max_bytes: Some(*max_bytes),
+            allow_foreign: *allow_foreign,
         },
-        Command::NewSession { name, isolated } => Request::NewSession {
+        Command::NewSession {
+            name,
+            isolated,
+            owner,
+        } => Request::NewSession {
             name: name.clone(),
             isolated: *isolated,
+            owner: match owner.as_deref() {
+                Some("user") => Some(NewSessionOwner::User),
+                Some("me") | None => None,
+                Some(other) => return Err(format!("unsupported --owner value: {other}")),
+            },
         },
-        Command::SelectSession { target } => Request::SelectSession {
+        Command::SelectSession {
+            target,
+            allow_foreign,
+        } => Request::SelectSession {
             target_session_id: target.clone(),
+            allow_foreign: *allow_foreign,
         },
-        Command::KillSession { target } => Request::KillSession {
+        Command::KillSession {
+            target,
+            allow_foreign,
+        } => Request::KillSession {
             target_session_id: target.clone(),
+            allow_foreign: *allow_foreign,
         },
         Command::Status => {
             // Routed before `build_request` in `main`. Reaching here means
@@ -276,7 +323,10 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     println!("socket:           {}", socket_path.display());
-    println!("socket file:      {}", if exists { "present" } else { "missing" });
+    println!(
+        "socket file:      {}",
+        if exists { "present" } else { "missing" }
+    );
     if reachable {
         println!("reachable:        yes");
     } else {
@@ -292,15 +342,18 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
 }
 
 fn send(path: &std::path::Path, envelope: &Envelope) -> Result<Response, String> {
-    let mut stream =
-        UnixStream::connect(path).map_err(|e| format!("connect: {e}"))?;
+    let mut stream = UnixStream::connect(path).map_err(|e| format!("connect: {e}"))?;
     let mut payload = serde_json::to_vec(envelope).map_err(|e| format!("encode: {e}"))?;
     payload.push(b'\n');
-    stream.write_all(&payload).map_err(|e| format!("write: {e}"))?;
+    stream
+        .write_all(&payload)
+        .map_err(|e| format!("write: {e}"))?;
     stream.flush().map_err(|e| format!("flush: {e}"))?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| format!("read: {e}"))?;
+    reader
+        .read_line(&mut line)
+        .map_err(|e| format!("read: {e}"))?;
     serde_json::from_str(line.trim_end()).map_err(|e| format!("decode: {e}"))
 }
 
@@ -319,12 +372,19 @@ fn render(response: &Response, json: bool) -> ExitCode {
         };
     }
     match response {
+        Response::Context { text } => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
         Response::Sessions { sessions } => {
             print_sessions(sessions);
             ExitCode::SUCCESS
         }
         Response::Ack => ExitCode::SUCCESS,
-        Response::Buffer { data_b64, truncated } => {
+        Response::Buffer {
+            data_b64,
+            truncated,
+        } => {
             match base64::engine::general_purpose::STANDARD.decode(data_b64) {
                 Ok(bytes) => {
                     let _ = std::io::stdout().write_all(&bytes);
@@ -356,13 +416,24 @@ fn print_sessions(sessions: &[SessionSummary]) {
         return;
     }
     let id_w = sessions.iter().map(|s| s.id.len()).max().unwrap_or(8);
-    let name_w = sessions.iter().map(|s| s.name.len()).max().unwrap_or(8).max(4);
+    let name_w = sessions
+        .iter()
+        .map(|s| s.name.len())
+        .max()
+        .unwrap_or(8)
+        .max(4);
     let kind_w = sessions
         .iter()
         .map(|s| s.kind.len())
         .max()
         .unwrap_or(7)
         .max(4);
+    let owner_w = sessions
+        .iter()
+        .map(|s| s.owner.len())
+        .max()
+        .unwrap_or(5)
+        .max(5);
     let status_w = sessions
         .iter()
         .map(|s| s.status.len())
@@ -370,21 +441,26 @@ fn print_sessions(sessions: &[SessionSummary]) {
         .unwrap_or(6)
         .max(6);
     println!(
-        "{marker} {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {status:<status_w$}  branch",
+        "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  branch",
         marker = " ",
+        mine = "MINE",
         id = "ID",
         name = "NAME",
         kind = "KIND",
+        owner = "OWNER",
         status = "STATUS",
     );
     for s in sessions {
         let marker = if s.is_source { "*" } else { " " };
+        let mine = if s.owned_by_me { "yes" } else { "no" };
         println!(
-            "{marker} {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {status:<status_w$}  {branch}",
+            "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {branch}",
             marker = marker,
+            mine = mine,
             id = s.id,
             name = s.name,
             kind = s.kind,
+            owner = s.owner,
             status = s.status,
             branch = s.branch,
         );
@@ -400,6 +476,7 @@ fn map_error_exit(code: ErrorCode) -> u8 {
         ErrorCode::OutOfScope => 4,
         ErrorCode::Invalid => 5,
         ErrorCode::Internal => 6,
+        ErrorCode::ForeignSession => 7,
     }
 }
 
@@ -422,6 +499,7 @@ mod tests {
             data: data.map(str::to_string),
             raw_base64: raw_base64.map(str::to_string),
             enter,
+            allow_foreign: false,
         })
     }
 
@@ -481,5 +559,42 @@ mod tests {
         assert!(msg.contains("--data"), "error should mention --data");
         assert!(msg.contains("--enter"), "error should mention --enter");
     }
-}
 
+    #[test]
+    fn context_command_builds_context_request() {
+        let req = build_request(&Command::Context).expect("build");
+        assert!(matches!(req, Request::Context));
+    }
+
+    #[test]
+    fn new_session_owner_user_is_forwarded() {
+        let req = build_request(&Command::NewSession {
+            name: "worker".to_string(),
+            isolated: false,
+            owner: Some("user".to_string()),
+        })
+        .expect("build");
+        match req {
+            Request::NewSession { owner, .. } => {
+                assert_eq!(owner, Some(NewSessionOwner::User));
+            }
+            other => panic!("expected new-session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_keys_allow_foreign_is_forwarded() {
+        let req = build_request(&Command::SendKeys {
+            target: "00000000-0000-0000-0000-000000000001".to_string(),
+            data: Some("ls".to_string()),
+            raw_base64: None,
+            enter: true,
+            allow_foreign: true,
+        })
+        .expect("build");
+        match req {
+            Request::SendKeys { allow_foreign, .. } => assert!(allow_foreign),
+            other => panic!("expected send-keys, got {other:?}"),
+        }
+    }
+}

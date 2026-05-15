@@ -427,7 +427,8 @@
     },
     "aria": {
       "worktree": "워크트리",
-      "closeSession": "세션 닫기"
+      "closeSession": "세션 닫기",
+      "closeTab": "탭 닫기"
     },
     "menu": {
       "rename": "이름 변경",
@@ -442,9 +443,12 @@
       "splitDown": "아래로 분할",
       "equalizePaneSizes": "패널 크기 균등화",
       "openWorktreeInEditor": "편집기에서 워크트리 열기",
+      "openFileInEditor": "편집기에서 파일 열기",
       "revealInFinder": "Finder에서 보기",
       "copyWorktreePath": "워크트리 경로 복사",
+      "copyFilePath": "파일 경로 복사",
       "copyWorktreeName": "워크트리 이름 복사",
+      "copyFileName": "파일 이름 복사",
       "copyBranchName": "브랜치 이름 복사",
       "copySessionId": "세션 ID 복사",
       "close": "닫기",

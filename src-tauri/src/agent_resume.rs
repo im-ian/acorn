@@ -319,6 +319,22 @@ fn extract_codex_preview(path: &Path) -> io::Result<Option<String>> {
         }
         let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else { continue };
 
+        if v.pointer("/payload/role").and_then(|r| r.as_str()) == Some("assistant") {
+            if let Some(content) = v.pointer("/payload/content").and_then(|c| c.as_array()) {
+                for item in content.iter().rev() {
+                    let text = item
+                        .get("text")
+                        .or_else(|| item.get("output_text"))
+                        .and_then(|t| t.as_str());
+                    if let Some(text) = text {
+                        if let Some(p) = collapse_preview(text) {
+                            return Ok(Some(p));
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(msg) = v
             .pointer("/payload/message")
             .and_then(|m| m.as_str())
@@ -456,6 +472,21 @@ mod tests {
         .unwrap();
         let candidate = result.expect("rotated UUID must re-surface");
         assert_eq!(candidate.uuid, "22222222-2222-2222-2222-222222222222");
+    }
+
+    #[test]
+    fn codex_preview_reads_response_item_output_text() {
+        let base = ScratchDir::new("codex-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Here is the latest Codex answer."}]}}"#,
+        )
+        .unwrap();
+
+        let preview = extract_codex_preview(&path).unwrap();
+
+        assert_eq!(preview.as_deref(), Some("Here is the latest Codex answer."));
     }
 
     #[test]

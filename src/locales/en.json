@@ -427,7 +427,8 @@
     },
     "aria": {
       "worktree": "worktree",
-      "closeSession": "Close session"
+      "closeSession": "Close session",
+      "closeTab": "Close tab"
     },
     "menu": {
       "rename": "Rename",
@@ -442,9 +443,12 @@
       "splitDown": "Split Down",
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
+      "openFileInEditor": "Open File in Editor",
       "revealInFinder": "Reveal in Finder",
       "copyWorktreePath": "Copy Worktree Path",
+      "copyFilePath": "Copy File Path",
       "copyWorktreeName": "Copy Worktree Name",
+      "copyFileName": "Copy File Name",
       "copyBranchName": "Copy Branch Name",
       "copySessionId": "Copy Session ID",
       "close": "Close",

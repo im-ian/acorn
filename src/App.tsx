@@ -49,6 +49,7 @@ import {
   startSessionNotificationWatcher,
 } from "./lib/notifications";
 import { findFocusedSessionId } from "./lib/focus";
+import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
@@ -346,7 +347,7 @@ function App() {
       const ws = state.workspaces[state.activeProject];
       if (!ws) return;
       for (const [pid, pane] of Object.entries(ws.panes)) {
-        if (pane.sessionIds.includes(sid)) {
+        if (pane.tabIds.includes(sid)) {
           if (ws.focusedPaneId !== pid) state.setFocusedPane(pid);
           return;
         }
@@ -718,8 +719,8 @@ function App() {
             const ws = s.workspaces[s.activeProject];
             if (ws) {
               for (const pane of Object.values(ws.panes)) {
-                if (pane.activeSessionId) {
-                  sessionId = pane.activeSessionId;
+                if (pane.activeTabId && isSessionTabId(pane.activeTabId)) {
+                  sessionId = pane.activeTabId;
                   break;
                 }
               }
@@ -875,7 +876,7 @@ function App() {
         // available for inputs, dialogs, and the command palette.
         const { focusedPaneId, panes } = useAppStore.getState();
         const pane = panes[focusedPaneId];
-        if (!pane || pane.sessionIds.length > 0) return;
+        if (!pane || pane.tabIds.length > 0) return;
         const total = Object.keys(panes).length;
         if (total <= 1) return;
         e.preventDefault();

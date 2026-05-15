@@ -16,6 +16,7 @@ vi.mock("./lib/api", () => {
         async (_ids: string[]) =>
           [] as { id: string; status: SessionStatus }[],
       ),
+      ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
       createSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => undefined),
       renameSession: vi.fn(async () => ({}) as Session),
@@ -70,6 +71,7 @@ function session(
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
     kind: "regular",
+    owner: { kind: "user" },
     position: null,
     in_worktree: false,
     ...overrides,
@@ -88,10 +90,12 @@ function resetStore(): void {
       workspaces: {},
       activeProject: null,
       layout: { kind: "pane", id: "root" },
-      panes: { root: { id: "root", sessionIds: [], activeSessionId: null } },
+      panes: { root: { id: "root", tabIds: [], activeTabId: null } },
       focusedPaneId: "root",
+      activeTabId: null,
       activeSessionId: null,
       rightTab: "commits",
+      workspaceTabs: {},
       prAccountByRepo: {},
       pendingTerminalInput: {},
       multiInputEnabled: false,
@@ -100,6 +104,7 @@ function resetStore(): void {
       pendingRemoveId: null,
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
+      liveInWorktree: {},
     },
     false,
   );
@@ -204,6 +209,45 @@ describe("selectSession", () => {
   });
 });
 
+describe("workspace tabs", () => {
+  it("opens a code viewer as a workspace tab without making it the active session", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+
+    const s = useAppStore.getState();
+    expect(s.activeSessionId).toBeNull();
+    expect(s.activeTabId).toMatch(/^code-viewer:/);
+    expect(s.sessions.map((x) => x.id)).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([
+      "a1",
+      s.activeTabId,
+    ]);
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "code",
+      lifecycle: "ephemeral",
+      path: `${REPO_A}/src/App.tsx`,
+      repoPath: REPO_A,
+      title: "App.tsx",
+    });
+  });
+
+  it("closes the active code viewer instead of requesting session removal", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const tabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().closeFocusedTab();
+
+    const s = useAppStore.getState();
+    expect(s.pendingRemoveId).toBeNull();
+    expect(s.workspaceTabs[tabId]).toBeUndefined();
+    expect(s.activeTabId).toBe("a1");
+    expect(s.activeSessionId).toBe("a1");
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
+  });
+});
+
 describe("splitFocusedPane", () => {
   it("creates a new pane and focuses it; layout becomes a split", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
@@ -213,7 +257,7 @@ describe("splitFocusedPane", () => {
     const s = useAppStore.getState();
     expect(s.layout.kind).toBe("split");
     expect(Object.keys(s.panes)).toHaveLength(2);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual([]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([]);
     expect(s.activeSessionId).toBeNull();
   });
 
@@ -241,20 +285,20 @@ describe("moveTab", () => {
     );
     useAppStore.getState().splitFocusedPane("horizontal");
     const fromPaneId = Object.keys(useAppStore.getState().panes).find(
-      (pid) => useAppStore.getState().panes[pid].sessionIds.length === 2,
+      (pid) => useAppStore.getState().panes[pid].tabIds.length === 2,
     )!;
     const toPaneId = useAppStore.getState().focusedPaneId;
     expect(fromPaneId).not.toBe(toPaneId);
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId,
       toPaneId,
     });
 
     const s = useAppStore.getState();
-    expect(s.panes[fromPaneId].sessionIds).toEqual(["a2"]);
-    expect(s.panes[toPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[fromPaneId].tabIds).toEqual(["a2"]);
+    expect(s.panes[toPaneId].tabIds).toEqual(["a1"]);
     expect(s.focusedPaneId).toBe(toPaneId);
     expect(s.activeSessionId).toBe("a1");
   });
@@ -269,7 +313,7 @@ describe("moveTab", () => {
     )!;
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId: sourcePaneId,
       toPaneId: focusedAfterSplit,
     });
@@ -277,7 +321,7 @@ describe("moveTab", () => {
     const s = useAppStore.getState();
     expect(s.layout.kind).toBe("pane");
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 
   it("creates a new pane when splitDirection/splitSide are provided; empty source collapses", async () => {
@@ -285,7 +329,7 @@ describe("moveTab", () => {
     const fromPaneId = useAppStore.getState().focusedPaneId;
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId,
       toPaneId: fromPaneId,
       splitDirection: "horizontal",
@@ -296,7 +340,7 @@ describe("moveTab", () => {
     // Splitting then immediately collapsing the empty source leaves a single pane.
     expect(s.layout.kind).toBe("pane");
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
     expect(s.activeSessionId).toBe("a1");
   });
 
@@ -308,7 +352,7 @@ describe("moveTab", () => {
     const fromPaneId = useAppStore.getState().focusedPaneId;
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId,
       toPaneId: fromPaneId,
       splitDirection: "horizontal",
@@ -318,7 +362,7 @@ describe("moveTab", () => {
     const s = useAppStore.getState();
     expect(s.layout.kind).toBe("split");
     expect(Object.keys(s.panes)).toHaveLength(2);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 });
 
@@ -335,7 +379,7 @@ describe("closePane", () => {
     )!;
     // Move a2 to the new (focused) pane so both panes hold sessions.
     useAppStore.getState().moveTab({
-      sessionId: "a2",
+      tabId: "a2",
       fromPaneId: otherPaneId,
       toPaneId: focusedAfterSplit,
     });
@@ -345,7 +389,7 @@ describe("closePane", () => {
     expect(s.layout.kind).toBe("pane");
     expect(Object.keys(s.panes)).toHaveLength(1);
     const surviving = s.panes[s.focusedPaneId];
-    expect(surviving.sessionIds.sort()).toEqual(["a1", "a2"]);
+    expect(surviving.tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
   it("is a no-op when only one pane exists", async () => {
@@ -413,7 +457,7 @@ describe("reconcile via refreshSessions", () => {
       [project(REPO_A, 0)],
       [session("a1", REPO_A), session("a2", REPO_A)],
     );
-    expect(useAppStore.getState().panes[useAppStore.getState().focusedPaneId].sessionIds.sort()).toEqual([
+    expect(useAppStore.getState().panes[useAppStore.getState().focusedPaneId].tabIds.sort()).toEqual([
       "a1",
       "a2",
     ]);
@@ -423,7 +467,7 @@ describe("reconcile via refreshSessions", () => {
 
     const s = useAppStore.getState();
     expect(s.sessions.map((x) => x.id)).toEqual(["a1"]);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 
   // TODO(acorn-tests): cross-pane collapse on session removal reproduces
@@ -443,7 +487,7 @@ describe("reconcile via refreshSessions", () => {
       (pid) => pid !== focusedAfterSplit,
     )!;
     useAppStore.getState().moveTab({
-      sessionId: "a2",
+      tabId: "a2",
       fromPaneId: otherPaneId,
       toPaneId: focusedAfterSplit,
     });
@@ -452,7 +496,7 @@ describe("reconcile via refreshSessions", () => {
 
     const s = useAppStore.getState();
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(Object.values(s.panes)[0].sessionIds).toEqual(["a1"]);
+    expect(Object.values(s.panes)[0].tabIds).toEqual(["a1"]);
   });
 
   it("places newly seen sessions in the focused pane", async () => {
@@ -463,10 +507,10 @@ describe("reconcile via refreshSessions", () => {
     ]);
     await useAppStore.getState().refreshSessions();
     const s = useAppStore.getState();
-    expect(s.panes[s.focusedPaneId].sessionIds.sort()).toEqual(["a1", "a2"]);
+    expect(s.panes[s.focusedPaneId].tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
-  it("does NOT wipe persisted sessionIds when load_status reports unclean", async () => {
+  it("does NOT wipe persisted tabIds when load_status reports unclean", async () => {
     // Seed: persisted layout with two sessions in one pane.
     await seed(
       [project(REPO_A, 0)],
@@ -474,7 +518,7 @@ describe("reconcile via refreshSessions", () => {
     );
     expect(
       useAppStore.getState().panes[useAppStore.getState().focusedPaneId]
-        .sessionIds.sort(),
+        .tabIds.sort(),
     ).toEqual(["a1", "a2"]);
 
     // Simulate boot-time corruption: backend returns empty + reports unclean.
@@ -490,7 +534,7 @@ describe("reconcile via refreshSessions", () => {
     const s = useAppStore.getState();
     expect(s.sessions).toEqual([]);
     expect(s.sessionsLoadedCleanly).toBe(false);
-    expect(s.panes[s.focusedPaneId].sessionIds.sort()).toEqual(["a1", "a2"]);
+    expect(s.panes[s.focusedPaneId].tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
   it("clears the wipe guard once backend returns at least one session", async () => {
@@ -683,7 +727,7 @@ describe("createSession", () => {
     await useAppStore.getState().createSession("new", REPO_A);
 
     const s = useAppStore.getState();
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual([
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([
       "a1",
       "a2",
       "a4",
@@ -701,7 +745,7 @@ describe("createSession", () => {
     await useAppStore.getState().createSession("first", REPO_A);
 
     const s = useAppStore.getState();
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["first"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["first"]);
     expect(s.activeSessionId).toBe("first");
   });
 });

@@ -55,20 +55,35 @@ pub fn primer_for(session: &Session, socket_path: &Path) -> String {
     format!(
         "You are running inside an Acorn \"control session\". You can orchestrate \
          other terminal sessions in the same project ({repo}) via the `acorn-ipc` \
-         CLI.\n\
+         CLI. The user does not need to know that `acorn-ipc` exists; treat it as \
+         your local control tool.\n\
          \n\
          Your session id: {session_id}\n\
          IPC socket:      {socket}\n\
          Daemon socket:   {daemon}\n\
+         Context command: acorn-ipc context\n\
+         \n\
+         Natural-language mapping:\n\
+         - If the user asks you to create, open, spawn, or use a \"new session\", \
+         interpret that as a new Acorn sibling terminal session in this project \
+         unless they clearly mean a new chat conversation.\n\
+         - Sessions you create with `acorn-ipc new-session` are owned by this \
+         controller by default. Only operate on sessions where `list-sessions` \
+         shows MINE=yes unless the user explicitly asks you to touch another \
+         session.\n\
+         - Do not repurpose, send input to, read from, focus, or kill user-owned \
+         sessions or sessions owned by another control session unless the user \
+         made that direct request; then pass `--allow-foreign`.\n\
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\
+           acorn-ipc context                             # print this context\n\
            acorn-ipc list-sessions                       # see siblings + self\n\
-           acorn-ipc send-keys     -t <uuid> --data '…' --enter\n\
-           acorn-ipc read-buffer   -t <uuid> [--max-bytes N]\n\
-           acorn-ipc new-session   <name> [--isolated]   # prints the new uuid\n\
-           acorn-ipc select-session -t <uuid>            # focus a tab in the UI\n\
-           acorn-ipc kill-session  -t <uuid>             # destructive — last resort\n\
+           acorn-ipc new-session   <name> [--isolated] [--owner me|user]\n\
+           acorn-ipc send-keys     -t <uuid> --data '…' --enter [--allow-foreign]\n\
+           acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]\n\
+           acorn-ipc select-session -t <uuid> [--allow-foreign]\n\
+           acorn-ipc kill-session  -t <uuid> [--allow-foreign]\n\
          \n\
          The newer `acornd` CLI talks to the same project graph via the\n\
          background daemon (currently rolling out). `acornd list-sessions`,\n\
