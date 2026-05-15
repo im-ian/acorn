@@ -483,7 +483,60 @@ export const api = {
     const encoded = encodeStringToBase64(data);
     return invoke<void>("pty_write", { sessionId, data: encoded });
   },
+  fsListDir(
+    path: string,
+    showHidden: boolean,
+    respectGitignore: boolean,
+  ): Promise<FsListResult> {
+    return invoke<FsListResult>("fs_list_dir", {
+      path,
+      showHidden,
+      respectGitignore,
+    });
+  },
+  fsCreateFile(path: string): Promise<void> {
+    return invoke<void>("fs_create_file", { path });
+  },
+  fsCreateDir(path: string): Promise<void> {
+    return invoke<void>("fs_create_dir", { path });
+  },
+  fsRename(from: string, to: string): Promise<void> {
+    return invoke<void>("fs_rename", { from, to });
+  },
+  fsTrash(path: string): Promise<void> {
+    return invoke<void>("fs_trash", { path });
+  },
+  fsReveal(path: string): Promise<void> {
+    return invoke<void>("fs_reveal", { path });
+  },
+  fsWatchSetRoot(path: string | null): Promise<void> {
+    return invoke<void>("fs_watch_set_root", { path });
+  },
 };
+
+/** Mirror of `crate::fs_explorer::FileEntry`. */
+export interface FsEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size: number;
+  modified_ms: number;
+  gitignored: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::ListResult`. */
+export interface FsListResult {
+  entries: FsEntry[];
+  repo_root: string | null;
+}
+
+/** Event payload from the backend fs watcher. */
+export interface FsChangePayload {
+  paths: string[];
+}
+
+export const FS_CHANGED_EVENT = "acorn:fs-changed";
 
 function encodeStringToBase64(input: string): string {
   const bytes = new TextEncoder().encode(input);
@@ -522,6 +575,7 @@ export interface DaemonSessionSummary {
   name: string;
   kind: "regular" | "control";
   alive: boolean;
+  cwd: string | null;
   repo_path: string | null;
   branch: string | null;
   agent_kind: string | null;

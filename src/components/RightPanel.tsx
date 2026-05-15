@@ -9,6 +9,7 @@ import {
   Copy,
   ExternalLink,
   FileDiff,
+  FolderTree,
   GitCommit,
   GitMerge,
   GitPullRequest,
@@ -54,6 +55,7 @@ import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
+import { FileExplorer } from "./FileExplorer";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
@@ -171,6 +173,12 @@ export function RightPanel() {
           active={rightTab === "actions"}
           onClick={() => setRightTab("actions")}
         />
+        <TabButton
+          icon={<FolderTree size={14} />}
+          label="Files"
+          active={rightTab === "files"}
+          onClick={() => setRightTab("files")}
+        />
       </nav>
       <div className="flex-1 overflow-hidden">
         {rightTab === "todos" ? (
@@ -211,6 +219,12 @@ export function RightPanel() {
               onOpenSearch={() => setPrSearch({ repoPath })}
               refreshKey={prListVersion}
             />
+          ) : (
+            <Empty msg="No project selected" />
+          )
+        ) : rightTab === "files" ? (
+          repoPath ? (
+            <FileExplorer key={repoPath} rootPath={repoPath} />
           ) : (
             <Empty msg="No project selected" />
           )
