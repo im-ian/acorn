@@ -348,6 +348,58 @@
       "shellEnvironmentReloadFailed": "셸 환경을 다시 불러오지 못했습니다."
     }
   },
+  "statusBar": {
+    "sessionCount": "세션: {count}",
+    "status": "상태: {status}",
+    "multiInputOn": "다중 입력: 켜짐",
+    "working": "작업 중...",
+    "error": "오류: {error}",
+    "githubAccountTooltip": "{account} gh 계정으로 PR을 표시합니다",
+    "branch": "브랜치: {branch}",
+    "memoryTooltip": "프로세스별 세부 정보를 보려면 클릭",
+    "memory": "메모리: {memory}",
+    "sessionStatus": {
+      "idle": "유휴",
+      "running": "실행 중",
+      "needsInput": "입력 필요",
+      "failed": "실패",
+      "completed": "완료"
+    },
+    "services": {
+      "ariaLabel": "서비스 상태",
+      "tooltip": {
+        "ipcLoading": "ipc: 불러오는 중",
+        "ipcOn": "ipc: 켜짐",
+        "ipcOff": "ipc: 꺼짐",
+        "daemonLoading": "데몬: 불러오는 중",
+        "daemonDisabled": "데몬: 비활성화됨",
+        "daemonOn": "데몬: 켜짐",
+        "daemonOnWithSessions": "데몬: 켜짐 ({count})",
+        "daemonDown": "데몬: 중단됨",
+        "details": "{ipc} · {daemon} - 자세히 보려면 클릭"
+      },
+      "status": {
+        "loading": "불러오는 중",
+        "running": "실행 중",
+        "down": "중단됨",
+        "disabled": "비활성화됨",
+        "runningSessions": "실행 중 · 세션 {count}개"
+      },
+      "ipc": {
+        "label": "IPC 서버",
+        "description": "컨트롤 세션 <-> 앱 소켓"
+      },
+      "daemon": {
+        "label": "acornd 데몬",
+        "description": "지속 PTY 세션"
+      },
+      "actions": {
+        "restart": "재시작",
+        "restarting": "재시작 중...",
+        "settings": "설정"
+      }
+    }
+  },
   "sidebar": {
     "status": {
       "idle": "유휴",

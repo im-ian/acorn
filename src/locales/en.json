@@ -348,6 +348,58 @@
       "shellEnvironmentReloadFailed": "Failed to reload shell environment."
     }
   },
+  "statusBar": {
+    "sessionCount": "sessions: {count}",
+    "status": "status: {status}",
+    "multiInputOn": "multi-input: on",
+    "working": "working...",
+    "error": "error: {error}",
+    "githubAccountTooltip": "PRs listed via gh account {account}",
+    "branch": "branch: {branch}",
+    "memoryTooltip": "Click to view per-process breakdown",
+    "memory": "memory: {memory}",
+    "sessionStatus": {
+      "idle": "idle",
+      "running": "running",
+      "needsInput": "needs input",
+      "failed": "failed",
+      "completed": "completed"
+    },
+    "services": {
+      "ariaLabel": "Service status",
+      "tooltip": {
+        "ipcLoading": "ipc: loading",
+        "ipcOn": "ipc: on",
+        "ipcOff": "ipc: off",
+        "daemonLoading": "daemon: loading",
+        "daemonDisabled": "daemon: disabled",
+        "daemonOn": "daemon: on",
+        "daemonOnWithSessions": "daemon: on ({count})",
+        "daemonDown": "daemon: down",
+        "details": "{ipc} · {daemon} - click for details"
+      },
+      "status": {
+        "loading": "loading",
+        "running": "running",
+        "down": "down",
+        "disabled": "disabled",
+        "runningSessions": "running · {count} sessions"
+      },
+      "ipc": {
+        "label": "IPC server",
+        "description": "control-session <-> app socket"
+      },
+      "daemon": {
+        "label": "acornd daemon",
+        "description": "persistent PTY sessions"
+      },
+      "actions": {
+        "restart": "Restart",
+        "restarting": "Restarting...",
+        "settings": "Settings"
+      }
+    }
+  },
   "sidebar": {
     "status": {
       "idle": "Idle",
