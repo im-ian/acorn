@@ -2,9 +2,17 @@ import { FolderPlus } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { validateProjectName } from "../lib/projectName";
 import { cn } from "../lib/cn";
+import { useTranslation } from "../lib/useTranslation";
 import { Field, Modal, ModalHeader, TextInput } from "./ui";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface NewProjectDialogProps {
   open: boolean;
@@ -21,6 +29,7 @@ export function NewProjectDialog({
   onClose,
   onCreate,
 }: NewProjectDialogProps) {
+  const t = useTranslation();
   const [name, setName] = useState("");
   const [parentPath, setParentPath] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +64,7 @@ export function NewProjectDialog({
       ? null
       : validation.kind === "safe" && ignoreSafeName
         ? null
-        : validation.message;
+        : dt(t, `dialogs.newProject.validation.${validation.reason}`);
   const canCreate =
     !pending &&
     parentPath !== "" &&
@@ -66,7 +75,7 @@ export function NewProjectDialog({
     const picked = await open({
       directory: true,
       multiple: false,
-      title: "Select parent folder",
+      title: dt(t, "dialogs.newProject.selectParentFolder"),
     });
     if (!picked || typeof picked !== "string") return;
     setParentPath(picked);
@@ -76,7 +85,7 @@ export function NewProjectDialog({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canCreate) {
-      setError(validationError ?? "Choose a location for the new project.");
+      setError(validationError ?? dt(t, "dialogs.newProject.chooseLocationError"));
       return;
     }
     setPending(true);
@@ -103,9 +112,9 @@ export function NewProjectDialog({
     >
       <form onSubmit={submit}>
         <ModalHeader
-          title="New project"
+          title={dt(t, "dialogs.newProject.title")}
           titleId="new-project-title"
-          subtitle="Create a git repository and add it to Acorn"
+          subtitle={dt(t, "dialogs.newProject.subtitle")}
           icon={<FolderPlus size={16} className="text-accent" />}
           variant="dialog"
           onClose={() => {
@@ -113,7 +122,10 @@ export function NewProjectDialog({
           }}
         />
         <div className="space-y-3 px-4 py-3">
-          <Field label="Project name" hint="Use a single folder name.">
+          <Field
+            label={dt(t, "dialogs.newProject.projectNameLabel")}
+            hint={dt(t, "dialogs.newProject.projectNameHint")}
+          >
             <TextInput
               autoFocus
               value={name}
@@ -123,7 +135,7 @@ export function NewProjectDialog({
                 setIgnoreSafeName(false);
               }}
               placeholder="my-project"
-              aria-label="Project name"
+              aria-label={dt(t, "dialogs.newProject.projectNameLabel")}
               aria-invalid={validationError !== null}
               aria-describedby={
                 validationError ? "new-project-name-error" : undefined
@@ -151,16 +163,16 @@ export function NewProjectDialog({
                 }}
                 className="size-3 accent-accent"
               />
-              <span>Ignore safe-name check</span>
+              <span>{dt(t, "dialogs.newProject.ignoreSafeName")}</span>
             </label>
           ) : null}
-          <Field label="Location">
+          <Field label={dt(t, "dialogs.newProject.locationLabel")}>
             <div className="flex gap-2">
               <TextInput
                 readOnly
                 value={parentPath}
-                placeholder="Choose a parent folder"
-                aria-label="Project location"
+                placeholder={dt(t, "dialogs.newProject.locationPlaceholder")}
+                aria-label={dt(t, "dialogs.newProject.locationAriaLabel")}
                 className="min-w-0 flex-1"
               />
               <button
@@ -168,13 +180,15 @@ export function NewProjectDialog({
                 onClick={() => void chooseLocation()}
                 className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
               >
-                Choose
+                {dt(t, "dialogs.newProject.choose")}
               </button>
             </div>
           </Field>
           {finalPath ? (
             <div className="rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
-              <div className="mb-1 text-fg-muted">Creates</div>
+              <div className="mb-1 text-fg-muted">
+                {dt(t, "dialogs.newProject.creates")}
+              </div>
               <div className="break-all font-mono text-fg">{finalPath}</div>
             </div>
           ) : null}
@@ -191,14 +205,16 @@ export function NewProjectDialog({
             onClick={onClose}
             className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:opacity-50"
           >
-            Cancel
+            {dt(t, "dialogs.common.cancel")}
           </button>
           <button
             type="submit"
             disabled={!canCreate}
             className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {pending ? "Creating..." : "Create project"}
+            {pending
+              ? dt(t, "dialogs.newProject.creating")
+              : dt(t, "dialogs.newProject.createProject")}
           </button>
         </footer>
       </form>

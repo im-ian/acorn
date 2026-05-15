@@ -30,13 +30,24 @@ import {
 import { api, type FsEntry, FS_CHANGED_EVENT } from "../lib/api";
 import type { FsChangePayload, FsGitStatus, FsGitStatusEntry } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { setFileDragPayload } from "../lib/dnd";
 import { Tooltip } from "./Tooltip";
 import { IconInput, TextInput } from "./ui";
+import { useTranslation } from "../lib/useTranslation";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
+
+type FileExplorerTranslationKey = Extract<TranslationKey, `fileExplorer.${string}`>;
+
+function fileExplorerText(
+  t: Translator,
+  key: FileExplorerTranslationKey,
+): string {
+  return t(key);
+}
 
 interface FileExplorerProps {
   rootPath: string;
@@ -197,8 +208,9 @@ function relativeTo(base: string, abs: string): string {
 async function writeToActiveSession(
   sessionId: string | null,
   payload: string,
+  noActiveSessionMessage: string,
 ): Promise<void> {
-  if (!sessionId) throw new Error("No active session");
+  if (!sessionId) throw new Error(noActiveSessionMessage);
   await api.ptyWrite(sessionId, payload);
 }
 
@@ -221,6 +233,7 @@ function setLocalBool(key: string, value: boolean) {
 }
 
 export function FileExplorer({ rootPath }: FileExplorerProps) {
+  const t = useTranslation();
   const [cache, setCache] = useState<Cache>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(() =>
@@ -669,15 +682,15 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       try {
         await navigator.clipboard.writeText(lines.join("\n"));
       } catch {
-        setError("Clipboard write failed");
+        setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
       }
     },
-    [selection, rootPath],
+    [selection, rootPath, t],
   );
 
   const handleBulkAttach = useCallback(async () => {
     if (!activeSessionId) {
-      setError("No active session — open a terminal first");
+      setError(fileExplorerText(t, "fileExplorer.errors.noActiveSession"));
       return;
     }
     const paths = Array.from(selection);
@@ -687,7 +700,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [activeSessionId, selection, rootPath]);
+  }, [activeSessionId, selection, rootPath, t]);
 
   const handleOpenFolderInNewTab = useCallback(async (folderPath: string) => {
     try {
@@ -695,10 +708,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       const state = store.useAppStore.getState();
       const project = state.activeProject;
       if (!project) {
-        setError("No active project");
+        setError(fileExplorerText(t, "fileExplorer.errors.noActiveProject"));
         return;
       }
-      const name = folderPath.split("/").filter(Boolean).pop() ?? "session";
+      const name =
+        folderPath.split("/").filter(Boolean).pop() ??
+        fileExplorerText(t, "fileExplorer.defaults.sessionName");
       // Spawn a regular session in the current project, then queue a
       // `cd <folder>` to land inside the clicked directory once the PTY
       // is up. Mirrors how CommandRunDialog primes new sessions.
@@ -712,7 +727,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [t]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -783,26 +798,26 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     if (entry && selection.size > 1 && selection.has(entry.path)) {
       const n = selection.size;
       items.push({
-        label: `Copy Relative Paths (${n})`,
+        label: `${fileExplorerText(t, "fileExplorer.menu.copyRelativePaths")} (${n})`,
         icon: <Link2 size={13} />,
         onClick: () => void handleBulkCopyPaths("relative"),
       });
       items.push({
-        label: `Copy Absolute Paths (${n})`,
+        label: `${fileExplorerText(t, "fileExplorer.menu.copyAbsolutePaths")} (${n})`,
         icon: <Copy size={13} />,
         onClick: () => void handleBulkCopyPaths("absolute"),
       });
       if (agent.claude || agent.codex) {
         items.push({ type: "separator" });
         items.push({
-          label: `Attach All to Conversation (${n})`,
+          label: `${fileExplorerText(t, "fileExplorer.menu.attachAllToConversation")} (${n})`,
           icon: <MessageSquarePlus size={13} />,
           onClick: () => void handleBulkAttach(),
         });
       }
       items.push({ type: "separator" });
       items.push({
-        label: `Move to Trash (${n})`,
+        label: `${fileExplorerText(t, "fileExplorer.menu.moveToTrash")} (${n})`,
         icon: <Trash2 size={13} />,
         onClick: () => void handleBulkTrash(),
       });
@@ -813,8 +828,8 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     if (entry && !entry.is_dir) {
       const editorBin = shellEditor.split(/\s+/)[0];
       const openLabel = editorBin
-        ? `Open in ${editorBin}`
-        : "Open with Default Program";
+        ? `${fileExplorerText(t, "fileExplorer.menu.openIn")} ${editorBin}`
+        : fileExplorerText(t, "fileExplorer.menu.openWithDefaultProgram");
       items.push({
         label: openLabel,
         icon: <Edit3 size={13} />,
@@ -823,7 +838,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
     if (entry) {
       items.push({
-        label: "Reveal in File Manager",
+        label: fileExplorerText(t, "fileExplorer.menu.revealInFileManager"),
         icon: <ExternalLink size={13} />,
         onClick: () => {
           void api.fsReveal(entry.path).catch((e) => {
@@ -834,7 +849,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
     if (entry?.is_dir) {
       items.push({
-        label: "Open in New Tab",
+        label: fileExplorerText(t, "fileExplorer.menu.openInNewTab"),
         icon: <TerminalSquare size={13} />,
         onClick: () => void handleOpenFolderInNewTab(entry.path),
       });
@@ -845,10 +860,14 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       items.push({ type: "separator" });
       if (agent.claude) {
         items.push({
-          label: "Attach to Claude",
+          label: fileExplorerText(t, "fileExplorer.menu.attachToClaude"),
           icon: <MessageSquarePlus size={13} />,
           onClick: () => {
-            void writeToActiveSession(activeSessionId, ` @${rel} `).catch(
+            void writeToActiveSession(
+              activeSessionId,
+              ` @${rel} `,
+              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
+            ).catch(
               (e) => setError(e instanceof Error ? e.message : String(e)),
             );
           },
@@ -856,10 +875,14 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       }
       if (agent.codex) {
         items.push({
-          label: "Attach to Codex",
+          label: fileExplorerText(t, "fileExplorer.menu.attachToCodex"),
           icon: <MessageSquarePlus size={13} />,
           onClick: () => {
-            void writeToActiveSession(activeSessionId, ` @${rel} `).catch(
+            void writeToActiveSession(
+              activeSessionId,
+              ` @${rel} `,
+              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
+            ).catch(
               (e) => setError(e instanceof Error ? e.message : String(e)),
             );
           },
@@ -871,20 +894,20 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     if (entry) {
       items.push({ type: "separator" });
       items.push({
-        label: "Copy Relative Path",
+        label: fileExplorerText(t, "fileExplorer.menu.copyRelativePath"),
         icon: <Link2 size={13} />,
         onClick: () => {
           void navigator.clipboard.writeText(rel).catch(() => {
-            setError("Clipboard write failed");
+            setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
           });
         },
       });
       items.push({
-        label: "Copy Absolute Path",
+        label: fileExplorerText(t, "fileExplorer.menu.copyAbsolutePath"),
         icon: <Copy size={13} />,
         onClick: () => {
           void navigator.clipboard.writeText(entry.path).catch(() => {
-            setError("Clipboard write failed");
+            setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
           });
         },
       });
@@ -894,12 +917,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     if (entry) {
       items.push({ type: "separator" });
       items.push({
-        label: "Rename",
+        label: fileExplorerText(t, "fileExplorer.menu.rename"),
         icon: <Pencil size={13} />,
         onClick: () => setDraftRename({ path: entry.path, value: entry.name }),
       });
       items.push({
-        label: "Move to Trash",
+        label: fileExplorerText(t, "fileExplorer.menu.moveToTrash"),
         icon: <Trash2 size={13} />,
         onClick: () => void handleTrash(entry),
       });
@@ -920,6 +943,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     handleBulkCopyPaths,
     handleBulkTrash,
     handleOpenFolderInNewTab,
+    t,
   ]);
 
   return (
@@ -998,6 +1022,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           <button
             type="button"
             className="text-fg-muted hover:text-fg"
+            aria-label={fileExplorerText(t, "fileExplorer.errorBanner.dismiss")}
             onClick={() => setError(null)}
           >
             ×
@@ -1026,6 +1051,7 @@ interface ToolbarProps {
 }
 
 function Toolbar(props: ToolbarProps) {
+  const t = useTranslation();
   const rootName = props.rootPath.split("/").filter(Boolean).pop() ?? "/";
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
@@ -1037,14 +1063,22 @@ function Toolbar(props: ToolbarProps) {
       </span>
       <span className="flex-1" />
       <ToolbarBtn
-        label={props.searchActive ? "Close search" : "Search (⌘F)"}
+        label={
+          props.searchActive
+            ? fileExplorerText(t, "fileExplorer.toolbar.closeSearch")
+            : fileExplorerText(t, "fileExplorer.toolbar.search")
+        }
         active={props.searchActive}
         onClick={props.onToggleSearch}
       >
         <Search size={12} />
       </ToolbarBtn>
       <ToolbarBtn
-        label={props.showHidden ? "Hide dotfiles" : "Show dotfiles"}
+        label={
+          props.showHidden
+            ? fileExplorerText(t, "fileExplorer.toolbar.hideDotfiles")
+            : fileExplorerText(t, "fileExplorer.toolbar.showDotfiles")
+        }
         active={props.showHidden}
         onClick={props.onToggleHidden}
       >
@@ -1053,8 +1087,8 @@ function Toolbar(props: ToolbarProps) {
       <ToolbarBtn
         label={
           props.respectGitignore
-            ? "Show gitignored"
-            : "Hide gitignored"
+            ? fileExplorerText(t, "fileExplorer.toolbar.showGitignored")
+            : fileExplorerText(t, "fileExplorer.toolbar.hideGitignored")
         }
         active={!props.respectGitignore}
         onClick={props.onToggleGitignore}
@@ -1082,21 +1116,26 @@ interface SearchBarProps {
 }
 
 function SearchBar(props: SearchBarProps) {
+  const t = useTranslation();
   return (
     <div className="flex shrink-0 flex-col gap-1 border-b border-border px-2 py-2">
       <IconInput
         ref={props.queryInputRef}
         value={props.query}
         onChange={(e) => props.onQueryChange(e.target.value)}
-        placeholder={props.useRegex ? "Regex…" : "Search files"}
+        placeholder={
+          props.useRegex
+            ? fileExplorerText(t, "fileExplorer.search.regexPlaceholder")
+            : fileExplorerText(t, "fileExplorer.search.searchFilesPlaceholder")
+        }
         invalid={props.invalidRegex}
         leading={<Search size={12} />}
         trailing={
           <>
-            <Tooltip label="Match Case">
+            <Tooltip label={fileExplorerText(t, "fileExplorer.search.matchCase")}>
               <button
                 type="button"
-                aria-label="Match case"
+                aria-label={fileExplorerText(t, "fileExplorer.search.matchCase")}
                 onClick={props.onToggleCaseSensitive}
                 className={cn(
                   "rounded p-0.5 text-[10px] font-semibold transition",
@@ -1108,10 +1147,18 @@ function SearchBar(props: SearchBarProps) {
                 Aa
               </button>
             </Tooltip>
-            <Tooltip label="Use Regular Expression">
+            <Tooltip
+              label={fileExplorerText(
+                t,
+                "fileExplorer.search.useRegularExpression",
+              )}
+            >
               <button
                 type="button"
-                aria-label="Toggle regex"
+                aria-label={fileExplorerText(
+                  t,
+                  "fileExplorer.search.toggleRegex",
+                )}
                 onClick={props.onToggleRegex}
                 className={cn(
                   "rounded p-0.5 transition",
@@ -1123,10 +1170,10 @@ function SearchBar(props: SearchBarProps) {
                 <Regex size={12} />
               </button>
             </Tooltip>
-            <Tooltip label="Close (Esc)">
+            <Tooltip label={fileExplorerText(t, "fileExplorer.search.close")}>
               <button
                 type="button"
-                aria-label="Close search"
+                aria-label={fileExplorerText(t, "fileExplorer.search.closeSearch")}
                 onClick={props.onClose}
                 className="rounded p-0.5 text-fg-muted hover:text-fg"
               >
@@ -1137,14 +1184,20 @@ function SearchBar(props: SearchBarProps) {
         }
       />
       <GlobInput
-        label="files to include"
-        placeholder="e.g. *.ts, *.tsx"
+        label={fileExplorerText(t, "fileExplorer.search.filesToInclude")}
+        placeholder={fileExplorerText(
+          t,
+          "fileExplorer.search.includePlaceholder",
+        )}
         value={props.includeGlobs}
         onChange={props.onIncludeChange}
       />
       <GlobInput
-        label="files to exclude"
-        placeholder="e.g. node_modules, *.lock"
+        label={fileExplorerText(t, "fileExplorer.search.filesToExclude")}
+        placeholder={fileExplorerText(
+          t,
+          "fileExplorer.search.excludePlaceholder",
+        )}
         value={props.excludeGlobs}
         onChange={props.onExcludeChange}
       />
@@ -1229,6 +1282,7 @@ interface DirNodeProps {
 }
 
 function DirNode(props: DirNodeProps) {
+  const t = useTranslation();
   const { state, isRoot, matcher, matchingDirs } = props;
   const rawEntries = state?.entries ?? [];
   // When a matcher is active, hide entries that fail to match. Directories
@@ -1259,7 +1313,7 @@ function DirNode(props: DirNodeProps) {
           className="px-2 py-0.5 text-[11px] italic text-fg-muted/60"
           style={{ paddingLeft: 8 + props.depth * 12 }}
         >
-          (empty)
+          {fileExplorerText(t, "fileExplorer.tree.empty")}
         </div>
       ) : null}
       {entries.map((entry) =>
@@ -1292,7 +1346,13 @@ function DirNode(props: DirNodeProps) {
             onContextMenu={props.onContextMenu}
           >
             {entry.is_dir && props.expanded.has(entry.path) ? (
-              <DirNode {...props} path={entry.path} depth={props.depth + 1} state={props.cache[entry.path]} isRoot={false} />
+              <DirNode
+                {...props}
+                path={entry.path}
+                depth={props.depth + 1}
+                state={props.cache[entry.path]}
+                isRoot={false}
+              />
             ) : null}
           </EntryRow>
         ),
@@ -1302,7 +1362,7 @@ function DirNode(props: DirNodeProps) {
           className="px-2 py-1 text-[11px] text-fg-muted/60"
           style={{ paddingLeft: 8 + props.depth * 12 }}
         >
-          Loading…
+          {fileExplorerText(t, "fileExplorer.tree.loading")}
         </div>
       ) : null}
     </>
@@ -1362,6 +1422,7 @@ function EntryRow({
   onContextMenu,
   children,
 }: EntryRowProps) {
+  const t = useTranslation();
   const nameClass = gitStatusClass(gitStatus?.kind);
   const statusLetter = gitStatus ? STATUS_LABELS[gitStatus.kind] : "";
   const additions = gitStatus?.additions ?? 0;
@@ -1463,7 +1524,10 @@ function EntryRow({
             ) : null}
             <span
               className="rounded bg-fg-muted/15 px-1 font-medium"
-              aria-label={`git status ${gitStatus?.kind}`}
+              aria-label={`${fileExplorerText(
+                t,
+                "fileExplorer.tree.gitStatus",
+              )} ${gitStatus?.kind}`}
             >
               {statusLetter}
             </span>
@@ -1492,6 +1556,7 @@ function EditRow({
   onCommit,
   onCancel,
 }: EditRowProps) {
+  const t = useTranslation();
   const inputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     inputRef.current?.focus();
@@ -1513,6 +1578,7 @@ function EditRow({
       <span className="shrink-0 text-fg-muted">{icon}</span>
       <input
         ref={inputRef}
+        aria-label={fileExplorerText(t, "fileExplorer.tree.renameInput")}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
