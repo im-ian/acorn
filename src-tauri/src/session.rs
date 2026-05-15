@@ -133,6 +133,39 @@ pub enum SessionKind {
     Control,
 }
 
+/// Ownership boundary for control-session-created worker sessions.
+///
+/// User-created and legacy sessions default to `User`. Sessions created through
+/// `acorn-ipc new-session` are owned by the source control session so agents can
+/// distinguish their own workers from user terminals or workers created by
+/// another controller.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum SessionOwner {
+    #[default]
+    User,
+    Control {
+        session_id: Uuid,
+    },
+}
+
+impl SessionOwner {
+    pub fn control(session_id: Uuid) -> Self {
+        Self::Control { session_id }
+    }
+
+    pub fn is_control_owner(&self, source_session_id: Uuid) -> bool {
+        matches!(self, Self::Control { session_id } if *session_id == source_session_id)
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::User => "user".to_string(),
+            Self::Control { session_id } => format!("control:{session_id}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -148,6 +181,8 @@ pub struct Session {
     pub last_message: Option<String>,
     #[serde(default)]
     pub kind: SessionKind,
+    #[serde(default)]
+    pub owner: SessionOwner,
     /// User-defined display order within the project group. `None` means the
     /// session has never been reordered — the frontend falls back to
     /// `updated_at DESC` for these. Once any session in a project is dragged,
@@ -206,6 +241,7 @@ impl Session {
             updated_at: now,
             last_message: None,
             kind,
+            owner: SessionOwner::User,
             position: None,
             daemon_session_id: None,
             agent_resume_token: None,

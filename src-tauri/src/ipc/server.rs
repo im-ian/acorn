@@ -35,11 +35,11 @@ use uuid::Uuid;
 
 use crate::commands::{create_unique_worktree, sanitize_worktree_name};
 use crate::ipc::proto::{
-    Envelope, ErrorCode, Request, Response, SessionSummary, PROTOCOL_VERSION,
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
 };
 use crate::ipc::socket_path;
 use crate::persistence;
-use crate::session::{Session, SessionKind, SessionStore};
+use crate::session::{Session, SessionKind, SessionOwner, SessionStore};
 use crate::state::AppState;
 use crate::worktree;
 
@@ -222,11 +222,7 @@ fn handle_connection<R: Runtime>(
 /// Top-level request dispatch. Resolves the source session and enforces the
 /// "must be Control" gate before invoking command-specific handlers, so
 /// each handler can assume `source` is a live, authorized session.
-fn dispatch<R: Runtime>(
-    envelope: Envelope,
-    app: &AppHandle<R>,
-    state: &AppState,
-) -> Response {
+fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState) -> Response {
     if envelope.protocol_version != PROTOCOL_VERSION {
         return Response::Error {
             code: ErrorCode::Invalid,
@@ -247,29 +243,37 @@ fn dispatch<R: Runtime>(
         "ipc: dispatch",
     );
     match envelope.request {
+        Request::Context => handle_context(&source),
         Request::ListSessions => handle_list_sessions(&source, &state.sessions),
         Request::SendKeys {
             target_session_id,
             data_b64,
-        } => handle_send_keys(&source, &target_session_id, &data_b64, state),
+            allow_foreign,
+        } => handle_send_keys(&source, &target_session_id, &data_b64, allow_foreign, state),
         Request::ReadBuffer {
             target_session_id,
             max_bytes,
-        } => handle_read_buffer(&source, &target_session_id, max_bytes, state),
-        Request::NewSession { name, isolated } => {
-            handle_new_session(&source, name, isolated, app, state)
-        }
-        Request::SelectSession { target_session_id } => {
-            handle_select_session(&source, &target_session_id, app, state)
-        }
-        Request::KillSession { target_session_id } => {
-            handle_kill_session(&source, &target_session_id, app, state)
-        }
+            allow_foreign,
+        } => handle_read_buffer(&source, &target_session_id, max_bytes, allow_foreign, state),
+        Request::NewSession {
+            name,
+            isolated,
+            owner,
+        } => handle_new_session(&source, name, isolated, owner, app, state),
+        Request::SelectSession {
+            target_session_id,
+            allow_foreign,
+        } => handle_select_session(&source, &target_session_id, allow_foreign, app, state),
+        Request::KillSession {
+            target_session_id,
+            allow_foreign,
+        } => handle_kill_session(&source, &target_session_id, allow_foreign, app, state),
     }
 }
 
 fn request_label(req: &Request) -> &'static str {
     match req {
+        Request::Context => "context",
         Request::ListSessions => "list-sessions",
         Request::SendKeys { .. } => "send-keys",
         Request::ReadBuffer { .. } => "read-buffer",
@@ -324,22 +328,57 @@ fn resolve_target(
     Ok(target)
 }
 
+fn is_owned_by_source(source: &Session, target: &Session) -> bool {
+    target.id == source.id || target.owner.is_control_owner(source.id)
+}
+
+fn resolve_action_target(
+    source: &Session,
+    raw_id: &str,
+    sessions: &SessionStore,
+    allow_foreign: bool,
+) -> Result<Session, Response> {
+    let target = resolve_target(source, raw_id, sessions)?;
+    if !allow_foreign && !is_owned_by_source(source, &target) {
+        return Err(Response::Error {
+            code: ErrorCode::ForeignSession,
+            message: format!(
+                "target session is owned by {}; pass --allow-foreign only when the user explicitly asked you to touch it",
+                target.owner.label()
+            ),
+        });
+    }
+    Ok(target)
+}
+
+fn handle_context(source: &Session) -> Response {
+    let socket = socket_path::resolve().unwrap_or_default();
+    Response::Context {
+        text: crate::ipc::primer::primer_for(source, &socket),
+    }
+}
+
 fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
     let summaries: Vec<SessionSummary> = sessions
         .list()
         .into_iter()
         .filter(|s| s.repo_path == source.repo_path)
-        .map(|s| SessionSummary {
-            is_source: s.id == source.id,
-            id: s.id.to_string(),
-            name: s.name,
-            repo_path: s.repo_path.display().to_string(),
-            branch: s.branch,
-            kind: match s.kind {
-                SessionKind::Regular => "regular".to_string(),
-                SessionKind::Control => "control".to_string(),
-            },
-            status: format!("{:?}", s.status).to_lowercase(),
+        .map(|s| {
+            let owned_by_me = is_owned_by_source(source, &s);
+            SessionSummary {
+                is_source: s.id == source.id,
+                id: s.id.to_string(),
+                name: s.name,
+                repo_path: s.repo_path.display().to_string(),
+                branch: s.branch,
+                kind: match s.kind {
+                    SessionKind::Regular => "regular".to_string(),
+                    SessionKind::Control => "control".to_string(),
+                },
+                owner: s.owner.label(),
+                status: format!("{:?}", s.status).to_lowercase(),
+                owned_by_me,
+            }
         })
         .collect();
     Response::Sessions {
@@ -351,9 +390,10 @@ fn handle_send_keys(
     source: &Session,
     target_id: &str,
     data_b64: &str,
+    allow_foreign: bool,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_target(source, target_id, &state.sessions) {
+    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -379,9 +419,10 @@ fn handle_read_buffer(
     source: &Session,
     target_id: &str,
     max_bytes: Option<usize>,
+    allow_foreign: bool,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_target(source, target_id, &state.sessions) {
+    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -402,6 +443,7 @@ fn handle_new_session<R: Runtime>(
     source: &Session,
     name: String,
     isolated: bool,
+    owner: Option<NewSessionOwner>,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
@@ -426,9 +468,8 @@ fn handle_new_session<R: Runtime>(
     } else {
         repo.clone()
     };
-    let branch =
-        worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
-    let session = Session::new(
+    let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
+    let mut session = Session::new(
         name,
         repo.clone(),
         worktree_path,
@@ -436,6 +477,10 @@ fn handle_new_session<R: Runtime>(
         isolated,
         SessionKind::Regular,
     );
+    session.owner = match owner.unwrap_or(NewSessionOwner::SourceControl) {
+        NewSessionOwner::SourceControl => SessionOwner::control(source.id),
+        NewSessionOwner::User => SessionOwner::User,
+    };
     let inserted = state.sessions.insert(session);
     let basename = repo
         .file_name()
@@ -465,10 +510,11 @@ fn handle_new_session<R: Runtime>(
 fn handle_select_session<R: Runtime>(
     source: &Session,
     target_id: &str,
+    allow_foreign: bool,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_target(source, target_id, &state.sessions) {
+    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -484,10 +530,11 @@ fn handle_select_session<R: Runtime>(
 fn handle_kill_session<R: Runtime>(
     source: &Session,
     target_id: &str,
+    allow_foreign: bool,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
-    let target = match resolve_target(source, target_id, &state.sessions) {
+    let target = match resolve_action_target(source, target_id, &state.sessions, allow_foreign) {
         Ok(t) => t,
         Err(err) => return err,
     };
@@ -517,18 +564,13 @@ fn handle_kill_session<R: Runtime>(
     Response::Ack
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::SessionStatus;
     use std::path::PathBuf;
 
-    fn make_session(
-        repo: &str,
-        name: &str,
-        kind: SessionKind,
-    ) -> Session {
+    fn make_session(repo: &str, name: &str, kind: SessionKind) -> Session {
         let mut s = Session::new(
             name.to_string(),
             PathBuf::from(repo),
@@ -580,14 +622,22 @@ mod tests {
     fn list_sessions_filters_by_project() {
         let store = SessionStore::new();
         let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
-        let _peer = store.insert(make_session("/tmp/A", "peer", SessionKind::Regular));
+        let mut peer = make_session("/tmp/A", "peer", SessionKind::Regular);
+        peer.owner = SessionOwner::control(ctl.id);
+        let _peer = store.insert(peer);
         let _other = store.insert(make_session("/tmp/B", "other", SessionKind::Regular));
         match handle_list_sessions(&ctl, &store) {
             Response::Sessions { sessions } => {
                 assert_eq!(sessions.len(), 2, "should see ctl + peer, not other");
                 assert!(sessions.iter().all(|s| s.repo_path == "/tmp/A"));
-                let source = sessions.iter().find(|s| s.is_source).expect("source marked");
+                let source = sessions
+                    .iter()
+                    .find(|s| s.is_source)
+                    .expect("source marked");
                 assert_eq!(source.id, ctl.id.to_string());
+                let worker = sessions.iter().find(|s| s.name == "peer").expect("worker");
+                assert_eq!(worker.owner, format!("control:{}", ctl.id));
+                assert!(worker.owned_by_me);
             }
             other => panic!("expected sessions response, got {other:?}"),
         }
@@ -606,5 +656,40 @@ mod tests {
             }) => {}
             other => panic!("expected out-of-scope, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn action_target_rejects_foreign_owner_by_default() {
+        let store = SessionStore::new();
+        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+        let target = store.insert(make_session("/tmp/A", "user", SessionKind::Regular));
+        let res = resolve_action_target(&ctl, &target.id.to_string(), &store, false);
+        match res {
+            Err(Response::Error {
+                code: ErrorCode::ForeignSession,
+                ..
+            }) => {}
+            other => panic!("expected foreign-session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn action_target_accepts_source_owned_session() {
+        let store = SessionStore::new();
+        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+        let mut target = make_session("/tmp/A", "worker", SessionKind::Regular);
+        target.owner = SessionOwner::control(ctl.id);
+        let target = store.insert(target);
+        let res = resolve_action_target(&ctl, &target.id.to_string(), &store, false);
+        assert!(res.is_ok(), "source-owned worker should be allowed");
+    }
+
+    #[test]
+    fn action_target_allows_foreign_owner_when_explicit() {
+        let store = SessionStore::new();
+        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+        let target = store.insert(make_session("/tmp/A", "user", SessionKind::Regular));
+        let res = resolve_action_target(&ctl, &target.id.to_string(), &store, true);
+        assert!(res.is_ok(), "allow_foreign should bypass owner guard");
     }
 }

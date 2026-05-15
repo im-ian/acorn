@@ -71,6 +71,7 @@ function session(
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
     kind: "regular",
+    owner: { kind: "user" },
     position: null,
     in_worktree: false,
     ...overrides,
