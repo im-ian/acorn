@@ -148,10 +148,13 @@ describe("SettingsModal font controls", () => {
 
     const fontFamily = document.querySelector<HTMLInputElement>("input");
     const patchTerminal = useSettings.getState().patchTerminal;
+    const bodyText = document.body.textContent ?? "";
 
-    expect(document.body.textContent).toContain("Font family");
-    expect(document.body.textContent).toContain(
-      "Comma-separated stack. First family that resolves wins.",
+    expect(bodyText).toMatch(
+      /Font family|settings\.terminal\.fontFamily\.label/,
+    );
+    expect(bodyText).toMatch(
+      /Comma-separated stack\. First family that resolves wins\.|settings\.terminal\.fontFamily\.hint/,
     );
     expect(fontFamily?.value).toBe(DEFAULT_SETTINGS.terminal.fontFamily);
 
@@ -252,6 +255,42 @@ describe("SettingsModal font controls", () => {
     });
 
     expect(patchLanguage).toHaveBeenCalledWith("en");
+  });
+
+  it("renders Korean Settings chrome and the active panel controls", async () => {
+    useSettings.setState({
+      settings: {
+        ...cloneSettings(),
+        language: "ko",
+      },
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+
+    for (const label of [
+      "터미널",
+      "에이전트",
+      "세션",
+      "GitHub",
+      "모양",
+      "편집기",
+      "알림",
+      "저장 공간",
+      "실험 기능",
+      "정보",
+    ]) {
+      const button = Array.from(document.querySelectorAll("button")).find(
+        (element) => element.textContent === label,
+      );
+      expect(button, `${label} tab button`).toBeInstanceOf(HTMLButtonElement);
+    }
+
+    expect(document.body.textContent).toContain("설정");
+    expect(document.body.textContent).toContain("기본값으로 재설정");
+    expect(document.body.textContent).toContain("글꼴 패밀리");
   });
 });
 

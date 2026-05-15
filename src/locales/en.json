@@ -17,6 +17,327 @@
     "language": {
       "label": "Language",
       "hint": "Language used for the Acorn interface. New translations are added gradually."
+    },
+    "terminal": {
+      "fontFamily": {
+        "label": "Font family",
+        "hint": "Comma-separated stack. First family that resolves wins."
+      },
+      "fontSize": {
+        "label": "Font size",
+        "hint": "In CSS pixels. Range 8-32."
+      },
+      "fontWeight": {
+        "label": "Font weight",
+        "hint": "Weight for normal text. Effective values depend on the chosen font's available weights."
+      },
+      "boldFontWeight": {
+        "label": "Bold font weight",
+        "hint": "Weight used when the terminal renders bold cells."
+      },
+      "lineHeight": {
+        "label": "Line height",
+        "hint": "Cell-height multiplier. 1.00 packs rows flush; raise for more vertical breathing room. Range 1.00-2.00."
+      },
+      "openLinksOn": {
+        "label": "Open links on",
+        "hint": "How to follow URLs that xterm detects in terminal output.",
+        "click": {
+          "label": "Click (default)",
+          "description": "A single mouse click opens the URL in your default browser."
+        },
+        "modifierClick": {
+          "description": "Hold {modifier} while clicking to open. Stops stray clicks on output containing URLs from yanking focus to the browser."
+        }
+      }
+    },
+    "sessions": {
+      "confirmRemove": {
+        "label": "Confirm before removing a session",
+        "hint": "Isolated worktrees always prompt because the delete-worktree choice still matters.",
+        "checkbox": "Show confirmation dialog"
+      },
+      "closeOnExit": {
+        "label": "Close tab when the process exits",
+        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way.",
+        "checkbox": "Auto-close on exit"
+      },
+      "background": {
+        "title": "Background sessions",
+        "description": "The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
+      },
+      "controlCli": {
+        "label": "Control sessions (acorn-ipc CLI)",
+        "errorHint": "Could not query install status.",
+        "loadingHint": "Loading install status...",
+        "hint": "Control sessions can dispatch commands to siblings via the acorn-ipc CLI. The CLI ships next to the app; symlink it into your $PATH to use it from any terminal.",
+        "bundledBinary": "Bundled binary",
+        "found": "found",
+        "missing": "missing",
+        "installedShim": "Installed shim",
+        "installed": "installed",
+        "notInstalled": "not installed",
+        "recheck": "Re-check"
+      }
+    },
+    "github": {
+      "refreshInterval": {
+        "label": "Refresh interval",
+        "hint": "How often the PRs and Actions tabs auto-refetch from gh. Lower values feel snappier but spend more API budget."
+      },
+      "manualRefresh": "Manual refresh (the icon in each tab) always works regardless of this interval.",
+      "listDensity": {
+        "label": "List density",
+        "hint": "Author avatars make rows easier to scan at a glance, but each row gets thicker."
+      },
+      "showAuthorAvatars": {
+        "label": "Show author avatars",
+        "description": "Render the GitHub avatar next to each PR row."
+      }
+    },
+    "appearance": {
+      "uiScale": {
+        "label": "UI scale",
+        "hint": "Scales the app chrome in 5% steps. Terminal text keeps its separate size setting."
+      },
+      "theme": {
+        "label": "Theme",
+        "hint": "Built-in palettes and valid CSS files from the themes folder.",
+        "custom": "(custom)",
+        "rescanTitle": "Rescan themes folder",
+        "refresh": "Refresh",
+        "revealFolder": "Reveal folder"
+      },
+      "background": {
+        "label": "Background image",
+        "hint": "One image can be applied to the app area, terminal area, or both.",
+        "pickImage": "Pick image",
+        "replace": "Replace",
+        "noImage": "No image selected",
+        "remove": "Remove",
+        "applyToApp": "Apply to app background",
+        "applyToTerminal": "Apply to terminal background",
+        "fit": {
+          "label": "Fit",
+          "cover": "Cover",
+          "contain": "Contain",
+          "tile": "Tile"
+        },
+        "opacity": {
+          "label": "Opacity",
+          "hint": "0 is transparent, 100 is opaque."
+        },
+        "blur": "Blur"
+      },
+      "sessionDisplay": {
+        "title": {
+          "label": "Session title",
+          "hint": "Which field becomes the bold first line of each sidebar session row.",
+          "options": {
+            "name": {
+              "label": "Session name",
+              "description": "The editable name you give each session (default)."
+            },
+            "workingDirectory": {
+              "label": "Working directory",
+              "description": "Worktree directory basename."
+            },
+            "branch": {
+              "label": "Branch",
+              "description": "Active git branch."
+            }
+          }
+        },
+        "metadata": {
+          "label": "Additional metadata",
+          "hint": "Secondary line under the title. Toggle off everything for a single-line row.",
+          "branch": {
+            "label": "Branch",
+            "description": "Active git branch."
+          },
+          "workingDirectory": {
+            "label": "Working directory",
+            "description": "Worktree directory basename."
+          },
+          "status": {
+            "label": "Status",
+            "description": "Idle / Running / Needs input / Failed / Completed."
+          }
+        },
+        "icons": {
+          "label": "Inline icons",
+          "hint": "Glyphs that decorate each session row. Hide to make the list denser.",
+          "statusDot": {
+            "label": "Status dot",
+            "description": "Colored bullet at the row start. Redundant when Status is enabled in metadata."
+          },
+          "sessionKind": {
+            "label": "Session kind icons",
+            "description": "Branch glyph for isolated worktrees and bot glyph for control sessions."
+          }
+        },
+        "hover": {
+          "label": "Show details on hover",
+          "hint": "Pop a tooltip with every field when hovering a session row, regardless of which fields the row itself shows.",
+          "checkbox": "Enable hover tooltip"
+        }
+      },
+      "statusBar": {
+        "label": "Status bar",
+        "hint": "Choose which optional badges show in the bottom status bar.",
+        "sessionCount": {
+          "label": "Session count",
+          "description": "Total number of sessions across the active project (`sessions: N`)."
+        },
+        "activeSessionStatus": {
+          "label": "Active session status",
+          "description": "Lifecycle state of the active session (Idle / Running / Needs input / Failed / Completed)."
+        },
+        "githubAccount": {
+          "label": "GitHub account",
+          "description": "The `gh` account used to list pull requests for the active repo."
+        },
+        "workingDirectory": {
+          "label": "Working directory",
+          "description": "The active session's worktree path (tildified against $HOME)."
+        },
+        "memoryUsage": {
+          "label": "Memory usage",
+          "description": "Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
+        }
+      }
+    },
+    "editor": {
+      "command": {
+        "label": "Editor command",
+        "hint": "Leave blank for the OS default. Examples: \"code\", \"cursor --wait\", \"subl\", \"idea\". The file path is appended as the last argument.",
+        "placeholder": "(use OS default)",
+        "description": "Used by the \"Open in editor\" right-click action on diff and staged file lists."
+      }
+    },
+    "notifications": {
+      "system": {
+        "label": "System notifications",
+        "hint": "Send a macOS notification when a session changes status.",
+        "enable": "Enable notifications"
+      },
+      "triggers": {
+        "label": "Trigger on",
+        "needsInput": {
+          "label": "Needs input",
+          "description": "Claude is waiting on the user."
+        },
+        "failed": {
+          "label": "Failed",
+          "description": "Session terminated with an error."
+        },
+        "completed": {
+          "label": "Completed",
+          "description": "Session reached the completed state."
+        }
+      },
+      "test": {
+        "label": "Test",
+        "hint": "Verifies the OS permission and that a notification can actually appear, independent of the Enable / Trigger settings above.",
+        "send": "Send test notification",
+        "sending": "Sending...",
+        "result": {
+          "sent": "Sent. Check your notification center if it didn't appear.",
+          "denied": "Permission denied. Allow Acorn under System Settings -> Notifications.",
+          "failed": "Failed to send. See the console for details."
+        }
+      },
+      "permissionHint": "macOS may ask once for permission the first time a notification fires."
+    },
+    "agents": {
+      "intro": {
+        "before": "The selected agent powers acorn's AI features - currently the merge dialog's ",
+        "action": "Generate with AI",
+        "after": " button."
+      },
+      "agent": {
+        "label": "Agent",
+        "hint": "Choose which AI CLI acorn uses."
+      },
+      "customOption": {
+        "label": "Custom command",
+        "description": "Use any CLI not in the list. Whitespace-separated; no shell expansion."
+      },
+      "ollamaModel": {
+        "label": "Ollama model",
+        "hint": "Passed to `ollama run <model>`. Defaults to `llama3` when blank."
+      },
+      "llmModel": {
+        "label": "llm model",
+        "hint": "Passed via `llm -m <model>` (and `llm chat -m <model>` for sessions). Blank uses the llm-configured default."
+      },
+      "customCommand": {
+        "label": "Custom command",
+        "hint": "Used for both interactive sessions and one-shot AI generation. Falls back to Claude Code when blank."
+      },
+      "requirement": "The selected agent's CLI must already be installed and authenticated on this machine. Surfaces a clear error when the binary is missing."
+    },
+    "storage": {
+      "title": "Reclaimable cache",
+      "description": "Disk artifacts that acorn cannot clean up through its normal session lifecycle (e.g. files orphaned by a crash or by edits made while acorn was offline). Sessions, projects, settings, and live terminal scrollback are never touched.",
+      "cacheCategories": {
+        "scrollbackOrphans": {
+          "label": "Orphan terminal scrollback",
+          "description": "ANSI scrollback files left behind by sessions that no longer exist (e.g. removed while acorn was offline, or before the prune-on-boot logic existed). Live sessions' scrollback is not touched - only the unreclaimable leftovers are surfaced."
+        }
+      },
+      "status": {
+        "clearedSingular": "Cleared {count} cached file.",
+        "clearedPlural": "Cleared {count} cached files.",
+        "nothingToClear": "Nothing to clear.",
+        "clearFailed": "Clear failed - see console."
+      },
+      "confirm": {
+        "message": "This will permanently delete the cached data listed above ({size}). Continue?",
+        "cancel": "Cancel"
+      },
+      "clear": {
+        "button": "Clear cache",
+        "clearing": "Clearing..."
+      },
+      "total": "Total: {size}"
+    },
+    "experiments": {
+      "warning": "Unfinished features. Behavior may change between releases; the toggles themselves are stable.",
+      "stickyPrompt": {
+        "label": "Pin last user prompt above terminal",
+        "description": "Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
+      },
+      "cjkCellWidthHeuristic": {
+        "label": "CJK terminal cell-width correction",
+        "description": "Heuristic for CJK monospaced fonts (D2Coding, Sarasa Mono, etc.): when `W` and `ga` measure the same width, halves the cell width so CJK glyphs sit on the cell grid. Skipped when widths differ, so ASCII fonts with system CJK fallback are not corrected. Known limitation: tab switches can briefly show a 1-frame glyph-size flicker as xterm's resize path resets `cell.width` to the natural W advance before the addon reapplies the halved value. Off by default."
+      },
+      "resumeModal": {
+        "label": "Show \"Resume previous conversation\" modal at cold boot",
+        "description": "On Acorn launch, probes every persisted session for an unfinished claude or codex transcript and pops a one-shot modal when you focus the session so you can pick up where you left off. Disable to suppress the modal entirely."
+      }
+    },
+    "about": {
+      "title": "About Acorn",
+      "description": "Acorn checks for updates automatically on startup and once every 24 hours. You can also check manually below.",
+      "currentVersion": "Current version",
+      "lastChecked": "Last checked",
+      "loading": "loading...",
+      "updateAvailable": "Update available",
+      "updateReady": "Acorn {version} is ready to install.",
+      "whatsNew": "What's new",
+      "installing": "Installing...",
+      "installRelaunch": "Install & relaunch",
+      "whatsNewInVersion": "What's new in {version}",
+      "checking": "Checking...",
+      "checkForUpdates": "Check for updates",
+      "relative": {
+        "never": "never",
+        "justNow": "just now",
+        "minutesAgo": "{count} min ago",
+        "hoursAgo": "{count} h ago",
+        "daysAgo": "{count} d ago"
+      }
     }
   },
   "app": {},
@@ -26,5 +347,61 @@
   "fileExplorer": {},
   "dialogs": {},
   "commandPalette": {},
-  "backgroundSessions": {}
+  "backgroundSessions": {
+    "daemon": {
+      "label": "Daemon",
+      "hint": "The acornd daemon owns long-running terminal sessions. With the daemon on, Acorn can quit and reopen without losing your PTYs. Off falls back to the legacy in-process path - sessions die with the app.",
+      "enableLabel": "Enable background sessions (acornd)",
+      "enabledDescription": "Sessions persist across Acorn restarts until you explicitly quit them.",
+      "disabledDescription": "Sessions are bound to this Acorn process - closing the app kills them."
+    },
+    "status": {
+      "label": "Status",
+      "hint": "Live state of the running daemon. Updates every 3 seconds while this panel is open.",
+      "disabled": "Disabled",
+      "running": "Running",
+      "down": "Down",
+      "up": "up",
+      "sessions": "sessions",
+      "log": "Log"
+    },
+    "controls": {
+      "label": "Controls",
+      "hint": "Restart reconnects the bridge - useful after killing the daemon from a terminal. Quit kills every running PTY and exits the daemon.",
+      "restart": "Restart daemon",
+      "confirmShutdownPrompt": "Kill every PTY?",
+      "confirm": "Confirm",
+      "cancel": "Cancel",
+      "quit": "Quit daemon"
+    },
+    "sessions": {
+      "label": "Sessions",
+      "hint": "Every PTY the daemon currently tracks. Dead rows can be forgotten from the daemon side; their app metadata stays so you can resume from disk if the agent supports it.",
+      "disabled": "Daemon disabled - sessions are managed by the legacy in-process path.",
+      "notRunning": "Daemon is not running.",
+      "loading": "Loading...",
+      "empty": "No sessions tracked.",
+      "controlSession": "Control session"
+    },
+    "actions": {
+      "killPty": "Kill PTY",
+      "restoreTooltip": "Adopt this session back into Acorn's sidebar",
+      "restore": "Restore session",
+      "forgetDisabledTooltip": "Kill first, then forget",
+      "forgetTooltip": "Remove this row from the daemon registry",
+      "forget": "Forget session"
+    },
+    "metadata": {
+      "tab": "Tab",
+      "branch": "Branch",
+      "status": "Status",
+      "worktree": "Worktree",
+      "last": "Last",
+      "repo": "Repo",
+      "orphaned": "No app-side row - orphaned in daemon."
+    },
+    "relativeTime": {
+      "ago": "ago"
+    }
+  }
 }
