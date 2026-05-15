@@ -1,5 +1,7 @@
+import { isSessionTabId } from "./workspaceTabs";
+
 interface PaneLike {
-  activeSessionId: string | null;
+  activeTabId: string | null;
 }
 
 export function visibleMultiInputSessionIds(
@@ -8,8 +10,8 @@ export function visibleMultiInputSessionIds(
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const pane of Object.values(panes)) {
-    const id = pane.activeSessionId;
-    if (!id || seen.has(id)) continue;
+    const id = pane.activeTabId;
+    if (!id || !isSessionTabId(id) || seen.has(id)) continue;
     seen.add(id);
     ids.push(id);
   }
@@ -21,5 +23,5 @@ export function isSessionInFocusedPane(
   panes: Record<string, PaneLike>,
   focusedPaneId: string,
 ): boolean {
-  return panes[focusedPaneId]?.activeSessionId === sessionId;
+  return panes[focusedPaneId]?.activeTabId === sessionId;
 }
