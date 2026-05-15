@@ -11,16 +11,31 @@ import {
   ChevronDown,
   Folder,
   FolderOpen,
+  FolderPlus,
   File as FileIcon,
+  FilePlus,
+  Copy,
+  Link2,
+  MessageSquarePlus,
+  Pencil,
+  Trash2,
+  ExternalLink,
+  Edit3,
   RefreshCw,
   EyeOff,
   Eye,
   Filter,
+  Search,
+  Regex,
+  GitBranch,
+  TerminalSquare,
+  X,
 } from "lucide-react";
 import { api, type FsEntry, FS_CHANGED_EVENT } from "../lib/api";
-import type { FsChangePayload } from "../lib/api";
+import type { FsChangePayload, FsGitStatus, FsGitStatusEntry } from "../lib/api";
 import { cn } from "../lib/cn";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { Tooltip } from "./Tooltip";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
@@ -65,6 +80,62 @@ function joinPath(parent: string, name: string): string {
   return parent + "/" + name;
 }
 
+function buildMatcher(query: string, regex: boolean): ((name: string) => boolean) | null {
+  const q = query.trim();
+  if (!q) return null;
+  if (regex) {
+    try {
+      const re = new RegExp(q, "i");
+      return (name) => re.test(name);
+    } catch {
+      // Invalid pattern — disable filtering rather than block the tree.
+      return null;
+    }
+  }
+  const lower = q.toLowerCase();
+  return (name) => name.toLowerCase().includes(lower);
+}
+
+/**
+ * Build a set of directory paths that contain at least one git-dirty
+ * descendant. Used to roll the modified/added/deleted color up to
+ * parent folders so the tree surfaces dirty subtrees even when
+ * collapsed.
+ */
+function buildDirtyAncestors(
+  status: Record<string, FsGitStatusEntry>,
+  rootPath: string,
+): Set<string> {
+  const out = new Set<string>();
+  for (const p of Object.keys(status)) {
+    let cur = p;
+    while (true) {
+      const idx = cur.lastIndexOf("/");
+      if (idx <= 0) break;
+      const parent = cur.slice(0, idx);
+      if (parent === rootPath || !parent.startsWith(rootPath)) break;
+      out.add(parent);
+      cur = parent;
+    }
+  }
+  return out;
+}
+
+function relativeTo(base: string, abs: string): string {
+  const b = base.endsWith("/") ? base : base + "/";
+  if (abs === base) return ".";
+  if (abs.startsWith(b)) return abs.slice(b.length);
+  return abs;
+}
+
+async function writeToActiveSession(
+  sessionId: string | null,
+  payload: string,
+): Promise<void> {
+  if (!sessionId) throw new Error("No active session");
+  await api.ptyWrite(sessionId, payload);
+}
+
 function getLocalBool(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key);
@@ -97,6 +168,103 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const [draftRename, setDraftRename] = useState<DraftRename | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Cached `$EDITOR` value from the user's shell rc. Empty string means
+  // the user did not set one, in which case the open action falls back
+  // to the OS default app and the menu label reflects that.
+  const [shellEditor, setShellEditor] = useState<string>("");
+  // Selection — Cmd-click toggle, Shift-click range. When non-empty
+  // the context menu offers bulk actions across `selection`.
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  // Search / filter state. Empty query disables filtering. Regex flag
+  // switches substring → RegExp; invalid pattern falls back to plain.
+  const [query, setQuery] = useState<string>("");
+  const [useRegex, setUseRegex] = useState<boolean>(false);
+  const [branch, setBranch] = useState<string>("");
+  // Per-path git status keyed by absolute path. Refreshed on mount + when
+  // the fs watcher fires (debounced). Used to color filenames + show
+  // status label + +/- line counts.
+  const [gitStatus, setGitStatus] = useState<Record<string, FsGitStatusEntry>>(
+    {},
+  );
+  // Which agent (if any) is currently running in the focused session.
+  // Drives the "Attach to Conversation" context-menu entries — null
+  // values mean no live process found for that agent kind.
+  const [agent, setAgent] = useState<{
+    claude: string | null;
+    codex: string | null;
+  }>({ claude: null, codex: null });
+  // Tracks the focused session id so the menu can write into the right
+  // PTY without re-importing the store at every click.
+  const [activeSessionId, setActiveSessionIdLocal] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .fsShellEditor()
+      .then((v) => {
+        if (!cancelled) setShellEditor(v.trim());
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshGitStatus = useCallback(async () => {
+    try {
+      const map = await api.fsGitStatus(rootPath);
+      setGitStatus(map);
+    } catch {
+      setGitStatus({});
+    }
+  }, [rootPath]);
+
+  const refreshBranch = useCallback(async () => {
+    try {
+      setBranch(await api.fsGitBranch(rootPath));
+    } catch {
+      setBranch("");
+    }
+  }, [rootPath]);
+
+  useEffect(() => {
+    void refreshGitStatus();
+    void refreshBranch();
+  }, [refreshGitStatus, refreshBranch]);
+
+  // Subscribe to focused-session changes via the store so the menu
+  // always reflects the agent state of whichever PTY would receive the
+  // attached path.
+  useEffect(() => {
+    let cancelled = false;
+    let unsub: (() => void) | null = null;
+    void import("../store").then(({ useAppStore }) => {
+      if (cancelled) return;
+      const sync = (sid: string | null) => {
+        setActiveSessionIdLocal(sid);
+        if (!sid) {
+          setAgent({ claude: null, codex: null });
+          return;
+        }
+        api
+          .detectSessionAgent(sid)
+          .then((res) => {
+            if (!cancelled) setAgent(res);
+          })
+          .catch(() => {});
+      };
+      sync(useAppStore.getState().activeSessionId);
+      unsub = useAppStore.subscribe((s) => {
+        sync(s.activeSessionId);
+      });
+    });
+    return () => {
+      cancelled = true;
+      if (unsub) unsub();
+    };
+  }, []);
 
   useEffect(() => {
     setLocalBool(SHOW_HIDDEN_KEY, showHidden);
@@ -191,6 +359,8 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           void fetchDir(dir);
         }
       }
+      void refreshGitStatus();
+      void refreshBranch();
     };
     void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
       for (const p of event.payload.paths) {
@@ -204,7 +374,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (flushTimer) clearTimeout(flushTimer);
       if (cancel) cancel();
     };
-  }, [rootPath, fetchDir, cache]);
+  }, [rootPath, fetchDir, cache, refreshGitStatus, refreshBranch]);
 
   const toggleDir = useCallback(
     (path: string) => {
@@ -227,16 +397,22 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const openInEditor = useCallback(async (entry: FsEntry) => {
     setActivePath(entry.path);
     try {
-      // Resolve which session to write into by walking the focused pane.
-      // Avoid a cross-module dep on the store by inlining the lookup.
-      const store = await import("../store");
-      const state = store.useAppStore.getState();
-      const sid = state.activeSessionId;
-      if (!sid) {
-        setError("No active session — open a terminal first");
+      // Probe `$EDITOR` from cached shell env. Empty means the user has
+      // not configured one — fall back to the OS default app for the
+      // file type. Without this fallback the PTY path becomes
+      // `"<path>"` after the shell expands an empty `$EDITOR`, which
+      // zsh tries to execute and rejects with "permission denied".
+      const editor = (await api.fsShellEditor()).trim();
+      if (!editor) {
+        await api.fsOpenDefault(entry.path);
         return;
       }
-      // Shell expands $EDITOR. Quote the path. Trailing \n executes.
+      const store = await import("../store");
+      const sid = store.useAppStore.getState().activeSessionId;
+      if (!sid) {
+        await api.fsOpenDefault(entry.path);
+        return;
+      }
       const escaped = entry.path.replace(/(["\\$`])/g, "\\$1");
       await api.ptyWrite(sid, `$EDITOR "${escaped}"\n`);
     } catch (e) {
@@ -300,6 +476,128 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     [fetchDir],
   );
 
+  const dirtyAncestors = useMemo(
+    () => buildDirtyAncestors(gitStatus, rootPath),
+    [gitStatus, rootPath],
+  );
+
+  const matcher = useMemo(() => buildMatcher(query, useRegex), [query, useRegex]);
+
+  const handleEntryClick = useCallback(
+    (entry: FsEntry, event: React.MouseEvent) => {
+      const meta = event.metaKey || event.ctrlKey;
+      const shift = event.shiftKey;
+      if (meta || shift) {
+        event.preventDefault();
+        setSelection((prev) => {
+          const next = new Set(prev);
+          if (next.has(entry.path)) next.delete(entry.path);
+          else next.add(entry.path);
+          return next;
+        });
+        return;
+      }
+      // Plain click: clear multi-selection and act on the entry.
+      setSelection(new Set());
+      if (entry.is_dir) toggleDir(entry.path);
+      else openInEditor(entry);
+    },
+    [toggleDir, openInEditor],
+  );
+
+  const handleBulkTrash = useCallback(async () => {
+    const paths = Array.from(selection);
+    for (const p of paths) {
+      try {
+        await api.fsTrash(p);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+    setSelection(new Set());
+    void refreshGitStatus();
+  }, [selection, refreshGitStatus]);
+
+  const handleBulkCopyPaths = useCallback(
+    async (mode: "relative" | "absolute") => {
+      const paths = Array.from(selection);
+      const lines = paths.map((p) =>
+        mode === "absolute" ? p : relativeTo(rootPath, p),
+      );
+      try {
+        await navigator.clipboard.writeText(lines.join("\n"));
+      } catch {
+        setError("Clipboard write failed");
+      }
+    },
+    [selection, rootPath],
+  );
+
+  const handleBulkAttach = useCallback(async () => {
+    if (!activeSessionId) {
+      setError("No active session — open a terminal first");
+      return;
+    }
+    const paths = Array.from(selection);
+    const rels = paths.map((p) => `@${relativeTo(rootPath, p)}`).join(" ");
+    try {
+      await api.ptyWrite(activeSessionId, ` ${rels} `);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [activeSessionId, selection, rootPath]);
+
+  const handleOpenFolderInNewTab = useCallback(async (folderPath: string) => {
+    try {
+      const store = await import("../store");
+      const state = store.useAppStore.getState();
+      const project = state.activeProject;
+      if (!project) {
+        setError("No active project");
+        return;
+      }
+      const name = folderPath.split("/").filter(Boolean).pop() ?? "session";
+      // Spawn a regular session in the current project, then queue a
+      // `cd <folder>` to land inside the clicked directory once the PTY
+      // is up. Mirrors how CommandRunDialog primes new sessions.
+      const session = await state.createSession(name, project, false);
+      if (session) {
+        state.setPendingTerminalInput(
+          session.id,
+          `cd "${folderPath.replace(/(["\\$`])/g, "\\$1")}"\n`,
+        );
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // F2 to rename the focused / single-selected entry. Scoped to the
+  // FileExplorer container so it does not collide with terminal input.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "F2") return;
+      if (selection.size === 1) {
+        const path = Array.from(selection)[0];
+        const name = path.split("/").pop() ?? "";
+        setDraftRename({ path, value: name });
+        e.preventDefault();
+        return;
+      }
+      if (activePath) {
+        const name = activePath.split("/").pop() ?? "";
+        setDraftRename({ path: activePath, value: name });
+        e.preventDefault();
+      }
+    };
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  }, [selection, activePath]);
+
   const openMenu = useCallback(
     (e: React.MouseEvent, entry: FsEntry | null) => {
       e.preventDefault();
@@ -312,16 +610,126 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     if (!menu) return [];
     const entry = menu.entry;
     const parentForCreate = entry?.is_dir ? entry.path : rootPath;
+    const rel = entry ? relativeTo(rootPath, entry.path) : "";
     const items: ContextMenuItem[] = [];
-    if (entry && !entry.is_dir) {
+
+    // Bulk-action mode: ≥2 entries selected (and the right-clicked
+    // entry is among them) — show actions that apply to the whole set.
+    if (entry && selection.size > 1 && selection.has(entry.path)) {
+      const n = selection.size;
       items.push({
-        label: "Open in $EDITOR",
+        label: `Copy Relative Paths (${n})`,
+        icon: <Link2 size={13} />,
+        onClick: () => void handleBulkCopyPaths("relative"),
+      });
+      items.push({
+        label: `Copy Absolute Paths (${n})`,
+        icon: <Copy size={13} />,
+        onClick: () => void handleBulkCopyPaths("absolute"),
+      });
+      if (agent.claude || agent.codex) {
+        items.push({ type: "separator" });
+        items.push({
+          label: `Attach All to Conversation (${n})`,
+          icon: <MessageSquarePlus size={13} />,
+          onClick: () => void handleBulkAttach(),
+        });
+      }
+      items.push({ type: "separator" });
+      items.push({
+        label: `Move to Trash (${n})`,
+        icon: <Trash2 size={13} />,
+        onClick: () => void handleBulkTrash(),
+      });
+      return items;
+    }
+
+    // Group 1: Open actions
+    if (entry && !entry.is_dir) {
+      const editorBin = shellEditor.split(/\s+/)[0];
+      const openLabel = editorBin
+        ? `Open in ${editorBin}`
+        : "Open with Default Program";
+      items.push({
+        label: openLabel,
+        icon: <Edit3 size={13} />,
         onClick: () => void openInEditor(entry),
       });
-      items.push({ type: "separator" });
     }
+    if (entry) {
+      items.push({
+        label: "Reveal in File Manager",
+        icon: <ExternalLink size={13} />,
+        onClick: () => {
+          void api.fsReveal(entry.path).catch((e) => {
+            setError(e instanceof Error ? e.message : String(e));
+          });
+        },
+      });
+    }
+    if (entry?.is_dir) {
+      items.push({
+        label: "Open in New Tab",
+        icon: <TerminalSquare size={13} />,
+        onClick: () => void handleOpenFolderInNewTab(entry.path),
+      });
+    }
+
+    // Group 2: Agent attach (only when an agent is live)
+    if (entry && (agent.claude || agent.codex)) {
+      items.push({ type: "separator" });
+      if (agent.claude) {
+        items.push({
+          label: "Attach to Claude",
+          icon: <MessageSquarePlus size={13} />,
+          onClick: () => {
+            void writeToActiveSession(activeSessionId, ` @${rel} `).catch(
+              (e) => setError(e instanceof Error ? e.message : String(e)),
+            );
+          },
+        });
+      }
+      if (agent.codex) {
+        items.push({
+          label: "Attach to Codex",
+          icon: <MessageSquarePlus size={13} />,
+          onClick: () => {
+            void writeToActiveSession(activeSessionId, ` @${rel} `).catch(
+              (e) => setError(e instanceof Error ? e.message : String(e)),
+            );
+          },
+        });
+      }
+    }
+
+    // Group 3: Path copy
+    if (entry) {
+      items.push({ type: "separator" });
+      items.push({
+        label: "Copy Relative Path",
+        icon: <Link2 size={13} />,
+        onClick: () => {
+          void navigator.clipboard.writeText(rel).catch(() => {
+            setError("Clipboard write failed");
+          });
+        },
+      });
+      items.push({
+        label: "Copy Absolute Path",
+        icon: <Copy size={13} />,
+        onClick: () => {
+          void navigator.clipboard.writeText(entry.path).catch(() => {
+            setError("Clipboard write failed");
+          });
+        },
+      });
+    }
+
+    // Group 4: Create
+    if (items.length > 0) items.push({ type: "separator" });
     items.push({
-      label: "New file",
+      label: "New File",
+      icon: <FilePlus size={13} />,
       onClick: () => {
         if (entry?.is_dir && !expanded.has(entry.path)) {
           toggleDir(entry.path);
@@ -330,7 +738,8 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       },
     });
     items.push({
-      label: "New folder",
+      label: "New Folder",
+      icon: <FolderPlus size={13} />,
       onClick: () => {
         if (entry?.is_dir && !expanded.has(entry.path)) {
           toggleDir(entry.path);
@@ -338,44 +747,49 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         setDraftCreate({ parentPath: parentForCreate, kind: "dir", value: "" });
       },
     });
+
+    // Group 5: Destructive
     if (entry) {
       items.push({ type: "separator" });
       items.push({
         label: "Rename",
+        icon: <Pencil size={13} />,
         onClick: () => setDraftRename({ path: entry.path, value: entry.name }),
       });
       items.push({
         label: "Move to Trash",
+        icon: <Trash2 size={13} />,
         onClick: () => void handleTrash(entry),
-      });
-      items.push({ type: "separator" });
-      items.push({
-        label: "Copy path",
-        onClick: () => {
-          void navigator.clipboard.writeText(entry.path).catch(() => {
-            setError("Clipboard write failed");
-          });
-        },
-      });
-      items.push({
-        label: "Reveal in file manager",
-        onClick: () => {
-          void api.fsReveal(entry.path).catch((e) => {
-            setError(e instanceof Error ? e.message : String(e));
-          });
-        },
       });
     }
     return items;
-  }, [menu, rootPath, expanded, toggleDir, openInEditor, handleTrash]);
+  }, [
+    menu,
+    rootPath,
+    expanded,
+    toggleDir,
+    openInEditor,
+    handleTrash,
+    shellEditor,
+    agent,
+    activeSessionId,
+    selection,
+    handleBulkAttach,
+    handleBulkCopyPaths,
+    handleBulkTrash,
+    handleOpenFolderInNewTab,
+  ]);
 
   return (
     <div
-      className="flex h-full w-full flex-col"
+      ref={containerRef}
+      tabIndex={0}
+      className="flex h-full w-full flex-col outline-none"
       onContextMenu={(e) => openMenu(e, null)}
     >
       <Toolbar
         rootPath={rootPath}
+        branch={branch}
         showHidden={showHidden}
         respectGitignore={respectGitignore}
         onToggleHidden={() => setShowHidden((v) => !v)}
@@ -388,7 +802,14 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           setDraftCreate({ parentPath: rootPath, kind: "dir", value: "" })
         }
       />
+      <SearchBar
+        query={query}
+        useRegex={useRegex}
+        onQueryChange={setQuery}
+        onToggleRegex={() => setUseRegex((v) => !v)}
+      />
       <div className="flex-1 overflow-auto py-1 text-[12px]">
+        <div className="w-max min-w-full">
         <DirNode
           path={rootPath}
           depth={0}
@@ -399,8 +820,13 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           activePath={activePath}
           draftCreate={draftCreate}
           draftRename={draftRename}
+          gitStatus={gitStatus}
+          dirtyAncestors={dirtyAncestors}
+          selection={selection}
+          matcher={matcher}
           onToggleDir={toggleDir}
           onOpenEntry={openInEditor}
+          onEntryClick={handleEntryClick}
           onContextMenu={openMenu}
           onCommitCreate={handleCreate}
           onCancelCreate={() => setDraftCreate(null)}
@@ -413,6 +839,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
             setDraftRename((prev) => (prev ? { ...prev, value: v } : prev))
           }
         />
+        </div>
       </div>
       {error ? (
         <div className="flex items-start gap-2 border-t border-border bg-bg-error/20 px-3 py-1.5 text-[11px] text-fg">
@@ -439,6 +866,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
 interface ToolbarProps {
   rootPath: string;
+  branch: string;
   showHidden: boolean;
   respectGitignore: boolean;
   onToggleHidden: () => void;
@@ -453,16 +881,25 @@ function Toolbar(props: ToolbarProps) {
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
       <span
-        className="flex-1 truncate font-medium text-fg-muted"
+        className="truncate font-medium text-fg-muted"
         title={props.rootPath}
       >
         {rootName.toUpperCase()}
       </span>
-      <ToolbarBtn label="New file" onClick={props.onNewFile}>
-        <FileIcon size={12} />
+      {props.branch ? (
+        <Tooltip label={`Current branch: ${props.branch}`}>
+          <span className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-px text-[10px] text-fg-muted">
+            <GitBranch size={10} />
+            <span className="max-w-[120px] truncate">{props.branch}</span>
+          </span>
+        </Tooltip>
+      ) : null}
+      <span className="flex-1" />
+      <ToolbarBtn label="New File" onClick={props.onNewFile}>
+        <FilePlus size={12} />
       </ToolbarBtn>
-      <ToolbarBtn label="New folder" onClick={props.onNewFolder}>
-        <Folder size={12} />
+      <ToolbarBtn label="New Folder" onClick={props.onNewFolder}>
+        <FolderPlus size={12} />
       </ToolbarBtn>
       <ToolbarBtn
         label={props.showHidden ? "Hide dotfiles" : "Show dotfiles"}
@@ -489,6 +926,55 @@ function Toolbar(props: ToolbarProps) {
   );
 }
 
+interface SearchBarProps {
+  query: string;
+  useRegex: boolean;
+  onQueryChange: (v: string) => void;
+  onToggleRegex: () => void;
+}
+
+function SearchBar(props: SearchBarProps) {
+  return (
+    <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+      <Search size={12} className="shrink-0 text-fg-muted" />
+      <input
+        type="text"
+        value={props.query}
+        onChange={(e) => props.onQueryChange(e.target.value)}
+        placeholder={props.useRegex ? "Regex…" : "Filter files…"}
+        className="flex-1 bg-transparent text-[11px] text-fg outline-none placeholder:text-fg-muted/60"
+      />
+      {props.query ? (
+        <Tooltip label="Clear filter">
+          <button
+            type="button"
+            aria-label="Clear filter"
+            onClick={() => props.onQueryChange("")}
+            className="rounded p-0.5 text-fg-muted hover:text-fg"
+          >
+            <X size={11} />
+          </button>
+        </Tooltip>
+      ) : null}
+      <Tooltip label={props.useRegex ? "Plain match" : "Regex match"}>
+        <button
+          type="button"
+          aria-label="Toggle regex"
+          onClick={props.onToggleRegex}
+          className={cn(
+            "rounded p-0.5 transition",
+            props.useRegex
+              ? "bg-fg-muted/15 text-fg"
+              : "text-fg-muted hover:text-fg",
+          )}
+        >
+          <Regex size={12} />
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
 function ToolbarBtn({
   children,
   label,
@@ -501,20 +987,21 @@ function ToolbarBtn({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={cn(
-        "rounded p-1 transition",
-        active
-          ? "bg-fg-muted/15 text-fg"
-          : "text-fg-muted hover:bg-fg-muted/10 hover:text-fg",
-      )}
-    >
-      {children}
-    </button>
+    <Tooltip label={label}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        className={cn(
+          "rounded p-1 transition",
+          active
+            ? "bg-fg-muted/15 text-fg"
+            : "text-fg-muted hover:bg-fg-muted/10 hover:text-fg",
+        )}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -528,8 +1015,13 @@ interface DirNodeProps {
   activePath: string | null;
   draftCreate: DraftCreate | null;
   draftRename: DraftRename | null;
+  gitStatus: Record<string, FsGitStatusEntry>;
+  dirtyAncestors: Set<string>;
+  selection: Set<string>;
+  matcher: ((name: string) => boolean) | null;
   onToggleDir: (path: string) => void;
   onOpenEntry: (entry: FsEntry) => void;
+  onEntryClick: (entry: FsEntry, event: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent, entry: FsEntry | null) => void;
   onCommitCreate: () => void;
   onCancelCreate: () => void;
@@ -540,8 +1032,15 @@ interface DirNodeProps {
 }
 
 function DirNode(props: DirNodeProps) {
-  const { state, path, isRoot } = props;
-  const entries = state?.entries ?? [];
+  const { state, path, isRoot, matcher } = props;
+  const rawEntries = state?.entries ?? [];
+  // When a matcher is active, hide entries that fail to match *unless*
+  // they are directories with at least one matching descendant. Without
+  // recursive descent we just keep dirs visible so the user can still
+  // drill in.
+  const entries = matcher
+    ? rawEntries.filter((e) => e.is_dir || matcher(e.name))
+    : rawEntries;
   const loading = state?.loading ?? false;
   const error = state?.error ?? null;
 
@@ -583,8 +1082,12 @@ function DirNode(props: DirNodeProps) {
             depth={props.depth}
             expanded={props.expanded.has(entry.path)}
             isActive={props.activePath === entry.path}
-            onToggleDir={props.onToggleDir}
-            onOpenEntry={props.onOpenEntry}
+            isSelected={props.selection.has(entry.path)}
+            gitStatus={props.gitStatus[entry.path]}
+            dirtyDescendant={
+              entry.is_dir && props.dirtyAncestors.has(entry.path)
+            }
+            onEntryClick={props.onEntryClick}
             onContextMenu={props.onContextMenu}
           >
             {entry.is_dir && props.expanded.has(entry.path) ? (
@@ -644,10 +1147,38 @@ interface EntryRowProps {
   depth: number;
   expanded: boolean;
   isActive: boolean;
-  onToggleDir: (path: string) => void;
-  onOpenEntry: (entry: FsEntry) => void;
+  isSelected: boolean;
+  gitStatus?: FsGitStatusEntry;
+  dirtyDescendant: boolean;
+  onEntryClick: (entry: FsEntry, event: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent, entry: FsEntry) => void;
   children?: React.ReactNode;
+}
+
+const STATUS_LABELS: Record<FsGitStatus, string> = {
+  modified: "M",
+  added: "A",
+  deleted: "D",
+  renamed: "R",
+  conflicted: "C",
+  clean: "",
+};
+
+function gitStatusClass(status: FsGitStatus | undefined): string {
+  switch (status) {
+    case "modified":
+      return "text-amber-400";
+    case "added":
+      return "text-emerald-400";
+    case "deleted":
+      return "text-rose-400 line-through";
+    case "renamed":
+      return "text-sky-400";
+    case "conflicted":
+      return "text-orange-400";
+    default:
+      return "";
+  }
 }
 
 function EntryRow({
@@ -655,34 +1186,50 @@ function EntryRow({
   depth,
   expanded,
   isActive,
-  onToggleDir,
-  onOpenEntry,
+  isSelected,
+  gitStatus,
+  dirtyDescendant,
+  onEntryClick,
   onContextMenu,
   children,
 }: EntryRowProps) {
-  const onClick = () => {
-    if (entry.is_dir) onToggleDir(entry.path);
-    else onOpenEntry(entry);
-  };
+  const nameClass = gitStatusClass(gitStatus?.kind);
+  const statusLetter = gitStatus ? STATUS_LABELS[gitStatus.kind] : "";
+  const additions = gitStatus?.additions ?? 0;
+  const deletions = gitStatus?.deletions ?? 0;
+  // Folder rollup: when a directory itself has no status entry but
+  // contains at least one dirty descendant, tint the name amber so the
+  // user sees there's something to look at inside.
+  const folderRollupClass =
+    !gitStatus && dirtyDescendant ? "text-amber-400/70" : "";
   return (
     <>
       <button
         type="button"
-        onClick={onClick}
+        onClick={(e) => onEntryClick(entry, e)}
         onContextMenu={(e) => {
           e.stopPropagation();
           onContextMenu(e, entry);
         }}
         className={cn(
-          "flex w-full items-center gap-1 truncate px-2 py-0.5 text-left transition",
-          isActive
+          "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
+          isSelected
+            ? "bg-accent/25 text-fg"
+            : isActive
             ? "bg-accent/15 text-fg"
             : "text-fg hover:bg-fg-muted/10",
           entry.gitignored ? "opacity-60" : "",
         )}
-        style={{ paddingLeft: 8 + depth * 12 }}
+        style={{ paddingLeft: 8 }}
         title={entry.path}
       >
+        {Array.from({ length: depth }).map((_, i) => (
+          <span
+            key={i}
+            aria-hidden
+            className="relative block w-1 shrink-0 self-stretch before:absolute before:left-[2px] before:top-0 before:bottom-0 before:w-px before:bg-fg-muted/20"
+          />
+        ))}
         {entry.is_dir ? (
           <span className="shrink-0 text-fg-muted">
             {expanded ? (
@@ -705,12 +1252,33 @@ function EntryRow({
             <FileIcon size={13} />
           )}
         </span>
-        <span className="truncate">
+        <span className={cn("whitespace-nowrap", nameClass, folderRollupClass)}>
           {entry.name}
           {entry.is_symlink ? (
             <span className="ml-1 text-fg-muted">↪</span>
           ) : null}
         </span>
+        {statusLetter ? (
+          <span
+            className={cn(
+              "ml-auto flex shrink-0 items-center gap-1 pl-2 text-[10px] tabular-nums",
+              nameClass,
+            )}
+          >
+            {additions > 0 ? (
+              <span className="text-emerald-400">+{additions}</span>
+            ) : null}
+            {deletions > 0 ? (
+              <span className="text-rose-400">-{deletions}</span>
+            ) : null}
+            <span
+              className="rounded bg-fg-muted/15 px-1 font-medium"
+              aria-label={`git status ${gitStatus?.kind}`}
+            >
+              {statusLetter}
+            </span>
+          </span>
+        ) : null}
       </button>
       {children}
     </>
@@ -741,9 +1309,16 @@ function EditRow({
   }, []);
   return (
     <div
-      className="flex w-full items-center gap-1 px-2 py-0.5"
-      style={{ paddingLeft: 8 + depth * 12 }}
+      className="flex w-full items-center gap-1 py-0.5 pr-2"
+      style={{ paddingLeft: 8 }}
     >
+      {Array.from({ length: depth }).map((_, i) => (
+        <span
+          key={i}
+          aria-hidden
+          className="block w-3 shrink-0 self-stretch border-l border-fg-muted/20"
+        />
+      ))}
       <span className="w-3 shrink-0" />
       <span className="shrink-0 text-fg-muted">{icon}</span>
       <input

@@ -140,6 +140,12 @@ export function RightPanel() {
           "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
       >
+        <TabButton
+          icon={<FolderTree size={14} />}
+          label="Files"
+          active={rightTab === "files"}
+          onClick={() => setRightTab("files")}
+        />
         {showTodos ? (
           <TabButton
             icon={<ListTodo size={14} />}
@@ -172,12 +178,6 @@ export function RightPanel() {
           label="Actions"
           active={rightTab === "actions"}
           onClick={() => setRightTab("actions")}
-        />
-        <TabButton
-          icon={<FolderTree size={14} />}
-          label="Files"
-          active={rightTab === "files"}
-          onClick={() => setRightTab("files")}
         />
       </nav>
       <div className="flex-1 overflow-hidden">
@@ -268,9 +268,10 @@ interface TabButtonProps {
   active: boolean;
   onClick: () => void;
   badge?: number;
+  className?: string;
 }
 
-function TabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
+function TabButton({ icon, label, active, onClick, badge, className }: TabButtonProps) {
   return (
     <button
       type="button"
@@ -280,6 +281,7 @@ function TabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
         active
           ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
           : "text-fg-muted hover:text-fg",
+        className,
       )}
     >
       {icon}

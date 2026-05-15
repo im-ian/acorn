@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use git2::{Repository, Status, StatusOptions};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
@@ -261,6 +263,221 @@ pub fn fs_reveal(path: String) -> AppResult<()> {
             .map_err(|e| AppError::Other(format!("explorer failed: {e}")))?;
     }
     Ok(())
+}
+
+/// Open a file with the OS's default registered application. Used as a
+/// fallback when the user has not set `$EDITOR` in their shell rc — the
+/// PTY path otherwise blows up with `permission denied` because the
+/// shell tries to execute the empty command followed by the file.
+#[tauri::command]
+pub fn fs_open_default(path: String) -> AppResult<()> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(AppError::InvalidPath(format!("missing: {path}")));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&p)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&p)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("xdg-open failed: {e}")))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", ""])
+            .arg(&p)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("start failed: {e}")))?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitStatusEntry {
+    pub kind: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// Per-path git status, mapped to a small set of buckets the frontend
+/// uses to pick a color, plus diff line counts (vs HEAD) so the entry
+/// can render a `+n -n` badge. Paths are absolute strings keyed by full
+/// path so the FileExplorer's flat lookup matches its entry paths.
+#[tauri::command]
+pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEntry>> {
+    let root = PathBuf::from(&repo_root);
+    if !root.exists() {
+        return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
+    }
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        // Not a git repo — return empty map, frontend treats this as "no
+        // status colors to apply".
+        Err(_) => return Ok(HashMap::new()),
+    };
+    let workdir = match repo.workdir() {
+        Some(p) => p.to_path_buf(),
+        None => return Ok(HashMap::new()),
+    };
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false)
+        .renames_head_to_index(true)
+        .renames_index_to_workdir(true);
+    let statuses = repo
+        .statuses(Some(&mut opts))
+        .map_err(|e| AppError::Other(format!("git status failed: {e}")))?;
+
+    let mut out: HashMap<String, GitStatusEntry> = HashMap::with_capacity(statuses.len());
+    for entry in statuses.iter() {
+        let Some(rel) = entry.path() else { continue };
+        let abs = workdir.join(rel);
+        let abs_str = abs.to_string_lossy().into_owned();
+        let s = entry.status();
+        let kind = classify_status(s);
+        let (additions, deletions) = file_diff_stats(&repo, &workdir, rel, kind);
+        out.insert(
+            abs_str,
+            GitStatusEntry {
+                kind: kind.into(),
+                additions,
+                deletions,
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Compute additions/deletions for a single path against HEAD. For
+/// untracked files we count line count as additions; for deleted files
+/// the count comes from the HEAD blob.
+fn file_diff_stats(
+    repo: &Repository,
+    workdir: &Path,
+    rel: &str,
+    kind: &str,
+) -> (u32, u32) {
+    if kind == "added" {
+        // Untracked or freshly-added file. Count file lines as additions.
+        let abs = workdir.join(rel);
+        if let Ok(bytes) = std::fs::read(&abs) {
+            let lines = count_lines(&bytes);
+            return (lines, 0);
+        }
+        return (0, 0);
+    }
+    if kind == "deleted" {
+        // Read HEAD blob to know the original line count.
+        if let Ok(head) = repo.head() {
+            if let Ok(commit) = head.peel_to_commit() {
+                if let Ok(tree) = commit.tree() {
+                    if let Ok(entry) = tree.get_path(Path::new(rel)) {
+                        if let Ok(obj) = entry.to_object(repo) {
+                            if let Some(blob) = obj.as_blob() {
+                                return (0, count_lines(blob.content()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return (0, 0);
+    }
+    // modified / renamed / conflicted — run a diff vs HEAD scoped to
+    // this single path so we get the patch stats directly.
+    let mut opts = git2::DiffOptions::new();
+    opts.pathspec(rel)
+        .include_untracked(true)
+        .recurse_untracked_dirs(false);
+    let tree = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_tree().ok());
+    let diff = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts));
+    if let Ok(d) = diff {
+        if let Ok(stats) = d.stats() {
+            return (stats.insertions() as u32, stats.deletions() as u32);
+        }
+    }
+    (0, 0)
+}
+
+fn count_lines(bytes: &[u8]) -> u32 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut n = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
+    if bytes.last() != Some(&b'\n') {
+        n += 1;
+    }
+    n
+}
+
+fn classify_status(s: Status) -> &'static str {
+    if s.is_conflicted() {
+        return "conflicted";
+    }
+    if s.intersects(Status::INDEX_DELETED | Status::WT_DELETED) {
+        return "deleted";
+    }
+    if s.intersects(Status::INDEX_NEW | Status::WT_NEW) {
+        return "added";
+    }
+    if s.intersects(Status::INDEX_RENAMED | Status::WT_RENAMED) {
+        return "renamed";
+    }
+    if s.intersects(
+        Status::INDEX_MODIFIED | Status::WT_MODIFIED | Status::INDEX_TYPECHANGE | Status::WT_TYPECHANGE,
+    ) {
+        return "modified";
+    }
+    "clean"
+}
+
+/// Return the current branch name (or short HEAD oid when detached) of
+/// the repo enclosing `repo_root`. Empty string when the path is not a
+/// git repo — frontend then hides the branch chip.
+#[tauri::command]
+pub fn fs_git_branch(repo_root: String) -> AppResult<String> {
+    let root = PathBuf::from(&repo_root);
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => return Ok(String::new()),
+    };
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(String::new()),
+    };
+    if head.is_branch() {
+        if let Some(name) = head.shorthand() {
+            return Ok(name.to_string());
+        }
+    }
+    if let Some(oid) = head.target() {
+        let short = oid.to_string();
+        return Ok(short.chars().take(7).collect());
+    }
+    Ok(String::new())
+}
+
+/// Return the cached `$EDITOR` value pulled from the user's shell rc.
+/// Empty string when unset — frontend uses that to decide between the
+/// PTY editor path and the OS-default opener.
+#[tauri::command]
+pub fn fs_shell_editor() -> String {
+    crate::shell_env::resolve()
+        .get("EDITOR")
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[tauri::command]

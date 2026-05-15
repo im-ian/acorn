@@ -355,6 +355,10 @@ pub fn run() {
             fs_explorer::fs_rename,
             fs_explorer::fs_trash,
             fs_explorer::fs_reveal,
+            fs_explorer::fs_open_default,
+            fs_explorer::fs_shell_editor,
+            fs_explorer::fs_git_status,
+            fs_explorer::fs_git_branch,
             fs_explorer::fs_watch_set_root,
         ])
         .run(tauri::generate_context!())

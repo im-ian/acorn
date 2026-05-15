@@ -509,6 +509,22 @@ export const api = {
   fsReveal(path: string): Promise<void> {
     return invoke<void>("fs_reveal", { path });
   },
+  fsOpenDefault(path: string): Promise<void> {
+    return invoke<void>("fs_open_default", { path });
+  },
+  fsShellEditor(): Promise<string> {
+    return invoke<string>("fs_shell_editor");
+  },
+  fsGitStatus(
+    repoRoot: string,
+  ): Promise<Record<string, FsGitStatusEntry>> {
+    return invoke<Record<string, FsGitStatusEntry>>("fs_git_status", {
+      repoRoot,
+    });
+  },
+  fsGitBranch(repoRoot: string): Promise<string> {
+    return invoke<string>("fs_git_branch", { repoRoot });
+  },
   fsWatchSetRoot(path: string | null): Promise<void> {
     return invoke<void>("fs_watch_set_root", { path });
   },
@@ -537,6 +553,22 @@ export interface FsChangePayload {
 }
 
 export const FS_CHANGED_EVENT = "acorn:fs-changed";
+
+/** Per-path git status bucket. Mirrors `crate::fs_explorer::classify_status`. */
+export type FsGitStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "conflicted"
+  | "clean";
+
+/** Mirror of `crate::fs_explorer::GitStatusEntry`. */
+export interface FsGitStatusEntry {
+  kind: FsGitStatus;
+  additions: number;
+  deletions: number;
+}
 
 function encodeStringToBase64(input: string): string {
   const bytes = new TextEncoder().encode(input);
