@@ -183,6 +183,10 @@ impl PtyManager {
         session.agent_resume_token = spec.agent_resume_token.clone();
         session.scrollback = Arc::clone(&scrollback);
         session.pid = pid;
+        // Capture the staged-dotfile fingerprint from caller env so the
+        // app can detect, on boot, that this session was spawned by an
+        // older build with different rc bodies and force-respawn it.
+        session.staged_rev = spec.env.get("ACORN_STAGED_REV").cloned();
         registry.insert(session);
 
         let stop_reader = stop.clone();

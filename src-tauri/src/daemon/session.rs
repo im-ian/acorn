@@ -71,6 +71,11 @@ pub struct DaemonSession {
     /// Daemon-local creation time. Useful for "Background sessions"
     /// status panel ordering and for telemetry on long-lived sessions.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Fingerprint of the staged dotfile bodies the PTY was spawned
+    /// against. `None` for legacy sessions whose spawner did not pass
+    /// `ACORN_STAGED_REV` in `SpawnSpec.env`. Surfaced back via
+    /// `SessionSummary.staged_rev` so the app can reconcile on boot.
+    pub staged_rev: Option<String>,
 }
 
 impl DaemonSession {
@@ -89,6 +94,7 @@ impl DaemonSession {
             alive: true,
             exit_code: None,
             created_at: chrono::Utc::now(),
+            staged_rev: None,
         }
     }
 }

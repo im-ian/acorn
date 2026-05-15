@@ -21,6 +21,7 @@ mod shell_args;
 mod shell_env;
 mod shell_init;
 mod shell_util;
+mod staged_rev_reconcile;
 mod state;
 mod todos;
 mod transcript_watcher;
@@ -246,6 +247,8 @@ pub fn run() {
             // killswitch UI surfaces the same error if the user opens
             // the Background sessions tab.
             let bridge_for_boot = state.daemon_bridge.clone();
+            let state_for_boot = state.inner().clone();
+            let app_for_boot = app.handle().clone();
             std::thread::Builder::new()
                 .name("acorn-daemon-boot".into())
                 .spawn(move || {
@@ -254,7 +257,17 @@ pub fn run() {
                     }
                     if let Err(err) = bridge_for_boot.ensure_connection() {
                         tracing::warn!(error = %err, "daemon boot spawn failed");
+                        return;
                     }
+                    // Detect stale daemon sessions (older `shell-init/`
+                    // bodies); the reconcile caches its verdict on
+                    // AppState so the frontend prompt survives a
+                    // listener-mount-after-emit race.
+                    staged_rev_reconcile::reconcile(
+                        &app_for_boot,
+                        &state_for_boot,
+                        &bridge_for_boot,
+                    );
                 })
                 .ok();
 
@@ -322,6 +335,8 @@ pub fn run() {
             commands::acknowledge_claude_resume,
             commands::get_codex_resume_candidate,
             commands::acknowledge_codex_resume,
+            commands::staged_rev_mismatch_status,
+            commands::acknowledge_staged_rev_mismatch,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,
