@@ -8,6 +8,7 @@ mod daemon_bridge;
 mod daemon_commands;
 mod daemon_stream;
 mod error;
+mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
@@ -348,6 +349,13 @@ pub fn run() {
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
             daemon_commands::daemon_adopt_session,
+            fs_explorer::fs_list_dir,
+            fs_explorer::fs_create_file,
+            fs_explorer::fs_create_dir,
+            fs_explorer::fs_rename,
+            fs_explorer::fs_trash,
+            fs_explorer::fs_reveal,
+            fs_explorer::fs_watch_set_root,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
