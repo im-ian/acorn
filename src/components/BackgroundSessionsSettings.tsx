@@ -11,10 +11,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api, type DaemonSessionSummary, type DaemonStatus } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
 import { Tooltip } from "./Tooltip";
 import { CheckboxRow, Field } from "./ui";
+
+type BackgroundSessionsTranslator = Translator;
 
 /**
  * Settings panel for the `acornd` daemon — live status, killswitch
@@ -25,6 +29,7 @@ import { CheckboxRow, Field } from "./ui";
  * backend.
  */
 export function BackgroundSessionsSettings() {
+  const t = useTranslation();
   const [enabled, setEnabledLocal] = useState<boolean>(() => readKillswitch());
   const [status, setStatus] = useState<DaemonStatus | null>(null);
   const [sessions, setSessions] = useState<DaemonSessionSummary[] | null>(null);
@@ -104,32 +109,41 @@ export function BackgroundSessionsSettings() {
 
   const running = status?.running ?? false;
   const indicator = !enabled
-    ? { label: "Disabled", className: "text-fg-muted" }
+    ? {
+        label: t("backgroundSessions.status.disabled"),
+        className: "text-fg-muted",
+      }
     : running
-      ? { label: "Running", className: "text-accent" }
-      : { label: "Down", className: "text-danger" };
+      ? {
+          label: t("backgroundSessions.status.running"),
+          className: "text-accent",
+        }
+      : {
+          label: t("backgroundSessions.status.down"),
+          className: "text-danger",
+        };
 
   return (
     <section className="space-y-4">
       <Field
-        label="Daemon"
-        hint="The acornd daemon owns long-running terminal sessions. With the daemon on, Acorn can quit and reopen without losing your PTYs. Off falls back to the legacy in-process path — sessions die with the app."
+        label={t("backgroundSessions.daemon.label")}
+        hint={t("backgroundSessions.daemon.hint")}
       >
         <CheckboxRow
           checked={enabled}
           onChange={(v) => void handleToggle(v)}
-          label="Enable background sessions (acornd)"
+          label={t("backgroundSessions.daemon.enableLabel")}
           description={
             enabled
-              ? "Sessions persist across Acorn restarts until you explicitly quit them."
-              : "Sessions are bound to this Acorn process — closing the app kills them."
+              ? t("backgroundSessions.daemon.enabledDescription")
+              : t("backgroundSessions.daemon.disabledDescription")
           }
         />
       </Field>
 
       <Field
-        label="Status"
-        hint="Live state of the running daemon. Updates every 3 seconds while this panel is open."
+        label={t("backgroundSessions.status.label")}
+        hint={t("backgroundSessions.status.hint")}
       >
         <div className="rounded border border-border bg-bg-elevated p-3 text-xs">
           <div className="flex items-center gap-2">
@@ -139,22 +153,25 @@ export function BackgroundSessionsSettings() {
             {status?.daemon_version ? (
               <span className="text-fg-muted">v{status.daemon_version}</span>
             ) : null}
-            {status?.uptime_seconds !== null && status?.uptime_seconds !== undefined ? (
+            {status?.uptime_seconds !== null &&
+            status?.uptime_seconds !== undefined ? (
               <span className="text-fg-muted">
-                · up {formatDuration(status.uptime_seconds)}
+                · {t("backgroundSessions.status.up")}{" "}
+                {formatDuration(status.uptime_seconds)}
               </span>
             ) : null}
             {status?.session_count_total !== null &&
             status?.session_count_total !== undefined ? (
               <span className="text-fg-muted">
-                · sessions {status.session_count_alive ?? 0}/
-                {status.session_count_total}
+                · {t("backgroundSessions.status.sessions")}{" "}
+                {status.session_count_alive ?? 0}/{status.session_count_total}
               </span>
             ) : null}
           </div>
           {status?.log_path ? (
             <div className="mt-2 text-fg-muted">
-              Log: <code className="font-mono">{status.log_path}</code>
+              {t("backgroundSessions.status.log")}:{" "}
+              <code className="font-mono">{status.log_path}</code>
             </div>
           ) : null}
           {statusError ? (
@@ -166,7 +183,10 @@ export function BackgroundSessionsSettings() {
         </div>
       </Field>
 
-      <Field label="Controls" hint="Restart reconnects the bridge — useful after killing the daemon from a terminal. Quit kills every running PTY and exits the daemon.">
+      <Field
+        label={t("backgroundSessions.controls.label")}
+        hint={t("backgroundSessions.controls.hint")}
+      >
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -182,11 +202,13 @@ export function BackgroundSessionsSettings() {
             ) : (
               <RefreshCcw size={12} />
             )}
-            <span>Restart daemon</span>
+            <span>{t("backgroundSessions.controls.restart")}</span>
           </button>
           {confirmShutdown ? (
             <div className="flex items-center gap-2 rounded border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
-              <span>Kill every PTY?</span>
+              <span>
+                {t("backgroundSessions.controls.confirmShutdownPrompt")}
+              </span>
               <button
                 type="button"
                 onClick={() => void handleShutdown()}
@@ -196,7 +218,7 @@ export function BackgroundSessionsSettings() {
                 {busy === "shutdown" ? (
                   <Loader2 size={10} className="animate-spin" />
                 ) : (
-                  "Confirm"
+                  t("backgroundSessions.controls.confirm")
                 )}
               </button>
               <button
@@ -205,7 +227,7 @@ export function BackgroundSessionsSettings() {
                 disabled={busy !== null}
                 className="px-2 py-0.5 hover:text-fg"
               >
-                Cancel
+                {t("backgroundSessions.controls.cancel")}
               </button>
             </div>
           ) : (
@@ -219,15 +241,15 @@ export function BackgroundSessionsSettings() {
               )}
             >
               <Power size={12} />
-              <span>Quit daemon</span>
+              <span>{t("backgroundSessions.controls.quit")}</span>
             </button>
           )}
         </div>
       </Field>
 
       <Field
-        label="Sessions"
-        hint="Every PTY the daemon currently tracks. Dead rows can be forgotten from the daemon side; their app metadata stays so you can resume from disk if the agent supports it."
+        label={t("backgroundSessions.sessions.label")}
+        hint={t("backgroundSessions.sessions.hint")}
       >
         <SessionsList
           sessions={sessions}
@@ -235,6 +257,7 @@ export function BackgroundSessionsSettings() {
           running={running}
           onRefresh={refresh}
           appSessions={appSessions}
+          t={t}
         />
       </Field>
     </section>
@@ -247,12 +270,14 @@ function SessionsList({
   running,
   onRefresh,
   appSessions,
+  t,
 }: {
   sessions: DaemonSessionSummary[] | null;
   enabled: boolean;
   running: boolean;
   onRefresh: () => Promise<void>;
   appSessions: Session[];
+  t: BackgroundSessionsTranslator;
 }) {
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
@@ -281,18 +306,30 @@ function SessionsList({
   if (!enabled) {
     return (
       <p className="text-xs text-fg-muted">
-        Daemon disabled — sessions are managed by the legacy in-process path.
+        {t("backgroundSessions.sessions.disabled")}
       </p>
     );
   }
   if (!running) {
-    return <p className="text-xs text-fg-muted">Daemon is not running.</p>;
+    return (
+      <p className="text-xs text-fg-muted">
+        {t("backgroundSessions.sessions.notRunning")}
+      </p>
+    );
   }
   if (sessions === null) {
-    return <p className="text-xs text-fg-muted">Loading…</p>;
+    return (
+      <p className="text-xs text-fg-muted">
+        {t("backgroundSessions.sessions.loading")}
+      </p>
+    );
   }
   if (sessions.length === 0) {
-    return <p className="text-xs text-fg-muted">No sessions tracked.</p>;
+    return (
+      <p className="text-xs text-fg-muted">
+        {t("backgroundSessions.sessions.empty")}
+      </p>
+    );
   }
   return (
     <div className="space-y-2">
@@ -311,7 +348,7 @@ function SessionsList({
               </span>
               <span className="flex flex-1 items-center gap-1.5 truncate font-mono">
                 <Tooltip
-                  label={renderAppMetaTooltip(appById.get(s.id), s)}
+                  label={renderAppMetaTooltip(appById.get(s.id), s, t)}
                   side="top"
                   multiline
                 >
@@ -323,22 +360,27 @@ function SessionsList({
                   const ts = Date.parse(app.updated_at);
                   if (Number.isNaN(ts)) return null;
                   return (
-                    <Tooltip
-                      label={new Date(ts).toLocaleString()}
-                      side="top"
-                    >
+                    <Tooltip label={new Date(ts).toLocaleString()} side="top">
                       <span className="shrink-0 cursor-help text-[10px] text-fg-muted">
-                        {formatRelativeTime(ts)}
+                        {formatRelativeTime(
+                          ts,
+                          t("backgroundSessions.relativeTime.ago"),
+                        )}
                       </span>
                     </Tooltip>
                   );
                 })()}
                 {s.kind === "control" ? (
-                  <Tooltip label="Control session" side="top">
+                  <Tooltip
+                    label={t("backgroundSessions.sessions.controlSession")}
+                    side="top"
+                  >
                     <Bot
                       size={12}
                       className="shrink-0 text-fg-muted"
-                      aria-label="Control session"
+                      aria-label={t(
+                        "backgroundSessions.sessions.controlSession",
+                      )}
                     />
                   </Tooltip>
                 ) : null}
@@ -350,7 +392,10 @@ function SessionsList({
               ) : null}
               <div className="flex items-center gap-1">
                 {s.alive ? (
-                  <Tooltip label="Kill PTY" side="top">
+                  <Tooltip
+                    label={t("backgroundSessions.actions.killPty")}
+                    side="top"
+                  >
                     <RowButton
                       busy={busy}
                       onClick={() =>
@@ -359,14 +404,14 @@ function SessionsList({
                         )
                       }
                       tone="danger"
-                      aria-label="Kill PTY"
+                      aria-label={t("backgroundSessions.actions.killPty")}
                     >
                       <Power size={12} />
                     </RowButton>
                   </Tooltip>
                 ) : (
                   <Tooltip
-                    label="Adopt this session back into Acorn's sidebar"
+                    label={t("backgroundSessions.actions.restoreTooltip")}
                     side="top"
                   >
                     <RowButton
@@ -376,7 +421,7 @@ function SessionsList({
                           api.daemonAdoptSession(s.id),
                         )
                       }
-                      aria-label="Restore session"
+                      aria-label={t("backgroundSessions.actions.restore")}
                     >
                       <Undo2 size={12} />
                     </RowButton>
@@ -385,8 +430,8 @@ function SessionsList({
                 <Tooltip
                   label={
                     s.alive
-                      ? "Kill first, then forget"
-                      : "Remove this row from the daemon registry"
+                      ? t("backgroundSessions.actions.forgetDisabledTooltip")
+                      : t("backgroundSessions.actions.forgetTooltip")
                   }
                   side="top"
                 >
@@ -398,7 +443,7 @@ function SessionsList({
                         api.daemonForgetSession(s.id),
                       )
                     }
-                    aria-label="Forget session"
+                    aria-label={t("backgroundSessions.actions.forget")}
                   >
                     <Trash2 size={12} />
                   </RowButton>
@@ -418,45 +463,69 @@ function SessionsList({
   );
 }
 
-function formatRelativeTime(timestampMs: number): string {
+function formatRelativeTime(timestampMs: number, ago: string): string {
   const diffSec = Math.round((Date.now() - timestampMs) / 1000);
-  if (diffSec < 60) return `${Math.max(0, diffSec)}s ago`;
+  if (diffSec < 60) return `${Math.max(0, diffSec)}s ${ago}`;
   const min = Math.round(diffSec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return `${min}m ${ago}`;
   const hr = Math.round(diffSec / 3600);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return `${hr}h ${ago}`;
   const day = Math.round(diffSec / 86400);
-  if (day < 30) return `${day}d ago`;
+  if (day < 30) return `${day}d ${ago}`;
   const mo = Math.round(diffSec / (86400 * 30));
-  if (mo < 12) return `${mo}mo ago`;
+  if (mo < 12) return `${mo}mo ${ago}`;
   const yr = Math.round(diffSec / (86400 * 365));
-  return `${yr}y ago`;
+  return `${yr}y ${ago}`;
 }
 
 function renderAppMetaTooltip(
   app: Session | undefined,
   daemon: DaemonSessionSummary,
+  t: BackgroundSessionsTranslator,
 ) {
   const rows: { label: string; value: string }[] = [];
   if (app) {
-    rows.push({ label: "Tab", value: app.name });
-    if (app.branch) rows.push({ label: "Branch", value: app.branch });
-    rows.push({ label: "Status", value: app.status });
+    rows.push({ label: t("backgroundSessions.metadata.tab"), value: app.name });
+    if (app.branch) {
+      rows.push({
+        label: t("backgroundSessions.metadata.branch"),
+        value: app.branch,
+      });
+    }
+    rows.push({
+      label: t("backgroundSessions.metadata.status"),
+      value: app.status,
+    });
     if (app.worktree_path) {
-      rows.push({ label: "Worktree", value: app.worktree_path });
+      rows.push({
+        label: t("backgroundSessions.metadata.worktree"),
+        value: app.worktree_path,
+      });
     }
     if (app.last_message) {
-      rows.push({ label: "Last", value: app.last_message });
+      rows.push({
+        label: t("backgroundSessions.metadata.last"),
+        value: app.last_message,
+      });
     }
   } else {
     if (daemon.branch) {
-      rows.push({ label: "Branch", value: daemon.branch });
+      rows.push({
+        label: t("backgroundSessions.metadata.branch"),
+        value: daemon.branch,
+      });
     }
     if (daemon.repo_path) {
-      rows.push({ label: "Repo", value: daemon.repo_path });
+      rows.push({
+        label: t("backgroundSessions.metadata.repo"),
+        value: daemon.repo_path,
+      });
     }
     if (daemon.cwd) {
-      rows.push({ label: "Worktree", value: daemon.cwd });
+      rows.push({
+        label: t("backgroundSessions.metadata.worktree"),
+        value: daemon.cwd,
+      });
     }
   }
   return (
@@ -464,7 +533,7 @@ function renderAppMetaTooltip(
       <div className="font-mono text-[10px] text-fg-muted">{daemon.id}</div>
       {!app ? (
         <div className="text-[10px] italic text-fg-muted">
-          No app-side row — orphaned in daemon.
+          {t("backgroundSessions.metadata.orphaned")}
         </div>
       ) : null}
       {rows.map((r) => (

@@ -17,6 +17,327 @@
     "language": {
       "label": "언어",
       "hint": "Acorn 인터페이스에 사용할 언어입니다. 새 번역은 점진적으로 추가됩니다."
+    },
+    "terminal": {
+      "fontFamily": {
+        "label": "글꼴 패밀리",
+        "hint": "쉼표로 구분한 글꼴 목록입니다. 먼저 해석되는 글꼴이 사용됩니다."
+      },
+      "fontSize": {
+        "label": "글꼴 크기",
+        "hint": "CSS 픽셀 단위입니다. 범위는 8-32입니다."
+      },
+      "fontWeight": {
+        "label": "글꼴 두께",
+        "hint": "일반 텍스트의 두께입니다. 실제 적용 값은 선택한 글꼴이 제공하는 두께에 따라 달라집니다."
+      },
+      "boldFontWeight": {
+        "label": "굵은 글꼴 두께",
+        "hint": "터미널이 굵은 셀을 렌더링할 때 사용할 두께입니다."
+      },
+      "lineHeight": {
+        "label": "줄 높이",
+        "hint": "셀 높이 배율입니다. 1.00은 행을 촘촘히 배치하며, 값을 높이면 세로 여백이 늘어납니다. 범위는 1.00-2.00입니다."
+      },
+      "openLinksOn": {
+        "label": "링크 열기 방식",
+        "hint": "xterm이 터미널 출력에서 감지한 URL을 여는 방식입니다.",
+        "click": {
+          "label": "클릭(기본값)",
+          "description": "마우스로 한 번 클릭하면 기본 브라우저에서 URL을 엽니다."
+        },
+        "modifierClick": {
+          "description": "{modifier} 키를 누른 채 클릭하면 열립니다. URL이 포함된 출력에서 실수로 클릭해 브라우저로 포커스가 넘어가는 일을 막습니다."
+        }
+      }
+    },
+    "sessions": {
+      "confirmRemove": {
+        "label": "세션 제거 전 확인",
+        "hint": "격리된 worktree는 delete-worktree 선택이 여전히 중요하므로 항상 확인합니다.",
+        "checkbox": "확인 대화상자 표시"
+      },
+      "closeOnExit": {
+        "label": "프로세스 종료 시 탭 닫기",
+        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. 어느 쪽이든 worktree는 보존됩니다.",
+        "checkbox": "종료 시 자동 닫기"
+      },
+      "background": {
+        "title": "백그라운드 세션",
+        "description": "acornd 데몬이 장시간 실행되는 PTY를 소유하므로 Acorn을 재시작해도 터미널 세션이 유지됩니다."
+      },
+      "controlCli": {
+        "label": "컨트롤 세션(acorn-ipc CLI)",
+        "errorHint": "설치 상태를 조회할 수 없습니다.",
+        "loadingHint": "설치 상태를 불러오는 중...",
+        "hint": "컨트롤 세션은 acorn-ipc CLI를 통해 형제 세션에 명령을 보낼 수 있습니다. CLI는 앱 옆에 함께 제공되며, 어느 터미널에서나 쓰려면 $PATH에 심볼릭 링크하세요.",
+        "bundledBinary": "번들 바이너리",
+        "found": "발견됨",
+        "missing": "없음",
+        "installedShim": "설치된 shim",
+        "installed": "설치됨",
+        "notInstalled": "설치되지 않음",
+        "recheck": "다시 확인"
+      }
+    },
+    "github": {
+      "refreshInterval": {
+        "label": "새로고침 간격",
+        "hint": "PR 및 Actions 탭이 gh에서 자동으로 다시 가져오는 빈도입니다. 값이 낮을수록 더 빠르게 느껴지지만 API 예산을 더 사용합니다."
+      },
+      "manualRefresh": "수동 새로고침(각 탭의 아이콘)은 이 간격과 관계없이 항상 작동합니다.",
+      "listDensity": {
+        "label": "목록 밀도",
+        "hint": "작성자 아바타는 행을 한눈에 훑기 쉽게 하지만 각 행이 더 두꺼워집니다."
+      },
+      "showAuthorAvatars": {
+        "label": "작성자 아바타 표시",
+        "description": "각 PR 행 옆에 GitHub 아바타를 표시합니다."
+      }
+    },
+    "appearance": {
+      "uiScale": {
+        "label": "UI 배율",
+        "hint": "앱 UI를 5% 단위로 확대/축소합니다. 터미널 텍스트는 별도의 크기 설정을 유지합니다."
+      },
+      "theme": {
+        "label": "테마",
+        "hint": "내장 팔레트와 themes 폴더의 유효한 CSS 파일입니다.",
+        "custom": "(사용자 지정)",
+        "rescanTitle": "테마 폴더 다시 스캔",
+        "refresh": "새로고침",
+        "revealFolder": "폴더 보기"
+      },
+      "background": {
+        "label": "배경 이미지",
+        "hint": "이미지 하나를 앱 영역, 터미널 영역 또는 둘 다에 적용할 수 있습니다.",
+        "pickImage": "이미지 선택",
+        "replace": "교체",
+        "noImage": "선택된 이미지 없음",
+        "remove": "제거",
+        "applyToApp": "앱 배경에 적용",
+        "applyToTerminal": "터미널 배경에 적용",
+        "fit": {
+          "label": "맞춤",
+          "cover": "채우기",
+          "contain": "맞추기",
+          "tile": "타일"
+        },
+        "opacity": {
+          "label": "불투명도",
+          "hint": "0은 투명, 100은 불투명입니다."
+        },
+        "blur": "흐림"
+      },
+      "sessionDisplay": {
+        "title": {
+          "label": "세션 제목",
+          "hint": "사이드바의 각 세션 행에서 굵은 첫 줄로 표시할 필드입니다.",
+          "options": {
+            "name": {
+              "label": "세션 이름",
+              "description": "각 세션에 지정하는 편집 가능한 이름입니다(기본값)."
+            },
+            "workingDirectory": {
+              "label": "작업 디렉터리",
+              "description": "worktree 디렉터리의 기본 이름입니다."
+            },
+            "branch": {
+              "label": "브랜치",
+              "description": "활성 git 브랜치입니다."
+            }
+          }
+        },
+        "metadata": {
+          "label": "추가 메타데이터",
+          "hint": "제목 아래의 보조 줄입니다. 모든 항목을 끄면 한 줄 행이 됩니다.",
+          "branch": {
+            "label": "브랜치",
+            "description": "활성 git 브랜치입니다."
+          },
+          "workingDirectory": {
+            "label": "작업 디렉터리",
+            "description": "worktree 디렉터리의 기본 이름입니다."
+          },
+          "status": {
+            "label": "상태",
+            "description": "Idle / Running / Needs input / Failed / Completed."
+          }
+        },
+        "icons": {
+          "label": "인라인 아이콘",
+          "hint": "각 세션 행을 꾸미는 글리프입니다. 숨기면 목록이 더 조밀해집니다.",
+          "statusDot": {
+            "label": "상태 점",
+            "description": "행 시작 부분의 색상 점입니다. 메타데이터에서 Status가 켜져 있으면 중복됩니다."
+          },
+          "sessionKind": {
+            "label": "세션 종류 아이콘",
+            "description": "격리된 worktree에는 브랜치 글리프를, 컨트롤 세션에는 봇 글리프를 표시합니다."
+          }
+        },
+        "hover": {
+          "label": "호버 시 세부 정보 표시",
+          "hint": "세션 행에 마우스를 올리면 행에 표시되는 필드와 관계없이 모든 필드가 포함된 툴팁을 표시합니다.",
+          "checkbox": "호버 툴팁 사용"
+        }
+      },
+      "statusBar": {
+        "label": "상태 표시줄",
+        "hint": "하단 상태 표시줄에 표시할 선택 배지를 고릅니다.",
+        "sessionCount": {
+          "label": "세션 수",
+          "description": "활성 프로젝트 전체의 총 세션 수입니다(`sessions: N`)."
+        },
+        "activeSessionStatus": {
+          "label": "활성 세션 상태",
+          "description": "활성 세션의 수명 주기 상태입니다(Idle / Running / Needs input / Failed / Completed)."
+        },
+        "githubAccount": {
+          "label": "GitHub 계정",
+          "description": "활성 저장소의 pull request 목록을 가져오는 데 사용하는 `gh` 계정입니다."
+        },
+        "workingDirectory": {
+          "label": "작업 디렉터리",
+          "description": "활성 세션의 worktree 경로입니다($HOME 기준으로 ~ 처리됨)."
+        },
+        "memoryUsage": {
+          "label": "메모리 사용량",
+          "description": "acorn과 하위 셸의 실시간 메모리 표시입니다. 끄면 2초 폴링 루프도 중지되어 숨겨진 동안 비용이 들지 않습니다."
+        }
+      }
+    },
+    "editor": {
+      "command": {
+        "label": "편집기 명령",
+        "hint": "비워 두면 OS 기본값을 사용합니다. 예: \"code\", \"cursor --wait\", \"subl\", \"idea\". 파일 경로는 마지막 인수로 추가됩니다.",
+        "placeholder": "(OS 기본값 사용)",
+        "description": "diff 및 스테이징된 파일 목록의 \"편집기에서 열기\" 우클릭 동작에 사용됩니다."
+      }
+    },
+    "notifications": {
+      "system": {
+        "label": "시스템 알림",
+        "hint": "세션 상태가 바뀌면 macOS 알림을 보냅니다.",
+        "enable": "알림 사용"
+      },
+      "triggers": {
+        "label": "알림 조건",
+        "needsInput": {
+          "label": "입력 필요",
+          "description": "Claude가 사용자 입력을 기다리고 있습니다."
+        },
+        "failed": {
+          "label": "실패",
+          "description": "세션이 오류로 종료되었습니다."
+        },
+        "completed": {
+          "label": "완료",
+          "description": "세션이 완료 상태에 도달했습니다."
+        }
+      },
+      "test": {
+        "label": "테스트",
+        "hint": "위의 사용/조건 설정과 별개로 OS 권한과 실제 알림 표시 여부를 확인합니다.",
+        "send": "테스트 알림 보내기",
+        "sending": "보내는 중...",
+        "result": {
+          "sent": "보냈습니다. 표시되지 않으면 알림 센터를 확인하세요.",
+          "denied": "권한이 거부되었습니다. 시스템 설정 -> 알림에서 Acorn을 허용하세요.",
+          "failed": "보내지 못했습니다. 자세한 내용은 콘솔을 확인하세요."
+        }
+      },
+      "permissionHint": "처음 알림이 발생할 때 macOS가 한 번 권한을 요청할 수 있습니다."
+    },
+    "agents": {
+      "intro": {
+        "before": "선택한 에이전트는 현재 병합 대화상자의 ",
+        "action": "AI로 생성",
+        "after": " 버튼 등 Acorn의 AI 기능을 구동합니다."
+      },
+      "agent": {
+        "label": "에이전트",
+        "hint": "Acorn에서 사용할 AI CLI를 선택하세요."
+      },
+      "customOption": {
+        "label": "사용자 지정 명령",
+        "description": "목록에 없는 CLI를 사용합니다. 공백으로 구분되며 셸 확장은 적용되지 않습니다."
+      },
+      "ollamaModel": {
+        "label": "Ollama 모델",
+        "hint": "`ollama run <model>`에 전달됩니다. 비워 두면 기본값은 `llama3`입니다."
+      },
+      "llmModel": {
+        "label": "llm 모델",
+        "hint": "`llm -m <model>`로 전달됩니다(세션에서는 `llm chat -m <model>`). 비워 두면 llm에 설정된 기본값을 사용합니다."
+      },
+      "customCommand": {
+        "label": "사용자 지정 명령",
+        "hint": "대화형 세션과 일회성 AI 생성 모두에 사용됩니다. 비워 두면 Claude Code로 대체됩니다."
+      },
+      "requirement": "선택한 에이전트의 CLI는 이 컴퓨터에 이미 설치되어 있고 인증되어 있어야 합니다. 바이너리가 없으면 명확한 오류를 표시합니다."
+    },
+    "storage": {
+      "title": "회수 가능한 캐시",
+      "description": "Acorn이 일반 세션 수명 주기에서 정리할 수 없는 디스크 산출물입니다(예: 충돌 또는 Acorn이 오프라인인 동안의 편집으로 고아가 된 파일). 세션, 프로젝트, 설정, 실행 중인 터미널 스크롤백은 절대 건드리지 않습니다.",
+      "cacheCategories": {
+        "scrollbackOrphans": {
+          "label": "고아 터미널 스크롤백",
+          "description": "더 이상 존재하지 않는 세션이 남긴 ANSI 스크롤백 파일입니다(예: Acorn이 오프라인인 동안 제거되었거나 부팅 시 정리 로직이 생기기 전에 남은 파일). 실행 중인 세션의 스크롤백은 건드리지 않으며, 회수 불가능한 잔여 파일만 표시합니다."
+        }
+      },
+      "status": {
+        "clearedSingular": "캐시 파일 {count}개를 지웠습니다.",
+        "clearedPlural": "캐시 파일 {count}개를 지웠습니다.",
+        "nothingToClear": "지울 항목이 없습니다.",
+        "clearFailed": "지우지 못했습니다 - 콘솔을 확인하세요."
+      },
+      "confirm": {
+        "message": "위에 표시된 캐시 데이터({size})를 영구적으로 삭제합니다. 계속할까요?",
+        "cancel": "취소"
+      },
+      "clear": {
+        "button": "캐시 지우기",
+        "clearing": "지우는 중..."
+      },
+      "total": "합계: {size}"
+    },
+    "experiments": {
+      "warning": "완성되지 않은 기능입니다. 릴리스 사이에 동작이 바뀔 수 있지만 토글 자체는 안정적입니다.",
+      "stickyPrompt": {
+        "label": "마지막 사용자 프롬프트를 터미널 위에 고정",
+        "description": "렌더링된 터미널 버퍼에서 가장 최근 claude 프롬프트 줄을 찾아 창 상단에 고정해, 응답을 읽는 동안 계속 보이게 합니다. Cmd+K를 누르면 나머지 스크롤백과 함께 지워집니다."
+      },
+      "cjkCellWidthHeuristic": {
+        "label": "CJK 터미널 셀 너비 보정",
+        "description": "CJK 고정폭 글꼴(D2Coding, Sarasa Mono 등)을 위한 휴리스틱입니다. `W`와 `가`의 측정 너비가 같으면 셀 너비를 절반으로 줄여 Hangul/Han 글리프가 셀 그리드에 맞게 배치되도록 합니다. 너비가 다르면 건너뛰므로 시스템 CJK 폴백을 사용하는 ASCII 글꼴은 보정하지 않습니다. 알려진 제한: 탭 전환 시 xterm의 resize 경로가 addon이 절반 너비를 다시 적용하기 전에 `cell.width`를 자연 W 진행 폭으로 재설정하면서 1프레임 글리프 크기 깜박임이 잠깐 보일 수 있습니다. 기본값은 꺼짐입니다."
+      },
+      "resumeModal": {
+        "label": "콜드 부팅 시 \"이전 대화 재개\" 모달 표시",
+        "description": "Acorn 실행 시 저장된 모든 세션에서 끝나지 않은 claude 또는 codex transcript를 확인하고, 해당 세션에 포커스하면 한 번만 표시되는 모달을 띄워 이전 작업을 이어갈 수 있게 합니다. 끄면 모달을 완전히 표시하지 않습니다."
+      }
+    },
+    "about": {
+      "title": "Acorn 정보",
+      "description": "Acorn은 시작 시 자동으로 업데이트를 확인하고 이후 24시간마다 한 번씩 확인합니다. 아래에서 직접 확인할 수도 있습니다.",
+      "currentVersion": "현재 버전",
+      "lastChecked": "마지막 확인",
+      "loading": "불러오는 중...",
+      "updateAvailable": "업데이트 가능",
+      "updateReady": "Acorn {version}을 설치할 준비가 되었습니다.",
+      "whatsNew": "새로운 내용",
+      "installing": "설치 중...",
+      "installRelaunch": "설치 후 다시 실행",
+      "whatsNewInVersion": "{version}의 새로운 내용",
+      "checking": "확인 중...",
+      "checkForUpdates": "업데이트 확인",
+      "relative": {
+        "never": "확인한 적 없음",
+        "justNow": "방금 전",
+        "minutesAgo": "{count}분 전",
+        "hoursAgo": "{count}시간 전",
+        "daysAgo": "{count}일 전"
+      }
     }
   },
   "app": {},
@@ -26,5 +347,61 @@
   "fileExplorer": {},
   "dialogs": {},
   "commandPalette": {},
-  "backgroundSessions": {}
+  "backgroundSessions": {
+    "daemon": {
+      "label": "데몬",
+      "hint": "acornd 데몬은 장시간 실행되는 터미널 세션을 관리합니다. 데몬을 켜면 PTY를 잃지 않고 Acorn을 종료했다 다시 열 수 있습니다. 끄면 기존 인프로세스 경로를 사용하며, 앱과 함께 세션이 종료됩니다.",
+      "enableLabel": "백그라운드 세션 사용(acornd)",
+      "enabledDescription": "세션은 명시적으로 종료할 때까지 Acorn 재시작 후에도 유지됩니다.",
+      "disabledDescription": "세션은 현재 Acorn 프로세스에 묶이며, 앱을 닫으면 종료됩니다."
+    },
+    "status": {
+      "label": "상태",
+      "hint": "실행 중인 데몬의 실시간 상태입니다. 이 패널이 열려 있는 동안 3초마다 업데이트됩니다.",
+      "disabled": "비활성화됨",
+      "running": "실행 중",
+      "down": "중지됨",
+      "up": "실행 시간",
+      "sessions": "세션",
+      "log": "로그"
+    },
+    "controls": {
+      "label": "제어",
+      "hint": "재시작은 브리지를 다시 연결합니다. 터미널에서 데몬을 종료한 뒤 유용합니다. 종료는 실행 중인 모든 PTY를 끝내고 데몬을 종료합니다.",
+      "restart": "데몬 재시작",
+      "confirmShutdownPrompt": "모든 PTY를 종료할까요?",
+      "confirm": "확인",
+      "cancel": "취소",
+      "quit": "데몬 종료"
+    },
+    "sessions": {
+      "label": "세션",
+      "hint": "데몬이 현재 추적하는 모든 PTY입니다. 종료된 행은 데몬 쪽에서 잊을 수 있으며, 앱 메타데이터는 남아 에이전트가 지원하면 디스크에서 재개할 수 있습니다.",
+      "disabled": "데몬이 비활성화되어 세션은 기존 인프로세스 경로로 관리됩니다.",
+      "notRunning": "데몬이 실행 중이 아닙니다.",
+      "loading": "로드 중...",
+      "empty": "추적 중인 세션이 없습니다.",
+      "controlSession": "제어 세션"
+    },
+    "actions": {
+      "killPty": "PTY 종료",
+      "restoreTooltip": "이 세션을 Acorn 사이드바로 다시 가져오기",
+      "restore": "세션 복원",
+      "forgetDisabledTooltip": "먼저 종료한 뒤 잊기",
+      "forgetTooltip": "데몬 레지스트리에서 이 행 제거",
+      "forget": "세션 잊기"
+    },
+    "metadata": {
+      "tab": "탭",
+      "branch": "브랜치",
+      "status": "상태",
+      "worktree": "워크트리",
+      "last": "마지막",
+      "repo": "저장소",
+      "orphaned": "앱 쪽 행이 없습니다. 데몬에 고아 상태로 남아 있습니다."
+    },
+    "relativeTime": {
+      "ago": "전"
+    }
+  }
 }
