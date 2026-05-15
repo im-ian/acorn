@@ -341,12 +341,152 @@
     }
   },
   "app": {},
-  "sidebar": {},
-  "pane": {},
+  "sidebar": {
+    "status": {
+      "idle": "Idle",
+      "running": "Running",
+      "needs_input": "Needs input",
+      "failed": "Failed",
+      "completed": "Completed"
+    },
+    "dialog": {
+      "selectExistingProject": "Select an existing project",
+      "selectIsolatedRepository": "Select a git repository (isolated worktree)",
+      "selectControlDirectory": "Select a directory (control session)",
+      "selectDirectory": "Select a directory"
+    },
+    "projects": {
+      "title": "Projects",
+      "newProject": "New project",
+      "addExistingProject": "Add existing project"
+    },
+    "actions": {
+      "dragToReorder": "Drag to reorder",
+      "expandProject": "Expand project",
+      "collapseProject": "Collapse project",
+      "newSession": "New session",
+      "newIsolatedSession": "New isolated session",
+      "newIsolatedSessionWorktree": "New isolated session (worktree)",
+      "newControlSession": "New control session",
+      "closeProject": "Close project",
+      "revealInFinder": "Reveal in Finder",
+      "copyPath": "Copy path",
+      "rename": "Rename",
+      "duplicateSession": "Duplicate Session",
+      "equalizePaneSizes": "Equalize Pane Sizes",
+      "openWorktreeInEditor": "Open Worktree in Editor",
+      "copyWorktreePath": "Copy Worktree Path",
+      "copyWorktreeName": "Copy Worktree Name",
+      "copyBranchName": "Copy Branch Name",
+      "copySessionId": "Copy Session ID",
+      "remove": "Remove",
+      "removeSession": "Remove session",
+      "removeOthersInProject": "Remove Others in Project",
+      "removeAllInProject": "Remove All in Project"
+    },
+    "aria": {
+      "project": "Project",
+      "dragToReorderProject": "Drag to reorder project",
+      "newSessionInProject": "New session in this project",
+      "newControlSessionInProject": "New control session in this project",
+      "dragToReorderSession": "Drag to reorder session",
+      "worktree": "worktree",
+      "controlSession": "control session"
+    },
+    "emptyProject": {
+      "prefix": "No sessions. Add one with",
+      "connector": "or",
+      "suffix": ", or double-click here."
+    },
+    "emptyProjects": {
+      "prefix": "No projects yet. Click",
+      "suffix": "to add one."
+    },
+    "metadata": {
+      "name": "Name",
+      "branch": "Branch",
+      "detached": "(detached)",
+      "workingDirectory": "Working directory",
+      "status": "Status",
+      "kind": "Kind",
+      "controlSession": "Control session",
+      "isolatedWorktree": "Isolated worktree"
+    }
+  },
+  "pane": {
+    "empty": {
+      "dropTabOrDoubleClick": "Drop a tab here or double-click to start a session",
+      "createProject": "Create a project to get started. Double-click here."
+    },
+    "aria": {
+      "worktree": "worktree",
+      "closeSession": "Close session"
+    },
+    "menu": {
+      "rename": "Rename",
+      "duplicateSession": "Duplicate Session",
+      "forkClaudeSession": "Fork Claude Session",
+      "forkSession": "Fork Session",
+      "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
+      "forkInNewWorktree": "Fork in New Worktree",
+      "forkCodexSession": "Fork Codex Session",
+      "forkCodexInNewWorktree": "Fork Codex in New Worktree",
+      "splitRight": "Split Right",
+      "splitDown": "Split Down",
+      "equalizePaneSizes": "Equalize Pane Sizes",
+      "openWorktreeInEditor": "Open Worktree in Editor",
+      "revealInFinder": "Reveal in Finder",
+      "copyWorktreePath": "Copy Worktree Path",
+      "copyWorktreeName": "Copy Worktree Name",
+      "copyBranchName": "Copy Branch Name",
+      "copySessionId": "Copy Session ID",
+      "close": "Close",
+      "closeOthers": "Close Others",
+      "closeAll": "Close All",
+      "newSessionInThisPane": "New Session in This Pane",
+      "closePane": "Close Pane"
+    }
+  },
   "rightPanel": {},
   "fileExplorer": {},
   "dialogs": {},
-  "commandPalette": {},
+  "commandPalette": {
+    "dialogLabel": "Command palette",
+    "placeholder": "Type a command or search...",
+    "empty": "No results.",
+    "groups": {
+      "sessions": "Sessions",
+      "switchSession": "Switch session",
+      "view": "View",
+      "terminal": "Terminal",
+      "ipc": "IPC",
+      "dangerZone": "Danger zone"
+    },
+    "commands": {
+      "newSession": "New session",
+      "newIsolatedSession": "New isolated session",
+      "newControlSession": "New control session",
+      "newProject": "New project",
+      "addExistingProject": "Add existing project",
+      "refreshSessions": "Refresh sessions",
+      "switchSessionPrefix": "Switch to",
+      "viewTodos": "View Todos",
+      "viewCommits": "View Commits",
+      "viewStaged": "View Staged",
+      "viewPullRequests": "View Pull Requests",
+      "resetPanelSizes": "Reset panel sizes",
+      "reloadShellEnvironment": "Reload shell environment",
+      "restartIpcServer": "Restart IPC server",
+      "removeSessionPrefix": "Remove session:",
+      "shakeTree": "Shake the tree"
+    },
+    "toasts": {
+      "shellEnvReloaded": "Shell environment reloaded. Open a new session to apply.",
+      "shellEnvReloadFailed": "Failed to reload shell environment.",
+      "ipcRestarted": "IPC server restarted.",
+      "ipcRestartFailedPrefix": "Failed to restart IPC server:"
+    }
+  },
   "backgroundSessions": {
     "daemon": {
       "label": "Daemon",

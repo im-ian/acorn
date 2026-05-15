@@ -341,12 +341,152 @@
     }
   },
   "app": {},
-  "sidebar": {},
-  "pane": {},
+  "sidebar": {
+    "status": {
+      "idle": "유휴",
+      "running": "실행 중",
+      "needs_input": "입력 필요",
+      "failed": "실패",
+      "completed": "완료"
+    },
+    "dialog": {
+      "selectExistingProject": "기존 프로젝트 선택",
+      "selectIsolatedRepository": "격리된 worktree용 Git 저장소 선택",
+      "selectControlDirectory": "컨트롤 세션 디렉터리 선택",
+      "selectDirectory": "디렉터리 선택"
+    },
+    "projects": {
+      "title": "프로젝트",
+      "newProject": "새 프로젝트",
+      "addExistingProject": "기존 프로젝트 추가"
+    },
+    "actions": {
+      "dragToReorder": "순서를 바꾸려면 드래그",
+      "expandProject": "프로젝트 펼치기",
+      "collapseProject": "프로젝트 접기",
+      "newSession": "새 세션",
+      "newIsolatedSession": "새 격리 세션",
+      "newIsolatedSessionWorktree": "새 격리 세션 (worktree)",
+      "newControlSession": "새 컨트롤 세션",
+      "closeProject": "프로젝트 닫기",
+      "revealInFinder": "Finder에서 보기",
+      "copyPath": "경로 복사",
+      "rename": "이름 변경",
+      "duplicateSession": "세션 복제",
+      "equalizePaneSizes": "Pane 크기 균등화",
+      "openWorktreeInEditor": "편집기에서 worktree 열기",
+      "copyWorktreePath": "Worktree 경로 복사",
+      "copyWorktreeName": "Worktree 이름 복사",
+      "copyBranchName": "브랜치 이름 복사",
+      "copySessionId": "세션 ID 복사",
+      "remove": "제거",
+      "removeSession": "세션 제거",
+      "removeOthersInProject": "프로젝트의 다른 세션 제거",
+      "removeAllInProject": "프로젝트의 모든 세션 제거"
+    },
+    "aria": {
+      "project": "프로젝트",
+      "dragToReorderProject": "프로젝트 순서를 바꾸려면 드래그",
+      "newSessionInProject": "이 프로젝트에 새 세션 만들기",
+      "newControlSessionInProject": "이 프로젝트에 새 컨트롤 세션 만들기",
+      "dragToReorderSession": "세션 순서를 바꾸려면 드래그",
+      "worktree": "worktree",
+      "controlSession": "컨트롤 세션"
+    },
+    "emptyProject": {
+      "prefix": "세션이 없습니다.",
+      "connector": "또는",
+      "suffix": "로 추가하거나 여기를 더블 클릭하세요."
+    },
+    "emptyProjects": {
+      "prefix": "아직 프로젝트가 없습니다.",
+      "suffix": "를 클릭해 추가하세요."
+    },
+    "metadata": {
+      "name": "이름",
+      "branch": "브랜치",
+      "detached": "(detached)",
+      "workingDirectory": "작업 디렉터리",
+      "status": "상태",
+      "kind": "종류",
+      "controlSession": "컨트롤 세션",
+      "isolatedWorktree": "격리된 worktree"
+    }
+  },
+  "pane": {
+    "empty": {
+      "dropTabOrDoubleClick": "여기에 탭을 놓거나 더블 클릭해 세션을 시작하세요",
+      "createProject": "시작하려면 프로젝트를 만드세요. 여기를 더블 클릭하세요."
+    },
+    "aria": {
+      "worktree": "워크트리",
+      "closeSession": "세션 닫기"
+    },
+    "menu": {
+      "rename": "이름 변경",
+      "duplicateSession": "세션 복제",
+      "forkClaudeSession": "Claude 세션 포크",
+      "forkSession": "세션 포크",
+      "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
+      "forkInNewWorktree": "새 워크트리에 포크",
+      "forkCodexSession": "Codex 세션 포크",
+      "forkCodexInNewWorktree": "새 워크트리에 Codex 포크",
+      "splitRight": "오른쪽으로 분할",
+      "splitDown": "아래로 분할",
+      "equalizePaneSizes": "패널 크기 균등화",
+      "openWorktreeInEditor": "편집기에서 워크트리 열기",
+      "revealInFinder": "Finder에서 보기",
+      "copyWorktreePath": "워크트리 경로 복사",
+      "copyWorktreeName": "워크트리 이름 복사",
+      "copyBranchName": "브랜치 이름 복사",
+      "copySessionId": "세션 ID 복사",
+      "close": "닫기",
+      "closeOthers": "다른 탭 닫기",
+      "closeAll": "모두 닫기",
+      "newSessionInThisPane": "이 패널에서 새 세션",
+      "closePane": "패널 닫기"
+    }
+  },
   "rightPanel": {},
   "fileExplorer": {},
   "dialogs": {},
-  "commandPalette": {},
+  "commandPalette": {
+    "dialogLabel": "명령 팔레트",
+    "placeholder": "명령을 입력하거나 검색하세요...",
+    "empty": "결과가 없습니다.",
+    "groups": {
+      "sessions": "세션",
+      "switchSession": "세션 전환",
+      "view": "보기",
+      "terminal": "터미널",
+      "ipc": "IPC",
+      "dangerZone": "위험 영역"
+    },
+    "commands": {
+      "newSession": "새 세션",
+      "newIsolatedSession": "새 격리 세션",
+      "newControlSession": "새 제어 세션",
+      "newProject": "새 프로젝트",
+      "addExistingProject": "기존 프로젝트 추가",
+      "refreshSessions": "세션 새로고침",
+      "switchSessionPrefix": "전환:",
+      "viewTodos": "할 일 보기",
+      "viewCommits": "커밋 보기",
+      "viewStaged": "스테이징 보기",
+      "viewPullRequests": "풀 리퀘스트 보기",
+      "resetPanelSizes": "패널 크기 재설정",
+      "reloadShellEnvironment": "셸 환경 다시 로드",
+      "restartIpcServer": "IPC 서버 다시 시작",
+      "removeSessionPrefix": "세션 제거:",
+      "shakeTree": "나무 흔들기"
+    },
+    "toasts": {
+      "shellEnvReloaded": "셸 환경을 다시 로드했습니다. 적용하려면 새 세션을 여세요.",
+      "shellEnvReloadFailed": "셸 환경을 다시 로드하지 못했습니다.",
+      "ipcRestarted": "IPC 서버를 다시 시작했습니다.",
+      "ipcRestartFailedPrefix": "IPC 서버를 다시 시작하지 못했습니다:"
+    }
+  },
   "backgroundSessions": {
     "daemon": {
       "label": "데몬",
