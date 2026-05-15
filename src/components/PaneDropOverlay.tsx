@@ -24,7 +24,7 @@ interface PaneDropOverlayProps {
 export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
   const dragging = useAcornDragInProgress();
   const moveTab = useAppStore((s) => s.moveTab);
-  const openViewerTab = useAppStore((s) => s.openViewerTab);
+  const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
@@ -90,12 +90,12 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
         if (!target) return;
         const filePayload = getCurrentFilePayload();
         if (filePayload) {
-          // For now ignore edge zones for file drops — viewer tabs land
+          // For now ignore edge zones for file drops — code tabs land
           // inside the target pane regardless of which edge the user hit.
-          // Splitting a pane to host a viewer can be a follow-up if it
+          // Splitting a pane to host a code tab can be a follow-up if it
           // turns out to be common.
           setFocusedPane(paneId);
-          openViewerTab(filePayload.path);
+          openCodeViewerTab(filePayload.path);
           return;
         }
         const payload = getCurrentTabPayload();
@@ -103,7 +103,7 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
         if (target.kind === "center") {
           if (payload.fromPaneId === paneId) return;
           moveTab({
-            sessionId: payload.sessionId,
+            tabId: payload.tabId,
             fromPaneId: payload.fromPaneId,
             toPaneId: paneId,
           });
@@ -113,10 +113,10 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
         // dragged tab — the source would immediately collapse.
         if (payload.fromPaneId === paneId) {
           const fromPane = useAppStore.getState().panes[paneId];
-          if (fromPane && fromPane.sessionIds.length <= 1) return;
+          if (fromPane && fromPane.tabIds.length <= 1) return;
         }
         moveTab({
-          sessionId: payload.sessionId,
+          tabId: payload.tabId,
           fromPaneId: payload.fromPaneId,
           toPaneId: paneId,
           splitDirection: target.direction,
