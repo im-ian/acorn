@@ -123,6 +123,74 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toEqual({
       parentPath: "/tmp/parent",
       name: "fresh-app",
+      ignoreSafeName: false,
+    });
+  });
+
+  test("New project can override long-name safe warnings", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("plugin:dialog|open", () => "/tmp/parent");
+    await tauri.handle("create_new_project", (args) => {
+      const w = window as unknown as {
+        __newProjectCalls?: unknown[];
+        __projectCreated?: boolean;
+      };
+      w.__newProjectCalls = w.__newProjectCalls ?? [];
+      w.__newProjectCalls.push(args);
+      w.__projectCreated = true;
+      const a = args as { parentPath: string; name: string };
+      return {
+        repo_path: `${a.parentPath}/${a.name}`,
+        name: a.name,
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      };
+    });
+    await tauri.handle("list_projects", () => {
+      const w = window as unknown as { __projectCreated?: boolean };
+      return w.__projectCreated
+        ? [
+            {
+              repo_path: `/tmp/parent/${"a".repeat(256)}`,
+              name: "a".repeat(256),
+              created_at: "2026-01-01T00:00:00Z",
+              position: 0,
+            },
+          ]
+        : [];
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+    await page.getByLabel("Project name").fill("a".repeat(256));
+    await page.getByRole("button", { name: "Choose" }).click();
+
+    await expect(page.getByRole("alert")).toContainText(
+      "longer than 255 bytes",
+    );
+    await expect(
+      page.getByRole("button", { name: "Create project" }),
+    ).toBeDisabled();
+
+    await page.getByLabel("Ignore safe-name check").check();
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await expect(
+      page.getByRole("listitem").filter({ hasText: "a".repeat(256) }),
+    ).toBeVisible();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __newProjectCalls?: unknown[] })
+          .__newProjectCalls,
+    )) as Array<{ parentPath: string; name: string; ignoreSafeName: boolean }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      parentPath: "/tmp/parent",
+      name: "a".repeat(256),
+      ignoreSafeName: true,
     });
   });
 
