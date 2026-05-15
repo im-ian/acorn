@@ -18,18 +18,33 @@ export function isLanguage(value: unknown): value is Language {
   return typeof value === "string" && LANGUAGE_VALUES.has(value as Language);
 }
 
-export type TranslationKey = keyof typeof en;
+type LocaleTree = typeof en;
+type StringPath<T> = {
+  [K in keyof T & string]: T[K] extends string
+    ? K
+    : T[K] extends Record<string, unknown>
+      ? `${K}.${StringPath<T[K]>}`
+      : never;
+}[keyof T & string];
 
-const EN_TRANSLATIONS: Record<TranslationKey, string> = en;
-const KO_TRANSLATIONS: Record<TranslationKey, string> = ko;
+export type TranslationKey = StringPath<LocaleTree>;
 
-const TRANSLATIONS: Record<Language, Record<TranslationKey, string>> = {
-  en: EN_TRANSLATIONS,
-  ko: KO_TRANSLATIONS,
+const TRANSLATIONS: Record<Language, LocaleTree> = {
+  en,
+  ko,
 };
 
+function lookup(tree: LocaleTree, key: TranslationKey): string {
+  const value = key.split(".").reduce<unknown>((node, part) => {
+    if (!node || typeof node !== "object") return undefined;
+    return (node as Record<string, unknown>)[part];
+  }, tree);
+
+  return typeof value === "string" ? value : key;
+}
+
 export function translate(language: Language, key: TranslationKey): string {
-  return TRANSLATIONS[language][key];
+  return lookup(TRANSLATIONS[language], key);
 }
 
 export function createTranslator(language: Language) {

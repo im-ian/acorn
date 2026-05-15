@@ -1,16 +1,30 @@
 {
-  "settings.title": "Settings",
-  "settings.reset": "Reset to defaults",
-  "settings.tabs.terminal": "Terminal",
-  "settings.tabs.agents": "Agents",
-  "settings.tabs.sessions": "Sessions",
-  "settings.tabs.github": "GitHub",
-  "settings.tabs.appearance": "Appearance",
-  "settings.tabs.editor": "Editor",
-  "settings.tabs.notifications": "Notifications",
-  "settings.tabs.storage": "Storage",
-  "settings.tabs.experiments": "Experiments",
-  "settings.tabs.about": "About",
-  "settings.language.label": "Language",
-  "settings.language.hint": "Language used for the Acorn interface. New translations are added gradually."
+  "settings": {
+    "title": "Settings",
+    "reset": "Reset to defaults",
+    "tabs": {
+      "terminal": "Terminal",
+      "agents": "Agents",
+      "sessions": "Sessions",
+      "github": "GitHub",
+      "appearance": "Appearance",
+      "editor": "Editor",
+      "notifications": "Notifications",
+      "storage": "Storage",
+      "experiments": "Experiments",
+      "about": "About"
+    },
+    "language": {
+      "label": "Language",
+      "hint": "Language used for the Acorn interface. New translations are added gradually."
+    }
+  },
+  "app": {},
+  "sidebar": {},
+  "pane": {},
+  "rightPanel": {},
+  "fileExplorer": {},
+  "dialogs": {},
+  "commandPalette": {},
+  "backgroundSessions": {}
 }
