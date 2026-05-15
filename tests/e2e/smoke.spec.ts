@@ -10,7 +10,10 @@ test.describe("smoke: app boots in mocked browser", () => {
 
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Add project" }),
+      page.getByRole("button", { name: "New project" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Add existing project" }),
     ).toBeVisible();
     await expect(page.getByText(/No projects yet/i)).toBeVisible();
     await expect(page.getByText(/update available/i)).toHaveCount(0);

@@ -124,6 +124,7 @@ interface AppStateModel {
   cycleTab: (direction: 1 | -1) => void;
   cycleProject: (direction: 1 | -1) => void;
   addProject: (repoPath: string) => Promise<void>;
+  createNewProject: (parentPath: string, name: string) => Promise<Project>;
   removeProject: (repoPath: string, removeWorktrees?: boolean) => Promise<void>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
   reorderSessions: (repoPath: string, orderedIds: string[]) => Promise<void>;
@@ -917,6 +918,19 @@ export const useAppStore = create<AppStateModel>()(
       await get().refreshProjects();
     } catch (e) {
       set({ error: errorMessage(e) });
+    }
+  },
+
+  async createNewProject(parentPath, name) {
+    try {
+      const project = await api.createNewProject(parentPath, name);
+      await get().refreshProjects();
+      get().setActiveProject(project.repo_path);
+      set({ error: null });
+      return project;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
     }
   },
 

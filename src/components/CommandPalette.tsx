@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Command, useCommandState } from "cmdk";
 import {
   Bot,
+  FolderOpen,
   FolderPlus,
   GitBranch,
   GitCommit,
@@ -60,6 +61,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleAddProject() {
     window.dispatchEvent(new CustomEvent("acorn:add-project"));
+    close();
+  }
+
+  function handleNewProject() {
+    window.dispatchEvent(new CustomEvent("acorn:new-project"));
     close();
   }
 
@@ -201,12 +207,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             </span>
           </Command.Item>
           <Command.Item
+            value="new-project"
+            onSelect={handleNewProject}
+            keywords={["project", "create", "repository", "repo", "folder"]}
+          >
+            <FolderPlus size={14} className="text-accent" />
+            <span>New project</span>
+          </Command.Item>
+          <Command.Item
             value="add-project"
             onSelect={handleAddProject}
             keywords={["project", "import", "repository", "repo", "folder"]}
           >
-            <FolderPlus size={14} className="text-accent" />
-            <span>Add project</span>
+            <FolderOpen size={14} className="text-accent" />
+            <span>Add existing project</span>
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⇧⌘N
             </span>

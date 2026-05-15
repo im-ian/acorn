@@ -59,6 +59,9 @@ export const api = {
   addProject(repoPath: string): Promise<Project> {
     return invoke<Project>("add_project", { repoPath });
   },
+  createNewProject(parentPath: string, name: string): Promise<Project> {
+    return invoke<Project>("create_new_project", { parentPath, name });
+  },
   removeProject(
     repoPath: string,
     removeSessions = true,

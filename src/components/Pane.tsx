@@ -280,7 +280,7 @@ export function Pane({ paneId }: PaneProps) {
               hasProjects
                 ? handleNewTabFromEmpty
                 : () =>
-                    window.dispatchEvent(new CustomEvent("acorn:add-project"))
+                    window.dispatchEvent(new CustomEvent("acorn:new-project"))
             }
             onContextMenu={(x, y) => {
               setFocusedPane(paneId);
@@ -351,7 +351,7 @@ function EmptyPane({
         <>
           <FolderPlus size={28} className="opacity-40" />
           <p className="text-xs">
-            Add a project to get started. Double-click here.
+            Create a project to get started. Double-click here.
           </p>
         </>
       )}

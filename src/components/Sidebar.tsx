@@ -55,6 +55,7 @@ import {
 } from "../lib/sidebar-actions";
 import type { Project, Session, SessionKind, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { NewProjectDialog } from "./NewProjectDialog";
 import { Tooltip } from "./Tooltip";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
@@ -96,11 +97,13 @@ export function Sidebar() {
     requestRemoveSession,
     requestRemoveProject,
     addProject,
+    createNewProject,
     reorderProjects,
     reorderSessions,
   } = useAppStore();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
 
   useEffect(() => {
     saveCollapsed(collapsed);
@@ -152,12 +155,12 @@ export function Sidebar() {
     }
   }
 
-  async function onAddProject() {
+  async function onAddExistingProject() {
     try {
       const repoPath = await open({
         directory: true,
         multiple: false,
-        title: "Select a directory",
+        title: "Select an existing project",
       });
       if (!repoPath || typeof repoPath !== "string") return;
       await addProject(repoPath);
@@ -188,17 +191,22 @@ export function Sidebar() {
       const project = useAppStore.getState().activeProject;
       void onNewSessionRef.current(false, "control", project ?? undefined);
     };
+    const newProject = () => {
+      setNewProjectOpen(true);
+    };
     const addProj = () => {
       void onAddProjectRef.current();
     };
     window.addEventListener("acorn:new-session", newSession);
     window.addEventListener("acorn:new-isolated-session", newIsolated);
     window.addEventListener("acorn:new-control-session", newControl);
+    window.addEventListener("acorn:new-project", newProject);
     window.addEventListener("acorn:add-project", addProj);
     return () => {
       window.removeEventListener("acorn:new-session", newSession);
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
       window.removeEventListener("acorn:new-control-session", newControl);
+      window.removeEventListener("acorn:new-project", newProject);
       window.removeEventListener("acorn:add-project", addProj);
     };
   }, []);
@@ -235,7 +243,7 @@ export function Sidebar() {
   }
 
   onNewSessionRef.current = onNewSession;
-  onAddProjectRef.current = onAddProject;
+  onAddProjectRef.current = onAddExistingProject;
 
   const projectIds = useMemo(
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
@@ -315,16 +323,28 @@ export function Sidebar() {
         <h2 className="text-sm font-medium tracking-tight text-fg-muted">
           Projects
         </h2>
-        <Tooltip label="Add project" side="left">
-          <button
-            type="button"
-            onClick={onAddProject}
-            className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-            aria-label="Add project"
-          >
-            <FolderPlus size={14} />
-          </button>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <Tooltip label="New project" side="left">
+            <button
+              type="button"
+              onClick={() => setNewProjectOpen(true)}
+              className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              aria-label="New project"
+            >
+              <FolderPlus size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Add existing project" side="left">
+            <button
+              type="button"
+              onClick={onAddExistingProject}
+              className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              aria-label="Add existing project"
+            >
+              <FolderOpen size={14} />
+            </button>
+          </Tooltip>
+        </div>
       </header>
       <div className="flex-1 overflow-y-auto px-1 pb-2">
         {projectGroups.length === 0 ? (
@@ -396,6 +416,13 @@ export function Sidebar() {
           </DndContext>
         )}
       </div>
+      <NewProjectDialog
+        open={newProjectOpen}
+        onClose={() => setNewProjectOpen(false)}
+        onCreate={async (parentPath, name) => {
+          await createNewProject(parentPath, name);
+        }}
+      />
     </aside>
   );
 }

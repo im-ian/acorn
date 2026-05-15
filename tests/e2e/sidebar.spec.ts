@@ -24,7 +24,7 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(page.getByText(/No sessions\./i)).toBeVisible();
   });
 
-  test("Add Project invokes add_project with the picked path", async ({
+  test("Add existing project invokes add_project with the picked path", async ({
     page,
     tauri,
   }) => {
@@ -53,7 +53,7 @@ test.describe("sidebar: project lifecycle", () => {
     ]);
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Add project" }).click();
+    await page.getByRole("button", { name: "Add existing project" }).click();
 
     await expect(
       page.getByRole("listitem").filter({ hasText: "picked" }),
@@ -66,6 +66,64 @@ test.describe("sidebar: project lifecycle", () => {
     )) as Array<{ repoPath: string }>;
     expect(calls).toHaveLength(1);
     expect(calls[0].repoPath).toBe("/tmp/picked");
+  });
+
+  test("New project creates a git-backed project under the selected parent", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("plugin:dialog|open", () => "/tmp/parent");
+    await tauri.handle("create_new_project", (args) => {
+      const w = window as unknown as {
+        __newProjectCalls?: unknown[];
+        __projectCreated?: boolean;
+      };
+      w.__newProjectCalls = w.__newProjectCalls ?? [];
+      w.__newProjectCalls.push(args);
+      w.__projectCreated = true;
+      const a = args as { parentPath: string; name: string };
+      return {
+        repo_path: `${a.parentPath}/${a.name}`,
+        name: a.name,
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      };
+    });
+    await tauri.handle("list_projects", () => {
+      const w = window as unknown as { __projectCreated?: boolean };
+      return w.__projectCreated
+        ? [
+            {
+              repo_path: "/tmp/parent/fresh-app",
+              name: "fresh-app",
+              created_at: "2026-01-01T00:00:00Z",
+              position: 0,
+            },
+          ]
+        : [];
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New project" }).click();
+    await page.getByLabel("Project name").fill("fresh-app");
+    await page.getByRole("button", { name: "Choose" }).click();
+    await expect(page.getByText("/tmp/parent/fresh-app")).toBeVisible();
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await expect(
+      page.getByRole("listitem").filter({ hasText: "fresh-app" }),
+    ).toBeVisible();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __newProjectCalls?: unknown[] })
+          .__newProjectCalls,
+    )) as Array<{ parentPath: string; name: string }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      parentPath: "/tmp/parent",
+      name: "fresh-app",
+    });
   });
 
   test("Close project removes the project after confirming", async ({
