@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
 import type { Project, Session, SessionKind } from "./lib/types";
+import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
 import {
   type Direction,
@@ -61,13 +62,13 @@ interface AppStateModel {
    *  surface "which identity am I acting as for this repo". In-memory only. */
   prAccountByRepo: Record<string, string>;
   /**
-   * One-shot command to write into a session's PTY immediately after its
-   * shell finishes spawning. Used by `CommandRunDialog` to launch a freshly
-   * created session that then executes a fixed command (e.g. `gh auth login`).
-   * Terminal.tsx consumes and clears the entry inside the `pty_spawn`
+   * One-shot command metadata to write into a session's PTY immediately after
+   * its shell finishes spawning. Used by `CommandRunDialog` to launch a
+   * freshly created session that then executes a fixed command (e.g. `gh auth
+   * login`). Terminal.tsx consumes and clears the entry inside the `pty_spawn`
    * resolver, so the value is in-memory only and never persisted.
    */
-  pendingTerminalInput: Record<string, string>;
+  pendingTerminalInput: Record<string, PendingTerminalInput>;
   multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
@@ -137,10 +138,23 @@ interface AppStateModel {
   setRightTab: (tab: RightTab) => void;
   setPrAccountForRepo: (repoPath: string, login: string | null) => void;
   /** Queue a command for the next successful `pty_spawn` of `sessionId`. */
-  setPendingTerminalInput: (sessionId: string, command: string) => void;
+  setPendingTerminalInput: (
+    sessionId: string,
+    command: string,
+    options?: PendingTerminalInputOptions,
+  ) => void;
   /** Atomically read and remove the queued command for `sessionId`. */
-  consumePendingTerminalInput: (sessionId: string) => string | null;
+  consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
   toggleMultiInput: () => boolean;
+}
+
+export interface PendingTerminalInput {
+  command: string;
+  adoptWorktreeOnExit: boolean;
+}
+
+export interface PendingTerminalInputOptions {
+  adoptWorktreeOnExit?: boolean;
 }
 
 let paneCounter = 0;
@@ -1027,11 +1041,16 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
-  setPendingTerminalInput(sessionId, command) {
+  setPendingTerminalInput(sessionId, command, options) {
     set((s) => ({
       pendingTerminalInput: {
         ...s.pendingTerminalInput,
-        [sessionId]: command,
+        [sessionId]: {
+          command,
+          adoptWorktreeOnExit:
+            options?.adoptWorktreeOnExit ??
+            commandRequestsWorktreeAdoption(command),
+        },
       },
     }));
   },
@@ -1041,7 +1060,7 @@ export const useAppStore = create<AppStateModel>()(
     // observe the same value before either of them clears it. Captures the
     // resolved value via closure rather than as the `set` return so the
     // function can still surface it to its caller.
-    let consumed: string | null = null;
+    let consumed: PendingTerminalInput | null = null;
     set((s) => {
       const queued = s.pendingTerminalInput[sessionId];
       if (!queued) return s;

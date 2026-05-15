@@ -131,6 +131,7 @@ pub struct DaemonSessionSummary {
     pub name: String,
     pub kind: String,
     pub alive: bool,
+    pub cwd: Option<String>,
     pub repo_path: Option<String>,
     pub branch: Option<String>,
     pub agent_kind: Option<String>,
@@ -154,6 +155,7 @@ pub fn daemon_list_sessions(
                 SessionKind::Control => "control".into(),
             },
             alive: s.alive,
+            cwd: s.cwd.map(|p| p.display().to_string()),
             repo_path: s.repo_path.map(|p| p.display().to_string()),
             branch: s.branch,
             agent_kind: s.agent_kind.map(agent_kind_to_str),
@@ -262,7 +264,7 @@ pub fn daemon_forget_session(
 /// the daemon kept the PTY). Idempotent — if the app already has a row
 /// for this id, returns it untouched.
 ///
-/// Pulls metadata (name, kind, repo_path, branch) straight from the
+/// Pulls metadata (name, kind, repo_path, cwd, branch) straight from the
 /// daemon's `SessionSummary`. The daemon must still know this id; pass
 /// `force` semantics through by always querying `list_sessions` first.
 #[tauri::command]
@@ -289,6 +291,7 @@ pub fn daemon_adopt_session(
         .repo_path
         .clone()
         .ok_or_else(|| "daemon session has no repo_path — cannot adopt".to_string())?;
+    let worktree_path = summary.cwd.clone().unwrap_or_else(|| repo_path.clone());
     // Branch is informational — leave empty when the daemon never knew
     // it. Synthesizing "main" would silently lie for repos on master /
     // trunk / detached HEAD; UI tolerates the empty string.
@@ -312,11 +315,7 @@ pub fn daemon_adopt_session(
         id,
         name: summary.name.clone(),
         repo_path: repo_path.clone(),
-        // No way to recover the original worktree path from daemon
-        // metadata. Fall back to repo_path; the user can `cd` inside the
-        // attached PTY if needed. `in_worktree` is recomputed at list
-        // time so it self-corrects if repo_path is itself a worktree.
-        worktree_path: repo_path,
+        worktree_path,
         branch,
         isolated: false,
         status: crate::session::SessionStatus::Idle,

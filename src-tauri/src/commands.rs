@@ -1283,7 +1283,7 @@ pub fn pty_reload_shell_env() {
 #[tauri::command]
 pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
     let id = parse_id(&session_id)?;
-    let Some(root_pid) = state.pty.child_pid(&id) else {
+    let Some(root_pid) = session_root_pid(&state, &id) else {
         return Ok(None);
     };
 
@@ -1297,6 +1297,13 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
     );
 
     Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
+}
+
+fn session_root_pid(state: &State<'_, AppState>, id: &Uuid) -> Option<u32> {
+    state
+        .stream_registry
+        .pid(id)
+        .or_else(|| state.pty.child_pid(id))
 }
 
 /// Like [`pty_cwd`], but resolves the cwd to its enclosing git repository's
@@ -1392,7 +1399,7 @@ pub fn pty_in_worktree_all(state: State<'_, AppState>) -> HashMap<String, bool> 
     let sessions = state.sessions.list();
     let pids: Vec<(Uuid, u32)> = sessions
         .iter()
-        .filter_map(|s| state.pty.child_pid(&s.id).map(|pid| (s.id, pid)))
+        .filter_map(|s| session_root_pid(&state, &s.id).map(|pid| (s.id, pid)))
         .collect();
     if pids.is_empty() {
         return HashMap::new();

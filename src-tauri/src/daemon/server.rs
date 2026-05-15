@@ -257,6 +257,7 @@ impl Daemon {
                         name: s.name,
                         kind: s.kind,
                         alive: s.alive,
+                        cwd: Some(s.cwd),
                         repo_path: s.repo_path,
                         branch: s.branch,
                         agent_kind: s.agent_kind,

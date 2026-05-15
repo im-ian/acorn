@@ -455,6 +455,9 @@ function renderAppMetaTooltip(
     if (daemon.repo_path) {
       rows.push({ label: "Repo", value: daemon.repo_path });
     }
+    if (daemon.cwd) {
+      rows.push({ label: "Worktree", value: daemon.cwd });
+    }
   }
   return (
     <div className="flex flex-col gap-0.5 text-left">

@@ -744,11 +744,15 @@ describe("pendingTerminalInput", () => {
     const { setPendingTerminalInput, consumePendingTerminalInput } =
       useAppStore.getState();
     setPendingTerminalInput("sess-1", "gh auth login");
-    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toBe(
-      "gh auth login",
-    );
+    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toEqual({
+      command: "gh auth login",
+      adoptWorktreeOnExit: false,
+    });
     const consumed = consumePendingTerminalInput("sess-1");
-    expect(consumed).toBe("gh auth login");
+    expect(consumed).toEqual({
+      command: "gh auth login",
+      adoptWorktreeOnExit: false,
+    });
     expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toBeUndefined();
   });
 
@@ -764,7 +768,10 @@ describe("pendingTerminalInput", () => {
       useAppStore.getState();
     setPendingTerminalInput("sess-1", "first");
     setPendingTerminalInput("sess-1", "second");
-    expect(consumePendingTerminalInput("sess-1")).toBe("second");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "second",
+      adoptWorktreeOnExit: false,
+    });
   });
 
   it("does not cross-contaminate session ids", () => {
@@ -772,8 +779,24 @@ describe("pendingTerminalInput", () => {
       useAppStore.getState();
     setPendingTerminalInput("sess-1", "one");
     setPendingTerminalInput("sess-2", "two");
-    expect(consumePendingTerminalInput("sess-1")).toBe("one");
-    expect(useAppStore.getState().pendingTerminalInput["sess-2"]).toBe("two");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "one",
+      adoptWorktreeOnExit: false,
+    });
+    expect(useAppStore.getState().pendingTerminalInput["sess-2"]).toEqual({
+      command: "two",
+      adoptWorktreeOnExit: false,
+    });
+  });
+
+  it("marks explicit claude worktree commands for after-exit adoption", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "claude --worktree");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "claude --worktree",
+      adoptWorktreeOnExit: true,
+    });
   });
 });
 
