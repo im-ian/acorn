@@ -21,6 +21,17 @@ use portable_pty::CommandBuilder;
 pub const RENDER_CAPABILITY: &[(&str, &str)] =
     &[("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
 
+const HOST_TERMINAL_ENV: &[&str] = &[
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    "LC_TERMINAL",
+    "LC_TERMINAL_VERSION",
+    "ITERM_SESSION_ID",
+    "WT_SESSION",
+    "VTE_VERSION",
+];
+
 /// Apply layered env to `cmd`, lowest-to-highest priority:
 ///   * (A) Render capability — TERM / COLORTERM defaults.
 ///   * (B) System locale — LANG default.
@@ -49,6 +60,18 @@ pub fn apply_layered_env(cmd: &mut CommandBuilder, env: HashMap<String, String>)
 
     let shell_env = crate::shell_env::resolve();
     let mut applied: HashSet<String> = env.keys().cloned().collect();
+
+    // `CommandBuilder::new` starts from Acorn's own environment. If Acorn
+    // was launched from Terminal.app/iTerm/VS Code, those host terminal
+    // fingerprints leak into the embedded xterm.js PTY. TUIs such as Claude
+    // can special-case `TERM_PROGRAM` / friends and emit redraw behaviour for
+    // a terminal Acorn is not actually running. Strip inherited fingerprints;
+    // explicit caller env below can still opt back in for tests/tools.
+    for k in HOST_TERMINAL_ENV {
+        if !applied.contains(*k) {
+            cmd.env_remove(k);
+        }
+    }
 
     // (A) Render capability — TERM advertises what xterm.js renders, so
     // zsh's terminfo lookups (used by zsh-autosuggestions for cursor
@@ -79,6 +102,9 @@ pub fn apply_layered_env(cmd: &mut CommandBuilder, env: HashMap<String, String>)
     // user explicitly exported — LANG, EDITOR, PAGER, TZ, etc. —
     // without acorn having to know each shell's rc-file conventions.
     for (k, v) in &shell_env {
+        if HOST_TERMINAL_ENV.contains(&k.as_str()) && !applied.contains(k) {
+            continue;
+        }
         if !applied.contains(k) {
             cmd.env(k, v);
             applied.insert(k.clone());
@@ -166,6 +192,30 @@ mod tests {
         assert_eq!(
             cmd.get_env("COLORTERM").and_then(|s| s.to_str()),
             Some("24bit"),
+        );
+    }
+
+    #[test]
+    fn layered_env_removes_inherited_host_terminal_fingerprints() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("TERM_PROGRAM", "Apple_Terminal");
+        cmd.env("TERM_SESSION_ID", "abc123");
+        apply_layered_env(&mut cmd, HashMap::new());
+        assert_eq!(cmd.get_env("TERM_PROGRAM"), None);
+        assert_eq!(cmd.get_env("TERM_SESSION_ID"), None);
+    }
+
+    #[test]
+    fn layered_env_preserves_explicit_host_terminal_override() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        let mut env = HashMap::new();
+        env.insert("TERM_PROGRAM".to_string(), "AcornTest".to_string());
+        apply_layered_env(&mut cmd, env);
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
+            Some("AcornTest"),
         );
     }
 }

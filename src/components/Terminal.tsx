@@ -335,6 +335,7 @@ export function Terminal({
     const unlistenFns: UnlistenFn[] = [];
     let observedLinkedWorktreePath: string | null = null;
     let liveCwdProbeTimer: number | null = null;
+    let restoredDiskScrollback = false;
 
     const rememberLinkedWorktreeCwd = (path: string, source: string) => {
       void api
@@ -478,39 +479,48 @@ export function Terminal({
       }, SCROLLBACK_SAVE_DEBOUNCE_MS);
     };
 
-    // Force a viewport repaint shortly after a PTY output burst goes idle.
+    // Force viewport repaints around PTY output bursts.
     //
     // xterm's DOM renderer reuses per-row DOM elements and incrementally
     // patches glyphs as the buffer changes. When a streaming TUI (Claude
-    // CLI, `htop`, `claude --print`) is interrupted mid-redraw — user
-    // presses Esc/Ctrl+C, or the stream simply stops — the parser settles
-    // but the last set of cell-diffs may never trigger a paint that
-    // overwrites stale glyphs left by an earlier wider line. The xterm
-    // buffer is correct (copy-to-clipboard yields clean text); only the
-    // DOM rendition is stale. Forcing `refresh(0, rows-1)` rebuilds every
-    // visible row from the buffer, which clears the leftover characters.
+    // CLI, `htop`, `claude --print`) is mid-redraw — or interrupted by
+    // Esc/Ctrl+C — the parser can settle with stale cursor/cell DOM left
+    // from an earlier frame. The xterm buffer is correct
+    // (copy-to-clipboard yields clean text); only the DOM rendition is
+    // stale. Forcing `refresh(0, rows-1)` rebuilds every visible row from
+    // the buffer, which clears leftover characters and cursor blocks.
     //
-    // Mid-burst paints already happen naturally as each chunk lands, so
-    // we only fire this when the stream goes quiet. 120ms after the last
-    // chunk: short enough that the stale frame is rarely visible, long
-    // enough to coalesce a Claude-CLI streaming burst (where natural
-    // gaps run ~10-60ms) into one refresh instead of one per chunk.
+    // We run one rAF-throttled refresh after each parsed write for live
+    // interactive redraws (notably Claude's slash-command picker), plus
+    // an idle refresh after the burst goes quiet to catch interrupted
+    // final frames.
     const VIEWPORT_REPAINT_IDLE_MS = 120;
     let viewportRepaintTimer: number | null = null;
-    const scheduleViewportRepaint = () => {
+    let viewportRepaintFrame: number | null = null;
+    const repaintViewport = () => {
+      if (disposed) return;
+      try {
+        term.refresh(0, term.rows - 1);
+      } catch {
+        // ignore — terminal may have been disposed between scheduling
+        // and reaching the call.
+      }
+    };
+    const scheduleViewportFrameRepaint = () => {
+      if (disposed || viewportRepaintFrame !== null) return;
+      viewportRepaintFrame = requestAnimationFrame(() => {
+        viewportRepaintFrame = null;
+        repaintViewport();
+      });
+    };
+    const scheduleViewportIdleRepaint = () => {
       if (disposed) return;
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
       }
       viewportRepaintTimer = window.setTimeout(() => {
         viewportRepaintTimer = null;
-        if (disposed) return;
-        try {
-          term.refresh(0, term.rows - 1);
-        } catch {
-          // ignore — terminal may have been disposed between the timer
-          // firing and reaching the call.
-        }
+        repaintViewport();
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
 
@@ -1069,6 +1079,7 @@ export function Terminal({
           env: {},
           cols: term.cols,
           rows: term.rows,
+          replayScrollback: !restoredDiskScrollback,
         });
         if (disposed) {
           // Cleanup ran mid-spawn — the pty just got created has no UI.
@@ -1127,18 +1138,25 @@ export function Terminal({
             if (disposed) return;
             try {
               const bytes = decodeBase64ToBytes(event.payload.data);
-              term.write(bytes);
-              // Output landed in the buffer — schedule a debounced save
+              term.write(bytes, () => {
+                if (disposed) return;
+                // The parser has drained this chunk. Force a frame-bound
+                // refresh so fast cursor-move/erase TUIs do not leave stale
+                // DOM cursor blocks or cells behind.
+                scheduleViewportFrameRepaint();
+                // Also schedule a viewport repaint once the burst goes
+                // quiet, so a TUI redraw interrupted mid-stream doesn't
+                // leave stale glyphs from a wider previous line painted on
+                // screen.
+                scheduleViewportIdleRepaint();
+                // A new prompt row may have just been rendered. Rescan the
+                // buffer so the sticky banner picks it up in the same frame
+                // (instead of waiting for the user's next scroll).
+                scheduleContextDispatch();
+              });
+              // Output will land in the buffer — schedule a debounced save
               // so the new content reaches disk ~1s after activity ends.
               scheduleScrollbackSave();
-              // Also schedule a viewport repaint once the burst goes quiet,
-              // so a TUI redraw interrupted mid-stream doesn't leave stale
-              // glyphs from a wider previous line painted on screen.
-              scheduleViewportRepaint();
-              // A new prompt row may have just been rendered. Rescan the
-              // buffer so the sticky banner picks it up in the same frame
-              // (instead of waiting for the user's next scroll).
-              scheduleContextDispatch();
               // Agents can create a worktree and chdir a descendant process
               // without triggering our shell's OSC 7 prompt hook. Probe the
               // live descendant cwd on output bursts so exit adoption can
@@ -1239,14 +1257,17 @@ export function Terminal({
       });
       unlistenFns.push(() => restartDisposable.dispose());
 
-      // Restore prior scrollback before spawning so the user sees the
-      // previous session's output immediately on app restart. The dim
-      // separator marks where the live PTY output begins.
+      // Restore the xterm-rendered disk snapshot before spawning so the user
+      // sees the previous terminal screen immediately on app restart. If this
+      // succeeds, `spawnPty()` tells the daemon attachment not to replay its
+      // raw PTY ring buffer: raw TUI output contains intermediate Claude
+      // redraw frames, while the disk snapshot is already parsed by xterm.
       try {
         const saved = await invoke<string | null>("scrollback_load", {
           sessionId,
         });
         if (disposed) return;
+        restoredDiskScrollback = saved !== null;
         if (saved && saved.length > 0) {
           // Each step is awaited individually. Previously the mode
           // resets and marker were fired without awaiting and `spawnPty`
@@ -1365,6 +1386,10 @@ export function Terminal({
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
         viewportRepaintTimer = null;
+      }
+      if (viewportRepaintFrame !== null) {
+        cancelAnimationFrame(viewportRepaintFrame);
+        viewportRepaintFrame = null;
       }
       // No cleanup-time save: under React.StrictMode the cleanup of the
       // first dev mount fires while the buffer is still empty (load

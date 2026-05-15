@@ -895,6 +895,7 @@ pub async fn pty_spawn<R: Runtime>(
     env: Option<HashMap<String, String>>,
     cols: Option<u16>,
     rows: Option<u16>,
+    replay_scrollback: Option<bool>,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let cwd = PathBuf::from(cwd);
@@ -1065,6 +1066,7 @@ pub async fn pty_spawn<R: Runtime>(
             &effective_env,
             cols.unwrap_or(0),
             rows.unwrap_or(0),
+            replay_scrollback.unwrap_or(true),
         ) {
             Ok(()) => return Ok(()),
             Err(err) => {
@@ -1090,8 +1092,9 @@ pub async fn pty_spawn<R: Runtime>(
 /// 1. **Already attached** — short-circuit; redundant guard catches
 ///    races where two callers hit this helper concurrently.
 /// 2. **Daemon already has an alive session** under this UUID (Acorn
-///    just restarted) — skip spawn, open a stream attachment with
-///    scrollback replay so the user sees the daemon's last screen.
+///    just restarted) — skip spawn, open a stream attachment. The frontend
+///    decides whether to replay the daemon's raw ring buffer based on whether
+///    it already restored an xterm-rendered disk snapshot.
 /// 3. **No live session** — fresh daemon spawn, attach the stream,
 ///    persist `daemon_session_id` so the next restart hits case 2.
 fn spawn_via_daemon<R: Runtime>(
@@ -1104,6 +1107,7 @@ fn spawn_via_daemon<R: Runtime>(
     env: &HashMap<String, String>,
     cols: u16,
     rows: u16,
+    replay_scrollback: bool,
 ) -> Result<(), String> {
     let bridge = &state.daemon_bridge;
     let registry = state.stream_registry.clone();
@@ -1142,7 +1146,7 @@ fn spawn_via_daemon<R: Runtime>(
     // tree to walk without an extra round-trip on every poll.
     if bridge.is_alive(id) {
         let pid = bridge.session_pid(id);
-        crate::daemon_stream::attach(app.clone(), registry.clone(), id, pid, true)
+        crate::daemon_stream::attach(app.clone(), registry.clone(), id, pid, replay_scrollback)
             .map_err(|e| format!("daemon stream attach failed: {e}"))?;
         return Ok(());
     }
@@ -1178,7 +1182,7 @@ fn spawn_via_daemon<R: Runtime>(
     }
     persist(state);
 
-    crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, true)
+    crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, replay_scrollback)
         .map_err(|e| format!("daemon stream attach failed: {e}"))
 }
 
