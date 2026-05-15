@@ -87,7 +87,7 @@ describe("Sidebar source contract", () => {
 
   it("chevron is rendered as its own padded button with hover background", () => {
     expect(SIDEBAR_SOURCE).toMatch(
-      /aria-label=\{collapsed \? "Expand project" : "Collapse project"\}/,
+      /aria-label=\{\s*collapsed\s*\?\s*sidebarText\(t, "sidebar\.actions\.expandProject"\)\s*:\s*sidebarText\(t, "sidebar\.actions\.collapseProject"\)\s*\}/,
     );
     expect(SIDEBAR_SOURCE).toMatch(
       /flex shrink-0 items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg/,

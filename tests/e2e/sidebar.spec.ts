@@ -1,6 +1,23 @@
-import { test, expect } from "./support";
+import { test, expect, seedSettingsLanguage } from "./support";
 
 test.describe("sidebar: project lifecycle", () => {
+  test("Korean mode localizes project chrome and empty state", async ({
+    page,
+  }) => {
+    await seedSettingsLanguage(page, "ko");
+
+    await page.goto("/");
+
+    await expect(page.getByRole("heading", { name: "프로젝트" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "새 프로젝트" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "기존 프로젝트 추가" }),
+    ).toBeVisible();
+    await expect(page.getByText(/아직 프로젝트가 없습니다/)).toBeVisible();
+  });
+
   test("seeded project appears with name and add session affordances", async ({
     page,
     tauri,

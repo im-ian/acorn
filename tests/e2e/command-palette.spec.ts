@@ -1,6 +1,33 @@
-import { test, expect, pressHotkey } from "./support";
+import {
+  test,
+  expect,
+  pressHotkey,
+  seedSettingsLanguage,
+} from "./support";
 
 test.describe("command palette", () => {
+  test("Korean mode localizes command palette chrome and default commands", async ({
+    page,
+  }) => {
+    await seedSettingsLanguage(page, "ko");
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "p" });
+
+    const palette = page.getByRole("dialog", { name: "명령 팔레트" });
+    await expect(palette).toBeVisible();
+    await expect(
+      page.getByPlaceholder("명령을 입력하거나 검색하세요..."),
+    ).toBeVisible();
+    await expect(page.getByText("세션", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("option", { name: /새 세션/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("option", { name: /새 프로젝트/ }),
+    ).toBeVisible();
+  });
+
   test("opens with $mod+P and closes with Escape", async ({ page }) => {
     await page.goto("/");
 

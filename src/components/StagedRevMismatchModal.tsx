@@ -1,8 +1,16 @@
 import { useState, type ReactElement } from "react";
 import { RefreshCw, Terminal } from "lucide-react";
 import { api, type StagedRevMismatch } from "../lib/api";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal } from "./ui/Modal";
 import { ModalHeader } from "./ui/ModalHeader";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface StagedRevMismatchModalProps {
   mismatch: StagedRevMismatch | null;
@@ -20,6 +28,7 @@ export function StagedRevMismatchModal({
   mismatch,
   onDismiss,
 }: StagedRevMismatchModalProps): ReactElement | null {
+  const t = useTranslation();
   const [restarting, setRestarting] = useState(false);
 
   if (!mismatch) return null;
@@ -59,7 +68,9 @@ export function StagedRevMismatchModal({
   }
 
   const sessionWord =
-    mismatch.stale_session_count === 1 ? "session" : "sessions";
+    mismatch.stale_session_count === 1
+      ? dt(t, "dialogs.stagedRevMismatch.sessionSingular")
+      : dt(t, "dialogs.stagedRevMismatch.sessionPlural");
 
   return (
     <Modal
@@ -70,8 +81,8 @@ export function StagedRevMismatchModal({
       ariaLabelledBy="acorn-staged-rev-mismatch-title"
     >
       <ModalHeader
-        title="Shell environment updated"
-        subtitle={`${mismatch.stale_session_count} background ${sessionWord} need a restart`}
+        title={dt(t, "dialogs.stagedRevMismatch.title")}
+        subtitle={`${mismatch.stale_session_count} ${dt(t, "dialogs.stagedRevMismatch.background")} ${sessionWord} ${dt(t, "dialogs.stagedRevMismatch.needRestart")}`}
         titleId="acorn-staged-rev-mismatch-title"
         icon={<Terminal size={14} className="text-accent" />}
         variant="dialog"
@@ -79,15 +90,10 @@ export function StagedRevMismatchModal({
       />
       <div className="space-y-3 px-4 py-4 text-xs text-fg-muted">
         <p>
-          Acorn refreshed its shell-init files in this update. Background
-          sessions started by the previous version are still running against
-          the old environment, which can cause garbled input and prompt
-          redraws.
+          {dt(t, "dialogs.stagedRevMismatch.bodyIntro")}
         </p>
         <p>
-          Restart now to apply the new environment. Open agent
-          conversations (Claude / Codex) will pick up where they left
-          off on next focus.
+          {dt(t, "dialogs.stagedRevMismatch.bodyRestart")}
         </p>
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
@@ -97,7 +103,7 @@ export function StagedRevMismatchModal({
           disabled={restarting}
           className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
         >
-          Later
+          {dt(t, "dialogs.stagedRevMismatch.later")}
         </button>
         <button
           type="button"
@@ -109,7 +115,9 @@ export function StagedRevMismatchModal({
             size={12}
             className={restarting ? "animate-spin" : undefined}
           />
-          {restarting ? "Restarting…" : "Restart sessions"}
+          {restarting
+            ? dt(t, "dialogs.stagedRevMismatch.restarting")
+            : dt(t, "dialogs.stagedRevMismatch.restartSessions")}
         </button>
       </footer>
     </Modal>

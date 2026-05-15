@@ -2,8 +2,16 @@ import { useEffect, useState } from "react";
 import { GitPullRequestClosed } from "lucide-react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import type { PullRequestDetail } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader, TextSwap } from "./ui";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface ClosePullRequestDialogProps {
   open: boolean;
@@ -20,6 +28,7 @@ export function ClosePullRequestDialog({
   onClose,
   onClosed,
 }: ClosePullRequestDialogProps) {
+  const t = useTranslation();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,7 +65,7 @@ export function ClosePullRequestDialog({
       {detail ? (
         <>
           <ModalHeader
-            title={`Close #${detail.number}`}
+            title={`${dt(t, "dialogs.closePullRequest.titlePrefix")} #${detail.number}`}
             icon={
               <GitPullRequestClosed size={16} className="text-rose-400" />
             }
@@ -67,9 +76,9 @@ export function ClosePullRequestDialog({
           />
           <div className="space-y-3 px-4 py-3 text-sm text-fg">
             <p className="text-xs">
-              Close pull request{" "}
+              {dt(t, "dialogs.closePullRequest.confirmPrefix")}{" "}
               <span className="font-mono text-accent">#{detail.number}</span>{" "}
-              without merging?
+              {dt(t, "dialogs.closePullRequest.confirmSuffix")}
             </p>
             <div className="rounded-md border border-border bg-bg-sidebar/60 p-3 text-[11px]">
               <p className="truncate font-medium">{detail.title}</p>
@@ -90,7 +99,7 @@ export function ClosePullRequestDialog({
               disabled={submitting}
               className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Cancel
+              {dt(t, "dialogs.common.cancel")}
             </button>
             <button
               type="button"
@@ -98,7 +107,11 @@ export function ClosePullRequestDialog({
               disabled={submitting}
               className="rounded-md bg-rose-500/20 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <TextSwap>{submitting ? "Closing…" : "Close PR"}</TextSwap>
+              <TextSwap>
+                {submitting
+                  ? dt(t, "dialogs.closePullRequest.closing")
+                  : dt(t, "dialogs.closePullRequest.closePr")}
+              </TextSwap>
             </button>
           </footer>
         </>

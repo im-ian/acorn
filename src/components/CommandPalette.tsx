@@ -21,15 +21,27 @@ import { RESET_PANEL_SIZES_EVENT } from "../lib/layoutEvents";
 import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
+import { useTranslation } from "../lib/useTranslation";
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (value: boolean) => void;
 }
 
+type CommandPaletteTranslationKey = Extract<
+  TranslationKey,
+  `commandPalette.${string}`
+>;
+
+function cpt(t: Translator, key: CommandPaletteTranslationKey): string {
+  return t(key);
+}
+
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const sessions = useAppStore((s) => s.sessions);
+  const t = useTranslation();
 
   // Derived once per render — sessions array identity is stable from zustand
   // until the underlying list actually changes.
@@ -104,10 +116,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     const show = useToasts.getState().show;
     try {
       await api.reloadShellEnv();
-      show("Shell environment reloaded. Open a new session to apply.");
+      show(cpt(t, "commandPalette.toasts.shellEnvReloaded"));
     } catch (err) {
       console.error("[CommandPalette] reloadShellEnv failed", err);
-      show("Failed to reload shell environment.");
+      show(cpt(t, "commandPalette.toasts.shellEnvReloadFailed"));
     } finally {
       close();
     }
@@ -122,11 +134,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     const show = useToasts.getState().show;
     try {
       await api.ipcRestart();
-      show("IPC server restarted.");
+      show(cpt(t, "commandPalette.toasts.ipcRestarted"));
     } catch (err) {
       console.error("[CommandPalette] ipcRestart failed", err);
       const message = err instanceof Error ? err.message : String(err);
-      show(`Failed to restart IPC server: ${message}`);
+      show(
+        `${cpt(t, "commandPalette.toasts.ipcRestartFailedPrefix")} ${message}`,
+      );
     } finally {
       close();
     }
@@ -136,7 +150,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     <Command.Dialog
       open={open}
       onOpenChange={onOpenChange}
-      label="Command palette"
+      label={cpt(t, "commandPalette.dialogLabel")}
       overlayClassName="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
       contentClassName={cn(
         "fixed inset-x-0 top-0 z-50 mx-auto mt-32 max-w-lg",
@@ -148,7 +162,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       <div className="border-b border-border px-3 py-2">
         <Command.Input
           autoFocus
-          placeholder="Type a command or search..."
+          placeholder={cpt(t, "commandPalette.placeholder")}
           className={cn(
             "w-full bg-transparent text-sm text-fg outline-none placeholder:text-fg-muted",
             "py-1.5",
@@ -173,13 +187,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         )}
       >
         <Command.Empty className="px-3 py-6 text-center text-sm text-fg-muted">
-          No results.
+          {cpt(t, "commandPalette.empty")}
         </Command.Empty>
 
-        <Command.Group heading="Sessions">
+        <Command.Group heading={cpt(t, "commandPalette.groups.sessions")}>
           <Command.Item value="new-session" onSelect={handleNewSession}>
             <Plus size={14} className="text-accent" />
-            <span>New session</span>
+            <span>{cpt(t, "commandPalette.commands.newSession")}</span>
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⌘T
             </span>
@@ -190,7 +204,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             keywords={["worktree", "isolated", "branch"]}
           >
             <GitBranch size={14} className="text-accent" />
-            <span>New isolated session</span>
+            <span>{cpt(t, "commandPalette.commands.newIsolatedSession")}</span>
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⌥⌘T
             </span>
@@ -201,7 +215,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             keywords={["control", "ipc", "dispatcher", "orchestrator"]}
           >
             <Bot size={14} className="text-accent" />
-            <span>New control session</span>
+            <span>{cpt(t, "commandPalette.commands.newControlSession")}</span>
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⌥⇧⌘T
             </span>
@@ -212,7 +226,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             keywords={["project", "create", "repository", "repo", "folder"]}
           >
             <FolderPlus size={14} className="text-accent" />
-            <span>New project</span>
+            <span>{cpt(t, "commandPalette.commands.newProject")}</span>
           </Command.Item>
           <Command.Item
             value="add-project"
@@ -220,19 +234,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             keywords={["project", "import", "repository", "repo", "folder"]}
           >
             <FolderOpen size={14} className="text-accent" />
-            <span>Add existing project</span>
+            <span>{cpt(t, "commandPalette.commands.addExistingProject")}</span>
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⇧⌘N
             </span>
           </Command.Item>
           <Command.Item value="refresh-sessions" onSelect={handleRefresh}>
             <RefreshCw size={14} className="text-fg-muted" />
-            <span>Refresh sessions</span>
+            <span>{cpt(t, "commandPalette.commands.refreshSessions")}</span>
           </Command.Item>
         </Command.Group>
 
         {sessionItems.length > 0 ? (
-          <Command.Group heading="Switch session">
+          <Command.Group heading={cpt(t, "commandPalette.groups.switchSession")}>
             {sessionItems.map((session) => (
               <Command.Item
                 key={`switch-${session.id}`}
@@ -241,7 +255,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 keywords={[session.name, session.branch]}
               >
                 <Sparkles size={14} className="text-fg-muted" />
-                <span className="truncate">Switch to {session.name}</span>
+                <span className="truncate">
+                  {cpt(t, "commandPalette.commands.switchSessionPrefix")}{" "}
+                  {session.name}
+                </span>
                 <span className="ml-auto truncate text-xs text-fg-muted/80">
                   {session.branch}
                 </span>
@@ -250,27 +267,27 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           </Command.Group>
         ) : null}
 
-        <Command.Group heading="View">
+        <Command.Group heading={cpt(t, "commandPalette.groups.view")}>
           <Command.Item
             value="view-todos"
             onSelect={() => handleSetTab("todos")}
           >
             <ListChecks size={14} className="text-fg-muted" />
-            <span>View Todos</span>
+            <span>{cpt(t, "commandPalette.commands.viewTodos")}</span>
           </Command.Item>
           <Command.Item
             value="view-commits"
             onSelect={() => handleSetTab("commits")}
           >
             <GitCommit size={14} className="text-fg-muted" />
-            <span>View Commits</span>
+            <span>{cpt(t, "commandPalette.commands.viewCommits")}</span>
           </Command.Item>
           <Command.Item
             value="view-staged"
             onSelect={() => handleSetTab("staged")}
           >
             <ListPlus size={14} className="text-fg-muted" />
-            <span>View Staged</span>
+            <span>{cpt(t, "commandPalette.commands.viewStaged")}</span>
           </Command.Item>
           <Command.Item
             value="view-prs"
@@ -278,7 +295,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             keywords={["pull requests", "pr", "github"]}
           >
             <GitPullRequest size={14} className="text-fg-muted" />
-            <span>View Pull Requests</span>
+            <span>{cpt(t, "commandPalette.commands.viewPullRequests")}</span>
           </Command.Item>
           <Command.Item
             value="reset-panel-sizes"
@@ -296,25 +313,27 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ]}
           >
             <LayoutTemplate size={14} className="text-fg-muted" />
-            <span>Reset panel sizes</span>
+            <span>{cpt(t, "commandPalette.commands.resetPanelSizes")}</span>
           </Command.Item>
         </Command.Group>
 
-        <Command.Group heading="Terminal">
+        <Command.Group heading={cpt(t, "commandPalette.groups.terminal")}>
           <Command.Item
             value="reload-shell-env"
             onSelect={() => void handleReloadShellEnv()}
             keywords={["dotfile", "zshenv", "lang", "editor", "env", "locale"]}
           >
             <Terminal size={14} className="text-fg-muted" />
-            <span>Reload shell environment</span>
+            <span>
+              {cpt(t, "commandPalette.commands.reloadShellEnvironment")}
+            </span>
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⇧⌘,
             </span>
           </Command.Item>
         </Command.Group>
 
-        <Command.Group heading="IPC">
+        <Command.Group heading={cpt(t, "commandPalette.groups.ipc")}>
           <Command.Item
             value="restart-ipc"
             onSelect={() => void handleRestartIpc()}
@@ -329,14 +348,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ]}
           >
             <Bot size={14} className="text-accent" />
-            <span>Restart IPC server</span>
+            <span>{cpt(t, "commandPalette.commands.restartIpcServer")}</span>
           </Command.Item>
         </Command.Group>
 
-        <ShakeTreeItem onSelect={handleShakeTree} />
+        <ShakeTreeItem onSelect={handleShakeTree} t={t} />
 
         {sessionItems.length > 0 ? (
-          <Command.Group heading="Danger zone">
+          <Command.Group heading={cpt(t, "commandPalette.groups.dangerZone")}>
             {sessionItems.map((session) => (
               <Command.Item
                 key={`remove-${session.id}`}
@@ -346,7 +365,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               >
                 <Trash2 size={14} className="text-danger" />
                 <span className="truncate">
-                  Remove session: {session.name}
+                  {cpt(t, "commandPalette.commands.removeSessionPrefix")}{" "}
+                  {session.name}
                 </span>
               </Command.Item>
             ))}
@@ -371,7 +391,13 @@ const SHAKE_TRIGGERS = [
   "도토리",
 ];
 
-function ShakeTreeItem({ onSelect }: { onSelect: () => void }) {
+function ShakeTreeItem({
+  onSelect,
+  t,
+}: {
+  onSelect: () => void;
+  t: Translator;
+}) {
   const search = useCommandState(
     (state: { search: string }) => state.search,
   ) as string | undefined;
@@ -387,7 +413,7 @@ function ShakeTreeItem({ onSelect }: { onSelect: () => void }) {
       keywords={SHAKE_TRIGGERS}
     >
       <Trees size={14} className="text-accent" />
-      <span>Shake the tree</span>
+      <span>{cpt(t, "commandPalette.commands.shakeTree")}</span>
     </Command.Item>
   );
 }
