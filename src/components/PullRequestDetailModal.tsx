@@ -24,6 +24,7 @@ import { Panel, PanelGroup } from "react-resizable-panels";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { ResizeHandle } from "./ResizeHandle";
 import type {
   DiffPayload,
@@ -34,6 +35,7 @@ import type {
   PullRequestDetailListing,
   PullRequestReview,
 } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -43,6 +45,11 @@ import { Tooltip } from "./Tooltip";
 import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
 
 type DetailTab = "conversation" | "commits" | "checks" | "files";
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface PullRequestDetailModalProps {
   /**
@@ -69,6 +76,7 @@ export function PullRequestDetailModal({
   onClose,
   onMutated,
 }: PullRequestDetailModalProps) {
+  const t = useTranslation();
   const [listing, setListing] = useState<PullRequestDetailListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>("conversation");
@@ -210,14 +218,16 @@ export function PullRequestDetailModal({
         ) : listing.kind === "not_github" ? (
           <ModalShell title={`#${open.number}`} onClose={onClose}>
             <div className="p-4 text-xs text-fg-muted">
-              Origin remote is not a GitHub repository.
+              {dt(t, "dialogs.pullRequestDetail.notGithub")}
             </div>
           </ModalShell>
         ) : listing.kind === "no_access" ? (
           <ModalShell title={`#${open.number}`} onClose={onClose}>
             <div className="p-4 text-xs text-fg-muted">
-              No logged-in <code className="font-mono">gh</code> account can
-              access {listing.slug}.
+              {dt(t, "dialogs.pullRequestDetail.noAccessPrefix")}{" "}
+              <code className="font-mono">gh</code>{" "}
+              {dt(t, "dialogs.pullRequestDetail.noAccessSuffix")}{" "}
+              {listing.slug}.
             </div>
           </ModalShell>
         ) : (
@@ -314,6 +324,7 @@ function DetailBody({
   onOpenMerge: () => void;
   onOpenClose: () => void;
 }) {
+  const t = useTranslation();
   const conversationCount = detail.comments.length + detail.reviews.length;
   const checkCounts = summarizeChecks(detail.checks);
   // Effective total ignores NEUTRAL / SKIPPED / CANCELLED — they carry no
@@ -363,7 +374,9 @@ function DetailBody({
               −{detail.deletions}
             </span>
             <span className="opacity-50"> · </span>
-            <span>{detail.changed_files} files</span>
+            <span>
+              {detail.changed_files} {dt(t, "dialogs.pullRequestDetail.files")}
+            </span>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -378,13 +391,13 @@ function DetailBody({
                 onClick={onOpenClose}
                 className="rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition hover:bg-rose-500/25"
               >
-                Close
+                {dt(t, "dialogs.common.close")}
               </button>
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             </>
           ) : null}
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
-          <Tooltip label="Open on GitHub" side="bottom">
+          <Tooltip label={dt(t, "dialogs.pullRequestDetail.openOnGithub")} side="bottom">
             <button
               type="button"
               onClick={() => void openUrl(detail.url)}
@@ -395,7 +408,7 @@ function DetailBody({
           </Tooltip>
           <button
             type="button"
-            aria-label="Close"
+            aria-label={dt(t, "dialogs.common.close")}
             onClick={onClose}
             className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
@@ -409,7 +422,8 @@ function DetailBody({
           <Markdown content={body} onTaskToggle={onTaskToggle} />
           {bodySaveError ? (
             <p className="mt-2 text-[10.5px] text-danger">
-              Couldn't save checkbox: {bodySaveError}
+              {dt(t, "dialogs.pullRequestDetail.checkboxSaveFailed")}{" "}
+              {bodySaveError}
             </p>
           ) : null}
         </ResizableBody>
@@ -418,21 +432,21 @@ function DetailBody({
       <nav className="flex shrink-0 border-b border-border">
         <DetailTabButton
           icon={<MessagesSquare size={13} />}
-          label="Conversation"
+          label={dt(t, "dialogs.pullRequestDetail.tabConversation")}
           badge={conversationCount > 0 ? conversationCount : null}
           active={tab === "conversation"}
           onClick={() => onTab("conversation")}
         />
         <DetailTabButton
           icon={<GitCommit size={13} />}
-          label="Commits"
+          label={dt(t, "dialogs.pullRequestDetail.tabCommits")}
           badge={commitCount > 0 ? commitCount : null}
           active={tab === "commits"}
           onClick={() => onTab("commits")}
         />
         <DetailTabButton
           icon={<CheckCircle2 size={13} />}
-          label="Checks"
+          label={dt(t, "dialogs.pullRequestDetail.tabChecks")}
           badge={
             allChecksPassed ? (
               <Check size={11} strokeWidth={3} className="text-emerald-300" />
@@ -454,7 +468,7 @@ function DetailBody({
         />
         <DetailTabButton
           icon={<GitPullRequest size={13} />}
-          label="Files"
+          label={dt(t, "dialogs.pullRequestDetail.tabFiles")}
           badge={fileCount > 0 ? fileCount : null}
           active={tab === "files"}
           onClick={() => onTab("files")}
@@ -501,6 +515,7 @@ function DetailSkeleton({
   onRefresh: () => void;
   refreshing: boolean;
 }) {
+  const t = useTranslation();
   return (
     <>
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
@@ -527,7 +542,7 @@ function DetailSkeleton({
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
           <button
             type="button"
-            aria-label="Close"
+            aria-label={dt(t, "dialogs.common.close")}
             onClick={onClose}
             className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
@@ -710,6 +725,7 @@ function MergeActionButton({
   mergeable: string | null;
   onClick: () => void;
 }) {
+  const t = useTranslation();
   const upper = mergeable?.toUpperCase() ?? null;
   const ready = upper === "MERGEABLE";
   const conflicting = upper === "CONFLICTING";
@@ -725,15 +741,15 @@ function MergeActionButton({
           : "cursor-not-allowed bg-bg-elevated text-fg-muted opacity-70",
       )}
     >
-      Merge
+      {dt(t, "dialogs.pullRequestDetail.merge")}
     </button>
   );
   if (ready) {
     return button;
   }
   const title = conflicting
-    ? "Cannot merge — conflicting branch"
-    : "Merge readiness still being determined…";
+    ? dt(t, "dialogs.pullRequestDetail.cannotMergeConflicting")
+    : dt(t, "dialogs.pullRequestDetail.mergeReadinessPending");
   return (
     <Tooltip label={title} side="bottom">
       {button}
@@ -760,6 +776,7 @@ function readStoredBodyHeight(): number {
 }
 
 function ResizableBody({ children }: { children: React.ReactNode }) {
+  const t = useTranslation();
   const [height, setHeight] = useState<number>(() => readStoredBodyHeight());
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
@@ -808,13 +825,13 @@ function ResizableBody({ children }: { children: React.ReactNode }) {
       <div
         role="separator"
         aria-orientation="horizontal"
-        aria-label="Resize PR body"
+        aria-label={dt(t, "dialogs.pullRequestDetail.resizePrBody")}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onDoubleClick={() => setHeight(BODY_HEIGHT_DEFAULT)}
-        title="Drag to resize · double-click to reset"
+        title={dt(t, "dialogs.pullRequestDetail.resizeHint")}
         className="group relative flex h-1.5 shrink-0 cursor-row-resize items-center justify-center border-b border-border bg-bg-sidebar/40 transition hover:bg-accent/30"
       >
         <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
@@ -864,6 +881,7 @@ function ConversationPane({
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
 }) {
+  const t = useTranslation();
   const [sort, setSort] = useState<ConversationSort>(() => readStoredSort());
 
   useEffect(() => {
@@ -909,7 +927,7 @@ function ConversationPane({
       <div className="flex h-full flex-col">
         {toolbar}
         <div className="flex flex-1 items-center justify-center text-xs text-fg-muted">
-          No comments or reviews yet.
+          {dt(t, "dialogs.pullRequestDetail.noComments")}
         </div>
       </div>
     );
@@ -939,10 +957,13 @@ function SortToggle({
   onChange: (next: ConversationSort) => void;
 }) {
   const isOldest = value === "oldest";
-  const label = isOldest ? "Oldest first" : "Newest first";
+  const t = useTranslation();
+  const label = isOldest
+    ? dt(t, "dialogs.pullRequestDetail.oldestFirst")
+    : dt(t, "dialogs.pullRequestDetail.newestFirst");
   const Icon = isOldest ? ArrowDownNarrowWide : ArrowUpNarrowWide;
   return (
-    <Tooltip label="Toggle sort order" side="bottom">
+    <Tooltip label={dt(t, "dialogs.pullRequestDetail.toggleSortOrder")} side="bottom">
       <button
         type="button"
         onClick={() => onChange(isOldest ? "newest" : "oldest")}
@@ -956,6 +977,7 @@ function SortToggle({
 }
 
 function CommentBlock({ comment }: { comment: PullRequestComment }) {
+  const t = useTranslation();
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
@@ -964,7 +986,9 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
           size={28}
           nameClass="text-[12.5px] font-semibold tracking-tight"
         />
-        <span className="opacity-60">commented</span>
+        <span className="opacity-60">
+          {dt(t, "dialogs.pullRequestDetail.commented")}
+        </span>
         <span className="font-mono opacity-60">
           {formatTimestamp(comment.created_at)}
         </span>
@@ -974,13 +998,16 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
           <Markdown content={comment.body} />
         </div>
       ) : (
-        <p className="text-[11px] text-fg-muted">(empty)</p>
+        <p className="text-[11px] text-fg-muted">
+          {dt(t, "dialogs.pullRequestDetail.empty")}
+        </p>
       )}
     </li>
   );
 }
 
 function ReviewBlock({ review }: { review: PullRequestReview }) {
+  const t = useTranslation();
   return (
     <li className="rounded border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
@@ -1000,7 +1027,7 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
         </div>
       ) : (
         <p className="text-[11px] text-fg-muted">
-          (no review comment)
+          {dt(t, "dialogs.pullRequestDetail.noReviewComment")}
         </p>
       )}
     </li>
@@ -1008,6 +1035,7 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
 }
 
 function ReviewStateBadge({ state }: { state: string }) {
+  const t = useTranslation();
   const upper = state.toUpperCase();
   const tone =
     upper === "APPROVED"
@@ -1017,7 +1045,14 @@ function ReviewStateBadge({ state }: { state: string }) {
         : upper === "DISMISSED"
           ? "bg-fg-muted/15 text-fg-muted line-through"
           : "bg-fg-muted/15 text-fg-muted";
-  const label = upper.replace("_", " ").toLowerCase();
+  const label =
+    upper === "APPROVED"
+      ? dt(t, "dialogs.pullRequestDetail.reviewApproved")
+      : upper === "CHANGES_REQUESTED"
+        ? dt(t, "dialogs.pullRequestDetail.reviewChangesRequested")
+        : upper === "DISMISSED"
+          ? dt(t, "dialogs.pullRequestDetail.reviewDismissed")
+          : upper.replace("_", " ").toLowerCase();
   return (
     <span
       className={cn(
@@ -1041,6 +1076,7 @@ function CommitsPane({
   repoPath: string;
   cwd?: string;
 }) {
+  const t = useTranslation();
   const [selectedOid, setSelectedOid] = useState<string | null>(
     commits[0]?.oid ?? null,
   );
@@ -1062,7 +1098,7 @@ function CommitsPane({
   if (commits.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        No commits in this pull request.
+        {dt(t, "dialogs.pullRequestDetail.noCommits")}
       </div>
     );
   }
@@ -1118,16 +1154,20 @@ function CommitListItem({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const primaryAuthor = commit.authors[0];
   const commitUrl = buildCommitUrl(prUrl, commit.oid);
-  const profileItems = buildProfileMenuItems(primaryAuthor?.login);
+  const profileItems = buildProfileMenuItems(
+    primaryAuthor?.login,
+    t("ui.openGitHubProfile"),
+  );
 
   const items: ContextMenuItem[] = [
     ...(commitUrl
       ? [
           {
-            label: "View on GitHub",
+            label: dt(t, "dialogs.pullRequestDetail.viewOnGithub"),
             icon: <ExternalLink size={12} />,
             onClick: () => void openUrl(commitUrl),
           },
@@ -1138,7 +1178,7 @@ function CommitListItem({
       ? [{ type: "separator" as const }]
       : []),
     {
-      label: "Copy SHA",
+      label: dt(t, "dialogs.pullRequestDetail.copySha"),
       icon: <Copy size={12} />,
       onClick: () => void navigator.clipboard.writeText(commit.oid),
     },
@@ -1162,20 +1202,20 @@ function CommitListItem({
         )}
       >
         <div className="truncate text-[12px] font-medium text-fg" title={commit.message_headline}>
-          {commit.message_headline || "(no message)"}
+          {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
         </div>
         <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-fg-muted">
           {primaryAuthor ? (
             <AuthorTag
               login={primaryAuthor.login}
-              fallbackName={primaryAuthor.name || "unknown"}
+              fallbackName={primaryAuthor.name || dt(t, "dialogs.pullRequestDetail.unknown")}
               size={14}
               nameClass="text-[10.5px] text-fg-muted"
             />
           ) : null}
           <span className="opacity-50">·</span>
           <span className="font-mono opacity-70">
-            {formatRelativeTime(commit.committed_date)}
+            {formatRelativeTime(commit.committed_date, t)}
           </span>
         </div>
       </button>
@@ -1201,6 +1241,7 @@ function CommitDetailView({
   repoPath: string;
   cwd?: string;
 }) {
+  const t = useTranslation();
   const [diff, setDiff] = useState<DiffPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1239,11 +1280,11 @@ function CommitDetailView({
         </div>
       ) : loading || !diff ? (
         <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-          Loading diff…
+          {dt(t, "dialogs.pullRequestDetail.loadingDiff")}
         </div>
       ) : diff.files.length === 0 ? (
         <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-          No file changes in this commit.
+          {dt(t, "dialogs.pullRequestDetail.noFileChanges")}
         </div>
       ) : (
         <DiffSplitView payload={diff} cwd={cwd} />
@@ -1266,13 +1307,13 @@ function CommitDetailView({
             className="truncate text-[13px] font-semibold tracking-tight text-fg"
             title={commit.message_headline}
           >
-            {commit.message_headline || "(no message)"}
+            {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
             {primaryAuthor ? (
               <AuthorTag
                 login={primaryAuthor.login}
-                fallbackName={primaryAuthor.name || "unknown"}
+                fallbackName={primaryAuthor.name || dt(t, "dialogs.pullRequestDetail.unknown")}
                 size={16}
                 nameClass="text-[11px] text-fg-muted"
               />
@@ -1288,7 +1329,7 @@ function CommitDetailView({
             </span>
           </div>
         </div>
-        <Tooltip label="Copy SHA" side="bottom">
+        <Tooltip label={dt(t, "dialogs.pullRequestDetail.copySha")} side="bottom">
           <button
             type="button"
             onClick={() => {
@@ -1300,7 +1341,10 @@ function CommitDetailView({
           </button>
         </Tooltip>
         {commitUrl ? (
-          <Tooltip label="Open commit on GitHub" side="bottom">
+          <Tooltip
+            label={dt(t, "dialogs.pullRequestDetail.openCommitOnGithub")}
+            side="bottom"
+          >
             <button
               type="button"
               onClick={() => void openUrl(commitUrl)}
@@ -1338,18 +1382,18 @@ function CommitDetailView({
  * Compact "23h" / "2d" / "May 4" — keeps the commit list narrow. Falls back
  * to the raw string when parsing fails.
  */
-function formatRelativeTime(iso: string): string {
+function formatRelativeTime(iso: string, t: Translator): string {
   if (!iso) return "—";
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return iso;
   const diff = Date.now() - ms;
   const min = Math.floor(diff / 60_000);
-  if (min < 1) return "now";
-  if (min < 60) return `${min}m`;
+  if (min < 1) return dt(t, "dialogs.pullRequestDetail.now");
+  if (min < 60) return `${min}${dt(t, "dialogs.pullRequestDetail.minuteAbbrev")}`;
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h}h`;
+  if (h < 24) return `${h}${dt(t, "dialogs.pullRequestDetail.hourAbbrev")}`;
   const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d`;
+  if (d < 7) return `${d}${dt(t, "dialogs.pullRequestDetail.dayAbbrev")}`;
   return new Date(ms).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -1370,10 +1414,11 @@ function buildCommitUrl(prUrl: string, oid: string): string | null {
 }
 
 function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
+  const t = useTranslation();
   if (checks.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        No checks reported.
+        {dt(t, "dialogs.pullRequestDetail.noChecks")}
       </div>
     );
   }
@@ -1393,7 +1438,7 @@ function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
           </span>
           <CheckStatusLabel status={c.status} conclusion={c.conclusion} />
           {c.url ? (
-            <Tooltip label="Open run" side="top">
+            <Tooltip label={dt(t, "dialogs.pullRequestDetail.openRun")} side="top">
               <button
                 type="button"
                 onClick={() => {
@@ -1445,11 +1490,30 @@ function CheckStatusLabel({
   status: string;
   conclusion: string | null;
 }) {
+  const t = useTranslation();
   const raw =
     status.toUpperCase() === "COMPLETED"
       ? (conclusion ?? "completed")
       : status;
-  const text = raw.toLowerCase().replace(/_/g, " ");
+  const normalized = raw.toUpperCase();
+  const text =
+    normalized === "SUCCESS"
+      ? dt(t, "dialogs.pullRequestDetail.checkSuccess")
+      : normalized === "FAILURE"
+        ? dt(t, "dialogs.pullRequestDetail.checkFailure")
+        : normalized === "TIMED_OUT"
+          ? dt(t, "dialogs.pullRequestDetail.checkTimedOut")
+          : normalized === "ACTION_REQUIRED"
+            ? dt(t, "dialogs.pullRequestDetail.checkActionRequired")
+            : normalized === "CANCELLED"
+              ? dt(t, "dialogs.pullRequestDetail.checkCancelled")
+              : normalized === "NEUTRAL"
+                ? dt(t, "dialogs.pullRequestDetail.checkNeutral")
+                : normalized === "SKIPPED"
+                  ? dt(t, "dialogs.pullRequestDetail.checkSkipped")
+                  : normalized === "COMPLETED"
+                    ? dt(t, "dialogs.pullRequestDetail.checkCompleted")
+                    : raw.toLowerCase().replace(/_/g, " ");
   return (
     <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
   );

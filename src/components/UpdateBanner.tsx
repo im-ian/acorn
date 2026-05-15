@@ -1,6 +1,7 @@
 import { Download, X } from "lucide-react";
 import { useState, type ReactElement } from "react";
 import { selectShouldNotify, useUpdater } from "../lib/updater-store";
+import { useTranslation } from "../lib/useTranslation";
 import { TextSwap } from "./ui/TextSwap";
 import { WhatsNewModal } from "./WhatsNewModal";
 
@@ -17,6 +18,7 @@ import { WhatsNewModal } from "./WhatsNewModal";
  * wondering why the click did nothing.
  */
 export function UpdateBanner(): ReactElement | null {
+  const t = useTranslation();
   const should = useUpdater(selectShouldNotify);
   const update = useUpdater((s) => s.available);
   const currentVersion = useUpdater((s) => s.currentVersion);
@@ -37,7 +39,7 @@ export function UpdateBanner(): ReactElement | null {
           <div className="min-w-0 flex-1">
             <span className="font-medium text-fg">Acorn {update.version}</span>
             <span className="ml-2 text-fg-muted">
-              is available. The app will relaunch after install.
+              {t("updateBanner.available")}
             </span>
           </div>
           <button
@@ -45,7 +47,7 @@ export function UpdateBanner(): ReactElement | null {
             onClick={() => setWhatsNewOpen(true)}
             className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
           >
-            What&apos;s new
+            {t("updateBanner.whatsNew")}
           </button>
           <button
             type="button"
@@ -53,13 +55,17 @@ export function UpdateBanner(): ReactElement | null {
             disabled={busy}
             className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
-            <TextSwap>{busy ? "Installing…" : "Install & relaunch"}</TextSwap>
+            <TextSwap>
+              {busy
+                ? t("updateBanner.installing")
+                : t("updateBanner.installRelaunch")}
+            </TextSwap>
           </button>
           <button
             type="button"
             onClick={dismiss}
             disabled={busy}
-            title="Hide until next version"
+            title={t("updateBanner.hideUntilNextVersion")}
             className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
           >
             <X size={14} />
@@ -72,7 +78,7 @@ export function UpdateBanner(): ReactElement | null {
               type="button"
               onClick={clearError}
               className="shrink-0 rounded p-0.5 text-danger/80 transition hover:bg-danger/20 hover:text-danger"
-              aria-label="Dismiss error"
+              aria-label={t("updateBanner.dismissError")}
             >
               <X size={12} />
             </button>

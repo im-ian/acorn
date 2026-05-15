@@ -3,6 +3,7 @@ import { GitMerge, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
 import {
   aiCommitProviderLabel,
@@ -10,30 +11,37 @@ import {
   useSettings,
 } from "../lib/settings";
 import type { MergeMethod, PullRequestDetail } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader, TextSwap } from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
   value: MergeMethod;
-  label: string;
-  hint: string;
+  labelKey: DialogTranslationKey;
+  hintKey: DialogTranslationKey;
 }> = [
     {
       value: "squash",
-      label: "Squash",
-      hint: "Combine into one commit on the base branch.",
+      labelKey: "dialogs.mergePullRequest.methodSquash",
+      hintKey: "dialogs.mergePullRequest.methodSquashHint",
     },
     {
       value: "merge",
-      label: "Merge",
-      hint: "Create a merge commit preserving history.",
+      labelKey: "dialogs.mergePullRequest.methodMerge",
+      hintKey: "dialogs.mergePullRequest.methodMergeHint",
     },
     {
       value: "rebase",
-      label: "Rebase",
-      hint: "Replay commits onto the base branch.",
+      labelKey: "dialogs.mergePullRequest.methodRebase",
+      hintKey: "dialogs.mergePullRequest.methodRebaseHint",
     },
   ];
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface MergePullRequestDialogProps {
   open: boolean;
@@ -50,6 +58,7 @@ export function MergePullRequestDialog({
   onClose,
   onMerged,
 }: MergePullRequestDialogProps) {
+  const t = useTranslation();
   const settings = useSettings((s) => s.settings);
   const [method, setMethod] = useState<MergeMethod>(() => loadLastMergeMethod());
   const [title, setTitle] = useState("");
@@ -156,7 +165,7 @@ export function MergePullRequestDialog({
       {detail ? (
         <>
           <ModalHeader
-            title={`Merge #${detail.number}`}
+            title={`${dt(t, "dialogs.mergePullRequest.titlePrefix")} #${detail.number}`}
             icon={<GitMerge size={16} className="text-emerald-400" />}
             variant="dialog"
             onClose={() => {
@@ -166,7 +175,9 @@ export function MergePullRequestDialog({
 
           <div className="space-y-4 px-4 py-3 text-xs text-fg">
             <div>
-              <p className="mb-2 text-fg-muted">Merge method</p>
+              <p className="mb-2 text-fg-muted">
+                {dt(t, "dialogs.mergePullRequest.mergeMethod")}
+              </p>
               <div className="grid grid-cols-3 gap-2">
                 {METHOD_OPTIONS.map((opt) => (
                   <button
@@ -181,9 +192,11 @@ export function MergePullRequestDialog({
                     )}
                     disabled={busy}
                   >
-                    <div className="text-[11px] font-medium">{opt.label}</div>
+                    <div className="text-[11px] font-medium">
+                      {dt(t, opt.labelKey)}
+                    </div>
                     <div className="mt-0.5 text-[10px] leading-snug text-fg-muted">
-                      {opt.hint}
+                      {dt(t, opt.hintKey)}
                     </div>
                   </button>
                 ))}
@@ -193,7 +206,9 @@ export function MergePullRequestDialog({
             {acceptsMessage ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-fg-muted">Commit message</p>
+                  <p className="text-fg-muted">
+                    {dt(t, "dialogs.mergePullRequest.commitMessage")}
+                  </p>
                   {generating ? (
                     <button
                       key="gen-button-loading"
@@ -202,11 +217,11 @@ export function MergePullRequestDialog({
                       className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted opacity-60"
                     >
                       <Sparkles size={11} />
-                      Generating…
+                      {dt(t, "dialogs.mergePullRequest.generating")}
                     </button>
                   ) : (
                     <Tooltip
-                      label={`Generate via ${providerLabel}`}
+                      label={`${dt(t, "dialogs.mergePullRequest.generateVia")} ${providerLabel}`}
                       side="top"
                     >
                       <button
@@ -216,7 +231,7 @@ export function MergePullRequestDialog({
                         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
                       >
                         <Sparkles size={11} />
-                        Generate with AI
+                        {dt(t, "dialogs.mergePullRequest.generateWithAi")}
                       </button>
                     </Tooltip>
                   )}
@@ -225,14 +240,14 @@ export function MergePullRequestDialog({
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Subject"
+                  placeholder={dt(t, "dialogs.mergePullRequest.subjectPlaceholder")}
                   disabled={busy}
                   className="w-full rounded-md border border-border bg-bg-sidebar/60 px-2 py-1.5 text-[11px] text-fg outline-none transition focus:border-accent/60 disabled:opacity-60"
                 />
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  placeholder="Body (optional)"
+                  placeholder={dt(t, "dialogs.mergePullRequest.bodyPlaceholder")}
                   rows={6}
                   disabled={busy}
                   className="w-full resize-none rounded-md border border-border bg-bg-sidebar/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg outline-none transition focus:border-accent/60 disabled:opacity-60"
@@ -240,8 +255,7 @@ export function MergePullRequestDialog({
               </div>
             ) : (
               <p className="rounded-md border border-border bg-bg-sidebar/40 px-3 py-2 text-[11px] text-fg-muted">
-                Rebase replays the original commits onto the base branch — the
-                commit messages are not customizable here.
+                {dt(t, "dialogs.mergePullRequest.rebaseMessageLocked")}
               </p>
             )}
 
@@ -259,7 +273,7 @@ export function MergePullRequestDialog({
               disabled={submitting}
               className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Cancel
+              {dt(t, "dialogs.common.cancel")}
             </button>
             <button
               type="button"
@@ -267,7 +281,11 @@ export function MergePullRequestDialog({
               disabled={busy}
               className="rounded-md bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <TextSwap>{submitting ? "Merging…" : "Merge"}</TextSwap>
+              <TextSwap>
+                {submitting
+                  ? dt(t, "dialogs.mergePullRequest.merging")
+                  : dt(t, "dialogs.mergePullRequest.merge")}
+              </TextSwap>
             </button>
           </footer>
         </>

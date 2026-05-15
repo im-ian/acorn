@@ -42,12 +42,14 @@ import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
   type AcornSettings,
   type SessionTitleSource,
 } from "../lib/settings";
+import { useTranslation } from "../lib/useTranslation";
 import {
   planChevronClick,
   planTitleClick,
@@ -66,18 +68,20 @@ const STATUS_DOT: Record<SessionStatus, string> = {
   completed: "bg-accent/60",
 };
 
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  idle: "Idle",
-  running: "Running",
-  needs_input: "Needs input",
-  failed: "Failed",
-  completed: "Completed",
-};
-
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 
 const PROJECT_DRAG_PREFIX = "project:";
 const SESSION_DRAG_PREFIX = "session:";
+
+type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
+
+function sidebarText(t: Translator, key: SidebarTranslationKey): string {
+  return t(key);
+}
+
+function statusLabel(t: Translator, status: SessionStatus): string {
+  return sidebarText(t, `sidebar.status.${status}`);
+}
 
 interface ProjectGroup {
   repoPath: string;
@@ -86,6 +90,7 @@ interface ProjectGroup {
 }
 
 export function Sidebar() {
+  const t = useTranslation();
   const {
     sessions,
     projects,
@@ -160,7 +165,7 @@ export function Sidebar() {
       const repoPath = await open({
         directory: true,
         multiple: false,
-        title: "Select an existing project",
+        title: sidebarText(t, "sidebar.dialog.selectExistingProject"),
       });
       if (!repoPath || typeof repoPath !== "string") return;
       await addProject(repoPath);
@@ -223,10 +228,10 @@ export function Sidebar() {
           directory: true,
           multiple: false,
           title: isolated
-            ? "Select a git repository (isolated worktree)"
+            ? sidebarText(t, "sidebar.dialog.selectIsolatedRepository")
             : kind === "control"
-              ? "Select a directory (control session)"
-              : "Select a directory",
+              ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
+              : sidebarText(t, "sidebar.dialog.selectDirectory"),
         }));
       if (!repoPath || typeof repoPath !== "string") return;
       const name = suggestName(repoPath, sessions, kind);
@@ -321,25 +326,34 @@ export function Sidebar() {
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
       <header className="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
         <h2 className="text-sm font-medium tracking-tight text-fg-muted">
-          Projects
+          {sidebarText(t, "sidebar.projects.title")}
         </h2>
         <div className="flex items-center gap-1">
-          <Tooltip label="New project" side="left">
+          <Tooltip
+            label={sidebarText(t, "sidebar.projects.newProject")}
+            side="left"
+          >
             <button
               type="button"
               onClick={() => setNewProjectOpen(true)}
               className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-              aria-label="New project"
+              aria-label={sidebarText(t, "sidebar.projects.newProject")}
             >
               <FolderPlus size={14} />
             </button>
           </Tooltip>
-          <Tooltip label="Add existing project" side="left">
+          <Tooltip
+            label={sidebarText(t, "sidebar.projects.addExistingProject")}
+            side="left"
+          >
             <button
               type="button"
               onClick={onAddExistingProject}
               className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-              aria-label="Add existing project"
+              aria-label={sidebarText(
+                t,
+                "sidebar.projects.addExistingProject",
+              )}
             >
               <FolderOpen size={14} />
             </button>
@@ -410,7 +424,7 @@ export function Sidebar() {
             </SortableContext>
             <DragOverlay dropAnimation={null}>
               {activeDragId
-                ? renderDragOverlay(activeDragId, projectGroups, sessions)
+                ? renderDragOverlay(activeDragId, projectGroups, sessions, t)
                 : null}
             </DragOverlay>
           </DndContext>
@@ -431,6 +445,7 @@ function renderDragOverlay(
   activeDragId: string,
   projectGroups: ProjectGroup[],
   sessions: Session[],
+  t: Translator,
 ): React.ReactNode {
   if (activeDragId.startsWith(PROJECT_DRAG_PREFIX)) {
     const repoPath = activeDragId.slice(PROJECT_DRAG_PREFIX.length);
@@ -442,7 +457,7 @@ function renderDragOverlay(
     const sid = activeDragId.slice(SESSION_DRAG_PREFIX.length);
     const session = sessions.find((s) => s.id === sid);
     if (!session) return null;
-    return <SessionRowPreview session={session} />;
+    return <SessionRowPreview session={session} t={t} />;
   }
   return null;
 }
@@ -472,7 +487,13 @@ function ProjectHeaderPreview({
   );
 }
 
-function SessionRowPreview({ session }: { session: Session }) {
+function SessionRowPreview({
+  session,
+  t,
+}: {
+  session: Session;
+  t: Translator;
+}) {
   return (
     <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
       <span className="mt-1 flex shrink-0 items-center text-fg-muted/60">
@@ -494,7 +515,7 @@ function SessionRowPreview({ session }: { session: Session }) {
           ) : null}
         </span>
         <span className="block truncate text-[11px] text-fg-muted">
-          {session.branch} · {STATUS_LABEL[session.status]}
+          {session.branch} · {statusLabel(t, session.status)}
         </span>
       </span>
     </div>
@@ -559,6 +580,7 @@ function ProjectGroupView({
   onAddSession,
   onRemoveProject,
 }: ProjectGroupViewProps) {
+  const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
     attributes,
@@ -617,19 +639,22 @@ function ProjectGroupView({
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        aria-label={`Project ${project.name}`}
+        aria-label={`${sidebarText(t, "sidebar.aria.project")} ${project.name}`}
         className={cn(
           "group flex items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
-        <Tooltip label="Drag to reorder" side="bottom">
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.dragToReorder")}
+          side="bottom"
+        >
           <span
             ref={setActivatorNodeRef}
             {...attributes}
             {...listeners}
             onClick={(e) => e.stopPropagation()}
-            aria-label="Drag to reorder project"
+            aria-label={sidebarText(t, "sidebar.aria.dragToReorderProject")}
             className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
           >
             <GripVertical size={12} />
@@ -641,7 +666,11 @@ function ProjectGroupView({
             e.stopPropagation();
             onChevronClick();
           }}
-          aria-label={collapsed ? "Expand project" : "Collapse project"}
+          aria-label={
+            collapsed
+              ? sidebarText(t, "sidebar.actions.expandProject")
+              : sidebarText(t, "sidebar.actions.collapseProject")
+          }
           aria-expanded={!collapsed}
           className="flex shrink-0 items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
@@ -658,7 +687,10 @@ function ProjectGroupView({
             {project.sessions.length}
           </span>
         </span>
-        <Tooltip label="New session" side="bottom">
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.newSession")}
+          side="bottom"
+        >
           <button
             type="button"
             onClick={(e) => {
@@ -666,12 +698,15 @@ function ProjectGroupView({
               onAddSession(false, "regular");
             }}
             className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-            aria-label="New session in this project"
+            aria-label={sidebarText(t, "sidebar.aria.newSessionInProject")}
           >
             <Plus size={12} />
           </button>
         </Tooltip>
-        <Tooltip label="New isolated session (worktree)" side="bottom">
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.newIsolatedSessionWorktree")}
+          side="bottom"
+        >
           <button
             type="button"
             onClick={(e) => {
@@ -679,12 +714,18 @@ function ProjectGroupView({
               onAddSession(true, "regular");
             }}
             className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-            aria-label="New isolated session (worktree)"
+            aria-label={sidebarText(
+              t,
+              "sidebar.actions.newIsolatedSessionWorktree",
+            )}
           >
             <GitBranch size={12} />
           </button>
         </Tooltip>
-        <Tooltip label="New control session" side="bottom">
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.newControlSession")}
+          side="bottom"
+        >
           <button
             type="button"
             onClick={(e) => {
@@ -692,12 +733,18 @@ function ProjectGroupView({
               onAddSession(false, "control");
             }}
             className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-            aria-label="New control session in this project"
+            aria-label={sidebarText(
+              t,
+              "sidebar.aria.newControlSessionInProject",
+            )}
           >
             <Bot size={12} />
           </button>
         </Tooltip>
-        <Tooltip label="Close project" side="bottom">
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.closeProject")}
+          side="bottom"
+        >
           <button
             type="button"
             onClick={(e) => {
@@ -705,7 +752,7 @@ function ProjectGroupView({
               onRemoveProject();
             }}
             className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover:visible"
-            aria-label="Close project"
+            aria-label={sidebarText(t, "sidebar.actions.closeProject")}
           >
             <X size={12} />
           </button>
@@ -718,30 +765,30 @@ function ProjectGroupView({
         onClose={() => setMenu(null)}
         items={[
           {
-            label: "New session",
+            label: sidebarText(t, "sidebar.actions.newSession"),
             icon: <Plus size={12} />,
             onClick: () => onAddSession(false, "regular"),
           },
           {
-            label: "New isolated session",
+            label: sidebarText(t, "sidebar.actions.newIsolatedSession"),
             icon: <GitBranch size={12} />,
             onClick: () => onAddSession(true, "regular"),
           },
           {
-            label: "New control session",
+            label: sidebarText(t, "sidebar.actions.newControlSession"),
             icon: <Bot size={12} />,
             onClick: () => onAddSession(false, "control"),
           },
           { type: "separator" },
           {
-            label: "Reveal in Finder",
+            label: sidebarText(t, "sidebar.actions.revealInFinder"),
             icon: <FolderOpen size={12} />,
             onClick: () => {
               void openInFinder(project.repoPath);
             },
           },
           {
-            label: "Copy path",
+            label: sidebarText(t, "sidebar.actions.copyPath"),
             icon: <Copy size={12} />,
             onClick: () => {
               void copyText(project.repoPath);
@@ -749,7 +796,7 @@ function ProjectGroupView({
           },
           { type: "separator" },
           {
-            label: "Close project",
+            label: sidebarText(t, "sidebar.actions.closeProject"),
             icon: <X size={12} />,
             onClick: onRemoveProject,
           },
@@ -775,9 +822,11 @@ function ProjectGroupView({
                 }}
                 className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
               >
-                No sessions. Add one with{" "}
-                <Plus size={10} className="inline" /> or{" "}
-                <GitBranch size={10} className="inline" />, or double-click here.
+                {sidebarText(t, "sidebar.emptyProject.prefix")}{" "}
+                <Plus size={10} className="inline" />{" "}
+                {sidebarText(t, "sidebar.emptyProject.connector")}{" "}
+                <GitBranch size={10} className="inline" />
+                {sidebarText(t, "sidebar.emptyProject.suffix")}
               </li>
             ) : (
               project.sessions.map((session) => (
@@ -805,15 +854,20 @@ interface SessionRowProps {
 }
 
 function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
+  const t = useTranslation();
   const renameSession = useAppStore((s) => s.renameSession);
   const sessions = useAppStore((s) => s.sessions);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
-  const metadataText = composeSessionMetadata(session, sessionDisplay.metadata);
+  const metadataText = composeSessionMetadata(
+    t,
+    session,
+    sessionDisplay.metadata,
+  );
   const hoverDetails = sessionDisplay.showDetailsOnHover
-    ? buildSessionHoverDetails(session)
+    ? buildSessionHoverDetails(t, session)
     : null;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -863,18 +917,18 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
 
   const sessionMenuItems: ContextMenuItem[] = [
     {
-      label: "Rename",
+      label: sidebarText(t, "sidebar.actions.rename"),
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
     },
     {
-      label: "Duplicate Session",
+      label: sidebarText(t, "sidebar.actions.duplicateSession"),
       icon: <Files size={12} />,
       onClick: () => void duplicate(),
     },
     { type: "separator" },
     {
-      label: "Equalize Pane Sizes",
+      label: sidebarText(t, "sidebar.actions.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
@@ -882,7 +936,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
     },
     { type: "separator" },
     {
-      label: "Open Worktree in Editor",
+      label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
       icon: <PencilLine size={12} />,
       disabled: !editorConfigured,
       onClick: () => {
@@ -894,7 +948,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       },
     },
     {
-      label: "Reveal in Finder",
+      label: sidebarText(t, "sidebar.actions.revealInFinder"),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void openPath(session.worktree_path).catch((err: unknown) => {
@@ -904,34 +958,34 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
     },
     { type: "separator" },
     {
-      label: "Copy Worktree Path",
+      label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(session.worktree_path),
     },
     {
-      label: "Copy Worktree Name",
+      label: sidebarText(t, "sidebar.actions.copyWorktreeName"),
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(basename(session.worktree_path)),
     },
     {
-      label: "Copy Branch Name",
+      label: sidebarText(t, "sidebar.actions.copyBranchName"),
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(session.branch),
       disabled: !session.branch,
     },
     {
-      label: "Copy Session ID",
+      label: sidebarText(t, "sidebar.actions.copySessionId"),
       icon: <Copy size={12} />,
       onClick: () => void copyToClipboard(session.id),
     },
     { type: "separator" },
     {
-      label: "Remove",
+      label: sidebarText(t, "sidebar.actions.remove"),
       icon: <Trash2 size={12} />,
       onClick: onRemove,
     },
     {
-      label: "Remove Others in Project",
+      label: sidebarText(t, "sidebar.actions.removeOthersInProject"),
       icon: <CircleX size={12} />,
       disabled: otherSiblings.length === 0,
       onClick: () => {
@@ -940,7 +994,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
       },
     },
     {
-      label: "Remove All in Project",
+      label: sidebarText(t, "sidebar.actions.removeAllInProject"),
       icon: <SquareX size={12} />,
       disabled: projectSiblings.length === 0,
       onClick: () => {
@@ -983,7 +1037,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           {...attributes}
           {...listeners}
           onClick={(e) => e.stopPropagation()}
-          aria-label="Drag to reorder session"
+          aria-label={sidebarText(t, "sidebar.aria.dragToReorderSession")}
           className="invisible mt-1 flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
         >
           <GripVertical size={10} />
@@ -1002,6 +1056,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
           titleText={titleText}
           metadataText={metadataText}
           showKindIcons={sessionDisplay.icons.sessionKind}
+          t={t}
           onSubmitRename={async (next) => {
             setEditing(false);
             if (next && next !== session.name) {
@@ -1012,7 +1067,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
         />
         <span
           role="button"
-          aria-label="Remove session"
+          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
           tabIndex={0}
           onClick={(e) => {
             e.stopPropagation();
@@ -1047,6 +1102,7 @@ interface SessionRowLabelProps {
   titleText: string;
   metadataText: string;
   showKindIcons: boolean;
+  t: Translator;
   onSubmitRename: (value: string) => void | Promise<void>;
   onCancelRename: () => void;
 }
@@ -1057,6 +1113,7 @@ function SessionRowLabel({
   titleText,
   metadataText,
   showKindIcons,
+  t,
   onSubmitRename,
   onCancelRename,
 }: SessionRowLabelProps) {
@@ -1085,14 +1142,14 @@ function SessionRowLabel({
           <GitBranch
             size={10}
             className="shrink-0 text-fg-muted"
-            aria-label="worktree"
+            aria-label={sidebarText(t, "sidebar.aria.worktree")}
           />
         ) : null}
         {showKindIcons && session.kind === "control" ? (
           <Bot
             size={10}
             className="shrink-0 text-accent"
-            aria-label="control session"
+            aria-label={sidebarText(t, "sidebar.aria.controlSession")}
           />
         ) : null}
       </span>
@@ -1149,9 +1206,13 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
 }
 
 function EmptyState() {
+  const t = useTranslation();
+
   return (
     <div className="px-3 py-6 text-xs text-fg-muted">
-      No projects yet. Click <span className="text-fg">+</span> to add one.
+      {sidebarText(t, "sidebar.emptyProjects.prefix")}{" "}
+      <span className="text-fg">+</span>
+      {sidebarText(t, "sidebar.emptyProjects.suffix")}
     </div>
   );
 }
@@ -1188,7 +1249,9 @@ function buildProjectGroups(
       const ap = a.position ?? Number.POSITIVE_INFINITY;
       const bp = b.position ?? Number.POSITIVE_INFINITY;
       if (ap !== bp) return ap - bp;
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      return (
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      );
     });
   }
   return Array.from(map.values());
@@ -1214,6 +1277,7 @@ function resolveSessionTitle(
 }
 
 function composeSessionMetadata(
+  t: Translator,
   session: Session,
   metadata: AcornSettings["sessionDisplay"]["metadata"],
 ): string {
@@ -1223,19 +1287,35 @@ function composeSessionMetadata(
     const dir = basename(session.worktree_path);
     if (dir) parts.push(dir);
   }
-  if (metadata.status) parts.push(STATUS_LABEL[session.status]);
+  if (metadata.status) parts.push(statusLabel(t, session.status));
   return parts.join(" · ");
 }
 
-function buildSessionHoverDetails(session: Session): string {
+function buildSessionHoverDetails(t: Translator, session: Session): string {
   const lines = [
-    `Name: ${session.name}`,
-    `Branch: ${session.branch || "(detached)"}`,
-    `Working directory: ${session.worktree_path}`,
-    `Status: ${STATUS_LABEL[session.status]}`,
+    `${sidebarText(t, "sidebar.metadata.name")}: ${session.name}`,
+    `${sidebarText(t, "sidebar.metadata.branch")}: ${
+      session.branch || sidebarText(t, "sidebar.metadata.detached")
+    }`,
+    `${sidebarText(t, "sidebar.metadata.workingDirectory")}: ${
+      session.worktree_path
+    }`,
+    `${sidebarText(t, "sidebar.metadata.status")}: ${statusLabel(
+      t,
+      session.status,
+    )}`,
   ];
-  if (session.kind === "control") lines.push("Kind: Control session");
-  if (session.isolated) lines.push("Isolated worktree");
+  if (session.kind === "control") {
+    lines.push(
+      `${sidebarText(t, "sidebar.metadata.kind")}: ${sidebarText(
+        t,
+        "sidebar.metadata.controlSession",
+      )}`,
+    );
+  }
+  if (session.isolated) {
+    lines.push(sidebarText(t, "sidebar.metadata.isolatedWorktree"));
+  }
   return lines.join("\n");
 }
 

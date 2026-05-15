@@ -1,4 +1,5 @@
 import { Minus, Plus } from "lucide-react";
+import { useTranslation } from "../../lib/useTranslation";
 
 interface StepperProps {
   value: number;
@@ -24,6 +25,7 @@ export function Stepper({
   format,
   onChange,
 }: StepperProps) {
+  const t = useTranslation();
   const clamp = (n: number) => Math.max(min, Math.min(max, n));
   // Round-to-step keeps fractional steps (e.g. 0.05) from accumulating
   // FP drift after many clicks.
@@ -37,7 +39,7 @@ export function Stepper({
         type="button"
         onClick={dec}
         disabled={value <= min}
-        aria-label="Decrease"
+        aria-label={t("ui.stepper.decrease")}
         className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Minus size={12} />
@@ -50,7 +52,7 @@ export function Stepper({
         type="button"
         onClick={inc}
         disabled={value >= max}
-        aria-label="Increase"
+        aria-label={t("ui.stepper.increase")}
         className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus size={12} />

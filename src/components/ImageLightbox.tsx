@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useTranslation } from "../lib/useTranslation";
 
 interface ImageLightboxProps {
   image: { src: string; alt?: string } | null;
@@ -16,6 +17,7 @@ interface ImageLightboxProps {
  * to Tauri's opener so users can save / share the original.
  */
 export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
+  const t = useTranslation();
   // The lightbox is the topmost overlay when it's open. Setting the
   // `acorn-image-preview-open` flag on <body> lets useDialogShortcuts in
   // underlying dialogs (e.g. the PR detail modal) bail out of their Escape
@@ -51,14 +53,14 @@ export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Image preview"
+      aria-label={t("imageLightbox.imagePreview")}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-6"
       onClick={onClose}
     >
       <div className="absolute right-3 top-3 flex items-center gap-1">
         <button
           type="button"
-          aria-label="Open in browser"
+          aria-label={t("imageLightbox.openInBrowser")}
           onClick={(e) => {
             e.stopPropagation();
             void openUrl(image.src);
@@ -69,7 +71,7 @@ export function ImageLightbox({ image, onClose }: ImageLightboxProps) {
         </button>
         <button
           type="button"
-          aria-label="Close"
+          aria-label={t("imageLightbox.close")}
           onClick={onClose}
           className="rounded p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
         >
