@@ -76,7 +76,8 @@ function cloneSettings() {
 
 function openAppearanceTab() {
   const button = Array.from(document.querySelectorAll("button")).find(
-    (element) => element.textContent === "Appearance",
+    (element) =>
+      element.textContent === "Appearance" || element.textContent === "모양",
   );
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error("Appearance tab button not found");
