@@ -331,12 +331,53 @@ export function Terminal({
     };
     scheduleThemeRefresh();
 
+    let disposed = false;
+    const unlistenFns: UnlistenFn[] = [];
+    let observedLinkedWorktreePath: string | null = null;
+    let liveCwdProbeTimer: number | null = null;
+
+    const rememberLinkedWorktreeCwd = (path: string, source: string) => {
+      void api
+        .linkedWorktreeRoot(path)
+        .then((root) => {
+          if (disposed) return;
+          useAppStore.setState((s) => ({
+            liveInWorktree: { ...s.liveInWorktree, [sessionId]: Boolean(root) },
+          }));
+          if (root) {
+            observedLinkedWorktreePath = root;
+          }
+        })
+        .catch((err: unknown) => {
+          console.debug(`[Terminal] ${source} linked-worktree probe failed`, err);
+        });
+    };
+
+    const scheduleLiveCwdProbe = () => {
+      if (disposed || liveCwdProbeTimer !== null) return;
+      liveCwdProbeTimer = window.setTimeout(() => {
+        liveCwdProbeTimer = null;
+        if (disposed) return;
+        void api
+          .ptyCwd(sessionId)
+          .then((liveCwd) => {
+            if (liveCwd && !disposed) {
+              rememberLinkedWorktreeCwd(liveCwd, "pty-cwd");
+            }
+          })
+          .catch((err: unknown) => {
+            console.debug("[Terminal] pty_cwd probe failed", err);
+          });
+      }, 500);
+    };
+
     // OSC 7 cwd tracking. The shell rc we inject via ZDOTDIR emits
     // `\e]7;file://<host><pwd>\e\\` on every prompt. xterm's parser hands
     // us the inner payload (everything between `\e]7;` and the terminator)
-    // — strip the `file://[host]` prefix, percent-decode, classify via the
-    // backend, and update the live-cwd store entry for this session. Each
-    // emit is one cheap stat through libgit2; no polling, no system scan.
+    // — strip the `file://[host]` prefix, percent-decode, resolve linked
+    // worktree roots via the backend, and update the live-cwd store entry
+    // for this session. A resolved root is also remembered as an adoption
+    // candidate for commands that created and entered a fresh worktree.
     // Returning `true` claims the sequence so xterm doesn't echo it.
     term.parser.registerOscHandler(7, (data) => {
       const match = /^file:\/\/[^/]*(\/.*)$/.exec(data);
@@ -347,16 +388,7 @@ export function Terminal({
       } catch {
         return false;
       }
-      void api
-        .isPathLinkedWorktree(path)
-        .then((flag) => {
-          useAppStore.setState((s) => ({
-            liveInWorktree: { ...s.liveInWorktree, [sessionId]: flag },
-          }));
-        })
-        .catch((err: unknown) => {
-          console.debug("[Terminal] osc7 classify failed", err);
-        });
+      rememberLinkedWorktreeCwd(path, "osc7");
       return true;
     });
 
@@ -416,9 +448,6 @@ export function Terminal({
         }
       }
     });
-
-    let disposed = false;
-    const unlistenFns: UnlistenFn[] = [];
 
     // `scrollback_load` must finish before any save is allowed. Without
     // this gate, React.StrictMode's mount → cleanup → mount cycle in dev
@@ -999,16 +1028,20 @@ export function Terminal({
 
     let exited = false;
     // Snapshot of linked worktrees taken right before each PTY spawn. On exit
-    // we re-fetch and compare only when this spawn cycle carried an explicit
-    // adoption intent. A repo-global "new worktree appeared" diff is not
-    // enough evidence: another tab, agent, or external terminal may have
+    // we re-fetch and compare when this spawn cycle carried an explicit
+    // adoption intent, or when this session's own live cwd was observed inside
+    // a fresh linked worktree. A repo-global "new worktree appeared" diff is
+    // not enough evidence: another tab, agent, or external terminal may have
     // created it while this shell was idle.
-    let worktreeSnapshot: Set<string> = new Set();
+    let worktreeSnapshot: Set<string> | null = null;
     let worktreeAdoptionIntent: WorktreeAdoptionIntent = { kind: "none" };
 
     async function spawnPty() {
       if (disposed) return;
       try {
+        observedLinkedWorktreePath = null;
+        worktreeAdoptionIntent = { kind: "none" };
+        worktreeSnapshot = null;
         // Capture the worktree set *before* the child can mutate it.
         // Failure here is non-fatal — without a snapshot we just lose
         // the adoption shortcut for this spawn cycle, and the press-Enter
@@ -1106,6 +1139,11 @@ export function Terminal({
               // buffer so the sticky banner picks it up in the same frame
               // (instead of waiting for the user's next scroll).
               scheduleContextDispatch();
+              // Agents can create a worktree and chdir a descendant process
+              // without triggering our shell's OSC 7 prompt hook. Probe the
+              // live descendant cwd on output bursts so exit adoption can
+              // remain tied to this session rather than a repo-global diff.
+              scheduleLiveCwdProbe();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -1119,20 +1157,23 @@ export function Terminal({
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
           if (disposed) return;
-          // If Acorn queued a command that explicitly asked for worktree
-          // adoption, check whether that spawn cycle produced a new linked
-          // worktree. Plain user `exit` must not adopt unrelated worktrees
-          // created elsewhere in the same repo.
+          // Adopt only when Acorn queued an explicit worktree command, or
+          // when this terminal itself was observed running inside a fresh
+          // linked worktree. Plain user `exit` must not adopt unrelated
+          // worktrees created elsewhere in the same repo.
           void (async () => {
             let adoptedPath: string | null = null;
             try {
               const current = await api.gitWorktrees(cwd);
               if (disposed) return;
-              adoptedPath = chooseWorktreeToAdoptAfterExit({
-                before: [...worktreeSnapshot],
-                after: current,
-                intent: worktreeAdoptionIntent,
-              });
+              if (worktreeSnapshot) {
+                adoptedPath = chooseWorktreeToAdoptAfterExit({
+                  before: [...worktreeSnapshot],
+                  after: current,
+                  intent: worktreeAdoptionIntent,
+                  observedLinkedWorktreePath,
+                });
+              }
             } catch (err) {
               console.warn(
                 "[Terminal] worktree adoption check failed",
@@ -1352,6 +1393,9 @@ export function Terminal({
       contextScrollDisposable.dispose();
       unsubStickyToggle();
       resizeDisposable.dispose();
+      if (liveCwdProbeTimer !== null) {
+        window.clearTimeout(liveCwdProbeTimer);
+      }
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }

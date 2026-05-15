@@ -316,6 +316,7 @@ pub fn run() {
             commands::pty_repo_root,
             commands::pty_in_worktree_all,
             commands::is_path_linked_worktree,
+            commands::linked_worktree_root,
             commands::update_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,
