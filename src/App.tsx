@@ -16,6 +16,7 @@ import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
 import { AgentResumeModal } from "./components/AgentResumeModal";
+import { StagedRevMismatchModal } from "./components/StagedRevMismatchModal";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -25,7 +26,13 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { api, type AgentKind, type ResumeCandidate } from "./lib/api";
+import {
+  api,
+  STAGED_REV_MISMATCH_EVENT,
+  type AgentKind,
+  type ResumeCandidate,
+  type StagedRevMismatch,
+} from "./lib/api";
 import {
   Hotkeys,
   shouldUseTinykeysToggleMultiInputFallback,
@@ -134,6 +141,8 @@ function App() {
   const [resumeCandidates, setResumeCandidates] = useState<
     Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
   >(new Map());
+  const [stagedRevMismatch, setStagedRevMismatch] =
+    useState<StagedRevMismatch | null>(null);
 
   const toggleMultiInput = useCallback(() => {
     const enabled = useAppStore.getState().toggleMultiInput();
@@ -150,6 +159,49 @@ function App() {
   useEffect(() => {
     void refreshThemes();
   }, [refreshThemes]);
+
+  useEffect(() => {
+    // Boot-time reconcile result lands in two places: a one-shot
+    // emit (caught by the listener below) and the AppState cache
+    // (pulled here at mount). The cache makes us race-proof — if
+    // the daemon boot thread emits before this listener attaches,
+    // the pull still finds the stored result. Each subsequent
+    // reconcile (e.g. after `daemon_restart`) updates the cache
+    // and re-emits, so both paths converge.
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    void api
+      .stagedRevMismatchStatus()
+      .then((m) => {
+        if (!cancelled && m) setStagedRevMismatch(m);
+      })
+      .catch((err) => {
+        console.error(
+          "[App] staged_rev_mismatch_status pull failed",
+          err,
+        );
+      });
+    listen<StagedRevMismatch>(STAGED_REV_MISMATCH_EVENT, (event) => {
+      if (!cancelled) setStagedRevMismatch(event.payload);
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[App] staged-rev-mismatch listener attach failed",
+          err,
+        );
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const theme = themes.find((t) => t.id === appearance.themeId) ?? themes[0];
@@ -854,6 +906,10 @@ function App() {
         }}
       />
       <SettingsModal />
+      <StagedRevMismatchModal
+        mismatch={stagedRevMismatch}
+        onDismiss={() => setStagedRevMismatch(null)}
+      />
       <AgentResumeModal
         sessionId={resumeCandidate?.sessionId ?? ""}
         agent={resumeCandidate?.agent ?? "claude"}
