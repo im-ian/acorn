@@ -13,6 +13,10 @@ export type SessionStatus =
  */
 export type SessionKind = "regular" | "control";
 
+export type SessionOwner =
+  | { kind: "user" }
+  | { kind: "control"; session_id: string };
+
 export interface Session {
   id: string;
   name: string;
@@ -25,6 +29,7 @@ export interface Session {
   updated_at: string;
   last_message: string | null;
   kind: SessionKind;
+  owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
    * worktree marker). Surfaces the worktree icon regardless of whether Acorn,

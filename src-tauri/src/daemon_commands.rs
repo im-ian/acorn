@@ -323,6 +323,7 @@ pub fn daemon_adopt_session(
         updated_at: now,
         last_message: None,
         kind,
+        owner: crate::session::SessionOwner::User,
         position: None,
         daemon_session_id: Some(id),
         agent_resume_token: Some(id.to_string()),
