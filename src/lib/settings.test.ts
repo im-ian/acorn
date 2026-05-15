@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SETTINGS } from "./settings";
+import {
+  AGENT_OPTIONS,
+  DEFAULT_SETTINGS,
+  resolveAiCommitCommand,
+} from "./settings";
 
 describe("language settings", () => {
   const STORAGE_KEY = "acorn:settings:v1";
@@ -52,6 +56,23 @@ describe("language settings", () => {
 describe("terminal.linkActivation default", () => {
   it("defaults to plain click so xterm's stock behaviour is preserved", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
+  });
+});
+
+describe("AI commit command resolution", () => {
+  it("runs Codex through non-interactive exec mode", () => {
+    expect(
+      resolveAiCommitCommand({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, selected: "codex" },
+      }),
+    ).toEqual({ command: "codex", args: ["exec"] });
+  });
+
+  it("describes the Codex one-shot invocation in settings", () => {
+    expect(AGENT_OPTIONS.find((o) => o.value === "codex")?.oneshotHint).toBe(
+      "codex exec",
+    );
   });
 });
 

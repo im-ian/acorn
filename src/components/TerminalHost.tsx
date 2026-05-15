@@ -46,7 +46,7 @@ function PortaledTerminal({ session }: { session: Session }) {
     const ws = state.workspaces[state.activeProject];
     if (!ws) return null;
     for (const pane of Object.values(ws.panes)) {
-      if (pane.activeSessionId === session.id) return pane.id;
+      if (pane.activeTabId === session.id) return pane.id;
     }
     return null;
   });

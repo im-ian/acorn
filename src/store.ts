@@ -16,6 +16,13 @@ import {
   removePaneFromLayout,
   splitPaneInLayout,
 } from "./lib/layout";
+import {
+  activeSessionIdFromTabId,
+  isRestorableWorkspaceTab,
+  isWorkspaceTabId,
+  makeCodeWorkspaceTab,
+  type FrontendWorkspaceTab,
+} from "./lib/workspaceTabs";
 
 type RightTab =
   | "todos"
@@ -29,8 +36,8 @@ const ROOT_PANE_ID: PaneId = "root";
 
 export interface PaneState {
   id: PaneId;
-  sessionIds: string[];
-  activeSessionId: string | null;
+  tabIds: string[];
+  activeTabId: string | null;
 }
 
 export interface ProjectWorkspace {
@@ -40,7 +47,7 @@ export interface ProjectWorkspace {
 }
 
 export interface MoveTabArgs {
-  sessionId: string;
+  tabId: string;
   fromPaneId: PaneId;
   toPaneId: PaneId;
   toIndex?: number;
@@ -60,16 +67,16 @@ interface AppStateModel {
   layout: LayoutNode;
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
+  activeTabId: string | null;
   activeSessionId: string | null;
 
   rightTab: RightTab;
   /**
-   * Readonly code viewer tabs. Each entry id is also referenced by a
-   * pane's `sessionIds` so the tab strip can render it alongside real
-   * PTY sessions. Frontend-only — not persisted across app restarts,
-   * never round-tripped through the backend.
+   * Frontend-owned tabs such as readonly code viewers. Terminal sessions
+   * use their backend session id directly as the tab id and therefore do
+   * not appear in this map.
    */
-  viewerTabs: Record<string, ViewerTab>;
+  workspaceTabs: Record<string, FrontendWorkspaceTab>;
   /** gh login most recently resolved as having access to a given repo, keyed
    *  by repo path. Populated by the PRs tab; consumed by the StatusBar to
    *  surface "which identity am I acting as for this repo". In-memory only. */
@@ -91,7 +98,7 @@ interface AppStateModel {
   /**
    * Set to false at boot if the backend reports that `sessions.json` failed
    * to load (file existed but could not be read or parsed). When false,
-   * `reconcileWorkspace` refuses to wipe a pane's `sessionIds` on the basis
+   * `reconcileWorkspace` refuses to wipe a pane's `tabIds` on the basis
    * of an empty backend list — protecting layouts from being destroyed by a
    * transient disk failure or a schema-incompatible build run from another
    * worktree. Cleared (set back to true) once the user takes any action that
@@ -116,6 +123,7 @@ interface AppStateModel {
   /** Probe session liveness via JSONL transcripts; updates session statuses
    *  in place without touching `updated_at`. */
   pollSessionStatuses: () => Promise<void>;
+  selectTab: (id: string | null) => void;
   selectSession: (id: string | null) => void;
   setActiveProject: (repoPath: string) => void;
   setFocusedPane: (paneId: PaneId) => void;
@@ -159,27 +167,10 @@ interface AppStateModel {
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
   toggleMultiInput: () => boolean;
-  /** Open a readonly viewer tab for `path` in the focused pane. */
-  openViewerTab: (path: string) => void;
-  /** Close a viewer tab and remove it from any pane it lives in. */
-  closeViewerTab: (id: string) => void;
-}
-
-export interface ViewerTab {
-  id: string;
-  path: string;
-  name: string;
-  /** Workspace this viewer belongs to. Pane code reads this to set the
-   * synthetic session's `repo_path` to the project root rather than the
-   * file path — otherwise "new tab" double-click would spawn a session
-   * against the file path and land in the wrong (or no) project. */
-  repoPath: string;
-}
-
-export const VIEWER_TAB_PREFIX = "viewer:";
-
-export function isViewerTabId(id: string): boolean {
-  return id.startsWith(VIEWER_TAB_PREFIX);
+  /** Open a readonly code viewer tab for `path` in the focused pane. */
+  openCodeViewerTab: (path: string) => void;
+  /** Close any frontend-owned tab and remove it from panes. */
+  closeWorkspaceTab: (id: string) => void;
 }
 
 export interface PendingTerminalInput {
@@ -203,7 +194,30 @@ function nextSplitId(): string {
 }
 
 function emptyPane(id: PaneId): PaneState {
-  return { id, sessionIds: [], activeSessionId: null };
+  return { id, tabIds: [], activeTabId: null };
+}
+
+type PersistedPaneState = Partial<PaneState> & {
+  sessionIds?: string[];
+  activeSessionId?: string | null;
+};
+
+function normalizePaneState(
+  pane: PersistedPaneState | undefined,
+  id: PaneId,
+): PaneState {
+  const tabIds = Array.isArray(pane?.tabIds)
+    ? pane.tabIds
+    : Array.isArray(pane?.sessionIds)
+      ? pane.sessionIds
+      : [];
+  const activeTabId =
+    pane?.activeTabId !== undefined
+      ? pane.activeTabId
+      : pane?.activeSessionId !== undefined
+        ? pane.activeSessionId
+        : null;
+  return { id, tabIds, activeTabId };
 }
 
 function emptyWorkspace(): ProjectWorkspace {
@@ -215,6 +229,7 @@ function emptyWorkspace(): ProjectWorkspace {
 }
 
 function fallbackEmptyMirror() {
+  const activeTabId = null as string | null;
   return {
     layout: makePaneNode(ROOT_PANE_ID),
     panes: { [ROOT_PANE_ID]: emptyPane(ROOT_PANE_ID) } as Record<
@@ -222,7 +237,8 @@ function fallbackEmptyMirror() {
       PaneState
     >,
     focusedPaneId: ROOT_PANE_ID as PaneId,
-    activeSessionId: null as string | null,
+    activeTabId,
+    activeSessionId: activeSessionIdFromTabId(activeTabId),
   };
 }
 
@@ -233,11 +249,13 @@ function mirrorActive(
   if (!activeProject) return fallbackEmptyMirror();
   const ws = workspaces[activeProject];
   if (!ws) return fallbackEmptyMirror();
+  const activeTabId = ws.panes[ws.focusedPaneId]?.activeTabId ?? null;
   return {
     layout: ws.layout,
     panes: ws.panes,
     focusedPaneId: ws.focusedPaneId,
-    activeSessionId: ws.panes[ws.focusedPaneId]?.activeSessionId ?? null,
+    activeTabId,
+    activeSessionId: activeSessionIdFromTabId(activeTabId),
   };
 }
 
@@ -249,7 +267,7 @@ function mirrorActive(
  * `allowEmptyWipe` is the safety knob for the boot-time disk-corruption
  * scenario. When `false` and `sessions` is empty *while the workspace still
  * remembers session ids*, this function returns the workspace unchanged
- * rather than zeroing every pane's `sessionIds`. This avoids the cascade
+ * rather than zeroing every pane's `tabIds`. This avoids the cascade
  * where a transient `sessions.json` read failure (or a schema-incompatible
  * build from another worktree) erases the persisted layout permanently.
  */
@@ -261,7 +279,7 @@ function reconcileWorkspace(
   if (
     !allowEmptyWipe &&
     sessions.length === 0 &&
-    Object.values(ws.panes).some((p) => p.sessionIds.length > 0)
+    Object.values(ws.panes).some((p) => p.tabIds.length > 0)
   ) {
     return ws;
   }
@@ -270,27 +288,27 @@ function reconcileWorkspace(
 
   let newPanes: Record<PaneId, PaneState> = {};
   for (const pid of validPaneIds) {
-    const existing = ws.panes[pid] ?? emptyPane(pid);
-    // Viewer-tab ids live alongside session ids in the same array but
-    // are not tracked by the backend, so the session-list filter must
+    const existing = normalizePaneState(ws.panes[pid], pid);
+    // Frontend-owned tab ids live alongside session ids in the same array
+    // but are not tracked by the backend, so the session-list filter must
     // preserve them explicitly.
-    const filtered = existing.sessionIds.filter(
-      (id) => knownIds.has(id) || isViewerTabId(id),
+    const filtered = existing.tabIds.filter(
+      (id) => knownIds.has(id) || isWorkspaceTabId(id),
     );
     const active =
-      existing.activeSessionId && filtered.includes(existing.activeSessionId)
-        ? existing.activeSessionId
+      existing.activeTabId && filtered.includes(existing.activeTabId)
+        ? existing.activeTabId
         : filtered[filtered.length - 1] ?? null;
     newPanes[pid] = {
       id: pid,
-      sessionIds: filtered,
-      activeSessionId: active,
+      tabIds: filtered,
+      activeTabId: active,
     };
   }
 
   const assigned = new Set<string>();
   for (const p of Object.values(newPanes)) {
-    for (const id of p.sessionIds) assigned.add(id);
+    for (const id of p.tabIds) assigned.add(id);
   }
   let target = newPanes[ws.focusedPaneId] ? ws.focusedPaneId : ROOT_PANE_ID;
   if (!newPanes[target]) {
@@ -302,8 +320,8 @@ function reconcileWorkspace(
       const pane = newPanes[target];
       newPanes[target] = {
         ...pane,
-        sessionIds: [...pane.sessionIds, s.id],
-        activeSessionId: pane.activeSessionId ?? s.id,
+        tabIds: [...pane.tabIds, s.id],
+        activeTabId: pane.activeTabId ?? s.id,
       };
       assigned.add(s.id);
     }
@@ -369,12 +387,12 @@ function reconcileWorkspaces(
   return { workspaces: newWorkspaces, activeProject: newActive };
 }
 
-function findPaneContainingSession(
+function findPaneContainingTab(
   panes: Record<PaneId, PaneState>,
-  sessionId: string,
+  tabId: string,
 ): PaneId | null {
   for (const [pid, p] of Object.entries(panes)) {
-    if (p.sessionIds.includes(sessionId)) return pid;
+    if (p.tabIds.includes(tabId)) return pid;
   }
   return null;
 }
@@ -407,10 +425,11 @@ export const useAppStore = create<AppStateModel>()(
   layout: makePaneNode(ROOT_PANE_ID),
   panes: { [ROOT_PANE_ID]: emptyPane(ROOT_PANE_ID) },
   focusedPaneId: ROOT_PANE_ID,
+  activeTabId: null,
   activeSessionId: null,
 
   rightTab: "commits",
-  viewerTabs: {},
+  workspaceTabs: {},
   prAccountByRepo: {},
   pendingTerminalInput: {},
   multiInputEnabled: false,
@@ -539,7 +558,7 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
-  selectSession(id) {
+  selectTab(id) {
     set((s) => {
       // Clear within active workspace
       if (id === null) {
@@ -550,35 +569,40 @@ export const useAppStore = create<AppStateModel>()(
             ...ws,
             panes: {
               ...ws.panes,
-              [ws.focusedPaneId]: { ...pane, activeSessionId: null },
+              [ws.focusedPaneId]: { ...pane, activeTabId: null },
             },
           };
         });
         return patch ?? s;
       }
 
-      // Viewer tabs are workspace-local — they live in whichever
-      // workspace the user opened them from. Resolve via current active
-      // project rather than session lookup (no backend Session exists).
-      if (isViewerTabId(id)) {
-        const patch = updateActiveWorkspace(s, (ws) => {
-          const containing = findPaneContainingSession(ws.panes, id);
-          if (!containing) return ws;
-          const pane = ws.panes[containing];
-          if (!pane) return ws;
-          return {
-            ...ws,
-            panes: {
-              ...ws.panes,
-              [containing]: { ...pane, activeSessionId: id },
-            },
-            focusedPaneId: containing,
-          };
-        });
-        return patch ?? s;
+      if (isWorkspaceTabId(id)) {
+        const tab = s.workspaceTabs[id];
+        const targetProject = tab?.repoPath ?? s.activeProject;
+        if (!targetProject) return s;
+        const ws = s.workspaces[targetProject];
+        if (!ws) return s;
+        const containing = findPaneContainingTab(ws.panes, id);
+        if (!containing) return s;
+        const pane = ws.panes[containing];
+        if (!pane) return s;
+        const nextWs: ProjectWorkspace = {
+          ...ws,
+          panes: {
+            ...ws.panes,
+            [containing]: { ...pane, activeTabId: id },
+          },
+          focusedPaneId: containing,
+        };
+        const workspaces = { ...s.workspaces, [targetProject]: nextWs };
+        return {
+          workspaces,
+          activeProject: targetProject,
+          ...mirrorActive(workspaces, targetProject),
+        };
       }
 
-      // Find session, switch active project to its repo, set active in pane
+      // Find session, switch active project to its repo, set active in pane.
       const session = s.sessions.find((x) => x.id === id);
       if (!session) return s;
 
@@ -586,21 +610,21 @@ export const useAppStore = create<AppStateModel>()(
       const ws = s.workspaces[targetProject];
       if (!ws) return s;
 
-      const containing = findPaneContainingSession(ws.panes, id);
+      const containing = findPaneContainingTab(ws.panes, id);
       const targetPaneId = containing ?? ws.focusedPaneId;
       const pane =
         ws.panes[targetPaneId] ?? emptyPane(targetPaneId);
-      const sessionIds = pane.sessionIds.includes(id)
-        ? pane.sessionIds
-        : [...pane.sessionIds, id];
+      const tabIds = pane.tabIds.includes(id)
+        ? pane.tabIds
+        : [...pane.tabIds, id];
       const newWs: ProjectWorkspace = {
         ...ws,
         panes: {
           ...ws.panes,
           [targetPaneId]: {
             ...pane,
-            sessionIds,
-            activeSessionId: id,
+            tabIds,
+            activeTabId: id,
           },
         },
         focusedPaneId: targetPaneId,
@@ -612,6 +636,10 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(workspaces, targetProject),
       };
     });
+  },
+
+  selectSession(id) {
+    get().selectTab(id);
   },
 
   setActiveProject(repoPath) {
@@ -679,10 +707,10 @@ export const useAppStore = create<AppStateModel>()(
     set((s) => {
       const patch = updateActiveWorkspace(s, (ws) => {
         const pane = ws.panes[ws.focusedPaneId];
-        if (!pane || pane.sessionIds.length === 0) return ws;
-        const ids = pane.sessionIds;
-        const currentIdx = pane.activeSessionId
-          ? ids.indexOf(pane.activeSessionId)
+        if (!pane || pane.tabIds.length === 0) return ws;
+        const ids = pane.tabIds;
+        const currentIdx = pane.activeTabId
+          ? ids.indexOf(pane.activeTabId)
           : -1;
         const nextIdx =
           currentIdx < 0
@@ -691,12 +719,12 @@ export const useAppStore = create<AppStateModel>()(
               : ids.length - 1
             : (currentIdx + direction + ids.length) % ids.length;
         const nextId = ids[nextIdx];
-        if (nextId === pane.activeSessionId) return ws;
+        if (nextId === pane.activeTabId) return ws;
         return {
           ...ws,
           panes: {
             ...ws.panes,
-            [ws.focusedPaneId]: { ...pane, activeSessionId: nextId },
+            [ws.focusedPaneId]: { ...pane, activeTabId: nextId },
           },
         };
       });
@@ -721,9 +749,13 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   closeFocusedTab() {
-    const { activeSessionId } = get();
-    if (!activeSessionId) return;
-    get().requestRemoveSession(activeSessionId);
+    const { activeTabId } = get();
+    if (!activeTabId) return;
+    if (isWorkspaceTabId(activeTabId)) {
+      get().closeWorkspaceTab(activeTabId);
+      return;
+    }
+    get().requestRemoveSession(activeTabId);
   },
 
   closePane(paneId) {
@@ -739,12 +771,12 @@ export const useAppStore = create<AppStateModel>()(
         delete newPanes[paneId];
         const surviving = listPaneIds(collapsed);
         const fallback = surviving[0] ?? ROOT_PANE_ID;
-        if (newPanes[fallback] && pane.sessionIds.length > 0) {
+        if (newPanes[fallback] && pane.tabIds.length > 0) {
           const target = newPanes[fallback];
           newPanes[fallback] = {
             ...target,
-            sessionIds: [...target.sessionIds, ...pane.sessionIds],
-            activeSessionId: target.activeSessionId ?? pane.activeSessionId,
+            tabIds: [...target.tabIds, ...pane.tabIds],
+            activeTabId: target.activeTabId ?? pane.activeTabId,
           };
         }
         return {
@@ -762,22 +794,22 @@ export const useAppStore = create<AppStateModel>()(
       // moveTab is intra-workspace only — tabs can't cross projects.
       const patch = updateActiveWorkspace(s, (ws) => {
         const fromPane = ws.panes[args.fromPaneId];
-        if (!fromPane || !fromPane.sessionIds.includes(args.sessionId))
+        if (!fromPane || !fromPane.tabIds.includes(args.tabId))
           return ws;
 
-        const srcSessionIds = fromPane.sessionIds.filter(
-          (id) => id !== args.sessionId,
+        const srcTabIds = fromPane.tabIds.filter(
+          (id) => id !== args.tabId,
         );
         const srcActive =
-          fromPane.activeSessionId === args.sessionId
-            ? srcSessionIds[srcSessionIds.length - 1] ?? null
-            : fromPane.activeSessionId;
+          fromPane.activeTabId === args.tabId
+            ? srcTabIds[srcTabIds.length - 1] ?? null
+            : fromPane.activeTabId;
         let newPanes: Record<PaneId, PaneState> = {
           ...ws.panes,
           [args.fromPaneId]: {
             ...fromPane,
-            sessionIds: srcSessionIds,
-            activeSessionId: srcActive,
+            tabIds: srcTabIds,
+            activeTabId: srcActive,
           },
         };
 
@@ -803,19 +835,19 @@ export const useAppStore = create<AppStateModel>()(
 
         const safeIndex =
           typeof args.toIndex === "number"
-            ? Math.max(0, Math.min(args.toIndex, toPane.sessionIds.length))
-            : toPane.sessionIds.length;
-        const targetIds = [...toPane.sessionIds];
-        targetIds.splice(safeIndex, 0, args.sessionId);
+            ? Math.max(0, Math.min(args.toIndex, toPane.tabIds.length))
+            : toPane.tabIds.length;
+        const targetIds = [...toPane.tabIds];
+        targetIds.splice(safeIndex, 0, args.tabId);
         newPanes[toPaneId] = {
           ...toPane,
-          sessionIds: targetIds,
-          activeSessionId: args.sessionId,
+          tabIds: targetIds,
+          activeTabId: args.tabId,
         };
 
         const totalPanes = Object.keys(newPanes).length;
         if (
-          srcSessionIds.length === 0 &&
+          srcTabIds.length === 0 &&
           totalPanes > 1 &&
           args.fromPaneId !== toPaneId
         ) {
@@ -850,8 +882,8 @@ export const useAppStore = create<AppStateModel>()(
         if (!ws) return null;
         const paneId = ws.focusedPaneId;
         const pane = ws.panes[paneId];
-        if (!pane?.activeSessionId) return null;
-        const idx = pane.sessionIds.indexOf(pane.activeSessionId);
+        if (!pane?.activeTabId) return null;
+        const idx = pane.tabIds.indexOf(pane.activeTabId);
         return idx >= 0 ? { paneId, idx } : null;
       })();
 
@@ -860,7 +892,7 @@ export const useAppStore = create<AppStateModel>()(
 
       // Reorder so the new tab sits immediately after the previously-active
       // tab in the same pane. `reconcileWorkspace` always appends new
-      // sessions at the end of `focusedPaneId.sessionIds`; this step
+      // sessions at the end of `focusedPaneId.tabIds`; this step
       // converts that to "next to active" without changing reconcile's
       // boot-time behavior.
       if (beforeSnap) {
@@ -869,16 +901,16 @@ export const useAppStore = create<AppStateModel>()(
           if (!ws) return s;
           const pane = ws.panes[beforeSnap.paneId];
           if (!pane) return s;
-          const currentIdx = pane.sessionIds.indexOf(created.id);
+          const currentIdx = pane.tabIds.indexOf(created.id);
           if (currentIdx < 0) return s;
           const targetIdx = Math.min(
             beforeSnap.idx + 1,
-            pane.sessionIds.length - 1,
+            pane.tabIds.length - 1,
           );
           if (currentIdx === targetIdx) return s;
-          const ids = pane.sessionIds.filter((id) => id !== created.id);
+          const ids = pane.tabIds.filter((id) => id !== created.id);
           ids.splice(targetIdx, 0, created.id);
-          const newPane = { ...pane, sessionIds: ids };
+          const newPane = { ...pane, tabIds: ids };
           const newWs = {
             ...ws,
             panes: { ...ws.panes, [beforeSnap.paneId]: newPane },
@@ -936,7 +968,7 @@ export const useAppStore = create<AppStateModel>()(
       let owning: { repoPath: string; paneId: PaneId } | null = null;
       for (const [repoPath, ws] of Object.entries(before.workspaces)) {
         for (const [pid, p] of Object.entries(ws.panes)) {
-          if (p.sessionIds.includes(id)) {
+          if (p.tabIds.includes(id)) {
             owning = { repoPath, paneId: pid as PaneId };
             break;
           }
@@ -953,7 +985,7 @@ export const useAppStore = create<AppStateModel>()(
       if (!ws) return;
       const pane = ws.panes[owning.paneId];
       if (!pane) return;
-      if (pane.sessionIds.length > 0) return;
+      if (pane.tabIds.length > 0) return;
       if (Object.keys(ws.panes).length <= 1) return;
       // Only auto-collapse for the currently active workspace's panes —
       // closePane operates on the active workspace, so applying it to a
@@ -1141,33 +1173,31 @@ export const useAppStore = create<AppStateModel>()(
     return enabled;
   },
 
-  openViewerTab(path) {
+  openCodeViewerTab(path) {
     set((s) => {
       if (!s.activeProject) return s;
       const ws = s.workspaces[s.activeProject];
       if (!ws) return s;
-      // Reuse an existing viewer tab for the same path if there is one;
+      // Reuse an existing code tab for the same path if there is one;
       // this avoids piling up identical tabs when the user double-clicks
       // the same file repeatedly. The reuse cycles focus to the tab.
-      const existing = Object.values(s.viewerTabs).find(
-        (v) => v.path === path && v.repoPath === s.activeProject,
+      const existing = Object.values(s.workspaceTabs).find(
+        (tab) =>
+          tab.kind === "code" &&
+          tab.path === path &&
+          tab.repoPath === s.activeProject,
       );
-      const tab: ViewerTab = existing ?? {
-        id: `${VIEWER_TAB_PREFIX}${crypto.randomUUID()}`,
-        path,
-        name: path.split("/").filter(Boolean).pop() ?? path,
-        repoPath: s.activeProject,
-      };
+      const tab = existing ?? makeCodeWorkspaceTab(path, s.activeProject);
       const focused = ws.focusedPaneId;
       const pane = ws.panes[focused];
       if (!pane) return s;
-      const alreadyInPane = pane.sessionIds.includes(tab.id);
+      const alreadyInPane = pane.tabIds.includes(tab.id);
       const newPane: PaneState = alreadyInPane
-        ? { ...pane, activeSessionId: tab.id }
+        ? { ...pane, activeTabId: tab.id }
         : {
             ...pane,
-            sessionIds: [...pane.sessionIds, tab.id],
-            activeSessionId: tab.id,
+            tabIds: [...pane.tabIds, tab.id],
+            activeTabId: tab.id,
           };
       const newWs: ProjectWorkspace = {
         ...ws,
@@ -1178,41 +1208,44 @@ export const useAppStore = create<AppStateModel>()(
         [s.activeProject]: newWs,
       };
       return {
-        viewerTabs: existing ? s.viewerTabs : { ...s.viewerTabs, [tab.id]: tab },
+        workspaceTabs: existing
+          ? s.workspaceTabs
+          : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
         ...mirrorActive(newWorkspaces, s.activeProject),
       };
     });
   },
 
-  closeViewerTab(id) {
+  closeWorkspaceTab(id) {
     set((s) => {
-      if (!isViewerTabId(id)) return s;
-      const { [id]: _, ...rest } = s.viewerTabs;
+      if (!isWorkspaceTabId(id)) return s;
+      const { [id]: _, ...rest } = s.workspaceTabs;
       const newWorkspaces: Record<string, ProjectWorkspace> = {};
       for (const [key, ws] of Object.entries(s.workspaces)) {
         const newPanes: Record<PaneId, PaneState> = {};
         for (const [pid, pane] of Object.entries(ws.panes)) {
-          const ids = pane.sessionIds.filter((sid) => sid !== id);
+          const ids = pane.tabIds.filter((sid) => sid !== id);
           const nextActive =
-            pane.activeSessionId === id
+            pane.activeTabId === id
               ? ids[ids.length - 1] ?? null
-              : pane.activeSessionId;
+              : pane.activeTabId;
           newPanes[pid as PaneId] = {
             ...pane,
-            sessionIds: ids,
-            activeSessionId: nextActive,
+            tabIds: ids,
+            activeTabId: nextActive,
           };
         }
         newWorkspaces[key] = { ...ws, panes: newPanes };
       }
       return {
-        viewerTabs: rest,
+        workspaceTabs: rest,
         workspaces: newWorkspaces,
         ...mirrorActive(newWorkspaces, s.activeProject),
       };
     });
   },
+
     }),
     {
       name: "acorn-workspaces",
@@ -1222,35 +1255,51 @@ export const useAppStore = create<AppStateModel>()(
         workspaces: state.workspaces,
         activeProject: state.activeProject,
         rightTab: state.rightTab,
+        workspaceTabs: Object.fromEntries(
+          Object.entries(state.workspaceTabs).filter(([, tab]) =>
+            isRestorableWorkspaceTab(tab),
+          ),
+        ),
       }),
       // Recompute the active-workspace mirror after hydration so consumers
       // see the persisted layout immediately, before the first refreshAll.
       onRehydrateStorage: () => (state) => {
         if (!state) return;
-        // Viewer tabs are frontend-only and not persisted, so any
-        // viewer ids in the persisted workspace are stale. Strip them
-        // from pane sessionIds + activeSessionId before the layout
-        // mirror computes, otherwise the empty-pane fallback never
-        // shows and the tab strip points at a dead id.
+        // Only restorable frontend-owned tabs survive rehydrate. Ephemeral
+        // tabs, plus stale ids whose descriptors are gone, are stripped
+        // before the layout mirror computes.
+        const restoredTabs = Object.fromEntries(
+          Object.entries(state.workspaceTabs ?? {}).filter(([, tab]) =>
+            isRestorableWorkspaceTab(tab),
+          ),
+        );
         const sanitized: Record<string, ProjectWorkspace> = {};
         for (const [key, ws] of Object.entries(state.workspaces ?? {})) {
           const newPanes: Record<PaneId, PaneState> = {};
           for (const [pid, pane] of Object.entries(ws.panes ?? {})) {
-            const ids = pane.sessionIds.filter((id) => !isViewerTabId(id));
+            const normalized = normalizePaneState(
+              pane as PersistedPaneState,
+              pid as PaneId,
+            );
+            const ids = normalized.tabIds.filter(
+              (id) => !isWorkspaceTabId(id) || restoredTabs[id],
+            );
             const active =
-              pane.activeSessionId && !isViewerTabId(pane.activeSessionId)
-                ? pane.activeSessionId
+              normalized.activeTabId &&
+              (!isWorkspaceTabId(normalized.activeTabId) ||
+                restoredTabs[normalized.activeTabId])
+                ? normalized.activeTabId
                 : ids[ids.length - 1] ?? null;
             newPanes[pid as PaneId] = {
-              ...pane,
-              sessionIds: ids,
-              activeSessionId: active,
+              ...normalized,
+              tabIds: ids,
+              activeTabId: active,
             };
           }
           sanitized[key] = { ...ws, panes: newPanes };
         }
         state.workspaces = sanitized;
-        state.viewerTabs = {};
+        state.workspaceTabs = restoredTabs;
         Object.assign(
           state,
           mirrorActive(state.workspaces, state.activeProject),

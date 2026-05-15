@@ -31,6 +31,9 @@ pub struct Envelope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Request {
+    /// Return the control-session context primer the agent should load before
+    /// interpreting natural-language requests like "new session".
+    Context,
     /// List sessions visible to the source — i.e. sessions in the same
     /// project (`repo_path`) as the calling control session.
     ListSessions,
@@ -40,6 +43,8 @@ pub enum Request {
     SendKeys {
         target_session_id: String,
         data_b64: String,
+        #[serde(default)]
+        allow_foreign: bool,
     },
     /// Read the tail of a target session's PTY output ring buffer. Returns
     /// up to `max_bytes`; `truncated = true` indicates the buffer had more
@@ -47,6 +52,8 @@ pub enum Request {
     ReadBuffer {
         target_session_id: String,
         max_bytes: Option<usize>,
+        #[serde(default)]
+        allow_foreign: bool,
     },
     /// Create a new (non-control) regular session in the same project as the
     /// source. Returns the new session's id. The frontend's `pty_spawn`
@@ -56,22 +63,40 @@ pub enum Request {
     NewSession {
         name: String,
         isolated: bool,
+        #[serde(default)]
+        owner: Option<NewSessionOwner>,
     },
     /// Ask the app to focus the given session in its pane. Emits a Tauri
     /// event the frontend reacts to.
     SelectSession {
         target_session_id: String,
+        #[serde(default)]
+        allow_foreign: bool,
     },
     /// Tear down a target session (kill its PTY, remove it from state).
     /// Destructive — the server logs every invocation to the audit log.
     KillSession {
         target_session_id: String,
+        #[serde(default)]
+        allow_foreign: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NewSessionOwner {
+    /// Default for `acorn-ipc new-session`: owned by the source control session.
+    SourceControl,
+    /// Explicit opt-out for sessions that should behave like user-created tabs.
+    User,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Response {
+    Context {
+        text: String,
+    },
     Sessions {
         sessions: Vec<SessionSummary>,
     },
@@ -108,6 +133,9 @@ pub enum ErrorCode {
     OutOfScope,
     /// Request shape was unrecognized or its arguments were invalid.
     Invalid,
+    /// Target exists in the same project but is owned by the user or by another
+    /// control session. Callers must opt in explicitly for these operations.
+    ForeignSession,
     /// Catch-all for server-side failures (PTY write errors, persistence
     /// errors, etc.). The `message` carries the underlying cause.
     Internal,
@@ -120,7 +148,9 @@ pub struct SessionSummary {
     pub repo_path: String,
     pub branch: String,
     pub kind: String,
+    pub owner: String,
     pub status: String,
+    pub owned_by_me: bool,
     /// True when the source session itself is the one being described —
     /// the CLI uses this to render an arrow / current-session marker.
     pub is_source: bool,
@@ -138,6 +168,7 @@ mod tests {
             request: Request::SendKeys {
                 target_session_id: "00000000-0000-0000-0000-000000000002".to_string(),
                 data_b64: "aGVsbG8=".to_string(),
+                allow_foreign: false,
             },
         };
         let encoded = serde_json::to_string(&env).expect("encode");
@@ -160,7 +191,8 @@ mod tests {
 
     #[test]
     fn unknown_request_kind_rejected() {
-        let bad = r#"{"protocol_version":1,"source_session_id":"x","request":{"kind":"frobnicate"}}"#;
+        let bad =
+            r#"{"protocol_version":1,"source_session_id":"x","request":{"kind":"frobnicate"}}"#;
         let parsed: Result<Envelope, _> = serde_json::from_str(bad);
         assert!(parsed.is_err());
     }

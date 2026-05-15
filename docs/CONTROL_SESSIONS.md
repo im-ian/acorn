@@ -45,11 +45,12 @@ should be able to orchestrate siblings *immediately*, not only after the
 user has explained the protocol. Acorn ships that priming through two
 layers that fire automatically every time a control-session PTY spawns:
 
-1. **PTY environment.** Three pieces of state are injected into the
+1. **PTY environment.** Four pieces of state are injected into the
    control session's PTY before any user code runs:
    - `ACORN_SESSION_ID` — this session's UUID, so `acorn-ipc` knows who
      is asking.
    - `ACORN_IPC_SOCKET` — the canonical IPC socket path.
+   - `ACORN_DAEMON_SOCKET` — the background daemon control socket path.
    - `PATH` — the directory containing the bundled `acorn-ipc` binary is
      prepended (de-duplicated), so the agent can invoke `acorn-ipc` by
      name without the user installing a shim. Regular sessions do not
@@ -63,22 +64,24 @@ layers that fire automatically every time a control-session PTY spawns:
    the protocol — point the agent at it explicitly if it doesn't auto-
    ingest project docs on startup.
 
-The primer text itself is generated server-side and lists every
-`acorn-ipc` subcommand with the current session id and socket path
-pre-substituted, so the agent can copy-paste examples without further
-work.
+The primer text itself is generated server-side and lists the control
+session id, socket paths, natural-language mapping for phrases like "new
+session", the ownership rule for worker sessions, and every `acorn-ipc`
+subcommand with copy-pasteable examples. Agents can also reload the same
+text at any time with `acorn-ipc context`.
 
 ## The `acorn-ipc` CLI
 
-When Acorn spawns a control session it injects two env vars into the PTY:
+When Acorn spawns a control session it injects these env vars into the PTY:
 
 | Env var             | Source                            |
 | ------------------- | --------------------------------- |
 | `ACORN_SESSION_ID`  | The session's UUID                |
 | `ACORN_IPC_SOCKET`  | Path to the in-app IPC socket     |
+| `ACORN_DAEMON_SOCKET` | Path to the daemon control socket |
 
-The `acorn-ipc` binary reads those two vars, so commands run straight from
-the shell without flags.
+The `acorn-ipc` binary reads `ACORN_SESSION_ID` and `ACORN_IPC_SOCKET`, so
+commands run straight from the shell without flags.
 
 ### Install
 
@@ -125,12 +128,13 @@ acorn-ipc --help
 ### Commands
 
 ```text
+acorn-ipc context
 acorn-ipc list-sessions
-acorn-ipc send-keys     -t <uuid> --data "ls\n"          # or --enter
-acorn-ipc read-buffer   -t <uuid> [--max-bytes N]
-acorn-ipc new-session   <name> [--isolated]
-acorn-ipc select-session -t <uuid>
-acorn-ipc kill-session  -t <uuid>
+acorn-ipc new-session   <name> [--isolated] [--owner me|user]
+acorn-ipc send-keys     -t <uuid> --data "ls" --enter [--allow-foreign]
+acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]
+acorn-ipc select-session -t <uuid> [--allow-foreign]
+acorn-ipc kill-session  -t <uuid> [--allow-foreign]
 ```
 
 Add `--json` to any command to get machine-readable output. Each command
@@ -143,13 +147,27 @@ exits non-zero with a stable code on error:
 | 4    | Target session belongs to a different project                      |
 | 5    | Invalid request shape / arguments                                  |
 | 6    | Internal — PTY write failed, persistence failed, etc.              |
+| 7    | Foreign session — target is user-owned or owned by another control |
+
+### Ownership
+
+Sessions created from the UI are owned by `user`. Sessions created through
+`acorn-ipc new-session` are owned by the source control session by default
+(`control:<ACORN_SESSION_ID>`), unless the caller passes `--owner user`.
+
+`list-sessions` shows each session's owner and whether it is owned by the
+current controller. By default, `send-keys`, `read-buffer`, `select-session`,
+and `kill-session` only operate on sessions owned by the current controller
+or on the source control session itself. Passing `--allow-foreign` is the
+explicit escape hatch for a direct user request to touch a user-owned session
+or a session owned by another control session.
 
 ### Examples
 
 Send a command to every regular sibling and wait for output:
 
 ```sh
-for id in $(acorn-ipc list-sessions --json | jq -r '.sessions[] | select(.kind == "regular") | .id'); do
+for id in $(acorn-ipc list-sessions --json | jq -r '.sessions[] | select(.owned_by_me and .kind == "regular") | .id'); do
   acorn-ipc send-keys -t "$id" --data "git status" --enter
   sleep 1
   acorn-ipc read-buffer -t "$id" --max-bytes 4096

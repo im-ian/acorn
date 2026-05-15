@@ -652,7 +652,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (entry.is_dir) return;
       try {
         const store = await import("../store");
-        store.useAppStore.getState().openViewerTab(entry.path);
+        store.useAppStore.getState().openCodeViewerTab(entry.path);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }

@@ -11,7 +11,11 @@ export type SessionStatus =
  * dispatch commands to other sessions in the same project. Persisted
  * sessions without this field load as `"regular"` from the backend.
  */
-export type SessionKind = "regular" | "control" | "viewer";
+export type SessionKind = "regular" | "control";
+
+export type SessionOwner =
+  | { kind: "user" }
+  | { kind: "control"; session_id: string };
 
 export interface Session {
   id: string;
@@ -25,6 +29,7 @@ export interface Session {
   updated_at: string;
   last_message: string | null;
   kind: SessionKind;
+  owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
    * worktree marker). Surfaces the worktree icon regardless of whether Acorn,
