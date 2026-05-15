@@ -1,0 +1,16 @@
+{
+  "settings.title": "Settings",
+  "settings.reset": "Reset to defaults",
+  "settings.tabs.terminal": "Terminal",
+  "settings.tabs.agents": "Agents",
+  "settings.tabs.sessions": "Sessions",
+  "settings.tabs.github": "GitHub",
+  "settings.tabs.appearance": "Appearance",
+  "settings.tabs.editor": "Editor",
+  "settings.tabs.notifications": "Notifications",
+  "settings.tabs.storage": "Storage",
+  "settings.tabs.experiments": "Experiments",
+  "settings.tabs.about": "About",
+  "settings.language.label": "Language",
+  "settings.language.hint": "Language used for the Acorn interface. New translations are added gradually."
+}
