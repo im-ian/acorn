@@ -8,6 +8,7 @@ use crate::daemon_stream::StreamRegistry;
 use crate::ipc::server::IpcServerHandle;
 use crate::pty::PtyManager;
 use crate::session::{ProjectStore, SessionStore};
+use crate::staged_rev_reconcile::StagedRevMismatch;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +37,15 @@ pub struct AppState {
     /// check the dispatch helpers use to decide between daemon and
     /// in-process routing on subsequent calls.
     pub stream_registry: Arc<StreamRegistry>,
+    /// Result of the boot-time staged-dotfile reconcile. `Some` when
+    /// the daemon held PTYs from an older build with different rc
+    /// bodies, `None` when everything was in sync (or reconcile did
+    /// not run yet). Frontend pulls this via `staged_rev_mismatch_status`
+    /// at mount; the same `acorn:staged-rev-mismatch` event is also
+    /// emitted at the end of reconcile but the pull is what's
+    /// authoritative, so a listener registered after the emit still
+    /// sees the prompt.
+    pub staged_rev_mismatch: Arc<Mutex<Option<StagedRevMismatch>>>,
 }
 
 impl AppState {
@@ -49,6 +59,7 @@ impl AppState {
             ipc_handle: Arc::new(Mutex::new(None)),
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),
+            staged_rev_mismatch: Arc::new(Mutex::new(None)),
         }
     }
 }

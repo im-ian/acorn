@@ -1855,6 +1855,27 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .to_string()
 }
 
+/// Returns the cached boot-time staged-rev reconcile result. `Some` if
+/// the daemon still holds PTYs spawned by an older build with different
+/// staged dotfile bodies; `None` when reconcile found everything in
+/// sync (or hasn't run yet because the daemon is disabled or
+/// unreachable). The frontend polls this at mount so the prompt
+/// survives a listener-mount-after-emit race.
+#[tauri::command]
+pub fn staged_rev_mismatch_status(
+    state: State<'_, AppState>,
+) -> Option<crate::staged_rev_reconcile::StagedRevMismatch> {
+    state.staged_rev_mismatch.lock().clone()
+}
+
+/// Clear the cached staged-rev mismatch so the prompt does not re-show
+/// when the user dismisses it or after they trigger the "restart
+/// daemon" flow. Idempotent.
+#[tauri::command]
+pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
+    *state.staged_rev_mismatch.lock() = None;
+}
+
 #[cfg(test)]
 mod tests {
     use super::font_name_from_path;
