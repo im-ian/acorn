@@ -1,8 +1,16 @@
 import { useState, type ReactElement } from "react";
 import { Bot } from "lucide-react";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal } from "./ui/Modal";
 import { ModalHeader } from "./ui/ModalHeader";
 import { CheckboxRow } from "./ui/CheckboxRow";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 /**
  * localStorage key gating this modal. Exported so the App-level host can write
@@ -31,6 +39,7 @@ export function ControlSessionGuideModal({
   open,
   onClose,
 }: ControlSessionGuideModalProps): ReactElement | null {
+  const t = useTranslation();
   const [dontShowAgain, setDontShowAgain] = useState(false);
 
   function dismiss() {
@@ -46,8 +55,8 @@ export function ControlSessionGuideModal({
       ariaLabelledBy="acorn-control-guide-title"
     >
       <ModalHeader
-        title="Control session"
-        subtitle="A terminal that drives other sessions in this project"
+        title={dt(t, "dialogs.controlSessionGuide.title")}
+        subtitle={dt(t, "dialogs.controlSessionGuide.subtitle")}
         titleId="acorn-control-guide-title"
         icon={<Bot size={14} className="text-accent" />}
         variant="dialog"
@@ -55,23 +64,20 @@ export function ControlSessionGuideModal({
       />
       <div className="space-y-3 px-4 py-4 text-xs text-fg-muted">
         <p>
-          Control sessions are an upcoming way to coordinate work across
-          terminals from a single place — handy for agents and scripts that
-          need to dispatch commands to siblings in the same project.
+          {dt(t, "dialogs.controlSessionGuide.bodyIntro")}
         </p>
         <ul className="ml-4 list-disc space-y-1">
-          <li>Send keystrokes to any session in this project.</li>
-          <li>List the other sessions and their status.</li>
-          <li>Read recent output from a target session.</li>
+          <li>{dt(t, "dialogs.controlSessionGuide.pointKeystrokes")}</li>
+          <li>{dt(t, "dialogs.controlSessionGuide.pointListSessions")}</li>
+          <li>{dt(t, "dialogs.controlSessionGuide.pointReadOutput")}</li>
         </ul>
         <p>
-          You just created a control session. The{" "}
+          {dt(t, "dialogs.controlSessionGuide.createdPrefix")}{" "}
           <code className="rounded bg-bg px-1 py-0.5 text-fg">acorn-ipc</code>{" "}
-          CLI that drives it ships in the next update; this terminal will
-          start behaving like a regular shell until then.
+          {dt(t, "dialogs.controlSessionGuide.createdSuffix")}
         </p>
         <CheckboxRow
-          label="Don't show this again"
+          label={dt(t, "dialogs.common.dontShowAgain")}
           checked={dontShowAgain}
           onChange={setDontShowAgain}
         />
@@ -82,7 +88,7 @@ export function ControlSessionGuideModal({
           onClick={dismiss}
           className="rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90"
         >
-          Got it
+          {dt(t, "dialogs.common.gotIt")}
         </button>
       </footer>
     </Modal>

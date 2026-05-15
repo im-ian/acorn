@@ -1,6 +1,10 @@
-import { test, expect, pressHotkey } from "./support";
+import {
+  test,
+  expect,
+  pressHotkey,
+  seedSettingsLanguage,
+} from "./support";
 
-const SETTINGS_STORAGE_KEY = "acorn:settings:v1";
 const SETTINGS_DIALOG_NAME = /^(Settings|설정)$/;
 
 // Each Settings tab has a label / heading unique enough to anchor against.
@@ -88,12 +92,7 @@ test.describe("settings modal: tab content", () => {
   test("Korean mode localizes tab buttons and representative Settings markers", async ({
     page,
   }) => {
-    await page.addInitScript((storageKey) => {
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify({ language: "ko" }),
-      );
-    }, SETTINGS_STORAGE_KEY);
+    await seedSettingsLanguage(page, "ko");
 
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });
