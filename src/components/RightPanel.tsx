@@ -378,6 +378,12 @@ interface SessionTodosState {
   error: string | null;
 }
 
+interface LiveRepoCache {
+  sessionId: string;
+  fallbackPath: string | null;
+  repoPath: string | null;
+}
+
 /**
  * Resolve the live working directory of a session's PTY tree to the git
  * repo it sits inside, with the recorded `fallback` path as the immediate
@@ -391,10 +397,10 @@ interface SessionTodosState {
  */
 function useLiveRepoPath(
   sessionId: string | null,
-  fallback: string | null,
+  fallbackPath: string | null,
   rightTab: string,
 ): string | null {
-  const [liveRepo, setLiveRepo] = useState<string | null>(null);
+  const [liveRepo, setLiveRepo] = useState<LiveRepoCache | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -405,8 +411,8 @@ function useLiveRepoPath(
     let cancelled = false;
     api
       .ptyRepoRoot(sessionId)
-      .then((repo) => {
-        if (!cancelled) setLiveRepo(repo);
+      .then((repoPath) => {
+        if (!cancelled) setLiveRepo({ sessionId, fallbackPath, repoPath });
       })
       .catch((err: unknown) => {
         // Don't blow away a previously resolved path on a transient backend
@@ -417,7 +423,7 @@ function useLiveRepoPath(
     return () => {
       cancelled = true;
     };
-  }, [sessionId, rightTab, tick]);
+  }, [sessionId, fallbackPath, rightTab, tick]);
 
   // Refocusing the app is a strong signal the user is about to look at the
   // panel — re-resolve so a `claude --worktree` that happened while we were
@@ -428,7 +434,13 @@ function useLiveRepoPath(
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  return liveRepo ?? fallback;
+  if (
+    liveRepo?.sessionId === sessionId &&
+    liveRepo.fallbackPath === fallbackPath
+  ) {
+    return liveRepo.repoPath ?? fallbackPath;
+  }
+  return fallbackPath;
 }
 
 function useSessionTodos(
