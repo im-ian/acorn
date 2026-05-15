@@ -27,6 +27,7 @@ import { useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import {
   getCurrentFilePayload,
   getCurrentTabPayload,
@@ -40,6 +41,7 @@ import {
 } from "../lib/editor";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
+import { useTranslation } from "../lib/useTranslation";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
@@ -58,6 +60,12 @@ const STATUS_DOT: Record<SessionStatus, string> = {
   completed: "bg-accent/60",
 };
 
+type PaneTranslationKey = Extract<TranslationKey, `pane.${string}`>;
+
+function paneT(t: Translator, key: PaneTranslationKey): string {
+  return t(key);
+}
+
 interface PaneProps {
   paneId: PaneId;
 }
@@ -75,6 +83,7 @@ type PaneTab =
  * `paneId`. The pane itself only renders.
  */
 export function Pane({ paneId }: PaneProps) {
+  const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const pane = useAppStore((s) => s.panes[paneId]);
@@ -342,6 +351,7 @@ export function Pane({ paneId }: PaneProps) {
         y={paneMenu?.y ?? 0}
         onClose={() => setPaneMenu(null)}
         items={buildPaneMenuItems({
+          t,
           activeSession: active?.kind === "session" ? active.session : null,
           totalPanes,
           paneId,
@@ -374,6 +384,8 @@ function EmptyPane({
   onDoubleClick: () => void;
   onContextMenu: (x: number, y: number) => void;
 }) {
+  const t = useTranslation();
+
   return (
     <div
       className="flex h-full flex-col items-center justify-center gap-2 text-fg-muted hover:text-fg/80 transition cursor-pointer select-none"
@@ -390,14 +402,14 @@ function EmptyPane({
         <>
           <TerminalIcon size={28} className="opacity-40" />
           <p className="text-xs">
-            Drop a tab here or double-click to start a session
+            {paneT(t, "pane.empty.dropTabOrDoubleClick")}
           </p>
         </>
       ) : (
         <>
           <FolderPlus size={28} className="opacity-40" />
           <p className="text-xs">
-            Create a project to get started. Double-click here.
+            {paneT(t, "pane.empty.createProject")}
           </p>
         </>
       )}
@@ -587,6 +599,7 @@ function TabItem({
   siblingCount,
   registerRef,
 }: TabItemProps) {
+  const t = useTranslation();
   const renameSession = useAppStore((s) => s.renameSession);
   const session = tab.kind === "session" ? tab.session : null;
   const tabPath = tab.kind === "session" ? tab.session.worktree_path : tab.path;
@@ -636,28 +649,32 @@ function TabItem({
     const both = agent.claude && agent.codex;
     if (agent.claude) {
       items.push({
-        label: both ? "Fork Claude Session" : "Fork Session",
+        label: both
+          ? paneT(t, "pane.menu.forkClaudeSession")
+          : paneT(t, "pane.menu.forkSession"),
         icon: <GitFork size={12} />,
         onClick: () => onFork("claude", agent.claude!, false),
       });
       items.push({
         label: both
-          ? "Fork Claude in New Worktree"
-          : "Fork in New Worktree",
+          ? paneT(t, "pane.menu.forkClaudeInNewWorktree")
+          : paneT(t, "pane.menu.forkInNewWorktree"),
         icon: <GitBranch size={12} />,
         onClick: () => onFork("claude", agent.claude!, true),
       });
     }
     if (agent.codex) {
       items.push({
-        label: both ? "Fork Codex Session" : "Fork Session",
+        label: both
+          ? paneT(t, "pane.menu.forkCodexSession")
+          : paneT(t, "pane.menu.forkSession"),
         icon: <GitFork size={12} />,
         onClick: () => onFork("codex", agent.codex!, false),
       });
       items.push({
         label: both
-          ? "Fork Codex in New Worktree"
-          : "Fork in New Worktree",
+          ? paneT(t, "pane.menu.forkCodexInNewWorktree")
+          : paneT(t, "pane.menu.forkInNewWorktree"),
         icon: <GitBranch size={12} />,
         onClick: () => onFork("codex", agent.codex!, true),
       });
@@ -669,13 +686,13 @@ function TabItem({
 
   const menuItems: ContextMenuItem[] = [
     {
-      label: "Rename",
+      label: paneT(t, "pane.menu.rename"),
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
       disabled: !session,
     },
     {
-      label: "Duplicate Session",
+      label: paneT(t, "pane.menu.duplicateSession"),
       icon: <Files size={12} />,
       onClick: () => onDuplicate?.(),
       disabled: !onDuplicate,
@@ -683,19 +700,19 @@ function TabItem({
     { type: "separator" },
     ...forkItems,
     {
-      label: "Split Right",
+      label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
       onClick: () => onSplitTab("horizontal"),
       disabled: siblingCount <= 1,
     },
     {
-      label: "Split Down",
+      label: paneT(t, "pane.menu.splitDown"),
       icon: <SplitSquareVertical size={12} />,
       onClick: () => onSplitTab("vertical"),
       disabled: siblingCount <= 1,
     },
     {
-      label: "Equalize Pane Sizes",
+      label: paneT(t, "pane.menu.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
@@ -703,7 +720,9 @@ function TabItem({
     },
     { type: "separator" },
     {
-      label: session ? "Open Worktree in Editor" : "Open File in Editor",
+      label: session
+        ? paneT(t, "pane.menu.openWorktreeInEditor")
+        : paneT(t, "pane.menu.openFileInEditor"),
       icon: <PencilLine size={12} />,
       disabled: !editorConfigured,
       onClick: () => {
@@ -715,7 +734,7 @@ function TabItem({
       },
     },
     {
-      label: "Reveal in Finder",
+      label: paneT(t, "pane.menu.revealInFinder"),
       icon: <FolderOpen size={12} />,
       onClick: () => {
         void openPath(tabPath).catch((err: unknown) => {
@@ -725,21 +744,25 @@ function TabItem({
     },
     { type: "separator" },
     {
-      label: session ? "Copy Worktree Path" : "Copy File Path",
+      label: session
+        ? paneT(t, "pane.menu.copyWorktreePath")
+        : paneT(t, "pane.menu.copyFilePath"),
       icon: <Copy size={12} />,
       onClick: () => {
         void copyToClipboard(tabPath);
       },
     },
     {
-      label: session ? "Copy Worktree Name" : "Copy File Name",
+      label: session
+        ? paneT(t, "pane.menu.copyWorktreeName")
+        : paneT(t, "pane.menu.copyFileName"),
       icon: <Copy size={12} />,
       onClick: () => {
         void copyToClipboard(basename(tabPath));
       },
     },
     {
-      label: "Copy Branch Name",
+      label: paneT(t, "pane.menu.copyBranchName"),
       icon: <Copy size={12} />,
       onClick: () => {
         if (session) void copyToClipboard(session.branch);
@@ -747,7 +770,7 @@ function TabItem({
       disabled: !session?.branch,
     },
     {
-      label: "Copy Session ID",
+      label: paneT(t, "pane.menu.copySessionId"),
       icon: <Copy size={12} />,
       onClick: () => {
         void copyToClipboard(tab.id);
@@ -756,18 +779,18 @@ function TabItem({
     },
     { type: "separator" },
     {
-      label: "Close",
+      label: paneT(t, "pane.menu.close"),
       icon: <X size={12} />,
       onClick: onClose,
     },
     {
-      label: "Close Others",
+      label: paneT(t, "pane.menu.closeOthers"),
       icon: <CircleX size={12} />,
       onClick: onCloseOthers,
       disabled: siblingCount <= 1,
     },
     {
-      label: "Close All",
+      label: paneT(t, "pane.menu.closeAll"),
       icon: <SquareX size={12} />,
       onClick: onCloseAll,
     },
@@ -848,12 +871,16 @@ function TabItem({
           <GitBranch
             size={10}
             className="pointer-events-none text-fg-muted"
-            aria-label="worktree"
+            aria-label={paneT(t, "pane.aria.worktree")}
           />
         ) : null}
         <button
           type="button"
-          aria-label="Close tab"
+          aria-label={
+            session
+              ? paneT(t, "pane.aria.closeSession")
+              : paneT(t, "pane.aria.closeTab")
+          }
           onClick={(e) => {
             e.stopPropagation();
             onClose();
@@ -922,6 +949,7 @@ function TabRenameInput({ initial, onSubmit, onCancel }: TabRenameInputProps) {
 }
 
 function buildPaneMenuItems({
+  t,
   activeSession,
   totalPanes,
   paneId: _paneId,
@@ -930,6 +958,7 @@ function buildPaneMenuItems({
   onClose,
   activeProjectFallback,
 }: {
+  t: Translator;
   activeSession: Session | null;
   totalPanes: number;
   paneId: PaneId;
@@ -943,7 +972,7 @@ function buildPaneMenuItems({
     ? [
         { type: "separator" },
         {
-          label: "Open Worktree in Editor",
+          label: paneT(t, "pane.menu.openWorktreeInEditor"),
           icon: <PencilLine size={12} />,
           disabled: !editorReady,
           onClick: () => {
@@ -955,7 +984,7 @@ function buildPaneMenuItems({
           },
         },
         {
-          label: "Reveal in Finder",
+          label: paneT(t, "pane.menu.revealInFinder"),
           icon: <FolderOpen size={12} />,
           onClick: () => {
             void openPath(activeSession.worktree_path).catch(
@@ -967,12 +996,12 @@ function buildPaneMenuItems({
         },
         { type: "separator" },
         {
-          label: "Copy Worktree Path",
+          label: paneT(t, "pane.menu.copyWorktreePath"),
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(activeSession.worktree_path),
         },
         {
-          label: "Copy Worktree Name",
+          label: paneT(t, "pane.menu.copyWorktreeName"),
           icon: <Copy size={12} />,
           onClick: () =>
             void copyToClipboard(basename(activeSession.worktree_path)),
@@ -982,24 +1011,24 @@ function buildPaneMenuItems({
 
   return [
     {
-      label: "New Session in This Pane",
+      label: paneT(t, "pane.menu.newSessionInThisPane"),
       icon: <TerminalIcon size={12} />,
       onClick: onNewTab,
       disabled: !activeSession && activeProjectFallback === null,
     },
     { type: "separator" },
     {
-      label: "Split Right",
+      label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
       onClick: () => onSplit("horizontal"),
     },
     {
-      label: "Split Down",
+      label: paneT(t, "pane.menu.splitDown"),
       icon: <SplitSquareVertical size={12} />,
       onClick: () => onSplit("vertical"),
     },
     {
-      label: "Equalize Pane Sizes",
+      label: paneT(t, "pane.menu.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
@@ -1009,7 +1038,7 @@ function buildPaneMenuItems({
     ...worktreeItems,
     { type: "separator" },
     {
-      label: "Close Pane",
+      label: paneT(t, "pane.menu.closePane"),
       icon: <X size={12} />,
       onClick: onClose,
       disabled: totalPanes <= 1,

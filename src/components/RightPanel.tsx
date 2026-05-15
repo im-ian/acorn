@@ -69,6 +69,8 @@ import {
   TextInput,
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 
 interface ExpandedDiff {
   payload: DiffPayload;
@@ -87,7 +89,26 @@ interface ExpandedDiff {
 const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
 
+type RightPanelTranslationKey = Extract<TranslationKey, `rightPanel.${string}`>;
+
+function rt(t: Translator, key: RightPanelTranslationKey): string {
+  return t(key);
+}
+
+function rtf(
+  t: Translator,
+  key: RightPanelTranslationKey,
+  values: Record<string, string | number>,
+): string {
+  return rt(t, key).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(values, name)
+      ? String(values[name])
+      : match,
+  );
+}
+
 export function RightPanel() {
+  const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeProject = useAppStore((s) => s.activeProject);
@@ -142,14 +163,14 @@ export function RightPanel() {
       >
         <TabButton
           icon={<FolderTree size={14} />}
-          label="Files"
+          label={rt(t, "rightPanel.tabs.files")}
           active={rightTab === "files"}
           onClick={() => setRightTab("files")}
         />
         {showTodos ? (
           <TabButton
             icon={<ListTodo size={14} />}
-            label="Todos"
+            label={rt(t, "rightPanel.tabs.todos")}
             badge={todosState.todos.length}
             active={rightTab === "todos"}
             onClick={() => setRightTab("todos")}
@@ -157,25 +178,25 @@ export function RightPanel() {
         ) : null}
         <TabButton
           icon={<GitCommit size={14} />}
-          label="Commits"
+          label={rt(t, "rightPanel.tabs.commits")}
           active={rightTab === "commits"}
           onClick={() => setRightTab("commits")}
         />
         <TabButton
           icon={<FileDiff size={14} />}
-          label="Staged"
+          label={rt(t, "rightPanel.tabs.staged")}
           active={rightTab === "staged"}
           onClick={() => setRightTab("staged")}
         />
         <TabButton
           icon={<GitPullRequest size={14} />}
-          label="PRs"
+          label={rt(t, "rightPanel.tabs.prs")}
           active={rightTab === "prs"}
           onClick={() => setRightTab("prs")}
         />
         <TabButton
           icon={<Activity size={14} />}
-          label="Actions"
+          label={rt(t, "rightPanel.tabs.actions")}
           active={rightTab === "actions"}
           onClick={() => setRightTab("actions")}
         />
@@ -185,7 +206,7 @@ export function RightPanel() {
           active && showTodos ? (
             <TodosTab todos={todosState.todos} />
           ) : (
-            <Empty msg="No todos in this session" />
+            <Empty msg={rt(t, "rightPanel.empty.noTodos")} />
           )
         ) : rightTab === "commits" ? (
           repoPath ? (
@@ -198,7 +219,7 @@ export function RightPanel() {
               onExpand={setExpanded}
             />
           ) : (
-            <Empty msg="No project selected" />
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "staged" ? (
           repoPath ? (
@@ -208,7 +229,7 @@ export function RightPanel() {
               onExpand={setExpanded}
             />
           ) : (
-            <Empty msg="No project selected" />
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "prs" ? (
           repoPath ? (
@@ -220,18 +241,18 @@ export function RightPanel() {
               refreshKey={prListVersion}
             />
           ) : (
-            <Empty msg="No project selected" />
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "files" ? (
           repoPath ? (
             <FileExplorer key={repoPath} rootPath={repoPath} />
           ) : (
-            <Empty msg="No project selected" />
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : repoPath ? (
           <ActionsTab key={repoPath} repoPath={repoPath} />
         ) : (
-          <Empty msg="No project selected" />
+          <Empty msg={rt(t, "rightPanel.empty.noProject")} />
         )}
       </div>
       <DiffViewerModal
@@ -507,14 +528,24 @@ function useSessionTodos(
 }
 
 function TodosTab({ todos }: { todos: TodoItem[] }) {
+  const t = useTranslation();
   const counts = countByStatus(todos);
 
   return (
     <div className="flex h-full flex-col">
       <div className="shrink-0 border-b border-border px-3 py-2 text-[10px] uppercase tracking-wide text-fg-muted">
-        <span className="mr-3">{counts.completed}/{todos.length} done</span>
+        <span className="mr-3">
+          {rtf(t, "rightPanel.todos.doneCount", {
+            completed: counts.completed,
+            total: todos.length,
+          })}
+        </span>
         {counts.in_progress > 0 ? (
-          <span className="text-accent">{counts.in_progress} in progress</span>
+          <span className="text-accent">
+            {rtf(t, "rightPanel.todos.inProgressCount", {
+              count: counts.in_progress,
+            })}
+          </span>
         ) : null}
       </div>
       <ul className="flex-1 overflow-y-auto p-2 text-xs">
@@ -585,6 +616,7 @@ function CommitsTab({
   repoPath: string;
   onExpand: (e: ExpandedDiff) => void;
 }) {
+  const t = useTranslation();
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [commitLogins, setCommitLogins] = useState<
     Record<string, string | null>
@@ -743,7 +775,7 @@ function CommitsTab({
         </span>
         <span className="opacity-50">·</span>
         <Tooltip label={absoluteTime(c.timestamp)} side="bottom">
-          <span className="font-mono">{relativeTime(c.timestamp)}</span>
+          <span className="font-mono">{relativeTime(c.timestamp, t)}</span>
         </Tooltip>
       </span>
     );
@@ -752,7 +784,7 @@ function CommitsTab({
   function buildHeaderActions(c: CommitInfo, webUrl: string | null): ReactNode {
     return (
       <>
-        <Tooltip label="Copy SHA" side="bottom">
+        <Tooltip label={rt(t, "rightPanel.tooltips.copySha")} side="bottom">
           <button
             type="button"
             onClick={() => void navigator.clipboard.writeText(c.sha)}
@@ -762,7 +794,7 @@ function CommitsTab({
           </button>
         </Tooltip>
         {webUrl ? (
-          <Tooltip label="Open on GitHub" side="bottom">
+          <Tooltip label={rt(t, "rightPanel.tooltips.openOnGitHub")} side="bottom">
             <button
               type="button"
               onClick={() => void openUrl(webUrl)}
@@ -798,7 +830,7 @@ function CommitsTab({
     try {
       const url = await api.commitWebUrl(repoPath, c.sha);
       if (!url) {
-        setError("This repo's origin is not a GitHub remote.");
+        setError(rt(t, "rightPanel.errors.notGitHubRemote"));
         return;
       }
       await openUrl(url);
@@ -881,7 +913,7 @@ function CommitsTab({
               >
                 {isSentinel ? (
                   <div className="px-3 py-3 text-center text-[10px] text-fg-muted">
-                    {loadingMore ? "loading more..." : "—"}
+                    {loadingMore ? rt(t, "rightPanel.loading.moreLower") : "—"}
                   </div>
                 ) : (
                   <button
@@ -904,7 +936,11 @@ function CommitsTab({
                   >
                     <span className="flex w-full min-w-0 items-center gap-2">
                       <Tooltip
-                        label={c.pushed ? "Pushed" : "Not pushed"}
+                        label={
+                          c.pushed
+                            ? rt(t, "rightPanel.commits.pushed")
+                            : rt(t, "rightPanel.commits.notPushed")
+                        }
                         side="top"
                       >
                         <span
@@ -933,7 +969,7 @@ function CommitsTab({
                       <span className="opacity-50">·</span>
                       <Tooltip label={absoluteTime(c.timestamp)} side="top">
                         <span className="font-mono">
-                          {relativeTime(c.timestamp)}
+                          {relativeTime(c.timestamp, t)}
                         </span>
                       </Tooltip>
                     </span>
@@ -965,9 +1001,9 @@ function CommitsTab({
               }}
             />
           ) : selected ? (
-            <Empty msg="loading diff..." />
+            <Empty msg={rt(t, "rightPanel.loading.diffLower")} />
           ) : (
-            <Empty msg="Select a commit to see diff" />
+            <Empty msg={rt(t, "rightPanel.commits.selectToSeeDiff")} />
           )}
         </div>
       </Panel>
@@ -979,14 +1015,14 @@ function CommitsTab({
           menu
             ? ([
                 {
-                  label: "Expand diff",
+                  label: rt(t, "rightPanel.menu.expandDiff"),
                   icon: <Maximize2 size={12} />,
                   onClick: () => {
                     void expandCommit(menu.commit);
                   },
                 },
                 {
-                  label: "View on GitHub",
+                  label: rt(t, "rightPanel.menu.viewOnGitHub"),
                   icon: <Globe size={12} />,
                   onClick: () => {
                     void openOnGitHub(menu.commit);
@@ -994,7 +1030,9 @@ function CommitsTab({
                 },
                 { type: "separator" },
                 {
-                  label: `Copy SHA (${menu.commit.short_sha})`,
+                  label: rtf(t, "rightPanel.menu.copyShaWithValue", {
+                    sha: menu.commit.short_sha,
+                  }),
                   icon: <Copy size={12} />,
                   onClick: () => {
                     void copyToClipboard(menu.commit.sha);
@@ -1009,19 +1047,21 @@ function CommitsTab({
   );
 }
 
-function relativeTime(unixSeconds: number): string {
+function relativeTime(unixSeconds: number, t: Translator): string {
   const diffSec = Math.round(Date.now() / 1000) - unixSeconds;
-  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 60) {
+    return rtf(t, "rightPanel.time.secondsAgo", { count: diffSec });
+  }
   const min = Math.round(diffSec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return rtf(t, "rightPanel.time.minutesAgo", { count: min });
   const hr = Math.round(diffSec / 3600);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return rtf(t, "rightPanel.time.hoursAgo", { count: hr });
   const day = Math.round(diffSec / 86400);
-  if (day < 30) return `${day}d ago`;
+  if (day < 30) return rtf(t, "rightPanel.time.daysAgo", { count: day });
   const mo = Math.round(diffSec / (86400 * 30));
-  if (mo < 12) return `${mo}mo ago`;
+  if (mo < 12) return rtf(t, "rightPanel.time.monthsAgo", { count: mo });
   const yr = Math.round(diffSec / (86400 * 365));
-  return `${yr}y ago`;
+  return rtf(t, "rightPanel.time.yearsAgo", { count: yr });
 }
 
 function absoluteTime(unixSeconds: number): string {
@@ -1035,6 +1075,7 @@ function StagedTab({
   repoPath: string;
   onExpand: (e: ExpandedDiff) => void;
 }) {
+  const t = useTranslation();
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [diff, setDiff] = useState<DiffPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1091,7 +1132,7 @@ function StagedTab({
 
   async function openInEditor(file: StagedFile) {
     if (isDeleted(file)) {
-      setError("File was deleted; nothing to open.");
+      setError(rt(t, "rightPanel.errors.deletedFile"));
       return;
     }
     try {
@@ -1103,7 +1144,7 @@ function StagedTab({
 
   async function openWithDefaultApp(file: StagedFile) {
     if (isDeleted(file)) {
-      setError("File was deleted; nothing to open.");
+      setError(rt(t, "rightPanel.errors.deletedFile"));
       return;
     }
     try {
@@ -1116,7 +1157,7 @@ function StagedTab({
   if (error) return <div className="p-3 text-xs text-danger">{error}</div>;
   if (files.length === 0) {
     if (loadingFirst) return <SkeletonList count={6} />;
-    return <Empty msg="No staged or modified files" />;
+    return <Empty msg={rt(t, "rightPanel.staged.empty")} />;
   }
 
   return (
@@ -1155,13 +1196,13 @@ function StagedTab({
               onExpand={() =>
                 onExpand({
                   payload: diff,
-                  title: "Working tree changes",
+                  title: rt(t, "rightPanel.staged.workingTreeChanges"),
                   subtitle: <span className="font-mono">{repoPath}</span>,
                 })
               }
             />
           ) : (
-            <Empty msg="No diff" />
+            <Empty msg={rt(t, "rightPanel.staged.noDiff")} />
           )}
         </div>
       </Panel>
@@ -1173,7 +1214,7 @@ function StagedTab({
           menu
             ? ([
                 {
-                  label: "Open in editor",
+                  label: rt(t, "rightPanel.menu.openInEditor"),
                   icon: <ExternalLink size={12} />,
                   disabled: isDeleted(menu.file),
                   onClick: () => {
@@ -1182,14 +1223,14 @@ function StagedTab({
                 },
                 { type: "separator" },
                 {
-                  label: "Copy relative path",
+                  label: rt(t, "rightPanel.menu.copyRelativePath"),
                   icon: <Copy size={12} />,
                   onClick: () => {
                     void copyText(menu.file.path);
                   },
                 },
                 {
-                  label: "Copy absolute path",
+                  label: rt(t, "rightPanel.menu.copyAbsolutePath"),
                   icon: <Copy size={12} />,
                   onClick: () => {
                     void copyText(joinPath(repoPath, menu.file.path));
@@ -1204,12 +1245,16 @@ function StagedTab({
   );
 }
 
-const PR_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-  { value: "merged", label: "Merged" },
-  { value: "all", label: "All" },
+const PR_STATE_OPTIONS: { value: PrStateFilter }[] = [
+  { value: "open" },
+  { value: "closed" },
+  { value: "merged" },
+  { value: "all" },
 ];
+
+function prStateLabelKey(value: PrStateFilter): RightPanelTranslationKey {
+  return `rightPanel.prStates.${value}`;
+}
 
 /** Initial page size and per-scroll growth increment for PR list pagination. */
 const PR_PAGE_SIZE = 50;
@@ -1229,6 +1274,7 @@ function usePrRowActions(
   onOpenDetail: (number: number) => void,
   onMutated?: () => void,
 ) {
+  const t = useTranslation();
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -1273,8 +1319,10 @@ function usePrRowActions(
       if (listing.kind !== "ok") {
         setError(
           listing.kind === "not_github"
-            ? "Origin remote is not a GitHub repository."
-            : `No access to ${listing.slug}.`,
+            ? rt(t, "rightPanel.errors.originNotGitHub")
+            : rtf(t, "rightPanel.errors.noAccessToSlug", {
+                slug: listing.slug,
+              }),
         );
         return null;
       }
@@ -1315,40 +1363,42 @@ function usePrRowActions(
           menu
             ? ([
                 {
-                  label: "Open detail",
+                  label: rt(t, "rightPanel.menu.openDetail"),
                   icon: <Maximize2 size={12} />,
                   onClick: () => onOpenDetail(menu.pr.number),
                 },
                 {
-                  label: "Open in browser",
+                  label: rt(t, "rightPanel.menu.openInBrowser"),
                   icon: <ExternalLink size={12} />,
                   onClick: () => void openPrInBrowser(menu.pr),
                 },
                 { type: "separator" },
                 {
-                  label: "Copy PR number",
+                  label: rt(t, "rightPanel.menu.copyPrNumber"),
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(`#${menu.pr.number}`),
                 },
                 {
-                  label: "Copy URL",
+                  label: rt(t, "rightPanel.menu.copyUrl"),
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(menu.pr.url),
                 },
                 {
-                  label: `Copy branch (${menu.pr.head_branch})`,
+                  label: rtf(t, "rightPanel.menu.copyBranchWithValue", {
+                    branch: menu.pr.head_branch,
+                  }),
                   icon: <Copy size={12} />,
                   onClick: () => void copyText(menu.pr.head_branch),
                 },
                 { type: "separator" },
                 {
-                  label: "Merge…",
+                  label: rt(t, "rightPanel.menu.merge"),
                   icon: <GitMerge size={12} />,
                   disabled: menu.pr.state.toUpperCase() !== "OPEN",
                   onClick: () => void openMergeFor(menu.pr),
                 },
                 {
-                  label: "Close…",
+                  label: rt(t, "rightPanel.menu.close"),
                   icon: <GitPullRequestClosed size={12} />,
                   disabled: menu.pr.state.toUpperCase() !== "OPEN",
                   onClick: () => void openCloseFor(menu.pr),
@@ -1404,6 +1454,7 @@ function PullRequestsTab({
   /** Bumped by the parent to force an out-of-band refetch (e.g. after a PR is merged via the modal). */
   refreshKey: number;
 }) {
+  const t = useTranslation();
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
   );
@@ -1513,14 +1564,14 @@ function PullRequestsTab({
                 : "text-fg-muted hover:text-fg",
             )}
           >
-            {opt.label}
+            {rt(t, prStateLabelKey(opt.value))}
           </button>
         ))}
         <button
           type="button"
           onClick={onOpenSearch}
-          aria-label="Search pull requests"
-          title="Search pull requests"
+          aria-label={rt(t, "rightPanel.search.aria")}
+          title={rt(t, "rightPanel.search.aria")}
           className="ml-auto rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           <Search size={12} />
@@ -1542,7 +1593,7 @@ function PullRequestsTab({
         ) : !listing ? (
           <PrSkeletonList count={10} />
         ) : listing.kind === "not_github" ? (
-          <Empty msg="Origin remote is not a GitHub repository." />
+          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
         ) : listing.kind === "no_access" ? (
           <NoAccessBanner
             slug={listing.slug}
@@ -1550,7 +1601,11 @@ function PullRequestsTab({
             repoPath={repoPath}
           />
         ) : listing.items.length === 0 ? (
-          <Empty msg={`No ${stateFilter} pull requests.`} />
+          <Empty
+            msg={rtf(t, "rightPanel.prs.emptyByState", {
+              state: rt(t, prStateLabelKey(stateFilter)).toLowerCase(),
+            })}
+          />
         ) : (
           <ul className="text-xs">
             {listing.items.map((pr) => (
@@ -1564,12 +1619,14 @@ function PullRequestsTab({
             ))}
             {loading && listing.items.length >= limit ? (
               <li className="px-3 py-2 text-[10px] text-fg-muted">
-                Loading more…
+                {rt(t, "rightPanel.loading.more")}
               </li>
             ) : null}
             {reachedMax ? (
               <li className="px-3 py-2 text-[10px] text-fg-muted">
-                Showing first {PR_PAGE_MAX}. Use search to find older PRs.
+                {rtf(t, "rightPanel.prs.reachedMax", {
+                  count: PR_PAGE_MAX,
+                })}
               </li>
             ) : null}
           </ul>
@@ -1584,6 +1641,7 @@ const WORKFLOW_RUNS_LIMIT = 50;
 const ALL_WORKFLOWS = "__all__";
 
 function ActionsTab({ repoPath }: { repoPath: string }) {
+  const t = useTranslation();
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
   );
@@ -1647,11 +1705,13 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
         <Select
           value={workflowFilter}
           onChange={(e) => setWorkflowFilter(e.target.value)}
-          aria-label="Filter by workflow"
+          aria-label={rt(t, "rightPanel.actions.filterByWorkflow")}
           disabled={listing?.kind !== "ok" || workflowNames.length === 0}
           className="min-w-0 max-w-full flex-1 truncate"
         >
-          <option value={ALL_WORKFLOWS}>All workflows</option>
+          <option value={ALL_WORKFLOWS}>
+            {rt(t, "rightPanel.actions.allWorkflows")}
+          </option>
           {workflowNames.map((name) => (
             <option key={name} value={name}>
               {name}
@@ -1670,7 +1730,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
         ) : !listing ? (
           <PrSkeletonList count={8} />
         ) : listing.kind === "not_github" ? (
-          <Empty msg="Origin remote is not a GitHub repository." />
+          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
         ) : listing.kind === "no_access" ? (
           <NoAccessBanner
             slug={listing.slug}
@@ -1681,8 +1741,8 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
           <Empty
             msg={
               listing.items.length === 0
-                ? "No workflow runs yet."
-                : "No runs match this filter."
+                ? rt(t, "rightPanel.actions.noRuns")
+                : rt(t, "rightPanel.actions.noRunsForFilter")
             }
           />
         ) : (
@@ -1714,13 +1774,16 @@ function WorkflowRunRow({
   run: WorkflowRun;
   onOpenDetail: () => void;
 }) {
+  const t = useTranslation();
   const updated = toUnixSeconds(run.updated_at);
-  const startedRelative = updated > 0 ? relativeTime(updated) : "";
+  const startedRelative = updated > 0 ? relativeTime(updated, t) : "";
   const startedAbsolute = updated > 0 ? absoluteTime(updated) : "";
   const title =
     run.display_title.trim().length > 0
       ? run.display_title
-      : `${run.workflow_name} run`;
+      : rtf(t, "rightPanel.actions.workflowRunFallbackTitle", {
+          workflow: run.workflow_name,
+        });
   const branch = run.head_branch?.trim() ?? "";
 
   return (
@@ -1738,7 +1801,7 @@ function WorkflowRunRow({
           "flex w-full items-start gap-2 border-b border-border/40 px-3 py-2 text-left",
           "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
         )}
-        title="Double-click to view details"
+        title={rt(t, "rightPanel.actions.doubleClickDetails")}
       >
         <span className="mt-0.5 flex shrink-0 items-center">
           <WorkflowRunStatusIcon
@@ -1761,7 +1824,11 @@ function WorkflowRunRow({
             {run.attempt > 1 ? (
               <>
                 <span className="opacity-50">·</span>
-                <span>retry #{run.attempt}</span>
+                <span>
+                  {rtf(t, "rightPanel.actions.retryAttempt", {
+                    attempt: run.attempt,
+                  })}
+                </span>
               </>
             ) : null}
           </div>
@@ -1789,6 +1856,7 @@ function WorkflowRunDetailModal({
   runId: number | null;
   onClose: () => void;
 }) {
+  const t = useTranslation();
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
   );
@@ -1851,7 +1919,7 @@ function WorkflowRunDetailModal({
   const title =
     detail?.display_title.trim().length
       ? detail.display_title
-      : detail?.workflow_name ?? "Workflow run";
+      : detail?.workflow_name ?? rt(t, "rightPanel.actions.workflowRun");
   const subtitle = detail ? (
     <span className="flex flex-wrap items-center gap-1.5">
       <span>{detail.workflow_name}</span>
@@ -1866,7 +1934,11 @@ function WorkflowRunDetailModal({
       {detail.attempt > 1 ? (
         <>
           <span className="opacity-50">·</span>
-          <span>retry #{detail.attempt}</span>
+          <span>
+            {rtf(t, "rightPanel.actions.retryAttempt", {
+              attempt: detail.attempt,
+            })}
+          </span>
         </>
       ) : null}
     </span>
@@ -1902,10 +1974,10 @@ function WorkflowRunDetailModal({
               type="button"
               onClick={() => void openUrl(detail.url)}
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
-              title="Open on GitHub"
+              title={rt(t, "rightPanel.tooltips.openOnGitHub")}
             >
               <ExternalLink size={12} />
-              GitHub
+              {rt(t, "rightPanel.actions.github")}
             </button>
           ) : null
         }
@@ -1918,7 +1990,7 @@ function WorkflowRunDetailModal({
         ) : loading || !listing ? (
           <WorkflowRunDetailSkeleton />
         ) : listing.kind === "not_github" ? (
-          <Empty msg="Origin remote is not a GitHub repository." />
+          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
         ) : listing.kind === "no_access" ? (
           <NoAccessBanner
             slug={listing.slug}
@@ -1975,60 +2047,72 @@ function WorkflowRunDetailSkeleton() {
 }
 
 function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
+  const t = useTranslation();
   const created = toUnixSeconds(detail.created_at);
   const updated = toUnixSeconds(detail.updated_at);
   const totalDuration = formatRunDuration(
     detail.started_at ?? detail.created_at,
     detail.status,
     detail.updated_at,
+    t,
   );
   return (
     <div className="space-y-3">
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-fg-muted">
-        <dt className="opacity-70">Status</dt>
+        <dt className="opacity-70">{rt(t, "rightPanel.actions.status")}</dt>
         <dd className="text-fg">
           {detail.status}
           {detail.conclusion ? ` · ${detail.conclusion}` : ""}
         </dd>
         {totalDuration ? (
           <>
-            <dt className="opacity-70">Total duration</dt>
+            <dt className="opacity-70">
+              {rt(t, "rightPanel.actions.totalDuration")}
+            </dt>
             <dd className="text-fg">
               {totalDuration}
               {detail.status.toLowerCase() !== "completed" ? (
-                <span className="ml-1 text-fg-muted">(running)</span>
+                <span className="ml-1 text-fg-muted">
+                  {rt(t, "rightPanel.actions.runningParenthetical")}
+                </span>
               ) : null}
             </dd>
           </>
         ) : null}
-        <dt className="opacity-70">Attempt</dt>
+        <dt className="opacity-70">{rt(t, "rightPanel.actions.attempt")}</dt>
         <dd className="text-fg">
           #{detail.attempt}
           {detail.attempt > 1 ? (
-            <span className="ml-1 text-fg-muted">(retried)</span>
+            <span className="ml-1 text-fg-muted">
+              {rt(t, "rightPanel.actions.retriedParenthetical")}
+            </span>
           ) : null}
         </dd>
-        <dt className="opacity-70">Commit</dt>
+        <dt className="opacity-70">{rt(t, "rightPanel.actions.commit")}</dt>
         <dd className="font-mono text-fg">{detail.head_sha.slice(0, 7)}</dd>
         {created > 0 ? (
           <>
-            <dt className="opacity-70">Created</dt>
+            <dt className="opacity-70">{rt(t, "rightPanel.actions.created")}</dt>
             <dd className="text-fg">{absoluteTime(created)}</dd>
           </>
         ) : null}
         {updated > 0 ? (
           <>
-            <dt className="opacity-70">Updated</dt>
+            <dt className="opacity-70">{rt(t, "rightPanel.actions.updated")}</dt>
             <dd className="text-fg">{absoluteTime(updated)}</dd>
           </>
         ) : null}
       </dl>
       <div>
         <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-muted">
-          Jobs ({detail.jobs.length})
+          {rtf(t, "rightPanel.actions.jobsCount", {
+            count: detail.jobs.length,
+          })}
         </div>
         {detail.jobs.length === 0 ? (
-          <div className="text-[11px] text-fg-muted">No jobs reported.</div>
+          <div className="text-[11px] text-fg-muted">
+            {rt(t, "rightPanel.actions.noJobs")}
+          </div>
         ) : (
           <ul className="rounded border border-border/60 divide-y divide-border/40">
             {detail.jobs.map((job) => (
@@ -2042,8 +2126,9 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
 }
 
 function WorkflowJobRow({ job }: { job: WorkflowJob }) {
+  const t = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const duration = formatJobDuration(job.started_at, job.completed_at);
+  const duration = formatJobDuration(job.started_at, job.completed_at, t);
   return (
     <li className="bg-bg/40">
       <button
@@ -2081,7 +2166,7 @@ function WorkflowJobRow({ job }: { job: WorkflowJob }) {
               }
             }}
             className="shrink-0 cursor-pointer rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
-            title="Open job on GitHub"
+            title={rt(t, "rightPanel.actions.openJobOnGitHub")}
           >
             <ExternalLink size={11} />
           </span>
@@ -2119,6 +2204,7 @@ function formatRunDuration(
   startedAt: string,
   status: string,
   updatedAt: string,
+  t: Translator,
 ): string {
   const start = toUnixSeconds(startedAt);
   if (start <= 0) return "";
@@ -2126,28 +2212,43 @@ function formatRunDuration(
   const end = completed
     ? toUnixSeconds(updatedAt) || Math.floor(Date.now() / 1000)
     : Math.floor(Date.now() / 1000);
-  return formatDurationSeconds(Math.max(0, end - start));
+  return formatDurationSeconds(Math.max(0, end - start), t);
 }
 
-function formatDurationSeconds(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
+function formatDurationSeconds(seconds: number, t: Translator): string {
+  if (seconds < 60) {
+    return rtf(t, "rightPanel.duration.seconds", { count: seconds });
+  }
   const minutes = Math.floor(seconds / 60);
   const rem = seconds % 60;
-  if (minutes < 60) return rem === 0 ? `${minutes}m` : `${minutes}m ${rem}s`;
+  if (minutes < 60) {
+    return rem === 0
+      ? rtf(t, "rightPanel.duration.minutes", { count: minutes })
+      : rtf(t, "rightPanel.duration.minutesSeconds", {
+          minutes,
+          seconds: rem,
+        });
+  }
   const hours = Math.floor(minutes / 60);
   const minRem = minutes % 60;
-  return minRem === 0 ? `${hours}h` : `${hours}h ${minRem}m`;
+  return minRem === 0
+    ? rtf(t, "rightPanel.duration.hours", { count: hours })
+    : rtf(t, "rightPanel.duration.hoursMinutes", {
+        hours,
+        minutes: minRem,
+      });
 }
 
 function formatJobDuration(
   startedAt: string | null,
   completedAt: string | null,
+  t: Translator,
 ): string {
   if (!startedAt) return "";
   const start = toUnixSeconds(startedAt);
   if (start <= 0) return "";
   const end = completedAt ? toUnixSeconds(completedAt) : Math.floor(Date.now() / 1000);
-  return formatDurationSeconds(Math.max(0, end - start));
+  return formatDurationSeconds(Math.max(0, end - start), t);
 }
 
 function WorkflowRunStatusIcon({
@@ -2200,25 +2301,27 @@ function NoAccessBanner({
   accounts: AccountSummary[];
   repoPath: string;
 }) {
+  const t = useTranslation();
   const tried = accounts.map((a) => `@${a.login}`).join(", ");
   return (
     <div className="space-y-2 p-3 text-xs text-fg-muted">
       <p className="text-fg">
-        No logged-in <code className="font-mono">gh</code> account can access{" "}
-        <span className="font-mono text-fg">{slug}</span>.
+        {rtf(t, "rightPanel.noAccess.noGhAccountCanAccess", { slug })}
       </p>
       {accounts.length > 0 ? (
         <p>
-          <span className="opacity-70">Tried:</span> {tried}
+          <span className="opacity-70">
+            {rt(t, "rightPanel.noAccess.tried")}
+          </span>{" "}
+          {tried}
         </p>
       ) : (
-        <p>No accounts authenticated against github.com.</p>
+        <p>{rt(t, "rightPanel.noAccess.noAccounts")}</p>
       )}
       <p className="flex flex-wrap items-center gap-1.5 opacity-70">
-        Run
+        {rt(t, "rightPanel.noAccess.run")}
         <CommandHint command="gh auth login" repoPath={repoPath} />
-        with an account that has access, or accept the invitation on
-        github.com.
+        {rt(t, "rightPanel.noAccess.withAccess")}
       </p>
     </div>
   );
@@ -2229,6 +2332,7 @@ function PrChecksBadge({
 }: {
   checks: PullRequestChecksSummary | null;
 }) {
+  const t = useTranslation();
   if (!checks) return null;
   // Effective total mirrors the PR detail modal: NEUTRAL/SKIPPED/CANCELLED
   // are already excluded by the backend, so passed+failed+pending is what
@@ -2242,7 +2346,7 @@ function PrChecksBadge({
   if (allPassed) {
     return (
       <Tooltip
-        label={`All ${effective} check${effective === 1 ? "" : "s"} passed`}
+        label={rtf(t, "rightPanel.checks.allPassed", { count: effective })}
         side="top"
       >
         <Check
@@ -2256,7 +2360,7 @@ function PrChecksBadge({
   if (allFailed) {
     return (
       <Tooltip
-        label={`All ${effective} check${effective === 1 ? "" : "s"} failed`}
+        label={rtf(t, "rightPanel.checks.allFailed", { count: effective })}
         side="top"
       >
         <X size={10} strokeWidth={3} className="shrink-0 text-rose-400" />
@@ -2266,7 +2370,11 @@ function PrChecksBadge({
   // Partial: tiny inline `passed/total` next to the branch name, no pill.
   return (
     <Tooltip
-      label={`${checks.passed} passed, ${checks.failed} failed, ${checks.pending} pending`}
+      label={rtf(t, "rightPanel.checks.summary", {
+        passed: checks.passed,
+        failed: checks.failed,
+        pending: checks.pending,
+      })}
       side="top"
     >
       <span className="shrink-0 font-mono tabular-nums opacity-80">
@@ -2277,9 +2385,12 @@ function PrChecksBadge({
 }
 
 function PrStateBadge({ state, isDraft }: { state: string; isDraft: boolean }) {
+  const t = useTranslation();
   const upper = state.toUpperCase();
   const showDraft = isDraft && upper === "OPEN";
-  const label = showDraft ? "DRAFT" : upper;
+  const label = showDraft
+    ? rt(t, "rightPanel.prStates.draft")
+    : stateLabelForBadge(t, upper);
   const tone = showDraft
     ? "bg-fg-muted/15 text-fg-muted"
     : upper === "OPEN"
@@ -2297,6 +2408,19 @@ function PrStateBadge({ state, isDraft }: { state: string; isDraft: boolean }) {
       {label}
     </span>
   );
+}
+
+function stateLabelForBadge(t: Translator, upper: string): string {
+  switch (upper) {
+    case "OPEN":
+      return rt(t, "rightPanel.prStates.open").toUpperCase();
+    case "CLOSED":
+      return rt(t, "rightPanel.prStates.closed").toUpperCase();
+    case "MERGED":
+      return rt(t, "rightPanel.prStates.merged").toUpperCase();
+    default:
+      return upper;
+  }
 }
 
 function toUnixSeconds(iso: string): number {
@@ -2333,6 +2457,7 @@ function PrRow({
    */
   showAvatar?: boolean;
 }) {
+  const t = useTranslation();
   const hoverBg =
     surface === "dialog"
       ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
@@ -2408,7 +2533,7 @@ function PrRow({
           className="shrink-0"
         >
           <span className="whitespace-nowrap font-mono">
-            {relativeTime(toUnixSeconds(pr.updated_at))}
+            {relativeTime(toUnixSeconds(pr.updated_at), t)}
           </span>
         </Tooltip>
       </span>
@@ -2416,11 +2541,11 @@ function PrRow({
   );
 }
 
-const PR_SEARCH_STATE_OPTIONS: { value: PrStateFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-  { value: "merged", label: "Merged" },
+const PR_SEARCH_STATE_OPTIONS: { value: PrStateFilter }[] = [
+  { value: "all" },
+  { value: "open" },
+  { value: "closed" },
+  { value: "merged" },
 ];
 
 /**
@@ -2444,6 +2569,7 @@ function PullRequestSearchModal({
   onClose: () => void;
   onOpenDetail: (number: number) => void;
 }) {
+  const t = useTranslation();
   const repoPath = open?.repoPath ?? null;
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
   const [rawQuery, setRawQuery] = useState("");
@@ -2545,10 +2671,10 @@ function PullRequestSearchModal({
       onClose={onClose}
       variant="dialog"
       size="2xl"
-      ariaLabel="Search pull requests"
+      ariaLabel={rt(t, "rightPanel.search.aria")}
     >
       <ModalHeader
-        title="Search pull requests"
+        title={rt(t, "rightPanel.search.aria")}
         icon={<Search size={14} className="text-fg-muted" />}
         variant="dialog"
         onClose={onClose}
@@ -2558,7 +2684,7 @@ function PullRequestSearchModal({
           ref={inputRef}
           value={rawQuery}
           onChange={(e) => setRawQuery(e.currentTarget.value)}
-          placeholder="Search title, author, label, branch…"
+          placeholder={rt(t, "rightPanel.search.placeholder")}
           autoFocus
         />
         <div className="flex items-center gap-1 text-[11px]">
@@ -2574,11 +2700,13 @@ function PullRequestSearchModal({
                   : "text-fg-muted hover:text-fg",
               )}
             >
-              {opt.label}
+              {rt(t, prStateLabelKey(opt.value))}
             </button>
           ))}
           {loading ? (
-            <span className="ml-auto text-fg-muted">Searching…</span>
+            <span className="ml-auto text-fg-muted">
+              {rt(t, "rightPanel.search.searching")}
+            </span>
           ) : listing?.kind === "ok" ? (
             <span className="ml-auto font-mono text-fg-muted">
               {listing.items.length}
@@ -2592,7 +2720,7 @@ function PullRequestSearchModal({
         onScroll={handleScroll}
       >
         {!debouncedQuery ? (
-          <Empty msg="Type to search pull requests." />
+          <Empty msg={rt(t, "rightPanel.search.typeToSearch")} />
         ) : error || rowActions.error ? (
           <div className="p-3 text-xs text-danger">
             {error ?? rowActions.error}
@@ -2600,13 +2728,13 @@ function PullRequestSearchModal({
         ) : !listing ? (
           <PrSkeletonList count={6} />
         ) : listing.kind === "not_github" ? (
-          <Empty msg="Origin remote is not a GitHub repository." />
+          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
         ) : listing.kind === "no_access" ? (
           <div className="p-3 text-xs text-fg-muted">
-            No logged-in gh account can access this repo.
+            {rt(t, "rightPanel.search.noGhAccessThisRepo")}
           </div>
         ) : listing.items.length === 0 ? (
-          <Empty msg="No matching pull requests." />
+          <Empty msg={rt(t, "rightPanel.search.noMatches")} />
         ) : (
           <ul className="text-xs">
             {listing.items.map((pr) => (
@@ -2621,12 +2749,14 @@ function PullRequestSearchModal({
             ))}
             {loading && listing.items.length >= limit ? (
               <li className="px-3 py-2 text-[10px] text-fg-muted">
-                Loading more…
+                {rt(t, "rightPanel.loading.more")}
               </li>
             ) : null}
             {reachedMax ? (
               <li className="px-3 py-2 text-[10px] text-fg-muted">
-                Showing first {PR_PAGE_MAX}. Refine the query for older PRs.
+                {rtf(t, "rightPanel.search.reachedMax", {
+                  count: PR_PAGE_MAX,
+                })}
               </li>
             ) : null}
           </ul>

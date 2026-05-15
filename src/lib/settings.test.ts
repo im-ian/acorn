@@ -5,6 +5,54 @@ import {
   resolveAiCommitCommand,
 } from "./settings";
 
+describe("language settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to English", () => {
+    expect(DEFAULT_SETTINGS.language).toBe("en");
+  });
+
+  it("loads a persisted Korean language selection", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: "ko" }));
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.language).toBe("ko");
+  });
+
+  it("falls back to English for an unsupported stored language", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: "fr" }));
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.language).toBe("en");
+  });
+});
+
 describe("terminal.linkActivation default", () => {
   it("defaults to plain click so xterm's stock behaviour is preserved", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
