@@ -213,6 +213,45 @@ describe("SettingsModal font controls", () => {
       uiScalePercent: 125,
     });
   });
+
+  it("renders the Appearance language selector in Korean and patches changes", async () => {
+    const patchLanguage = vi.fn();
+    useSettings.setState({
+      settings: {
+        ...cloneSettings(),
+        language: "ko",
+      },
+      patchLanguage,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain("설정");
+    expect(document.body.textContent).toContain("모양");
+    expect(document.body.textContent).toContain("언어");
+
+    const languageSelect = Array.from(
+      document.querySelectorAll<HTMLSelectElement>("select"),
+    ).find((element) => element.value === "ko");
+
+    expect(languageSelect).toBeInstanceOf(HTMLSelectElement);
+    expect(languageSelect?.textContent).toContain("한국어");
+
+    act(() => {
+      if (!languageSelect) throw new Error("Language select not found");
+      languageSelect.value = "en";
+      languageSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(patchLanguage).toHaveBeenCalledWith("en");
+  });
 });
 
 describe("SettingsModal background controls", () => {
