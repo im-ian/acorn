@@ -51,7 +51,7 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   {
     value: "codex",
     label: "OpenAI Codex CLI",
-    oneshotHint: "codex (interactive only)",
+    oneshotHint: "codex exec",
   },
 ];
 
@@ -947,9 +947,7 @@ interface ResolvedCommand {
 
 /**
  * One-shot stdin → stdout invocation for an agent. Used by the merge
- * dialog's "Generate with AI" action. Codex has no documented headless
- * mode here, so users who need codex specifically should select Custom
- * and supply their own one-shot incantation.
+ * dialog's "Generate with AI" action.
  */
 function agentOneshotCommand(
   agent: AgentProvider,
@@ -961,7 +959,7 @@ function agentOneshotCommand(
     case "gemini":
       return { command: "gemini", args: ["-p"] };
     case "codex":
-      return { command: "codex", args: [] };
+      return { command: "codex", args: ["exec"] };
     case "ollama": {
       const model = agents.ollama.model.trim() || "llama3";
       return { command: "ollama", args: ["run", model] };
