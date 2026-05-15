@@ -4,6 +4,7 @@ import { cn } from "../lib/cn";
 import { countStats, parseDiff, type ParsedLine } from "../lib/diff";
 import { highlightDiff, langFromPath } from "../lib/highlight";
 import type { DiffFile, DiffPayload } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 
 interface DiffViewProps {
@@ -12,6 +13,7 @@ interface DiffViewProps {
 }
 
 export function DiffView({ payload, onExpand }: DiffViewProps) {
+  const t = useTranslation();
   const collapseByDefault = payload.files.length > 1;
   const [collapsed, setCollapsed] = useState<Set<number>>(
     () => new Set(collapseByDefault ? payload.files.map((_, i) => i) : []),
@@ -25,7 +27,9 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
 
   if (payload.files.length === 0) {
     return (
-      <div className="p-3 text-xs text-fg-muted">No changes in this diff.</div>
+      <div className="p-3 text-xs text-fg-muted">
+        {t("diffView.noChanges")}
+      </div>
     );
   }
 
@@ -52,8 +56,10 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
     <div className="flex flex-col gap-3 p-3">
       <div className="flex items-center justify-between text-xs text-fg-muted">
         <span>
-          {payload.files.length} file{payload.files.length === 1 ? "" : "s"}{" "}
-          changed
+          {t("diffView.filesChanged").replace(
+            "{count}",
+            String(payload.files.length),
+          )}
         </span>
         <span className="flex items-center gap-1">
           {payload.files.length > 1 ? (
@@ -62,16 +68,18 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
               onClick={allCollapsed ? expandAll : collapseAll}
               className="rounded px-2 py-0.5 text-[10px] uppercase tracking-wide transition hover:bg-bg-elevated hover:text-fg"
             >
-              {allCollapsed ? "Expand all" : "Collapse all"}
+              {allCollapsed
+                ? t("diffView.expandAll")
+                : t("diffView.collapseAll")}
             </button>
           ) : null}
           {onExpand ? (
-            <Tooltip label="Open full diff" side="bottom">
+            <Tooltip label={t("diffView.openFullDiff")} side="bottom">
               <button
                 type="button"
                 onClick={onExpand}
                 className="rounded p-1 transition hover:bg-bg-elevated hover:text-fg"
-                aria-label="Open full diff"
+                aria-label={t("diffView.openFullDiff")}
               >
                 <Maximize2 size={12} />
               </button>
@@ -98,6 +106,7 @@ interface DiffFileAccordionProps {
 }
 
 function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps) {
+  const t = useTranslation();
   const path = file.new_path ?? file.old_path ?? "(unknown)";
   const lines = useMemo(() => parseDiff(file.patch), [file.patch]);
   const stats = useMemo(() => countStats(lines), [lines]);
@@ -121,7 +130,7 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
           <span className="truncate text-fg">{path}</span>
           {file.is_image ? (
             <span className="shrink-0 rounded bg-bg-elevated/80 px-1 text-[10px] uppercase tracking-wide text-fg-muted">
-              image
+              {t("diffView.image")}
             </span>
           ) : null}
         </span>
@@ -150,33 +159,50 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
 }
 
 function ImageDiff({ file }: { file: DiffFile }) {
+  const t = useTranslation();
   const hasOld = !!file.old_image;
   const hasNew = !!file.new_image;
   if (!hasOld && !hasNew) {
     return (
       <div className="p-3 text-xs text-fg-muted">
-        Binary image change (no preview available)
+        {t("diffView.binaryImageNoPreview")}
       </div>
     );
   }
   if (!hasOld) {
     return (
       <div className="p-3">
-        <ImagePane label="Added" src={file.new_image ?? null} accent="add" />
+        <ImagePane
+          label={t("diffView.imageLabels.added")}
+          src={file.new_image ?? null}
+          accent="add"
+        />
       </div>
     );
   }
   if (!hasNew) {
     return (
       <div className="p-3">
-        <ImagePane label="Deleted" src={file.old_image ?? null} accent="del" />
+        <ImagePane
+          label={t("diffView.imageLabels.deleted")}
+          src={file.old_image ?? null}
+          accent="del"
+        />
       </div>
     );
   }
   return (
     <div className="grid grid-cols-2 gap-2 p-3">
-      <ImagePane label="Before" src={file.old_image ?? null} accent="del" />
-      <ImagePane label="After" src={file.new_image ?? null} accent="add" />
+      <ImagePane
+        label={t("diffView.imageLabels.before")}
+        src={file.old_image ?? null}
+        accent="del"
+      />
+      <ImagePane
+        label={t("diffView.imageLabels.after")}
+        src={file.new_image ?? null}
+        accent="add"
+      />
     </div>
   );
 }
@@ -190,6 +216,7 @@ function ImagePane({
   src: string | null;
   accent: "add" | "del";
 }) {
+  const t = useTranslation();
   const ringCls =
     accent === "add"
       ? "ring-1 ring-[oklch(35%_0.10_145_/_0.6)]"
@@ -212,7 +239,9 @@ function ImagePane({
             className="max-h-80 w-full object-contain"
           />
         ) : (
-          <span className="p-3 text-[11px] text-fg-muted">(none)</span>
+          <span className="p-3 text-[11px] text-fg-muted">
+            {t("diffView.none")}
+          </span>
         )}
       </div>
     </div>

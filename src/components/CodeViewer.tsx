@@ -6,6 +6,7 @@ import {
 } from "../lib/api";
 import { highlightCode, langFromPath } from "../lib/highlight";
 import { cn } from "../lib/cn";
+import { useTranslation } from "../lib/useTranslation";
 
 interface CodeViewerProps {
   path: string;
@@ -33,6 +34,7 @@ const DIFF_KIND_CLASS: Record<FsLineDiffEntry["kind"], string> = {
 };
 
 export function CodeViewer({ path, isActive }: CodeViewerProps) {
+  const t = useTranslation();
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
 
@@ -95,7 +97,7 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   if (state.loading) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        Loading…
+        {t("codeViewer.loading")}
       </div>
     );
   }
@@ -109,8 +111,11 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   if (state.data?.binary) {
     return (
       <Notice
-        title="Binary file"
-        body={`${state.data.size.toLocaleString()} bytes — not shown in the readonly viewer.`}
+        title={t("codeViewer.binaryFile")}
+        body={t("codeViewer.binaryFileBody").replace(
+          "{bytes}",
+          state.data.size.toLocaleString(),
+        )}
       />
     );
   }
@@ -130,7 +135,7 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
     >
       {state.data.truncated ? (
         <div className="shrink-0 border-b border-border bg-bg-warning/15 px-3 py-1 text-[11px] text-fg-muted">
-          File truncated to 2 MB. Open externally to view the rest.
+          {t("codeViewer.truncated")}
         </div>
       ) : null}
       <pre className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent font-mono text-[12px] leading-[1.5] text-fg">
