@@ -865,6 +865,18 @@ pub async fn pty_spawn<R: Runtime>(
             .or_insert_with(|| home.to_string_lossy().into_owned());
     }
 
+    // Stamp every PTY child with the staged-dotfile fingerprint. The
+    // daemon stores this on its `DaemonSession` row and surfaces it
+    // back via `ListSessions`, so a reboot-time reconcile can spot a
+    // session that survived from an older build (different staged rc
+    // bodies) and force-respawn it before the user types into a ZLE
+    // that has stale dotfile state. Always overwritten — callers do
+    // not get to forge a stale rev.
+    effective_env.insert(
+        "ACORN_STAGED_REV".to_string(),
+        crate::shell_init::STAGED_REV.to_string(),
+    );
+
     // `ACORN_RESUME_TOKEN` carries the Acorn session UUID. Older builds
     // used the value inside a PATH-based shim to auto-inject claude's
     // `--session-id`; the shim is gone (filesystem-watcher persister

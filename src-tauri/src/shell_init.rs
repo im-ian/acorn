@@ -34,6 +34,15 @@ const ZPROFILE_BODY: &str = include_str!("../shell-init/zprofile");
 const ZSHRC_BODY: &str = include_str!("../shell-init/zshrc");
 const ZLOGIN_BODY: &str = include_str!("../shell-init/zlogin");
 
+/// Fingerprint of the staged dotfile bodies, computed at build time by
+/// `build.rs` (FNV-1a over the four files in declaration order). Used
+/// as the value of the `ACORN_STAGED_REV` env stamped into every PTY
+/// child env, so a boot-time reconcile can detect a daemon session
+/// spawned against an older build's dotfile bodies and force-respawn
+/// it before the user's ZLE state collides with the new staged
+/// `.zshrc` / `.zprofile` / `.zlogin`.
+pub const STAGED_REV: &str = env!("ACORN_STAGED_REV");
+
 /// Materialise the shell-init dir under Acorn's data dir, returning the
 /// path callers should hand to `ZDOTDIR` on PTY spawn. Idempotent — the
 /// body is rewritten every call so a shipped fix lands without a data
@@ -135,5 +144,18 @@ mod tests {
         let a = ensure_shell_init_dir_at(base.path()).unwrap();
         let b = ensure_shell_init_dir_at(base.path()).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn staged_rev_is_nonempty_hex() {
+        // build.rs stamps `ACORN_STAGED_REV` as a 16-char hex FNV-1a
+        // digest. Both length and charset are part of the contract —
+        // reconcile code grep-matches on this format.
+        assert_eq!(STAGED_REV.len(), 16, "expected 16-char hex, got {:?}", STAGED_REV);
+        assert!(
+            STAGED_REV.chars().all(|c| c.is_ascii_hexdigit()),
+            "expected hex chars only, got {:?}",
+            STAGED_REV,
+        );
     }
 }
