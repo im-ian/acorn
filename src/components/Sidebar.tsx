@@ -419,8 +419,8 @@ export function Sidebar() {
       <NewProjectDialog
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
-        onCreate={async (parentPath, name) => {
-          await createNewProject(parentPath, name);
+        onCreate={async (parentPath, name, ignoreSafeName) => {
+          await createNewProject(parentPath, name, ignoreSafeName);
         }}
       />
     </aside>

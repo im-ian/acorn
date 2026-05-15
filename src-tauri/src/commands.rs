@@ -491,8 +491,9 @@ pub fn create_new_project(
     state: State<'_, AppState>,
     parent_path: String,
     name: String,
+    ignore_safe_name: Option<bool>,
 ) -> AppResult<Project> {
-    let name = validate_new_project_name(&name)?;
+    let name = validate_new_project_name(&name, ignore_safe_name.unwrap_or(false))?;
     let parent = PathBuf::from(&parent_path);
     if !parent.is_dir() {
         return Err(AppError::InvalidPath(parent_path));
@@ -517,23 +518,42 @@ pub fn create_new_project(
     Ok(project)
 }
 
-fn validate_new_project_name(name: &str) -> AppResult<&str> {
+fn validate_new_project_name(name: &str, ignore_safe_name: bool) -> AppResult<&str> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(AppError::Other("project name is required".into()));
     }
-    if trimmed.contains('/') || trimmed.contains('\\') {
+    if trimmed.contains('\0') {
+        return Err(AppError::Other(
+            "project name cannot contain a null character".into(),
+        ));
+    }
+    if trimmed.contains('/') {
         return Err(AppError::Other(
             "project name must be a single folder name".into(),
         ));
     }
     let mut components = Path::new(trimmed).components();
     match (components.next(), components.next()) {
-        (Some(Component::Normal(_)), None) => Ok(trimmed),
+        (Some(Component::Normal(_)), None) => {
+            if !ignore_safe_name {
+                if let Some(message) = safe_project_name_error(trimmed) {
+                    return Err(AppError::Other(message));
+                }
+            }
+            Ok(trimmed)
+        }
         _ => Err(AppError::Other(
             "project name must be a single folder name".into(),
         )),
     }
+}
+
+fn safe_project_name_error(name: &str) -> Option<String> {
+    if name.as_bytes().len() > 255 {
+        return Some("project name is longer than 255 bytes, which common filesystems reject".into());
+    }
+    None
 }
 
 #[tauri::command]
@@ -1946,15 +1966,39 @@ mod tests {
 
     #[test]
     fn validate_new_project_name_accepts_single_folder_name() {
-        assert_eq!(validate_new_project_name(" fresh-app ").unwrap(), "fresh-app");
+        assert_eq!(
+            validate_new_project_name(" fresh-app ", false).unwrap(),
+            "fresh-app"
+        );
     }
 
     #[test]
     fn validate_new_project_name_rejects_path_like_names() {
-        assert!(validate_new_project_name("").is_err());
-        assert!(validate_new_project_name("../fresh-app").is_err());
-        assert!(validate_new_project_name("parent/fresh-app").is_err());
-        assert!(validate_new_project_name("parent\\fresh-app").is_err());
-        assert!(validate_new_project_name(".").is_err());
+        assert!(validate_new_project_name("", false).is_err());
+        assert!(validate_new_project_name("../fresh-app", false).is_err());
+        assert!(validate_new_project_name("parent/fresh-app", false).is_err());
+        assert!(validate_new_project_name(".", false).is_err());
+    }
+
+    #[test]
+    fn validate_new_project_name_rejects_long_names_unless_overridden() {
+        let long = "a".repeat(256);
+        assert!(validate_new_project_name(&long, false).is_err());
+        assert_eq!(validate_new_project_name(&long, true).unwrap(), long);
+    }
+
+    #[test]
+    fn validate_new_project_name_allows_macos_linux_valid_names() {
+        assert_eq!(validate_new_project_name("CON", false).unwrap(), "CON");
+        assert_eq!(validate_new_project_name("nul.txt", false).unwrap(), "nul.txt");
+        assert_eq!(
+            validate_new_project_name("foo:bar", false).unwrap(),
+            "foo:bar"
+        );
+        assert_eq!(validate_new_project_name("name.", false).unwrap(), "name.");
+        assert_eq!(
+            validate_new_project_name("parent\\fresh-app", false).unwrap(),
+            "parent\\fresh-app"
+        );
     }
 }

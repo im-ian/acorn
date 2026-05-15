@@ -27,13 +27,15 @@ export const tauriMockSource = `
     return undefined;
   }
 
-  function appDefault(cmd) {
+  function appDefault(cmd, args) {
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
     if (cmd === 'create_new_project') {
+      const name = args && typeof args.name === 'string' ? args.name : 'new-project';
+      const parentPath = args && typeof args.parentPath === 'string' ? args.parentPath : '/tmp';
       return Promise.resolve({
-        repo_path: '/tmp/new-project',
-        name: 'new-project',
+        repo_path: parentPath + '/' + name,
+        name,
         created_at: '2026-01-01T00:00:00Z',
         position: 0,
       });
@@ -160,7 +162,7 @@ export const tauriMockSource = `
       }
       const plugin = pluginDefault(cmd);
       if (plugin !== undefined) return plugin;
-      return appDefault(cmd);
+      return appDefault(cmd, args);
     },
   };
 

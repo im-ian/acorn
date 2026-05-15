@@ -2,12 +2,18 @@ import { FolderPlus } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDialogShortcuts } from "../lib/dialog";
+import { validateProjectName } from "../lib/projectName";
+import { cn } from "../lib/cn";
 import { Field, Modal, ModalHeader, TextInput } from "./ui";
 
 interface NewProjectDialogProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (parentPath: string, name: string) => Promise<void>;
+  onCreate: (
+    parentPath: string,
+    name: string,
+    ignoreSafeName: boolean,
+  ) => Promise<void>;
 }
 
 export function NewProjectDialog({
@@ -18,6 +24,7 @@ export function NewProjectDialog({
   const [name, setName] = useState("");
   const [parentPath, setParentPath] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [ignoreSafeName, setIgnoreSafeName] = useState(false);
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
@@ -25,6 +32,7 @@ export function NewProjectDialog({
     setName("");
     setParentPath("");
     setError(null);
+    setIgnoreSafeName(false);
     setPending(false);
   }, [isOpen]);
 
@@ -40,8 +48,19 @@ export function NewProjectDialog({
     return `${parentPath.replace(/\/+$/, "")}/${trimmedName}`;
   }, [parentPath, trimmedName]);
 
-  const validationError = validateProjectName(trimmedName);
-  const canCreate = !pending && parentPath !== "" && validationError === null;
+  const validation = validateProjectName(trimmedName);
+  const canOverrideSafeName = validation.kind === "safe";
+  const validationError =
+    validation.kind === "ok"
+      ? null
+      : validation.kind === "safe" && ignoreSafeName
+        ? null
+        : validation.message;
+  const canCreate =
+    !pending &&
+    parentPath !== "" &&
+    (validation.kind === "ok" ||
+      (validation.kind === "safe" && ignoreSafeName));
 
   async function chooseLocation() {
     const picked = await open({
@@ -63,7 +82,7 @@ export function NewProjectDialog({
     setPending(true);
     setError(null);
     try {
-      await onCreate(parentPath, trimmedName);
+      await onCreate(parentPath, trimmedName, ignoreSafeName);
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -101,11 +120,40 @@ export function NewProjectDialog({
               onChange={(e) => {
                 setName(e.target.value);
                 setError(null);
+                setIgnoreSafeName(false);
               }}
               placeholder="my-project"
               aria-label="Project name"
+              aria-invalid={validationError !== null}
+              aria-describedby={
+                validationError ? "new-project-name-error" : undefined
+              }
+              className={cn(validationError ? "border-danger" : null)}
             />
+            {validationError ? (
+              <span
+                id="new-project-name-error"
+                role="alert"
+                className="text-[11px] text-danger"
+              >
+                {validationError}
+              </span>
+            ) : null}
           </Field>
+          {canOverrideSafeName ? (
+            <label className="flex items-center gap-2 text-xs text-fg-muted">
+              <input
+                type="checkbox"
+                checked={ignoreSafeName}
+                onChange={(e) => {
+                  setIgnoreSafeName(e.target.checked);
+                  setError(null);
+                }}
+                className="size-3 accent-accent"
+              />
+              <span>Ignore safe-name check</span>
+            </label>
+          ) : null}
           <Field label="Location">
             <div className="flex gap-2">
               <TextInput
@@ -156,14 +204,6 @@ export function NewProjectDialog({
       </form>
     </Modal>
   );
-}
-
-function validateProjectName(name: string): string | null {
-  if (!name) return "Project name is required.";
-  if (name === "." || name === "..") return "Project name is not valid.";
-  if (name.includes("/") || name.includes("\\"))
-    return "Project name must be a single folder name.";
-  return null;
 }
 
 function errorMessage(e: unknown): string {
