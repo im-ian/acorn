@@ -10,6 +10,7 @@ import { joinPath } from "../lib/paths";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffLine, useHighlightedDiff } from "./DiffView";
 import { ResizeHandle } from "./ResizeHandle";
+import { useTranslation } from "../lib/useTranslation";
 
 interface DiffSplitViewProps {
   payload: DiffPayload;
@@ -43,6 +44,7 @@ interface FileEntry {
  * path so navigation is stable across diff payloads.
  */
 export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
+  const t = useTranslation();
   const entries = useMemo<FileEntry[]>(() => {
     return payload.files
       .map((file, index) => {
@@ -73,7 +75,9 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
 
   if (entries.length === 0) {
     return (
-      <div className="p-3 text-xs text-fg-muted">No changes in this diff.</div>
+      <div className="p-3 text-xs text-fg-muted">
+        {t("diffView.noChanges")}
+      </div>
     );
   }
 
@@ -109,7 +113,10 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
         <aside className="flex h-full flex-col bg-bg-sidebar">
           <header className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2 text-[11px] uppercase tracking-wider text-fg-muted">
             <span>
-              {entries.length} file{entries.length === 1 ? "" : "s"}
+              {t("diffView.filesCount").replace(
+                "{count}",
+                String(entries.length),
+              )}
             </span>
             <span className="flex gap-2 normal-case">
               <span className="text-[oklch(72%_0.16_145)]">+{totals.add}</span>
@@ -198,7 +205,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
         menu
           ? ([
               {
-                label: "Open in editor",
+                label: t("diffView.openInEditor"),
                 icon: <ExternalLink size={12} />,
                 disabled: menu.entry.file.new_path === null,
                 onClick: () => {
@@ -231,33 +238,50 @@ function DiffSplitContent({ entry }: { entry: FileEntry }) {
 }
 
 function ImageDiffPane({ file }: { file: DiffFile }) {
+  const t = useTranslation();
   const hasOld = !!file.old_image;
   const hasNew = !!file.new_image;
   if (!hasOld && !hasNew) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-xs text-fg-muted">
-        Binary image change (no preview available)
+        {t("diffView.binaryImageNoPreview")}
       </div>
     );
   }
   if (!hasOld) {
     return (
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        <ImagePreview label="Added" src={file.new_image!} accent="add" />
+        <ImagePreview
+          label={t("diffView.imageLabels.added")}
+          src={file.new_image!}
+          accent="add"
+        />
       </div>
     );
   }
   if (!hasNew) {
     return (
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        <ImagePreview label="Deleted" src={file.old_image!} accent="del" />
+        <ImagePreview
+          label={t("diffView.imageLabels.deleted")}
+          src={file.old_image!}
+          accent="del"
+        />
       </div>
     );
   }
   return (
     <div className="grid min-h-0 flex-1 grid-cols-2 gap-3 overflow-auto p-4">
-      <ImagePreview label="Before" src={file.old_image!} accent="del" />
-      <ImagePreview label="After" src={file.new_image!} accent="add" />
+      <ImagePreview
+        label={t("diffView.imageLabels.before")}
+        src={file.old_image!}
+        accent="del"
+      />
+      <ImagePreview
+        label={t("diffView.imageLabels.after")}
+        src={file.new_image!}
+        accent="add"
+      />
     </div>
   );
 }

@@ -400,6 +400,56 @@
       }
     }
   },
+  "topBar": {
+    "noSessionSelected": "No session selected"
+  },
+  "updateBanner": {
+    "available": "is available. The app will relaunch after install.",
+    "whatsNew": "What's new",
+    "installing": "Installing...",
+    "installRelaunch": "Install & relaunch",
+    "hideUntilNextVersion": "Hide until next version",
+    "dismissError": "Dismiss error"
+  },
+  "imageLightbox": {
+    "imagePreview": "Image preview",
+    "openInBrowser": "Open in browser",
+    "close": "Close"
+  },
+  "codeViewer": {
+    "loading": "Loading...",
+    "binaryFile": "Binary file",
+    "binaryFileBody": "{bytes} bytes - not shown in the readonly viewer.",
+    "truncated": "File truncated to 2 MB. Open externally to view the rest."
+  },
+  "diffView": {
+    "noChanges": "No changes in this diff.",
+    "filesChanged": "{count} files changed",
+    "filesCount": "{count} files",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "openFullDiff": "Open full diff",
+    "openInEditor": "Open in editor",
+    "image": "image",
+    "binaryImageNoPreview": "Binary image change (no preview available)",
+    "none": "(none)",
+    "imageLabels": {
+      "added": "Added",
+      "deleted": "Deleted",
+      "before": "Before",
+      "after": "After"
+    }
+  },
+  "ui": {
+    "openGitHubProfile": "Open GitHub profile",
+    "stepper": {
+      "decrease": "Decrease",
+      "increase": "Increase"
+    },
+    "commandHint": {
+      "title": "Click to copy or run"
+    }
+  },
   "sidebar": {
     "status": {
       "idle": "Idle",

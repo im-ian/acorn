@@ -400,6 +400,56 @@
       }
     }
   },
+  "topBar": {
+    "noSessionSelected": "선택된 세션 없음"
+  },
+  "updateBanner": {
+    "available": "사용할 수 있습니다. 설치 후 앱이 다시 실행됩니다.",
+    "whatsNew": "새로운 내용",
+    "installing": "설치 중...",
+    "installRelaunch": "설치 후 다시 실행",
+    "hideUntilNextVersion": "다음 버전까지 숨기기",
+    "dismissError": "오류 닫기"
+  },
+  "imageLightbox": {
+    "imagePreview": "이미지 미리보기",
+    "openInBrowser": "브라우저에서 열기",
+    "close": "닫기"
+  },
+  "codeViewer": {
+    "loading": "불러오는 중...",
+    "binaryFile": "바이너리 파일",
+    "binaryFileBody": "{bytes}바이트 - 읽기 전용 뷰어에 표시되지 않습니다.",
+    "truncated": "파일이 2 MB로 잘렸습니다. 나머지는 외부에서 열어 확인하세요."
+  },
+  "diffView": {
+    "noChanges": "이 diff에는 변경 사항이 없습니다.",
+    "filesChanged": "변경된 파일 {count}개",
+    "filesCount": "파일 {count}개",
+    "expandAll": "모두 펼치기",
+    "collapseAll": "모두 접기",
+    "openFullDiff": "전체 diff 열기",
+    "openInEditor": "편집기에서 열기",
+    "image": "이미지",
+    "binaryImageNoPreview": "바이너리 이미지 변경(미리보기 없음)",
+    "none": "(없음)",
+    "imageLabels": {
+      "added": "추가됨",
+      "deleted": "삭제됨",
+      "before": "이전",
+      "after": "이후"
+    }
+  },
+  "ui": {
+    "openGitHubProfile": "GitHub 프로필 열기",
+    "stepper": {
+      "decrease": "감소",
+      "increase": "증가"
+    },
+    "commandHint": {
+      "title": "복사하거나 실행하려면 클릭"
+    }
+  },
   "sidebar": {
     "status": {
       "idle": "유휴",

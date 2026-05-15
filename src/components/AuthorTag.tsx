@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { AuthorAvatar } from "./AuthorAvatar";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { cn } from "../lib/cn";
+import { useTranslation } from "../lib/useTranslation";
 
 /**
  * GitHub login regex. `[bot]` suffix is stripped before this check.
@@ -42,12 +43,13 @@ export function loginFromEmail(
  */
 export function buildProfileMenuItems(
   login: string | null | undefined,
+  label = "Open GitHub profile",
 ): ContextMenuItem[] {
   if (!isLikelyLogin(login)) return [];
   const slug = login.replace(/\[bot\]$/, "");
   return [
     {
-      label: "Open GitHub profile",
+      label,
       icon: <ExternalLink size={12} />,
       onClick: () => void openUrl(`https://github.com/${slug}`),
     },
@@ -74,9 +76,10 @@ export function AuthorTag({
   /** When true, render only the avatar (no inline username text). */
   avatarOnly?: boolean;
 }) {
+  const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const hasLogin = isLikelyLogin(login);
-  const items = buildProfileMenuItems(login);
+  const items = buildProfileMenuItems(login, t("ui.openGitHubProfile"));
 
   if (!hasLogin) {
     if (!fallbackName) return null;

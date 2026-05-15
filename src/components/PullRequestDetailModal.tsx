@@ -1158,7 +1158,10 @@ function CommitListItem({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const primaryAuthor = commit.authors[0];
   const commitUrl = buildCommitUrl(prUrl, commit.oid);
-  const profileItems = buildProfileMenuItems(primaryAuthor?.login);
+  const profileItems = buildProfileMenuItems(
+    primaryAuthor?.login,
+    t("ui.openGitHubProfile"),
+  );
 
   const items: ContextMenuItem[] = [
     ...(commitUrl
