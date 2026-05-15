@@ -128,6 +128,24 @@ export const tauriMockSource = `
     if (cmd === 'acknowledge_staged_rev_mismatch')
       return Promise.resolve(undefined);
     if (cmd === 'pty_write') return Promise.resolve(undefined);
+    // File explorer. No real fs in E2E — default to an empty listing so
+    // the panel renders without errors. Tests that need real entries
+    // override these via window.__ACORN_MOCK_HANDLERS__.
+    if (cmd === 'fs_list_dir') {
+      return Promise.resolve({ entries: [], repo_root: null });
+    }
+    if (cmd === 'fs_rename') return Promise.resolve(undefined);
+    if (cmd === 'fs_trash') return Promise.resolve(undefined);
+    if (cmd === 'fs_reveal') return Promise.resolve(undefined);
+    if (cmd === 'fs_open_default') return Promise.resolve(undefined);
+    if (cmd === 'fs_shell_editor') return Promise.resolve('');
+    if (cmd === 'fs_git_status') return Promise.resolve({});
+    if (cmd === 'fs_git_branch') return Promise.resolve('');
+    if (cmd === 'fs_read_file') {
+      return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
+    }
+    if (cmd === 'fs_git_diff_lines') return Promise.resolve([]);
+    if (cmd === 'fs_watch_set_root') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);
   }

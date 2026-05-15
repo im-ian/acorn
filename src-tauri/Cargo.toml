@@ -72,6 +72,15 @@ clap = { version = "4", features = ["derive"] }
 # loop is a small synchronous thread per socket — pulling tokio's async
 # runtime into the daemon binary would dwarf the work it actually does.
 interprocess = "2"
+# File-explorer support: cross-platform fs watcher (FSEvents on macOS),
+# gitignore matcher aggregated per directory from repo root, and OS trash.
+notify = "6"
+ignore = "0.4"
+trash = "5"
+
+[dev-dependencies]
+# Used by `fs_explorer` unit tests for scratch directories.
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 # `setsid()` and `getpid()` wrappers for detaching the daemon from the

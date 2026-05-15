@@ -9,6 +9,7 @@ import {
   Copy,
   ExternalLink,
   FileDiff,
+  FolderTree,
   GitCommit,
   GitMerge,
   GitPullRequest,
@@ -54,6 +55,7 @@ import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
+import { FileExplorer } from "./FileExplorer";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
@@ -138,6 +140,12 @@ export function RightPanel() {
           "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
       >
+        <TabButton
+          icon={<FolderTree size={14} />}
+          label="Files"
+          active={rightTab === "files"}
+          onClick={() => setRightTab("files")}
+        />
         {showTodos ? (
           <TabButton
             icon={<ListTodo size={14} />}
@@ -214,6 +222,12 @@ export function RightPanel() {
           ) : (
             <Empty msg="No project selected" />
           )
+        ) : rightTab === "files" ? (
+          repoPath ? (
+            <FileExplorer key={repoPath} rootPath={repoPath} />
+          ) : (
+            <Empty msg="No project selected" />
+          )
         ) : repoPath ? (
           <ActionsTab key={repoPath} repoPath={repoPath} />
         ) : (
@@ -254,9 +268,10 @@ interface TabButtonProps {
   active: boolean;
   onClick: () => void;
   badge?: number;
+  className?: string;
 }
 
-function TabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
+function TabButton({ icon, label, active, onClick, badge, className }: TabButtonProps) {
   return (
     <button
       type="button"
@@ -266,6 +281,7 @@ function TabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
         active
           ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
           : "text-fg-muted hover:text-fg",
+        className,
       )}
     >
       {icon}

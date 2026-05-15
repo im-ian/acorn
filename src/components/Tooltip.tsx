@@ -30,6 +30,24 @@ interface TooltipProps {
   className?: string;
 }
 
+export interface TooltipAnchorRect {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+  width: number;
+  height: number;
+}
+
+interface FloatingTooltipProps {
+  label: ReactNode;
+  anchorRect: TooltipAnchorRect | null;
+  side?: TooltipProps["side"];
+  multiline?: boolean;
+  portalTarget?: HTMLElement | null;
+  overlayClassName?: string;
+}
+
 interface TooltipPosition {
   top: number;
   left: number;
@@ -39,7 +57,7 @@ interface TooltipPosition {
 const GAP = 6;
 
 function computePosition(
-  rect: DOMRect,
+  rect: TooltipAnchorRect,
   side: NonNullable<TooltipProps["side"]>,
 ): TooltipPosition {
   switch (side) {
@@ -71,63 +89,35 @@ function computePosition(
   }
 }
 
-/**
- * Tooltip rendered through a portal so it escapes ancestor `overflow:auto`
- * clipping and z-index stacking contexts. Visibility is driven by explicit
- * pointer events on the trigger, not Tailwind `group-hover`, to avoid
- * cross-talk when nested inside other `group` containers.
- */
-export function Tooltip({
+export function FloatingTooltip({
   label,
+  anchorRect,
   side = "bottom",
-  delay = 250,
   multiline = false,
-  children,
-  className,
-}: TooltipProps) {
-  const triggerRef = useRef<HTMLSpanElement>(null);
+  portalTarget,
+  overlayClassName,
+}: FloatingTooltipProps) {
   const tooltipRef = useRef<HTMLSpanElement>(null);
-  const showTimer = useRef<number | null>(null);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
 
-  const clearTimer = useCallback(() => {
-    if (showTimer.current !== null) {
-      window.clearTimeout(showTimer.current);
-      showTimer.current = null;
+  useEffect(() => {
+    if (anchorRect === null) {
+      setPosition(null);
+      return;
     }
-  }, []);
-
-  const show = useCallback(() => {
-    clearTimer();
-    showTimer.current = window.setTimeout(() => {
-      const el = triggerRef.current;
-      if (!el) return;
-      // Use the inner trigger (first child element) for accurate
-      // anchoring; falls back to the wrapper rect.
-      const target =
-        (el.firstElementChild as HTMLElement | null) ?? el;
-      setPosition(computePosition(target.getBoundingClientRect(), side));
-    }, delay);
-  }, [clearTimer, delay, side]);
-
-  const hide = useCallback(() => {
-    clearTimer();
-    setPosition(null);
-  }, [clearTimer]);
+    setPosition(computePosition(anchorRect, side));
+  }, [anchorRect, side]);
 
   useEffect(() => {
     if (position === null) return;
-    // Hide on scroll/resize so the tooltip never sits at a stale anchor.
-    const onMove = () => hide();
+    const onMove = () => setPosition(null);
     window.addEventListener("scroll", onMove, true);
     window.addEventListener("resize", onMove);
     return () => {
       window.removeEventListener("scroll", onMove, true);
       window.removeEventListener("resize", onMove);
     };
-  }, [position, hide]);
-
-  useEffect(() => () => clearTimer(), [clearTimer]);
+  }, [position]);
 
   // Clamp the tooltip into the viewport AFTER it has been measured. The
   // initial `computePosition` anchors at the trigger center, which can
@@ -156,6 +146,76 @@ export function Tooltip({
     }
   }, [position]);
 
+  if (position === null) return null;
+
+  return createPortal(
+    <span
+      ref={tooltipRef}
+      role="tooltip"
+      style={{
+        position: "fixed",
+        top: position.top,
+        left: position.left,
+        transform: position.transform,
+        zIndex: 9999,
+      }}
+      className={`${
+        multiline
+          ? "pointer-events-none max-w-xs whitespace-pre-line break-words rounded border border-border bg-bg-elevated px-2 py-1 text-[11px] font-normal leading-snug text-fg shadow-md"
+          : "pointer-events-none whitespace-nowrap rounded border border-border bg-bg-elevated px-2 py-0.5 text-[11px] font-normal text-fg shadow-md"
+      } ${overlayClassName ?? ""}`}
+    >
+      {label}
+    </span>,
+    portalTarget ?? document.body,
+  );
+}
+
+/**
+ * Tooltip rendered through a portal so it escapes ancestor `overflow:auto`
+ * clipping and z-index stacking contexts. Visibility is driven by explicit
+ * pointer events on the trigger, not Tailwind `group-hover`, to avoid
+ * cross-talk when nested inside other `group` containers.
+ */
+export function Tooltip({
+  label,
+  side = "bottom",
+  delay = 250,
+  multiline = false,
+  children,
+  className,
+}: TooltipProps) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const showTimer = useRef<number | null>(null);
+  const [anchorRect, setAnchorRect] = useState<TooltipAnchorRect | null>(null);
+
+  const clearTimer = useCallback(() => {
+    if (showTimer.current !== null) {
+      window.clearTimeout(showTimer.current);
+      showTimer.current = null;
+    }
+  }, []);
+
+  const show = useCallback(() => {
+    clearTimer();
+    showTimer.current = window.setTimeout(() => {
+      const el = triggerRef.current;
+      if (!el) return;
+      // Use the inner trigger (first child element) for accurate
+      // anchoring; falls back to the wrapper rect.
+      const target =
+        (el.firstElementChild as HTMLElement | null) ?? el;
+      setAnchorRect(target.getBoundingClientRect());
+    }, delay);
+  }, [clearTimer, delay]);
+
+  const hide = useCallback(() => {
+    clearTimer();
+    setAnchorRect(null);
+  }, [clearTimer]);
+
+  useEffect(() => () => clearTimer(), [clearTimer]);
+
   return (
     <>
       <span
@@ -169,29 +229,12 @@ export function Tooltip({
       >
         {children}
       </span>
-      {position !== null
-        ? createPortal(
-            <span
-              ref={tooltipRef}
-              role="tooltip"
-              style={{
-                position: "fixed",
-                top: position.top,
-                left: position.left,
-                transform: position.transform,
-                zIndex: 9999,
-              }}
-              className={
-                multiline
-                  ? "pointer-events-none max-w-xs whitespace-pre-line break-words rounded border border-border bg-bg-elevated px-2 py-1 text-[11px] font-normal leading-snug text-fg shadow-md"
-                  : "pointer-events-none whitespace-nowrap rounded border border-border bg-bg-elevated px-2 py-0.5 text-[11px] font-normal text-fg shadow-md"
-              }
-            >
-              {label}
-            </span>,
-            document.body,
-          )
-        : null}
+      <FloatingTooltip
+        label={label}
+        anchorRect={anchorRect}
+        side={side}
+        multiline={multiline}
+      />
     </>
   );
 }

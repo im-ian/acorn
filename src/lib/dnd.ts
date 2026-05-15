@@ -12,11 +12,19 @@ import { useEffect, useState } from "react";
 import type { Direction, PaneId, SplitSide } from "./layout";
 
 export interface TabDragPayload {
+  kind: "tab";
   sessionId: string;
   fromPaneId: PaneId;
 }
 
-let currentDrag: TabDragPayload | null = null;
+export interface FileDragPayload {
+  kind: "file";
+  path: string;
+}
+
+export type DragPayload = TabDragPayload | FileDragPayload;
+
+let currentDrag: DragPayload | null = null;
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -25,11 +33,9 @@ function notify(): void {
 
 export function setTabDragPayload(
   e: React.DragEvent,
-  payload: TabDragPayload,
+  payload: { sessionId: string; fromPaneId: PaneId },
 ): void {
-  currentDrag = payload;
-  // Some webviews refuse `setData` during dragstart; guard so the drag
-  // still works via the module-level mirror even if this fails.
+  currentDrag = { kind: "tab", ...payload };
   try {
     e.dataTransfer.setData("text/plain", payload.sessionId);
   } catch {
@@ -39,8 +45,25 @@ export function setTabDragPayload(
   notify();
 }
 
-export function getCurrentDragPayload(): TabDragPayload | null {
+export function setFileDragPayload(
+  e: React.DragEvent,
+  payload: { path: string },
+): void {
+  currentDrag = { kind: "file", path: payload.path };
+  e.dataTransfer.effectAllowed = "copy";
+  notify();
+}
+
+export function getCurrentDragPayload(): DragPayload | null {
   return currentDrag;
+}
+
+export function getCurrentTabPayload(): TabDragPayload | null {
+  return currentDrag?.kind === "tab" ? currentDrag : null;
+}
+
+export function getCurrentFilePayload(): FileDragPayload | null {
+  return currentDrag?.kind === "file" ? currentDrag : null;
 }
 
 export function clearTabDragPayload(): void {
@@ -50,6 +73,14 @@ export function clearTabDragPayload(): void {
 }
 
 export function isTabDrag(_e: React.DragEvent): boolean {
+  return currentDrag?.kind === "tab";
+}
+
+export function isFileDrag(_e: React.DragEvent): boolean {
+  return currentDrag?.kind === "file";
+}
+
+export function isAcornDrag(_e: React.DragEvent): boolean {
   return currentDrag !== null;
 }
 
@@ -59,12 +90,37 @@ export function isTabDrag(_e: React.DragEvent): boolean {
  * an active drag. Backed by a module-level signal updated synchronously
  * inside `setTabDragPayload` and on window-level dragend / drop.
  */
-export function useTabDragInProgress(): boolean {
+export function useAcornDragInProgress(): boolean {
   const [active, setActive] = useState<boolean>(() => currentDrag !== null);
 
   useEffect(() => {
     function onChange() {
       setActive(currentDrag !== null);
+    }
+    listeners.add(onChange);
+    function onEnd() {
+      clearTabDragPayload();
+    }
+    window.addEventListener("dragend", onEnd);
+    window.addEventListener("drop", onEnd);
+    return () => {
+      listeners.delete(onChange);
+      window.removeEventListener("dragend", onEnd);
+      window.removeEventListener("drop", onEnd);
+    };
+  }, []);
+
+  return active;
+}
+
+export function useTabDragInProgress(): boolean {
+  const [active, setActive] = useState<boolean>(
+    () => currentDrag?.kind === "tab",
+  );
+
+  useEffect(() => {
+    function onChange() {
+      setActive(currentDrag?.kind === "tab");
     }
     listeners.add(onChange);
     function onEnd() {
