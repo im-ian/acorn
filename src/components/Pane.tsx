@@ -23,7 +23,7 @@ import {
   type CSSProperties,
 } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { isViewerTabId, useAppStore, type ViewerTab } from "../store";
+import { useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -44,6 +44,11 @@ import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import type { Session, SessionKind, SessionStatus } from "../lib/types";
+import {
+  makeSessionWorkspaceTab,
+  type CodeWorkspaceTab,
+  type SessionWorkspaceTab,
+} from "../lib/workspaceTabs";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
   idle: "bg-fg-muted",
@@ -56,6 +61,10 @@ const STATUS_DOT: Record<SessionStatus, string> = {
 interface PaneProps {
   paneId: PaneId;
 }
+
+type PaneTab =
+  | (SessionWorkspaceTab & { session: Session })
+  | CodeWorkspaceTab;
 
 /**
  * A single workspace pane. Hosts a tab strip and a body with the active
@@ -72,9 +81,10 @@ export function Pane({ paneId }: PaneProps) {
   const totalPanes = useAppStore((s) => Object.keys(s.panes).length);
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
-  const selectSession = useAppStore((s) => s.selectSession);
+  const selectTab = useAppStore((s) => s.selectTab);
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
+  const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
   const closePane = useAppStore((s) => s.closePane);
@@ -98,29 +108,42 @@ export function Pane({ paneId }: PaneProps) {
     return () => node.removeEventListener("mousedown", handler);
   }, [paneId, setFocusedPane]);
 
-  const viewerTabs = useAppStore((s) => s.viewerTabs);
-  const closeViewerTab = useAppStore((s) => s.closeViewerTab);
-  const tabs = useMemo<Session[]>(() => {
+  const workspaceTabs = useAppStore((s) => s.workspaceTabs);
+  const tabs = useMemo<PaneTab[]>(() => {
     if (!pane) return [];
     const lookup = new Map(sessions.map((s) => [s.id, s] as const));
-    const ordered: Session[] = [];
-    for (const id of pane.sessionIds) {
+    const ordered: PaneTab[] = [];
+    for (const id of pane.tabIds) {
       const s = lookup.get(id);
       if (s) {
-        ordered.push(s);
+        ordered.push({
+          ...makeSessionWorkspaceTab({
+            id: s.id,
+            title: s.name,
+            repoPath: s.repo_path,
+          }),
+          session: s,
+        });
         continue;
       }
-      if (isViewerTabId(id)) {
-        const v = viewerTabs[id];
-        if (v) ordered.push(viewerToSession(v));
+      const workspaceTab = workspaceTabs[id];
+      if (workspaceTab?.kind === "code") {
+        ordered.push({
+          kind: "code",
+          id: workspaceTab.id,
+          title: workspaceTab.title,
+          repoPath: workspaceTab.repoPath,
+          lifecycle: workspaceTab.lifecycle,
+          path: workspaceTab.path,
+        });
       }
     }
     return ordered;
-  }, [pane, sessions, viewerTabs]);
+  }, [pane, sessions, workspaceTabs]);
 
-  const active = useMemo<Session | null>(() => {
-    if (!pane?.activeSessionId) return null;
-    return tabs.find((t) => t.id === pane.activeSessionId) ?? null;
+  const active = useMemo<PaneTab | null>(() => {
+    if (!pane?.activeTabId) return null;
+    return tabs.find((t) => t.id === pane.activeTabId) ?? null;
   }, [pane, tabs]);
 
   const isFocused = focusedPaneId === paneId;
@@ -192,7 +215,7 @@ export function Pane({ paneId }: PaneProps) {
           : `codex fork ${parentAgentId}`;
       useAppStore.getState().setPendingTerminalInput(created.id, command);
       await useAppStore.getState().refreshAll();
-      selectSession(created.id);
+      selectTab(created.id);
     } catch (err) {
       console.error("[Pane] fork session failed", err);
     }
@@ -200,14 +223,14 @@ export function Pane({ paneId }: PaneProps) {
 
   async function handleNewTabFromStrip() {
     if (tabs.length === 0) return;
-    await spawnSession(tabs[0].repo_path);
+    await spawnSession(tabs[0].repoPath);
   }
 
   async function handleNewTabFromEmpty() {
     // Prefer the pane's project if any tabs exist (shouldn't here), else use
     // the globally active project. With no project at all, do nothing.
     const repoPath =
-      tabs[0]?.repo_path ??
+      tabs[0]?.repoPath ??
       useAppStore.getState().activeProject ??
       null;
     if (!repoPath) return;
@@ -230,27 +253,28 @@ export function Pane({ paneId }: PaneProps) {
           activeId={active?.id ?? null}
           onSelect={(id) => {
             setFocusedPane(paneId);
-            selectSession(id);
+            selectTab(id);
           }}
           onClose={(id) => {
-            if (isViewerTabId(id)) closeViewerTab(id);
-            else requestRemoveSession(id);
+            const tab = tabs.find((t) => t.id === id);
+            if (tab?.kind === "session") requestRemoveSession(id);
+            else closeWorkspaceTab(id);
           }}
           onDropReorder={(payload, toIndex) => {
             moveTab({
-              sessionId: payload.sessionId,
+              tabId: payload.tabId,
               fromPaneId: payload.fromPaneId,
               toPaneId: paneId,
               toIndex,
             });
           }}
           onNewTab={handleNewTabFromStrip}
-          onSplitTab={(sessionId, direction) => {
+          onSplitTab={(tabId, direction) => {
             // Move the tab into a fresh pane created on the right (horizontal)
             // or below (vertical) the current pane. Mirrors VS Code's
             // "Split Right / Split Down" command on a tab.
             moveTab({
-              sessionId,
+              tabId,
               fromPaneId: paneId,
               toPaneId: paneId,
               splitDirection: direction,
@@ -287,11 +311,11 @@ export function Pane({ paneId }: PaneProps) {
           gets `appendChild`-moved into this pane body when this session is
           active. We render only an EmptyPane fallback here for the
           no-active-session case — or a CodeViewer when the active tab is
-          a frontend-only readonly viewer instead of a PTY session.
+          a frontend-owned code tab instead of a PTY session.
         */}
-        {active && active.kind === "viewer" && viewerTabs[active.id] ? (
+        {active?.kind === "code" ? (
           <CodeViewer
-            path={viewerTabs[active.id].path}
+            path={active.path}
             isActive={isFocused}
           />
         ) : null}
@@ -318,7 +342,7 @@ export function Pane({ paneId }: PaneProps) {
         y={paneMenu?.y ?? 0}
         onClose={() => setPaneMenu(null)}
         items={buildPaneMenuItems({
-          activeSession: active,
+          activeSession: active?.kind === "session" ? active.session : null,
           totalPanes,
           paneId,
           onNewTab: () => void handleNewTabFromEmpty(),
@@ -329,24 +353,6 @@ export function Pane({ paneId }: PaneProps) {
       />
     </div>
   );
-}
-
-function viewerToSession(v: ViewerTab): Session {
-  return {
-    id: v.id,
-    name: v.name,
-    repo_path: v.repoPath,
-    worktree_path: v.repoPath,
-    branch: "",
-    isolated: false,
-    status: "idle",
-    created_at: "",
-    updated_at: "",
-    last_message: null,
-    kind: "viewer",
-    position: null,
-    in_worktree: false,
-  };
 }
 
 function suggestSessionName(repoPath: string, existing: Session[]): string {
@@ -401,16 +407,16 @@ function EmptyPane({
 
 interface TabStripProps {
   paneId: PaneId;
-  tabs: Session[];
+  tabs: PaneTab[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onDropReorder: (
-    payload: { sessionId: string; fromPaneId: PaneId },
+    payload: { tabId: string; fromPaneId: PaneId },
     toIndex: number,
   ) => void;
   onNewTab: () => void;
-  onSplitTab: (sessionId: string, direction: Direction) => void;
+  onSplitTab: (tabId: string, direction: Direction) => void;
   onDuplicate: (repoPath: string, kind: SessionKind) => void;
   onFork: (
     parent: Session,
@@ -476,14 +482,14 @@ function TabStrip({
         const filePayload = getCurrentFilePayload();
         if (filePayload) {
           useAppStore.getState().setFocusedPane(paneId);
-          useAppStore.getState().openViewerTab(filePayload.path);
+          useAppStore.getState().openCodeViewerTab(filePayload.path);
           return;
         }
         const payload = getCurrentTabPayload();
         if (!payload) return;
         // No-op: dropping onto the same pane at the same position.
         if (payload.fromPaneId === paneId) {
-          const currentIdx = tabs.findIndex((t) => t.id === payload.sessionId);
+          const currentIdx = tabs.findIndex((t) => t.id === payload.tabId);
           if (currentIdx === idx || currentIdx + 1 === idx) return;
         }
         onDropReorder(payload, idx);
@@ -507,9 +513,16 @@ function TabStrip({
             for (const t of tabs) onClose(t.id);
           }}
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
-          onDuplicate={() => onDuplicate(tab.repo_path, tab.kind)}
-          onFork={(kind, parentAgentId, isolated) =>
-            onFork(tab, kind, parentAgentId, isolated)
+          onDuplicate={
+            tab.kind === "session"
+              ? () => onDuplicate(tab.session.repo_path, tab.session.kind)
+              : undefined
+          }
+          onFork={
+            tab.kind === "session"
+              ? (kind, parentAgentId, isolated) =>
+                  onFork(tab.session, kind, parentAgentId, isolated)
+              : undefined
           }
           siblingCount={tabs.length}
           registerRef={(el) => {
@@ -540,7 +553,7 @@ function TabStrip({
 }
 
 interface TabItemProps {
-  tab: Session;
+  tab: PaneTab;
   paneId: PaneId;
   active: boolean;
   insertBefore: boolean;
@@ -549,8 +562,8 @@ interface TabItemProps {
   onCloseOthers: () => void;
   onCloseAll: () => void;
   onSplitTab: (direction: Direction) => void;
-  onDuplicate: () => void;
-  onFork: (
+  onDuplicate?: () => void;
+  onFork?: (
     kind: "claude" | "codex",
     parentAgentId: string,
     isolated: boolean,
@@ -575,7 +588,11 @@ function TabItem({
   registerRef,
 }: TabItemProps) {
   const renameSession = useAppStore((s) => s.renameSession);
-  const liveInWorktree = useAppStore((s) => s.liveInWorktree[tab.id]);
+  const session = tab.kind === "session" ? tab.session : null;
+  const tabPath = tab.kind === "session" ? tab.session.worktree_path : tab.path;
+  const liveInWorktree = useAppStore((s) =>
+    session ? s.liveInWorktree[session.id] : false,
+  );
   // Subscribe to the editor command so the menu's enabled/disabled state
   // updates immediately when the user configures an editor in Settings.
   const editorCommand = useSettings(
@@ -593,25 +610,28 @@ function TabItem({
   } | null>(null);
 
   useEffect(() => {
-    if (!menu) return;
+    if (!menu || !session) return;
     setAgent(null);
     let cancelled = false;
     api
-      .detectSessionAgent(tab.id)
+      .detectSessionAgent(session.id)
       .then((res) => {
         if (!cancelled) setAgent(res);
       })
       .catch((err) => {
-        console.error("[Pane.Fork] detect failed", { sessionId: tab.id, err });
+        console.error("[Pane.Fork] detect failed", {
+          sessionId: session.id,
+          err,
+        });
         if (!cancelled) setAgent({ claude: null, codex: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [menu, tab.id]);
+  }, [menu, session]);
 
   const forkItems: ContextMenuItem[] = (() => {
-    if (!agent) return [];
+    if (!agent || !onFork) return [];
     const items: ContextMenuItem[] = [];
     const both = agent.claude && agent.codex;
     if (agent.claude) {
@@ -652,11 +672,13 @@ function TabItem({
       label: "Rename",
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
+      disabled: !session,
     },
     {
       label: "Duplicate Session",
       icon: <Files size={12} />,
-      onClick: onDuplicate,
+      onClick: () => onDuplicate?.(),
+      disabled: !onDuplicate,
     },
     { type: "separator" },
     ...forkItems,
@@ -681,11 +703,11 @@ function TabItem({
     },
     { type: "separator" },
     {
-      label: "Open Worktree in Editor",
+      label: session ? "Open Worktree in Editor" : "Open File in Editor",
       icon: <PencilLine size={12} />,
       disabled: !editorConfigured,
       onClick: () => {
-        void openInConfiguredEditor(tab.worktree_path).catch(
+        void openInConfiguredEditor(tabPath).catch(
           (err: unknown) => {
             console.error("[Pane] open in editor failed", err);
           },
@@ -696,33 +718,33 @@ function TabItem({
       label: "Reveal in Finder",
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void openPath(tab.worktree_path).catch((err: unknown) => {
+        void openPath(tabPath).catch((err: unknown) => {
           console.error("[Pane] reveal in finder failed", err);
         });
       },
     },
     { type: "separator" },
     {
-      label: "Copy Worktree Path",
+      label: session ? "Copy Worktree Path" : "Copy File Path",
       icon: <Copy size={12} />,
       onClick: () => {
-        void copyToClipboard(tab.worktree_path);
+        void copyToClipboard(tabPath);
       },
     },
     {
-      label: "Copy Worktree Name",
+      label: session ? "Copy Worktree Name" : "Copy File Name",
       icon: <Copy size={12} />,
       onClick: () => {
-        void copyToClipboard(basename(tab.worktree_path));
+        void copyToClipboard(basename(tabPath));
       },
     },
     {
       label: "Copy Branch Name",
       icon: <Copy size={12} />,
       onClick: () => {
-        void copyToClipboard(tab.branch);
+        if (session) void copyToClipboard(session.branch);
       },
-      disabled: !tab.branch,
+      disabled: !session?.branch,
     },
     {
       label: "Copy Session ID",
@@ -730,6 +752,7 @@ function TabItem({
       onClick: () => {
         void copyToClipboard(tab.id);
       },
+      disabled: !session,
     },
     { type: "separator" },
     {
@@ -766,12 +789,12 @@ function TabItem({
             : undefined
         }
         onDragStart={(e) => {
-          setTabDragPayload(e, { sessionId: tab.id, fromPaneId: paneId });
+          setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
         }}
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
           e.stopPropagation();
-          setEditing(true);
+          if (session) setEditing(true);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -788,7 +811,7 @@ function TabItem({
             onSelect();
           } else if (e.key === "F2") {
             e.preventDefault();
-            setEditing(true);
+            if (session) setEditing(true);
           }
         }}
         className={cn(
@@ -801,26 +824,27 @@ function TabItem({
         <span
           className={cn(
             "pointer-events-none size-1.5 rounded-full",
-            STATUS_DOT[tab.status],
+            session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
           )}
         />
         {editing ? (
           <TabRenameInput
-            initial={tab.name}
+            initial={tab.title}
             onSubmit={async (next) => {
               setEditing(false);
-              if (next && next !== tab.name) {
-                await renameSession(tab.id, next);
+              if (session && next && next !== session.name) {
+                await renameSession(session.id, next);
               }
             }}
             onCancel={() => setEditing(false)}
           />
         ) : (
           <span className="pointer-events-none max-w-[12rem] truncate">
-            {tab.name}
+            {tab.title}
           </span>
         )}
-        {(liveInWorktree ?? (tab.isolated || tab.in_worktree)) ? (
+        {session &&
+        (liveInWorktree ?? (session.isolated || session.in_worktree)) ? (
           <GitBranch
             size={10}
             className="pointer-events-none text-fg-muted"
@@ -829,7 +853,7 @@ function TabItem({
         ) : null}
         <button
           type="button"
-          aria-label="Close session"
+          aria-label="Close tab"
           onClick={(e) => {
             e.stopPropagation();
             onClose();

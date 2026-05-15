@@ -1,5 +1,5 @@
 /**
- * Drag-and-drop helpers for moving session tabs between panes.
+ * Drag-and-drop helpers for moving workspace tabs between panes.
  *
  * The browser's `DataTransfer` is unreliable for custom MIME types in some
  * webviews (notably WKWebView used by Tauri on macOS): the `types` list and
@@ -13,7 +13,7 @@ import type { Direction, PaneId, SplitSide } from "./layout";
 
 export interface TabDragPayload {
   kind: "tab";
-  sessionId: string;
+  tabId: string;
   fromPaneId: PaneId;
 }
 
@@ -33,11 +33,11 @@ function notify(): void {
 
 export function setTabDragPayload(
   e: React.DragEvent,
-  payload: { sessionId: string; fromPaneId: PaneId },
+  payload: { tabId: string; fromPaneId: PaneId },
 ): void {
   currentDrag = { kind: "tab", ...payload };
   try {
-    e.dataTransfer.setData("text/plain", payload.sessionId);
+    e.dataTransfer.setData("text/plain", payload.tabId);
   } catch {
     // ignore
   }
