@@ -340,7 +340,14 @@
       }
     }
   },
-  "app": {},
+  "app": {
+    "toast": {
+      "multiInputOn": "Multi-input on.",
+      "multiInputOff": "Multi-input off.",
+      "shellEnvironmentReloaded": "Shell environment reloaded. Open a new session to apply.",
+      "shellEnvironmentReloadFailed": "Failed to reload shell environment."
+    }
+  },
   "sidebar": {
     "status": {
       "idle": "Idle",
@@ -447,9 +454,392 @@
       "closePane": "Close Pane"
     }
   },
-  "rightPanel": {},
-  "fileExplorer": {},
-  "dialogs": {},
+  "rightPanel": {
+    "tabs": {
+      "files": "Files",
+      "todos": "Todos",
+      "commits": "Commits",
+      "staged": "Staged",
+      "prs": "PRs",
+      "actions": "Actions"
+    },
+    "empty": {
+      "noTodos": "No todos in this session",
+      "noProject": "No project selected"
+    },
+    "todos": {
+      "doneCount": "{completed}/{total} done",
+      "inProgressCount": "{count} in progress"
+    },
+    "loading": {
+      "more": "Loading more…",
+      "moreLower": "loading more...",
+      "diffLower": "loading diff..."
+    },
+    "tooltips": {
+      "copySha": "Copy SHA",
+      "openOnGitHub": "Open on GitHub"
+    },
+    "commits": {
+      "pushed": "Pushed",
+      "notPushed": "Not pushed",
+      "selectToSeeDiff": "Select a commit to see diff"
+    },
+    "staged": {
+      "empty": "No staged or modified files",
+      "workingTreeChanges": "Working tree changes",
+      "noDiff": "No diff"
+    },
+    "errors": {
+      "deletedFile": "File was deleted; nothing to open.",
+      "notGitHubRemote": "This repo's origin is not a GitHub remote.",
+      "originNotGitHub": "Origin remote is not a GitHub repository.",
+      "noAccessToSlug": "No access to {slug}."
+    },
+    "menu": {
+      "expandDiff": "Expand diff",
+      "viewOnGitHub": "View on GitHub",
+      "copyShaWithValue": "Copy SHA ({sha})",
+      "openInEditor": "Open in editor",
+      "copyRelativePath": "Copy relative path",
+      "copyAbsolutePath": "Copy absolute path",
+      "openDetail": "Open detail",
+      "openInBrowser": "Open in browser",
+      "copyPrNumber": "Copy PR number",
+      "copyUrl": "Copy URL",
+      "copyBranchWithValue": "Copy branch ({branch})",
+      "merge": "Merge…",
+      "close": "Close…"
+    },
+    "prStates": {
+      "open": "Open",
+      "closed": "Closed",
+      "merged": "Merged",
+      "all": "All",
+      "draft": "DRAFT"
+    },
+    "prs": {
+      "emptyByState": "No {state} pull requests.",
+      "reachedMax": "Showing first {count}. Use search to find older PRs."
+    },
+    "search": {
+      "aria": "Search pull requests",
+      "placeholder": "Search title, author, label, branch…",
+      "searching": "Searching…",
+      "typeToSearch": "Type to search pull requests.",
+      "noGhAccessThisRepo": "No logged-in gh account can access this repo.",
+      "noMatches": "No matching pull requests.",
+      "reachedMax": "Showing first {count}. Refine the query for older PRs."
+    },
+    "actions": {
+      "filterByWorkflow": "Filter by workflow",
+      "allWorkflows": "All workflows",
+      "noRuns": "No workflow runs yet.",
+      "noRunsForFilter": "No runs match this filter.",
+      "workflowRun": "Workflow run",
+      "workflowRunFallbackTitle": "{workflow} run",
+      "doubleClickDetails": "Double-click to view details",
+      "retryAttempt": "retry #{attempt}",
+      "github": "GitHub",
+      "status": "Status",
+      "totalDuration": "Total duration",
+      "runningParenthetical": "(running)",
+      "attempt": "Attempt",
+      "retriedParenthetical": "(retried)",
+      "commit": "Commit",
+      "created": "Created",
+      "updated": "Updated",
+      "jobsCount": "Jobs ({count})",
+      "noJobs": "No jobs reported.",
+      "openJobOnGitHub": "Open job on GitHub"
+    },
+    "checks": {
+      "allPassed": "All {count} checks passed",
+      "allFailed": "All {count} checks failed",
+      "summary": "{passed} passed, {failed} failed, {pending} pending"
+    },
+    "noAccess": {
+      "noGhAccountCanAccess": "No logged-in gh account can access {slug}.",
+      "tried": "Tried:",
+      "noAccounts": "No accounts authenticated against github.com.",
+      "run": "Run",
+      "withAccess": "with an account that has access, or accept the invitation on github.com."
+    },
+    "time": {
+      "secondsAgo": "{count}s ago",
+      "minutesAgo": "{count}m ago",
+      "hoursAgo": "{count}h ago",
+      "daysAgo": "{count}d ago",
+      "monthsAgo": "{count}mo ago",
+      "yearsAgo": "{count}y ago"
+    },
+    "duration": {
+      "seconds": "{count}s",
+      "minutes": "{count}m",
+      "minutesSeconds": "{minutes}m {seconds}s",
+      "hours": "{count}h",
+      "hoursMinutes": "{hours}h {minutes}m"
+    }
+  },
+  "fileExplorer": {
+    "defaults": {
+      "sessionName": "session"
+    },
+    "errorBanner": {
+      "dismiss": "Dismiss error"
+    },
+    "errors": {
+      "clipboardWriteFailed": "Clipboard write failed",
+      "noActiveProject": "No active project",
+      "noActiveSession": "No active session - open a terminal first"
+    },
+    "menu": {
+      "attachAllToConversation": "Attach All to Conversation",
+      "attachToClaude": "Attach to Claude",
+      "attachToCodex": "Attach to Codex",
+      "copyAbsolutePath": "Copy Absolute Path",
+      "copyAbsolutePaths": "Copy Absolute Paths",
+      "copyRelativePath": "Copy Relative Path",
+      "copyRelativePaths": "Copy Relative Paths",
+      "moveToTrash": "Move to Trash",
+      "openIn": "Open in",
+      "openInNewTab": "Open in New Tab",
+      "openWithDefaultProgram": "Open with Default Program",
+      "rename": "Rename",
+      "revealInFileManager": "Reveal in File Manager"
+    },
+    "search": {
+      "close": "Close (Esc)",
+      "closeSearch": "Close search",
+      "excludePlaceholder": "e.g. node_modules, *.lock",
+      "filesToExclude": "files to exclude",
+      "filesToInclude": "files to include",
+      "includePlaceholder": "e.g. *.ts, *.tsx",
+      "matchCase": "Match Case",
+      "regexPlaceholder": "Regex...",
+      "searchFilesPlaceholder": "Search files",
+      "toggleRegex": "Toggle regex",
+      "useRegularExpression": "Use Regular Expression"
+    },
+    "toolbar": {
+      "closeSearch": "Close search",
+      "hideDotfiles": "Hide dotfiles",
+      "hideGitignored": "Hide gitignored",
+      "search": "Search (⌘F)",
+      "showDotfiles": "Show dotfiles",
+      "showGitignored": "Show gitignored"
+    },
+    "tree": {
+      "empty": "(empty)",
+      "gitStatus": "git status",
+      "loading": "Loading...",
+      "renameInput": "Rename entry"
+    }
+  },
+  "dialogs": {
+    "common": {
+      "cancel": "Cancel",
+      "close": "Close",
+      "copy": "Copy",
+      "dontShowAgain": "Don't show this again",
+      "gotIt": "Got it"
+    },
+    "removeSession": {
+      "title": "Remove session",
+      "confirmPrefix": "Remove session",
+      "isolatedWorktree": "This is an isolated worktree:",
+      "deleteWorktreeQuestion": "Also delete the worktree from disk?",
+      "filesIn": "Files in",
+      "willNotBeTouched": "will not be touched.",
+      "dontAskAgain": "Don't ask again (toggle in Settings → Sessions)",
+      "keepWorktree": "Keep worktree",
+      "deleteWorktree": "Delete worktree",
+      "remove": "Remove"
+    },
+    "removeProject": {
+      "title": "Close project",
+      "confirmPrefix": "Close project",
+      "sessionSingular": "session",
+      "sessionPlural": "sessions",
+      "willBeRemoved": "will be removed",
+      "isolatedWorktreeSingular": "isolated worktree",
+      "isolatedWorktreePlural": "isolated worktrees",
+      "closeKeepWorktrees": "Close · keep worktrees",
+      "closeDeleteWorktrees": "Close · delete worktrees",
+      "closeProject": "Close project"
+    },
+    "newProject": {
+      "title": "New project",
+      "subtitle": "Create a git repository and add it to Acorn",
+      "projectNameLabel": "Project name",
+      "projectNameHint": "Use a single folder name.",
+      "ignoreSafeName": "Ignore safe-name check",
+      "locationLabel": "Location",
+      "locationPlaceholder": "Choose a parent folder",
+      "locationAriaLabel": "Project location",
+      "choose": "Choose",
+      "creates": "Creates",
+      "creating": "Creating...",
+      "createProject": "Create project",
+      "selectParentFolder": "Select parent folder",
+      "chooseLocationError": "Choose a location for the new project.",
+      "validation": {
+        "required": "Project name is required.",
+        "single_folder_name": "Project name must be a single folder name.",
+        "null_character": "Project name cannot contain a null character.",
+        "component_too_long": "Project name is longer than 255 bytes, which common filesystems reject."
+      }
+    },
+    "agentResume": {
+      "title": "Resume previous conversation",
+      "bodyClaude": "There's a Claude conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
+      "bodyCodex": "There's a Codex conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
+      "sessionIdCopied": "Session ID copied",
+      "copyFailed": "Failed to copy to clipboard",
+      "copyId": "Copy ID",
+      "resume": "Resume",
+      "lastActivityUnknown": "Last activity unknown",
+      "justNow": "Just now",
+      "minutesAgo": "min ago",
+      "hoursAgo": "hr ago",
+      "dayAgo": "day ago",
+      "daysAgo": "days ago"
+    },
+    "controlSessionGuide": {
+      "title": "Control session",
+      "subtitle": "A terminal that drives other sessions in this project",
+      "bodyIntro": "Control sessions are an upcoming way to coordinate work across terminals from a single place - handy for agents and scripts that need to dispatch commands to siblings in the same project.",
+      "pointKeystrokes": "Send keystrokes to any session in this project.",
+      "pointListSessions": "List the other sessions and their status.",
+      "pointReadOutput": "Read recent output from a target session.",
+      "createdPrefix": "You just created a control session. The",
+      "createdSuffix": "CLI that drives it ships in the next update; this terminal will start behaving like a regular shell until then."
+    },
+    "commandRun": {
+      "title": "Run this command?",
+      "ariaLabel": "Run command",
+      "description": "A new terminal session will open and run:",
+      "cwdLabel": "cwd:",
+      "noProjectHint": "No project is registered - add a project before running this command, or use \"Copy\" to paste it into an existing terminal.",
+      "noProjectError": "No project available to host the new session.",
+      "createFailed": "Failed to create session.",
+      "copiedPrefix": "Copied:",
+      "copyFailedPrefix": "Copy failed:",
+      "runningPrefix": "Running:",
+      "running": "Running...",
+      "run": "Run"
+    },
+    "closePullRequest": {
+      "titlePrefix": "Close",
+      "confirmPrefix": "Close pull request",
+      "confirmSuffix": "without merging?",
+      "closing": "Closing...",
+      "closePr": "Close PR"
+    },
+    "mergePullRequest": {
+      "titlePrefix": "Merge",
+      "mergeMethod": "Merge method",
+      "methodSquash": "Squash",
+      "methodSquashHint": "Combine into one commit on the base branch.",
+      "methodMerge": "Merge",
+      "methodMergeHint": "Create a merge commit preserving history.",
+      "methodRebase": "Rebase",
+      "methodRebaseHint": "Replay commits onto the base branch.",
+      "commitMessage": "Commit message",
+      "generating": "Generating...",
+      "generateVia": "Generate via",
+      "generateWithAi": "Generate with AI",
+      "subjectPlaceholder": "Subject",
+      "bodyPlaceholder": "Body (optional)",
+      "rebaseMessageLocked": "Rebase replays the original commits onto the base branch - the commit messages are not customizable here.",
+      "merging": "Merging...",
+      "merge": "Merge"
+    },
+    "stagedRevMismatch": {
+      "title": "Shell environment updated",
+      "background": "background",
+      "sessionSingular": "session",
+      "sessionPlural": "sessions",
+      "needRestart": "need a restart",
+      "bodyIntro": "Acorn refreshed its shell-init files in this update. Background sessions started by the previous version are still running against the old environment, which can cause garbled input and prompt redraws.",
+      "bodyRestart": "Restart now to apply the new environment. Open agent conversations (Claude / Codex) will pick up where they left off on next focus.",
+      "later": "Later",
+      "restarting": "Restarting...",
+      "restartSessions": "Restart sessions"
+    },
+    "memoryBreakdown": {
+      "title": "Memory breakdown",
+      "totalRssSum": "total (RSS, sum)",
+      "processes": "processes",
+      "pid": "PID",
+      "processTree": "Process tree",
+      "rss": "RSS",
+      "subtree": "Subtree",
+      "subtreeTooltip": "Sum of this process and all descendants",
+      "share": "Share",
+      "footer": "Tree ordered by parent->child (DFS). Siblings sorted by subtree RSS desc. Sum-of-RSS overcounts shared memory; WebView helpers and PTY children (claude, node) included."
+    },
+    "whatsNew": {
+      "titlePrefix": "What's new in Acorn",
+      "latestPublished": "latest published - no public release for",
+      "yourVersion": "your version",
+      "currentlyRunning": "currently running",
+      "onThisVersion": "you're on this version",
+      "noReleaseNotes": "No release notes were published with this version.",
+      "viewOnGithub": "View on GitHub",
+      "installing": "Installing...",
+      "installRelaunch": "Install & relaunch"
+    },
+    "pullRequestDetail": {
+      "notGithub": "Origin remote is not a GitHub repository.",
+      "noAccessPrefix": "No logged-in",
+      "noAccessSuffix": "account can access",
+      "files": "files",
+      "openOnGithub": "Open on GitHub",
+      "checkboxSaveFailed": "Couldn't save checkbox:",
+      "tabConversation": "Conversation",
+      "tabCommits": "Commits",
+      "tabChecks": "Checks",
+      "tabFiles": "Files",
+      "merge": "Merge",
+      "cannotMergeConflicting": "Cannot merge - conflicting branch",
+      "mergeReadinessPending": "Merge readiness still being determined...",
+      "resizePrBody": "Resize PR body",
+      "resizeHint": "Drag to resize · double-click to reset",
+      "noComments": "No comments or reviews yet.",
+      "oldestFirst": "Oldest first",
+      "newestFirst": "Newest first",
+      "toggleSortOrder": "Toggle sort order",
+      "commented": "commented",
+      "empty": "(empty)",
+      "noReviewComment": "(no review comment)",
+      "reviewApproved": "approved",
+      "reviewChangesRequested": "changes requested",
+      "reviewDismissed": "dismissed",
+      "noCommits": "No commits in this pull request.",
+      "viewOnGithub": "View on GitHub",
+      "copySha": "Copy SHA",
+      "noMessage": "(no message)",
+      "unknown": "unknown",
+      "loadingDiff": "Loading diff...",
+      "noFileChanges": "No file changes in this commit.",
+      "openCommitOnGithub": "Open commit on GitHub",
+      "now": "now",
+      "minuteAbbrev": "m",
+      "hourAbbrev": "h",
+      "dayAbbrev": "d",
+      "noChecks": "No checks reported.",
+      "openRun": "Open run",
+      "checkSuccess": "success",
+      "checkFailure": "failure",
+      "checkTimedOut": "timed out",
+      "checkActionRequired": "action required",
+      "checkCancelled": "cancelled",
+      "checkNeutral": "neutral",
+      "checkSkipped": "skipped",
+      "checkCompleted": "completed"
+    }
+  },
   "commandPalette": {
     "dialogLabel": "Command palette",
     "placeholder": "Type a command or search...",

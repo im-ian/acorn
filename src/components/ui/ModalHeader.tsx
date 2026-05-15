@@ -1,7 +1,15 @@
 import { X } from "lucide-react";
 import { type ReactNode } from "react";
 import { cn } from "../../lib/cn";
+import type { TranslationKey, Translator } from "../../lib/i18n";
+import { useTranslation } from "../../lib/useTranslation";
 import { type ModalVariant } from "./Modal";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface ModalHeaderProps {
   title: string;
@@ -27,6 +35,7 @@ export function ModalHeader({
   variant = "panel",
   onClose,
 }: ModalHeaderProps) {
+  const t = useTranslation();
   const hoverBg =
     variant === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated";
   return (
@@ -49,7 +58,7 @@ export function ModalHeader({
         {actions}
         <button
           type="button"
-          aria-label="Close"
+          aria-label={dt(t, "dialogs.common.close")}
           onClick={onClose}
           className={cn(
             "rounded p-1 text-fg-muted transition hover:text-fg",

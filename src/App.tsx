@@ -61,6 +61,8 @@ import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
+import type { TranslationKey, Translator } from "./lib/i18n";
+import { useTranslation } from "./lib/useTranslation";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
@@ -69,6 +71,12 @@ const SIDEBAR_DEFAULT_SIZE = 18;
 const SIDEBAR_MIN_SIZE = 12;
 const RIGHT_PANEL_DEFAULT_SIZE = 26;
 const RIGHT_PANEL_MIN_SIZE = 16;
+
+type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
+
+function appText(t: Translator, key: AppTranslationKey): string {
+  return t(key);
+}
 
 function focusPanel(id: "sidebar" | "main" | "right") {
   const panel = document.querySelector(
@@ -117,6 +125,7 @@ function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
 }
 
 function App() {
+  const t = useTranslation();
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
@@ -148,8 +157,12 @@ function App() {
     const enabled = useAppStore.getState().toggleMultiInput();
     useToasts
       .getState()
-      .show(enabled ? "Multi-input on." : "Multi-input off.");
-  }, []);
+      .show(
+        enabled
+          ? appText(t, "app.toast.multiInputOn")
+          : appText(t, "app.toast.multiInputOff"),
+      );
+  }, [t]);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
   const themes = useThemes((s) => s.themes);
@@ -840,11 +853,21 @@ function App() {
             // Existing PTY children keep the env they forked with —
             // surfacing this so the user knows why their already-open
             // session didn't change.
-            show("Shell environment reloaded. Open a new session to apply.");
+            show(
+              appText(
+                t,
+                "app.toast.shellEnvironmentReloaded",
+              ),
+            );
           })
           .catch((err: unknown) => {
             console.error("[App] reloadShellEnv failed", err);
-            show("Failed to reload shell environment.");
+            show(
+              appText(
+                t,
+                "app.toast.shellEnvironmentReloadFailed",
+              ),
+            );
           });
       },
       [Hotkeys.closeEmptyPane]: (e: KeyboardEvent) => {
@@ -859,7 +882,7 @@ function App() {
         useAppStore.getState().closePane(focusedPaneId);
       },
     }),
-    [],
+    [t, toggleMultiInput],
   );
 
   useHotkeys(bindings);
