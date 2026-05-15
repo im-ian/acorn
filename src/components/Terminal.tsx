@@ -27,6 +27,7 @@ import {
   shouldRestoreScrollback,
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
+import { terminalPasteAction } from "../lib/terminalPaste";
 import {
   useSettings,
   type TerminalLinkActivation,
@@ -532,7 +533,31 @@ export function Terminal({
     const unlistenFns: UnlistenFn[] = [];
     let observedLinkedWorktreePath: string | null = null;
     let liveCwdProbeTimer: number | null = null;
+    let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
+    let codexImagePasteActive = false;
+
+    const refreshAgentDetection = () => {
+      void api
+        .detectSessionAgent(sessionId)
+        .then((agent) => {
+          if (disposed) return;
+          codexImagePasteActive = Boolean(agent.codex);
+        })
+        .catch((err: unknown) => {
+          console.debug("[Terminal] agent detection failed", err);
+        });
+    };
+
+    const scheduleAgentDetection = () => {
+      if (disposed || agentProbeTimer !== null) return;
+      agentProbeTimer = window.setTimeout(() => {
+        agentProbeTimer = null;
+        if (disposed) return;
+        refreshAgentDetection();
+      }, 500);
+    };
+    refreshAgentDetection();
 
     const rememberLinkedWorktreeCwd = (path: string, source: string) => {
       void api
@@ -1071,21 +1096,22 @@ export function Terminal({
     // blocks the browser reinsertion; `stopImmediatePropagation`
     // blocks xterm's listener so the data emits exactly once.
     //
-    // Skip this path when the clipboard carries an image-only
-    // payload (macOS screencapture, copy-image-from-browser). The
-    // WKWebView's native paste relays the underlying NSPasteboard
-    // image to the running CLI (Claude Code surfaces it as
-    // `[Image #N]`), which only works if we let the default
-    // action proceed. Text-mixed payloads still take the owned
-    // path because the textarea residue + IME race outweighs the
-    // image relay there.
+    // Image-only payloads stay on the native path unless the running
+    // agent is Codex. Codex handles image paste by receiving Ctrl+V
+    // and reading NSPasteboard itself; WKWebView's default paste into
+    // xterm's hidden textarea does not wake that path up.
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
       const text = cd?.getData("text/plain") ?? "";
-      const hasFiles = (cd?.files?.length ?? 0) > 0;
-      if (!text && hasFiles) return;
-      if (text) term.paste(text);
+      const action = terminalPasteAction({
+        text,
+        fileCount: cd?.files?.length ?? 0,
+        codexActive: codexImagePasteActive,
+      });
+      if (action.kind === "native") return;
+      if (action.kind === "pasteText") term.paste(action.text);
+      if (action.kind === "send") sendUserInputToPty(action.data);
       ev.preventDefault();
       ev.stopImmediatePropagation();
     };
@@ -1362,6 +1388,7 @@ export function Terminal({
               // live descendant cwd on output bursts so exit adoption can
               // remain tied to this session rather than a repo-global diff.
               scheduleLiveCwdProbe();
+              scheduleAgentDetection();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -1375,6 +1402,7 @@ export function Terminal({
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
           if (disposed) return;
+          codexImagePasteActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
           // linked worktree. Plain user `exit` must not adopt unrelated
@@ -1625,6 +1653,9 @@ export function Terminal({
       resizeDisposable.dispose();
       if (liveCwdProbeTimer !== null) {
         window.clearTimeout(liveCwdProbeTimer);
+      }
+      if (agentProbeTimer !== null) {
+        window.clearTimeout(agentProbeTimer);
       }
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
