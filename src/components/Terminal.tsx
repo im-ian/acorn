@@ -21,6 +21,12 @@ import {
   unpatchTerminalCellMeasurements,
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
+  prepareScrollbackForSave,
+  RESTORE_MARKER_TEXT,
+  shouldRestoreScrollback,
+  stripRestoreMarkers,
+} from "../lib/terminalScrollback";
+import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
@@ -1268,7 +1274,8 @@ export function Terminal({
         });
         if (disposed) return;
         restoredDiskScrollback = saved !== null;
-        if (saved && saved.length > 0) {
+        const restored = saved ? stripRestoreMarkers(saved) : "";
+        if (restored && shouldRestoreScrollback(restored)) {
           // Each step is awaited individually. Previously the mode
           // resets and marker were fired without awaiting and `spawnPty`
           // was called immediately after, so the new shell's first
@@ -1282,7 +1289,7 @@ export function Terminal({
           const writeAndDrain = (data: string): Promise<void> =>
             new Promise<void>((resolve) => term.write(data, resolve));
 
-          await writeAndDrain(saved);
+          await writeAndDrain(restored);
           if (disposed) return;
           // Only exit alt-screen if the snapshot actually left us in it
           // — issuing `\x1b[?1049l` from the normal buffer pushes the
@@ -1316,7 +1323,7 @@ export function Terminal({
           await writeAndDrain(RESETS);
           if (disposed) return;
           await writeAndDrain(
-            `\r\n${ANSI_DIM}— restored from previous session —${ANSI_RESET}\r\n`,
+            `\r\n${ANSI_DIM}${RESTORE_MARKER_TEXT}${ANSI_RESET}\r\n`,
           );
           if (disposed) return;
         }
@@ -1361,7 +1368,10 @@ export function Terminal({
         const data = serializeAddon.serialize({
           scrollback: SCROLLBACK_MAX_ROWS,
         });
-        await invoke("scrollback_save", { sessionId, data });
+        await invoke("scrollback_save", {
+          sessionId,
+          data: prepareScrollbackForSave(data),
+        });
       } catch (err) {
         console.warn("[Terminal] scrollback_save failed", err);
       }
