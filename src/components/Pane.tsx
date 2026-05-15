@@ -23,11 +23,14 @@ import {
   type CSSProperties,
 } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useAppStore } from "../store";
+import { isViewerTabId, useAppStore, type ViewerTab } from "../store";
+import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import {
-  getCurrentDragPayload,
+  getCurrentFilePayload,
+  getCurrentTabPayload,
+  isAcornDrag,
   isTabDrag,
   setTabDragPayload,
 } from "../lib/dnd";
@@ -95,16 +98,25 @@ export function Pane({ paneId }: PaneProps) {
     return () => node.removeEventListener("mousedown", handler);
   }, [paneId, setFocusedPane]);
 
+  const viewerTabs = useAppStore((s) => s.viewerTabs);
+  const closeViewerTab = useAppStore((s) => s.closeViewerTab);
   const tabs = useMemo<Session[]>(() => {
     if (!pane) return [];
     const lookup = new Map(sessions.map((s) => [s.id, s] as const));
     const ordered: Session[] = [];
     for (const id of pane.sessionIds) {
       const s = lookup.get(id);
-      if (s) ordered.push(s);
+      if (s) {
+        ordered.push(s);
+        continue;
+      }
+      if (isViewerTabId(id)) {
+        const v = viewerTabs[id];
+        if (v) ordered.push(viewerToSession(v));
+      }
     }
     return ordered;
-  }, [pane, sessions]);
+  }, [pane, sessions, viewerTabs]);
 
   const active = useMemo<Session | null>(() => {
     if (!pane?.activeSessionId) return null;
@@ -220,7 +232,10 @@ export function Pane({ paneId }: PaneProps) {
             setFocusedPane(paneId);
             selectSession(id);
           }}
-          onClose={(id) => requestRemoveSession(id)}
+          onClose={(id) => {
+            if (isViewerTabId(id)) closeViewerTab(id);
+            else requestRemoveSession(id);
+          }}
           onDropReorder={(payload, toIndex) => {
             moveTab({
               sessionId: payload.sessionId,
@@ -271,8 +286,15 @@ export function Pane({ paneId }: PaneProps) {
           at App level. It is portaled into a per-session target div which
           gets `appendChild`-moved into this pane body when this session is
           active. We render only an EmptyPane fallback here for the
-          no-active-session case.
+          no-active-session case — or a CodeViewer when the active tab is
+          a frontend-only readonly viewer instead of a PTY session.
         */}
+        {active && active.kind === "viewer" && viewerTabs[active.id] ? (
+          <CodeViewer
+            path={viewerTabs[active.id].path}
+            isActive={isFocused}
+          />
+        ) : null}
         {active ? null : (
           <EmptyPane
             hasProjects={hasProjects}
@@ -307,6 +329,24 @@ export function Pane({ paneId }: PaneProps) {
       />
     </div>
   );
+}
+
+function viewerToSession(v: ViewerTab): Session {
+  return {
+    id: v.id,
+    name: v.name,
+    repo_path: v.repoPath,
+    worktree_path: v.repoPath,
+    branch: "",
+    isolated: false,
+    status: "idle",
+    created_at: "",
+    updated_at: "",
+    last_message: null,
+    kind: "viewer",
+    position: null,
+    in_worktree: false,
+  };
 }
 
 function suggestSessionName(repoPath: string, existing: Session[]): string {
@@ -415,25 +455,31 @@ function TabStrip({
       ref={stripRef}
       className="relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
       onDragEnter={(e) => {
-        if (!isTabDrag(e)) return;
+        if (!isAcornDrag(e)) return;
         e.preventDefault();
         setInsertIndex(computeInsertIndex(e.clientX));
       }}
       onDragOver={(e) => {
-        if (!isTabDrag(e)) return;
+        if (!isAcornDrag(e)) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
+        e.dataTransfer.dropEffect = isTabDrag(e) ? "move" : "copy";
         setInsertIndex(computeInsertIndex(e.clientX));
       }}
       onDragLeave={(e) => {
         if (e.currentTarget === e.target) setInsertIndex(null);
       }}
       onDrop={(e) => {
-        if (!isTabDrag(e)) return;
+        if (!isAcornDrag(e)) return;
         e.preventDefault();
-        const payload = getCurrentDragPayload();
         const idx = computeInsertIndex(e.clientX);
         setInsertIndex(null);
+        const filePayload = getCurrentFilePayload();
+        if (filePayload) {
+          useAppStore.getState().setFocusedPane(paneId);
+          useAppStore.getState().openViewerTab(filePayload.path);
+          return;
+        }
+        const payload = getCurrentTabPayload();
         if (!payload) return;
         // No-op: dropping onto the same pane at the same position.
         if (payload.fromPaneId === paneId) {

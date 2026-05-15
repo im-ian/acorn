@@ -494,12 +494,6 @@ export const api = {
       respectGitignore,
     });
   },
-  fsCreateFile(path: string): Promise<void> {
-    return invoke<void>("fs_create_file", { path });
-  },
-  fsCreateDir(path: string): Promise<void> {
-    return invoke<void>("fs_create_dir", { path });
-  },
   fsRename(from: string, to: string): Promise<void> {
     return invoke<void>("fs_rename", { from, to });
   },
@@ -524,6 +518,12 @@ export const api = {
   },
   fsGitBranch(repoRoot: string): Promise<string> {
     return invoke<string>("fs_git_branch", { repoRoot });
+  },
+  fsReadFile(path: string): Promise<FsReadFileResult> {
+    return invoke<FsReadFileResult>("fs_read_file", { path });
+  },
+  fsGitDiffLines(path: string): Promise<FsLineDiffEntry[]> {
+    return invoke<FsLineDiffEntry[]>("fs_git_diff_lines", { path });
   },
   fsWatchSetRoot(path: string | null): Promise<void> {
     return invoke<void>("fs_watch_set_root", { path });
@@ -568,6 +568,20 @@ export interface FsGitStatusEntry {
   kind: FsGitStatus;
   additions: number;
   deletions: number;
+}
+
+/** Mirror of `crate::fs_explorer::ReadFileResult`. */
+export interface FsReadFileResult {
+  content: string;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::LineDiffEntry`. */
+export interface FsLineDiffEntry {
+  line: number;
+  kind: "added" | "modified" | "deleted";
 }
 
 function encodeStringToBase64(input: string): string {

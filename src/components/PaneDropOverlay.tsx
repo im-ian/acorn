@@ -3,9 +3,10 @@ import { cn } from "../lib/cn";
 import {
   classifyDropZone,
   type DropZone,
-  getCurrentDragPayload,
-  isTabDrag,
-  useTabDragInProgress,
+  getCurrentFilePayload,
+  getCurrentTabPayload,
+  isAcornDrag,
+  useAcornDragInProgress,
 } from "../lib/dnd";
 import { useAppStore } from "../store";
 import type { PaneId } from "../lib/layout";
@@ -21,8 +22,10 @@ interface PaneDropOverlayProps {
  * append the moved tab into this pane.
  */
 export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
-  const dragging = useTabDragInProgress();
+  const dragging = useAcornDragInProgress();
   const moveTab = useAppStore((s) => s.moveTab);
+  const openViewerTab = useAppStore((s) => s.openViewerTab);
+  const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
 
@@ -54,14 +57,15 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
           : "pointer-events-none absolute inset-0 z-20"
       }
       onDragEnter={(e) => {
-        if (!isTabDrag(e)) return;
+        if (!isAcornDrag(e)) return;
         e.preventDefault();
         setZone(computeZone(e));
       }}
       onDragOver={(e) => {
-        if (!isTabDrag(e)) return;
+        if (!isAcornDrag(e)) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
+        e.dataTransfer.dropEffect =
+          getCurrentTabPayload() !== null ? "move" : "copy";
         const next = computeZone(e);
         if (
           !zone ||
@@ -79,12 +83,23 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
         if (e.currentTarget === e.target) setZone(null);
       }}
       onDrop={(e) => {
-        if (!isTabDrag(e)) return;
+        if (!isAcornDrag(e)) return;
         e.preventDefault();
-        const payload = getCurrentDragPayload();
         const target = computeZone(e);
         setZone(null);
-        if (!payload || !target) return;
+        if (!target) return;
+        const filePayload = getCurrentFilePayload();
+        if (filePayload) {
+          // For now ignore edge zones for file drops — viewer tabs land
+          // inside the target pane regardless of which edge the user hit.
+          // Splitting a pane to host a viewer can be a follow-up if it
+          // turns out to be common.
+          setFocusedPane(paneId);
+          openViewerTab(filePayload.path);
+          return;
+        }
+        const payload = getCurrentTabPayload();
+        if (!payload) return;
         if (target.kind === "center") {
           if (payload.fromPaneId === paneId) return;
           moveTab({

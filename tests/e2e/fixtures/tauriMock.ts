@@ -134,8 +134,6 @@ export const tauriMockSource = `
     if (cmd === 'fs_list_dir') {
       return Promise.resolve({ entries: [], repo_root: null });
     }
-    if (cmd === 'fs_create_file') return Promise.resolve(undefined);
-    if (cmd === 'fs_create_dir') return Promise.resolve(undefined);
     if (cmd === 'fs_rename') return Promise.resolve(undefined);
     if (cmd === 'fs_trash') return Promise.resolve(undefined);
     if (cmd === 'fs_reveal') return Promise.resolve(undefined);
@@ -143,6 +141,10 @@ export const tauriMockSource = `
     if (cmd === 'fs_shell_editor') return Promise.resolve('');
     if (cmd === 'fs_git_status') return Promise.resolve({});
     if (cmd === 'fs_git_branch') return Promise.resolve('');
+    if (cmd === 'fs_read_file') {
+      return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
+    }
+    if (cmd === 'fs_git_diff_lines') return Promise.resolve([]);
     if (cmd === 'fs_watch_set_root') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);

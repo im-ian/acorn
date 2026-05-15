@@ -11,9 +11,7 @@ import {
   ChevronDown,
   Folder,
   FolderOpen,
-  FolderPlus,
   File as FileIcon,
-  FilePlus,
   Copy,
   Link2,
   MessageSquarePlus,
@@ -21,13 +19,11 @@ import {
   Trash2,
   ExternalLink,
   Edit3,
-  RefreshCw,
   EyeOff,
   Eye,
   Filter,
   Search,
   Regex,
-  GitBranch,
   TerminalSquare,
   X,
 } from "lucide-react";
@@ -35,7 +31,9 @@ import { api, type FsEntry, FS_CHANGED_EVENT } from "../lib/api";
 import type { FsChangePayload, FsGitStatus, FsGitStatusEntry } from "../lib/api";
 import { cn } from "../lib/cn";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { setFileDragPayload } from "../lib/dnd";
 import { Tooltip } from "./Tooltip";
+import { IconInput, TextInput } from "./ui";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
@@ -51,12 +49,6 @@ interface DirState {
 }
 
 type Cache = Record<string, DirState>;
-
-interface DraftCreate {
-  parentPath: string;
-  kind: "file" | "dir";
-  value: string;
-}
 
 interface DraftRename {
   path: string;
@@ -80,20 +72,82 @@ function joinPath(parent: string, name: string): string {
   return parent + "/" + name;
 }
 
-function buildMatcher(query: string, regex: boolean): ((name: string) => boolean) | null {
+interface MatcherResult {
+  matcher: ((name: string) => boolean) | null;
+  invalidRegex: boolean;
+}
+
+function globToRegex(glob: string, flags: string): RegExp {
+  let re = "";
+  for (const ch of glob) {
+    if (ch === "*") re += ".*";
+    else if (ch === "?") re += ".";
+    else if ("^$.|+()[]{}\\".includes(ch)) re += "\\" + ch;
+    else re += ch;
+  }
+  return new RegExp(re, flags);
+}
+
+function buildQueryMatcher(
+  query: string,
+  regex: boolean,
+  caseSensitive: boolean,
+): MatcherResult {
   const q = query.trim();
-  if (!q) return null;
+  if (!q) return { matcher: null, invalidRegex: false };
+  const flags = caseSensitive ? "" : "i";
   if (regex) {
+    let re: RegExp | null = null;
     try {
-      const re = new RegExp(q, "i");
-      return (name) => re.test(name);
+      re = new RegExp(q, flags);
     } catch {
-      // Invalid pattern — disable filtering rather than block the tree.
-      return null;
+      // Regex compile failed — fall through and try glob.
+    }
+    if (!re && (q.includes("*") || q.includes("?"))) {
+      try {
+        re = globToRegex(q, flags);
+      } catch {
+        re = null;
+      }
+    }
+    if (re) {
+      const compiled = re;
+      return { matcher: (name) => compiled.test(name), invalidRegex: false };
+    }
+    return { matcher: null, invalidRegex: true };
+  }
+  const needle = caseSensitive ? q : q.toLowerCase();
+  return {
+    matcher: caseSensitive
+      ? (name) => name.includes(needle)
+      : (name) => name.toLowerCase().includes(needle),
+    invalidRegex: false,
+  };
+}
+
+/**
+ * Compile a comma-separated glob list (e.g. `*.ts, *.tsx, **\/test/*`) into
+ * a name predicate. Returns null when the list is empty so callers can
+ * treat "no filter" distinctly from "matches none".
+ */
+function buildGlobListMatcher(
+  list: string,
+): ((name: string) => boolean) | null {
+  const parts = list
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return null;
+  const compiled: RegExp[] = [];
+  for (const p of parts) {
+    try {
+      compiled.push(globToRegex(p, "i"));
+    } catch {
+      // Skip invalid entries silently — VSCode-style behavior.
     }
   }
-  const lower = q.toLowerCase();
-  return (name) => name.toLowerCase().includes(lower);
+  if (compiled.length === 0) return null;
+  return (name) => compiled.some((re) => re.test(name));
 }
 
 /**
@@ -164,7 +218,6 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     getLocalBool(RESPECT_GITIGNORE_KEY, true),
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [draftCreate, setDraftCreate] = useState<DraftCreate | null>(null);
   const [draftRename, setDraftRename] = useState<DraftRename | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -175,11 +228,16 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   // Selection — Cmd-click toggle, Shift-click range. When non-empty
   // the context menu offers bulk actions across `selection`.
   const [selection, setSelection] = useState<Set<string>>(new Set());
-  // Search / filter state. Empty query disables filtering. Regex flag
-  // switches substring → RegExp; invalid pattern falls back to plain.
+  // VSCode-style search panel. Toggled via Cmd+F when the Files tab is
+  // active. Three composable filters: free-form query, include globs,
+  // exclude globs. Case-sensitivity + regex are per-query toggles.
+  const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [query, setQuery] = useState<string>("");
   const [useRegex, setUseRegex] = useState<boolean>(false);
-  const [branch, setBranch] = useState<string>("");
+  const [caseSensitive, setCaseSensitive] = useState<boolean>(false);
+  const [includeGlobs, setIncludeGlobs] = useState<string>("");
+  const [excludeGlobs, setExcludeGlobs] = useState<string>("");
+  const queryInputRef = useRef<HTMLInputElement | null>(null);
   // Per-path git status keyed by absolute path. Refreshed on mount + when
   // the fs watcher fires (debounced). Used to color filenames + show
   // status label + +/- line counts.
@@ -221,18 +279,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
   }, [rootPath]);
 
-  const refreshBranch = useCallback(async () => {
-    try {
-      setBranch(await api.fsGitBranch(rootPath));
-    } catch {
-      setBranch("");
-    }
-  }, [rootPath]);
-
   useEffect(() => {
     void refreshGitStatus();
-    void refreshBranch();
-  }, [refreshGitStatus, refreshBranch]);
+  }, [refreshGitStatus]);
 
   // Subscribe to focused-session changes via the store so the menu
   // always reflects the agent state of whichever PTY would receive the
@@ -337,7 +386,6 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       rootRef.current = rootPath;
       setCache({});
       setExpanded(new Set());
-      setDraftCreate(null);
       setDraftRename(null);
       setActivePath(null);
     }
@@ -360,7 +408,6 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         }
       }
       void refreshGitStatus();
-      void refreshBranch();
     };
     void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
       for (const p of event.payload.paths) {
@@ -374,7 +421,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (flushTimer) clearTimeout(flushTimer);
       if (cancel) cancel();
     };
-  }, [rootPath, fetchDir, cache, refreshGitStatus, refreshBranch]);
+  }, [rootPath, fetchDir, cache, refreshGitStatus]);
 
   const toggleDir = useCallback(
     (path: string) => {
@@ -420,28 +467,6 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
   }, []);
 
-  const handleCreate = useCallback(async () => {
-    if (!draftCreate) return;
-    const { parentPath, kind, value } = draftCreate;
-    const name = value.trim();
-    if (!name) {
-      setDraftCreate(null);
-      return;
-    }
-    const target = joinPath(parentPath, name);
-    try {
-      if (kind === "file") {
-        await api.fsCreateFile(target);
-      } else {
-        await api.fsCreateDir(target);
-      }
-      setDraftCreate(null);
-      await fetchDir(parentPath);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [draftCreate, fetchDir]);
-
   const handleRename = useCallback(async () => {
     if (!draftRename) return;
     const { path, value } = draftRename;
@@ -481,7 +506,89 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     [gitStatus, rootPath],
   );
 
-  const matcher = useMemo(() => buildMatcher(query, useRegex), [query, useRegex]);
+  const queryMatcherResult = useMemo(
+    () => buildQueryMatcher(query, useRegex, caseSensitive),
+    [query, useRegex, caseSensitive],
+  );
+  const includeMatcher = useMemo(
+    () => buildGlobListMatcher(includeGlobs),
+    [includeGlobs],
+  );
+  const excludeMatcher = useMemo(
+    () => buildGlobListMatcher(excludeGlobs),
+    [excludeGlobs],
+  );
+  const invalidRegex = queryMatcherResult.invalidRegex;
+  // Composite matcher: query AND include AND NOT exclude. Each layer
+  // is optional — when one is null, that layer is skipped. The filter
+  // is gated on `searchOpen` so closing the panel removes the visual
+  // filter while preserving the last-used values for the next open.
+  const matcher = useMemo<((name: string) => boolean) | null>(() => {
+    if (!searchOpen) return null;
+    const qm = queryMatcherResult.matcher;
+    if (!qm && !includeMatcher && !excludeMatcher) return null;
+    return (name) => {
+      if (qm && !qm(name)) return false;
+      if (includeMatcher && !includeMatcher(name)) return false;
+      if (excludeMatcher && excludeMatcher(name)) return false;
+      return true;
+    };
+  }, [searchOpen, queryMatcherResult.matcher, includeMatcher, excludeMatcher]);
+
+  // When a filter is active, walk the loaded cache to find every
+  // directory that contains at least one matching descendant. The
+  // tree then hides directories whose names don't match and whose
+  // (loaded) subtree contains no match. Unloaded subtrees are not
+  // probed — the user has to expand to surface them.
+  const matchingDirs = useMemo(() => {
+    if (!matcher) return new Set<string>();
+    const result = new Set<string>();
+    for (const [dirPath, dirState] of Object.entries(cache)) {
+      if (!dirState?.entries) continue;
+      const hasMatch = dirState.entries.some(
+        (e) => matcher(e.name) || (e.is_dir && result.has(e.path)),
+      );
+      if (!hasMatch) continue;
+      let cur = dirPath;
+      while (cur && cur.length >= rootPath.length) {
+        result.add(cur);
+        if (cur === rootPath) break;
+        const idx = cur.lastIndexOf("/");
+        if (idx <= 0) break;
+        const next = cur.slice(0, idx);
+        if (next === cur) break;
+        cur = next;
+      }
+    }
+    // Second pass to propagate ancestor flags when matches surfaced
+    // out of cache iteration order.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [dirPath, dirState] of Object.entries(cache)) {
+        if (!dirState?.entries) continue;
+        if (result.has(dirPath)) continue;
+        if (
+          dirState.entries.some(
+            (e) => matcher(e.name) || (e.is_dir && result.has(e.path)),
+          )
+        ) {
+          let cur = dirPath;
+          while (cur && cur.length >= rootPath.length) {
+            result.add(cur);
+            if (cur === rootPath) break;
+            const idx = cur.lastIndexOf("/");
+            if (idx <= 0) break;
+            const next = cur.slice(0, idx);
+            if (next === cur) break;
+            cur = next;
+          }
+          changed = true;
+        }
+      }
+    }
+    return result;
+  }, [matcher, cache, rootPath]);
 
   const handleEntryClick = useCallback(
     (entry: FsEntry, event: React.MouseEvent) => {
@@ -500,9 +607,22 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       // Plain click: clear multi-selection and act on the entry.
       setSelection(new Set());
       if (entry.is_dir) toggleDir(entry.path);
-      else openInEditor(entry);
+      else setActivePath(entry.path);
     },
-    [toggleDir, openInEditor],
+    [toggleDir],
+  );
+
+  const handleEntryDoubleClick = useCallback(
+    async (entry: FsEntry) => {
+      if (entry.is_dir) return;
+      try {
+        const store = await import("../store");
+        store.useAppStore.getState().openViewerTab(entry.path);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [],
   );
 
   const handleBulkTrash = useCallback(async () => {
@@ -574,6 +694,30 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  // Cmd+F toggles the VSCode-style search panel. Window-level so it
+  // works even when focus is inside the tree (which doesn't bubble to
+  // the container otherwise). Esc closes the panel when it is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSearchOpen((open) => {
+          const next = !open;
+          if (next) {
+            requestAnimationFrame(() => queryInputRef.current?.focus());
+          }
+          return next;
+        });
+        return;
+      }
+      if (e.key === "Escape" && searchOpen) {
+        setSearchOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen]);
+
   // F2 to rename the focused / single-selected entry. Scoped to the
   // FileExplorer container so it does not collide with terminal input.
   useEffect(() => {
@@ -609,7 +753,6 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const menuItems: ContextMenuItem[] = useMemo(() => {
     if (!menu) return [];
     const entry = menu.entry;
-    const parentForCreate = entry?.is_dir ? entry.path : rootPath;
     const rel = entry ? relativeTo(rootPath, entry.path) : "";
     const items: ContextMenuItem[] = [];
 
@@ -725,30 +868,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       });
     }
 
-    // Group 4: Create
-    if (items.length > 0) items.push({ type: "separator" });
-    items.push({
-      label: "New File",
-      icon: <FilePlus size={13} />,
-      onClick: () => {
-        if (entry?.is_dir && !expanded.has(entry.path)) {
-          toggleDir(entry.path);
-        }
-        setDraftCreate({ parentPath: parentForCreate, kind: "file", value: "" });
-      },
-    });
-    items.push({
-      label: "New Folder",
-      icon: <FolderPlus size={13} />,
-      onClick: () => {
-        if (entry?.is_dir && !expanded.has(entry.path)) {
-          toggleDir(entry.path);
-        }
-        setDraftCreate({ parentPath: parentForCreate, kind: "dir", value: "" });
-      },
-    });
-
-    // Group 5: Destructive
+    // Group 4: Destructive
     if (entry) {
       items.push({ type: "separator" });
       items.push({
@@ -789,25 +909,38 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     >
       <Toolbar
         rootPath={rootPath}
-        branch={branch}
         showHidden={showHidden}
         respectGitignore={respectGitignore}
         onToggleHidden={() => setShowHidden((v) => !v)}
         onToggleGitignore={() => setRespectGitignore((v) => !v)}
-        onRefresh={() => void fetchDir(rootPath)}
-        onNewFile={() =>
-          setDraftCreate({ parentPath: rootPath, kind: "file", value: "" })
-        }
-        onNewFolder={() =>
-          setDraftCreate({ parentPath: rootPath, kind: "dir", value: "" })
-        }
+        searchActive={searchOpen}
+        onToggleSearch={() => {
+          setSearchOpen((open) => {
+            const next = !open;
+            if (next) {
+              requestAnimationFrame(() => queryInputRef.current?.focus());
+            }
+            return next;
+          });
+        }}
       />
-      <SearchBar
-        query={query}
-        useRegex={useRegex}
-        onQueryChange={setQuery}
-        onToggleRegex={() => setUseRegex((v) => !v)}
-      />
+      {searchOpen ? (
+        <SearchBar
+          query={query}
+          useRegex={useRegex}
+          caseSensitive={caseSensitive}
+          invalidRegex={invalidRegex}
+          includeGlobs={includeGlobs}
+          excludeGlobs={excludeGlobs}
+          queryInputRef={queryInputRef}
+          onQueryChange={setQuery}
+          onToggleRegex={() => setUseRegex((v) => !v)}
+          onToggleCaseSensitive={() => setCaseSensitive((v) => !v)}
+          onIncludeChange={setIncludeGlobs}
+          onExcludeChange={setExcludeGlobs}
+          onClose={() => setSearchOpen(false)}
+        />
+      ) : null}
       <div className="flex-1 overflow-auto py-1 text-[12px]">
         <div className="w-max min-w-full">
         <DirNode
@@ -818,21 +951,17 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           expanded={expanded}
           cache={cache}
           activePath={activePath}
-          draftCreate={draftCreate}
           draftRename={draftRename}
           gitStatus={gitStatus}
           dirtyAncestors={dirtyAncestors}
           selection={selection}
           matcher={matcher}
+          matchingDirs={matchingDirs}
           onToggleDir={toggleDir}
           onOpenEntry={openInEditor}
           onEntryClick={handleEntryClick}
+          onEntryDoubleClick={handleEntryDoubleClick}
           onContextMenu={openMenu}
-          onCommitCreate={handleCreate}
-          onCancelCreate={() => setDraftCreate(null)}
-          onChangeCreate={(v) =>
-            setDraftCreate((prev) => (prev ? { ...prev, value: v } : prev))
-          }
           onCommitRename={handleRename}
           onCancelRename={() => setDraftRename(null)}
           onChangeRename={(v) =>
@@ -866,14 +995,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
 interface ToolbarProps {
   rootPath: string;
-  branch: string;
   showHidden: boolean;
   respectGitignore: boolean;
+  searchActive: boolean;
   onToggleHidden: () => void;
   onToggleGitignore: () => void;
-  onRefresh: () => void;
-  onNewFile: () => void;
-  onNewFolder: () => void;
+  onToggleSearch: () => void;
 }
 
 function Toolbar(props: ToolbarProps) {
@@ -886,20 +1013,13 @@ function Toolbar(props: ToolbarProps) {
       >
         {rootName.toUpperCase()}
       </span>
-      {props.branch ? (
-        <Tooltip label={`Current branch: ${props.branch}`}>
-          <span className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-px text-[10px] text-fg-muted">
-            <GitBranch size={10} />
-            <span className="max-w-[120px] truncate">{props.branch}</span>
-          </span>
-        </Tooltip>
-      ) : null}
       <span className="flex-1" />
-      <ToolbarBtn label="New File" onClick={props.onNewFile}>
-        <FilePlus size={12} />
-      </ToolbarBtn>
-      <ToolbarBtn label="New Folder" onClick={props.onNewFolder}>
-        <FolderPlus size={12} />
+      <ToolbarBtn
+        label={props.searchActive ? "Close search" : "Search (⌘F)"}
+        active={props.searchActive}
+        onClick={props.onToggleSearch}
+      >
+        <Search size={12} />
       </ToolbarBtn>
       <ToolbarBtn
         label={props.showHidden ? "Hide dotfiles" : "Show dotfiles"}
@@ -919,9 +1039,6 @@ function Toolbar(props: ToolbarProps) {
       >
         <Filter size={12} />
       </ToolbarBtn>
-      <ToolbarBtn label="Refresh" onClick={props.onRefresh}>
-        <RefreshCw size={12} />
-      </ToolbarBtn>
     </div>
   );
 }
@@ -929,49 +1046,109 @@ function Toolbar(props: ToolbarProps) {
 interface SearchBarProps {
   query: string;
   useRegex: boolean;
+  caseSensitive: boolean;
+  invalidRegex: boolean;
+  includeGlobs: string;
+  excludeGlobs: string;
+  queryInputRef: React.RefObject<HTMLInputElement | null>;
   onQueryChange: (v: string) => void;
   onToggleRegex: () => void;
+  onToggleCaseSensitive: () => void;
+  onIncludeChange: (v: string) => void;
+  onExcludeChange: (v: string) => void;
+  onClose: () => void;
 }
 
 function SearchBar(props: SearchBarProps) {
   return (
-    <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
-      <Search size={12} className="shrink-0 text-fg-muted" />
-      <input
-        type="text"
+    <div className="flex shrink-0 flex-col gap-1 border-b border-border px-2 py-2">
+      <IconInput
+        ref={props.queryInputRef}
         value={props.query}
         onChange={(e) => props.onQueryChange(e.target.value)}
-        placeholder={props.useRegex ? "Regex…" : "Filter files…"}
-        className="flex-1 bg-transparent text-[11px] text-fg outline-none placeholder:text-fg-muted/60"
+        placeholder={props.useRegex ? "Regex…" : "Search files"}
+        invalid={props.invalidRegex}
+        leading={<Search size={12} />}
+        trailing={
+          <>
+            <Tooltip label="Match Case">
+              <button
+                type="button"
+                aria-label="Match case"
+                onClick={props.onToggleCaseSensitive}
+                className={cn(
+                  "rounded p-0.5 text-[10px] font-semibold transition",
+                  props.caseSensitive
+                    ? "bg-fg-muted/15 text-fg"
+                    : "text-fg-muted hover:text-fg",
+                )}
+              >
+                Aa
+              </button>
+            </Tooltip>
+            <Tooltip label="Use Regular Expression">
+              <button
+                type="button"
+                aria-label="Toggle regex"
+                onClick={props.onToggleRegex}
+                className={cn(
+                  "rounded p-0.5 transition",
+                  props.useRegex
+                    ? "bg-fg-muted/15 text-fg"
+                    : "text-fg-muted hover:text-fg",
+                )}
+              >
+                <Regex size={12} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Close (Esc)">
+              <button
+                type="button"
+                aria-label="Close search"
+                onClick={props.onClose}
+                className="rounded p-0.5 text-fg-muted hover:text-fg"
+              >
+                <X size={11} />
+              </button>
+            </Tooltip>
+          </>
+        }
       />
-      {props.query ? (
-        <Tooltip label="Clear filter">
-          <button
-            type="button"
-            aria-label="Clear filter"
-            onClick={() => props.onQueryChange("")}
-            className="rounded p-0.5 text-fg-muted hover:text-fg"
-          >
-            <X size={11} />
-          </button>
-        </Tooltip>
-      ) : null}
-      <Tooltip label={props.useRegex ? "Plain match" : "Regex match"}>
-        <button
-          type="button"
-          aria-label="Toggle regex"
-          onClick={props.onToggleRegex}
-          className={cn(
-            "rounded p-0.5 transition",
-            props.useRegex
-              ? "bg-fg-muted/15 text-fg"
-              : "text-fg-muted hover:text-fg",
-          )}
-        >
-          <Regex size={12} />
-        </button>
-      </Tooltip>
+      <GlobInput
+        label="files to include"
+        placeholder="e.g. *.ts, *.tsx"
+        value={props.includeGlobs}
+        onChange={props.onIncludeChange}
+      />
+      <GlobInput
+        label="files to exclude"
+        placeholder="e.g. node_modules, *.lock"
+        value={props.excludeGlobs}
+        onChange={props.onExcludeChange}
+      />
     </div>
+  );
+}
+
+interface GlobInputProps {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+}
+
+function GlobInput({ label, placeholder, value, onChange }: GlobInputProps) {
+  return (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[10px] uppercase tracking-wide text-fg-muted/80">
+        {label}
+      </span>
+      <TextInput
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
   );
 }
 
@@ -1013,33 +1190,34 @@ interface DirNodeProps {
   expanded: Set<string>;
   cache: Cache;
   activePath: string | null;
-  draftCreate: DraftCreate | null;
   draftRename: DraftRename | null;
   gitStatus: Record<string, FsGitStatusEntry>;
   dirtyAncestors: Set<string>;
   selection: Set<string>;
   matcher: ((name: string) => boolean) | null;
+  matchingDirs: Set<string>;
   onToggleDir: (path: string) => void;
   onOpenEntry: (entry: FsEntry) => void;
   onEntryClick: (entry: FsEntry, event: React.MouseEvent) => void;
+  onEntryDoubleClick: (entry: FsEntry) => void;
   onContextMenu: (e: React.MouseEvent, entry: FsEntry | null) => void;
-  onCommitCreate: () => void;
-  onCancelCreate: () => void;
-  onChangeCreate: (v: string) => void;
   onCommitRename: () => void;
   onCancelRename: () => void;
   onChangeRename: (v: string) => void;
 }
 
 function DirNode(props: DirNodeProps) {
-  const { state, path, isRoot, matcher } = props;
+  const { state, isRoot, matcher, matchingDirs } = props;
   const rawEntries = state?.entries ?? [];
-  // When a matcher is active, hide entries that fail to match *unless*
-  // they are directories with at least one matching descendant. Without
-  // recursive descent we just keep dirs visible so the user can still
-  // drill in.
+  // When a matcher is active, hide entries that fail to match. Directories
+  // survive only when their own name matches or their loaded subtree
+  // contains at least one matching descendant (tracked in `matchingDirs`).
   const entries = matcher
-    ? rawEntries.filter((e) => e.is_dir || matcher(e.name))
+    ? rawEntries.filter((e) => {
+        if (matcher(e.name)) return true;
+        if (e.is_dir && matchingDirs.has(e.path)) return true;
+        return false;
+      })
     : rawEntries;
   const loading = state?.loading ?? false;
   const error = state?.error ?? null;
@@ -1088,48 +1266,15 @@ function DirNode(props: DirNodeProps) {
               entry.is_dir && props.dirtyAncestors.has(entry.path)
             }
             onEntryClick={props.onEntryClick}
+            onEntryDoubleClick={props.onEntryDoubleClick}
             onContextMenu={props.onContextMenu}
           >
             {entry.is_dir && props.expanded.has(entry.path) ? (
               <DirNode {...props} path={entry.path} depth={props.depth + 1} state={props.cache[entry.path]} isRoot={false} />
             ) : null}
-            {entry.is_dir &&
-            props.expanded.has(entry.path) &&
-            props.draftCreate?.parentPath === entry.path ? (
-              <EditRow
-                depth={props.depth + 1}
-                icon={
-                  props.draftCreate.kind === "dir" ? (
-                    <Folder size={13} />
-                  ) : (
-                    <FileIcon size={13} />
-                  )
-                }
-                value={props.draftCreate.value}
-                onChange={props.onChangeCreate}
-                onCommit={props.onCommitCreate}
-                onCancel={props.onCancelCreate}
-              />
-            ) : null}
           </EntryRow>
         ),
       )}
-      {isRoot && props.draftCreate?.parentPath === path ? (
-        <EditRow
-          depth={props.depth}
-          icon={
-            props.draftCreate.kind === "dir" ? (
-              <Folder size={13} />
-            ) : (
-              <FileIcon size={13} />
-            )
-          }
-          value={props.draftCreate.value}
-          onChange={props.onChangeCreate}
-          onCommit={props.onCommitCreate}
-          onCancel={props.onCancelCreate}
-        />
-      ) : null}
       {loading && entries.length === 0 ? (
         <div
           className="px-2 py-1 text-[11px] text-fg-muted/60"
@@ -1151,6 +1296,7 @@ interface EntryRowProps {
   gitStatus?: FsGitStatusEntry;
   dirtyDescendant: boolean;
   onEntryClick: (entry: FsEntry, event: React.MouseEvent) => void;
+  onEntryDoubleClick: (entry: FsEntry) => void;
   onContextMenu: (e: React.MouseEvent, entry: FsEntry) => void;
   children?: React.ReactNode;
 }
@@ -1190,6 +1336,7 @@ function EntryRow({
   gitStatus,
   dirtyDescendant,
   onEntryClick,
+  onEntryDoubleClick,
   onContextMenu,
   children,
 }: EntryRowProps) {
@@ -1206,7 +1353,28 @@ function EntryRow({
     <>
       <button
         type="button"
+        draggable
+        onDragStart={(e) => {
+          // Set both the OS-friendly text data (terminals + external
+          // apps paste the quoted path) and the in-process Acorn drag
+          // mirror used by Pane/TabStrip drop targets.
+          if (!entry.is_dir) {
+            setFileDragPayload(e, { path: entry.path });
+          }
+          const quoted = `"${entry.path.replace(/(["\\$`])/g, "\\$1")}"`;
+          try {
+            e.dataTransfer.setData("text/plain", quoted);
+            e.dataTransfer.setData("text/uri-list", `file://${entry.path}`);
+          } catch {
+            // ignore
+          }
+          e.dataTransfer.effectAllowed = "copy";
+        }}
         onClick={(e) => onEntryClick(entry, e)}
+        onDoubleClick={(e) => {
+          e.preventDefault();
+          onEntryDoubleClick(entry);
+        }}
         onContextMenu={(e) => {
           e.stopPropagation();
           onContextMenu(e, entry);
@@ -1227,7 +1395,7 @@ function EntryRow({
           <span
             key={i}
             aria-hidden
-            className="relative block w-1 shrink-0 self-stretch before:absolute before:left-[2px] before:top-0 before:bottom-0 before:w-px before:bg-fg-muted/20"
+            className="relative block w-2 shrink-0 self-stretch before:absolute before:left-[4px] before:-top-[2px] before:-bottom-[2px] before:w-px before:bg-fg-muted/25"
           />
         ))}
         {entry.is_dir ? (

@@ -350,8 +350,6 @@ pub fn run() {
             daemon_commands::daemon_forget_session,
             daemon_commands::daemon_adopt_session,
             fs_explorer::fs_list_dir,
-            fs_explorer::fs_create_file,
-            fs_explorer::fs_create_dir,
             fs_explorer::fs_rename,
             fs_explorer::fs_trash,
             fs_explorer::fs_reveal,
@@ -359,6 +357,8 @@ pub fn run() {
             fs_explorer::fs_shell_editor,
             fs_explorer::fs_git_status,
             fs_explorer::fs_git_branch,
+            fs_explorer::fs_read_file,
+            fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,
         ])
         .run(tauri::generate_context!())
