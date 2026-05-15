@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Terminal as XTerm,
   type IBuffer,
   type ITheme,
+  type IViewportRange,
 } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -29,6 +30,7 @@ import { useThemes, type ThemeMode } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
+import { FloatingTooltip, type TooltipAnchorRect } from "./Tooltip";
 
 interface TerminalProps {
   sessionId: string;
@@ -188,9 +190,161 @@ function scanForContextPrompt(buf: IBuffer, startY: number): string | null {
 const IS_MAC =
   typeof navigator !== "undefined" &&
   /Mac|iP(hone|od|ad)/.test(navigator.platform);
+const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
+
+interface TerminalRenderInternals {
+  _core?: {
+    _renderService?: {
+      dimensions?: {
+        css?: {
+          cell?: {
+            width: number;
+            height: number;
+          };
+        };
+      };
+    };
+  };
+}
 
 function modifierHeld(event: MouseEvent): boolean {
   return IS_MAC ? event.metaKey : event.ctrlKey;
+}
+
+function terminalCellDims(term: XTerm): { width: number; height: number } | null {
+  const core = (term as unknown as TerminalRenderInternals)._core;
+  const cell = core?._renderService?.dimensions?.css?.cell;
+  return cell ? { width: cell.width, height: cell.height } : null;
+}
+
+function textRangeRectForColumns(
+  rowElement: HTMLElement,
+  startCol: number,
+  endCol: number,
+): DOMRect | null {
+  const doc = rowElement.ownerDocument;
+  const walker = doc.createTreeWalker(rowElement, NodeFilter.SHOW_TEXT);
+  const range = doc.createRange();
+  let offset = 0;
+  let startSet = false;
+  let endSet = false;
+
+  for (
+    let node = walker.nextNode() as Text | null;
+    node;
+    node = walker.nextNode() as Text | null
+  ) {
+    const textLength = node.textContent?.length ?? 0;
+    const nextOffset = offset + textLength;
+    if (!startSet && startCol <= nextOffset) {
+      range.setStart(node, Math.max(0, startCol - offset));
+      startSet = true;
+    }
+    if (startSet && endCol <= nextOffset) {
+      range.setEnd(node, Math.max(0, endCol - offset));
+      endSet = true;
+      break;
+    }
+    offset = nextOffset;
+  }
+
+  if (!startSet || !endSet) {
+    range.detach();
+    return null;
+  }
+
+  const rect = range.getBoundingClientRect();
+  range.detach();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  return rect;
+}
+
+function unionRects(rects: DOMRect[]): TooltipAnchorRect | null {
+  if (rects.length === 0) return null;
+  const left = Math.min(...rects.map((r) => r.left));
+  const top = Math.min(...rects.map((r) => r.top));
+  const right = Math.max(...rects.map((r) => r.right));
+  const bottom = Math.max(...rects.map((r) => r.bottom));
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function hoveredLinkAnchorRect(container: HTMLElement): TooltipAnchorRect | null {
+  const rects = Array.from(
+    container.querySelectorAll<HTMLElement>(".xterm-rows span"),
+  )
+    .filter((el) => {
+      const style = getComputedStyle(el);
+      return style.textDecorationLine.includes("underline");
+    })
+    .map((el) => el.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+  return unionRects(rects);
+}
+
+function linkRangeAnchorRect(
+  container: HTMLElement,
+  term: XTerm,
+  range: IViewportRange,
+): TooltipAnchorRect | null {
+  const cell = terminalCellDims(term);
+  if (!cell) return null;
+  const viewportY = term.buffer.active.viewportY;
+
+  const startViewportY = range.start.y - viewportY - 1;
+  const endViewportY = range.end.y - viewportY - 1;
+  if (endViewportY < 0 || startViewportY >= term.rows) return null;
+
+  const row = Math.max(0, Math.min(term.rows - 1, startViewportY));
+  const rowElements = Array.from(
+    container.querySelectorAll<HTMLElement>(".xterm-rows > div"),
+  );
+  const textRects: DOMRect[] = [];
+  const firstVisibleRow = Math.max(0, startViewportY);
+  const lastVisibleRow = Math.min(term.rows - 1, endViewportY);
+  for (let y = firstVisibleRow; y <= lastVisibleRow; y++) {
+    const rowElement = rowElements[y];
+    if (!rowElement) continue;
+    const startCol = y === startViewportY ? Math.max(0, range.start.x - 1) : 0;
+    const endCol =
+      y === endViewportY
+        ? Math.max(startCol + 1, Math.min(term.cols, range.end.x))
+        : term.cols;
+    const rect = textRangeRectForColumns(rowElement, startCol, endCol);
+    if (rect) textRects.push(rect);
+  }
+  const textRect = unionRects(textRects);
+  if (textRect) return textRect;
+
+  const rowElement = rowElements[row];
+  const rowRect =
+    rowElement?.getBoundingClientRect() ??
+    (
+      container.querySelector<HTMLElement>(".xterm-screen") ?? container
+    ).getBoundingClientRect();
+  const startX = startViewportY < 0 ? 0 : Math.max(0, range.start.x - 1);
+  const endX =
+    row === endViewportY
+      ? Math.max(startX + 1, Math.min(term.cols, range.end.x))
+      : term.cols;
+  const left = rowRect.left + startX * cell.width;
+  const top = rowElement ? rowRect.top : rowRect.top + row * cell.height;
+  const right = rowRect.left + endX * cell.width;
+  const bottom = rowElement ? rowRect.bottom : top + cell.height;
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 function decodeBase64ToBytes(b64: string): Uint8Array {
@@ -221,6 +375,9 @@ export function Terminal({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const [linkTooltip, setLinkTooltip] = useState<{
+    anchorRect: TooltipAnchorRect;
+  } | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -266,13 +423,47 @@ export function Terminal({
     // app's CSP and would either fail or replace the app shell). When the user
     // opts into modifier-click activation, plain clicks are swallowed so a
     // stray click on a URL in shell output doesn't steal focus.
-    const webLinksAddon = new WebLinksAddon((event, uri) => {
-      event.preventDefault();
-      if (linkActivation === "modifier-click" && !modifierHeld(event)) return;
-      void openUrl(uri).catch((err: unknown) => {
-        console.error("failed to open terminal link", uri, err);
+    let linkTooltipFrame: number | null = null;
+    const showLinkTooltip = (range: IViewportRange) => {
+      if (linkTooltipFrame !== null) {
+        cancelAnimationFrame(linkTooltipFrame);
+      }
+      linkTooltipFrame = requestAnimationFrame(() => {
+        linkTooltipFrame = null;
+        if (linkActivation !== "modifier-click") return;
+        const anchorRect =
+          hoveredLinkAnchorRect(container) ??
+          linkRangeAnchorRect(container, term, range);
+        if (!anchorRect) return;
+        setLinkTooltip({ anchorRect });
       });
-    });
+    };
+    const hideLinkTooltip = () => {
+      if (linkTooltipFrame !== null) {
+        cancelAnimationFrame(linkTooltipFrame);
+        linkTooltipFrame = null;
+      }
+      setLinkTooltip(null);
+    };
+    const webLinksAddon = new WebLinksAddon(
+      (event, uri) => {
+        event.preventDefault();
+        hideLinkTooltip();
+        if (linkActivation === "modifier-click" && !modifierHeld(event)) return;
+        void openUrl(uri).catch((err: unknown) => {
+          console.error("failed to open terminal link", uri, err);
+        });
+      },
+      {
+        hover: (_event, _uri, range) => {
+          if (linkActivation !== "modifier-click") return;
+          showLinkTooltip(range);
+        },
+        leave: () => {
+          hideLinkTooltip();
+        },
+      },
+    );
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
     term.loadAddon(fitAddon);
@@ -383,6 +574,9 @@ export function Terminal({
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
+        if (next.linkActivation !== "modifier-click") {
+          setLinkTooltip(null);
+        }
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
@@ -1308,6 +1502,7 @@ export function Terminal({
     return () => {
       disposed = true;
       unsubSettings();
+      hideLinkTooltip();
       if (themeFrame !== null) {
         cancelAnimationFrame(themeFrame);
         themeFrame = null;
@@ -1458,6 +1653,12 @@ export function Terminal({
         className={`acorn-terminal relative z-10 h-full w-full ${
           isFocusedPane ? "" : "acorn-terminal-inactive"
         }`}
+      />
+      <FloatingTooltip
+        label={`${MODIFIER_LINK_LABEL} to open link`}
+        anchorRect={linkTooltip?.anchorRect ?? null}
+        side="top"
+        overlayClassName="xterm-hover"
       />
       {/* Pinned-prompt overlay. */}
       <StickyUserPrompt sessionId={sessionId} />
