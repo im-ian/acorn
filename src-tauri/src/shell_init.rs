@@ -1,17 +1,23 @@
 //! Acorn-managed shell rc files materialised under the data dir.
 //!
-//! Set `ZDOTDIR` on PTY spawn to point zsh at our staged `.zshenv` +
-//! `.zshrc`. The `.zshrc` registers an OSC 7 emitter so the host learns
-//! the live cwd every prompt without polling, and the `.zshenv` forwards
-//! to the user's real `.zshenv` so rustup / asdf style env bootstrap
-//! still runs (zsh resolves both files via `$ZDOTDIR`, not `$HOME`).
-//! The same pattern iTerm2 / Wezterm / VS Code use; `ZDOTDIR` is the
-//! only env handle zsh provides for "load an extra interactive rc
-//! before the user's".
+//! Acorn spawns the user's `$SHELL` with `-l` (matching macOS
+//! Terminal.app / iTerm2 / VS Code) and points `ZDOTDIR` at this
+//! staged dir so zsh sees all four rc files we own (`.zshenv`,
+//! `.zprofile`, `.zshrc`, `.zlogin`). Each forwarder sources the
+//! user's real counterpart so version managers, `brew shellenv`,
+//! `nvm`, ssh-agent bootstrap, etc. run normally; `.zshrc`
+//! additionally installs an OSC 7 emitter so the host learns the
+//! live cwd every prompt without polling, and re-prepends Acorn's
+//! shim / IPC CLI dirs if the user's rc reset PATH.
 //!
-//! bash and fish are out of scope today — bash supports `PROMPT_COMMAND`
-//! from the env directly, and fish emits OSC 7 by default. zsh is the
-//! macOS default and the only shell that needs file-side help.
+//! `ZDOTDIR` is the only env handle zsh provides for "load an extra
+//! interactive rc before the user's" — same pattern iTerm2 / Wezterm
+//! / VS Code use.
+//!
+//! bash and fish are out of scope today. bash handles its own
+//! `.bash_profile` / `.bashrc` resolution off `$HOME` and we already
+//! pass `-l` so login mode runs. fish emits OSC 7 by default. zsh is
+//! the macOS default and the only shell that needs file-side help.
 
 use std::fs;
 use std::io;
@@ -19,10 +25,14 @@ use std::path::{Path, PathBuf};
 
 const SHELL_INIT_DIR_NAME: &str = "shell-init";
 const ZSHENV_NAME: &str = ".zshenv";
+const ZPROFILE_NAME: &str = ".zprofile";
 const ZSHRC_NAME: &str = ".zshrc";
+const ZLOGIN_NAME: &str = ".zlogin";
 
 const ZSHENV_BODY: &str = include_str!("../shell-init/zshenv");
+const ZPROFILE_BODY: &str = include_str!("../shell-init/zprofile");
 const ZSHRC_BODY: &str = include_str!("../shell-init/zshrc");
+const ZLOGIN_BODY: &str = include_str!("../shell-init/zlogin");
 
 /// Materialise the shell-init dir under Acorn's data dir, returning the
 /// path callers should hand to `ZDOTDIR` on PTY spawn. Idempotent — the
@@ -36,7 +46,9 @@ fn ensure_shell_init_dir_at(base: &Path) -> io::Result<PathBuf> {
     let dir = base.join(SHELL_INIT_DIR_NAME);
     fs::create_dir_all(&dir)?;
     fs::write(dir.join(ZSHENV_NAME), ZSHENV_BODY)?;
+    fs::write(dir.join(ZPROFILE_NAME), ZPROFILE_BODY)?;
     fs::write(dir.join(ZSHRC_NAME), ZSHRC_BODY)?;
+    fs::write(dir.join(ZLOGIN_NAME), ZLOGIN_BODY)?;
     Ok(dir)
 }
 
@@ -65,7 +77,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_zshrc_with_osc7_emitter() {
+    fn writes_zshrc_with_osc7_emitter_and_path_guard() {
         let base = ScratchDir::new("zshrc");
         let dir = ensure_shell_init_dir_at(base.path()).unwrap();
         let zshrc = dir.join(ZSHRC_NAME);
@@ -74,6 +86,11 @@ mod tests {
         assert!(body.contains("_acorn_osc7"));
         assert!(body.contains("precmd_functions"));
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
+        assert!(body.contains("ACORN_SHIM_DIR"));
+        assert!(body.contains("ACORN_CLI_DIR"));
+        // Restore ZDOTDIR before .zlogin runs (otherwise the staged
+        // .zlogin would resolve to the user's dir on its own).
+        assert!(body.contains("_acorn_zd_save"));
     }
 
     #[test]
@@ -86,6 +103,31 @@ mod tests {
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
         assert!(body.contains(".zshenv"));
         assert!(body.contains("ZDOTDIR=$_acorn_zd"));
+    }
+
+    #[test]
+    fn writes_zprofile_forwarding_to_user() {
+        let base = ScratchDir::new("zprofile");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let zprofile = dir.join(ZPROFILE_NAME);
+        assert!(zprofile.exists());
+        let body = fs::read_to_string(&zprofile).unwrap();
+        assert!(body.contains("ACORN_USER_ZDOTDIR"));
+        assert!(body.contains(".zprofile"));
+        // Restore ZDOTDIR so subsequent stage files keep resolving to
+        // our forwarders.
+        assert!(body.contains("_acorn_zd_save"));
+    }
+
+    #[test]
+    fn writes_zlogin_forwarding_to_user() {
+        let base = ScratchDir::new("zlogin");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        let zlogin = dir.join(ZLOGIN_NAME);
+        assert!(zlogin.exists());
+        let body = fs::read_to_string(&zlogin).unwrap();
+        assert!(body.contains("ACORN_USER_ZDOTDIR"));
+        assert!(body.contains(".zlogin"));
     }
 
     #[test]
