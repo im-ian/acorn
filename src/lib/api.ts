@@ -344,6 +344,25 @@ export const api = {
     return invoke<DaemonStatus>("daemon_status");
   },
   /**
+   * Pull the cached boot-time staged-rev reconcile result. `null` when
+   * either reconcile has not run, the daemon is disabled, or every
+   * alive daemon session was spawned against the same staged dotfile
+   * bodies as the current build. Frontend calls this at mount so a
+   * listener registered after the matching emit still sees the
+   * prompt.
+   */
+  stagedRevMismatchStatus(): Promise<StagedRevMismatch | null> {
+    return invoke<StagedRevMismatch | null>("staged_rev_mismatch_status");
+  },
+  /**
+   * Drop the cached staged-rev mismatch so the prompt does not re-show
+   * after the user dismisses it or after the daemon-restart flow that
+   * resolves it.
+   */
+  acknowledgeStagedRevMismatch(): Promise<void> {
+    return invoke<void>("acknowledge_staged_rev_mismatch");
+  },
+  /**
    * Flip the daemon killswitch. Persistence (so the setting survives a
    * restart) is the caller's responsibility — stash to `localStorage`
    * under `acorn:daemon-enabled`.
@@ -499,3 +518,15 @@ export interface DaemonSessionSummary {
   branch: string | null;
   agent_kind: string | null;
 }
+
+/**
+ * Mirror of `crate::staged_rev_reconcile::StagedRevMismatch`. Returned
+ * when the daemon still owns PTYs spawned against a different
+ * staged-dotfile revision than the running build.
+ */
+export interface StagedRevMismatch {
+  current_rev: string;
+  stale_session_count: number;
+}
+
+export const STAGED_REV_MISMATCH_EVENT = "acorn:staged-rev-mismatch";

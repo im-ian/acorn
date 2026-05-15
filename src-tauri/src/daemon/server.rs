@@ -261,6 +261,7 @@ impl Daemon {
                         branch: s.branch,
                         agent_kind: s.agent_kind,
                         pid: s.pid,
+                        staged_rev: s.staged_rev,
                     })
                     .collect(),
             },

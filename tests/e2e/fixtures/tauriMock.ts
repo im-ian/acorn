@@ -119,6 +119,12 @@ export const tauriMockSource = `
     if (cmd === 'get_codex_resume_candidate') return Promise.resolve(null);
     if (cmd === 'acknowledge_claude_resume') return Promise.resolve(undefined);
     if (cmd === 'acknowledge_codex_resume') return Promise.resolve(undefined);
+    // Staged-rev mismatch is the daemon-stale prompt at boot. Default to
+    // "no mismatch" so non-related E2Es never see the modal; tests that
+    // exercise it override via __ACORN_MOCK_HANDLERS__.
+    if (cmd === 'staged_rev_mismatch_status') return Promise.resolve(null);
+    if (cmd === 'acknowledge_staged_rev_mismatch')
+      return Promise.resolve(undefined);
     if (cmd === 'pty_write') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);
