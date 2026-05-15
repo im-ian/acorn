@@ -7,7 +7,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import {
   importBackgroundImage,
@@ -16,6 +16,11 @@ import {
 } from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import {
+  createTranslator,
+  LANGUAGE_OPTIONS,
+  type Language,
+} from "../lib/i18n";
 import { sendTestNotification } from "../lib/notifications";
 import {
   fetchLatestReleaseNotes,
@@ -63,28 +68,31 @@ type Tab =
   | "experiments"
   | "about";
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "terminal", label: "Terminal" },
-  { id: "agents", label: "Agents" },
-  { id: "sessions", label: "Sessions" },
-  { id: "github", label: "GitHub" },
-  { id: "appearance", label: "Appearance" },
-  { id: "editor", label: "Editor" },
-  { id: "notifications", label: "Notifications" },
-  { id: "storage", label: "Storage" },
-  { id: "experiments", label: "Experiments" },
-  { id: "about", label: "About" },
+const TABS: Array<{ id: Tab; labelKey: string }> = [
+  { id: "terminal", labelKey: "settings.tabs.terminal" },
+  { id: "agents", labelKey: "settings.tabs.agents" },
+  { id: "sessions", labelKey: "settings.tabs.sessions" },
+  { id: "github", labelKey: "settings.tabs.github" },
+  { id: "appearance", labelKey: "settings.tabs.appearance" },
+  { id: "editor", labelKey: "settings.tabs.editor" },
+  { id: "notifications", labelKey: "settings.tabs.notifications" },
+  { id: "storage", labelKey: "settings.tabs.storage" },
+  { id: "experiments", labelKey: "settings.tabs.experiments" },
+  { id: "about", labelKey: "settings.tabs.about" },
 ];
 
 const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
+type SettingsTranslator = ReturnType<typeof createTranslator>;
 
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
   const reset = useSettings((s) => s.reset);
+  const language = useSettings((s) => s.settings.language);
   const pendingTab = useSettings((s) => s.pendingTab);
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
+  const t = useMemo(() => createTranslator(language), [language]);
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
   // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
@@ -117,7 +125,7 @@ export function SettingsModal() {
       ariaLabelledBy="acorn-settings-title"
     >
       <ModalHeader
-        title="Settings"
+        title={t("settings.title")}
         titleId="acorn-settings-title"
         icon={<SettingsIcon size={14} className="text-fg-muted" />}
         variant="dialog"
@@ -125,19 +133,19 @@ export function SettingsModal() {
       />
       <div className="flex h-[28rem]">
         <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
-          {TABS.map((t) => (
+          {TABS.map((tabMeta) => (
             <button
-              key={t.id}
+              key={tabMeta.id}
               type="button"
-              onClick={() => setTab(t.id)}
+              onClick={() => setTab(tabMeta.id)}
               className={cn(
                 "px-4 py-1.5 text-left text-xs transition",
-                tab === t.id
+                tab === tabMeta.id
                   ? "bg-bg-elevated text-fg"
                   : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
               )}
             >
-              {t.label}
+              {t(tabMeta.labelKey)}
             </button>
           ))}
           <div className="mt-auto px-4 pb-2">
@@ -146,7 +154,7 @@ export function SettingsModal() {
               onClick={reset}
               className="text-[11px] text-fg-muted transition hover:text-danger"
             >
-              Reset to defaults
+              {t("settings.reset")}
             </button>
           </div>
         </nav>
@@ -160,7 +168,7 @@ export function SettingsModal() {
           ) : tab === "github" ? (
             <GithubSettings />
           ) : tab === "appearance" ? (
-            <AppearanceSettings />
+            <AppearanceSettings t={t} />
           ) : tab === "editor" ? (
             <EditorSettings />
           ) : tab === "notifications" ? (
@@ -562,8 +570,9 @@ function GithubSettings() {
   );
 }
 
-function AppearanceSettings() {
+function AppearanceSettings({ t }: { t: SettingsTranslator }) {
   const settings = useSettings((s) => s.settings);
+  const patchLanguage = useSettings((s) => s.patchLanguage);
   const patchStatusBar = useSettings((s) => s.patchStatusBar);
   const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
   const patchAppearance = useSettings((s) => s.patchAppearance);
@@ -572,6 +581,11 @@ function AppearanceSettings() {
 
   return (
     <section className="space-y-6">
+      <LanguageSection
+        language={settings.language}
+        onChange={patchLanguage}
+        t={t}
+      />
       <ThemeSection
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
@@ -593,6 +607,36 @@ function AppearanceSettings() {
         patch={patchStatusBar}
       />
     </section>
+  );
+}
+
+function LanguageSection({
+  language,
+  onChange,
+  t,
+}: {
+  language: Language;
+  onChange: (language: Language) => void;
+  t: SettingsTranslator;
+}) {
+  return (
+    <Field
+      label={t("settings.language.label")}
+      hint={t("settings.language.hint")}
+    >
+      <Select
+        value={language}
+        onChange={(e) => onChange(e.target.value as Language)}
+        className="w-48"
+        aria-label={t("settings.language.label")}
+      >
+        {LANGUAGE_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.nativeLabel}
+          </option>
+        ))}
+      </Select>
+    </Field>
   );
 }
 

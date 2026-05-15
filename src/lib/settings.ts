@@ -5,6 +5,7 @@ import {
   sanitizeFontFamilyName,
   type CuratedMonospaceFont,
 } from "./fonts";
+import { isLanguage, type Language } from "./i18n";
 
 const STORAGE_KEY = "acorn:settings:v1";
 
@@ -142,6 +143,7 @@ export const TERMINAL_FONT_WEIGHTS: ReadonlyArray<{
 ];
 
 export interface AcornSettings {
+  language: Language;
   terminal: {
     fontFamily: string;
     fontSize: number;
@@ -306,6 +308,7 @@ export interface AcornSettings {
 }
 
 export const DEFAULT_SETTINGS: AcornSettings = {
+  language: "en",
   terminal: {
     fontFamily: fontStackFromSlots(
       ["JetBrains Mono", "Fira Code", "Menlo"],
@@ -515,6 +518,10 @@ function normalizeSelectedAgent(
   return fallback;
 }
 
+function normalizeLanguage(v: unknown, fallback: Language): Language {
+  return isLanguage(v) ? v : fallback;
+}
+
 /**
  * v1 commitMessage block from the multi-provider commit-message PR. The
  * loader below lifts every field up into the new `agents.*` block so a
@@ -625,6 +632,7 @@ function loadSettings(): AcornSettings {
       },
     };
     return {
+      language: normalizeLanguage(parsed.language, DEFAULT_SETTINGS.language),
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
         ...terminalRaw,
@@ -786,6 +794,7 @@ interface SettingsState {
     },
   ) => void;
   patchExperiments: (patch: Partial<AcornSettings["experiments"]>) => void;
+  patchLanguage: (language: Language) => void;
   reset: () => void;
 }
 
@@ -930,6 +939,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         experiments: { ...s.settings.experiments, ...patch },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchLanguage: (language) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        language,
       };
       persist(next);
       return { settings: next };
