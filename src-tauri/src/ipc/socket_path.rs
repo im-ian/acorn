@@ -13,7 +13,7 @@
 //! same `directories` lookup directly — the two paths must stay in lockstep.
 //!
 //! Debug vs release: `cfg!(debug_assertions)` swaps the project name to
-//! `acorn-dev` so `bun run tauri dev` cannot collide with the installed
+//! `acorn-dev` so `pnpm run tauri dev` cannot collide with the installed
 //! app. The sidecar `acorn-ipc` CLI is normally built `--release` (see
 //! `scripts/build-sidecar.sh`), so its fallback resolves to `acorn` even
 //! when the host runs debug. This is fine in practice because every
