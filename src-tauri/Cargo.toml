@@ -96,7 +96,7 @@ strip = true
 
 # CI release profile — trades a small binary-size increase for much faster
 # compile time. Used by `.github/workflows/release.yml`. Local releases
-# (developers running `bun run tauri build`) still use [profile.release]
+# (developers running `pnpm run tauri build`) still use [profile.release]
 # above, so shipped artifact size is unchanged for ad-hoc builds.
 [profile.release-ci]
 inherits = "release"
