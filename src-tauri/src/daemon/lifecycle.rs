@@ -4,9 +4,11 @@
 //!
 //! 1. **PID file as singleton lock.** Only one daemon may bind the control
 //!    socket at a time per user. We write our PID to `daemon.pid` on
-//!    startup and refuse to start if the file already names a live PID
-//!    that has the same executable name. Stale PIDs (process is gone, or
-//!    is a different binary) are reclaimed silently.
+//!    startup and refuse to start only when the recorded PID is alive
+//!    *and* points at an `acornd` binary. PIDs that are gone, unparseable,
+//!    or recycled by an unrelated process are reclaimed silently — without
+//!    the executable check, OS PID reuse (e.g. macOS handing the slot to
+//!    a system XPC) wedges every restart with `daemon already running`.
 //!
 //! 2. **Detach from the spawning Acorn process group.** The app launches
 //!    `acornd serve --detach`; that child forks once, calls `setsid()` to
@@ -24,7 +26,14 @@
 use std::io;
 use std::path::PathBuf;
 
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
 use super::paths;
+
+/// Basename the daemon binary ships as. Compared (case-sensitive) against
+/// the running process's `exe()` / `name()` / `argv[0]` to defeat PID
+/// reuse — see [`is_our_daemon`].
+const DAEMON_EXECUTABLE: &str = "acornd";
 
 /// Outcome of attempting to acquire the daemon singleton lock.
 #[derive(Debug)]
@@ -43,12 +52,13 @@ pub fn try_acquire_pid_lock() -> io::Result<PidLock> {
     if path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
             if let Ok(pid) = contents.trim().parse::<u32>() {
-                if is_process_alive(pid) {
+                if is_our_daemon(pid) {
                     return Ok(PidLock::AlreadyHeld(pid));
                 }
             }
         }
-        // Stale file (process gone, or unparseable). Reclaim it.
+        // Stale file (process gone, unparseable, or PID was recycled
+        // by an unrelated binary). Reclaim it.
     }
     let me = std::process::id();
     std::fs::write(&path, me.to_string())?;
@@ -88,6 +98,53 @@ fn is_process_alive(_pid: u32) -> bool {
     // hits this branch; the stub keeps the function buildable when
     // Windows support is added later.
     true
+}
+
+/// `kill -0` alone treats a PID as "the daemon" when the OS has reused
+/// that PID slot for an unrelated binary (commonly seen on macOS where
+/// a recycled PID lands on a system XPC like `com.apple.geod`). That
+/// stale-but-alive case causes every restart to fail with `daemon
+/// already running` until the user manually deletes `daemon.pid`.
+/// Require *both* signals: the PID is live, and its executable basename
+/// matches our daemon binary.
+fn is_our_daemon(pid: u32) -> bool {
+    if !is_process_alive(pid) {
+        return false;
+    }
+    let target_pid = Pid::from_u32(pid);
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[target_pid]),
+        true,
+        ProcessRefreshKind::new(),
+    );
+    sys.process(target_pid)
+        .map(process_basename_is_daemon)
+        .unwrap_or(false)
+}
+
+fn basename(s: &str) -> &str {
+    s.rsplit('/').next().unwrap_or(s)
+}
+
+fn process_basename_is_daemon(proc: &sysinfo::Process) -> bool {
+    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
+        if basename(exe) == DAEMON_EXECUTABLE {
+            return true;
+        }
+    }
+    if let Some(name) = proc.name().to_str() {
+        if basename(name) == DAEMON_EXECUTABLE {
+            return true;
+        }
+    }
+    if let Some(first) = proc.cmd().first() {
+        if basename(&first.to_string_lossy()) == DAEMON_EXECUTABLE {
+            return true;
+        }
+    }
+    false
 }
 
 /// Probe a daemon by attempting to connect to the canonical control
@@ -213,6 +270,31 @@ mod tests {
         match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(_) => {}
             PidLock::AlreadyHeld(pid) => panic!("reclaim should have happened, got {pid}"),
+        }
+        unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: an alive PID whose binary is *not* `acornd` (e.g. the
+    /// OS recycled the slot to an unrelated process) must be treated as
+    /// stale. Pre-fix, `kill -0` returned success and the daemon refused
+    /// to start with `daemon already running`.
+    #[test]
+    fn pid_lock_reclaims_when_pid_belongs_to_unrelated_binary() {
+        let _g = ENV_LOCK.lock();
+        let tmp = short_tmp_root().join(format!("acn-pid-reuse-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
+        // The test runner itself: guaranteed alive, guaranteed not
+        // `acornd` (cargo names the test binary something like
+        // `acorn_lib-<hash>`).
+        let pidfile = paths::pid_file_path().unwrap();
+        std::fs::write(&pidfile, std::process::id().to_string()).unwrap();
+        match try_acquire_pid_lock().unwrap() {
+            PidLock::Acquired(_) => {}
+            PidLock::AlreadyHeld(pid) => {
+                panic!("recycled PID should have been reclaimed, got {pid}")
+            }
         }
         unsafe { std::env::remove_var(paths::ENV_DATA_DIR_OVERRIDE) };
         let _ = std::fs::remove_dir_all(&tmp);
