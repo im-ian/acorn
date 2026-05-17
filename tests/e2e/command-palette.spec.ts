@@ -17,14 +17,14 @@ test.describe("command palette", () => {
     const palette = page.getByRole("dialog", { name: "명령 팔레트" });
     await expect(palette).toBeVisible();
     await expect(
-      page.getByPlaceholder("명령을 입력하거나 검색하세요..."),
+      palette.getByPlaceholder("명령을 입력하거나 검색하세요..."),
     ).toBeVisible();
-    await expect(page.getByText("세션", { exact: true })).toBeVisible();
+    await expect(palette.getByText("세션", { exact: true })).toBeVisible();
     await expect(
-      page.getByRole("option", { name: /새 세션/ }),
+      palette.getByRole("option", { name: /새 세션/ }),
     ).toBeVisible();
     await expect(
-      page.getByRole("option", { name: /새 프로젝트/ }),
+      palette.getByRole("option", { name: /새 프로젝트/ }),
     ).toBeVisible();
   });
 
