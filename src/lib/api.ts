@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
+  AgentHistoryItem,
   CommitInfo,
   DiffPayload,
   GeneratedCommitMessage,
@@ -235,6 +236,12 @@ export const api = {
   },
   listSystemFonts(): Promise<string[]> {
     return invoke<string[]>("list_system_fonts");
+  },
+  listAgentHistory(repoPath: string, limit = 100): Promise<AgentHistoryItem[]> {
+    return invoke<AgentHistoryItem[]>("list_agent_history", {
+      repoPath,
+      limit,
+    });
   },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
