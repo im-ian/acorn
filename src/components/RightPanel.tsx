@@ -691,7 +691,7 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
                       "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
                       item.provider === "codex"
                         ? "bg-accent/15 text-accent"
-                        : "bg-fg-muted/15 text-fg-muted",
+                        : "bg-warning/15 text-warning",
                     )}
                   >
                     {item.provider}
