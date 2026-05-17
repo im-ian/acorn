@@ -361,6 +361,7 @@ pub fn run() {
             fs_explorer::fs_git_status,
             fs_explorer::fs_git_branch,
             fs_explorer::fs_read_file,
+            fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,
         ])

@@ -186,6 +186,27 @@ function buildDirtyAncestors(
   return out;
 }
 
+function collectVisiblePaths(
+  cache: Cache,
+  expanded: Set<string>,
+  rootPath: string,
+): Set<string> {
+  const out = new Set<string>();
+
+  const walk = (dir: string) => {
+    const entries = cache[dir]?.entries ?? [];
+    for (const entry of entries) {
+      out.add(entry.path);
+      if (entry.is_dir && expanded.has(entry.path)) {
+        walk(entry.path);
+      }
+    }
+  };
+
+  walk(rootPath);
+  return out;
+}
+
 /**
  * POSIX shell-quote a path with single quotes. Inside `'…'` every byte
  * except `'` is literal — even newlines, `!`, `$`, backticks. The only
@@ -276,10 +297,20 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     claude: string | null;
     codex: string | null;
   }>({ claude: null, codex: null });
+  const gitStatsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gitStatusRef = useRef<Record<string, FsGitStatusEntry>>({});
+  const visiblePathsRef = useRef<Set<string>>(new Set());
+  const changedPathsRef = useRef<Set<string>>(new Set());
+  const statusInFlightRef = useRef<Promise<void> | null>(null);
+  const statusRefreshPendingRef = useRef(false);
   // Tracks the focused session id so the menu can write into the right
   // PTY without re-importing the store at every click.
   const [activeSessionId, setActiveSessionIdLocal] = useState<string | null>(
     null,
+  );
+  const visiblePaths = useMemo(
+    () => collectVisiblePaths(cache, expanded, rootPath),
+    [cache, expanded, rootPath],
   );
 
   useEffect(() => {
@@ -295,18 +326,125 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     };
   }, []);
 
+  useEffect(() => {
+    gitStatusRef.current = gitStatus;
+  }, [gitStatus]);
+
+  useEffect(() => {
+    visiblePathsRef.current = visiblePaths;
+  }, [visiblePaths]);
+
   const refreshGitStatus = useCallback(async () => {
-    try {
-      const map = await api.fsGitStatus(rootPath);
-      setGitStatus(map);
-    } catch {
-      setGitStatus({});
+    if (statusInFlightRef.current) {
+      statusRefreshPendingRef.current = true;
+      return statusInFlightRef.current;
     }
+
+    const run = async () => {
+      try {
+        const map = await api.fsGitStatus(rootPath);
+        setGitStatus((prev) => {
+          const next: Record<string, FsGitStatusEntry> = {};
+          for (const [path, entry] of Object.entries(map)) {
+            const previous = prev[path];
+            next[path] =
+              previous && previous.kind === entry.kind
+                ? {
+                    ...entry,
+                    additions: previous.additions,
+                    deletions: previous.deletions,
+                  }
+                : entry;
+          }
+          gitStatusRef.current = next;
+          return next;
+        });
+      } catch {
+        gitStatusRef.current = {};
+        setGitStatus({});
+      }
+    };
+
+    const promise = run().finally(() => {
+      statusInFlightRef.current = null;
+      if (statusRefreshPendingRef.current) {
+        statusRefreshPendingRef.current = false;
+        void refreshGitStatus();
+      }
+    });
+    statusInFlightRef.current = promise;
+    return promise;
   }, [rootPath]);
+
+  const scheduleGitDiffStats = useCallback(() => {
+    if (gitStatsTimerRef.current) {
+      clearTimeout(gitStatsTimerRef.current);
+    }
+    gitStatsTimerRef.current = setTimeout(() => {
+      gitStatsTimerRef.current = null;
+      const targetPaths = new Set([
+        ...visiblePathsRef.current,
+        ...changedPathsRef.current,
+      ]);
+      changedPathsRef.current.clear();
+      const entries = Object.entries(gitStatusRef.current)
+        .filter(([path]) => targetPaths.has(path))
+        .map(([path, status]) => ({ path, kind: status.kind }));
+      if (entries.length === 0) return;
+
+      void api
+        .fsGitDiffStats(rootPath, entries)
+        .then((stats) => {
+          const requestedKinds = new Map(entries.map((e) => [e.path, e.kind]));
+          setGitStatus((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const [path, stat] of Object.entries(stats)) {
+              const current = next[path];
+              if (!current || current.kind !== requestedKinds.get(path)) continue;
+              if (
+                current.additions === stat.additions &&
+                current.deletions === stat.deletions
+              ) {
+                continue;
+              }
+              next[path] = { ...current, ...stat };
+              changed = true;
+            }
+            if (changed) gitStatusRef.current = next;
+            return changed ? next : prev;
+          });
+        })
+        .catch(() => {});
+    }, 1200);
+  }, [rootPath]);
+
+  const gitStatusKindFingerprint = useMemo(
+    () =>
+      Object.entries(gitStatus)
+        .map(([path, status]) => `${path}:${status.kind}`)
+        .join("\0"),
+    [gitStatus],
+  );
 
   useEffect(() => {
     void refreshGitStatus();
-  }, [refreshGitStatus]);
+    scheduleGitDiffStats();
+    return () => {
+      if (gitStatsTimerRef.current) {
+        clearTimeout(gitStatsTimerRef.current);
+        gitStatsTimerRef.current = null;
+      }
+    };
+  }, [refreshGitStatus, scheduleGitDiffStats]);
+
+  useEffect(() => {
+    scheduleGitDiffStats();
+  }, [visiblePaths, scheduleGitDiffStats]);
+
+  useEffect(() => {
+    scheduleGitDiffStats();
+  }, [gitStatusKindFingerprint, scheduleGitDiffStats]);
 
   // Subscribe to focused-session changes via the store so the menu
   // always reflects the agent state of whichever PTY would receive the
@@ -444,9 +582,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         }
       }
       void refreshGitStatus();
+      scheduleGitDiffStats();
     };
     void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
       for (const p of event.payload.paths) {
+        changedPathsRef.current.add(p);
         pending.add(parentOf(p));
       }
       if (!flushTimer) flushTimer = setTimeout(flush, 100);
@@ -457,7 +597,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (flushTimer) clearTimeout(flushTimer);
       if (cancel) cancel();
     };
-  }, [rootPath, fetchDir, refreshGitStatus]);
+  }, [rootPath, fetchDir, refreshGitStatus, scheduleGitDiffStats]);
 
   const toggleDir = useCallback(
     (path: string) => {
@@ -670,8 +810,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       }
     }
     setSelection(new Set());
+    for (const p of paths) changedPathsRef.current.add(p);
     void refreshGitStatus();
-  }, [selection, refreshGitStatus]);
+    scheduleGitDiffStats();
+  }, [selection, refreshGitStatus, scheduleGitDiffStats]);
 
   const handleBulkCopyPaths = useCallback(
     async (mode: "relative" | "absolute") => {
