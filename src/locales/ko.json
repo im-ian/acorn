@@ -596,8 +596,11 @@
       "loading": "agent 세션을 스캔하는 중…",
       "count": "agent 세션 {count}개",
       "empty": "이 프로젝트의 Claude 또는 Codex 세션을 찾지 못했습니다",
+      "runSession": "새 터미널에서 실행",
       "copyResume": "resume 명령 복사",
-      "openTranscript": "transcript 열기"
+      "openTranscript": "transcript 열기",
+      "resumeSessionName": "resume",
+      "createFailed": "터미널 세션을 만들지 못했습니다"
     },
     "staged": {
       "empty": "스테이징되었거나 수정된 파일이 없습니다",

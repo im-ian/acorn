@@ -20,6 +20,7 @@ import {
   ListTodo,
   Maximize2,
   MinusCircle,
+  Play,
   Search,
   X,
 } from "lucide-react";
@@ -625,9 +626,16 @@ function countByStatus(todos: TodoItem[]) {
 
 function AgentHistoryTab({ repoPath }: { repoPath: string }) {
   const t = useTranslation();
+  const createSession = useAppStore((s) => s.createSession);
+  const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
   const [items, setItems] = useState<AgentHistoryItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    item: AgentHistoryItem;
+  } | null>(null);
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -648,6 +656,27 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
   async function copy(text: string) {
     try {
       await navigator.clipboard.writeText(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function runSession(item: AgentHistoryItem) {
+    if (!item.resume_command) return;
+    setError(null);
+    try {
+      const created = await createSession(
+        `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
+        repoPath,
+      );
+      if (!created) {
+        setError(
+          useAppStore.getState().error ??
+            rt(t, "rightPanel.history.createFailed"),
+        );
+        return;
+      }
+      setPendingTerminalInput(created.id, item.resume_command);
     } catch (e) {
       setError(String(e));
     }
@@ -683,7 +712,12 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
             {items.map((item) => (
               <div
                 key={`${item.provider}:${item.id}:${item.transcript_path}`}
-                className="group px-3 py-2.5 hover:bg-bg-elevated/60"
+                className="group cursor-default px-3 py-2.5 hover:bg-bg-elevated/60"
+                onDoubleClick={() => void runSession(item)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, item });
+                }}
               >
                 <div className="flex items-start gap-2">
                   <span
@@ -719,40 +753,41 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
                       ) : null}
                     </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
-                    {item.resume_command ? (
-                      <Tooltip
-                        label={rt(t, "rightPanel.history.copyResume")}
-                        side="bottom"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => void copy(item.resume_command ?? "")}
-                          className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-                        >
-                          <Copy size={12} />
-                        </button>
-                      </Tooltip>
-                    ) : null}
-                    <Tooltip
-                      label={rt(t, "rightPanel.history.openTranscript")}
-                      side="bottom"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void openPath(item.transcript_path)}
-                        className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-                      >
-                        <ExternalLink size={12} />
-                      </button>
-                    </Tooltip>
-                  </div>
                 </div>
               </div>
             ))}
           </div>
         )}
       </div>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={
+          menu
+            ? ([
+                {
+                  label: rt(t, "rightPanel.history.runSession"),
+                  icon: <Play size={12} />,
+                  disabled: !menu.item.resume_command,
+                  onClick: () => void runSession(menu.item),
+                },
+                {
+                  label: rt(t, "rightPanel.history.copyResume"),
+                  icon: <Copy size={12} />,
+                  disabled: !menu.item.resume_command,
+                  onClick: () => void copy(menu.item.resume_command ?? ""),
+                },
+                {
+                  label: rt(t, "rightPanel.history.openTranscript"),
+                  icon: <ExternalLink size={12} />,
+                  onClick: () => void openPath(menu.item.transcript_path),
+                },
+              ] satisfies ContextMenuItem[])
+            : []
+        }
+      />
     </div>
   );
 }
