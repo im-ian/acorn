@@ -7,7 +7,7 @@ use git2::{Repository, Status, StatusOptions};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::error::{AppError, AppResult};
@@ -291,9 +291,11 @@ pub struct GitStatusEntry {
 }
 
 /// Per-path git status, mapped to a small set of buckets the frontend
-/// uses to pick a color, plus diff line counts (vs HEAD) so the entry
-/// can render a `+n -n` badge. Paths are absolute strings keyed by full
-/// path so the FileExplorer's flat lookup matches its entry paths.
+/// uses to pick a color. Diff line counts are intentionally omitted here
+/// because computing them requires extra per-path IO/diff work.
+///
+/// Paths are absolute strings keyed by full path so the FileExplorer's
+/// flat lookup matches its entry paths.
 #[tauri::command]
 pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEntry>> {
     let root = PathBuf::from(&repo_root);
@@ -327,11 +329,60 @@ pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEn
         let abs_str = abs.to_string_lossy().into_owned();
         let s = entry.status();
         let kind = classify_status(s);
-        let (additions, deletions) = file_diff_stats(&repo, &workdir, rel, kind);
         out.insert(
             abs_str,
             GitStatusEntry {
                 kind: kind.into(),
+                additions: 0,
+                deletions: 0,
+            },
+        );
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitDiffStatsRequest {
+    pub path: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitDiffStatsEntry {
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[tauri::command]
+pub fn fs_git_diff_stats(
+    repo_root: String,
+    entries: Vec<GitDiffStatsRequest>,
+) -> AppResult<HashMap<String, GitDiffStatsEntry>> {
+    let root = PathBuf::from(&repo_root);
+    if !root.exists() {
+        return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
+    }
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => return Ok(HashMap::new()),
+    };
+    let workdir = match repo.workdir() {
+        Some(p) => p.to_path_buf(),
+        None => return Ok(HashMap::new()),
+    };
+
+    let mut out = HashMap::with_capacity(entries.len());
+    for entry in entries {
+        let path = PathBuf::from(&entry.path);
+        reject_dangerous(&path)?;
+        let Ok(rel_path) = path.strip_prefix(&workdir) else {
+            continue;
+        };
+        let rel = rel_path.to_string_lossy();
+        let (additions, deletions) = file_diff_stats(&repo, &workdir, &rel, &entry.kind);
+        out.insert(
+            path.to_string_lossy().into_owned(),
+            GitDiffStatsEntry {
                 additions,
                 deletions,
             },
