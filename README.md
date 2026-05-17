@@ -75,6 +75,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 - Acorn 세션에서 `claude` / `codex`를 띄운 뒤 앱을 껐다 켜도 **이전 대화 그대로 이어서** 사용 가능
 - 별도 설정 / 설치 단계 없음 — 그냥 `claude` 또는 `codex` 치면 자동 적용
 - 사용자가 직접 옵션이나 서브커맨드를 지정한 호출은 그대로 통과
+- 우측 **Sessions** 패널에서 프로젝트별 Claude / Codex transcript 히스토리를 확인하고, 더블 클릭으로 새 터미널에서 이어서 실행
 
 ### 🛏️ Background sessions
 - Acorn 앱을 종료·재시작해도 **PTY 세션이 그대로 살아 있음** — 다시 열면 화면도 복원
@@ -99,6 +100,9 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
   - Conversation / Commits / Checks / Files 탭
   - PR 본문의 task checkbox 토글
   - 머지 메시지를 설치된 AI CLI(`claude` / `codex` / `gemini` / `ollama` / `llm`)로 자동 생성
+- **Sessions** — 선택한 프로젝트의 Claude / Codex JSONL transcript 히스토리, 미리보기, cwd, 최근 활동 시간 표시
+  - 더블 클릭으로 resume 명령을 새 터미널에서 실행
+  - 우클릭 메뉴에서 resume 명령 복사 또는 transcript 열기
 - **Actions** — GitHub Actions 실행 목록, workflow 필터, run 상세 보기
 
 ### 🔍 Diff 뷰어

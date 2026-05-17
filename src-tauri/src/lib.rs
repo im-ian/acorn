@@ -1,3 +1,4 @@
+mod agent_history;
 mod agent_resume;
 mod agent_resume_persister;
 mod claude_util;
@@ -333,6 +334,7 @@ pub fn run() {
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
             commands::list_system_fonts,
+            commands::list_agent_history,
             commands::get_claude_resume_candidate,
             commands::acknowledge_claude_resume,
             commands::get_codex_resume_candidate,
