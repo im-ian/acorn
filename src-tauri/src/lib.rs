@@ -48,7 +48,7 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
-    // Release-only: lets `bun run tauri dev` run alongside an installed Acorn.
+    // Release-only: lets `pnpm run tauri dev` run alongside an installed Acorn.
     #[cfg(not(debug_assertions))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -223,7 +223,7 @@ pub fn run() {
             // Resolve and cache the `acornd` binary location now so the
             // bridge does not pay the lookup cost on every spawn. In
             // bundled mode the binary lives at
-            // `Contents/MacOS/acornd`; in `bun run tauri dev` it sits
+            // `Contents/MacOS/acornd`; in `pnpm run tauri dev` it sits
             // at `target/debug/acornd`. Cache failure (binary missing)
             // is non-fatal — the bridge will surface a `BinaryNotFound`
             // error on the first daemon-routed call so the user sees

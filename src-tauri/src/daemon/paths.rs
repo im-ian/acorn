@@ -51,7 +51,7 @@ pub const ENV_DAEMON_STREAM_OVERRIDE: &str = "ACORN_DAEMON_STREAM_SOCKET";
 ///
 /// Debug builds resolve `ProjectDirs` against `acorn-dev` so the daemon's
 /// socket / pidfile / log / metadata land in the same isolated data dir
-/// that `bun run tauri dev` uses for the app. Without this the dev app
+/// that `pnpm run tauri dev` uses for the app. Without this the dev app
 /// (`acorn-dev`) and a dev-built `acornd` (`acorn`) would each pick a
 /// different directory and never see each other's sockets. The release
 /// sidecar is built `--release` (see `scripts/build-sidecar.sh`), so it

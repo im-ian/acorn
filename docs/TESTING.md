@@ -8,8 +8,8 @@ Acorn has two test layers, each catching a different class of bug. Pick the righ
 | End-to-end / UI | Playwright | `tests/e2e/**/*.spec.ts` | Real Chromium |
 
 ```sh
-bun run test       # Vitest — sub-second, all logic
-bun run test:e2e   # Playwright — ~5s, all UI flows
+pnpm run test       # Vitest — sub-second, all logic
+pnpm run test:e2e   # Playwright — ~5s, all UI flows
 ```
 
 For Playwright-specific patterns (mocking Tauri invoke, hotkey helper, capturing call args), see [`E2E_TESTING.md`](./E2E_TESTING.md).

@@ -28,23 +28,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          # Pinned to match .github/workflows/ci.yml so the GHA-managed
-          # bun cache key stays stable across runs (`latest` invalidates
-          # whenever upstream cuts a new release).
-          bun-version: 1.3.12
+          version: 9.15.0
 
-      # Cache bun's package store. setup-bun does not cache install
-      # output; `bun install` re-fetches every dep without this.
-      - name: Cache bun store
-        uses: actions/cache@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -90,7 +84,7 @@ jobs:
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
 
       - name: Install JS deps
-        run: bun install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build & sign tauri bundle
         env:
@@ -110,7 +104,7 @@ jobs:
         # and rely on `bundle.createUpdaterArtifacts: true` in
         # tauri.conf.json to emit the updater tarball alongside the app
         # bundle automatically.
-        run: bun run tauri build --target ${{ matrix.target }} --bundles app dmg -- --profile release-ci
+        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg -- --profile release-ci
 
       - name: Stage release artifacts
         id: stage

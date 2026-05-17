@@ -101,11 +101,11 @@ If you are building from source rather than installing a release, the
 sidecar is staged for you when you run `tauri build`. For a dev loop:
 
 ```sh
-bun run build:sidecar   # one-time; run again after IPC changes
-bun run tauri dev
+pnpm run build:sidecar   # one-time; run again after IPC changes
+pnpm run tauri dev
 ```
 
-`bun run build:sidecar` shells out to `src-tauri/scripts/build-sidecar.sh`
+`pnpm run build:sidecar` shells out to `src-tauri/scripts/build-sidecar.sh`
 which both compiles `acorn-ipc` *and* stages it at
 `src-tauri/binaries/acorn-ipc-<target-triple>`, the path Tauri's
 `externalBin` existence check requires before `tauri dev` / `tauri build`

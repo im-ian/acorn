@@ -472,7 +472,7 @@ describe("reconcile via refreshSessions", () => {
 
   // TODO(acorn-tests): cross-pane collapse on session removal reproduces
   // reliably on macOS+local but the empty pane is not collapsed when run
-  // under Linux + (bun OR node) on CI. The state ends up with the empty
+  // under Linux + Node on CI. The state ends up with the empty
   // pane still attached to a `split` layout. Likely a real bug in
   // `reconcileWorkspace`'s collapse loop — file an issue and re-enable
   // once root-caused.
