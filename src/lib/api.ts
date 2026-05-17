@@ -525,6 +525,15 @@ export const api = {
       repoRoot,
     });
   },
+  fsGitDiffStats(
+    repoRoot: string,
+    entries: FsGitDiffStatsRequest[],
+  ): Promise<Record<string, FsGitDiffStatsEntry>> {
+    return invoke<Record<string, FsGitDiffStatsEntry>>("fs_git_diff_stats", {
+      repoRoot,
+      entries,
+    });
+  },
   fsGitBranch(repoRoot: string): Promise<string> {
     return invoke<string>("fs_git_branch", { repoRoot });
   },
@@ -575,6 +584,16 @@ export type FsGitStatus =
 /** Mirror of `crate::fs_explorer::GitStatusEntry`. */
 export interface FsGitStatusEntry {
   kind: FsGitStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface FsGitDiffStatsRequest {
+  path: string;
+  kind: FsGitStatus;
+}
+
+export interface FsGitDiffStatsEntry {
   additions: number;
   deletions: number;
 }
