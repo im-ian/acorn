@@ -596,8 +596,11 @@
       "loading": "Scanning agent sessions…",
       "count": "{count} agent sessions",
       "empty": "No Claude or Codex sessions found for this project",
+      "runSession": "Run in new terminal",
       "copyResume": "Copy resume command",
-      "openTranscript": "Open transcript"
+      "openTranscript": "Open transcript",
+      "resumeSessionName": "resume",
+      "createFailed": "Failed to create terminal session"
     },
     "staged": {
       "empty": "No staged or modified files",
