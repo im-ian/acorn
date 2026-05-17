@@ -4,9 +4,9 @@
   "version": "1.0.15",
   "identifier": "io.im-ian.acorn",
   "build": {
-    "beforeDevCommand": "bun run dev:sidecar && bun run dev",
+    "beforeDevCommand": "pnpm run dev:sidecar && pnpm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build && bun run build:sidecar",
+    "beforeBuildCommand": "pnpm run build && pnpm run build:sidecar",
     "frontendDist": "../dist"
   },
   "app": {

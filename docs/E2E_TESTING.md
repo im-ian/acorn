@@ -15,20 +15,20 @@ tests/e2e/
 ├── support.ts           # Playwright fixture exposing tauri.handle()
 ├── smoke.spec.ts        # one example
 └── tsconfig.json
-playwright.config.ts     # webServer auto-starts `bun run dev` at :1420
+playwright.config.ts     # webServer auto-starts `pnpm run dev` at :1420
 ```
 
 ## Running
 
 ```sh
-bun run test:e2e          # headless
-bun run test:e2e:headed   # watch the browser drive itself
-bun run test:e2e:ui       # Playwright UI mode (test picker + time travel)
+pnpm run test:e2e          # headless
+pnpm run test:e2e:headed   # watch the browser drive itself
+pnpm run test:e2e:ui       # Playwright UI mode (test picker + time travel)
 ```
 
-The config auto-starts vite at `localhost:1420` and reuses an already-running dev server when present, so you can keep `bun run dev` open in another terminal and tests will reuse it.
+The config auto-starts vite at `localhost:1420` and reuses an already-running dev server when present, so you can keep `pnpm run dev` open in another terminal and tests will reuse it.
 
-Failure artifacts (`test-results/`, `playwright-report/`) are gitignored. Open the last HTML report with `bunx playwright show-report`.
+Failure artifacts (`test-results/`, `playwright-report/`) are gitignored. Open the last HTML report with `pnpm exec playwright show-report`.
 
 ## Writing a test
 

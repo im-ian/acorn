@@ -11,7 +11,7 @@
 #
 # Tauri passes the active target through `TAURI_ENV_TARGET_TRIPLE` to
 # commands spawned via `beforeBuildCommand`. Standalone callers (local
-# `bun run build:sidecar`, manual runs) fall back to the host triple so
+# `pnpm run build:sidecar`, manual runs) fall back to the host triple so
 # the script keeps working without extra setup.
 #
 # Exits non-zero on any failure so the build surfaces the problem instead

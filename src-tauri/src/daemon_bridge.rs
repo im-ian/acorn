@@ -145,7 +145,7 @@ impl DaemonBridge {
     /// Resolve and cache the bundled `acornd` binary path. macOS app
     /// bundle layout: the GUI binary lives at `Contents/MacOS/acorn`
     /// and the daemon sits next to it as `Contents/MacOS/acornd`. In
-    /// `bun run tauri dev` mode the daemon is at `target/debug/acornd`
+    /// `pnpm run tauri dev` mode the daemon is at `target/debug/acornd`
     /// next to `target/debug/acorn`.
     pub fn cache_binary_path(&self, hint: Option<PathBuf>) -> Option<PathBuf> {
         let resolved = hint.or_else(|| {

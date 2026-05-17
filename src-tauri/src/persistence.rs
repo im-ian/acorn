@@ -44,7 +44,7 @@ fn backup_corrupt_file(path: &Path) {
 
 /// Resolve the application's data directory, creating it if missing.
 ///
-/// Debug builds (`bun run tauri dev`) write to `acorn-dev` so local testing
+/// Debug builds (`pnpm run tauri dev`) write to `acorn-dev` so local testing
 /// does not clobber the installed Acorn's sessions/projects.
 pub fn data_dir() -> AppResult<PathBuf> {
     let app_name = if cfg!(debug_assertions) {
