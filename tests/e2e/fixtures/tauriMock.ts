@@ -58,6 +58,13 @@ export const tauriMockSource = `
     if (cmd === 'get_workflow_run_detail') {
       return Promise.resolve({ kind: 'not_github' });
     }
+    // Right panel uses this to decide whether to show the GitHub group.
+    // Default to "GitHub repo" so the existing PRs/Actions tabs stay
+    // visible across all E2Es; tests that need the not-github branch
+    // override this via window.__ACORN_MOCK_HANDLERS__.
+    if (cmd === 'github_origin_slug') {
+      return Promise.resolve('acorn/test');
+    }
     if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
     if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
     if (cmd === 'scrollback_load') return Promise.resolve(null);

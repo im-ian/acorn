@@ -47,11 +47,14 @@ test.describe("right panel: tab switching", () => {
       page.getByText(/No staged or modified files/i),
     ).toBeVisible();
 
+    // PRs lives under the GitHub group — switch group first, then sub-tab.
+    await page.getByRole("button", { name: "GitHub" }).click();
     await page.getByRole("button", { name: "PRs" }).click();
     // PR tab: when remote isn't GitHub OR list is empty, one of these shows.
     // Mock returns an empty list so the empty-list copy wins.
     await expect(page.getByText(/No .* pull requests/i)).toBeVisible();
 
+    await page.getByRole("button", { name: "Code" }).click();
     await page.getByRole("button", { name: "Commits" }).click();
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
@@ -215,5 +218,73 @@ test.describe("right panel: tab switching", () => {
     });
     // Regression: A's page-1 marker must never appear in B's panel.
     await expect(page.getByText(/leak-marker-AAA/)).toHaveCount(0);
+  });
+});
+
+test.describe("right panel: groups", () => {
+  test("group buttons restore each group's last sub-tab", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    // GitHub group is visible by default in the mock; align Actions so its
+    // empty-state copy matches "ok with no items" rather than "not GitHub".
+    await tauri.handle("list_workflow_runs", () => ({
+      kind: "ok",
+      items: [],
+      account: "test-account",
+    }));
+    await page.goto("/");
+
+    // Pick a non-default sub-tab inside Code so we can prove it's remembered.
+    await page.getByRole("button", { name: "Staged" }).click();
+    await expect(page.getByText(/No staged or modified files/i)).toBeVisible();
+
+    // Hop to GitHub → land on its default sub-tab (PRs).
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText(/No .* pull requests/i)).toBeVisible();
+    // Switch to the other GitHub sub-tab.
+    await page.getByRole("button", { name: "Actions" }).click();
+    await expect(page.getByText(/No workflow runs yet/i)).toBeVisible();
+
+    // Hop back to Code — Staged should be restored, not Commits.
+    await page.getByRole("button", { name: "Code" }).click();
+    await expect(page.getByText(/No staged or modified files/i)).toBeVisible();
+
+    // Hop back to GitHub — Actions should be restored, not PRs.
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText(/No workflow runs yet/i)).toBeVisible();
+  });
+
+  test("GitHub group is hidden when origin is not GitHub", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    // Override the default mock so the probe reports "not GitHub".
+    await tauri.handle("github_origin_slug", () => null);
+
+    await page.goto("/");
+
+    // Code group is always there; Agents group is too. GitHub must be gone.
+    await expect(page.getByRole("button", { name: "Code" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agents" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
+  });
+
+  test("History sub-tab is labeled 'History' (renamed from 'Sessions')", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Agents" }).click();
+    // The right-panel sub-tab bar surfaces History; scope to it so we don't
+    // collide with the sidebar's session list which previously used the
+    // "Sessions" label.
+    await expect(
+      page.getByRole("button", { name: "History" }),
+    ).toBeVisible();
   });
 });

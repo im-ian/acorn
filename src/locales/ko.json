@@ -561,13 +561,18 @@
     }
   },
   "rightPanel": {
+    "groups": {
+      "code": "코드",
+      "github": "GitHub",
+      "agents": "에이전트"
+    },
     "tabs": {
       "files": "파일",
       "todos": "할 일",
       "commits": "커밋",
       "staged": "스테이징",
       "prs": "PR",
-      "history": "세션",
+      "history": "기록",
       "actions": "작업"
     },
     "empty": {

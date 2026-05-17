@@ -44,6 +44,9 @@ test.describe("CommandHint via NoAccessBanner", () => {
     await seedNoAccess(tauri);
 
     await page.goto("/");
+    // PRs lives under the GitHub group of the right panel — open the group
+    // first so the sub-tab is in the DOM, then click it.
+    await page.getByRole("button", { name: "GitHub" }).click();
     await page.getByRole("button", { name: "PRs" }).click();
 
     // Banner renders the command as a clickable chip with title attr.
@@ -64,6 +67,9 @@ test.describe("CommandHint via NoAccessBanner", () => {
     await seedNoAccess(tauri);
 
     await page.goto("/");
+    // PRs lives under the GitHub group of the right panel — open the group
+    // first so the sub-tab is in the DOM, then click it.
+    await page.getByRole("button", { name: "GitHub" }).click();
     await page.getByRole("button", { name: "PRs" }).click();
     await page.getByRole("button", { name: /gh auth login/ }).click();
     await page.getByRole("button", { name: /^Cancel$/ }).click();
