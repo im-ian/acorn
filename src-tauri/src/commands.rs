@@ -5,6 +5,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
+use crate::agent_history::{self, AgentHistoryItem};
 use crate::agent_resume;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
@@ -101,6 +102,14 @@ pub fn list_system_fonts() -> Vec<String> {
     }
 
     fonts.into_iter().collect()
+}
+
+#[tauri::command]
+pub fn list_agent_history(
+    repo_path: String,
+    limit: Option<usize>,
+) -> AppResult<Vec<AgentHistoryItem>> {
+    agent_history::list_agent_history(PathBuf::from(repo_path), limit)
 }
 
 /// Stop the running IPC listener (if any) and spawn a fresh one. Used by

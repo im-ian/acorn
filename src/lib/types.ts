@@ -44,6 +44,19 @@ export interface Project {
   position: number;
 }
 
+export type AgentHistoryProvider = "claude" | "codex";
+
+export interface AgentHistoryItem {
+  provider: AgentHistoryProvider;
+  id: string;
+  title: string;
+  preview: string | null;
+  cwd: string | null;
+  transcript_path: string;
+  updated_at: number;
+  resume_command: string | null;
+}
+
 export interface CommitInfo {
   sha: string;
   short_sha: string;

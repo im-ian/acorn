@@ -15,6 +15,7 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   Globe,
+  History,
   Loader2,
   ListTodo,
   Maximize2,
@@ -33,6 +34,7 @@ import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
 import type {
   AccountSummary,
+  AgentHistoryItem,
   CommitInfo,
   DiffPayload,
   PrStateFilter,
@@ -195,6 +197,12 @@ export function RightPanel() {
           onClick={() => setRightTab("prs")}
         />
         <TabButton
+          icon={<History size={14} />}
+          label={rt(t, "rightPanel.tabs.history")}
+          active={rightTab === "history"}
+          onClick={() => setRightTab("history")}
+        />
+        <TabButton
           icon={<Activity size={14} />}
           label={rt(t, "rightPanel.tabs.actions")}
           active={rightTab === "actions"}
@@ -246,6 +254,12 @@ export function RightPanel() {
         ) : rightTab === "files" ? (
           repoPath ? (
             <FileExplorer key={repoPath} rootPath={repoPath} />
+          ) : (
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
+          )
+        ) : rightTab === "history" ? (
+          repoPath ? (
+            <AgentHistoryTab key={repoPath} repoPath={repoPath} />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
@@ -607,6 +621,140 @@ function countByStatus(todos: TodoItem[]) {
     else pending++;
   }
   return { pending, in_progress, completed };
+}
+
+function AgentHistoryTab({ repoPath }: { repoPath: string }) {
+  const t = useTranslation();
+  const [items, setItems] = useState<AgentHistoryItem[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchHistory = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setItems(await api.listAgentHistory(repoPath, 100));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [repoPath]);
+
+  useEffect(() => {
+    void fetchHistory();
+  }, [fetchHistory]);
+
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
+        <div className="min-w-0 flex-1 truncate text-[11px] text-fg-muted">
+          {items
+            ? rtf(t, "rightPanel.history.count", { count: items.length })
+            : rt(t, "rightPanel.history.loading")}
+        </div>
+        <RefreshButton
+          onClick={() => void fetchHistory()}
+          loading={loading}
+          size={12}
+        />
+      </div>
+      <div className="flex-1 overflow-x-hidden overflow-y-auto">
+        {error ? (
+          <div className="p-3 text-xs text-danger">{error}</div>
+        ) : !items ? (
+          <div>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <SkeletonRow key={i} pulseDelayMs={i * 70} />
+            ))}
+          </div>
+        ) : items.length === 0 ? (
+          <Empty msg={rt(t, "rightPanel.history.empty")} />
+        ) : (
+          <div className="divide-y divide-border/50">
+            {items.map((item) => (
+              <div
+                key={`${item.provider}:${item.id}:${item.transcript_path}`}
+                className="group px-3 py-2.5 hover:bg-bg-elevated/60"
+              >
+                <div className="flex items-start gap-2">
+                  <span
+                    className={cn(
+                      "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                      item.provider === "codex"
+                        ? "bg-accent/15 text-accent"
+                        : "bg-fg-muted/15 text-fg-muted",
+                    )}
+                  >
+                    {item.provider}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium text-fg">
+                      {item.title}
+                    </div>
+                    {item.preview ? (
+                      <div className="mt-1 max-h-8 overflow-hidden text-[11px] leading-4 text-fg-muted">
+                        {item.preview}
+                      </div>
+                    ) : null}
+                    <div className="mt-1 flex min-w-0 items-center gap-2 text-[10.5px] text-fg-muted/80">
+                      <Tooltip label={absoluteTime(item.updated_at)} side="bottom">
+                        <span className="shrink-0 font-mono">
+                          {relativeTime(item.updated_at, t)}
+                        </span>
+                      </Tooltip>
+                      {item.cwd ? (
+                        <>
+                          <span className="shrink-0 opacity-50">·</span>
+                          <span className="truncate font-mono">{item.cwd}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                    {item.resume_command ? (
+                      <Tooltip
+                        label={rt(t, "rightPanel.history.copyResume")}
+                        side="bottom"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void copy(item.resume_command ?? "")}
+                          className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                        >
+                          <Copy size={12} />
+                        </button>
+                      </Tooltip>
+                    ) : null}
+                    <Tooltip
+                      label={rt(t, "rightPanel.history.openTranscript")}
+                      side="bottom"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void openPath(item.transcript_path)}
+                        className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                      >
+                        <ExternalLink size={12} />
+                      </button>
+                    </Tooltip>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function CommitsTab({

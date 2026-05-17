@@ -567,6 +567,7 @@
       "commits": "Commits",
       "staged": "Staged",
       "prs": "PRs",
+      "history": "History",
       "actions": "Actions"
     },
     "empty": {
@@ -590,6 +591,13 @@
       "pushed": "Pushed",
       "notPushed": "Not pushed",
       "selectToSeeDiff": "Select a commit to see diff"
+    },
+    "history": {
+      "loading": "Scanning agent sessions…",
+      "count": "{count} agent sessions",
+      "empty": "No Claude or Codex sessions found for this project",
+      "copyResume": "Copy resume command",
+      "openTranscript": "Open transcript"
     },
     "staged": {
       "empty": "No staged or modified files",
