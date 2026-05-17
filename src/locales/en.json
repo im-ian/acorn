@@ -561,13 +561,18 @@
     }
   },
   "rightPanel": {
+    "groups": {
+      "code": "Code",
+      "github": "GitHub",
+      "agents": "Agents"
+    },
     "tabs": {
       "files": "Files",
       "todos": "Todos",
       "commits": "Commits",
       "staged": "Staged",
       "prs": "PRs",
-      "history": "Sessions",
+      "history": "History",
       "actions": "Actions"
     },
     "empty": {

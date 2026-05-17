@@ -39,6 +39,7 @@ vi.mock("./lib/api", () => {
 
 import { api } from "./lib/api";
 import { useAppStore } from "./store";
+import { defaultTabByGroup } from "./lib/rightPanelGroups";
 
 const mockApi = vi.mocked(api);
 
@@ -95,6 +96,7 @@ function resetStore(): void {
       activeTabId: null,
       activeSessionId: null,
       rightTab: "commits",
+      rightTabByGroup: defaultTabByGroup(),
       workspaceTabs: {},
       prAccountByRepo: {},
       pendingTerminalInput: {},
@@ -864,5 +866,45 @@ describe("createSession returns the created session", () => {
       .createSession("x", REPO_A);
     expect(result).toBeNull();
     expect(useAppStore.getState().error).toBe("nope");
+  });
+});
+
+describe("right panel groups", () => {
+  it("setRightTab records the tab and assigns it to its group's memory slot", () => {
+    useAppStore.getState().setRightTab("prs");
+    let s = useAppStore.getState();
+    expect(s.rightTab).toBe("prs");
+    expect(s.rightTabByGroup.github).toBe("prs");
+
+    useAppStore.getState().setRightTab("actions");
+    s = useAppStore.getState();
+    expect(s.rightTab).toBe("actions");
+    expect(s.rightTabByGroup.github).toBe("actions");
+    // Other groups untouched.
+    expect(s.rightTabByGroup.code).toBe("files");
+    expect(s.rightTabByGroup.agents).toBe("todos");
+  });
+
+  it("setRightGroup restores the group's last sub-tab", () => {
+    useAppStore.getState().setRightTab("commits");
+    useAppStore.getState().setRightTab("actions");
+    useAppStore.getState().setRightTab("history");
+    expect(useAppStore.getState().rightTab).toBe("history");
+
+    useAppStore.getState().setRightGroup("code");
+    expect(useAppStore.getState().rightTab).toBe("commits");
+
+    useAppStore.getState().setRightGroup("github");
+    expect(useAppStore.getState().rightTab).toBe("actions");
+
+    useAppStore.getState().setRightGroup("agents");
+    expect(useAppStore.getState().rightTab).toBe("history");
+  });
+
+  it("setRightGroup falls back to the group's default tab when no memory exists", () => {
+    // Fresh store — rightTabByGroup is seeded with defaults; switching to a
+    // group whose memory was never written returns the default.
+    useAppStore.getState().setRightGroup("github");
+    expect(useAppStore.getState().rightTab).toBe("prs");
   });
 });

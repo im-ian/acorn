@@ -100,6 +100,11 @@ export const api = {
   commitWebUrl(repoPath: string, sha: string): Promise<string | null> {
     return invoke<string | null>("commit_web_url", { repoPath, sha });
   },
+  /** Resolve the repo's GitHub `owner/repo` slug, or null when the origin
+   *  remote isn't a GitHub host. Used to conditionally hide GitHub-only UI. */
+  githubOriginSlug(repoPath: string): Promise<string | null> {
+    return invoke<string | null>("github_origin_slug", { repoPath });
+  },
   openInEditor(command: string, args: string[], path: string): Promise<void> {
     return invoke<void>("open_in_editor", { command, args, path });
   },

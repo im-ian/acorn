@@ -1656,6 +1656,14 @@ pub async fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<
     git_ops::web_url_for_commit(&PathBuf::from(repo_path), &sha)
 }
 
+/// `Some("owner/repo")` when the repo's `origin` remote points at GitHub,
+/// `None` otherwise. The frontend uses this to hide the GitHub group of the
+/// right panel for non-GitHub repos. Read-only and cheap — no network calls.
+#[tauri::command]
+pub async fn github_origin_slug(repo_path: String) -> AppResult<Option<String>> {
+    git_ops::github_owner_repo(&PathBuf::from(repo_path))
+}
+
 /// Spawn an external editor on `path`. Used by the "Open in editor" action
 /// when the user has configured a custom editor command in settings.
 ///
