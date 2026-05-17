@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Activity,
+  Bot,
   Check,
   CircleAlert,
+  Code2,
   CircleCheck,
   CircleDashed,
   CircleX,
@@ -33,6 +42,14 @@ import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
+import { useIsGitHubRepo } from "../lib/useIsGitHubRepo";
+import {
+  RIGHT_GROUPS,
+  groupOfTab,
+  tabsForGroup,
+  type RightGroup,
+  type RightTab,
+} from "../lib/rightPanelGroups";
 import type {
   AccountSummary,
   AgentHistoryItem,
@@ -117,6 +134,7 @@ export function RightPanel() {
   const activeProject = useAppStore((s) => s.activeProject);
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
+  const setRightGroup = useAppStore((s) => s.setRightGroup);
   const active = sessions.find((s) => s.id === activeSessionId);
   // The session's recorded worktree path is what we set at spawn time. The
   // PTY child (or any descendant) may have chdir'd since — most notably via
@@ -146,15 +164,41 @@ export function RightPanel() {
     active?.worktree_path ?? null,
   );
   const showTodos = todosState.todos.length > 0;
+  // null while the first probe is in flight — keep GitHub visible during
+  // that brief window so the bar doesn't flicker on first paint.
+  const isGitHubRepo = useIsGitHubRepo(repoPath);
+  const githubVisible = isGitHubRepo !== false;
 
-  // If the user is sitting on Todos but the underlying list emptied (e.g.
-  // session ended, switched to a session with no todos), fall back rather
-  // than render an empty hidden tab.
+  const visibleTabsByGroup = useMemo<
+    Record<RightGroup, ReadonlyArray<RightTab>>
+  >(
+    () => ({
+      code: tabsForGroup("code"),
+      github: githubVisible ? tabsForGroup("github") : [],
+      agents: showTodos
+        ? tabsForGroup("agents")
+        : tabsForGroup("agents").filter((tab) => tab !== "todos"),
+    }),
+    [githubVisible, showTodos],
+  );
+  const visibleGroups = useMemo(
+    () => RIGHT_GROUPS.filter((g) => visibleTabsByGroup[g].length > 0),
+    [visibleTabsByGroup],
+  );
+  const activeGroup: RightGroup = visibleGroups.includes(groupOfTab(rightTab))
+    ? groupOfTab(rightTab)
+    : (visibleGroups[0] ?? "code");
+  const visibleTabs = visibleTabsByGroup[activeGroup];
+
+  // If the user is sitting on a tab that just became invisible (Todos emptied,
+  // GitHub origin disappeared, etc.), slide them to the nearest visible tab
+  // rather than render the panel against a stale selection.
   useEffect(() => {
-    if (rightTab === "todos" && !showTodos && todosState.loaded) {
-      setRightTab("commits");
+    if (visibleTabs.length === 0) return;
+    if (!visibleTabs.includes(rightTab)) {
+      setRightTab(visibleTabs[0]);
     }
-  }, [rightTab, showTodos, todosState.loaded, setRightTab]);
+  }, [rightTab, visibleTabs, setRightTab]);
 
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
@@ -163,53 +207,38 @@ export function RightPanel() {
           "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border",
           "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
+        aria-label="Right panel group"
       >
-        <TabButton
-          icon={<FolderTree size={14} />}
-          label={rt(t, "rightPanel.tabs.files")}
-          active={rightTab === "files"}
-          onClick={() => setRightTab("files")}
-        />
-        {showTodos ? (
+        {visibleGroups.map((group) => (
           <TabButton
-            icon={<ListTodo size={14} />}
-            label={rt(t, "rightPanel.tabs.todos")}
-            badge={todosState.todos.length}
-            active={rightTab === "todos"}
-            onClick={() => setRightTab("todos")}
+            key={group}
+            icon={groupIcon(group)}
+            label={rt(t, groupLabelKey(group))}
+            active={group === activeGroup}
+            onClick={() => setRightGroup(group)}
           />
-        ) : null}
-        <TabButton
-          icon={<GitCommit size={14} />}
-          label={rt(t, "rightPanel.tabs.commits")}
-          active={rightTab === "commits"}
-          onClick={() => setRightTab("commits")}
-        />
-        <TabButton
-          icon={<FileDiff size={14} />}
-          label={rt(t, "rightPanel.tabs.staged")}
-          active={rightTab === "staged"}
-          onClick={() => setRightTab("staged")}
-        />
-        <TabButton
-          icon={<GitPullRequest size={14} />}
-          label={rt(t, "rightPanel.tabs.prs")}
-          active={rightTab === "prs"}
-          onClick={() => setRightTab("prs")}
-        />
-        <TabButton
-          icon={<History size={14} />}
-          label={rt(t, "rightPanel.tabs.history")}
-          active={rightTab === "history"}
-          onClick={() => setRightTab("history")}
-        />
-        <TabButton
-          icon={<Activity size={14} />}
-          label={rt(t, "rightPanel.tabs.actions")}
-          active={rightTab === "actions"}
-          onClick={() => setRightTab("actions")}
-        />
+        ))}
       </nav>
+      {visibleTabs.length > 0 ? (
+        <nav
+          className={cn(
+            "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border bg-bg-elevated/30",
+            "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          )}
+          aria-label="Right panel sub-tab"
+        >
+          {visibleTabs.map((tab) => (
+            <SubTabButton
+              key={tab}
+              icon={tabIcon(tab)}
+              label={rt(t, tabLabelKey(tab))}
+              badge={tab === "todos" ? todosState.todos.length : undefined}
+              active={tab === rightTab}
+              onClick={() => setRightTab(tab)}
+            />
+          ))}
+        </nav>
+      ) : null}
       <div className="flex-1 overflow-hidden">
         {rightTab === "todos" ? (
           active && showTodos ? (
@@ -336,6 +365,83 @@ function TabButton({ icon, label, active, onClick, badge, className }: TabButton
       ) : null}
     </button>
   );
+}
+
+// Sub-tabs sit under the group bar with denser padding and a lighter inactive
+// state, so the eye registers "group is primary, sub-tab is secondary".
+function SubTabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "relative flex shrink-0 items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] transition",
+        active
+          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-accent/40"
+          : "text-fg-muted/80 hover:text-fg",
+      )}
+    >
+      {icon}
+      {label}
+      {typeof badge === "number" && badge > 0 ? (
+        <span
+          className={cn(
+            "rounded-full px-1 py-px text-[9px] font-medium tabular-nums",
+            active
+              ? "bg-accent/20 text-fg"
+              : "bg-fg-muted/15 text-fg-muted",
+          )}
+        >
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function groupIcon(group: RightGroup): ReactNode {
+  switch (group) {
+    case "code":
+      return <Code2 size={14} />;
+    case "github":
+      return <Globe size={14} />;
+    case "agents":
+      return <Bot size={14} />;
+  }
+}
+
+function groupLabelKey(group: RightGroup): RightPanelTranslationKey {
+  switch (group) {
+    case "code":
+      return "rightPanel.groups.code";
+    case "github":
+      return "rightPanel.groups.github";
+    case "agents":
+      return "rightPanel.groups.agents";
+  }
+}
+
+function tabIcon(tab: RightTab): ReactNode {
+  switch (tab) {
+    case "files":
+      return <FolderTree size={12} />;
+    case "staged":
+      return <FileDiff size={12} />;
+    case "commits":
+      return <GitCommit size={12} />;
+    case "prs":
+      return <GitPullRequest size={12} />;
+    case "actions":
+      return <Activity size={12} />;
+    case "todos":
+      return <ListTodo size={12} />;
+    case "history":
+      return <History size={12} />;
+  }
+}
+
+function tabLabelKey(tab: RightTab): RightPanelTranslationKey {
+  return `rightPanel.tabs.${tab}` as RightPanelTranslationKey;
 }
 
 function Empty({ msg }: { msg: string }) {

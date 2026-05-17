@@ -23,15 +23,16 @@ import {
   makeCodeWorkspaceTab,
   type FrontendWorkspaceTab,
 } from "./lib/workspaceTabs";
+import {
+  defaultTabByGroup,
+  defaultTabForGroup,
+  groupOfTab,
+  isRightTab,
+  type RightGroup,
+  type RightTab,
+} from "./lib/rightPanelGroups";
 
-type RightTab =
-  | "todos"
-  | "commits"
-  | "staged"
-  | "prs"
-  | "history"
-  | "actions"
-  | "files";
+export type { RightGroup, RightTab };
 
 const ROOT_PANE_ID: PaneId = "root";
 
@@ -72,6 +73,12 @@ interface AppStateModel {
   activeSessionId: string | null;
 
   rightTab: RightTab;
+  /**
+   * Last sub-tab selected per group. Lets the user switch groups via the
+   * top-level group bar and return to their previous sub-tab in each group
+   * without re-clicking.
+   */
+  rightTabByGroup: Record<RightGroup, RightTab>;
   /**
    * Frontend-owned tabs such as readonly code viewers. Terminal sessions
    * use their backend session id directly as the tab id and therefore do
@@ -158,6 +165,8 @@ interface AppStateModel {
   requestRemoveProject: (repoPath: string) => void;
   clearPendingRemoveProject: () => void;
   setRightTab: (tab: RightTab) => void;
+  /** Switch to `group` and restore that group's last sub-tab. */
+  setRightGroup: (group: RightGroup) => void;
   setPrAccountForRepo: (repoPath: string, login: string | null) => void;
   /** Queue a command for the next successful `pty_spawn` of `sessionId`. */
   setPendingTerminalInput: (
@@ -430,6 +439,7 @@ export const useAppStore = create<AppStateModel>()(
   activeSessionId: null,
 
   rightTab: "commits",
+  rightTabByGroup: defaultTabByGroup(),
   workspaceTabs: {},
   prAccountByRepo: {},
   pendingTerminalInput: {},
@@ -1117,7 +1127,21 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   setRightTab(tab) {
-    set({ rightTab: tab });
+    set((s) => ({
+      rightTab: tab,
+      rightTabByGroup: {
+        ...s.rightTabByGroup,
+        [groupOfTab(tab)]: tab,
+      },
+    }));
+  },
+
+  setRightGroup(group) {
+    set((s) => {
+      const remembered = s.rightTabByGroup[group] ?? defaultTabForGroup(group);
+      if (s.rightTab === remembered) return s;
+      return { rightTab: remembered };
+    });
   },
 
   setPrAccountForRepo(repoPath, login) {
@@ -1251,17 +1275,38 @@ export const useAppStore = create<AppStateModel>()(
     {
       name: "acorn-workspaces",
       storage: createJSONStorage(() => localStorage),
-      version: 1,
+      version: 2,
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeProject: state.activeProject,
         rightTab: state.rightTab,
+        rightTabByGroup: state.rightTabByGroup,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
           ),
         ),
       }),
+      migrate: (persisted, fromVersion) => {
+        // v1 → v2: rightTabByGroup did not exist. Seed it from the persisted
+        // rightTab so the group bar opens to whatever the user last looked at.
+        // An invalid/unknown persisted rightTab leaves rightTabByGroup at the
+        // defaults; the panel-level visibility guard then slides to the
+        // nearest valid tab on first render.
+        if (
+          persisted &&
+          typeof persisted === "object" &&
+          fromVersion < 2
+        ) {
+          const p = persisted as { rightTab?: unknown };
+          const seeded = defaultTabByGroup();
+          if (isRightTab(p.rightTab)) {
+            seeded[groupOfTab(p.rightTab)] = p.rightTab;
+          }
+          return { ...p, rightTabByGroup: seeded } as typeof persisted;
+        }
+        return persisted as typeof persisted;
+      },
       // Recompute the active-workspace mirror after hydration so consumers
       // see the persisted layout immediately, before the first refreshAll.
       onRehydrateStorage: () => (state) => {
