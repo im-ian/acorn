@@ -29,6 +29,7 @@ type RightTab =
   | "commits"
   | "staged"
   | "prs"
+  | "history"
   | "actions"
   | "files";
 
