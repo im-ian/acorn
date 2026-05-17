@@ -567,7 +567,7 @@
       "commits": "커밋",
       "staged": "스테이징",
       "prs": "PR",
-      "history": "히스토리",
+      "history": "세션",
       "actions": "작업"
     },
     "empty": {
