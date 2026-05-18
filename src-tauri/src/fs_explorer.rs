@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -57,6 +57,9 @@ impl SupervisorState {
         self.enospc_logged = true;
     }
 
+    /// Reset the restart counter. Consumed by the full restart-with-backoff
+    /// supervisor thread (deferred follow-up) when a fresh watcher attaches.
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.restarts = 0;
     }
@@ -103,6 +106,20 @@ pub fn decide(state: &SupervisorState, class: ErrorClass) -> SupervisorAction {
             }
         }
     }
+}
+
+/// Glue between an error message and the supervisor state machine.
+/// Mutates `state` (enospc_logged or restarts) as a side effect of the
+/// returned action so callers do not have to remember which counter to bump.
+pub fn handle_supervisor_error(msg: &str, state: &mut SupervisorState) -> SupervisorAction {
+    let class = classify_error_message(msg);
+    let action = decide(state, class);
+    match action {
+        SupervisorAction::WarnOnce => state.record_enospc_logged(),
+        SupervisorAction::Restart { .. } => state.record_restart(),
+        _ => {}
+    }
+    action
 }
 
 const DEFAULT_IGNORE_GLOBS: &[&str] = &[
@@ -945,13 +962,14 @@ fn run_watch_batcher<R: Runtime>(
     rx: Receiver<notify::Result<Event>>,
 ) {
     let mut last_emit: Option<Instant> = None;
+    let mut supervisor = SupervisorState::default();
     loop {
         let first = match rx.recv() {
             Ok(res) => res,
             Err(_) => break,
         };
         let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
-        batch.add_result(first);
+        ingest_result(&mut batch, first, &mut supervisor);
 
         let deadline = Instant::now() + WATCH_BATCH_WINDOW;
         loop {
@@ -960,7 +978,7 @@ fn run_watch_batcher<R: Runtime>(
                 break;
             }
             match rx.recv_timeout(deadline.saturating_duration_since(now)) {
-                Ok(res) => batch.add_result(res),
+                Ok(res) => ingest_result(&mut batch, res, &mut supervisor),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -991,6 +1009,42 @@ fn throttle_delay(last_emit: Option<Instant>, now: Instant) -> Duration {
     };
     let elapsed = now.saturating_duration_since(last);
     WATCH_THROTTLE_GAP.saturating_sub(elapsed)
+}
+
+/// Funnel a single notify result into the batch, classifying any error via
+/// the supervisor state machine before swallowing it. This gives one-shot
+/// ENOSPC warnings, distinguished trace levels for known vs unknown errors,
+/// and `tracing::info!` on FSEvents rescan requests — all without restarting
+/// the watcher yet. Full restart-with-backoff is a follow-up that will
+/// rebuild the `RecommendedWatcher`; for now we keep observability only.
+fn ingest_result(
+    batch: &mut WatchBatch,
+    res: notify::Result<Event>,
+    supervisor: &mut SupervisorState,
+) {
+    match res {
+        Ok(event) => batch.add_event(event),
+        Err(err) => {
+            let msg = err.to_string();
+            match handle_supervisor_error(&msg, supervisor) {
+                SupervisorAction::NoOp => {
+                    tracing::debug!(error = %msg, "fs watch error (suppressed)");
+                }
+                SupervisorAction::WarnOnce => {
+                    tracing::warn!(error = %msg, "fs watcher hit inotify limit (ENOSPC)");
+                }
+                SupervisorAction::Restart { .. } => {
+                    tracing::warn!(error = %msg, "fs watcher error (restart deferred to follow-up)");
+                }
+                SupervisorAction::Suspend => {
+                    tracing::warn!(error = %msg, "fs watcher root missing (suspend deferred to follow-up)");
+                }
+                SupervisorAction::GiveUp => {
+                    tracing::error!(error = %msg, "fs watcher exceeded restart budget");
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1044,17 +1098,6 @@ impl WatchBatch {
             ignore,
             dotgit_changed: false,
         }
-    }
-
-    fn add_result(&mut self, res: notify::Result<Event>) {
-        let event = match res {
-            Ok(e) => e,
-            Err(err) => {
-                tracing::debug!(error = %err, "fs watch error");
-                return;
-            }
-        };
-        self.add_event(event);
     }
 
     fn add_event(&mut self, event: Event) {
