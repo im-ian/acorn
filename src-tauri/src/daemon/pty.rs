@@ -22,14 +22,12 @@
 //!    context. Unknown agents pass through unmodified.
 
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use portable_pty::{
-    Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system,
-};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -110,8 +108,16 @@ impl PtyManager {
         }
 
         let size = PtySize {
-            cols: if spec.cols == 0 { DEFAULT_COLS } else { spec.cols },
-            rows: if spec.rows == 0 { DEFAULT_ROWS } else { spec.rows },
+            cols: if spec.cols == 0 {
+                DEFAULT_COLS
+            } else {
+                spec.cols
+            },
+            rows: if spec.rows == 0 {
+                DEFAULT_ROWS
+            } else {
+                spec.rows
+            },
             pixel_width: 0,
             pixel_height: 0,
         };
@@ -124,8 +130,12 @@ impl PtyManager {
         // Augment argv for known agents. The session registry copy keeps
         // the original command + agent metadata so a future respawn can
         // re-apply the strategy.
-        let (effective_command, effective_args) =
-            apply_resume_strategy(&spec.command, &spec.args, &spec.agent_kind, &spec.agent_resume_token);
+        let (effective_command, effective_args) = apply_resume_strategy(
+            &spec.command,
+            &spec.args,
+            &spec.agent_kind,
+            &spec.agent_resume_token,
+        );
 
         let mut cmd = CommandBuilder::new(&effective_command);
         for arg in &effective_args {
@@ -176,7 +186,8 @@ impl PtyManager {
         // Register the daemon-side session metadata. The app DB owns
         // the rich form; this is the minimum the daemon needs for
         // reconciliation.
-        let mut session = DaemonSession::new(session_id, spec.name.clone(), spec.kind, spec.cwd.clone());
+        let mut session =
+            DaemonSession::new(session_id, spec.name.clone(), spec.kind, spec.cwd.clone());
         session.repo_path = spec.repo_path.clone();
         session.branch = spec.branch.clone();
         session.agent_kind = spec.agent_kind;
@@ -206,10 +217,7 @@ impl PtyManager {
                 wait_loop(child, session_id, handles_for_wait, registry_for_wait, stop);
             })?;
 
-        Ok(SpawnedSession {
-            session_id,
-            pid,
-        })
+        Ok(SpawnedSession { session_id, pid })
     }
 
     pub fn write(&self, id: &Uuid, data: &[u8]) -> std::io::Result<()> {

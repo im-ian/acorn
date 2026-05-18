@@ -107,11 +107,7 @@ pub fn primer_for(session: &Session, socket_path: &Path) -> String {
 /// `args` vector. For unknown flavors the args are returned unchanged —
 /// those agents still see the env vars and the `.acorn-control.md`
 /// marker, just not an in-system-prompt nudge.
-pub fn inject_primer_args(
-    flavor: AgentFlavor,
-    args: Vec<String>,
-    primer: &str,
-) -> Vec<String> {
+pub fn inject_primer_args(flavor: AgentFlavor, args: Vec<String>, primer: &str) -> Vec<String> {
     match flavor {
         AgentFlavor::Claude => prepend(args, &["--append-system-prompt", primer]),
         AgentFlavor::Llm => insert_llm_system_arg(args, primer),
@@ -223,8 +219,7 @@ mod tests {
     #[test]
     fn inject_unknown_is_passthrough() {
         let args = vec!["arg1".to_string(), "arg2".to_string()];
-        let out =
-            inject_primer_args(AgentFlavor::Unknown, args.clone(), "PRIMER_TEXT");
+        let out = inject_primer_args(AgentFlavor::Unknown, args.clone(), "PRIMER_TEXT");
         assert_eq!(out, args);
     }
 }

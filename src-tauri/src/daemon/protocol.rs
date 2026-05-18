@@ -115,9 +115,7 @@ pub enum ControlPayload {
     /// records minimal metadata, spawns the PTY, and returns the new id.
     /// The app merges this id into its own DB on receipt so the two
     /// stores stay in sync without a cross-process transaction.
-    SpawnSession {
-        spec: SpawnSpec,
-    },
+    SpawnSession { spec: SpawnSpec },
     /// Forward raw stdin bytes to a session. Same as a `StreamFrame::Input`
     /// over the stream socket, but available on the control channel for
     /// one-shot CLI use (`acornd send-keys ...`).
@@ -140,14 +138,10 @@ pub enum ControlPayload {
     /// Kill a session. Drops the PTY child and marks the session as
     /// `dead`. Metadata is retained so the app can render a ghost row
     /// and offer "resume from disk" before the user opts to forget.
-    KillSession {
-        target_session_id: Uuid,
-    },
+    KillSession { target_session_id: Uuid },
     /// Permanently remove a dead session's metadata. The daemon refuses if
     /// the session is still alive — caller must Kill first.
-    ForgetSession {
-        target_session_id: Uuid,
-    },
+    ForgetSession { target_session_id: Uuid },
     /// Status snapshot: version, uptime, session counts, RSS estimate.
     /// Backs the StatusBar daemon indicator + the "Background sessions"
     /// settings panel.
@@ -471,7 +465,8 @@ mod tests {
         // simulates a client built against an earlier minor version.
         // Must parse successfully so additive minor-version bumps stay
         // non-breaking.
-        let s = r#"{"protocol_version_major":1,"protocol_version_minor":0,"role":"control-one-shot"}"#;
+        let s =
+            r#"{"protocol_version_major":1,"protocol_version_minor":0,"role":"control-one-shot"}"#;
         let parsed: Hello = serde_json::from_str(s).unwrap();
         assert_eq!(parsed.protocol_version_major, 1);
         assert!(parsed.source_session_id.is_none());

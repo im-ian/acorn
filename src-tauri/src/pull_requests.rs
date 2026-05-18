@@ -980,9 +980,12 @@ pub fn resolve_commit_logins(
 
     match try_with_account(repo_path, &slug, |token| {
         let output = cli_resolver::run("gh", |cmd| {
-            cmd.env("GH_TOKEN", token)
-                .env("GH_HOST", GH_HOST)
-                .args(["api", "graphql", "-f", &format!("query={query}")]);
+            cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={query}"),
+            ]);
         })?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1700,7 +1703,9 @@ pub fn list_workflow_runs(repo_path: &Path, limit: u32) -> AppResult<WorkflowRun
         return Ok(WorkflowRunsListing::NotGithub);
     };
 
-    match try_with_account(repo_path, &slug, |token| run_workflow_list(&slug, token, limit))? {
+    match try_with_account(repo_path, &slug, |token| {
+        run_workflow_list(&slug, token, limit)
+    })? {
         AccountOutcome::Ok { account, value } => Ok(WorkflowRunsListing::Ok {
             items: value,
             account,

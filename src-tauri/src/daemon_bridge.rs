@@ -20,8 +20,8 @@
 use std::io;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -229,8 +229,9 @@ impl DaemonBridge {
         };
         match result {
             Ok(resp) => Ok(resp.payload),
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
-                || e.kind() == io::ErrorKind::BrokenPipe =>
+            Err(e)
+                if e.kind() == io::ErrorKind::UnexpectedEof
+                    || e.kind() == io::ErrorKind::BrokenPipe =>
             {
                 // Stale connection — drop and reconnect once.
                 *self.conn.lock() = None;
@@ -403,8 +404,7 @@ fn unexpected(result: ControlResult) -> BridgeError {
 /// the app does not pull in an extra dep — `crate::pty::base64_encode`
 /// is module-private, hence duplicated here.
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {

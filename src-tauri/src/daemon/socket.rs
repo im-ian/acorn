@@ -17,8 +17,7 @@ use std::io;
 use std::path::PathBuf;
 
 use interprocess::local_socket::{
-    GenericFilePath, ListenerOptions, Name, ToFsName,
-    traits::Stream as _StreamConnect,
+    traits::Stream as _StreamConnect, GenericFilePath, ListenerOptions, Name, ToFsName,
 };
 
 /// Listener pair bound to the daemon's two canonical sockets. The fields
@@ -140,8 +139,7 @@ mod tests {
     #[test]
     fn bind_reclaims_stale_socket_file() {
         let _g = ENV_LOCK.lock();
-        let tmp =
-            short_tmp_root().join(format!("acn-stale-{}", uuid::Uuid::new_v4().simple()));
+        let tmp = short_tmp_root().join(format!("acn-stale-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         unsafe { std::env::set_var(super::super::paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
 

@@ -19,19 +19,17 @@
 //!   closes the connection.
 
 use std::io::{self, BufRead, BufReader, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
-use interprocess::TryClone;
+use interprocess::local_socket::traits::{Listener as _ListenerTrait, Stream as _StreamTrait};
 use interprocess::local_socket::{ListenerNonblockingMode, Stream};
-use interprocess::local_socket::traits::{
-    Listener as _ListenerTrait, Stream as _StreamTrait,
-};
+use interprocess::TryClone;
 
 use super::protocol::{
-    ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, ErrorCode,
-    Hello, PROTOCOL_VERSION_MAJOR, SessionSummary, StatusSnapshot, StreamAttach, StreamFrame,
+    ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, ErrorCode, Hello,
+    SessionSummary, StatusSnapshot, StreamAttach, StreamFrame, PROTOCOL_VERSION_MAJOR,
 };
 use super::pty::PtyManager;
 use super::session::SessionRegistry;
@@ -114,8 +112,12 @@ impl Daemon {
     /// client closed. 50 ms is short enough that `acornd shutdown`
     /// feels instant and long enough that the loop is not a busy-spin
     /// (~20 syscalls per second per socket).
-    fn accept_loop<F>(self: Arc<Self>, listener: interprocess::local_socket::Listener, kind: &'static str, handle: F)
-    where
+    fn accept_loop<F>(
+        self: Arc<Self>,
+        listener: interprocess::local_socket::Listener,
+        kind: &'static str,
+        handle: F,
+    ) where
         F: Fn(Arc<Self>, Stream) + Send + Sync + 'static,
     {
         if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
@@ -173,9 +175,10 @@ impl Daemon {
         let hello: Hello = match serde_json::from_str(line.trim()) {
             Ok(h) => h,
             Err(e) => {
-                return write_line(reader.get_mut(), &Self::protocol_error_envelope(format!(
-                    "invalid hello: {e}"
-                )));
+                return write_line(
+                    reader.get_mut(),
+                    &Self::protocol_error_envelope(format!("invalid hello: {e}")),
+                );
             }
         };
         if hello.protocol_version_major != PROTOCOL_VERSION_MAJOR {
@@ -501,10 +504,7 @@ impl Daemon {
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     // PTY exited. Emit an Exit frame and close.
-                    let code = self
-                        .registry
-                        .get(&session_id)
-                        .and_then(|s| s.exit_code);
+                    let code = self.registry.get(&session_id).and_then(|s| s.exit_code);
                     let frame = StreamFrame::Exit { code };
                     let _ = write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap());
                     return Ok(());
@@ -543,8 +543,7 @@ fn io_error_to_code(err: &io::Error) -> ErrorCode {
 /// not pull in the `base64` crate's full feature surface. Kept in sync
 /// with `crate::pty::base64_encode` semantics (RFC 4648).
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {
@@ -587,10 +586,7 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
             _ => Err(format!("non-base64 byte 0x{c:02x}")),
         }
     }
-    let bytes: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
@@ -605,7 +601,8 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         let v1 = val(chunk[1])?;
         let v2 = if pad >= 2 { 0 } else { val(chunk[2])? };
         let v3 = if pad >= 1 { 0 } else { val(chunk[3])? };
-        let n = (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
+        let n =
+            (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
         out.push((n >> 16) as u8);
         if pad < 2 {
             out.push((n >> 8) as u8);
@@ -619,12 +616,17 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::protocol::SessionKind;
+    use super::*;
 
     #[test]
     fn base64_roundtrip() {
-        let cases = [&b""[..], &b"hello"[..], &b"hello world"[..], &b"\x00\x01\xff"[..]];
+        let cases = [
+            &b""[..],
+            &b"hello"[..],
+            &b"hello world"[..],
+            &b"\x00\x01\xff"[..],
+        ];
         for input in cases {
             let encoded = base64_encode(input);
             let decoded = base64_decode(&encoded).unwrap();
