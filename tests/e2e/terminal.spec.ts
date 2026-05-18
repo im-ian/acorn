@@ -33,9 +33,17 @@ test.describe("terminal: spawn", () => {
     // Record every pty_spawn invocation on `window` so the test can read it
     // back via page.evaluate.
     await tauri.handle("pty_spawn", (args) => {
+      const slot = document.querySelector<HTMLElement>(
+        '[data-acorn-terminal-slot="s-term"]',
+      );
+      const parent = slot?.parentElement ?? null;
       const w = window as unknown as { __ptySpawnCalls?: unknown[] };
       w.__ptySpawnCalls = w.__ptySpawnCalls ?? [];
-      w.__ptySpawnCalls.push(args);
+      w.__ptySpawnCalls.push({
+        ...(args as Record<string, unknown>),
+        parentPane: parent?.getAttribute("data-pane-body") ?? null,
+        parentLimbo: parent?.getAttribute("data-acorn-terminal-limbo") ?? null,
+      });
       return null;
     });
 
@@ -68,5 +76,7 @@ test.describe("terminal: spawn", () => {
     const first = calls[0];
     expect(first.sessionId).toBe("s-term");
     expect(first.cwd).toBe("/tmp/demo");
+    expect(first.parentPane).not.toBeNull();
+    expect(first.parentLimbo).toBeNull();
   });
 });
