@@ -7,7 +7,7 @@ use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
 use crate::fs_explorer::WatcherState;
 use crate::ipc::server::IpcServerHandle;
-use crate::session::{ProjectStore, SessionStore};
+use acorn_session::{ProjectStore, SessionStore};
 use crate::staged_rev_reconcile::StagedRevMismatch;
 use acorn_pty::PtyManager;
 

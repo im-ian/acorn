@@ -25,36 +25,39 @@
 //! deliberately do NOT gate on mtime, otherwise the moment after a turn
 //! ends (file still warm) gets misreported as Running.
 //!
-//! Transcript resolution. The on-disk markers `<data_dir>/agent-state/
-//! <acorn-session-uuid>/{claude,codex}.id` (kept fresh by
-//! `agent_resume_persister`) are the canonical bridge from an Acorn
-//! session UUID to the agent's transcript filename. Without this, the
-//! detector could only consult `~/.claude/projects/*/<acorn-uuid>.jsonl`,
-//! which never matches in the common case where the user runs
-//! `claude` / `codex` *inside* an Acorn shell session (the JSONL is
-//! named after the agent's own UUID, not Acorn's). The result was that
-//! every claude/codex run looked perpetually `Running` until the agent
-//! process exited — `NeedsInput` was structurally unreachable.
+//! Transcript resolution lives in the host `acorn` crate (it consults
+//! `agent_resume`'s persister markers + the legacy `~/.claude/projects/`
+//! UUID-named fallback) and is passed in here as `(PathBuf, AgentKind)`
+//! so this crate stays a leaf with no upstream dependency.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use acorn_pty::ShellHint;
 
-use crate::agent_resume::{self, AgentKind, LiveTranscript};
-use crate::error::AppResult;
 use crate::session::SessionStatus;
-use crate::todos;
 
 // Big enough to comfortably contain the last assistant turn line for typical
 // Claude responses. JSONL lines are one-per-message, so a long assistant
 // response can be many KB on a single line.
 const TAIL_BYTES: u64 = 262_144;
 
-/// Resolve the session's live transcript (via the persister's resume
-/// markers or — as a legacy fallback — the Acorn UUID itself) and infer
-/// status from its tail.
+/// Which agent's transcript format the tail should be parsed as. The host
+/// crate maps its richer `agent_resume::AgentKind` onto this two-variant
+/// enum at the call site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AgentKind {
+    Claude,
+    Codex,
+}
+
+/// Infer a session's status from its transcript tail (when one was resolved)
+/// plus an optional shell-mode liveness hint.
+///
+/// `transcript` is `Some((path, kind))` when the caller resolved a live
+/// JSONL for the session (via `agent_resume` markers or the legacy lookup);
+/// `None` falls back to the shell hint.
 ///
 /// `previous` is the last status the caller observed for this session. It is
 /// only consulted when the transcript file exists but the tail buffer is
@@ -71,14 +74,13 @@ const TAIL_BYTES: u64 = 262_144;
 /// terminal sessions, so when no transcript resolves we map it directly
 /// to a status. `None` means "no live PTY" → Idle.
 pub fn detect(
-    session_id: &str,
+    transcript: Option<(PathBuf, AgentKind)>,
     previous: SessionStatus,
     shell_hint: Option<ShellHint>,
-) -> AppResult<SessionStatus> {
-    let resolved = resolve_transcript(session_id);
-    let (path, kind) = match resolved {
-        Some(LiveTranscript { path, kind }) => (path, kind),
-        None => return Ok(map_shell_hint(shell_hint)),
+) -> SessionStatus {
+    let (path, kind) = match transcript {
+        Some(t) => t,
+        None => return map_shell_hint(shell_hint),
     };
 
     let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -89,7 +91,7 @@ pub fn detect(
         AgentKind::Codex => classify_codex_tail(&tail, read_full),
     };
 
-    Ok(match classified {
+    match classified {
         Some(TurnClass::NeedsInput) => SessionStatus::NeedsInput,
         Some(TurnClass::Running) => SessionStatus::Running,
         // Transcript exists but the tail held no turn lines; keep
@@ -97,30 +99,7 @@ pub fn detect(
         // to Idle. The next poll that lands on a real turn line corrects
         // it.
         None => previous,
-    })
-}
-
-/// Two-stage transcript lookup. First the persister marker (the canonical
-/// path for "user ran `claude` / `codex` inside a shell session"), then
-/// the legacy Acorn-UUID-named JSONL (kept so any direct caller that
-/// passes a claude session-id continues to work, and so the dedicated
-/// unit tests below can stage a fixture without standing up a fake
-/// `agent-state` tree). Returns `None` only when neither lookup
-/// resolves — that's the cue for `detect` to fall back to `shell_hint`.
-fn resolve_transcript(session_id: &str) -> Option<LiveTranscript> {
-    let parsed = uuid::Uuid::parse_str(session_id).ok();
-    if let Some(uuid) = parsed {
-        if let Some(found) = agent_resume::live_transcript(uuid) {
-            return Some(found);
-        }
     }
-    todos::locate_transcript_for(session_id)
-        .ok()
-        .flatten()
-        .map(|path| LiveTranscript {
-            path,
-            kind: AgentKind::Claude,
-        })
 }
 
 fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
@@ -418,5 +397,23 @@ mod tests {
     #[test]
     fn codex_empty_tail_returns_none() {
         assert_eq!(classify_codex_tail("", true), None);
+    }
+
+    // --- detect() entry point ---
+
+    #[test]
+    fn detect_returns_idle_when_no_transcript_and_no_hint() {
+        assert_eq!(
+            detect(None, SessionStatus::Idle, None),
+            SessionStatus::Idle
+        );
+    }
+
+    #[test]
+    fn detect_uses_shell_hint_when_no_transcript() {
+        assert_eq!(
+            detect(None, SessionStatus::Idle, Some(ShellHint::Running)),
+            SessionStatus::Running
+        );
     }
 }

@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/acorn-ipc",
     "crates/acorn-pty",
+    "crates/acorn-session",
     "crates/acorn-transcript",
 ]
 
@@ -87,6 +88,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 acorn-ipc = { path = "crates/acorn-ipc" }
 acorn-pty = { path = "crates/acorn-pty" }
+acorn-session = { path = "crates/acorn-session" }
 acorn-transcript = { path = "crates/acorn-transcript" }
 tauri = { workspace = true }
 tauri-plugin-opener = "2"
