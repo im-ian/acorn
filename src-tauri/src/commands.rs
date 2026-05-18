@@ -107,11 +107,15 @@ pub fn list_system_fonts() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn list_agent_history(
+pub async fn list_agent_history(
     repo_path: String,
     limit: Option<usize>,
 ) -> AppResult<Vec<AgentHistoryItem>> {
-    agent_history::list_agent_history(PathBuf::from(repo_path), limit)
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_history::list_agent_history(PathBuf::from(repo_path), limit)
+    })
+    .await
+    .map_err(|e| crate::error::AppError::Other(format!("history scan join failed: {e}")))?
 }
 
 #[tauri::command]

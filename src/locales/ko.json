@@ -605,7 +605,6 @@
       "runInWorktree": "워크트리에서 실행",
       "copyResume": "resume 명령 복사",
       "copyWorktreePath": "워크트리 경로 복사",
-      "openTranscript": "transcript 열기",
       "moveTranscriptToTrash": "transcript를 휴지통으로 이동...",
       "worktreeMissing": "없음",
       "worktreeUnavailable": "해당 워크트리를 더 이상 사용할 수 없습니다.",

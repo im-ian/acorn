@@ -546,6 +546,42 @@ function PrSkeletonList({ count = 6 }: { count?: number }) {
   );
 }
 
+/**
+ * Shaped placeholder for an Agents History row. Mirrors the real row's
+ * structure — provider badge on the left, then title / preview / worktree /
+ * timestamp stacked on the right — so the panel doesn't reflow when items
+ * arrive. Some rows skip the worktree bar to look like a real mixed list.
+ */
+function HistorySkeletonRow({ index }: { index: number }) {
+  const titleWidths = ["68%", "82%", "54%", "74%", "60%", "88%"];
+  const previewWidths = ["92%", "76%", "60%", "84%"];
+  const titleW = titleWidths[index % titleWidths.length];
+  const previewW = previewWidths[index % previewWidths.length];
+  const showWorktree = index % 3 !== 1;
+  return (
+    <div
+      className="flex items-start gap-2 border-b border-border/40 px-3 py-2.5"
+      style={{ animationDelay: `${index * 60}ms` }}
+    >
+      <span className="mt-0.5 h-4 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <span
+          className="block h-3 animate-pulse rounded bg-fg-muted/15"
+          style={{ width: titleW }}
+        />
+        <span
+          className="block h-2.5 animate-pulse rounded bg-fg-muted/10"
+          style={{ width: previewW }}
+        />
+        {showWorktree ? (
+          <span className="block h-2.5 w-24 animate-pulse rounded bg-fg-muted/10" />
+        ) : null}
+        <span className="block h-2 w-12 animate-pulse rounded bg-fg-muted/10" />
+      </div>
+    </div>
+  );
+}
+
 const RIGHT_PANEL_REFRESH_DEBOUNCE_MS = 150;
 const TODOS_ACTIVITY_DEBOUNCE_MS = 750;
 const TODOS_SAFETY_INTERVAL_MS = 30_000;
@@ -968,16 +1004,33 @@ function AgentHistoryTab({
     onCancel: () => setTrashCandidate(null),
   });
 
+  // Stale responses from a previous repoPath (or an earlier in-flight call)
+  // must not overwrite newer results. Each fetch claims a token; only the
+  // latest token is allowed to commit.
+  const fetchTokenRef = useRef(0);
+
   const fetchHistory = useCallback(async () => {
+    const token = ++fetchTokenRef.current;
     setLoading(true);
     setError(null);
     try {
-      setItems(await api.listAgentHistory(repoPath, 100));
+      const result = await api.listAgentHistory(repoPath, 100);
+      if (token !== fetchTokenRef.current) return;
+      setItems(result);
     } catch (e) {
+      if (token !== fetchTokenRef.current) return;
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (token === fetchTokenRef.current) setLoading(false);
     }
+  }, [repoPath]);
+
+  // Project switch: drop the previous project's items so the skeleton shows
+  // immediately instead of leaving stale data on screen while the scan runs.
+  useEffect(() => {
+    fetchTokenRef.current++;
+    setItems(null);
+    setError(null);
   }, [repoPath]);
 
   useEffect(() => {
@@ -1074,7 +1127,7 @@ function AgentHistoryTab({
         ) : !items ? (
           <div>
             {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonRow key={i} pulseDelayMs={i * 70} />
+              <HistorySkeletonRow key={i} index={i} />
             ))}
           </div>
         ) : items.length === 0 ? (
@@ -1129,7 +1182,12 @@ function AgentHistoryTab({
                           )}
                         >
                           <GitBranch size={11} className="shrink-0" />
-                          <span className="truncate">
+                          <span
+                            className={cn(
+                              "truncate",
+                              item.worktree.exists ? null : "line-through",
+                            )}
+                          >
                             {item.worktree.name}
                           </span>
                         </div>
@@ -1182,12 +1240,6 @@ function AgentHistoryTab({
                   icon: <GitBranch size={12} />,
                   disabled: !menu.item.worktree,
                   onClick: () => void copy(menu.item.worktree?.path ?? ""),
-                },
-                { type: "separator" },
-                {
-                  label: rt(t, "rightPanel.history.openTranscript"),
-                  icon: <ExternalLink size={12} />,
-                  onClick: () => void openPath(menu.item.transcript_path),
                 },
                 { type: "separator" },
                 {

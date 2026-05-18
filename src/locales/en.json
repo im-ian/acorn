@@ -605,7 +605,6 @@
       "runInWorktree": "Run in worktree",
       "copyResume": "Copy resume command",
       "copyWorktreePath": "Copy worktree path",
-      "openTranscript": "Open transcript",
       "moveTranscriptToTrash": "Move transcript to Trash...",
       "worktreeMissing": "missing",
       "worktreeUnavailable": "That worktree is no longer available.",
