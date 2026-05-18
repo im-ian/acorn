@@ -30,6 +30,7 @@ import {
 import { api, type FsEntry, FS_CHANGED_EVENT } from "../lib/api";
 import type { FsChangePayload, FsGitStatus, FsGitStatusEntry } from "../lib/api";
 import { cn } from "../lib/cn";
+import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { setFileDragPayload } from "../lib/dnd";
@@ -332,6 +333,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const changedPathsRef = useRef<Set<string>>(new Set());
   const statusInFlightRef = useRef<Promise<void> | null>(null);
   const statusRefreshPendingRef = useRef(false);
+  const lastStatusSuccessRef = useRef<number | null>(null);
+  const refreshDeferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDotgitRef = useRef(false);
+  const pendingWorkingTreeRef = useRef(false);
   // Tracks the focused session id so the menu can write into the right
   // PTY without re-importing the store at every click.
   const [activeSessionId, setActiveSessionIdLocal] = useState<string | null>(
@@ -389,6 +394,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           gitStatusRef.current = next;
           return next;
         });
+        lastStatusSuccessRef.current = Date.now();
       } catch {
         gitStatusRef.current = {};
         setGitStatus({});
@@ -405,6 +411,63 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     statusInFlightRef.current = promise;
     return promise;
   }, [rootPath]);
+
+  const scheduleGitStatusRefresh = useCallback(
+    (trigger: "mount" | "fs-event" | "user") => {
+      if (refreshDeferTimerRef.current) {
+        clearTimeout(refreshDeferTimerRef.current);
+        refreshDeferTimerRef.current = null;
+      }
+      const decision = planGitRefresh({
+        now: Date.now(),
+        lastSuccessAt: lastStatusSuccessRef.current,
+        inFlight: statusInFlightRef.current !== null,
+        focused: document.hasFocus(),
+        huge: gitHugeRef.current,
+        trigger,
+        dotgitChanged: pendingDotgitRef.current,
+        hasWorkingTreeChange: pendingWorkingTreeRef.current,
+      });
+      switch (decision.action) {
+        case "run":
+          if (decision.debounceMs === 0) {
+            pendingDotgitRef.current = false;
+            pendingWorkingTreeRef.current = false;
+            void refreshGitStatus();
+          } else {
+            refreshDeferTimerRef.current = setTimeout(() => {
+              refreshDeferTimerRef.current = null;
+              pendingDotgitRef.current = false;
+              pendingWorkingTreeRef.current = false;
+              void refreshGitStatus();
+            }, decision.debounceMs);
+          }
+          break;
+        case "defer":
+          refreshDeferTimerRef.current = setTimeout(() => {
+            refreshDeferTimerRef.current = null;
+            scheduleGitStatusRefresh(trigger);
+          }, decision.waitMs);
+          break;
+        case "defer-until-focus":
+        case "coalesce-with-inflight":
+        case "skip-huge":
+        case "skip-nothing-changed":
+          break;
+      }
+    },
+    [refreshGitStatus],
+  );
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (pendingDotgitRef.current || pendingWorkingTreeRef.current) {
+        scheduleGitStatusRefresh("fs-event");
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [scheduleGitStatusRefresh]);
 
   const scheduleGitDiffStats = useCallback(() => {
     if (gitStatsTimerRef.current) {
@@ -458,15 +521,19 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   );
 
   useEffect(() => {
-    void refreshGitStatus();
+    scheduleGitStatusRefresh("mount");
     scheduleGitDiffStats();
     return () => {
       if (gitStatsTimerRef.current) {
         clearTimeout(gitStatsTimerRef.current);
         gitStatsTimerRef.current = null;
       }
+      if (refreshDeferTimerRef.current) {
+        clearTimeout(refreshDeferTimerRef.current);
+        refreshDeferTimerRef.current = null;
+      }
     };
-  }, [refreshGitStatus, scheduleGitDiffStats]);
+  }, [scheduleGitStatusRefresh, scheduleGitDiffStats]);
 
   useEffect(() => {
     scheduleGitDiffStats();
@@ -624,7 +691,13 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       for (const dir of toFetch) {
         void fetchDir(dir);
       }
-      void refreshGitStatus();
+      if (payload.dotgit_changed) {
+        pendingDotgitRef.current = true;
+      }
+      if (changedPaths.length > 0) {
+        pendingWorkingTreeRef.current = true;
+      }
+      scheduleGitStatusRefresh("fs-event");
       scheduleGitDiffStats();
     }).then((unlisten) => {
       cancel = unlisten;
@@ -632,7 +705,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     return () => {
       if (cancel) cancel();
     };
-  }, [rootPath, fetchDir, refreshGitStatus, scheduleGitDiffStats]);
+  }, [rootPath, fetchDir, scheduleGitStatusRefresh, scheduleGitDiffStats]);
 
   const toggleDir = useCallback(
     (path: string) => {
@@ -846,9 +919,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
     setSelection(new Set());
     for (const p of paths) changedPathsRef.current.add(p);
-    void refreshGitStatus();
+    pendingWorkingTreeRef.current = true;
+    scheduleGitStatusRefresh("user");
     scheduleGitDiffStats();
-  }, [selection, refreshGitStatus, scheduleGitDiffStats]);
+  }, [selection, scheduleGitStatusRefresh, scheduleGitDiffStats]);
 
   const handleBulkCopyPaths = useCallback(
     async (mode: "relative" | "absolute") => {
