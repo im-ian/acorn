@@ -367,6 +367,23 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    /// Re-point a session at its main repo and clear `isolated` when the
+    /// linked worktree has disappeared from disk (typically: agent exit
+    /// pruned the worktree but the session row still references it). Keeps
+    /// the session row alive so PTY/agent history stays addressable;
+    /// downstream git ops resolve against the main repo instead of erroring
+    /// on a missing path.
+    pub fn reconcile_missing_worktree(&self, id: &Uuid) -> AppResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        entry.worktree_path = entry.repo_path.clone();
+        entry.isolated = false;
+        entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
     pub fn remove(&self, id: &Uuid) -> AppResult<Session> {
         self.inner
             .remove(id)
@@ -409,5 +426,47 @@ impl SessionStore {
                 pos += 1;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_session(repo: &str, worktree: &str, isolated: bool) -> Session {
+        Session::new(
+            "test".to_string(),
+            PathBuf::from(repo),
+            PathBuf::from(worktree),
+            "main".to_string(),
+            isolated,
+            SessionKind::Regular,
+        )
+    }
+
+    #[test]
+    fn reconcile_missing_worktree_resets_path_and_isolation() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session(
+            "/tmp/acorn-repo",
+            "/tmp/acorn-repo/.acorn/worktrees/gone",
+            true,
+        ));
+
+        let reconciled = store
+            .reconcile_missing_worktree(&session.id)
+            .expect("session exists");
+
+        assert_eq!(reconciled.worktree_path, PathBuf::from("/tmp/acorn-repo"));
+        assert!(!reconciled.isolated);
+        assert_eq!(reconciled.id, session.id);
+        assert_eq!(reconciled.name, session.name);
+    }
+
+    #[test]
+    fn reconcile_missing_worktree_errors_for_unknown_session() {
+        let store = SessionStore::new();
+        let result = store.reconcile_missing_worktree(&Uuid::new_v4());
+        assert!(matches!(result, Err(AppError::SessionNotFound(_))));
     }
 }
