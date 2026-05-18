@@ -29,15 +29,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use acorn_ipc::primer;
+use acorn_ipc::proto::{
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
+};
+use acorn_ipc::socket_path;
 use base64::Engine;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
 use crate::commands::{create_unique_worktree, sanitize_worktree_name};
-use crate::ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
-};
-use crate::ipc::socket_path;
 use crate::persistence;
 use crate::session::{Session, SessionKind, SessionOwner, SessionStore};
 use crate::state::AppState;
@@ -353,8 +354,14 @@ fn resolve_action_target(
 
 fn handle_context(source: &Session) -> Response {
     let socket = socket_path::resolve().unwrap_or_default();
+    let daemon_socket = crate::daemon::paths::control_socket_path().ok();
     Response::Context {
-        text: crate::ipc::primer::primer_for(source, &socket),
+        text: primer::primer_for(
+            &source.id.to_string(),
+            &source.repo_path,
+            &socket,
+            daemon_socket.as_deref(),
+        ),
     }
 }
 
