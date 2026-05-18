@@ -6,6 +6,8 @@ version = 4
 name = "acorn"
 version = "1.1.0"
 dependencies = [
+ "acorn-pty",
+ "acorn-transcript",
  "anyhow",
  "base64 0.22.1",
  "chrono",
@@ -39,6 +41,33 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trash",
+ "uuid",
+]
+
+[[package]]
+name = "acorn-pty"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "parking_lot",
+ "portable-pty",
+ "serde",
+ "tauri",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acorn-transcript"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "parking_lot",
+ "serde_json",
+ "sysinfo",
+ "tracing",
  "uuid",
 ]
 

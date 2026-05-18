@@ -394,12 +394,7 @@ pub fn fs_git_diff_stats(
 /// Compute additions/deletions for a single path against HEAD. For
 /// untracked files we count line count as additions; for deleted files
 /// the count comes from the HEAD blob.
-fn file_diff_stats(
-    repo: &Repository,
-    workdir: &Path,
-    rel: &str,
-    kind: &str,
-) -> (u32, u32) {
+fn file_diff_stats(repo: &Repository, workdir: &Path, rel: &str, kind: &str) -> (u32, u32) {
     if kind == "added" {
         // Untracked or freshly-added file. Count file lines as additions.
         let abs = workdir.join(rel);
@@ -432,10 +427,7 @@ fn file_diff_stats(
     opts.pathspec(rel)
         .include_untracked(true)
         .recurse_untracked_dirs(false);
-    let tree = repo
-        .head()
-        .ok()
-        .and_then(|h| h.peel_to_tree().ok());
+    let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
     let diff = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts));
     if let Ok(d) = diff {
         if let Ok(stats) = d.stats() {
@@ -470,7 +462,10 @@ fn classify_status(s: Status) -> &'static str {
         return "renamed";
     }
     if s.intersects(
-        Status::INDEX_MODIFIED | Status::WT_MODIFIED | Status::INDEX_TYPECHANGE | Status::WT_TYPECHANGE,
+        Status::INDEX_MODIFIED
+            | Status::WT_MODIFIED
+            | Status::INDEX_TYPECHANGE
+            | Status::WT_TYPECHANGE,
     ) {
         return "modified";
     }
@@ -557,13 +552,8 @@ pub fn fs_git_diff_lines(path: String) -> AppResult<Vec<LineDiffEntry>> {
     };
 
     let mut opts = git2::DiffOptions::new();
-    opts.pathspec(&rel)
-        .context_lines(0)
-        .include_untracked(true);
-    let tree = repo
-        .head()
-        .ok()
-        .and_then(|h| h.peel_to_tree().ok());
+    opts.pathspec(&rel).context_lines(0).include_untracked(true);
+    let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
     let diff = match repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts)) {
         Ok(d) => d,
         Err(_) => return Ok(Vec::new()),

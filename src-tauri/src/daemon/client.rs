@@ -11,8 +11,8 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use interprocess::TryClone;
 use interprocess::local_socket::Stream;
+use interprocess::TryClone;
 
 use super::protocol::{
     ClientRole, ControlPayload, ControlRequest, ControlResponse, ControlResult, Hello,
@@ -39,7 +39,11 @@ impl ControlConn {
 
         let mut hello = Hello::current(ClientRole::ControlPersistent);
         hello.client_name = Some(client_name.into());
-        writeln!(writer, "{}", serde_json::to_string(&hello).map_err(io::Error::other)?)?;
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string(&hello).map_err(io::Error::other)?
+        )?;
         writer.flush()?;
         // Read server hello.
         let mut buf = String::new();
@@ -68,7 +72,10 @@ impl ControlConn {
         self.writer.flush()?;
         let mut buf = String::new();
         if self.reader.read_line(&mut buf)? == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "daemon closed"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "daemon closed",
+            ));
         }
         serde_json::from_str(buf.trim()).map_err(io::Error::other)
     }
@@ -83,18 +90,29 @@ pub fn one_shot(payload: ControlPayload) -> io::Result<ControlResponse> {
     let mut reader = BufReader::new(conn);
 
     let hello = Hello::current(ClientRole::ControlOneShot);
-    writeln!(writer, "{}", serde_json::to_string(&hello).map_err(io::Error::other)?)?;
+    writeln!(
+        writer,
+        "{}",
+        serde_json::to_string(&hello).map_err(io::Error::other)?
+    )?;
     writer.flush()?;
     let mut buf = String::new();
     reader.read_line(&mut buf)?;
     // Server hello consumed (not currently inspected).
 
     let req = ControlRequest { seq: 1, payload };
-    writeln!(writer, "{}", serde_json::to_string(&req).map_err(io::Error::other)?)?;
+    writeln!(
+        writer,
+        "{}",
+        serde_json::to_string(&req).map_err(io::Error::other)?
+    )?;
     writer.flush()?;
     buf.clear();
     if reader.read_line(&mut buf)? == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "daemon closed"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "daemon closed",
+        ));
     }
     serde_json::from_str(buf.trim()).map_err(io::Error::other)
 }

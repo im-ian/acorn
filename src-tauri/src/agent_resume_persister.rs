@@ -30,9 +30,31 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use acorn_transcript::{self as transcript_watcher, AgentKind, SessionPid};
+
 use crate::agent_resume;
 use crate::state::AppState;
-use crate::transcript_watcher::{self, AgentKind};
+
+/// Snapshot every Acorn session's PTY root pid for `acorn_transcript`'s
+/// scanner. Daemon-managed sessions take priority — the stream registry
+/// records the daemon-side pid as soon as the attachment lands — with
+/// the in-process `PtyManager` as fallback for non-daemon sessions.
+/// Lives here (and not in the transcript crate) because the AppState
+/// surface is owned by the host crate.
+pub fn collect_session_pids(state: &AppState) -> Vec<SessionPid> {
+    state
+        .sessions
+        .list()
+        .into_iter()
+        .map(|s| SessionPid {
+            session_id: s.id,
+            root_pid: state
+                .stream_registry
+                .pid(&s.id)
+                .or_else(|| state.pty.child_pid(&s.id)),
+        })
+        .collect()
+}
 
 /// Tick interval. Short enough to capture a UUID before the user could
 /// reasonably switch sessions and back; long enough that the host-wide
@@ -63,7 +85,8 @@ fn run(state: AppState) {
 }
 
 fn tick(state: &AppState) -> io::Result<()> {
-    let mappings = transcript_watcher::collect_live_mappings(state);
+    let sessions = collect_session_pids(state);
+    let mappings = transcript_watcher::collect_live_mappings(&sessions);
     if mappings.is_empty() {
         return Ok(());
     }

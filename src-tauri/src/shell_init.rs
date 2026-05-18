@@ -149,7 +149,12 @@ mod tests {
     #[test]
     fn staged_rev_is_nonempty_hex() {
         // 16-char lowercase hex — the format `build.rs` commits to.
-        assert_eq!(STAGED_REV.len(), 16, "expected 16-char hex, got {:?}", STAGED_REV);
+        assert_eq!(
+            STAGED_REV.len(),
+            16,
+            "expected 16-char hex, got {:?}",
+            STAGED_REV
+        );
         assert!(
             STAGED_REV.chars().all(|c| c.is_ascii_hexdigit()),
             "expected hex chars only, got {:?}",
