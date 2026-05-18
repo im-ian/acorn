@@ -585,8 +585,17 @@ export interface FsListResult {
 }
 
 /** Event payload from the backend fs watcher. */
+export interface FsRefreshHint {
+  kind: "root" | "subtree";
+  path: string;
+}
+
 export interface FsChangePayload {
   paths: string[];
+  root?: string;
+  overflow?: boolean;
+  cap?: number;
+  refresh?: FsRefreshHint | null;
 }
 
 export const FS_CHANGED_EVENT = "acorn:fs-changed";
