@@ -110,6 +110,8 @@ mod tests {
         let body = fs::read_to_string(&zshenv).unwrap();
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
         assert!(body.contains(".zshenv"));
+        assert!(body.contains("_acorn_user_zd=$HOME"));
+        assert!(body.contains("[ \"$_acorn_user_zd\" != \"$_acorn_zd\" ]"));
         assert!(body.contains("ZDOTDIR=$_acorn_zd"));
     }
 
