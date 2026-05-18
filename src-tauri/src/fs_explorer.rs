@@ -20,6 +20,90 @@ const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
 const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
 const WATCH_EVENT_CAP: usize = 256;
 
+const SUPERVISOR_INITIAL_BACKOFF: Duration = Duration::from_millis(800);
+const SUPERVISOR_MAX_BACKOFF: Duration = Duration::from_millis(12_800);
+const SUPERVISOR_MAX_RESTARTS: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    Enospc,
+    PathMissing,
+    RescanRequired,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupervisorAction {
+    NoOp,
+    WarnOnce,
+    Restart { delay: Duration },
+    Suspend,
+    GiveUp,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SupervisorState {
+    restarts: u32,
+    enospc_logged: bool,
+}
+
+impl SupervisorState {
+    pub fn record_restart(&mut self) {
+        self.restarts = self.restarts.saturating_add(1);
+    }
+
+    pub fn record_enospc_logged(&mut self) {
+        self.enospc_logged = true;
+    }
+
+    pub fn reset(&mut self) {
+        self.restarts = 0;
+    }
+
+    fn backoff(&self) -> Duration {
+        let shift = self.restarts.min(4);
+        let ms = SUPERVISOR_INITIAL_BACKOFF
+            .as_millis()
+            .saturating_mul(1u128 << shift);
+        let capped = ms.min(SUPERVISOR_MAX_BACKOFF.as_millis()) as u64;
+        Duration::from_millis(capped)
+    }
+}
+
+pub fn classify_error_message(msg: &str) -> ErrorClass {
+    if msg.contains("No space left on device") {
+        ErrorClass::Enospc
+    } else if msg.contains("File system must be re-scanned") {
+        ErrorClass::RescanRequired
+    } else if msg.contains("No such file or directory") {
+        ErrorClass::PathMissing
+    } else {
+        ErrorClass::Unknown
+    }
+}
+
+pub fn decide(state: &SupervisorState, class: ErrorClass) -> SupervisorAction {
+    match class {
+        ErrorClass::Enospc => {
+            if state.enospc_logged {
+                SupervisorAction::NoOp
+            } else {
+                SupervisorAction::WarnOnce
+            }
+        }
+        ErrorClass::PathMissing => SupervisorAction::Suspend,
+        ErrorClass::RescanRequired | ErrorClass::Unknown => {
+            if state.restarts >= SUPERVISOR_MAX_RESTARTS {
+                SupervisorAction::GiveUp
+            } else {
+                SupervisorAction::Restart {
+                    delay: state.backoff(),
+                }
+            }
+        }
+    }
+}
+
 const DEFAULT_IGNORE_GLOBS: &[&str] = &[
     "**/node_modules/**",
     "**/target/**",
@@ -1202,5 +1286,86 @@ mod tests {
         // No requirement to canonicalize; equality up to component walk is enough.
         assert!(out.is_absolute());
         assert!(out.ends_with("real.txt"));
+    }
+
+    #[test]
+    fn supervisor_classifies_enospc() {
+        let msg = "No space left on device (os error 28)";
+        assert_eq!(classify_error_message(msg), ErrorClass::Enospc);
+    }
+
+    #[test]
+    fn supervisor_classifies_rescan_required() {
+        let msg = "File system must be re-scanned";
+        assert_eq!(classify_error_message(msg), ErrorClass::RescanRequired);
+    }
+
+    #[test]
+    fn supervisor_classifies_path_not_found() {
+        assert_eq!(
+            classify_error_message("Operation not permitted (os error 1)"),
+            ErrorClass::Unknown,
+        );
+        assert_eq!(
+            classify_error_message("No such file or directory (os error 2)"),
+            ErrorClass::PathMissing,
+        );
+    }
+
+    #[test]
+    fn supervisor_restarts_first_unknown_error_after_800ms() {
+        let state = SupervisorState::default();
+        let action = decide(&state, ErrorClass::Unknown);
+        assert_eq!(
+            action,
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
+    }
+
+    #[test]
+    fn supervisor_doubles_backoff_up_to_cap() {
+        let mut state = SupervisorState::default();
+        for expected_ms in [800u64, 1600, 3200, 6400, 12800] {
+            let action = decide(&state, ErrorClass::Unknown);
+            assert_eq!(
+                action,
+                SupervisorAction::Restart {
+                    delay: Duration::from_millis(expected_ms)
+                }
+            );
+            state.record_restart();
+        }
+        // After 5 restarts, give up.
+        assert_eq!(decide(&state, ErrorClass::Unknown), SupervisorAction::GiveUp);
+    }
+
+    #[test]
+    fn supervisor_suspends_on_path_missing() {
+        let state = SupervisorState::default();
+        assert_eq!(
+            decide(&state, ErrorClass::PathMissing),
+            SupervisorAction::Suspend
+        );
+    }
+
+    #[test]
+    fn supervisor_emits_warn_only_once_for_enospc() {
+        let mut state = SupervisorState::default();
+        assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::WarnOnce);
+        state.record_enospc_logged();
+        assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::NoOp);
+    }
+
+    #[test]
+    fn supervisor_treats_rescan_required_as_restart() {
+        let state = SupervisorState::default();
+        assert_eq!(
+            decide(&state, ErrorClass::RescanRequired),
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
     }
 }
