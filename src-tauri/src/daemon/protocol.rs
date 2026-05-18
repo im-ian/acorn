@@ -343,8 +343,13 @@ pub struct StatusSnapshot {
     pub uptime_seconds: u64,
     pub session_count_total: u32,
     pub session_count_alive: u32,
+    /// OS process id of the daemon process that served this status request.
+    /// Optional for forward compatibility with older daemon builds.
+    #[serde(default)]
+    pub pid: Option<u32>,
     /// Approximate resident memory of the daemon process in bytes. `None`
     /// when the daemon could not query the OS (rare; not fatal).
+    #[serde(default)]
     pub rss_bytes: Option<u64>,
 }
 

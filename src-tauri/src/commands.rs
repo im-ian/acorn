@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
@@ -350,6 +350,28 @@ pub struct MemoryProcess {
     pub depth: u32,
 }
 
+#[derive(Clone)]
+struct ProcessMemorySnapshot {
+    pid: u32,
+    parent_pid: Option<u32>,
+    name: String,
+    command_line: String,
+    bytes: u64,
+}
+
+#[cfg(test)]
+impl ProcessMemorySnapshot {
+    fn new(pid: u32, parent_pid: Option<u32>, name: &str, bytes: u64) -> Self {
+        Self {
+            pid,
+            parent_pid,
+            name: name.to_string(),
+            command_line: name.to_string(),
+            bytes,
+        }
+    }
+}
+
 /// Best-effort process display name. `proc.name()` is unreliable on macOS —
 /// it can return a stale or truncated name (e.g. shows the launcher shell
 /// instead of the actual binary, or a 15-char truncation). Prefer the
@@ -384,53 +406,143 @@ fn process_command_line(proc: &sysinfo::Process) -> String {
     parts.join(" ")
 }
 
+fn process_memory_snapshot(pid: Pid, proc: &sysinfo::Process) -> ProcessMemorySnapshot {
+    ProcessMemorySnapshot {
+        pid: pid.as_u32(),
+        parent_pid: proc.parent().map(|p| p.as_u32()),
+        name: process_display_name(proc),
+        command_line: process_command_line(proc),
+        bytes: proc.memory(),
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct MemoryUsage {
-    /// Total resident set size in bytes — main process plus descendants.
+    /// Total resident set size in bytes — app process tree plus known sidecars.
     pub bytes: u64,
     pub processes: Vec<MemoryProcess>,
 }
 
-#[tauri::command]
-pub async fn get_memory_usage() -> MemoryUsage {
-    let mut guard = MEMORY_PROBE.lock().expect("memory probe poisoned");
-    let sys = guard.get_or_insert_with(|| {
-        System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new().with_memory()),
-        )
-    });
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new().with_memory(),
-    );
+fn basename(s: &str) -> &str {
+    s.rsplit('/').next().unwrap_or(s)
+}
 
-    let self_pid = Pid::from_u32(std::process::id());
+fn snapshot_basename_matches(snapshot: &ProcessMemorySnapshot, target: &str) -> bool {
+    if basename(&snapshot.name) == target {
+        return true;
+    }
+    snapshot
+        .command_line
+        .split_whitespace()
+        .next()
+        .map(|first| basename(first) == target)
+        .unwrap_or(false)
+}
+
+fn daemon_pid_from_status_sessions_or_pidfile(
+    state: &State<'_, AppState>,
+    snapshots_by_pid: &HashMap<u32, &ProcessMemorySnapshot>,
+) -> Option<u32> {
+    match state.daemon_bridge.status() {
+        Ok(snapshot) => snapshot.pid.or_else(|| {
+            let session_pids: Vec<u32> = state
+                .daemon_bridge
+                .list_sessions()
+                .ok()?
+                .into_iter()
+                .filter_map(|session| session.pid)
+                .collect();
+            infer_acornd_root_from_session_pids(snapshots_by_pid, &session_pids)
+        }),
+        Err(_) => daemon_pid_from_pidfile(),
+    }
+}
+
+fn daemon_pid_from_pidfile() -> Option<u32> {
+    let path = crate::daemon::paths::pid_file_path().ok()?;
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn memory_root_pids(
+    snapshots_by_pid: &HashMap<u32, &ProcessMemorySnapshot>,
+    app_pid: u32,
+    daemon_pid: Option<u32>,
+) -> Vec<u32> {
+    let mut roots = vec![app_pid];
+    if let Some(pid) = daemon_pid {
+        if snapshots_by_pid
+            .get(&pid)
+            .map(|snapshot| snapshot_basename_matches(snapshot, "acornd"))
+            .unwrap_or(false)
+        {
+            roots.push(pid);
+        }
+    }
+    roots
+}
+
+fn infer_acornd_root_from_session_pids(
+    snapshots_by_pid: &HashMap<u32, &ProcessMemorySnapshot>,
+    session_pids: &[u32],
+) -> Option<u32> {
+    for session_pid in session_pids {
+        let mut pid = Some(*session_pid);
+        let mut visited: HashSet<u32> = HashSet::new();
+        while let Some(current) = pid {
+            if !visited.insert(current) {
+                break;
+            }
+            let Some(snapshot) = snapshots_by_pid.get(&current) else {
+                break;
+            };
+            if snapshot_basename_matches(snapshot, "acornd") {
+                return Some(current);
+            }
+            pid = snapshot.parent_pid;
+        }
+    }
+    None
+}
+
+fn collect_memory_usage_from_roots(
+    snapshots: &[ProcessMemorySnapshot],
+    root_pids: &[u32],
+) -> MemoryUsage {
+    let by_pid: HashMap<u32, &ProcessMemorySnapshot> =
+        snapshots.iter().map(|p| (p.pid, p)).collect();
+    let mut children_of: HashMap<u32, Vec<u32>> = HashMap::new();
+    for snapshot in snapshots {
+        if let Some(parent_pid) = snapshot.parent_pid {
+            children_of.entry(parent_pid).or_default().push(snapshot.pid);
+        }
+    }
+
     let mut processes: Vec<MemoryProcess> = Vec::new();
     let mut total: u64 = 0;
-
-    let mut frontier: Vec<(Pid, u32)> = vec![(self_pid, 0)];
-    let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();
+    let mut frontier: Vec<(u32, u32)> = root_pids.iter().rev().map(|pid| (*pid, 0)).collect();
+    let mut visited: HashSet<u32> = HashSet::new();
 
     while let Some((pid, depth)) = frontier.pop() {
         if !visited.insert(pid) {
             continue;
         }
-        if let Some(proc) = sys.process(pid) {
-            let bytes = proc.memory();
-            total = total.saturating_add(bytes);
-            processes.push(MemoryProcess {
-                pid: pid.as_u32(),
-                parent_pid: proc.parent().map(|p| p.as_u32()),
-                name: process_display_name(proc),
-                command_line: process_command_line(proc),
-                bytes,
-                depth,
-            });
-        }
-        for (child_pid, child) in sys.processes() {
-            if child.parent() == Some(pid) && !visited.contains(child_pid) {
-                frontier.push((*child_pid, depth + 1));
+        let Some(snapshot) = by_pid.get(&pid) else {
+            continue;
+        };
+        total = total.saturating_add(snapshot.bytes);
+        processes.push(MemoryProcess {
+            pid,
+            parent_pid: snapshot.parent_pid,
+            name: snapshot.name.clone(),
+            command_line: snapshot.command_line.clone(),
+            bytes: snapshot.bytes,
+            depth,
+        });
+        if let Some(children) = children_of.get(&pid) {
+            for child_pid in children.iter().rev() {
+                if !visited.contains(child_pid) {
+                    frontier.push((*child_pid, depth + 1));
+                }
             }
         }
     }
@@ -441,6 +553,34 @@ pub async fn get_memory_usage() -> MemoryUsage {
         bytes: total,
         processes,
     }
+}
+
+#[tauri::command]
+pub fn get_memory_usage(state: State<'_, AppState>) -> MemoryUsage {
+    let mut guard = MEMORY_PROBE.lock().expect("memory probe poisoned");
+    let refresh = ProcessRefreshKind::new()
+        .with_memory()
+        .with_exe(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always);
+    let sys = guard.get_or_insert_with(|| {
+        System::new_with_specifics(RefreshKind::new().with_processes(refresh))
+    });
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+
+    let snapshots: Vec<ProcessMemorySnapshot> = sys
+        .processes()
+        .iter()
+        .map(|(pid, proc)| process_memory_snapshot(*pid, proc))
+        .collect();
+    let snapshots_by_pid: HashMap<u32, &ProcessMemorySnapshot> =
+        snapshots.iter().map(|p| (p.pid, p)).collect();
+    let root_pids = memory_root_pids(
+        &snapshots_by_pid,
+        std::process::id(),
+        daemon_pid_from_status_sessions_or_pidfile(&state, &snapshots_by_pid),
+    );
+
+    collect_memory_usage_from_roots(&snapshots, &root_pids)
 }
 
 #[tauri::command]
@@ -1978,7 +2118,10 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{font_name_from_path, validate_new_project_name};
+    use super::{
+        collect_memory_usage_from_roots, font_name_from_path, infer_acornd_root_from_session_pids,
+        memory_root_pids, validate_new_project_name, ProcessMemorySnapshot,
+    };
     use std::path::Path;
 
     #[test]
@@ -2033,5 +2176,61 @@ mod tests {
             validate_new_project_name("parent\\fresh-app", false).unwrap(),
             "parent\\fresh-app"
         );
+    }
+
+    #[test]
+    fn memory_usage_walks_app_and_daemon_roots_once() {
+        let snapshots = [
+            ProcessMemorySnapshot::new(10, None, "acorn", 100),
+            ProcessMemorySnapshot::new(11, Some(10), "legacy-shell", 20),
+            ProcessMemorySnapshot::new(20, Some(1), "acornd", 70),
+            ProcessMemorySnapshot::new(21, Some(20), "daemon-shell", 30),
+            ProcessMemorySnapshot::new(22, Some(21), "claude", 200),
+            ProcessMemorySnapshot::new(23, Some(22), "acorn-ipc", 15),
+        ];
+
+        let usage = collect_memory_usage_from_roots(&snapshots, &[10, 20, 21]);
+
+        assert_eq!(usage.bytes, 435);
+        assert_eq!(usage.processes.len(), 6);
+        let daemon = usage.processes.iter().find(|p| p.pid == 20).unwrap();
+        let daemon_shell = usage.processes.iter().find(|p| p.pid == 21).unwrap();
+        let ipc = usage.processes.iter().find(|p| p.pid == 23).unwrap();
+        assert_eq!(daemon.depth, 0);
+        assert_eq!(daemon_shell.depth, 1);
+        assert_eq!(ipc.depth, 3);
+        assert_eq!(ipc.name, "acorn-ipc");
+    }
+
+    #[test]
+    fn memory_roots_include_only_real_daemon_pid() {
+        let snapshots = [
+            ProcessMemorySnapshot::new(10, None, "acorn", 100),
+            ProcessMemorySnapshot::new(20, Some(1), "acornd", 70),
+            ProcessMemorySnapshot::new(30, Some(1), "zsh", 40),
+        ];
+        let by_pid: std::collections::HashMap<u32, &ProcessMemorySnapshot> =
+            snapshots.iter().map(|p| (p.pid, p)).collect();
+
+        assert_eq!(memory_root_pids(&by_pid, 10, Some(20)), vec![10, 20]);
+        assert_eq!(memory_root_pids(&by_pid, 10, Some(30)), vec![10]);
+        assert_eq!(memory_root_pids(&by_pid, 10, Some(999)), vec![10]);
+    }
+
+    #[test]
+    fn memory_can_infer_daemon_root_from_session_pid() {
+        let snapshots = [
+            ProcessMemorySnapshot::new(20, Some(1), "acornd", 70),
+            ProcessMemorySnapshot::new(21, Some(20), "zsh", 30),
+            ProcessMemorySnapshot::new(22, Some(21), "claude", 200),
+        ];
+        let by_pid: std::collections::HashMap<u32, &ProcessMemorySnapshot> =
+            snapshots.iter().map(|p| (p.pid, p)).collect();
+
+        assert_eq!(
+            infer_acornd_root_from_session_pids(&by_pid, &[21, 22]),
+            Some(20)
+        );
+        assert_eq!(infer_acornd_root_from_session_pids(&by_pid, &[999]), None);
     }
 }

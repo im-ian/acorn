@@ -361,6 +361,7 @@ impl Daemon {
                     uptime_seconds: self.uptime_seconds(),
                     session_count_total: self.registry.count_total() as u32,
                     session_count_alive: self.registry.count_alive() as u32,
+                    pid: Some(std::process::id()),
                     rss_bytes: None,
                 },
             },
