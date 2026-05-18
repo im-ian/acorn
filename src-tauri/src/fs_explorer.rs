@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use git2::{Repository, Status, StatusOptions};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
@@ -18,23 +19,60 @@ use crate::state::AppState;
 const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
 const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
 const WATCH_EVENT_CAP: usize = 256;
-const WATCH_IGNORED_COMPONENTS: &[&str] = &[
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    "out",
-    ".next",
-    ".nuxt",
-    ".svelte-kit",
-    ".vite",
-    ".turbo",
-    ".cache",
-    ".parcel-cache",
-    ".pytest_cache",
-    "__pycache__",
-    "coverage",
+
+const DEFAULT_IGNORE_GLOBS: &[&str] = &[
+    "**/node_modules/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/.nuxt/**",
+    "**/.svelte-kit/**",
+    "**/.vite/**",
+    "**/.turbo/**",
+    "**/.cache/**",
+    "**/.parcel-cache/**",
+    "**/.pytest_cache/**",
+    "**/__pycache__/**",
+    "**/coverage/**",
 ];
+
+#[derive(Debug)]
+pub struct WatchIgnoreMatcher {
+    set: GlobSet,
+}
+
+impl WatchIgnoreMatcher {
+    pub fn with_defaults(user_globs: &[String]) -> Self {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in DEFAULT_IGNORE_GLOBS {
+            builder.add(Glob::new(pattern).expect("default ignore glob compiles"));
+        }
+        for user in user_globs {
+            match Glob::new(user) {
+                Ok(g) => {
+                    builder.add(g);
+                }
+                Err(err) => {
+                    tracing::warn!(pattern = %user, error = %err, "ignoring malformed watch exclude");
+                }
+            }
+        }
+        let set = builder.build().unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "watch ignore globset build failed; using empty set");
+            GlobSet::empty()
+        });
+        Self { set }
+    }
+
+    pub fn is_ignored(&self, path: &Path, root: &Path) -> bool {
+        match path.strip_prefix(root) {
+            Ok(rel) => self.set.is_match(rel),
+            Err(_) => true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileEntry {
@@ -759,7 +797,7 @@ fn run_watch_batcher<R: Runtime>(
             Ok(res) => res,
             Err(_) => break,
         };
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
         batch.add_result(first);
 
         let deadline = Instant::now() + WATCH_BATCH_WINDOW;
@@ -791,16 +829,18 @@ struct WatchBatch {
     paths: Vec<PathBuf>,
     common_ancestor: Option<PathBuf>,
     overflow: bool,
+    ignore: Arc<WatchIgnoreMatcher>,
 }
 
 impl WatchBatch {
-    fn new(root: &Path) -> Self {
+    fn new(root: &Path, ignore: Arc<WatchIgnoreMatcher>) -> Self {
         Self {
             root: root.to_path_buf(),
             seen: HashSet::new(),
             paths: Vec::new(),
             common_ancestor: None,
             overflow: false,
+            ignore,
         }
     }
 
@@ -836,7 +876,7 @@ impl WatchBatch {
             if !path_is_inside_root(&path, &self.root) {
                 continue;
             }
-            if should_ignore_watch_path(&path, &self.root) {
+            if self.ignore.is_ignored(&path, &self.root) {
                 continue;
             }
             self.add_path(path);
@@ -929,21 +969,6 @@ fn path_is_inside_root(path: &Path, root: &Path) -> bool {
     path == root || path.starts_with(root)
 }
 
-fn should_ignore_watch_path(path: &Path, root: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(root) else {
-        return true;
-    };
-    rel.components().any(|component| {
-        let Component::Normal(name) = component else {
-            return false;
-        };
-        let Some(name) = name.to_str() else {
-            return false;
-        };
-        WATCH_IGNORED_COMPONENTS.contains(&name)
-    })
-}
-
 fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for (a_component, b_component) in a.components().zip(b.components()) {
@@ -1019,7 +1044,7 @@ mod tests {
     fn watch_batch_filters_noisy_and_outside_paths() {
         let d = tmpdir();
         let root = d.path().canonicalize().unwrap();
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
 
         batch.add_event(create_event(vec![
             root.join("src").join("main.rs"),
@@ -1060,7 +1085,7 @@ mod tests {
         let d = tmpdir();
         let root = d.path().canonicalize().unwrap();
         let src = root.join("src");
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
 
         for n in 0..(WATCH_EVENT_CAP + 10) {
             batch.add_event(create_event(vec![src.join(format!("file-{n}.rs"))]));
@@ -1083,7 +1108,7 @@ mod tests {
     fn watch_batch_rescan_requests_root_refresh() {
         let d = tmpdir();
         let root = d.path().canonicalize().unwrap();
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
 
         batch.add_event(Event::new(EventKind::Any).set_flag(notify::event::Flag::Rescan));
 
@@ -1097,6 +1122,42 @@ mod tests {
                 path: root.to_string_lossy().into_owned(),
             })
         );
+    }
+
+    #[test]
+    fn ignore_matcher_blocks_default_dirs() {
+        let m = WatchIgnoreMatcher::with_defaults(&[]);
+        let root = Path::new("/proj");
+        assert!(m.is_ignored(&root.join("node_modules/pkg/index.js"), root));
+        assert!(m.is_ignored(&root.join("target/debug/acorn"), root));
+        assert!(m.is_ignored(&root.join("src/__pycache__/x.pyc"), root));
+        assert!(!m.is_ignored(&root.join("src/main.rs"), root));
+    }
+
+    #[test]
+    fn ignore_matcher_accepts_user_globs() {
+        let m = WatchIgnoreMatcher::with_defaults(&[
+            "out/**".to_string(),
+            "**/*.log".to_string(),
+        ]);
+        let root = Path::new("/proj");
+        assert!(m.is_ignored(&root.join("out/bundle.js"), root));
+        assert!(m.is_ignored(&root.join("nested/a.log"), root));
+        assert!(!m.is_ignored(&root.join("src/a.rs"), root));
+    }
+
+    #[test]
+    fn ignore_matcher_treats_outside_root_as_ignored() {
+        let m = WatchIgnoreMatcher::with_defaults(&[]);
+        let root = Path::new("/proj");
+        assert!(m.is_ignored(Path::new("/other/file.rs"), root));
+    }
+
+    #[test]
+    fn ignore_matcher_skips_bad_user_globs() {
+        let m = WatchIgnoreMatcher::with_defaults(&["[[invalid".to_string()]);
+        let root = Path::new("/proj");
+        assert!(!m.is_ignored(&root.join("src/a.rs"), root));
     }
 
     #[test]

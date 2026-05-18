@@ -18,6 +18,7 @@ dependencies = [
  "dashmap",
  "directories",
  "git2",
+ "globset",
  "ignore",
  "interprocess",
  "nix 0.31.3",

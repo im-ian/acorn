@@ -36,6 +36,7 @@ clap = { version = "4", features = ["derive"] }
 interprocess = "2"
 notify = "6"
 ignore = "0.4"
+globset = "0.4"
 trash = "5"
 tempfile = "3"
 
@@ -131,6 +132,7 @@ interprocess = { workspace = true }
 # gitignore matcher aggregated per directory from repo root, and OS trash.
 notify = { workspace = true }
 ignore = { workspace = true }
+globset = { workspace = true }
 trash = { workspace = true }
 
 [dev-dependencies]
