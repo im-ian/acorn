@@ -541,9 +541,11 @@ export const api = {
   },
   fsGitStatus(
     repoRoot: string,
-  ): Promise<Record<string, FsGitStatusEntry>> {
-    return invoke<Record<string, FsGitStatusEntry>>("fs_git_status", {
+    statusLimit?: number,
+  ): Promise<FsGitStatusResult> {
+    return invoke<FsGitStatusResult>("fs_git_status", {
       repoRoot,
+      statusLimit,
     });
   },
   fsGitDiffStats(
@@ -598,6 +600,7 @@ export interface FsChangePayload {
   overflow?: boolean;
   cap?: number;
   refresh?: FsRefreshHint | null;
+  dotgit_changed: boolean;
 }
 
 export const FS_CHANGED_EVENT = "acorn:fs-changed";
@@ -616,6 +619,13 @@ export interface FsGitStatusEntry {
   kind: FsGitStatus;
   additions: number;
   deletions: number;
+}
+
+/** Mirror of `crate::fs_explorer::GitStatusResult`. */
+export interface FsGitStatusResult {
+  statuses: Record<string, FsGitStatusEntry>;
+  huge: boolean;
+  limit: number;
 }
 
 export interface FsGitDiffStatsRequest {
