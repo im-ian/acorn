@@ -328,12 +328,45 @@ pub fn load_status(state: State<'_, AppState>) -> LoadStatus {
 
 #[tauri::command]
 pub fn list_sessions(state: State<'_, AppState>) -> Vec<Session> {
+    reconcile_stale_worktrees(&state);
     state
         .sessions
         .list()
         .into_iter()
         .map(enrich_session)
         .collect()
+}
+
+/// Sweep sessions whose linked worktree directory has vanished (e.g. the
+/// agent pruned its worktree on exit) and re-point them at the project's
+/// main repo. Without this, every subsequent git op (`list_commits`,
+/// `list_staged`, `diff_*`) for that session bubbles a raw `ensure_repo`
+/// failure ("could not find git repository from '<missing-path>'") into
+/// the UI. Only touches sessions where the parent project still exists,
+/// so a temporarily unmounted repo doesn't trip the cleanup.
+fn reconcile_stale_worktrees(state: &AppState) {
+    let mut dirty = false;
+    for session in state.sessions.list() {
+        if session.worktree_path == session.repo_path {
+            continue;
+        }
+        if !session.repo_path.exists() {
+            continue;
+        }
+        if session.worktree_path.exists() {
+            continue;
+        }
+        if state
+            .sessions
+            .reconcile_missing_worktree(&session.id)
+            .is_ok()
+        {
+            dirty = true;
+        }
+    }
+    if dirty {
+        persist(state);
+    }
 }
 
 /// Attach derived fields (`branch`, `in_worktree`) computed from the
