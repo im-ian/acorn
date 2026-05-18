@@ -1,0 +1,25 @@
+[package]
+name = "acorn-daemon"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "acorn_daemon"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true }
+interprocess = { workspace = true }
+directories = { workspace = true }
+sysinfo = { workspace = true }
+portable-pty = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["process", "signal"] }

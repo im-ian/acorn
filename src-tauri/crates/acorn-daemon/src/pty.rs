@@ -21,6 +21,7 @@
 //!    <uuid>`) so a daemon restart recreates the agent's prior
 //!    context. Unknown agents pass through unmodified.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -79,14 +80,30 @@ struct PtyHandle {
     scrollback: Arc<RingBuffer>,
 }
 
-#[derive(Default)]
+/// Caller-supplied policy for applying environment variables to the
+/// PTY-spawned `CommandBuilder`. The host crate's `pty_env` /
+/// `shell_env` modules define the actual layering (login-shell rc env,
+/// `TERM`/`COLORTERM`/`LANG` backstops, caller overrides on top) —
+/// keeping that logic out of this leaf crate avoids a circular dep on
+/// the main `acorn` module graph and lets the daemon binary in the
+/// host crate inject the same policy the in-process spawn path uses.
+pub type EnvApplier =
+    Arc<dyn Fn(&mut CommandBuilder, HashMap<String, String>) + Send + Sync + 'static>;
+
 pub struct PtyManager {
     handles: Arc<DashMap<Uuid, Arc<PtyHandle>>>,
+    env_applier: EnvApplier,
 }
 
 impl PtyManager {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+    /// `env_applier` is invoked once per spawned PTY with the freshly
+    /// built `CommandBuilder` and the request's env map; it owns the
+    /// layering policy (login-shell env, TERM backstops, etc.).
+    pub fn new(env_applier: EnvApplier) -> Arc<Self> {
+        Arc::new(Self {
+            handles: Arc::new(DashMap::new()),
+            env_applier,
+        })
     }
 
     /// Spawn a new PTY child according to `spec`, register it with the
@@ -149,7 +166,7 @@ impl PtyManager {
         // empty TERM whenever the daemon process inherited a sanitized
         // env from launchd-launched Acorn — surfacing as #166's redraw /
         // color regressions whenever the daemon killswitch was on.
-        crate::pty_env::apply_layered_env(&mut cmd, spec.env.clone());
+        (self.env_applier)(&mut cmd, spec.env.clone());
 
         let child = pair
             .slave

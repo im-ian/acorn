@@ -26,8 +26,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
-use crate::daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
-use crate::daemon::socket;
+use acorn_daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
+use acorn_daemon::socket;
 
 /// Same sticky window the in-process PtyManager uses for the
 /// post-command "still waiting on you" NeedsInput cue. Mirrors

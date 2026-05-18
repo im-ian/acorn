@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/acorn-daemon",
     "crates/acorn-ipc",
     "crates/acorn-pty",
     "crates/acorn-session",
@@ -10,7 +11,8 @@ members = [
 # Shared dependencies referenced from each member crate with
 # `<name> = { workspace = true }`. Keeping the version + feature set in
 # one place removes drift risk between the main `acorn` crate and the
-# extracted leaf crates (`acorn-ipc`, `acorn-pty`, `acorn-transcript`).
+# extracted leaf crates (`acorn-daemon`, `acorn-ipc`, `acorn-pty`,
+# `acorn-session`, `acorn-transcript`).
 [workspace.dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
@@ -86,6 +88,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+acorn-daemon = { path = "crates/acorn-daemon" }
 acorn-ipc = { path = "crates/acorn-ipc" }
 acorn-pty = { path = "crates/acorn-pty" }
 acorn-session = { path = "crates/acorn-session" }

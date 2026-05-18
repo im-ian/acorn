@@ -354,7 +354,7 @@ fn resolve_action_target(
 
 fn handle_context(source: &Session) -> Response {
     let socket = socket_path::resolve().unwrap_or_default();
-    let daemon_socket = crate::daemon::paths::control_socket_path().ok();
+    let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
     Response::Context {
         text: primer::primer_for(
             &source.id.to_string(),

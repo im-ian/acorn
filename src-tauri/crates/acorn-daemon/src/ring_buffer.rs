@@ -104,18 +104,23 @@ impl RingBuffer {
         }
 
         // 3) Evict by line cap. If the line count exceeds LINE_CAP, drop
-        //    bytes from the front up to (and including) the oldest
-        //    surplus newline. This keeps the ring's "logical row" count
-        //    bounded even when individual lines are short.
-        while newlines.len() > LINE_CAP {
-            // Safe: the while-condition guarantees at least LINE_CAP+1
-            // entries; `pop_front` cannot return None here.
-            let cutover = newlines.pop_front().expect("invariant: surplus exists");
-            // Drop bytes 0..=cutover (inclusive of the newline itself).
-            drop_front_bytes(&mut bytes, cutover + 1);
-            // Rebase remaining newline indices by (cutover + 1).
+        //    every surplus newline in a single batch — compute the byte
+        //    cutover from the last surplus newline once, drop_front_bytes
+        //    once, rebase the remaining newline indices once. A naive
+        //    one-newline-at-a-time loop here is O(n²) on the rebase pass
+        //    and stalls under heavy short-line bursts (~2 MiB of `\n`
+        //    chunks pegged the daemon read thread + the corresponding
+        //    test for minutes before this change).
+        if newlines.len() > LINE_CAP {
+            let surplus = newlines.len() - LINE_CAP;
+            // The last newline we want to drop is at position `surplus-1`
+            // (zero-indexed). Drop bytes 0..=that index (inclusive of the
+            // newline itself).
+            let drop_bytes = newlines[surplus - 1] + 1;
+            newlines.drain(0..surplus);
+            drop_front_bytes(&mut bytes, drop_bytes);
             for n in newlines.iter_mut() {
-                *n = n.saturating_sub(cutover + 1);
+                *n = n.saturating_sub(drop_bytes);
             }
         }
     }

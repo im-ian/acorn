@@ -15,7 +15,7 @@ use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::daemon::protocol::{AgentKind, SessionKind};
+use acorn_daemon::protocol::{AgentKind, SessionKind};
 use crate::daemon_bridge::BridgeError;
 use crate::state::AppState;
 
@@ -293,8 +293,8 @@ pub fn daemon_adopt_session(
     let branch = summary.branch.clone().unwrap_or_default();
 
     let kind = match summary.kind {
-        crate::daemon::protocol::SessionKind::Regular => acorn_session::SessionKind::Regular,
-        crate::daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
+        acorn_daemon::protocol::SessionKind::Regular => acorn_session::SessionKind::Regular,
+        acorn_daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
     };
 
     let project_name = repo_path
