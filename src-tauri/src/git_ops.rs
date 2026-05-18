@@ -351,7 +351,16 @@ fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> 
             true
         },
         None,
-        None,
+        Some(&mut |_delta, hunk| {
+            // Without this callback the patch stream contains only +/-/space
+            // body lines, so the renderer has no per-line numbering anchor.
+            // libgit2's `header()` already includes the trailing newline.
+            if let Some(f) = current.borrow_mut().as_mut() {
+                let header = std::str::from_utf8(hunk.header()).unwrap_or("");
+                f.patch.push_str(header);
+            }
+            true
+        }),
         Some(&mut |_delta, _hunk, line| {
             if let Some(f) = current.borrow_mut().as_mut() {
                 let origin = line.origin();
@@ -437,4 +446,71 @@ fn image_data_uri_workdir(repo: &Repository, oid: git2::Oid, path: Option<&str>)
     let abs = workdir.join(path);
     let bytes = std::fs::read(abs).ok()?;
     Some(encode_data_uri(&bytes, path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-git-ops-test-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn commit_file(
+        repo: &git2::Repository,
+        rel: &str,
+        contents: &str,
+        message: &str,
+        parents: &[&git2::Commit<'_>],
+    ) -> git2::Oid {
+        let workdir = repo.workdir().expect("workdir");
+        let path = workdir.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        fs::write(&path, contents).expect("write file");
+        let mut idx = repo.index().expect("index");
+        idx.add_path(std::path::Path::new(rel)).expect("add");
+        idx.write().expect("write index");
+        let tree_id = idx.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("tree");
+        let sig = git2::Signature::now("test", "t@example").expect("sig");
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, parents)
+            .expect("commit")
+    }
+
+    #[test]
+    fn diff_for_commit_includes_hunk_headers() {
+        let root = unique_temp_dir("hunk-headers");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let v1 = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
+        let first_oid = commit_file(&repo, "a.txt", v1, "init", &[]);
+        let first = repo.find_commit(first_oid).expect("first commit");
+        let v2 = "alpha\nbeta\nGAMMA\ndelta\nepsilon\n";
+        let second_oid = commit_file(&repo, "a.txt", v2, "mutate", &[&first]);
+        drop(first);
+        drop(repo);
+
+        let payload = diff_for_commit(&root, &second_oid.to_string())
+            .expect("diff for second commit");
+        assert_eq!(payload.files.len(), 1);
+        let patch = &payload.files[0].patch;
+        assert!(
+            patch.lines().any(|l| l.starts_with("@@")),
+            "patch should contain at least one hunk header, got: {patch:?}",
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
