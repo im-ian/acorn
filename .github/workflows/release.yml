@@ -412,5 +412,10 @@ jobs:
             bundles/*.app.tar.gz
             bundles/*.app.tar.gz.sig
             latest.json
+          # Defer "Latest" badge + prerelease flag to GitHub's semver
+          # auto-detection so test tags like `v1.1.0-rc1` stay out of the
+          # default release pointer and the updater's latest.json feed.
+          make_latest: legacy
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
