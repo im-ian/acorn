@@ -12,6 +12,8 @@ export interface ParsedLine {
   kind: LineKind;
   prefix: string;
   text: string;
+  oldLine: number | null;
+  newLine: number | null;
 }
 
 export interface DiffStats {
@@ -19,10 +21,28 @@ export interface DiffStats {
   del: number;
 }
 
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
 export function parseDiff(patch: string): ParsedLine[] {
-  return patch.split("\n").map((raw) => {
+  let oldCursor: number | null = null;
+  let newCursor: number | null = null;
+  return patch.split("\n").map((raw): ParsedLine => {
     if (raw.startsWith("@@")) {
-      return { kind: "hunk" as const, prefix: "@@", text: raw };
+      const match = HUNK_HEADER.exec(raw);
+      if (match) {
+        oldCursor = Number(match[1]);
+        newCursor = Number(match[2]);
+      } else {
+        oldCursor = null;
+        newCursor = null;
+      }
+      return {
+        kind: "hunk",
+        prefix: "@@",
+        text: raw,
+        oldLine: null,
+        newLine: null,
+      };
     }
     if (
       raw.startsWith("diff ") ||
@@ -34,19 +54,66 @@ export function parseDiff(patch: string): ParsedLine[] {
       raw.startsWith("similarity index") ||
       raw.startsWith("rename ")
     ) {
-      return { kind: "meta" as const, prefix: "", text: raw };
+      return {
+        kind: "meta",
+        prefix: "",
+        text: raw,
+        oldLine: null,
+        newLine: null,
+      };
     }
     if (raw.startsWith("+")) {
-      return { kind: "add" as const, prefix: "+", text: raw.slice(1) };
+      const newLine = newCursor;
+      if (newCursor !== null) newCursor += 1;
+      return {
+        kind: "add",
+        prefix: "+",
+        text: raw.slice(1),
+        oldLine: null,
+        newLine,
+      };
     }
     if (raw.startsWith("-")) {
-      return { kind: "del" as const, prefix: "-", text: raw.slice(1) };
+      const oldLine = oldCursor;
+      if (oldCursor !== null) oldCursor += 1;
+      return {
+        kind: "del",
+        prefix: "-",
+        text: raw.slice(1),
+        oldLine,
+        newLine: null,
+      };
     }
     if (raw.startsWith(" ")) {
-      return { kind: "ctx" as const, prefix: " ", text: raw.slice(1) };
+      const oldLine = oldCursor;
+      const newLine = newCursor;
+      if (oldCursor !== null) oldCursor += 1;
+      if (newCursor !== null) newCursor += 1;
+      return {
+        kind: "ctx",
+        prefix: " ",
+        text: raw.slice(1),
+        oldLine,
+        newLine,
+      };
     }
-    return { kind: "ctx" as const, prefix: "", text: raw };
+    return {
+      kind: "ctx",
+      prefix: "",
+      text: raw,
+      oldLine: null,
+      newLine: null,
+    };
   });
+}
+
+export function diffGutterWidth(lines: readonly ParsedLine[]): number {
+  let max = 0;
+  for (const l of lines) {
+    if (l.oldLine !== null && l.oldLine > max) max = l.oldLine;
+    if (l.newLine !== null && l.newLine > max) max = l.newLine;
+  }
+  return max > 0 ? String(max).length : 1;
 }
 
 export function countStats(lines: ParsedLine[]): DiffStats {
