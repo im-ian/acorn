@@ -35,7 +35,7 @@ use directories::ProjectDirs;
 pub const ENV_DATA_DIR_OVERRIDE: &str = "ACORN_DATA_DIR";
 
 /// Override env var for the daemon control socket. Mirrors the existing
-/// `ACORN_IPC_SOCKET` override pattern used by `crate::ipc::socket_path`
+/// `ACORN_IPC_SOCKET` override pattern used by `acorn_ipc::socket_path`
 /// so the same E2E harness that points the legacy IPC at a tempdir can
 /// also point the daemon at one.
 pub const ENV_DAEMON_SOCKET_OVERRIDE: &str = "ACORN_DAEMON_SOCKET";
