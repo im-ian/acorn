@@ -20,19 +20,19 @@
 use std::io;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use uuid::Uuid;
 
-use crate::daemon::client::ControlConn;
-use crate::daemon::protocol::{
+use acorn_daemon::client::ControlConn;
+use acorn_daemon::protocol::{
     AgentKind, ControlPayload, ControlResult, SessionKind, SessionSummary, SpawnSpec,
     StatusSnapshot,
 };
-use crate::daemon::{client, paths};
+use acorn_daemon::{client, paths};
 
 /// How long the bridge waits for `acornd` to become reachable after
 /// spawning it. Conservative because the first launch on a cold disk
@@ -65,7 +65,7 @@ pub enum BridgeError {
     /// The daemon answered with a typed protocol error. The original
     /// error code and message are preserved for UI surfacing.
     Daemon {
-        code: crate::daemon::protocol::ErrorCode,
+        code: acorn_daemon::protocol::ErrorCode,
         message: String,
     },
     /// Anything else (OS I/O, JSON parse, etc.).
@@ -145,7 +145,7 @@ impl DaemonBridge {
     /// Resolve and cache the bundled `acornd` binary path. macOS app
     /// bundle layout: the GUI binary lives at `Contents/MacOS/acorn`
     /// and the daemon sits next to it as `Contents/MacOS/acornd`. In
-    /// `bun run tauri dev` mode the daemon is at `target/debug/acornd`
+    /// `pnpm run tauri dev` mode the daemon is at `target/debug/acornd`
     /// next to `target/debug/acorn`.
     pub fn cache_binary_path(&self, hint: Option<PathBuf>) -> Option<PathBuf> {
         let resolved = hint.or_else(|| {
@@ -229,8 +229,9 @@ impl DaemonBridge {
         };
         match result {
             Ok(resp) => Ok(resp.payload),
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
-                || e.kind() == io::ErrorKind::BrokenPipe =>
+            Err(e)
+                if e.kind() == io::ErrorKind::UnexpectedEof
+                    || e.kind() == io::ErrorKind::BrokenPipe =>
             {
                 // Stale connection — drop and reconnect once.
                 *self.conn.lock() = None;
@@ -394,7 +395,7 @@ impl DaemonBridge {
 
 fn unexpected(result: ControlResult) -> BridgeError {
     BridgeError::Daemon {
-        code: crate::daemon::protocol::ErrorCode::Internal,
+        code: acorn_daemon::protocol::ErrorCode::Internal,
         message: format!("unexpected response: {result:?}"),
     }
 }
@@ -403,8 +404,7 @@ fn unexpected(result: ControlResult) -> BridgeError {
 /// the app does not pull in an extra dep — `crate::pty::base64_encode`
 /// is module-private, hence duplicated here.
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {

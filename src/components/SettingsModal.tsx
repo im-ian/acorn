@@ -16,6 +16,12 @@ import {
 } from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import {
+  LANGUAGE_OPTIONS,
+  type Language,
+  type TranslationKey,
+  type Translator,
+} from "../lib/i18n";
 import { sendTestNotification } from "../lib/notifications";
 import {
   fetchLatestReleaseNotes,
@@ -38,7 +44,7 @@ import {
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
-import type { PrStateFilter } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
 import {
   CheckboxRow,
   CommandHint,
@@ -56,7 +62,7 @@ type Tab =
   | "terminal"
   | "agents"
   | "sessions"
-  | "pull-requests"
+  | "github"
   | "appearance"
   | "editor"
   | "notifications"
@@ -64,20 +70,37 @@ type Tab =
   | "experiments"
   | "about";
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "terminal", label: "Terminal" },
-  { id: "agents", label: "Agents" },
-  { id: "sessions", label: "Sessions" },
-  { id: "pull-requests", label: "Pull Requests" },
-  { id: "appearance", label: "Appearance" },
-  { id: "editor", label: "Editor" },
-  { id: "notifications", label: "Notifications" },
-  { id: "storage", label: "Storage" },
-  { id: "experiments", label: "Experiments" },
-  { id: "about", label: "About" },
+const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
+  { id: "terminal", labelKey: "settings.tabs.terminal" },
+  { id: "agents", labelKey: "settings.tabs.agents" },
+  { id: "sessions", labelKey: "settings.tabs.sessions" },
+  { id: "github", labelKey: "settings.tabs.github" },
+  { id: "appearance", labelKey: "settings.tabs.appearance" },
+  { id: "editor", labelKey: "settings.tabs.editor" },
+  { id: "notifications", labelKey: "settings.tabs.notifications" },
+  { id: "storage", labelKey: "settings.tabs.storage" },
+  { id: "experiments", labelKey: "settings.tabs.experiments" },
+  { id: "about", labelKey: "settings.tabs.about" },
 ];
 
 const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
+type SettingsTranslator = Translator;
+
+function st(t: SettingsTranslator, key: TranslationKey): string {
+  return t(key);
+}
+
+function stf(
+  t: SettingsTranslator,
+  key: TranslationKey,
+  values: Record<string, string | number>,
+): string {
+  return st(t, key).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(values, name)
+      ? String(values[name])
+      : match,
+  );
+}
 
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
@@ -86,6 +109,7 @@ export function SettingsModal() {
   const pendingTab = useSettings((s) => s.pendingTab);
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("terminal");
+  const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
   // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
@@ -118,7 +142,7 @@ export function SettingsModal() {
       ariaLabelledBy="acorn-settings-title"
     >
       <ModalHeader
-        title="Settings"
+        title={t("settings.title")}
         titleId="acorn-settings-title"
         icon={<SettingsIcon size={14} className="text-fg-muted" />}
         variant="dialog"
@@ -126,19 +150,19 @@ export function SettingsModal() {
       />
       <div className="flex h-[28rem]">
         <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
-          {TABS.map((t) => (
+          {TABS.map((tabMeta) => (
             <button
-              key={t.id}
+              key={tabMeta.id}
               type="button"
-              onClick={() => setTab(t.id)}
+              onClick={() => setTab(tabMeta.id)}
               className={cn(
                 "px-4 py-1.5 text-left text-xs transition",
-                tab === t.id
+                tab === tabMeta.id
                   ? "bg-bg-elevated text-fg"
                   : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
               )}
             >
-              {t.label}
+              {t(tabMeta.labelKey)}
             </button>
           ))}
           <div className="mt-auto px-4 pb-2">
@@ -147,7 +171,7 @@ export function SettingsModal() {
               onClick={reset}
               className="text-[11px] text-fg-muted transition hover:text-danger"
             >
-              Reset to defaults
+              {t("settings.reset")}
             </button>
           </div>
         </nav>
@@ -158,10 +182,10 @@ export function SettingsModal() {
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
-          ) : tab === "pull-requests" ? (
-            <PullRequestsSettings />
+          ) : tab === "github" ? (
+            <GithubSettings />
           ) : tab === "appearance" ? (
-            <AppearanceSettings />
+            <AppearanceSettings t={t} />
           ) : tab === "editor" ? (
             <EditorSettings />
           ) : tab === "notifications" ? (
@@ -182,19 +206,23 @@ export function SettingsModal() {
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
   const patchTerminal = useSettings((s) => s.patchTerminal);
+  const t = useTranslation();
 
   return (
     <section className="space-y-4">
       <Field
-        label="Font family"
-        hint="Comma-separated stack. First family that resolves wins."
+        label={st(t, "settings.terminal.fontFamily.label")}
+        hint={st(t, "settings.terminal.fontFamily.hint")}
       >
-        <TextInput
+        <TerminalFontFamilyInput
           value={settings.terminal.fontFamily}
-          onChange={(e) => patchTerminal({ fontFamily: e.target.value })}
+          onCommit={(fontFamily) => patchTerminal({ fontFamily })}
         />
       </Field>
-      <Field label="Font size" hint="In CSS pixels. Range 8–32.">
+      <Field
+        label={st(t, "settings.terminal.fontSize.label")}
+        hint={st(t, "settings.terminal.fontSize.hint")}
+      >
         <Stepper
           value={settings.terminal.fontSize}
           min={8}
@@ -204,8 +232,8 @@ function TerminalSettings() {
         />
       </Field>
       <Field
-        label="Font weight"
-        hint="Weight for normal text. Effective values depend on the chosen font's available weights."
+        label={st(t, "settings.terminal.fontWeight.label")}
+        hint={st(t, "settings.terminal.fontWeight.hint")}
       >
         <WeightSelect
           value={settings.terminal.fontWeight}
@@ -213,8 +241,8 @@ function TerminalSettings() {
         />
       </Field>
       <Field
-        label="Bold font weight"
-        hint="Weight used when the terminal renders bold cells."
+        label={st(t, "settings.terminal.boldFontWeight.label")}
+        hint={st(t, "settings.terminal.boldFontWeight.hint")}
       >
         <WeightSelect
           value={settings.terminal.fontWeightBold}
@@ -222,8 +250,8 @@ function TerminalSettings() {
         />
       </Field>
       <Field
-        label="Line height"
-        hint="Cell-height multiplier. 1.00 packs rows flush; raise for more vertical breathing room. Range 1.00–2.00."
+        label={st(t, "settings.terminal.lineHeight.label")}
+        hint={st(t, "settings.terminal.lineHeight.hint")}
       >
         <Stepper
           value={settings.terminal.lineHeight}
@@ -235,16 +263,19 @@ function TerminalSettings() {
         />
       </Field>
       <Field
-        label="Open links on"
-        hint="How to follow URLs that xterm detects in terminal output."
+        label={st(t, "settings.terminal.openLinksOn.label")}
+        hint={st(t, "settings.terminal.openLinksOn.hint")}
       >
         <div className="flex flex-col gap-1.5">
           <RadioCard<TerminalLinkActivation>
             name="terminal-link-activation"
             value="click"
             current={settings.terminal.linkActivation}
-            label="Click (default)"
-            description="A single mouse click opens the URL in your default browser."
+            label={st(t, "settings.terminal.openLinksOn.click.label")}
+            description={st(
+              t,
+              "settings.terminal.openLinksOn.click.description",
+            )}
             onSelect={(v) => patchTerminal({ linkActivation: v })}
           />
           <RadioCard<TerminalLinkActivation>
@@ -252,12 +283,66 @@ function TerminalSettings() {
             value="modifier-click"
             current={settings.terminal.linkActivation}
             label={`${MODIFIER_LABEL}-click`}
-            description={`Hold ${MODIFIER_LABEL} while clicking to open. Stops stray clicks on output containing URLs from yanking focus to the browser.`}
+            description={stf(
+              t,
+              "settings.terminal.openLinksOn.modifierClick.description",
+              { modifier: MODIFIER_LABEL },
+            )}
             onSelect={(v) => patchTerminal({ linkActivation: v })}
           />
         </div>
       </Field>
     </section>
+  );
+}
+
+function TerminalFontFamilyInput({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
+  const valueRef = useRef(value);
+  const onCommitRef = useRef(onCommit);
+
+  useEffect(() => {
+    onCommitRef.current = onCommit;
+  }, [onCommit]);
+
+  useEffect(() => {
+    valueRef.current = value;
+    draftRef.current = value;
+    setDraft(value);
+  }, [value]);
+
+  const commitDraft = useCallback(() => {
+    const next = draftRef.current;
+    if (next === valueRef.current) return;
+    valueRef.current = next;
+    onCommitRef.current(next);
+  }, []);
+
+  useEffect(() => () => commitDraft(), [commitDraft]);
+
+  return (
+    <TextInput
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        draftRef.current = next;
+        setDraft(next);
+      }}
+      onBlur={commitDraft}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commitDraft();
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -290,13 +375,14 @@ function WeightSelect({ value, onChange }: WeightSelectProps) {
 function SessionSettings() {
   const settings = useSettings((s) => s.settings);
   const patchSessions = useSettings((s) => s.patchSessions);
+  const t = useTranslation();
 
   return (
     <section className="space-y-6">
       <div className="space-y-4">
         <Field
-          label="Confirm before removing a session"
-          hint="Isolated worktrees always prompt because the delete-worktree choice still matters."
+          label={st(t, "settings.sessions.confirmRemove.label")}
+          hint={st(t, "settings.sessions.confirmRemove.hint")}
         >
           <label className="flex items-center gap-2 text-xs text-fg">
             <input
@@ -307,12 +393,12 @@ function SessionSettings() {
               }
               className="accent-[var(--color-accent)]"
             />
-            Show confirmation dialog
+            {st(t, "settings.sessions.confirmRemove.checkbox")}
           </label>
         </Field>
         <Field
-          label="Close tab when the process exits"
-          hint="When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way."
+          label={st(t, "settings.sessions.closeOnExit.label")}
+          hint={st(t, "settings.sessions.closeOnExit.hint")}
         >
           <label className="flex items-center gap-2 text-xs text-fg">
             <input
@@ -323,14 +409,14 @@ function SessionSettings() {
               }
               className="accent-[var(--color-accent)]"
             />
-            Auto-close on exit
+            {st(t, "settings.sessions.closeOnExit.checkbox")}
           </label>
         </Field>
         <ControlSessionInstallSection />
       </div>
       <SettingsGroup
-        title="Background sessions"
-        description="The acornd daemon owns long-running PTYs so terminal sessions survive Acorn restarts."
+        title={st(t, "settings.sessions.background.title")}
+        description={st(t, "settings.sessions.background.description")}
       >
         <BackgroundSessionsSettings />
       </SettingsGroup>
@@ -367,6 +453,7 @@ function ControlSessionInstallSection() {
     import("../lib/types").AcornIpcStatus | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslation();
 
   const refresh = useCallback(async () => {
     try {
@@ -385,8 +472,8 @@ function ControlSessionInstallSection() {
   if (error) {
     return (
       <Field
-        label="Control sessions (acorn-ipc CLI)"
-        hint="Could not query install status."
+        label={st(t, "settings.sessions.controlCli.label")}
+        hint={st(t, "settings.sessions.controlCli.errorHint")}
       >
         <p className="text-[11px] text-danger">{error}</p>
       </Field>
@@ -396,8 +483,8 @@ function ControlSessionInstallSection() {
   if (!status) {
     return (
       <Field
-        label="Control sessions (acorn-ipc CLI)"
-        hint="Loading install status…"
+        label={st(t, "settings.sessions.controlCli.label")}
+        hint={st(t, "settings.sessions.controlCli.loadingHint")}
       >
         <p className="text-[11px] text-fg-muted">…</p>
       </Field>
@@ -413,13 +500,15 @@ function ControlSessionInstallSection() {
 
   return (
     <Field
-      label="Control sessions (acorn-ipc CLI)"
-      hint="Control sessions can dispatch commands to siblings via the acorn-ipc CLI. The CLI ships next to the app; symlink it into your $PATH to use it from any terminal."
+      label={st(t, "settings.sessions.controlCli.label")}
+      hint={st(t, "settings.sessions.controlCli.hint")}
     >
       <div className="space-y-2">
         <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
           <div className="flex items-center justify-between">
-            <span className="text-fg-muted">Bundled binary</span>
+            <span className="text-fg-muted">
+              {st(t, "settings.sessions.controlCli.bundledBinary")}
+            </span>
             <span
               className={cn(
                 "rounded px-1.5 py-0.5 text-[10px] font-medium",
@@ -428,7 +517,9 @@ function ControlSessionInstallSection() {
                   : "bg-warning/15 text-warning",
               )}
             >
-              {status.bundled_exists ? "found" : "missing"}
+              {status.bundled_exists
+                ? st(t, "settings.sessions.controlCli.found")
+                : st(t, "settings.sessions.controlCli.missing")}
             </span>
           </div>
           <code className="mt-1 block truncate font-mono text-fg">
@@ -437,7 +528,9 @@ function ControlSessionInstallSection() {
         </div>
         <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
           <div className="flex items-center justify-between">
-            <span className="text-fg-muted">Installed shim</span>
+            <span className="text-fg-muted">
+              {st(t, "settings.sessions.controlCli.installedShim")}
+            </span>
             <span
               className={cn(
                 "rounded px-1.5 py-0.5 text-[10px] font-medium",
@@ -446,7 +539,9 @@ function ControlSessionInstallSection() {
                   : "bg-bg-elevated text-fg-muted",
               )}
             >
-              {activeShim ? "installed" : "not installed"}
+              {activeShim
+                ? st(t, "settings.sessions.controlCli.installed")
+                : st(t, "settings.sessions.controlCli.notInstalled")}
             </span>
           </div>
           <code className="mt-1 block truncate font-mono text-fg">
@@ -461,46 +556,28 @@ function ControlSessionInstallSection() {
           onClick={() => void refresh()}
           className="text-[11px] text-fg-muted underline-offset-2 hover:text-fg hover:underline"
         >
-          Re-check
+          {st(t, "settings.sessions.controlCli.recheck")}
         </button>
       </div>
     </Field>
   );
 }
 
-function PullRequestsSettings() {
+function GithubSettings() {
   const settings = useSettings((s) => s.settings);
-  const patchPullRequests = useSettings((s) => s.patchPullRequests);
+  const patchGithub = useSettings((s) => s.patchGithub);
+  const t = useTranslation();
 
   return (
     <section className="space-y-4">
       <Field
-        label="Default tab"
-        hint="Filter pre-selected when the PRs panel first opens for a repo. Switching tabs by hand still works as before."
+        label={st(t, "settings.github.refreshInterval.label")}
+        hint={st(t, "settings.github.refreshInterval.hint")}
       >
         <Select
-          value={settings.pullRequests.defaultState}
+          value={settings.github.refreshIntervalMs}
           onChange={(e) =>
-            patchPullRequests({
-              defaultState: e.target.value as PrStateFilter,
-            })
-          }
-          className="w-48"
-        >
-          <option value="open">Open</option>
-          <option value="closed">Closed</option>
-          <option value="merged">Merged</option>
-          <option value="all">All</option>
-        </Select>
-      </Field>
-      <Field
-        label="Refresh interval"
-        hint="How often the PRs tab auto-refetches from gh. Lower values feel snappier but spend more API budget."
-      >
-        <Select
-          value={settings.pullRequests.refreshIntervalMs}
-          onChange={(e) =>
-            patchPullRequests({
+            patchGithub({
               refreshIntervalMs: Number(e.target.value),
             })
           }
@@ -514,26 +591,26 @@ function PullRequestsSettings() {
         </Select>
       </Field>
       <p className="text-[11px] text-fg-muted">
-        Manual refresh (the icon in the PRs tab) always works regardless of
-        this interval.
+        {st(t, "settings.github.manualRefresh")}
       </p>
       <Field
-        label="List density"
-        hint="Author avatars make rows easier to scan at a glance, but each row gets thicker."
+        label={st(t, "settings.github.listDensity.label")}
+        hint={st(t, "settings.github.listDensity.hint")}
       >
         <CheckboxRow
-          label="Show author avatars"
-          description="Render the GitHub avatar next to each PR row."
-          checked={settings.pullRequests.showAvatars}
-          onChange={(v) => patchPullRequests({ showAvatars: v })}
+          label={st(t, "settings.github.showAuthorAvatars.label")}
+          description={st(t, "settings.github.showAuthorAvatars.description")}
+          checked={settings.github.showAvatars}
+          onChange={(v) => patchGithub({ showAvatars: v })}
         />
       </Field>
     </section>
   );
 }
 
-function AppearanceSettings() {
+function AppearanceSettings({ t }: { t: SettingsTranslator }) {
   const settings = useSettings((s) => s.settings);
+  const patchLanguage = useSettings((s) => s.patchLanguage);
   const patchStatusBar = useSettings((s) => s.patchStatusBar);
   const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
   const patchAppearance = useSettings((s) => s.patchAppearance);
@@ -542,9 +619,18 @@ function AppearanceSettings() {
 
   return (
     <section className="space-y-6">
+      <LanguageSection
+        language={settings.language}
+        onChange={patchLanguage}
+        t={t}
+      />
       <ThemeSection
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
+      />
+      <UiScaleSection
+        value={appearance.uiScalePercent}
+        onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
       />
       <BackgroundSection
         state={appearance.background}
@@ -562,6 +648,79 @@ function AppearanceSettings() {
   );
 }
 
+function LanguageSection({
+  language,
+  onChange,
+  t,
+}: {
+  language: Language;
+  onChange: (language: Language) => void;
+  t: SettingsTranslator;
+}) {
+  return (
+    <Field
+      label={t("settings.language.label")}
+      hint={t("settings.language.hint")}
+    >
+      <Select
+        value={language}
+        onChange={(e) => onChange(e.target.value as Language)}
+        className="w-48"
+        aria-label={t("settings.language.label")}
+      >
+        {LANGUAGE_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.nativeLabel}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  );
+}
+
+const UI_SCALE_PRESETS = [75, 80, 90, 100, 110, 125, 150] as const;
+
+function UiScaleSection({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const t = useTranslation();
+  const presets = UI_SCALE_PRESETS.includes(
+    value as (typeof UI_SCALE_PRESETS)[number],
+  )
+    ? UI_SCALE_PRESETS
+    : [...UI_SCALE_PRESETS, value].sort((a, b) => a - b);
+
+  const commitValue = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    onChange(next);
+  };
+
+  return (
+    <Field
+      label={st(t, "settings.appearance.uiScale.label")}
+      hint={st(t, "settings.appearance.uiScale.hint")}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={String(value)}
+          onChange={(e) => commitValue(Number(e.target.value))}
+          className="w-32"
+        >
+          {presets.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}%
+            </option>
+          ))}
+        </Select>
+      </div>
+    </Field>
+  );
+}
+
 function ThemeSection({
   themeId,
   onChange,
@@ -571,11 +730,12 @@ function ThemeSection({
 }) {
   const themes = useThemes((s) => s.themes);
   const refresh = useThemes((s) => s.refresh);
+  const t = useTranslation();
 
   return (
     <Field
-      label="Theme"
-      hint="Built-in palettes and valid CSS files from the themes folder."
+      label={st(t, "settings.appearance.theme.label")}
+      hint={st(t, "settings.appearance.theme.hint")}
     >
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -586,7 +746,9 @@ function ThemeSection({
           {themes.map((theme) => (
             <option key={theme.id} value={theme.id}>
               {theme.label}
-              {theme.source === "user" ? " (custom)" : ""}
+              {theme.source === "user"
+                ? ` ${st(t, "settings.appearance.theme.custom")}`
+                : ""}
             </option>
           ))}
         </Select>
@@ -594,16 +756,17 @@ function ThemeSection({
           type="button"
           onClick={() => void refresh()}
           className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
-          title="Rescan themes folder"
+          title={st(t, "settings.appearance.theme.rescanTitle")}
         >
-          <RefreshCcw size={12} /> Refresh
+          <RefreshCcw size={12} /> {st(t, "settings.appearance.theme.refresh")}
         </button>
         <button
           type="button"
           onClick={() => void revealThemesFolder()}
           className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
         >
-          <FolderOpen size={12} /> Reveal folder
+          <FolderOpen size={12} />{" "}
+          {st(t, "settings.appearance.theme.revealFolder")}
         </button>
       </div>
     </Field>
@@ -621,6 +784,7 @@ function BackgroundSection({
 }) {
   const [pickError, setPickError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const t = useTranslation();
 
   const handleFileChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -658,8 +822,8 @@ function BackgroundSection({
 
   return (
     <Field
-      label="Background image"
-      hint="One image can be applied to the app area, terminal area, or both."
+      label={st(t, "settings.appearance.background.label")}
+      hint={st(t, "settings.appearance.background.hint")}
     >
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -675,10 +839,13 @@ function BackgroundSection({
             onClick={() => fileInputRef.current?.click()}
             className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg transition hover:bg-bg-elevated"
           >
-            <ImagePlus size={12} /> {state.relativePath ? "Replace" : "Pick image"}
+            <ImagePlus size={12} />{" "}
+            {state.relativePath
+              ? st(t, "settings.appearance.background.replace")
+              : st(t, "settings.appearance.background.pickImage")}
           </button>
           <span className="min-w-0 truncate text-[11px] text-fg-muted">
-            {state.fileName ?? "No image selected"}
+            {state.fileName ?? st(t, "settings.appearance.background.noImage")}
           </span>
           {state.relativePath ? (
             <button
@@ -686,7 +853,8 @@ function BackgroundSection({
               onClick={() => void remove()}
               className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-danger"
             >
-              <Trash2 size={12} /> Remove
+              <Trash2 size={12} />{" "}
+              {st(t, "settings.appearance.background.remove")}
             </button>
           ) : null}
         </div>
@@ -695,20 +863,22 @@ function BackgroundSection({
         ) : null}
         <div className="flex flex-col gap-1">
           <CheckboxRow
-            label="Apply to app background"
+            label={st(t, "settings.appearance.background.applyToApp")}
             checked={state.applyToApp}
             disabled={!state.relativePath}
             onChange={(checked) => onChange({ applyToApp: checked })}
           />
           <CheckboxRow
-            label="Apply to terminal background"
+            label={st(t, "settings.appearance.background.applyToTerminal")}
             checked={state.applyToTerminal}
             disabled={!state.relativePath}
             onChange={(checked) => onChange({ applyToTerminal: checked })}
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-medium text-fg-muted">Fit</span>
+          <span className="text-[11px] font-medium text-fg-muted">
+            {st(t, "settings.appearance.background.fit.label")}
+          </span>
           <div className="flex flex-wrap gap-1.5">
             {(["cover", "contain", "tile"] as BackgroundFit[]).map((fit) => (
               <RadioCard<BackgroundFit>
@@ -716,14 +886,17 @@ function BackgroundSection({
                 name="acorn-bg-fit"
                 value={fit}
                 current={state.fit}
-                label={fit[0].toUpperCase() + fit.slice(1)}
+                label={st(t, `settings.appearance.background.fit.${fit}`)}
                 onSelect={(value) => onChange({ fit: value })}
               />
             ))}
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Opacity" hint="0 is transparent, 100 is opaque.">
+          <Field
+            label={st(t, "settings.appearance.background.opacity.label")}
+            hint={st(t, "settings.appearance.background.opacity.hint")}
+          >
             <Stepper
               value={Math.round(state.opacity * 100)}
               min={0}
@@ -733,7 +906,7 @@ function BackgroundSection({
               onChange={(value) => onChange({ opacity: value / 100 })}
             />
           </Field>
-          <Field label="Blur">
+          <Field label={st(t, "settings.appearance.background.blur")}>
             <Stepper
               value={state.blur}
               min={0}
@@ -763,11 +936,13 @@ function SessionDisplaySection({
     },
   ) => void;
 }) {
+  const t = useTranslation();
+
   return (
     <>
       <Field
-        label="Session title"
-        hint="Which field becomes the bold first line of each sidebar session row."
+        label={st(t, "settings.appearance.sessionDisplay.title.label")}
+        hint={st(t, "settings.appearance.sessionDisplay.title.hint")}
       >
         <div className="flex flex-col gap-1.5">
           {SESSION_TITLE_OPTIONS.map((opt) => (
@@ -776,60 +951,96 @@ function SessionDisplaySection({
               name="acorn-session-title"
               value={opt.value}
               current={sessionDisplay.title}
-              label={opt.label}
-              description={opt.description}
+              label={st(
+                t,
+                `settings.appearance.sessionDisplay.title.options.${opt.value}.label`,
+              )}
+              description={st(
+                t,
+                `settings.appearance.sessionDisplay.title.options.${opt.value}.description`,
+              )}
               onSelect={(v) => patch({ title: v })}
             />
           ))}
         </div>
       </Field>
       <Field
-        label="Additional metadata"
-        hint="Secondary line under the title. Toggle off everything for a single-line row."
+        label={st(t, "settings.appearance.sessionDisplay.metadata.label")}
+        hint={st(t, "settings.appearance.sessionDisplay.metadata.hint")}
       >
         <div className="flex flex-col gap-1">
           <CheckboxRow
-            label="Branch"
-            description="Active git branch."
+            label={st(
+              t,
+              "settings.appearance.sessionDisplay.metadata.branch.label",
+            )}
+            description={st(
+              t,
+              "settings.appearance.sessionDisplay.metadata.branch.description",
+            )}
             checked={sessionDisplay.metadata.branch}
             onChange={(v) => patch({ metadata: { branch: v } })}
           />
           <CheckboxRow
-            label="Working directory"
-            description="Worktree directory basename."
+            label={st(
+              t,
+              "settings.appearance.sessionDisplay.metadata.workingDirectory.label",
+            )}
+            description={st(
+              t,
+              "settings.appearance.sessionDisplay.metadata.workingDirectory.description",
+            )}
             checked={sessionDisplay.metadata.workingDirectory}
             onChange={(v) => patch({ metadata: { workingDirectory: v } })}
           />
           <CheckboxRow
-            label="Status"
-            description="Idle / Running / Needs input / Failed / Completed."
+            label={st(
+              t,
+              "settings.appearance.sessionDisplay.metadata.status.label",
+            )}
+            description={st(
+              t,
+              "settings.appearance.sessionDisplay.metadata.status.description",
+            )}
             checked={sessionDisplay.metadata.status}
             onChange={(v) => patch({ metadata: { status: v } })}
           />
         </div>
       </Field>
       <Field
-        label="Inline icons"
-        hint="Glyphs that decorate each session row. Hide to make the list denser."
+        label={st(t, "settings.appearance.sessionDisplay.icons.label")}
+        hint={st(t, "settings.appearance.sessionDisplay.icons.hint")}
       >
         <div className="flex flex-col gap-1">
           <CheckboxRow
-            label="Status dot"
-            description="Colored bullet at the row start. Redundant when Status is enabled in metadata."
+            label={st(
+              t,
+              "settings.appearance.sessionDisplay.icons.statusDot.label",
+            )}
+            description={st(
+              t,
+              "settings.appearance.sessionDisplay.icons.statusDot.description",
+            )}
             checked={sessionDisplay.icons.statusDot}
             onChange={(v) => patch({ icons: { statusDot: v } })}
           />
           <CheckboxRow
-            label="Session kind icons"
-            description="Branch glyph for isolated worktrees and bot glyph for control sessions."
+            label={st(
+              t,
+              "settings.appearance.sessionDisplay.icons.sessionKind.label",
+            )}
+            description={st(
+              t,
+              "settings.appearance.sessionDisplay.icons.sessionKind.description",
+            )}
             checked={sessionDisplay.icons.sessionKind}
             onChange={(v) => patch({ icons: { sessionKind: v } })}
           />
         </div>
       </Field>
       <Field
-        label="Show details on hover"
-        hint="Pop a tooltip with every field when hovering a session row, regardless of which fields the row itself shows."
+        label={st(t, "settings.appearance.sessionDisplay.hover.label")}
+        hint={st(t, "settings.appearance.sessionDisplay.hover.hint")}
       >
         <label className="flex items-center gap-2 text-xs text-fg">
           <input
@@ -838,7 +1049,7 @@ function SessionDisplaySection({
             onChange={(e) => patch({ showDetailsOnHover: e.target.checked })}
             className="accent-[var(--color-accent)]"
           />
-          Enable hover tooltip
+          {st(t, "settings.appearance.sessionDisplay.hover.checkbox")}
         </label>
       </Field>
     </>
@@ -852,33 +1063,59 @@ function StatusBarSection({
   statusBar: AcornSettings["statusBar"];
   patch: (patch: Partial<AcornSettings["statusBar"]>) => void;
 }) {
+  const t = useTranslation();
+
   return (
     <Field
-      label="Status bar"
-      hint="Choose which optional badges show in the bottom status bar."
+      label={st(t, "settings.appearance.statusBar.label")}
+      hint={st(t, "settings.appearance.statusBar.hint")}
     >
       <div className="flex flex-col gap-1">
         <CheckboxRow
-          label="Session count"
-          description="Total number of sessions across the active project (`sessions: N`)."
+          label={st(t, "settings.appearance.statusBar.sessionCount.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.sessionCount.description",
+          )}
           checked={statusBar.showSessionCount}
           onChange={(v) => patch({ showSessionCount: v })}
         />
         <CheckboxRow
-          label="Active session status"
-          description="Lifecycle state of the active session (Idle / Running / Needs input / Failed / Completed)."
+          label={st(
+            t,
+            "settings.appearance.statusBar.activeSessionStatus.label",
+          )}
+          description={st(
+            t,
+            "settings.appearance.statusBar.activeSessionStatus.description",
+          )}
           checked={statusBar.showSessionStatus}
           onChange={(v) => patch({ showSessionStatus: v })}
         />
         <CheckboxRow
-          label="GitHub account"
-          description="The `gh` account used to list pull requests for the active repo."
+          label={st(t, "settings.appearance.statusBar.githubAccount.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.githubAccount.description",
+          )}
           checked={statusBar.showGithubAccount}
           onChange={(v) => patch({ showGithubAccount: v })}
         />
         <CheckboxRow
-          label="Memory usage"
-          description="Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
+          label={st(t, "settings.appearance.statusBar.workingDirectory.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.workingDirectory.description",
+          )}
+          checked={statusBar.showWorkingDirectory}
+          onChange={(v) => patch({ showWorkingDirectory: v })}
+        />
+        <CheckboxRow
+          label={st(t, "settings.appearance.statusBar.memoryUsage.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.memoryUsage.description",
+          )}
           checked={statusBar.showMemory}
           onChange={(v) => patch({ showMemory: v })}
         />
@@ -890,22 +1127,22 @@ function StatusBarSection({
 function EditorSettings() {
   const settings = useSettings((s) => s.settings);
   const patchEditor = useSettings((s) => s.patchEditor);
+  const t = useTranslation();
 
   return (
     <section className="space-y-4">
       <Field
-        label="Editor command"
-        hint='Leave blank for the OS default. Examples: "code", "cursor --wait", "subl", "idea". The file path is appended as the last argument.'
+        label={st(t, "settings.editor.command.label")}
+        hint={st(t, "settings.editor.command.hint")}
       >
         <TextInput
           value={settings.editor.command}
           onChange={(e) => patchEditor({ command: e.target.value })}
-          placeholder="(use OS default)"
+          placeholder={st(t, "settings.editor.command.placeholder")}
         />
       </Field>
       <p className="text-[11px] text-fg-muted">
-        Used by the "Open in editor" right-click action on diff and staged
-        file lists.
+        {st(t, "settings.editor.command.description")}
       </p>
     </section>
   );
@@ -914,6 +1151,7 @@ function EditorSettings() {
 function NotificationSettings() {
   const settings = useSettings((s) => s.settings);
   const patchNotifications = useSettings((s) => s.patchNotifications);
+  const t = useTranslation();
   const enabled = settings.notifications.enabled;
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<
@@ -929,17 +1167,17 @@ function NotificationSettings() {
       if (result === "sent") {
         setTestResult({
           tone: "success",
-          text: "Sent. Check your notification center if it didn't appear.",
+          text: st(t, "settings.notifications.test.result.sent"),
         });
       } else if (result === "denied") {
         setTestResult({
           tone: "warning",
-          text: "Permission denied. Allow Acorn under System Settings → Notifications.",
+          text: st(t, "settings.notifications.test.result.denied"),
         });
       } else {
         setTestResult({
           tone: "danger",
-          text: "Failed to send. See the console for details.",
+          text: st(t, "settings.notifications.test.result.failed"),
         });
       }
     } finally {
@@ -950,8 +1188,8 @@ function NotificationSettings() {
   return (
     <section className="space-y-4">
       <Field
-        label="System notifications"
-        hint="Send a macOS notification when a session changes status."
+        label={st(t, "settings.notifications.system.label")}
+        hint={st(t, "settings.notifications.system.hint")}
       >
         <label className="flex items-center gap-2 text-xs text-fg">
           <input
@@ -962,14 +1200,17 @@ function NotificationSettings() {
             }
             className="accent-[var(--color-accent)]"
           />
-          Enable notifications
+          {st(t, "settings.notifications.system.enable")}
         </label>
       </Field>
-      <Field label="Trigger on">
+      <Field label={st(t, "settings.notifications.triggers.label")}>
         <div className="flex flex-col gap-1">
           <CheckboxRow
-            label="Needs input"
-            description="Claude is waiting on the user."
+            label={st(t, "settings.notifications.triggers.needsInput.label")}
+            description={st(
+              t,
+              "settings.notifications.triggers.needsInput.description",
+            )}
             checked={settings.notifications.events.needsInput}
             disabled={!enabled}
             onChange={(v) =>
@@ -977,15 +1218,21 @@ function NotificationSettings() {
             }
           />
           <CheckboxRow
-            label="Failed"
-            description="Session terminated with an error."
+            label={st(t, "settings.notifications.triggers.failed.label")}
+            description={st(
+              t,
+              "settings.notifications.triggers.failed.description",
+            )}
             checked={settings.notifications.events.failed}
             disabled={!enabled}
             onChange={(v) => patchNotifications({ events: { failed: v } })}
           />
           <CheckboxRow
-            label="Completed"
-            description="Session reached the completed state."
+            label={st(t, "settings.notifications.triggers.completed.label")}
+            description={st(
+              t,
+              "settings.notifications.triggers.completed.description",
+            )}
             checked={settings.notifications.events.completed}
             disabled={!enabled}
             onChange={(v) =>
@@ -995,8 +1242,8 @@ function NotificationSettings() {
         </div>
       </Field>
       <Field
-        label="Test"
-        hint="Verifies the OS permission and that a notification can actually appear, independent of the Enable / Trigger settings above."
+        label={st(t, "settings.notifications.test.label")}
+        hint={st(t, "settings.notifications.test.hint")}
       >
         <div className="flex flex-col items-start gap-2">
           <button
@@ -1005,7 +1252,9 @@ function NotificationSettings() {
             disabled={testing}
             className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-fg transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {testing ? "Sending…" : "Send test notification"}
+            {testing
+              ? st(t, "settings.notifications.test.sending")
+              : st(t, "settings.notifications.test.send")}
           </button>
           {testResult ? (
             <p
@@ -1025,7 +1274,7 @@ function NotificationSettings() {
         </div>
       </Field>
       <p className="text-[11px] text-fg-muted">
-        macOS may ask once for permission the first time a notification fires.
+        {st(t, "settings.notifications.permissionHint")}
       </p>
     </section>
   );
@@ -1034,15 +1283,20 @@ function NotificationSettings() {
 function AgentSettings() {
   const settings = useSettings((s) => s.settings);
   const patchAgents = useSettings((s) => s.patchAgents);
+  const t = useTranslation();
   const selected = settings.agents.selected;
 
   return (
     <section className="space-y-4">
       <p className="rounded-md border border-border bg-bg-sidebar/40 px-3 py-2 text-[11px] text-fg-muted">
-        The selected agent powers acorn's AI features — currently the merge
-        dialog's <em>Generate with AI</em> button.
+        {st(t, "settings.agents.intro.before")}
+        <em>{st(t, "settings.agents.intro.action")}</em>
+        {st(t, "settings.agents.intro.after")}
       </p>
-      <Field label="Agent" hint="Choose which AI CLI acorn uses.">
+      <Field
+        label={st(t, "settings.agents.agent.label")}
+        hint={st(t, "settings.agents.agent.hint")}
+      >
         <div className="flex flex-col gap-1.5">
           {AGENT_OPTIONS.map((opt) => (
             <RadioCard<SelectedAgent>
@@ -1059,16 +1313,16 @@ function AgentSettings() {
             name="acorn-agent"
             value="custom"
             current={selected}
-            label="Custom command"
-            description="Use any CLI not in the list. Whitespace-separated; no shell expansion."
+            label={st(t, "settings.agents.customOption.label")}
+            description={st(t, "settings.agents.customOption.description")}
             onSelect={(v) => patchAgents({ selected: v })}
           />
         </div>
       </Field>
       {selected === "ollama" ? (
         <Field
-          label="Ollama model"
-          hint="Passed to `ollama run <model>`. Defaults to `llama3` when blank."
+          label={st(t, "settings.agents.ollamaModel.label")}
+          hint={st(t, "settings.agents.ollamaModel.hint")}
         >
           <TextInput
             value={settings.agents.ollama.model}
@@ -1081,8 +1335,8 @@ function AgentSettings() {
       ) : null}
       {selected === "llm" ? (
         <Field
-          label="llm model"
-          hint="Passed via `llm -m <model>` (and `llm chat -m <model>` for sessions). Blank uses the llm-configured default."
+          label={st(t, "settings.agents.llmModel.label")}
+          hint={st(t, "settings.agents.llmModel.hint")}
         >
           <TextInput
             value={settings.agents.llm.model}
@@ -1093,8 +1347,8 @@ function AgentSettings() {
       ) : null}
       {selected === "custom" ? (
         <Field
-          label="Custom command"
-          hint="Used for both interactive sessions and one-shot AI generation. Falls back to Claude Code when blank."
+          label={st(t, "settings.agents.customCommand.label")}
+          hint={st(t, "settings.agents.customCommand.hint")}
         >
           <TextInput
             value={settings.agents.customCommand}
@@ -1106,9 +1360,7 @@ function AgentSettings() {
         </Field>
       ) : null}
       <p className="text-[11px] text-fg-muted">
-        The selected agent's CLI must already be installed and
-        authenticated on this machine. Surfaces a clear error when the
-        binary is missing.
+        {st(t, "settings.agents.requirement")}
       </p>
     </section>
   );
@@ -1124,8 +1376,8 @@ function AgentSettings() {
  */
 interface CacheCategory {
   id: string;
-  label: string;
-  description: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
   loadSize: () => Promise<number>;
   clear: () => Promise<number>;
 }
@@ -1133,9 +1385,9 @@ interface CacheCategory {
 const CACHE_CATEGORIES: CacheCategory[] = [
   {
     id: "scrollback-orphans",
-    label: "Orphan terminal scrollback",
-    description:
-      "ANSI scrollback files left behind by sessions that no longer exist (e.g. removed while acorn was offline, or before the prune-on-boot logic existed). Live sessions' scrollback is not touched — only the unreclaimable leftovers are surfaced.",
+    labelKey: "settings.storage.cacheCategories.scrollbackOrphans.label",
+    descriptionKey:
+      "settings.storage.cacheCategories.scrollbackOrphans.description",
     loadSize: () => api.scrollbackOrphanSize(),
     clear: () => api.scrollbackOrphanClear(),
   },
@@ -1151,6 +1403,7 @@ function formatBytes(bytes: number): string {
 }
 
 function StorageSettings() {
+  const t = useTranslation();
   const [sizes, setSizes] = useState<Record<string, number | null>>(() =>
     Object.fromEntries(CACHE_CATEGORIES.map((c) => [c.id, null])),
   );
@@ -1194,13 +1447,19 @@ function StorageSettings() {
       );
       setStatus(
         totalRemoved > 0
-          ? `Cleared ${totalRemoved} cached file${totalRemoved === 1 ? "" : "s"}.`
-          : "Nothing to clear.",
+          ? stf(
+              t,
+              totalRemoved === 1
+                ? "settings.storage.status.clearedSingular"
+                : "settings.storage.status.clearedPlural",
+              { count: totalRemoved },
+            )
+          : st(t, "settings.storage.status.nothingToClear"),
       );
       await refreshSizes();
     } catch (err) {
       console.error("[Settings] cache clear failed", err);
-      setStatus("Clear failed — see console.");
+      setStatus(st(t, "settings.storage.status.clearFailed"));
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -1210,12 +1469,11 @@ function StorageSettings() {
   return (
     <section className="space-y-4">
       <header className="space-y-1">
-        <h3 className="text-sm font-medium text-fg">Reclaimable cache</h3>
+        <h3 className="text-sm font-medium text-fg">
+          {st(t, "settings.storage.title")}
+        </h3>
         <p className="text-[11px] text-fg-muted">
-          Disk artifacts that acorn cannot clean up through its normal
-          session lifecycle (e.g. files orphaned by a crash or by edits
-          made while acorn was offline). Sessions, projects, settings,
-          and live terminal scrollback are never touched.
+          {st(t, "settings.storage.description")}
         </p>
       </header>
 
@@ -1226,13 +1484,15 @@ function StorageSettings() {
             <li key={cat.id} className="space-y-1 px-3 py-2.5">
               <div className="flex items-baseline justify-between gap-3">
                 <span className="text-xs font-medium text-fg">
-                  {cat.label}
+                  {st(t, cat.labelKey)}
                 </span>
                 <span className="text-[11px] tabular-nums text-fg-muted">
                   {size === null ? "—" : formatBytes(size)}
                 </span>
               </div>
-              <p className="text-[11px] text-fg-muted">{cat.description}</p>
+              <p className="text-[11px] text-fg-muted">
+                {st(t, cat.descriptionKey)}
+              </p>
             </li>
           );
         })}
@@ -1241,8 +1501,9 @@ function StorageSettings() {
       {confirming ? (
         <div className="space-y-2 rounded border border-warning/40 bg-warning/10 p-3">
           <p className="text-[11px] text-fg">
-            This will permanently delete the cached data listed above
-            ({formatBytes(totalBytes)}). Continue?
+            {stf(t, "settings.storage.confirm.message", {
+              size: formatBytes(totalBytes),
+            })}
           </p>
           <div className="flex justify-end gap-2">
             <button
@@ -1251,7 +1512,7 @@ function StorageSettings() {
               disabled={busy}
               className="rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:text-fg disabled:opacity-50"
             >
-              Cancel
+              {st(t, "settings.storage.confirm.cancel")}
             </button>
             <button
               type="button"
@@ -1259,14 +1520,21 @@ function StorageSettings() {
               disabled={busy}
               className="rounded bg-danger px-2 py-1 text-[11px] font-medium text-white transition hover:bg-danger/90 disabled:opacity-50"
             >
-              <TextSwap>{busy ? "Clearing…" : "Clear cache"}</TextSwap>
+              <TextSwap>
+                {busy
+                  ? st(t, "settings.storage.clear.clearing")
+                  : st(t, "settings.storage.clear.button")}
+              </TextSwap>
             </button>
           </div>
         </div>
       ) : (
         <div className="flex items-center justify-between gap-3">
           <span className="text-[11px] text-fg-muted">
-            {status ?? `Total: ${formatBytes(totalBytes)}`}
+            {status ??
+              stf(t, "settings.storage.total", {
+                size: formatBytes(totalBytes),
+              })}
           </span>
           <button
             type="button"
@@ -1275,7 +1543,7 @@ function StorageSettings() {
             className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-danger/60 hover:text-danger disabled:opacity-50"
           >
             <Trash2 size={11} />
-            Clear cache
+            {st(t, "settings.storage.clear.button")}
           </button>
         </div>
       )}
@@ -1283,13 +1551,23 @@ function StorageSettings() {
   );
 }
 
-function formatRelative(ts: number | null): string {
-  if (!ts) return "never";
+function formatRelative(ts: number | null, t: SettingsTranslator): string {
+  if (!ts) return st(t, "settings.about.relative.never");
   const diff = Date.now() - ts;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h ago`;
-  return `${Math.floor(diff / 86_400_000)} d ago`;
+  if (diff < 60_000) return st(t, "settings.about.relative.justNow");
+  if (diff < 3_600_000) {
+    return stf(t, "settings.about.relative.minutesAgo", {
+      count: Math.floor(diff / 60_000),
+    });
+  }
+  if (diff < 86_400_000) {
+    return stf(t, "settings.about.relative.hoursAgo", {
+      count: Math.floor(diff / 3_600_000),
+    });
+  }
+  return stf(t, "settings.about.relative.daysAgo", {
+    count: Math.floor(diff / 86_400_000),
+  });
 }
 
 type WhatsNewSource =
@@ -1310,25 +1588,43 @@ type WhatsNewSource =
 function ExperimentsSettings() {
   const experiments = useSettings((s) => s.settings.experiments);
   const patchExperiments = useSettings((s) => s.patchExperiments);
+  const t = useTranslation();
 
   return (
     <section className="space-y-4">
       <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
         <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
-        Unfinished features. Behaviour may change between releases; the toggles
-        themselves are stable.
+        {st(t, "settings.experiments.warning")}
       </div>
       <CheckboxRow
         checked={experiments.stickyPrompt}
         onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
-        label="Pin last user prompt above terminal"
-        description="Detects the most recent claude prompt line in the rendered terminal buffer and pins it at the top of the pane so it stays in view while reading the reply. Cmd+K clears it along with the rest of the scrollback."
+        label={st(t, "settings.experiments.stickyPrompt.label")}
+        description={st(t, "settings.experiments.stickyPrompt.description")}
+      />
+      <CheckboxRow
+        checked={experiments.cjkCellWidthHeuristic}
+        onChange={(checked) =>
+          patchExperiments({ cjkCellWidthHeuristic: checked })
+        }
+        label={st(t, "settings.experiments.cjkCellWidthHeuristic.label")}
+        description={st(
+          t,
+          "settings.experiments.cjkCellWidthHeuristic.description",
+        )}
+      />
+      <CheckboxRow
+        checked={experiments.resumeModal}
+        onChange={(checked) => patchExperiments({ resumeModal: checked })}
+        label={st(t, "settings.experiments.resumeModal.label")}
+        description={st(t, "settings.experiments.resumeModal.description")}
       />
     </section>
   );
 }
 
 function AboutSettings() {
+  const t = useTranslation();
   const currentVersion = useUpdater((s) => s.currentVersion);
   const available = useUpdater((s) => s.available);
   const busy = useUpdater((s) => s.busy);
@@ -1402,34 +1698,41 @@ function AboutSettings() {
   return (
     <section className="space-y-4">
       <header className="space-y-1">
-        <h3 className="text-sm font-medium text-fg">About Acorn</h3>
+        <h3 className="text-sm font-medium text-fg">
+          {st(t, "settings.about.title")}
+        </h3>
         <p className="text-[11px] text-fg-muted">
-          Acorn checks for updates automatically on startup and once every
-          24 hours. You can also check manually below.
+          {st(t, "settings.about.description")}
         </p>
       </header>
 
       <div className="rounded border border-border">
         <div className="flex items-baseline justify-between gap-3 px-3 py-2.5">
-          <span className="text-xs font-medium text-fg">Current version</span>
+          <span className="text-xs font-medium text-fg">
+            {st(t, "settings.about.currentVersion")}
+          </span>
           <span className="text-[11px] tabular-nums text-fg-muted">
-            {currentVersion ?? "loading…"}
+            {currentVersion ?? st(t, "settings.about.loading")}
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-3 border-t border-border px-3 py-2.5">
-          <span className="text-xs font-medium text-fg">Last checked</span>
+          <span className="text-xs font-medium text-fg">
+            {st(t, "settings.about.lastChecked")}
+          </span>
           <span className="text-[11px] tabular-nums text-fg-muted">
-            {formatRelative(lastCheckedAt)}
+            {formatRelative(lastCheckedAt, t)}
           </span>
         </div>
         {available ? (
           <div className="flex items-baseline justify-between gap-3 border-t border-border bg-accent/10 px-3 py-2.5">
             <div className="space-y-0.5">
               <div className="text-xs font-medium text-fg">
-                Update available
+                {st(t, "settings.about.updateAvailable")}
               </div>
               <div className="text-[11px] text-fg-muted">
-                Acorn {available.version} is ready to install.
+                {stf(t, "settings.about.updateReady", {
+                  version: available.version,
+                })}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -1445,7 +1748,7 @@ function AboutSettings() {
                   }
                   className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
                 >
-                  What&apos;s new
+                  {st(t, "settings.about.whatsNew")}
                 </button>
               ) : null}
               <button
@@ -1456,7 +1759,9 @@ function AboutSettings() {
               >
                 <Download size={11} />
                 <TextSwap>
-                  {busy ? "Installing…" : "Install & relaunch"}
+                  {busy
+                    ? st(t, "settings.about.installing")
+                    : st(t, "settings.about.installRelaunch")}
                 </TextSwap>
               </button>
             </div>
@@ -1486,10 +1791,12 @@ function AboutSettings() {
           <Sparkles size={11} className={notesLoading ? "animate-pulse" : ""} />
           <TextSwap>
             {notesLoading
-              ? "Loading…"
+              ? st(t, "settings.about.loading")
               : currentVersion
-                ? `What's new in ${currentVersion}`
-                : "What's new"}
+                ? stf(t, "settings.about.whatsNewInVersion", {
+                    version: currentVersion,
+                  })
+                : st(t, "settings.about.whatsNew")}
           </TextSwap>
         </button>
         <button
@@ -1499,7 +1806,11 @@ function AboutSettings() {
           className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
         >
           <RefreshCcw size={11} className={busy ? "animate-spin" : ""} />
-          <TextSwap>{busy ? "Checking…" : "Check for updates"}</TextSwap>
+          <TextSwap>
+            {busy
+              ? st(t, "settings.about.checking")
+              : st(t, "settings.about.checkForUpdates")}
+          </TextSwap>
         </button>
       </div>
 

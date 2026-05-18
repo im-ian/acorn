@@ -30,6 +30,33 @@ async function seedActiveSession(
   ]);
 }
 
+async function seedActiveWorktreeSession(
+  tauri: { handle: (cmd: string, fn: (args: unknown) => unknown) => Promise<void> },
+) {
+  await tauri.handle("list_projects", () => [
+    {
+      repo_path: "/tmp/demo",
+      name: "demo",
+      created_at: "2026-01-01T00:00:00Z",
+      position: 0,
+    },
+  ]);
+  await tauri.handle("list_sessions", () => [
+    {
+      id: "s-1",
+      name: "sess",
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo/.acorn/worktrees/demo-1",
+      branch: "main",
+      isolated: true,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    },
+  ]);
+}
+
 test.describe("right panel: tab switching", () => {
   test("each tab shows its own empty placeholder when seeded with a project", async ({
     page,
@@ -47,11 +74,14 @@ test.describe("right panel: tab switching", () => {
       page.getByText(/No staged or modified files/i),
     ).toBeVisible();
 
+    // PRs lives under the GitHub group — switch group first, then sub-tab.
+    await page.getByRole("button", { name: "GitHub" }).click();
     await page.getByRole("button", { name: "PRs" }).click();
     // PR tab: when remote isn't GitHub OR list is empty, one of these shows.
     // Mock returns an empty list so the empty-list copy wins.
     await expect(page.getByText(/No .* pull requests/i)).toBeVisible();
 
+    await page.getByRole("button", { name: "Code" }).click();
     await page.getByRole("button", { name: "Commits" }).click();
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
@@ -215,5 +245,404 @@ test.describe("right panel: tab switching", () => {
     });
     // Regression: A's page-1 marker must never appear in B's panel.
     await expect(page.getByText(/leak-marker-AAA/)).toHaveCount(0);
+  });
+});
+
+test.describe("right panel: groups", () => {
+  test("group buttons restore each group's last sub-tab", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    // GitHub group is visible by default in the mock; align Actions so its
+    // empty-state copy matches "ok with no items" rather than "not GitHub".
+    await tauri.handle("list_workflow_runs", () => ({
+      kind: "ok",
+      items: [],
+      account: "test-account",
+    }));
+    await page.goto("/");
+
+    // Pick a non-default sub-tab inside Code so we can prove it's remembered.
+    await page.getByRole("button", { name: "Staged" }).click();
+    await expect(page.getByText(/No staged or modified files/i)).toBeVisible();
+
+    // Hop to GitHub → land on its default sub-tab (PRs).
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText(/No .* pull requests/i)).toBeVisible();
+    // Switch to the other GitHub sub-tab.
+    await page.getByRole("button", { name: "Actions" }).click();
+    await expect(page.getByText(/No workflow runs yet/i)).toBeVisible();
+
+    // Hop back to Code — Staged should be restored, not Commits.
+    await page.getByRole("button", { name: "Code" }).click();
+    await expect(page.getByText(/No staged or modified files/i)).toBeVisible();
+
+    // Hop back to GitHub — Actions should be restored, not PRs.
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText(/No workflow runs yet/i)).toBeVisible();
+  });
+
+  test("GitHub group is hidden when origin is not GitHub", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    // Override the default mock so the probe reports "not GitHub".
+    await tauri.handle("github_origin_slug", () => null);
+
+    await page.goto("/");
+
+    // Code group is always there; Agents group is too. GitHub must be gone.
+    await expect(page.getByRole("button", { name: "Code" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agents" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
+  });
+
+  test("History sub-tab is labeled 'History' (renamed from 'Sessions')", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Agents" }).click();
+    // The right-panel sub-tab bar surfaces History; scope to it so we don't
+    // collide with the sidebar's session list which previously used the
+    // "Sessions" label.
+    await expect(
+      page.getByRole("button", { name: "History" }),
+    ).toBeVisible();
+  });
+
+  test("History rows surface linked worktree names", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "claude",
+        id: "claude-1",
+        title: "Investigate resume flow",
+        preview: null,
+        cwd: "/tmp/demo/.claude/worktrees/agent-a3f552/src",
+        worktree: {
+          name: "agent-a3f552",
+          path: "/tmp/demo/.claude/worktrees/agent-a3f552",
+          exists: true,
+        },
+        transcript_path: "/tmp/transcript.jsonl",
+        updated_at: 1770000000,
+        resume_command: "claude --resume claude-1",
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+
+    await expect(page.getByText("Investigate resume flow")).toBeVisible();
+    await expect(
+      page.getByText("agent-a3f552", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("/tmp/demo/.claude/worktrees/agent-a3f552/src", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  });
+
+  test("History resume adopts the source worktree for the new terminal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-1",
+        title: "Resume from codex worktree",
+        preview: null,
+        cwd: "/tmp/demo/.acorn/worktrees/acorn-2/src",
+        worktree: {
+          name: "acorn-2",
+          path: "/tmp/demo/.acorn/worktrees/acorn-2",
+          exists: true,
+        },
+        transcript_path: "/tmp/codex-rollout.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-1",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => ({
+      id: "created-1",
+      name: (args as { name: string }).name,
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    }));
+    await tauri.handle("update_session_worktree", (args) => {
+      const w = window as unknown as { __worktreeUpdates?: unknown[] };
+      w.__worktreeUpdates = w.__worktreeUpdates ?? [];
+      w.__worktreeUpdates.push(args);
+      return {
+        id: "created-1",
+        name: "codex resume",
+        repo_path: "/tmp/demo",
+        worktree_path: (args as { worktreePath: string }).worktreePath,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Resume from codex worktree").dblclick();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __worktreeUpdates?: unknown[] })
+                .__worktreeUpdates?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __worktreeUpdates?: unknown[] })
+          .__worktreeUpdates,
+    )) as Array<{ id: string; worktreePath: string }>;
+    expect(calls[0]).toEqual({
+      id: "created-1",
+      worktreePath: "/tmp/demo/.acorn/worktrees/acorn-2",
+    });
+    await expect(
+      page.getByRole("dialog", { name: "Running in worktree" }),
+    ).toBeVisible();
+  });
+
+  test("History run in new terminal hosts resumed sessions in the project root", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveWorktreeSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-root",
+        title: "Resume without project duplication",
+        preview: null,
+        cwd: "/tmp/demo/.acorn/worktrees/demo-1",
+        worktree: {
+          name: "demo-1",
+          path: "/tmp/demo/.acorn/worktrees/demo-1",
+          exists: true,
+        },
+        transcript_path: "/tmp/codex-root.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-root",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as { __createSessionCalls?: unknown[] };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      return {
+        id: "created-root",
+        name: (args as { name: string }).name,
+        repo_path: (args as { repoPath: string }).repoPath,
+        worktree_path: (args as { repoPath: string }).repoPath,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Resume without project duplication").click({
+      button: "right",
+    });
+    await page.getByRole("menuitem", { name: "Run in new terminal" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __createSessionCalls?: unknown[] })
+                .__createSessionCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{ repoPath: string }>;
+    expect(calls[0].repoPath).toBe("/tmp/demo");
+  });
+
+  test("History context menu can explicitly resume in a worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "claude",
+        id: "claude-1",
+        title: "Resume from claude worktree",
+        preview: null,
+        cwd: "/tmp/demo/.claude/worktrees/agent-a3f552/src",
+        worktree: {
+          name: "agent-a3f552",
+          path: "/tmp/demo/.claude/worktrees/agent-a3f552",
+          exists: true,
+        },
+        transcript_path: "/tmp/claude.jsonl",
+        updated_at: 1770000000,
+        resume_command: "claude --resume claude-1",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => ({
+      id: "created-2",
+      name: (args as { name: string }).name,
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    }));
+    await tauri.handle("update_session_worktree", (args) => {
+      const w = window as unknown as { __contextWorktreeUpdates?: unknown[] };
+      w.__contextWorktreeUpdates = w.__contextWorktreeUpdates ?? [];
+      w.__contextWorktreeUpdates.push(args);
+      return {
+        id: "created-2",
+        name: "claude resume",
+        repo_path: "/tmp/demo",
+        worktree_path: (args as { worktreePath: string }).worktreePath,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Resume from claude worktree").click({
+      button: "right",
+    });
+
+    await expect(
+      page.getByRole("menu").getByRole("separator"),
+    ).toHaveCount(3);
+    await page.getByRole("menuitem", { name: "Run in worktree" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __contextWorktreeUpdates?: unknown[] })
+                .__contextWorktreeUpdates?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByRole("dialog", { name: "Running in worktree" }),
+    ).toBeVisible();
+  });
+
+  test("History transcript trash action requires confirmation and removes the row", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "claude",
+        id: "claude-trash",
+        title: "Disposable transcript",
+        preview: null,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/claude-trash.jsonl",
+        updated_at: 1770000000,
+        resume_command: "claude --resume claude-trash",
+      },
+    ]);
+    await tauri.handle("trash_agent_history_transcript", (args) => {
+      const w = window as unknown as { __trashTranscriptCalls?: unknown[] };
+      w.__trashTranscriptCalls = w.__trashTranscriptCalls ?? [];
+      w.__trashTranscriptCalls.push(args);
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Disposable transcript").click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Move transcript to Trash..." })
+      .click();
+
+    await expect(
+      page.getByRole("dialog", { name: "Move transcript to Trash?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Move to Trash" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __trashTranscriptCalls?: unknown[] })
+                .__trashTranscriptCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __trashTranscriptCalls?: unknown[] })
+          .__trashTranscriptCalls,
+    )) as Array<{ provider: string; id: string; transcriptPath: string }>;
+    expect(calls[0]).toEqual({
+      provider: "claude",
+      id: "claude-trash",
+      transcriptPath: "/tmp/claude-trash.jsonl",
+    });
+    await expect(page.getByText("Disposable transcript")).toHaveCount(0);
   });
 });

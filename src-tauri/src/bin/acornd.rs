@@ -18,10 +18,12 @@
 
 use std::io;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-use acorn_lib::daemon;
+use acorn_daemon as daemon;
+use acorn_lib::pty_env;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -186,7 +188,15 @@ fn run_serve(detach: bool) -> io::Result<()> {
     );
 
     // 6) Run the daemon. Blocks until shutdown.
-    let daemon_handle = daemon::server::Daemon::new();
+    //
+    // `env_applier` wires the same layered shell-env policy (`pty_env`
+    // + `shell_env`) the in-process spawn path uses, so PTYs created
+    // through the daemon receive identical TERM/LANG/PATH layering.
+    // Keeping the closure in this binary (host crate) avoids pulling
+    // host-only modules into the `acorn-daemon` leaf crate.
+    let env_applier: daemon::pty::EnvApplier =
+        Arc::new(|cmd, env| pty_env::apply_layered_env(cmd, env));
+    let daemon_handle = daemon::server::Daemon::new(env_applier);
     let serve_result = daemon_handle.serve(listeners);
 
     // 7) Cleanup on the way out. Always reached on graceful shutdown;
@@ -333,17 +343,19 @@ fn run_read_buffer(target: &str, max_bytes: usize) -> ExitCode {
         }
     };
     match resp.payload {
-        daemon::protocol::ControlResult::Buffer { data_b64, .. } => match base64_decode(&data_b64) {
-            Ok(bytes) => {
-                use std::io::Write;
-                let _ = std::io::stdout().write_all(&bytes);
-                ExitCode::SUCCESS
+        daemon::protocol::ControlResult::Buffer { data_b64, .. } => {
+            match base64_decode(&data_b64) {
+                Ok(bytes) => {
+                    use std::io::Write;
+                    let _ = std::io::stdout().write_all(&bytes);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("acornd read-buffer: bad base64 from daemon: {e}");
+                    ExitCode::from(1)
+                }
             }
-            Err(e) => {
-                eprintln!("acornd read-buffer: bad base64 from daemon: {e}");
-                ExitCode::from(1)
-            }
-        },
+        }
         daemon::protocol::ControlResult::Error { code, message } => {
             eprintln!("daemon error ({code:?}): {message}");
             error_code_to_exit(code)
@@ -437,8 +449,7 @@ fn error_code_to_exit(code: daemon::protocol::ErrorCode) -> ExitCode {
 }
 
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {
@@ -496,7 +507,8 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         let v1 = val(chunk[1])?;
         let v2 = if pad >= 2 { 0 } else { val(chunk[2])? };
         let v3 = if pad >= 1 { 0 } else { val(chunk[3])? };
-        let n = (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
+        let n =
+            (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
         out.push((n >> 16) as u8);
         if pad < 2 {
             out.push((n >> 8) as u8);

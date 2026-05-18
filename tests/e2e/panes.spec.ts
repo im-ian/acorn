@@ -1,4 +1,9 @@
-import { test, expect, pressHotkey } from "./support";
+import {
+  test,
+  expect,
+  pressHotkey,
+  seedSettingsLanguage,
+} from "./support";
 
 const PROJECT = {
   repo_path: "/tmp/demo",
@@ -21,6 +26,18 @@ const SESSION = {
 };
 
 test.describe("pane / sidebar shortcuts", () => {
+  test("Korean mode localizes empty pane guidance", async ({ page, tauri }) => {
+    await seedSettingsLanguage(page, "ko");
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", []);
+
+    await page.goto("/");
+
+    await expect(
+      page.getByText(/여기에 탭을 놓거나 더블 클릭해 세션을 시작하세요/),
+    ).toBeVisible();
+  });
+
   // react-resizable-panels publishes the current size on `data-panel-size`
   // (string, e.g. "18.0" for the default 18%). Collapsed panels get "0.0".
   test("$mod+B collapses then re-expands the sidebar", async ({ page }) => {
@@ -118,6 +135,23 @@ test.describe("pane / sidebar shortcuts", () => {
       "data-active-pane-indicator",
       initialPaneId ?? "",
     );
+  });
+
+  test("$mod+Alt+E dispatches equalize panes", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate(() => {
+      window.addEventListener("acorn:equalize-panes", () => {
+        document.documentElement.dataset.equalizePanes = "true";
+      });
+    });
+
+    await pressHotkey(page, { mod: true, alt: true, key: "e" });
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.equalizePanes),
+      )
+      .toBe("true");
   });
 
   test("$mod+W triggers the remove-session confirm flow for the active tab", async ({

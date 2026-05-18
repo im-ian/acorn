@@ -1,26 +1,25 @@
-mod agent_shim;
-mod claude_util;
+mod agent_history;
+mod agent_resume;
+mod agent_resume_persister;
 mod cli_resolver;
 mod commands;
-pub mod daemon;
 mod daemon_bridge;
 mod daemon_commands;
 mod daemon_stream;
 mod error;
+mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
-mod pty;
+pub mod pty_env;
 mod pull_requests;
-mod scrollback;
-mod session;
-mod session_status;
+mod shell_args;
 mod shell_env;
 mod shell_init;
 mod shell_util;
+mod staged_rev_reconcile;
 mod state;
 mod todos;
-mod transcript_watcher;
 mod unified_diff;
 mod worktree;
 
@@ -42,7 +41,7 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
-    // Release-only: lets `bun run tauri dev` run alongside an installed Acorn.
+    // Release-only: lets `pnpm run tauri dev` run alongside an installed Acorn.
     #[cfg(not(debug_assertions))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -93,6 +92,10 @@ pub fn run() {
                 .paste()
                 .select_all()
                 .build()?;
+            let multi_input_item = MenuItemBuilder::new("Toggle Multi Input")
+                .id("toggle-multi-input")
+                .accelerator("CmdOrCtrl+Alt+I")
+                .build(app)?;
             // Dev-only Reload (Cmd+R) so frontend edits that don't HMR cleanly
             // can be re-bootstrapped without restarting the whole Tauri host.
             // The release menu omits it on purpose — Acorn ships as a single
@@ -105,12 +108,18 @@ pub fn run() {
                 .build(app)?;
             #[cfg(debug_assertions)]
             let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&multi_input_item)
+                .separator()
                 .item(&reload_item)
                 .separator()
                 .fullscreen()
                 .build()?;
             #[cfg(not(debug_assertions))]
-            let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&multi_input_item)
+                .separator()
+                .fullscreen()
+                .build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
                 .maximize()
@@ -128,6 +137,11 @@ pub fn run() {
                 if event.id() == "settings" {
                     if let Err(err) = handle.emit("acorn:open-settings", ()) {
                         tracing::warn!("failed to emit open-settings: {err}");
+                    }
+                }
+                if event.id() == "toggle-multi-input" {
+                    if let Err(err) = handle.emit("acorn:toggle-multi-input", ()) {
+                        tracing::warn!("failed to emit toggle-multi-input: {err}");
                     }
                 }
                 #[cfg(debug_assertions)]
@@ -189,8 +203,18 @@ pub fn run() {
                 tracing::warn!(
                     "skipping scrollback prune: session load was unclean and no live ids"
                 );
-            } else if let Err(err) = scrollback::prune_orphans(&live_ids) {
-                tracing::warn!("scrollback prune at boot failed: {err}");
+            } else {
+                match persistence::data_dir() {
+                    Ok(dir) => {
+                        if let Err(err) = acorn_session::scrollback::prune_orphans(&dir, &live_ids)
+                        {
+                            tracing::warn!("scrollback prune at boot failed: {err}");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("scrollback prune at boot: data_dir failed: {err}");
+                    }
+                }
             }
             // Start the IPC server in the background. It owns its own
             // listener thread; if bind fails it logs and the app keeps
@@ -202,7 +226,7 @@ pub fn run() {
             // Resolve and cache the `acornd` binary location now so the
             // bridge does not pay the lookup cost on every spawn. In
             // bundled mode the binary lives at
-            // `Contents/MacOS/acornd`; in `bun run tauri dev` it sits
+            // `Contents/MacOS/acornd`; in `pnpm run tauri dev` it sits
             // at `target/debug/acornd`. Cache failure (binary missing)
             // is non-fatal — the bridge will surface a `BinaryNotFound`
             // error on the first daemon-routed call so the user sees
@@ -228,6 +252,8 @@ pub fn run() {
             // killswitch UI surfaces the same error if the user opens
             // the Background sessions tab.
             let bridge_for_boot = state.daemon_bridge.clone();
+            let state_for_boot = state.inner().clone();
+            let app_for_boot = app.handle().clone();
             std::thread::Builder::new()
                 .name("acorn-daemon-boot".into())
                 .spawn(move || {
@@ -236,9 +262,24 @@ pub fn run() {
                     }
                     if let Err(err) = bridge_for_boot.ensure_connection() {
                         tracing::warn!(error = %err, "daemon boot spawn failed");
+                        return;
                     }
+                    // Detect stale daemon sessions (older `shell-init/`
+                    // bodies); the reconcile caches its verdict on
+                    // AppState so the frontend prompt survives a
+                    // listener-mount-after-emit race.
+                    staged_rev_reconcile::reconcile(
+                        &app_for_boot,
+                        &state_for_boot,
+                        &bridge_for_boot,
+                    );
                 })
                 .ok();
+
+            // Watcher that mirrors live agent transcripts into per-session
+            // `claude.id` / `codex.id` files. The focus-time resume modal
+            // reads those files; no shim or PATH injection is required.
+            agent_resume_persister::spawn(state.inner().clone());
 
             Ok(())
         })
@@ -251,6 +292,7 @@ pub fn run() {
             commands::rename_session,
             commands::list_projects,
             commands::add_project,
+            commands::create_new_project,
             commands::remove_project,
             commands::reorder_projects,
             commands::reorder_sessions,
@@ -258,6 +300,7 @@ pub fn run() {
             commands::list_staged,
             commands::commit_diff,
             commands::commit_web_url,
+            commands::github_origin_slug,
             commands::open_in_editor,
             commands::staged_diff,
             commands::list_pull_requests,
@@ -268,6 +311,8 @@ pub fn run() {
             commands::close_pull_request,
             commands::update_pull_request_body,
             commands::generate_pr_commit_message,
+            commands::list_workflow_runs,
+            commands::get_workflow_run_detail,
             commands::pty_spawn,
             commands::pty_write,
             commands::pty_resize,
@@ -277,6 +322,7 @@ pub fn run() {
             commands::pty_repo_root,
             commands::pty_in_worktree_all,
             commands::is_path_linked_worktree,
+            commands::linked_worktree_root,
             commands::update_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,
@@ -292,6 +338,14 @@ pub fn run() {
             commands::get_acorn_ipc_status,
             commands::ipc_restart,
             commands::list_system_fonts,
+            commands::list_agent_history,
+            commands::trash_agent_history_transcript,
+            commands::get_claude_resume_candidate,
+            commands::acknowledge_claude_resume,
+            commands::get_codex_resume_candidate,
+            commands::acknowledge_codex_resume,
+            commands::staged_rev_mismatch_status,
+            commands::acknowledge_staged_rev_mismatch,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,
@@ -302,6 +356,19 @@ pub fn run() {
             daemon_commands::daemon_resize,
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
+            daemon_commands::daemon_adopt_session,
+            fs_explorer::fs_list_dir,
+            fs_explorer::fs_rename,
+            fs_explorer::fs_trash,
+            fs_explorer::fs_reveal,
+            fs_explorer::fs_open_default,
+            fs_explorer::fs_shell_editor,
+            fs_explorer::fs_git_status,
+            fs_explorer::fs_git_branch,
+            fs_explorer::fs_read_file,
+            fs_explorer::fs_git_diff_stats,
+            fs_explorer::fs_git_diff_lines,
+            fs_explorer::fs_watch_set_root,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

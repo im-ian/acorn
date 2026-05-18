@@ -141,6 +141,21 @@ async function renderLines(
 }
 
 /**
+ * Highlight full file content as token-painted HTML lines. Returns one
+ * entry per source line — null when the language is unknown / failed to
+ * load, in which case the caller should render plain text.
+ */
+export async function highlightCode(
+  content: string,
+  lang: BundledLanguage | null,
+): Promise<(string | null)[]> {
+  const lines = content.split("\n");
+  if (!lang) return lines.map(() => null);
+  const out = await renderLines(lines, lang);
+  return out;
+}
+
+/**
  * Highlight a parsed diff. Splits into the new-side (ctx + add) and old-side
  * (ctx + del) virtual files so the lexer keeps coherent state per side, then
  * maps tokens back to the original line order.

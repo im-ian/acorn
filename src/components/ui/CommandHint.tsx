@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from "react";
 import { CommandRunDialog } from "../CommandRunDialog";
 import { cn } from "../../lib/cn";
+import { useTranslation } from "../../lib/useTranslation";
 
 interface CommandHintProps {
   /**
@@ -31,13 +32,14 @@ export function CommandHint({
   repoPath,
   className,
 }: CommandHintProps): ReactElement {
+  const t = useTranslation();
   const [open, setOpen] = useState(false);
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        title="Click to copy or run"
+        title={t("ui.commandHint.title")}
         className={cn(
           "inline-flex max-w-full items-center rounded border border-border bg-bg-sidebar/70 px-1.5 py-0.5 text-left font-mono text-[11px] text-fg transition hover:border-accent/60 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
           className,

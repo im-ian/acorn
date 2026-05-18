@@ -1,9 +1,78 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SETTINGS } from "./settings";
+import {
+  AGENT_OPTIONS,
+  DEFAULT_SETTINGS,
+  resolveAiCommitCommand,
+} from "./settings";
+
+describe("language settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to English", () => {
+    expect(DEFAULT_SETTINGS.language).toBe("en");
+  });
+
+  it("loads a persisted Korean language selection", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: "ko" }));
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.language).toBe("ko");
+  });
+
+  it("falls back to English for an unsupported stored language", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: "fr" }));
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.language).toBe("en");
+  });
+});
 
 describe("terminal.linkActivation default", () => {
   it("defaults to plain click so xterm's stock behaviour is preserved", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
+  });
+});
+
+describe("AI commit command resolution", () => {
+  it("runs Codex through non-interactive exec mode", () => {
+    expect(
+      resolveAiCommitCommand({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, selected: "codex" },
+      }),
+    ).toEqual({ command: "codex", args: ["exec"] });
+  });
+
+  it("describes the Codex one-shot invocation in settings", () => {
+    expect(AGENT_OPTIONS.find((o) => o.value === "codex")?.oneshotHint).toBe(
+      "codex exec",
+    );
   });
 });
 
@@ -47,6 +116,7 @@ describe("appearance settings migration", () => {
       DEFAULT_SETTINGS.appearance.fontSlots,
     );
     expect(settings.appearance.background.relativePath).toBeNull();
+    expect(settings.appearance.uiScalePercent).toBe(100);
   });
 
   it("keeps terminal.fontFamily as the source of truth on load", async () => {
@@ -182,5 +252,29 @@ describe("appearance settings migration", () => {
     expect(background.fit).toBe("cover");
     expect(background.opacity).toBe(1);
     expect(background.blur).toBe(0);
+  });
+
+  it("clamps and snaps stored UI scale percentage", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { uiScalePercent: 152 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.uiScalePercent).toBe(150);
+  });
+
+  it("falls back to default UI scale when stored value is invalid", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { uiScalePercent: "large" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.uiScalePercent).toBe(100);
   });
 });

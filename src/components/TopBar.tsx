@@ -1,6 +1,8 @@
 import { useAppStore } from "../store";
+import { useTranslation } from "../lib/useTranslation";
 
 export function TopBar() {
+  const t = useTranslation();
   const { sessions, activeSessionId } = useAppStore();
   const active = sessions.find((s) => s.id === activeSessionId);
 
@@ -22,7 +24,9 @@ export function TopBar() {
           </span>
         </div>
       ) : (
-        <span className="text-sm text-fg-muted">No session selected</span>
+        <span className="text-sm text-fg-muted">
+          {t("topBar.noSessionSelected")}
+        </span>
       )}
     </header>
   );

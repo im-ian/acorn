@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
+  AgentHistoryItem,
   CommitInfo,
   DiffPayload,
   GeneratedCommitMessage,
@@ -15,6 +16,8 @@ import type {
   SessionStatus,
   StagedFile,
   TodoItem,
+  WorkflowRunDetailListing,
+  WorkflowRunsListing,
 } from "./types";
 
 export interface LoadStatus {
@@ -57,6 +60,17 @@ export const api = {
   addProject(repoPath: string): Promise<Project> {
     return invoke<Project>("add_project", { repoPath });
   },
+  createNewProject(
+    parentPath: string,
+    name: string,
+    ignoreSafeName = false,
+  ): Promise<Project> {
+    return invoke<Project>("create_new_project", {
+      parentPath,
+      name,
+      ignoreSafeName,
+    });
+  },
   removeProject(
     repoPath: string,
     removeSessions = true,
@@ -85,6 +99,11 @@ export const api = {
   },
   commitWebUrl(repoPath: string, sha: string): Promise<string | null> {
     return invoke<string | null>("commit_web_url", { repoPath, sha });
+  },
+  /** Resolve the repo's GitHub `owner/repo` slug, or null when the origin
+   *  remote isn't a GitHub host. Used to conditionally hide GitHub-only UI. */
+  githubOriginSlug(repoPath: string): Promise<string | null> {
+    return invoke<string | null>("github_origin_slug", { repoPath });
   },
   openInEditor(command: string, args: string[], path: string): Promise<void> {
     return invoke<void>("open_in_editor", { command, args, path });
@@ -181,6 +200,24 @@ export const api = {
       args,
     });
   },
+  listWorkflowRuns(
+    repoPath: string,
+    limit = 50,
+  ): Promise<WorkflowRunsListing> {
+    return invoke<WorkflowRunsListing>("list_workflow_runs", {
+      repoPath,
+      limit,
+    });
+  },
+  getWorkflowRunDetail(
+    repoPath: string,
+    runId: number,
+  ): Promise<WorkflowRunDetailListing> {
+    return invoke<WorkflowRunDetailListing>("get_workflow_run_detail", {
+      repoPath,
+      runId,
+    });
+  },
   getMemoryUsage(): Promise<MemoryUsage> {
     return invoke<MemoryUsage>("get_memory_usage");
   },
@@ -204,6 +241,19 @@ export const api = {
   },
   listSystemFonts(): Promise<string[]> {
     return invoke<string[]>("list_system_fonts");
+  },
+  listAgentHistory(repoPath: string, limit = 100): Promise<AgentHistoryItem[]> {
+    return invoke<AgentHistoryItem[]>("list_agent_history", {
+      repoPath,
+      limit,
+    });
+  },
+  trashAgentHistoryTranscript(item: AgentHistoryItem): Promise<void> {
+    return invoke<void>("trash_agent_history_transcript", {
+      provider: item.provider,
+      id: item.id,
+      transcriptPath: item.transcript_path,
+    });
   },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
@@ -295,6 +345,15 @@ export const api = {
     return invoke<boolean>("is_path_linked_worktree", { path });
   },
   /**
+   * Resolve an arbitrary path to the root of its enclosing linked git
+   * worktree. Returns null when the path is outside git or belongs to the
+   * main checkout. Used to remember a session-specific adoption candidate
+   * without relying on repo-global worktree diffs alone.
+   */
+  linkedWorktreeRoot(path: string): Promise<string | null> {
+    return invoke<string | null>("linked_worktree_root", { path });
+  },
+  /**
    * Re-point a session at a different worktree directory. Used after an
    * in-PTY command creates a worktree and exits — adopting it lets the next
    * spawn land inside the new worktree instead of the original cwd.
@@ -319,6 +378,25 @@ export const api = {
    */
   daemonStatus(): Promise<DaemonStatus> {
     return invoke<DaemonStatus>("daemon_status");
+  },
+  /**
+   * Pull the cached boot-time staged-rev reconcile result. `null` when
+   * either reconcile has not run, the daemon is disabled, or every
+   * alive daemon session was spawned against the same staged dotfile
+   * bodies as the current build. Frontend calls this at mount so a
+   * listener registered after the matching emit still sees the
+   * prompt.
+   */
+  stagedRevMismatchStatus(): Promise<StagedRevMismatch | null> {
+    return invoke<StagedRevMismatch | null>("staged_rev_mismatch_status");
+  },
+  /**
+   * Drop the cached staged-rev mismatch so the prompt does not re-show
+   * after the user dismisses it or after the daemon-restart flow that
+   * resolves it.
+   */
+  acknowledgeStagedRevMismatch(): Promise<void> {
+    return invoke<void>("acknowledge_staged_rev_mismatch");
   },
   /**
    * Flip the daemon killswitch. Persistence (so the setting survives a
@@ -350,7 +428,229 @@ export const api = {
   daemonListSessions(): Promise<DaemonSessionSummary[]> {
     return invoke<DaemonSessionSummary[]>("daemon_list_sessions");
   },
+  /**
+   * Kill a daemon-owned PTY. Equivalent to closing the shell inside the
+   * session — the row stays in the daemon registry (with `alive=false`)
+   * until `daemonForgetSession` is also called.
+   */
+  daemonKillSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_kill_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Remove a dead session row from the daemon registry. The daemon
+   * rejects this for sessions still alive — caller must kill first.
+   */
+  daemonForgetSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_forget_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Reconstruct an app-side session row from a daemon-owned PTY the
+   * app has lost track of. Pulls name/kind/repo_path/branch from the
+   * daemon's session metadata. Idempotent.
+   */
+  daemonAdoptSession(targetSessionId: string): Promise<void> {
+    return invoke<void>("daemon_adopt_session", {
+      targetSessionId,
+    });
+  },
+  /**
+   * Resolve the "이전 Claude 대화 있음" candidate for a session. The
+   * filesystem watcher writes `claude.id` after every fresh bare-flag
+   * claude run, and the app surfaces it via this command on session
+   * focus. Returns `null` when there is nothing to offer — no claude
+   * has run, the user already dismissed the modal for this UUID, or
+   * claude is actively running in the PTY tree (in which case the
+   * modal would be redundant).
+   */
+  getClaudeResumeCandidate(
+    sessionId: string,
+  ): Promise<ResumeCandidate | null> {
+    return invoke<ResumeCandidate | null>(
+      "get_claude_resume_candidate",
+      { sessionId },
+    );
+  },
+  /**
+   * Codex equivalent of `getClaudeResumeCandidate`. Returns the codex
+   * rollout UUID + preview the user is being offered to resume, or
+   * `null` when there's nothing to surface.
+   */
+  getCodexResumeCandidate(
+    sessionId: string,
+  ): Promise<ResumeCandidate | null> {
+    return invoke<ResumeCandidate | null>(
+      "get_codex_resume_candidate",
+      { sessionId },
+    );
+  },
+  /**
+   * Mark the current `claude.id` as seen. All three modal buttons call
+   * this so the modal does not pop again for the same UUID; only a new
+   * JSONL appearing under a different UUID reactivates it.
+   */
+  acknowledgeClaudeResume(sessionId: string): Promise<void> {
+    return invoke<void>("acknowledge_claude_resume", { sessionId });
+  },
+  /** Codex equivalent of `acknowledgeClaudeResume`. */
+  acknowledgeCodexResume(sessionId: string): Promise<void> {
+    return invoke<void>("acknowledge_codex_resume", { sessionId });
+  },
+  /**
+   * Write raw bytes to a session's PTY master (i.e. as if the user
+   * typed them). The backend handles routing — daemon-managed sessions
+   * go through the control socket, in-process sessions go through the
+   * direct PTY handle. Caller is responsible for terminating commands
+   * with `\n` if they want them to execute; otherwise the bytes land
+   * on the shell's line buffer untouched.
+   */
+  ptyWrite(sessionId: string, data: string): Promise<void> {
+    const encoded = encodeStringToBase64(data);
+    return invoke<void>("pty_write", { sessionId, data: encoded });
+  },
+  fsListDir(
+    path: string,
+    showHidden: boolean,
+    respectGitignore: boolean,
+  ): Promise<FsListResult> {
+    return invoke<FsListResult>("fs_list_dir", {
+      path,
+      showHidden,
+      respectGitignore,
+    });
+  },
+  fsRename(from: string, to: string): Promise<void> {
+    return invoke<void>("fs_rename", { from, to });
+  },
+  fsTrash(path: string): Promise<void> {
+    return invoke<void>("fs_trash", { path });
+  },
+  fsReveal(path: string): Promise<void> {
+    return invoke<void>("fs_reveal", { path });
+  },
+  fsOpenDefault(path: string): Promise<void> {
+    return invoke<void>("fs_open_default", { path });
+  },
+  fsShellEditor(): Promise<string> {
+    return invoke<string>("fs_shell_editor");
+  },
+  fsGitStatus(
+    repoRoot: string,
+  ): Promise<Record<string, FsGitStatusEntry>> {
+    return invoke<Record<string, FsGitStatusEntry>>("fs_git_status", {
+      repoRoot,
+    });
+  },
+  fsGitDiffStats(
+    repoRoot: string,
+    entries: FsGitDiffStatsRequest[],
+  ): Promise<Record<string, FsGitDiffStatsEntry>> {
+    return invoke<Record<string, FsGitDiffStatsEntry>>("fs_git_diff_stats", {
+      repoRoot,
+      entries,
+    });
+  },
+  fsGitBranch(repoRoot: string): Promise<string> {
+    return invoke<string>("fs_git_branch", { repoRoot });
+  },
+  fsReadFile(path: string): Promise<FsReadFileResult> {
+    return invoke<FsReadFileResult>("fs_read_file", { path });
+  },
+  fsGitDiffLines(path: string): Promise<FsLineDiffEntry[]> {
+    return invoke<FsLineDiffEntry[]>("fs_git_diff_lines", { path });
+  },
+  fsWatchSetRoot(path: string | null): Promise<void> {
+    return invoke<void>("fs_watch_set_root", { path });
+  },
 };
+
+/** Mirror of `crate::fs_explorer::FileEntry`. */
+export interface FsEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size: number;
+  modified_ms: number;
+  gitignored: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::ListResult`. */
+export interface FsListResult {
+  entries: FsEntry[];
+  repo_root: string | null;
+}
+
+/** Event payload from the backend fs watcher. */
+export interface FsChangePayload {
+  paths: string[];
+}
+
+export const FS_CHANGED_EVENT = "acorn:fs-changed";
+
+/** Per-path git status bucket. Mirrors `crate::fs_explorer::classify_status`. */
+export type FsGitStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "conflicted"
+  | "clean";
+
+/** Mirror of `crate::fs_explorer::GitStatusEntry`. */
+export interface FsGitStatusEntry {
+  kind: FsGitStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface FsGitDiffStatsRequest {
+  path: string;
+  kind: FsGitStatus;
+}
+
+export interface FsGitDiffStatsEntry {
+  additions: number;
+  deletions: number;
+}
+
+/** Mirror of `crate::fs_explorer::ReadFileResult`. */
+export interface FsReadFileResult {
+  content: string;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::LineDiffEntry`. */
+export interface FsLineDiffEntry {
+  line: number;
+  kind: "added" | "modified" | "deleted";
+}
+
+function encodeStringToBase64(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/** Which user-invoked agent a resume candidate belongs to. */
+export type AgentKind = "claude" | "codex";
+
+export interface ResumeCandidate {
+  /** JSONL transcript UUID the user is being offered to resume. */
+  uuid: string;
+  /** Unix seconds of the transcript file's mtime. `0` when unknown. */
+  lastActivityUnix: number;
+  /** Single-line preview of the last assistant text, truncated. */
+  preview: string | null;
+}
 
 export interface DaemonStatus {
   running: boolean;
@@ -368,7 +668,20 @@ export interface DaemonSessionSummary {
   name: string;
   kind: "regular" | "control";
   alive: boolean;
+  cwd: string | null;
   repo_path: string | null;
   branch: string | null;
   agent_kind: string | null;
 }
+
+/**
+ * Mirror of `crate::staged_rev_reconcile::StagedRevMismatch`. Returned
+ * when the daemon still owns PTYs spawned against a different
+ * staged-dotfile revision than the running build.
+ */
+export interface StagedRevMismatch {
+  current_rev: string;
+  stale_session_count: number;
+}
+
+export const STAGED_REV_MISMATCH_EVENT = "acorn:staged-rev-mismatch";

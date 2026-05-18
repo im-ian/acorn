@@ -1,12 +1,19 @@
 import { AlertTriangle } from "lucide-react";
 import type { Project, Session } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader } from "./ui";
 
 type RemoveProjectChoice =
   | "project_only"
   | "project_and_worktrees"
   | "cancel";
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface RemoveProjectDialogProps {
   project: Project | null;
@@ -19,6 +26,7 @@ export function RemoveProjectDialog({
   sessions,
   onClose,
 }: RemoveProjectDialogProps) {
+  const t = useTranslation();
   const isolatedCount = sessions.filter((s) => s.isolated).length;
   const primaryChoice: RemoveProjectChoice =
     isolatedCount > 0 ? "project_and_worktrees" : "project_only";
@@ -38,14 +46,14 @@ export function RemoveProjectDialog({
       {project ? (
         <>
           <ModalHeader
-            title="Close project"
+            title={dt(t, "dialogs.removeProject.title")}
             icon={<AlertTriangle size={16} className="text-warning" />}
             variant="dialog"
             onClose={() => onClose("cancel")}
           />
           <div className="space-y-3 px-4 py-3 text-sm text-fg">
             <p>
-              Close project{" "}
+              {dt(t, "dialogs.removeProject.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{project.name}</span>?
             </p>
             <div className="space-y-1 rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
@@ -53,10 +61,17 @@ export function RemoveProjectDialog({
                 {project.repo_path}
               </p>
               <p className="text-fg-muted">
-                {sessions.length} session{sessions.length === 1 ? "" : "s"}{" "}
-                will be removed
+                {sessions.length}{" "}
+                {sessions.length === 1
+                  ? dt(t, "dialogs.removeProject.sessionSingular")
+                  : dt(t, "dialogs.removeProject.sessionPlural")}{" "}
+                {dt(t, "dialogs.removeProject.willBeRemoved")}
                 {isolatedCount > 0
-                  ? ` (${isolatedCount} isolated worktree${isolatedCount === 1 ? "" : "s"})`
+                  ? ` (${isolatedCount} ${
+                      isolatedCount === 1
+                        ? dt(t, "dialogs.removeProject.isolatedWorktreeSingular")
+                        : dt(t, "dialogs.removeProject.isolatedWorktreePlural")
+                    })`
                   : ""}
                 .
               </p>
@@ -68,7 +83,7 @@ export function RemoveProjectDialog({
               onClick={() => onClose("cancel")}
               className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
             >
-              Cancel
+              {dt(t, "dialogs.common.cancel")}
             </button>
             {isolatedCount > 0 ? (
               <button
@@ -76,7 +91,7 @@ export function RemoveProjectDialog({
                 onClick={() => onClose("project_only")}
                 className="rounded-md px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
               >
-                Close · keep worktrees
+                {dt(t, "dialogs.removeProject.closeKeepWorktrees")}
               </button>
             ) : null}
             <button
@@ -88,7 +103,9 @@ export function RemoveProjectDialog({
               }
               className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
             >
-              {isolatedCount > 0 ? "Close · delete worktrees" : "Close project"}
+              {isolatedCount > 0
+                ? dt(t, "dialogs.removeProject.closeDeleteWorktrees")
+                : dt(t, "dialogs.removeProject.closeProject")}
             </button>
           </footer>
         </>

@@ -76,7 +76,8 @@ function cloneSettings() {
 
 function openAppearanceTab() {
   const button = Array.from(document.querySelectorAll("button")).find(
-    (element) => element.textContent === "Appearance",
+    (element) =>
+      element.textContent === "Appearance" || element.textContent === "모양",
   );
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error("Appearance tab button not found");
@@ -95,6 +96,12 @@ function setInputValue(input: HTMLInputElement, value: string) {
   act(() => {
     setter.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function blurInput(input: HTMLInputElement) {
+  act(() => {
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
   });
 }
 
@@ -133,7 +140,7 @@ describe("SettingsModal font controls", () => {
     vi.clearAllMocks();
   });
 
-  it("edits terminal fontFamily as a comma-separated stack", async () => {
+  it("buffers terminal fontFamily edits until the field loses focus", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -141,10 +148,13 @@ describe("SettingsModal font controls", () => {
 
     const fontFamily = document.querySelector<HTMLInputElement>("input");
     const patchTerminal = useSettings.getState().patchTerminal;
+    const bodyText = document.body.textContent ?? "";
 
-    expect(document.body.textContent).toContain("Font family");
-    expect(document.body.textContent).toContain(
-      "Comma-separated stack. First family that resolves wins.",
+    expect(bodyText).toMatch(
+      /Font family|settings\.terminal\.fontFamily\.label/,
+    );
+    expect(bodyText).toMatch(
+      /Comma-separated stack\. First family that resolves wins\.|settings\.terminal\.fontFamily\.hint/,
     );
     expect(fontFamily?.value).toBe(DEFAULT_SETTINGS.terminal.fontFamily);
 
@@ -152,6 +162,10 @@ describe("SettingsModal font controls", () => {
       fontFamily as HTMLInputElement,
       '"Berkeley Mono", Menlo, monospace',
     );
+
+    expect(patchTerminal).not.toHaveBeenCalled();
+
+    blurInput(fontFamily as HTMLInputElement);
 
     expect(patchTerminal).toHaveBeenCalledWith({
       fontFamily: '"Berkeley Mono", Menlo, monospace',
@@ -171,6 +185,112 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).not.toContain("Terminal font");
     expect(document.body.textContent).not.toContain("Refresh fonts");
     expect(document.querySelector('[role="listbox"]')).toBeNull();
+  });
+
+  it("edits Appearance UI scale with presets only", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const scaleSelect = Array.from(
+      document.querySelectorAll<HTMLSelectElement>("select"),
+    ).find((element) => element.value === "100");
+
+    expect(document.body.textContent).toContain("UI scale");
+    expect(
+      document.querySelector('input[aria-label="Custom UI scale percentage"]'),
+    ).toBeNull();
+    expect(scaleSelect?.value).toBe("100");
+
+    act(() => {
+      if (!scaleSelect) throw new Error("UI scale select not found");
+      scaleSelect.value = "125";
+      scaleSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
+      uiScalePercent: 125,
+    });
+  });
+
+  it("renders the Appearance language selector in Korean and patches changes", async () => {
+    const patchLanguage = vi.fn();
+    useSettings.setState({
+      settings: {
+        ...cloneSettings(),
+        language: "ko",
+      },
+      patchLanguage,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain("설정");
+    expect(document.body.textContent).toContain("모양");
+    expect(document.body.textContent).toContain("언어");
+
+    const languageSelect = Array.from(
+      document.querySelectorAll<HTMLSelectElement>("select"),
+    ).find((element) => element.value === "ko");
+
+    expect(languageSelect).toBeInstanceOf(HTMLSelectElement);
+    expect(languageSelect?.textContent).toContain("한국어");
+
+    act(() => {
+      if (!languageSelect) throw new Error("Language select not found");
+      languageSelect.value = "en";
+      languageSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(patchLanguage).toHaveBeenCalledWith("en");
+  });
+
+  it("renders Korean Settings chrome and the active panel controls", async () => {
+    useSettings.setState({
+      settings: {
+        ...cloneSettings(),
+        language: "ko",
+      },
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+
+    for (const label of [
+      "터미널",
+      "에이전트",
+      "세션",
+      "GitHub",
+      "모양",
+      "편집기",
+      "알림",
+      "저장 공간",
+      "실험 기능",
+      "정보",
+    ]) {
+      const button = Array.from(document.querySelectorAll("button")).find(
+        (element) => element.textContent === label,
+      );
+      expect(button, `${label} tab button`).toBeInstanceOf(HTMLButtonElement);
+    }
+
+    expect(document.body.textContent).toContain("설정");
+    expect(document.body.textContent).toContain("기본값으로 재설정");
+    expect(document.body.textContent).toContain("글꼴 패밀리");
   });
 });
 

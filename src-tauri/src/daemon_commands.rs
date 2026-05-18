@@ -15,7 +15,7 @@ use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::daemon::protocol::{AgentKind, SessionKind};
+use acorn_daemon::protocol::{AgentKind, SessionKind};
 use crate::daemon_bridge::BridgeError;
 use crate::state::AppState;
 
@@ -131,6 +131,7 @@ pub struct DaemonSessionSummary {
     pub name: String,
     pub kind: String,
     pub alive: bool,
+    pub cwd: Option<String>,
     pub repo_path: Option<String>,
     pub branch: Option<String>,
     pub agent_kind: Option<String>,
@@ -154,6 +155,7 @@ pub fn daemon_list_sessions(
                 SessionKind::Control => "control".into(),
             },
             alive: s.alive,
+            cwd: s.cwd.map(|p| p.display().to_string()),
             repo_path: s.repo_path.map(|p| p.display().to_string()),
             branch: s.branch,
             agent_kind: s.agent_kind.map(agent_kind_to_str),
@@ -213,8 +215,7 @@ pub fn daemon_send_input(
     data_b64: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     let bytes = base64_decode(&data_b64)?;
     state
         .daemon_bridge
@@ -229,8 +230,7 @@ pub fn daemon_resize(
     rows: u16,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state
         .daemon_bridge
         .resize(id, cols, rows)
@@ -242,8 +242,7 @@ pub fn daemon_kill_session(
     target_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state.daemon_bridge.kill(id).map_err(|e| e.to_string())
 }
 
@@ -252,9 +251,86 @@ pub fn daemon_forget_session(
     target_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state.daemon_bridge.forget(id).map_err(|e| e.to_string())
+}
+
+/// Reconstruct an app-side `Session` row from a daemon-owned PTY the app
+/// has lost track of (typical cause: user deleted the session row while
+/// the daemon kept the PTY). Idempotent — if the app already has a row
+/// for this id, returns it untouched.
+///
+/// Pulls metadata (name, kind, repo_path, cwd, branch) straight from the
+/// daemon's `SessionSummary`. The daemon must still know this id; pass
+/// `force` semantics through by always querying `list_sessions` first.
+#[tauri::command]
+pub fn daemon_adopt_session(
+    target_session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+
+    if state.sessions.get(&id).is_ok() {
+        return Ok(());
+    }
+
+    let summary = state
+        .daemon_bridge
+        .list_sessions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("daemon does not know session {id}"))?;
+
+    let repo_path = summary
+        .repo_path
+        .clone()
+        .ok_or_else(|| "daemon session has no repo_path — cannot adopt".to_string())?;
+    let worktree_path = summary.cwd.clone().unwrap_or_else(|| repo_path.clone());
+    // Branch is informational — leave empty when the daemon never knew
+    // it. Synthesizing "main" would silently lie for repos on master /
+    // trunk / detached HEAD; UI tolerates the empty string.
+    let branch = summary.branch.clone().unwrap_or_default();
+
+    let kind = match summary.kind {
+        acorn_daemon::protocol::SessionKind::Regular => acorn_session::SessionKind::Regular,
+        acorn_daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
+    };
+
+    let project_name = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| repo_path.display().to_string());
+    state.projects.ensure(repo_path.clone(), project_name);
+
+    let now = chrono::Utc::now();
+    let session = acorn_session::Session {
+        id,
+        name: summary.name.clone(),
+        repo_path: repo_path.clone(),
+        worktree_path,
+        branch,
+        isolated: false,
+        status: acorn_session::SessionStatus::Idle,
+        created_at: now,
+        updated_at: now,
+        last_message: None,
+        kind,
+        owner: acorn_session::SessionOwner::User,
+        position: None,
+        daemon_session_id: Some(id),
+        agent_resume_token: Some(id.to_string()),
+        in_worktree: false,
+    };
+    state.sessions.insert(session);
+
+    if let Err(e) = crate::persistence::save_sessions(&state.sessions.list()) {
+        tracing::warn!("failed to persist sessions after adopt: {e}");
+    }
+    if let Err(e) = crate::persistence::save_projects(&state.projects.list()) {
+        tracing::warn!("failed to persist projects after adopt: {e}");
+    }
+    Ok(())
 }
 
 fn parse_kind(kind: &str) -> Result<SessionKind, String> {
@@ -316,7 +392,8 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         let v1 = val(chunk[1])?;
         let v2 = if pad >= 2 { 0 } else { val(chunk[2])? };
         let v3 = if pad >= 1 { 0 } else { val(chunk[3])? };
-        let n = (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
+        let n =
+            (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
         out.push((n >> 16) as u8);
         if pad < 2 {
             out.push((n >> 8) as u8);

@@ -13,6 +13,10 @@ export type SessionStatus =
  */
 export type SessionKind = "regular" | "control";
 
+export type SessionOwner =
+  | { kind: "user" }
+  | { kind: "control"; session_id: string };
+
 export interface Session {
   id: string;
   name: string;
@@ -25,6 +29,7 @@ export interface Session {
   updated_at: string;
   last_message: string | null;
   kind: SessionKind;
+  owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
    * worktree marker). Surfaces the worktree icon regardless of whether Acorn,
@@ -37,6 +42,26 @@ export interface Project {
   name: string;
   created_at: string;
   position: number;
+}
+
+export type AgentHistoryProvider = "claude" | "codex";
+
+export interface AgentHistoryWorktree {
+  name: string;
+  path: string;
+  exists: boolean;
+}
+
+export interface AgentHistoryItem {
+  provider: AgentHistoryProvider;
+  id: string;
+  title: string;
+  preview: string | null;
+  cwd: string | null;
+  worktree: AgentHistoryWorktree | null;
+  transcript_path: string;
+  updated_at: number;
+  resume_command: string | null;
 }
 
 export interface CommitInfo {
@@ -205,6 +230,71 @@ export interface PullRequestDetail {
 
 export type PullRequestDetailListing =
   | { kind: "ok"; account: string; detail: PullRequestDetail }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface WorkflowRun {
+  id: number;
+  /** Commit subject (or dispatch title) gh shows for the run. */
+  display_title: string;
+  /** Human-readable workflow name (e.g. "CI", "Release"). */
+  workflow_name: string;
+  /** queued | in_progress | completed | requested | waiting | pending */
+  status: string;
+  /** success | failure | cancelled | skipped | neutral | timed_out | action_required | startup_failure. null while still running. */
+  conclusion: string | null;
+  /** push | pull_request | workflow_dispatch | schedule | ... */
+  event: string;
+  head_branch: string | null;
+  head_sha: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  attempt: number;
+}
+
+export type WorkflowRunsListing =
+  | { kind: "ok"; items: WorkflowRun[]; account: string }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface WorkflowJobStep {
+  name: string;
+  number: number;
+  status: string;
+  conclusion: string | null;
+}
+
+export interface WorkflowJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  url: string;
+  steps: WorkflowJobStep[];
+}
+
+export interface WorkflowRunDetail {
+  id: number;
+  display_title: string;
+  workflow_name: string;
+  status: string;
+  conclusion: string | null;
+  event: string;
+  head_branch: string | null;
+  head_sha: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  attempt: number;
+  jobs: WorkflowJob[];
+}
+
+export type WorkflowRunDetailListing =
+  | { kind: "ok"; account: string; detail: WorkflowRunDetail }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
 

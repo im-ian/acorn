@@ -1,0 +1,243 @@
+//! Generates the "control session primer" — a short system-prompt blurb
+//! that teaches an agent invoked inside a control session about the
+//! `acorn-ipc` CLI, its env vars, and the commands it can issue.
+//!
+//! The primer is delivered two ways at PTY spawn time:
+//!
+//!   1. A `<cwd>/.acorn-control.md` marker file written unconditionally
+//!      for every control session. Agents that read project-local docs
+//!      (Claude Code follows CLAUDE.md, Aider follows .aider config, …)
+//!      can discover it; humans `cat`-ing the file get the same content.
+//!      This is the primary delivery channel because Acorn always spawns
+//!      `$SHELL` — the user invokes the agent from inside.
+//!   2. Per-agent CLI flag injection, kept as a dormant fallback: if
+//!      `$SHELL` itself ever resolves to a recognised agent (Claude
+//!      Code's `--append-system-prompt`, llm CLI's `-s`) the primer is
+//!      threaded into argv at spawn time. For ordinary shells the
+//!      `AgentFlavor::Unknown` branch is a no-op.
+//!
+//! This module takes plain primitives (session id, repo path, socket
+//! paths) instead of an `acorn` `Session` struct so the crate stays a
+//! leaf with no upstream dependency on the host app's module graph.
+
+use std::path::Path;
+
+/// Distinguishes our few well-known agent CLIs from arbitrary user commands.
+/// Detection is by file-basename, so paths like
+/// `/Users/me/.bun/bin/claude` still match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentFlavor {
+    Claude,
+    Llm,
+    Unknown,
+}
+
+impl AgentFlavor {
+    pub fn detect(command: &str) -> Self {
+        let basename = Path::new(command)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(command);
+        match basename {
+            "claude" => Self::Claude,
+            "llm" => Self::Llm,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Build the primer string for a given control session. Substitutes the
+/// session id and socket paths so the agent can copy-paste examples
+/// verbatim. Kept short on purpose — every byte goes into every
+/// agent-call's system prompt.
+///
+/// `daemon_socket_path` is `None` when the daemon's socket path could
+/// not be resolved (e.g. data dir lookup failure); the primer prints an
+/// empty path in that case so the rest of the message still renders.
+pub fn primer_for(
+    session_id: &str,
+    repo_path: &Path,
+    socket_path: &Path,
+    daemon_socket_path: Option<&Path>,
+) -> String {
+    let daemon = daemon_socket_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    format!(
+        "You are running inside an Acorn \"control session\". You can orchestrate \
+         other terminal sessions in the same project ({repo}) via the `acorn-ipc` \
+         CLI. The user does not need to know that `acorn-ipc` exists; treat it as \
+         your local control tool.\n\
+         \n\
+         Your session id: {session_id}\n\
+         IPC socket:      {socket}\n\
+         Daemon socket:   {daemon}\n\
+         Context command: acorn-ipc context\n\
+         \n\
+         Natural-language mapping:\n\
+         - If the user asks you to create, open, spawn, or use a \"new session\", \
+         interpret that as a new Acorn sibling terminal session in this project \
+         unless they clearly mean a new chat conversation.\n\
+         - Sessions you create with `acorn-ipc new-session` are owned by this \
+         controller by default. Only operate on sessions where `list-sessions` \
+         shows MINE=yes unless the user explicitly asks you to touch another \
+         session.\n\
+         - Do not repurpose, send input to, read from, focus, or kill user-owned \
+         sessions or sessions owned by another control session unless the user \
+         made that direct request; then pass `--allow-foreign`.\n\
+         \n\
+         Available commands (project-scoped — other projects are not reachable):\n\
+         \n\
+           acorn-ipc context                             # print this context\n\
+           acorn-ipc list-sessions                       # see siblings + self\n\
+           acorn-ipc new-session   <name> [--isolated] [--owner me|user]\n\
+           acorn-ipc send-keys     -t <uuid> --data '…' --enter [--allow-foreign]\n\
+           acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]\n\
+           acorn-ipc select-session -t <uuid> [--allow-foreign]\n\
+           acorn-ipc kill-session  -t <uuid> [--allow-foreign]\n\
+         \n\
+         The newer `acornd` CLI talks to the same project graph via the\n\
+         background daemon (currently rolling out). `acornd list-sessions`,\n\
+         `acornd send-keys -t …`, etc. — same shape, different transport.\n\
+         \n\
+         Tips:\n\
+         - Pass `--json` to `acorn-ipc` for machine-parseable output.\n\
+         - Prefer delegating CPU-bound or long-running work to sibling sessions \
+         instead of running it serially here; this seat is the orchestrator.\n\
+         - `read-buffer` after a `send-keys` may need a brief wait — the sibling \
+         is a real PTY, not a synchronous RPC.",
+        repo = repo_path.display(),
+        session_id = session_id,
+        socket = socket_path.display(),
+        daemon = daemon,
+    )
+}
+
+/// Augment `(command, args)` with the agent-specific flag that injects the
+/// primer into the spawned agent's system prompt. Returns the modified
+/// `args` vector. For unknown flavors the args are returned unchanged —
+/// those agents still see the env vars and the `.acorn-control.md`
+/// marker, just not an in-system-prompt nudge.
+pub fn inject_primer_args(flavor: AgentFlavor, args: Vec<String>, primer: &str) -> Vec<String> {
+    match flavor {
+        AgentFlavor::Claude => prepend(args, &["--append-system-prompt", primer]),
+        AgentFlavor::Llm => insert_llm_system_arg(args, primer),
+        AgentFlavor::Unknown => args,
+    }
+}
+
+fn prepend(mut args: Vec<String>, head: &[&str]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len() + head.len());
+    out.extend(head.iter().map(|s| (*s).to_string()));
+    out.append(&mut args);
+    out
+}
+
+/// `llm` invocations land as either `llm` (one-shot) or `llm chat …`
+/// (interactive). The `-s/--system` flag is only valid on certain
+/// subcommands. We insert it right after `chat` when present, otherwise
+/// prepend — the worst case is `-s` flagged onto a subcommand that does
+/// not accept it, which surfaces as an immediate CLI error the user can
+/// see and fix.
+fn insert_llm_system_arg(args: Vec<String>, primer: &str) -> Vec<String> {
+    if let Some(idx) = args.iter().position(|a| a == "chat") {
+        let mut out = args.clone();
+        out.insert(idx + 1, "-s".to_string());
+        out.insert(idx + 2, primer.to_string());
+        out
+    } else {
+        prepend(args, &["-s", primer])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn detect_recognizes_known_agents() {
+        assert_eq!(AgentFlavor::detect("claude"), AgentFlavor::Claude);
+        assert_eq!(
+            AgentFlavor::detect("/usr/local/bin/claude"),
+            AgentFlavor::Claude
+        );
+        assert_eq!(AgentFlavor::detect("llm"), AgentFlavor::Llm);
+        assert_eq!(AgentFlavor::detect("bash"), AgentFlavor::Unknown);
+        assert_eq!(AgentFlavor::detect("/bin/zsh"), AgentFlavor::Unknown);
+    }
+
+    #[test]
+    fn primer_substitutes_session_and_socket() {
+        let p = primer_for(
+            "00000000-0000-0000-0000-000000000001",
+            &PathBuf::from("/tmp/repo"),
+            &PathBuf::from("/tmp/ipc.sock"),
+            Some(&PathBuf::from("/tmp/daemon.sock")),
+        );
+        assert!(p.contains("00000000-0000-0000-0000-000000000001"));
+        assert!(p.contains("/tmp/ipc.sock"));
+        assert!(p.contains("/tmp/repo"));
+        assert!(p.contains("/tmp/daemon.sock"));
+        assert!(p.contains("acorn-ipc list-sessions"));
+    }
+
+    #[test]
+    fn primer_renders_empty_daemon_when_unresolved() {
+        let p = primer_for(
+            "00000000-0000-0000-0000-000000000001",
+            &PathBuf::from("/tmp/repo"),
+            &PathBuf::from("/tmp/ipc.sock"),
+            None,
+        );
+        // The line still renders, just with an empty value after the
+        // label — same shape as the pre-extraction behaviour where the
+        // daemon resolver returned an empty string on lookup failure.
+        assert!(p.contains("Daemon socket:   \n"));
+    }
+
+    #[test]
+    fn inject_claude_prepends_append_system_prompt() {
+        let args = vec!["--resume".to_string()];
+        let out = inject_primer_args(AgentFlavor::Claude, args, "PRIMER_TEXT");
+        assert_eq!(
+            out,
+            vec![
+                "--append-system-prompt".to_string(),
+                "PRIMER_TEXT".to_string(),
+                "--resume".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn inject_llm_chat_inserts_dash_s_after_chat() {
+        let args = vec!["chat".to_string(), "-m".to_string(), "gpt-4o".to_string()];
+        let out = inject_primer_args(AgentFlavor::Llm, args, "PRIMER_TEXT");
+        assert_eq!(
+            out,
+            vec![
+                "chat".to_string(),
+                "-s".to_string(),
+                "PRIMER_TEXT".to_string(),
+                "-m".to_string(),
+                "gpt-4o".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn inject_llm_oneshot_prepends_dash_s() {
+        let args = vec!["-m".to_string(), "gpt-4o".to_string()];
+        let out = inject_primer_args(AgentFlavor::Llm, args, "PRIMER_TEXT");
+        assert_eq!(out[0], "-s");
+        assert_eq!(out[1], "PRIMER_TEXT");
+    }
+
+    #[test]
+    fn inject_unknown_is_passthrough() {
+        let args = vec!["arg1".to_string(), "arg2".to_string()];
+        let out = inject_primer_args(AgentFlavor::Unknown, args.clone(), "PRIMER_TEXT");
+        assert_eq!(out, args);
+    }
+}

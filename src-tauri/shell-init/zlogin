@@ -1,0 +1,20 @@
+# Acorn zsh login init.
+#
+# Login-mode counterpart of the staged `.zprofile`. zsh sources `.zlogin`
+# after `.zshrc` for login shells, and resolves it relative to
+# `$ZDOTDIR` — which Acorn pinned to its staged dir, so without this
+# file the user's real `.zlogin` would never run. Most users keep
+# `.zlogin` empty, but ssh-agent bootstrap and motd-style logic
+# occasionally live here.
+#
+# Same forward pattern as `.zprofile` / `.zshrc`: temporarily point
+# `ZDOTDIR` at the user's dir, source their file, then restore Acorn's
+# staged dir so a later `exec zsh` still resolves stage files
+# correctly.
+
+_acorn_zd_save=$ZDOTDIR
+_acorn_user_zd=${ACORN_USER_ZDOTDIR:-$HOME}
+ZDOTDIR=$_acorn_user_zd
+[ -f "$ZDOTDIR/.zlogin" ] && source "$ZDOTDIR/.zlogin"
+ZDOTDIR=$_acorn_zd_save
+unset _acorn_zd_save _acorn_user_zd

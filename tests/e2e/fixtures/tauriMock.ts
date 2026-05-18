@@ -27,9 +27,19 @@ export const tauriMockSource = `
     return undefined;
   }
 
-  function appDefault(cmd) {
+  function appDefault(cmd, args) {
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
+    if (cmd === 'create_new_project') {
+      const name = args && typeof args.name === 'string' ? args.name : 'new-project';
+      const parentPath = args && typeof args.parentPath === 'string' ? args.parentPath : '/tmp';
+      return Promise.resolve({
+        repo_path: parentPath + '/' + name,
+        name,
+        created_at: '2026-01-01T00:00:00Z',
+        position: 0,
+      });
+    }
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
     if (cmd === 'detect_session_agent') {
       return Promise.resolve({ claude: null, codex: null });
@@ -41,6 +51,19 @@ export const tauriMockSource = `
     if (cmd === 'list_staged') return Promise.resolve([]);
     if (cmd === 'list_pull_requests') {
       return Promise.resolve({ items: [], account: null, error: null });
+    }
+    if (cmd === 'list_workflow_runs') {
+      return Promise.resolve({ kind: 'not_github' });
+    }
+    if (cmd === 'get_workflow_run_detail') {
+      return Promise.resolve({ kind: 'not_github' });
+    }
+    // Right panel uses this to decide whether to show the GitHub group.
+    // Default to "GitHub repo" so the existing PRs/Actions tabs stay
+    // visible across all E2Es; tests that need the not-github branch
+    // override this via window.__ACORN_MOCK_HANDLERS__.
+    if (cmd === 'github_origin_slug') {
+      return Promise.resolve('acorn/test');
     }
     if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
     if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
@@ -97,6 +120,39 @@ export const tauriMockSource = `
     if (cmd === 'daemon_resize') return Promise.resolve(undefined);
     if (cmd === 'daemon_kill_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_forget_session') return Promise.resolve(undefined);
+    if (cmd === 'daemon_adopt_session') return Promise.resolve(undefined);
+    // Resume modal probes every session focus for both claude and codex.
+    // Default to "no candidate" so non-resume E2Es never see the modal;
+    // tests that exercise the modal override this via __ACORN_MOCK_HANDLERS__.
+    if (cmd === 'get_claude_resume_candidate') return Promise.resolve(null);
+    if (cmd === 'get_codex_resume_candidate') return Promise.resolve(null);
+    if (cmd === 'acknowledge_claude_resume') return Promise.resolve(undefined);
+    if (cmd === 'acknowledge_codex_resume') return Promise.resolve(undefined);
+    // Staged-rev mismatch is the daemon-stale prompt at boot. Default to
+    // "no mismatch" so non-related E2Es never see the modal; tests that
+    // exercise it override via __ACORN_MOCK_HANDLERS__.
+    if (cmd === 'staged_rev_mismatch_status') return Promise.resolve(null);
+    if (cmd === 'acknowledge_staged_rev_mismatch')
+      return Promise.resolve(undefined);
+    if (cmd === 'pty_write') return Promise.resolve(undefined);
+    // File explorer. No real fs in E2E — default to an empty listing so
+    // the panel renders without errors. Tests that need real entries
+    // override these via window.__ACORN_MOCK_HANDLERS__.
+    if (cmd === 'fs_list_dir') {
+      return Promise.resolve({ entries: [], repo_root: null });
+    }
+    if (cmd === 'fs_rename') return Promise.resolve(undefined);
+    if (cmd === 'fs_trash') return Promise.resolve(undefined);
+    if (cmd === 'fs_reveal') return Promise.resolve(undefined);
+    if (cmd === 'fs_open_default') return Promise.resolve(undefined);
+    if (cmd === 'fs_shell_editor') return Promise.resolve('');
+    if (cmd === 'fs_git_status') return Promise.resolve({});
+    if (cmd === 'fs_git_branch') return Promise.resolve('');
+    if (cmd === 'fs_read_file') {
+      return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
+    }
+    if (cmd === 'fs_git_diff_lines') return Promise.resolve([]);
+    if (cmd === 'fs_watch_set_root') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
     return Promise.resolve(null);
   }
@@ -131,7 +187,7 @@ export const tauriMockSource = `
       }
       const plugin = pluginDefault(cmd);
       if (plugin !== undefined) return plugin;
-      return appDefault(cmd);
+      return appDefault(cmd, args);
     },
   };
 

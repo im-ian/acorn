@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
+import { isSessionInFocusedPane } from "../lib/multiInput";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
 import { Terminal } from "./Terminal";
@@ -45,7 +46,7 @@ function PortaledTerminal({ session }: { session: Session }) {
     const ws = state.workspaces[state.activeProject];
     if (!ws) return null;
     for (const pane of Object.values(ws.panes)) {
-      if (pane.activeSessionId === session.id) return pane.id;
+      if (pane.activeTabId === session.id) return pane.id;
     }
     return null;
   });
@@ -59,46 +60,37 @@ function PortaledTerminal({ session }: { session: Session }) {
       ? state.workspaces[state.activeProject]?.layout ?? null
       : null,
   );
+  const isFocusedPane = useAppStore((state) =>
+    isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
+  );
 
-  // Park the target in limbo immediately on mount so React's createPortal
-  // has a connected DOM node to render into; full unmount returns it to
-  // the document tree so we don't leak the orphaned subtree.
+  // Full unmount removes the stable portal target so we do not leak an
+  // orphaned terminal subtree.
   useEffect(() => {
     const target = targetRef.current;
     if (!target) return;
-    if (!target.isConnected) {
-      getTerminalLimbo().appendChild(target);
-    }
     return () => {
       target.remove();
     };
   }, []);
 
   // Whenever the visible pane changes, move our target div into that pane's
-  // body (or back to limbo). Use rAF so we move after React commits any
-  // pending pane mounts, ensuring `[data-pane-body]` is in the DOM.
-  useEffect(() => {
+  // body (or back to limbo). This must run as a layout effect: Terminal's
+  // passive mount effect opens xterm and spawns the PTY with the current
+  // measured cols/rows, so the target needs to be in its real pane before
+  // that effect runs. Waiting for rAF leaves the first spawn fitted against
+  // the off-screen limbo size, which narrow panes and agent TUIs expose as
+  // stale wrapping/paint until the next resize or tab refit.
+  useLayoutEffect(() => {
     const target = targetRef.current;
     if (!target) return;
-    let cancelled = false;
-    const id = requestAnimationFrame(() => {
-      if (cancelled) return;
-      const dest = visiblePaneId
-        ? (document.querySelector(
-            `[data-pane-body="${cssEscape(visiblePaneId)}"]`,
-          ) as HTMLElement | null)
-        : null;
-      if (dest) {
-        if (target.parentElement !== dest) dest.appendChild(target);
-      } else {
-        const limbo = getTerminalLimbo();
-        if (target.parentElement !== limbo) limbo.appendChild(target);
-      }
-    });
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(id);
-    };
+    const dest = visiblePaneId
+      ? (document.querySelector(
+          `[data-pane-body="${cssEscape(visiblePaneId)}"]`,
+        ) as HTMLElement | null)
+      : null;
+    const nextParent = dest ?? getTerminalLimbo();
+    if (target.parentElement !== nextParent) nextParent.appendChild(target);
   }, [visiblePaneId, layoutRef]);
 
   return createPortal(
@@ -106,6 +98,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       sessionId={session.id}
       cwd={session.worktree_path}
       isActive={visiblePaneId !== null}
+      isFocusedPane={isFocusedPane}
     />,
     targetRef.current,
   );

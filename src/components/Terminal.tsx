@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Terminal as XTerm,
   type IBuffer,
   type ITheme,
+  type IViewportRange,
 } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -14,7 +15,23 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
+import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
+import {
+  patchTerminalCellMeasurements,
+  unpatchTerminalCellMeasurements,
+} from "../lib/terminal-cjk-cell-width-addon";
+import {
+  createTerminalRepaintScheduler,
+  repaintTerminalViewport,
+} from "../lib/terminalRepaint";
+import {
+  prepareScrollbackForSave,
+  RESTORE_MARKER_TEXT,
+  shouldRestoreScrollback,
+  stripRestoreMarkers,
+} from "../lib/terminalScrollback";
+import { terminalPasteAction } from "../lib/terminalPaste";
 import {
   useSettings,
   type TerminalLinkActivation,
@@ -22,8 +39,13 @@ import {
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
+import {
+  chooseWorktreeToAdoptAfterExit,
+  type WorktreeAdoptionIntent,
+} from "../lib/worktreeAdoption";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
+import { FloatingTooltip, type TooltipAnchorRect } from "./Tooltip";
 
 interface TerminalProps {
   sessionId: string;
@@ -35,6 +57,7 @@ interface TerminalProps {
    * activate triggers a `fit()` + `refresh()` cycle so the buffer redraws.
    */
   isActive?: boolean;
+  isFocusedPane?: boolean;
 }
 
 interface PtyOutputPayload {
@@ -182,9 +205,161 @@ function scanForContextPrompt(buf: IBuffer, startY: number): string | null {
 const IS_MAC =
   typeof navigator !== "undefined" &&
   /Mac|iP(hone|od|ad)/.test(navigator.platform);
+const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
+
+interface TerminalRenderInternals {
+  _core?: {
+    _renderService?: {
+      dimensions?: {
+        css?: {
+          cell?: {
+            width: number;
+            height: number;
+          };
+        };
+      };
+    };
+  };
+}
 
 function modifierHeld(event: MouseEvent): boolean {
   return IS_MAC ? event.metaKey : event.ctrlKey;
+}
+
+function terminalCellDims(term: XTerm): { width: number; height: number } | null {
+  const core = (term as unknown as TerminalRenderInternals)._core;
+  const cell = core?._renderService?.dimensions?.css?.cell;
+  return cell ? { width: cell.width, height: cell.height } : null;
+}
+
+function textRangeRectForColumns(
+  rowElement: HTMLElement,
+  startCol: number,
+  endCol: number,
+): DOMRect | null {
+  const doc = rowElement.ownerDocument;
+  const walker = doc.createTreeWalker(rowElement, NodeFilter.SHOW_TEXT);
+  const range = doc.createRange();
+  let offset = 0;
+  let startSet = false;
+  let endSet = false;
+
+  for (
+    let node = walker.nextNode() as Text | null;
+    node;
+    node = walker.nextNode() as Text | null
+  ) {
+    const textLength = node.textContent?.length ?? 0;
+    const nextOffset = offset + textLength;
+    if (!startSet && startCol <= nextOffset) {
+      range.setStart(node, Math.max(0, startCol - offset));
+      startSet = true;
+    }
+    if (startSet && endCol <= nextOffset) {
+      range.setEnd(node, Math.max(0, endCol - offset));
+      endSet = true;
+      break;
+    }
+    offset = nextOffset;
+  }
+
+  if (!startSet || !endSet) {
+    range.detach();
+    return null;
+  }
+
+  const rect = range.getBoundingClientRect();
+  range.detach();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  return rect;
+}
+
+function unionRects(rects: DOMRect[]): TooltipAnchorRect | null {
+  if (rects.length === 0) return null;
+  const left = Math.min(...rects.map((r) => r.left));
+  const top = Math.min(...rects.map((r) => r.top));
+  const right = Math.max(...rects.map((r) => r.right));
+  const bottom = Math.max(...rects.map((r) => r.bottom));
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function hoveredLinkAnchorRect(container: HTMLElement): TooltipAnchorRect | null {
+  const rects = Array.from(
+    container.querySelectorAll<HTMLElement>(".xterm-rows span"),
+  )
+    .filter((el) => {
+      const style = getComputedStyle(el);
+      return style.textDecorationLine.includes("underline");
+    })
+    .map((el) => el.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+  return unionRects(rects);
+}
+
+function linkRangeAnchorRect(
+  container: HTMLElement,
+  term: XTerm,
+  range: IViewportRange,
+): TooltipAnchorRect | null {
+  const cell = terminalCellDims(term);
+  if (!cell) return null;
+  const viewportY = term.buffer.active.viewportY;
+
+  const startViewportY = range.start.y - viewportY - 1;
+  const endViewportY = range.end.y - viewportY - 1;
+  if (endViewportY < 0 || startViewportY >= term.rows) return null;
+
+  const row = Math.max(0, Math.min(term.rows - 1, startViewportY));
+  const rowElements = Array.from(
+    container.querySelectorAll<HTMLElement>(".xterm-rows > div"),
+  );
+  const textRects: DOMRect[] = [];
+  const firstVisibleRow = Math.max(0, startViewportY);
+  const lastVisibleRow = Math.min(term.rows - 1, endViewportY);
+  for (let y = firstVisibleRow; y <= lastVisibleRow; y++) {
+    const rowElement = rowElements[y];
+    if (!rowElement) continue;
+    const startCol = y === startViewportY ? Math.max(0, range.start.x - 1) : 0;
+    const endCol =
+      y === endViewportY
+        ? Math.max(startCol + 1, Math.min(term.cols, range.end.x))
+        : term.cols;
+    const rect = textRangeRectForColumns(rowElement, startCol, endCol);
+    if (rect) textRects.push(rect);
+  }
+  const textRect = unionRects(textRects);
+  if (textRect) return textRect;
+
+  const rowElement = rowElements[row];
+  const rowRect =
+    rowElement?.getBoundingClientRect() ??
+    (
+      container.querySelector<HTMLElement>(".xterm-screen") ?? container
+    ).getBoundingClientRect();
+  const startX = startViewportY < 0 ? 0 : Math.max(0, range.start.x - 1);
+  const endX =
+    row === endViewportY
+      ? Math.max(startX + 1, Math.min(term.cols, range.end.x))
+      : term.cols;
+  const left = rowRect.left + startX * cell.width;
+  const top = rowElement ? rowRect.top : rowRect.top + row * cell.height;
+  const right = rowRect.left + endX * cell.width;
+  const bottom = rowElement ? rowRect.bottom : top + cell.height;
+  return {
+    top,
+    bottom,
+    left,
+    right,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 function decodeBase64ToBytes(b64: string): Uint8Array {
@@ -210,10 +385,15 @@ export function Terminal({
   sessionId,
   cwd,
   isActive = true,
+  isFocusedPane = true,
 }: TerminalProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const fitTerminalRef = useRef<(() => void) | null>(null);
+  const [linkTooltip, setLinkTooltip] = useState<{
+    anchorRect: TooltipAnchorRect;
+  } | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -232,7 +412,7 @@ export function Terminal({
       fontWeight: initialSettings.terminal.fontWeight,
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
-      cursorBlink: true,
+      cursorBlink: isFocusedPane,
       allowProposedApi: true,
       scrollback: 5000,
       // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
@@ -259,13 +439,47 @@ export function Terminal({
     // app's CSP and would either fail or replace the app shell). When the user
     // opts into modifier-click activation, plain clicks are swallowed so a
     // stray click on a URL in shell output doesn't steal focus.
-    const webLinksAddon = new WebLinksAddon((event, uri) => {
-      event.preventDefault();
-      if (linkActivation === "modifier-click" && !modifierHeld(event)) return;
-      void openUrl(uri).catch((err: unknown) => {
-        console.error("failed to open terminal link", uri, err);
+    let linkTooltipFrame: number | null = null;
+    const showLinkTooltip = (range: IViewportRange) => {
+      if (linkTooltipFrame !== null) {
+        cancelAnimationFrame(linkTooltipFrame);
+      }
+      linkTooltipFrame = requestAnimationFrame(() => {
+        linkTooltipFrame = null;
+        if (linkActivation !== "modifier-click") return;
+        const anchorRect =
+          hoveredLinkAnchorRect(container) ??
+          linkRangeAnchorRect(container, term, range);
+        if (!anchorRect) return;
+        setLinkTooltip({ anchorRect });
       });
-    });
+    };
+    const hideLinkTooltip = () => {
+      if (linkTooltipFrame !== null) {
+        cancelAnimationFrame(linkTooltipFrame);
+        linkTooltipFrame = null;
+      }
+      setLinkTooltip(null);
+    };
+    const webLinksAddon = new WebLinksAddon(
+      (event, uri) => {
+        event.preventDefault();
+        hideLinkTooltip();
+        if (linkActivation === "modifier-click" && !modifierHeld(event)) return;
+        void openUrl(uri).catch((err: unknown) => {
+          console.error("failed to open terminal link", uri, err);
+        });
+      },
+      {
+        hover: (_event, _uri, range) => {
+          if (linkActivation !== "modifier-click") return;
+          showLinkTooltip(range);
+        },
+        leave: () => {
+          hideLinkTooltip();
+        },
+      },
+    );
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
     term.loadAddon(fitAddon);
@@ -286,8 +500,16 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
-    try {
+    const fitWithCellMeasurements = () => {
+      const cjkEnabled =
+        useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
+      if (cjkEnabled) patchTerminalCellMeasurements(term);
       fitAddon.fit();
+      if (cjkEnabled) patchTerminalCellMeasurements(term);
+    };
+    fitTerminalRef.current = fitWithCellMeasurements;
+    try {
+      fitWithCellMeasurements();
     } catch {
       // initial fit can fail if container has zero size; ResizeObserver will retry.
     }
@@ -313,12 +535,79 @@ export function Terminal({
     };
     scheduleThemeRefresh();
 
+    let disposed = false;
+    const unlistenFns: UnlistenFn[] = [];
+    let observedLinkedWorktreePath: string | null = null;
+    let liveCwdProbeTimer: number | null = null;
+    let agentProbeTimer: number | null = null;
+    let restoredDiskScrollback = false;
+    let daemonSessionAliveAtMount = false;
+    let codexImagePasteActive = false;
+
+    const refreshAgentDetection = () => {
+      void api
+        .detectSessionAgent(sessionId)
+        .then((agent) => {
+          if (disposed) return;
+          codexImagePasteActive = Boolean(agent.codex);
+        })
+        .catch((err: unknown) => {
+          console.debug("[Terminal] agent detection failed", err);
+        });
+    };
+
+    const scheduleAgentDetection = () => {
+      if (disposed || agentProbeTimer !== null) return;
+      agentProbeTimer = window.setTimeout(() => {
+        agentProbeTimer = null;
+        if (disposed) return;
+        refreshAgentDetection();
+      }, 500);
+    };
+    refreshAgentDetection();
+
+    const rememberLinkedWorktreeCwd = (path: string, source: string) => {
+      void api
+        .linkedWorktreeRoot(path)
+        .then((root) => {
+          if (disposed) return;
+          useAppStore.setState((s) => ({
+            liveInWorktree: { ...s.liveInWorktree, [sessionId]: Boolean(root) },
+          }));
+          if (root) {
+            observedLinkedWorktreePath = root;
+          }
+        })
+        .catch((err: unknown) => {
+          console.debug(`[Terminal] ${source} linked-worktree probe failed`, err);
+        });
+    };
+
+    const scheduleLiveCwdProbe = () => {
+      if (disposed || liveCwdProbeTimer !== null) return;
+      liveCwdProbeTimer = window.setTimeout(() => {
+        liveCwdProbeTimer = null;
+        if (disposed) return;
+        void api
+          .ptyCwd(sessionId)
+          .then((liveCwd) => {
+            if (liveCwd && !disposed) {
+              rememberLinkedWorktreeCwd(liveCwd, "pty-cwd");
+            }
+          })
+          .catch((err: unknown) => {
+            console.debug("[Terminal] pty_cwd probe failed", err);
+          });
+      }, 500);
+    };
+
     // OSC 7 cwd tracking. The shell rc we inject via ZDOTDIR emits
     // `\e]7;file://<host><pwd>\e\\` on every prompt. xterm's parser hands
     // us the inner payload (everything between `\e]7;` and the terminator)
-    // — strip the `file://[host]` prefix, percent-decode, classify via the
-    // backend, and update the live-cwd store entry for this session. Each
-    // emit is one cheap stat through libgit2; no polling, no system scan.
+    // — strip the `file://[host]` prefix, percent-decode, resolve linked
+    // worktree roots via the backend, and update the live-cwd store entry
+    // for this session. A resolved root is also remembered as an adoption
+    // candidate for commands that created and entered a fresh worktree.
     // Returning `true` claims the sequence so xterm doesn't echo it.
     term.parser.registerOscHandler(7, (data) => {
       const match = /^file:\/\/[^/]*(\/.*)$/.exec(data);
@@ -329,16 +618,7 @@ export function Terminal({
       } catch {
         return false;
       }
-      void api
-        .isPathLinkedWorktree(path)
-        .then((flag) => {
-          useAppStore.setState((s) => ({
-            liveInWorktree: { ...s.liveInWorktree, [sessionId]: flag },
-          }));
-        })
-        .catch((err: unknown) => {
-          console.debug("[Terminal] osc7 classify failed", err);
-        });
+      rememberLinkedWorktreeCwd(path, "osc7");
       return true;
     });
 
@@ -369,9 +649,21 @@ export function Terminal({
       }
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
+        if (next.linkActivation !== "modifier-click") {
+          setLinkTooltip(null);
+        }
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
+      }
+      const cjkNow = state.settings.experiments.cjkCellWidthHeuristic;
+      const cjkPrev = prev.settings.experiments.cjkCellWidthHeuristic;
+      if (cjkNow !== cjkPrev) {
+        if (cjkNow) {
+          patchTerminalCellMeasurements(term);
+        } else {
+          unpatchTerminalCellMeasurements(term);
+        }
       }
       const nextBackground = state.settings.appearance.background;
       const previousBackground = prev.settings.appearance.background;
@@ -383,15 +675,12 @@ export function Terminal({
       }
       if (changed) {
         try {
-          fitAddon.fit();
+          fitWithCellMeasurements();
         } catch {
           // ignore — ResizeObserver will retry
         }
       }
     });
-
-    let disposed = false;
-    const unlistenFns: UnlistenFn[] = [];
 
     // `scrollback_load` must finish before any save is allowed. Without
     // this gate, React.StrictMode's mount → cleanup → mount cycle in dev
@@ -422,50 +711,73 @@ export function Terminal({
       }, SCROLLBACK_SAVE_DEBOUNCE_MS);
     };
 
-    // Force a viewport repaint shortly after a PTY output burst goes idle.
+    // Force viewport repaints around PTY output bursts.
     //
     // xterm's DOM renderer reuses per-row DOM elements and incrementally
     // patches glyphs as the buffer changes. When a streaming TUI (Claude
-    // CLI, `htop`, `claude --print`) is interrupted mid-redraw — user
-    // presses Esc/Ctrl+C, or the stream simply stops — the parser settles
-    // but the last set of cell-diffs may never trigger a paint that
-    // overwrites stale glyphs left by an earlier wider line. The xterm
-    // buffer is correct (copy-to-clipboard yields clean text); only the
-    // DOM rendition is stale. Forcing `refresh(0, rows-1)` rebuilds every
-    // visible row from the buffer, which clears the leftover characters.
+    // CLI, `htop`, `claude --print`) is mid-redraw — or interrupted by
+    // Esc/Ctrl+C — the parser can settle with stale cursor/cell DOM left
+    // from an earlier frame. The xterm buffer is correct
+    // (copy-to-clipboard yields clean text); only the DOM rendition is
+    // stale. Forcing `refresh(0, rows-1)` rebuilds every visible row from
+    // the buffer, which clears leftover characters and cursor blocks.
     //
-    // Mid-burst paints already happen naturally as each chunk lands, so
-    // we only fire this when the stream goes quiet. 120ms after the last
-    // chunk: short enough that the stale frame is rarely visible, long
-    // enough to coalesce a Claude-CLI streaming burst (where natural
-    // gaps run ~10-60ms) into one refresh instead of one per chunk.
+    // We run one rAF-throttled refresh after each parsed write for live
+    // interactive redraws (notably Claude's slash-command picker), plus
+    // an idle refresh after the burst goes quiet to catch interrupted
+    // final frames.
     const VIEWPORT_REPAINT_IDLE_MS = 120;
     let viewportRepaintTimer: number | null = null;
-    const scheduleViewportRepaint = () => {
+    let viewportRepaintFrame: number | null = null;
+    const repaintViewport = () => {
+      if (disposed) return;
+      try {
+        term.refresh(0, term.rows - 1);
+      } catch {
+        // ignore — terminal may have been disposed between scheduling
+        // and reaching the call.
+      }
+    };
+    const scheduleViewportFrameRepaint = () => {
+      if (disposed || viewportRepaintFrame !== null) return;
+      viewportRepaintFrame = requestAnimationFrame(() => {
+        viewportRepaintFrame = null;
+        repaintViewport();
+      });
+    };
+    const scheduleViewportIdleRepaint = () => {
       if (disposed) return;
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
       }
       viewportRepaintTimer = window.setTimeout(() => {
         viewportRepaintTimer = null;
-        if (disposed) return;
-        try {
-          term.refresh(0, term.rows - 1);
-        } catch {
-          // ignore — terminal may have been disposed between the timer
-          // firing and reaching the call.
-        }
+        repaintViewport();
       }, VIEWPORT_REPAINT_IDLE_MS);
     };
 
-    const sendToPty = (data: string) => {
+    const writeToPty = (targetSessionId: string, data: string) => {
       if (data.length === 0) return;
       invoke("pty_write", {
-        sessionId,
+        sessionId: targetSessionId,
         data: encodeStringToBase64(data),
       }).catch((err: unknown) => {
         console.error("[Terminal] pty_write failed", err);
       });
+    };
+    const sendToPty = (data: string) => {
+      writeToPty(sessionId, data);
+    };
+    const sendUserInputToPty = (data: string) => {
+      if (data.length === 0) return;
+      const state = useAppStore.getState();
+      const targets = state.multiInputEnabled
+        ? visibleMultiInputSessionIds(state.panes)
+        : [sessionId];
+      const targetIds = targets.length > 0 ? targets : [sessionId];
+      for (const targetId of targetIds) {
+        writeToPty(targetId, data);
+      }
     };
 
     // CJK IME path. xterm.js's built-in handler only processes plain
@@ -572,7 +884,7 @@ export function Terminal({
         ? ta.value.slice(sentPrefix.length)
         : "";
       const data = tail || explicit || "";
-      if (data) sendToPty(data);
+      if (data) sendUserInputToPty(data);
       if (ta) ta.value = "";
       sentPrefix = "";
       composing = false;
@@ -642,7 +954,7 @@ export function Terminal({
           }
           const committedEnd = value.length - newCharLen;
           if (committedEnd > sentPrefix.length) {
-            sendToPty(value.slice(sentPrefix.length, committedEnd));
+            sendUserInputToPty(value.slice(sentPrefix.length, committedEnd));
             sentPrefix = value.slice(0, committedEnd);
           }
           showComposing(value.slice(sentPrefix.length));
@@ -742,7 +1054,7 @@ export function Terminal({
       // Claude CLI cannot tell them apart. Send a literal LF and stop the
       // event so xterm does not emit its own \r on top.
       if (ev.key === "Enter" && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        sendToPty("\n");
+        sendUserInputToPty("\n");
         ev.preventDefault();
         ev.stopImmediatePropagation();
         return;
@@ -757,13 +1069,13 @@ export function Terminal({
         !ev.shiftKey
       ) {
         if (ev.key === "ArrowLeft") {
-          sendToPty("\x01");
+          sendUserInputToPty("\x01");
           ev.preventDefault();
           ev.stopImmediatePropagation();
           return;
         }
         if (ev.key === "ArrowRight") {
-          sendToPty("\x05");
+          sendUserInputToPty("\x05");
           ev.preventDefault();
           ev.stopImmediatePropagation();
           return;
@@ -791,21 +1103,22 @@ export function Terminal({
     // blocks the browser reinsertion; `stopImmediatePropagation`
     // blocks xterm's listener so the data emits exactly once.
     //
-    // Skip this path when the clipboard carries an image-only
-    // payload (macOS screencapture, copy-image-from-browser). The
-    // WKWebView's native paste relays the underlying NSPasteboard
-    // image to the running CLI (Claude Code surfaces it as
-    // `[Image #N]`), which only works if we let the default
-    // action proceed. Text-mixed payloads still take the owned
-    // path because the textarea residue + IME race outweighs the
-    // image relay there.
+    // Image-only payloads stay on the native path unless the running
+    // agent is Codex. Codex handles image paste by receiving Ctrl+V
+    // and reading NSPasteboard itself; WKWebView's default paste into
+    // xterm's hidden textarea does not wake that path up.
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
       const text = cd?.getData("text/plain") ?? "";
-      const hasFiles = (cd?.files?.length ?? 0) > 0;
-      if (!text && hasFiles) return;
-      if (text) term.paste(text);
+      const action = terminalPasteAction({
+        text,
+        fileCount: cd?.files?.length ?? 0,
+        codexActive: codexImagePasteActive,
+      });
+      if (action.kind === "native") return;
+      if (action.kind === "pasteText") term.paste(action.text);
+      if (action.kind === "send") sendUserInputToPty(action.data);
       ev.preventDefault();
       ev.stopImmediatePropagation();
     };
@@ -824,8 +1137,61 @@ export function Terminal({
     container.addEventListener("compositionupdate", swallowComposition, true);
     container.addEventListener("compositionend", swallowComposition, true);
 
+    let ptyReady = false;
+    let lastPtyResize:
+      | {
+          cols: number;
+          rows: number;
+        }
+      | null = null;
+    const sendPtyResize = (
+      force = false,
+      size: { cols: number; rows: number } = {
+        cols: term.cols,
+        rows: term.rows,
+      },
+    ) => {
+      if (!ptyReady || size.cols <= 0 || size.rows <= 0) return;
+      if (
+        !force &&
+        lastPtyResize?.cols === size.cols &&
+        lastPtyResize.rows === size.rows
+      ) {
+        return;
+      }
+      lastPtyResize = { cols: size.cols, rows: size.rows };
+      invoke("pty_resize", {
+        sessionId,
+        cols: size.cols,
+        rows: size.rows,
+      }).catch((err: unknown) => {
+        if (
+          lastPtyResize?.cols === size.cols &&
+          lastPtyResize.rows === size.rows
+        ) {
+          lastPtyResize = null;
+        }
+        console.error("[Terminal] pty_resize failed", err);
+      });
+    };
+    const syncViewportAndPtySize = () => {
+      const fit = fitTerminalRef.current;
+      if (!fit) return;
+      repaintTerminalViewport({ container, fit, term });
+      // Even when xterm's cols/rows are unchanged, force a backend resize so
+      // TUIs launched from an already-open shell observe the current pane size.
+      sendPtyResize(true);
+    };
+    const commandSizeSyncScheduler = createTerminalRepaintScheduler(
+      syncViewportAndPtySize,
+      120,
+    );
+
     const inputDisposable = term.onData((data: string) => {
-      sendToPty(data);
+      sendUserInputToPty(data);
+      if (data.includes("\r") || data.includes("\n")) {
+        commandSizeSyncScheduler.schedule();
+      }
     });
 
     // Re-anchor the composition preview to the cursor on every xterm render.
@@ -928,9 +1294,7 @@ export function Terminal({
     window.addEventListener("acorn:terminal-clear", onClearRequested);
 
     const resizeDisposable = term.onResize(({ cols, rows }) => {
-      invoke("pty_resize", { sessionId, cols, rows }).catch((err: unknown) => {
-        console.error("[Terminal] pty_resize failed", err);
-      });
+      sendPtyResize(false, { cols, rows });
     });
 
     // Debounce resize-driven `fit()` + SIGWINCH. Without this, dragging the
@@ -948,7 +1312,7 @@ export function Terminal({
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null;
         try {
-          fitAddon.fit();
+          fitWithCellMeasurements();
         } catch (err) {
           console.error("[Terminal] fit failed", err);
         }
@@ -958,15 +1322,22 @@ export function Terminal({
 
     let exited = false;
     // Snapshot of linked worktrees taken right before each PTY spawn. On exit
-    // we re-fetch and compare; a fresh entry means the just-exited child
-    // (most often `claude --worktree`) added a worktree, and we adopt it as
-    // this session's new home instead of letting the user fall into the
-    // "press Enter to respawn in the same old cwd" dead end.
-    let worktreeSnapshot: Set<string> = new Set();
+    // we re-fetch and compare when this spawn cycle carried an explicit
+    // adoption intent, or when this session's own live cwd was observed inside
+    // a fresh linked worktree. A repo-global "new worktree appeared" diff is
+    // not enough evidence: another tab, agent, or external terminal may have
+    // created it while this shell was idle.
+    let worktreeSnapshot: Set<string> | null = null;
+    let worktreeAdoptionIntent: WorktreeAdoptionIntent = { kind: "none" };
 
     async function spawnPty() {
       if (disposed) return;
       try {
+        ptyReady = false;
+        lastPtyResize = null;
+        observedLinkedWorktreePath = null;
+        worktreeAdoptionIntent = { kind: "none" };
+        worktreeSnapshot = null;
         // Capture the worktree set *before* the child can mutate it.
         // Failure here is non-fatal — without a snapshot we just lose
         // the adoption shortcut for this spawn cycle, and the press-Enter
@@ -988,12 +1359,15 @@ export function Terminal({
         // "no pty for session".
         //
         // Sessions always drop into $SHELL on the backend.
+        const spawnCols = term.cols;
+        const spawnRows = term.rows;
         await invoke("pty_spawn", {
           sessionId,
           cwd,
           env: {},
-          cols: term.cols,
-          rows: term.rows,
+          cols: spawnCols,
+          rows: spawnRows,
+          replayScrollback: daemonSessionAliveAtMount || !restoredDiskScrollback,
         });
         if (disposed) {
           // Cleanup ran mid-spawn — the pty just got created has no UI.
@@ -1003,6 +1377,9 @@ export function Terminal({
           });
           return;
         }
+        ptyReady = true;
+        lastPtyResize = { cols: spawnCols, rows: spawnRows };
+        commandSizeSyncScheduler.schedule();
         exited = false;
         // CommandRunDialog may have queued a one-shot command for this
         // session (e.g. `gh auth login` launched from the NoAccessBanner).
@@ -1016,7 +1393,10 @@ export function Terminal({
         // mount/cleanup/mount sequence. Re-check `disposed` so we do not
         // pty_write into a session whose PTY has already been killed.
         if (queued && !disposed) {
-          const payload = encodeStringToBase64(queued + "\r");
+          if (queued.adoptWorktreeOnExit) {
+            worktreeAdoptionIntent = { kind: "after-exit" };
+          }
+          const payload = encodeStringToBase64(queued.command + "\r");
           invoke("pty_write", { sessionId, data: payload }).catch(
             (err: unknown) => {
               console.error("[Terminal] pending pty_write failed", err);
@@ -1049,18 +1429,31 @@ export function Terminal({
             if (disposed) return;
             try {
               const bytes = decodeBase64ToBytes(event.payload.data);
-              term.write(bytes);
-              // Output landed in the buffer — schedule a debounced save
+              term.write(bytes, () => {
+                if (disposed) return;
+                // The parser has drained this chunk. Force a frame-bound
+                // refresh so fast cursor-move/erase TUIs do not leave stale
+                // DOM cursor blocks or cells behind.
+                scheduleViewportFrameRepaint();
+                // Also schedule a viewport repaint once the burst goes
+                // quiet, so a TUI redraw interrupted mid-stream doesn't
+                // leave stale glyphs from a wider previous line painted on
+                // screen.
+                scheduleViewportIdleRepaint();
+                // A new prompt row may have just been rendered. Rescan the
+                // buffer so the sticky banner picks it up in the same frame
+                // (instead of waiting for the user's next scroll).
+                scheduleContextDispatch();
+              });
+              // Output will land in the buffer — schedule a debounced save
               // so the new content reaches disk ~1s after activity ends.
               scheduleScrollbackSave();
-              // Also schedule a viewport repaint once the burst goes quiet,
-              // so a TUI redraw interrupted mid-stream doesn't leave stale
-              // glyphs from a wider previous line painted on screen.
-              scheduleViewportRepaint();
-              // A new prompt row may have just been rendered. Rescan the
-              // buffer so the sticky banner picks it up in the same frame
-              // (instead of waiting for the user's next scroll).
-              scheduleContextDispatch();
+              // Agents can create a worktree and chdir a descendant process
+              // without triggering our shell's OSC 7 prompt hook. Probe the
+              // live descendant cwd on output bursts so exit adoption can
+              // remain tied to this session rather than a repo-global diff.
+              scheduleLiveCwdProbe();
+              scheduleAgentDetection();
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -1074,24 +1467,25 @@ export function Terminal({
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
           if (disposed) return;
-          // Did the just-exited child add a new worktree? Most common cause:
-          // user ran `claude --worktree` (or typed `claude -w`), which on
-          // its own *creates the worktree and exits without putting you
-          // inside it*. Without this branch the user sees a silent exit
-          // and ends up trapped at the press-Enter prompt in the original
-          // cwd, defeating the point. Adopt the new worktree so the next
-          // spawn — triggered by the cwd-prop change after the store update
-          // — lands inside it.
+          ptyReady = false;
+          lastPtyResize = null;
+          codexImagePasteActive = false;
+          // Adopt only when Acorn queued an explicit worktree command, or
+          // when this terminal itself was observed running inside a fresh
+          // linked worktree. Plain user `exit` must not adopt unrelated
+          // worktrees created elsewhere in the same repo.
           void (async () => {
             let adoptedPath: string | null = null;
             try {
               const current = await api.gitWorktrees(cwd);
               if (disposed) return;
-              const fresh = current.filter((p) => !worktreeSnapshot.has(p));
-              if (fresh.length > 0) {
-                // Pick the last (most recently appended in libgit2's
-                // enumeration) when the child added several in one run.
-                adoptedPath = fresh[fresh.length - 1];
+              if (worktreeSnapshot) {
+                adoptedPath = chooseWorktreeToAdoptAfterExit({
+                  before: [...worktreeSnapshot],
+                  after: current,
+                  intent: worktreeAdoptionIntent,
+                  observedLinkedWorktreePath,
+                });
               }
             } catch (err) {
               console.warn(
@@ -1100,6 +1494,7 @@ export function Terminal({
               );
             }
             if (disposed) return;
+            worktreeAdoptionIntent = { kind: "none" };
             if (adoptedPath) {
               const name = adoptedPath.split("/").pop() || adoptedPath;
               useToasts.getState().show(`Adopted new worktree: ${name}`);
@@ -1157,15 +1552,40 @@ export function Terminal({
       });
       unlistenFns.push(() => restartDisposable.dispose());
 
-      // Restore prior scrollback before spawning so the user sees the
-      // previous session's output immediately on app restart. The dim
-      // separator marks where the live PTY output begins.
+      // If the daemon already owns a live PTY for this session, its ring
+      // buffer is the freshest representation of the screen. Disk scrollback
+      // is only the last saved frontend snapshot and can be stale after the
+      // app has been closed while Claude/Codex kept running. Replaying that
+      // stale snapshot first leaves xterm's buffer/cursor out of sync with
+      // the next daemon redraw, so live daemon reattach skips disk restore
+      // and asks `pty_spawn` to replay the daemon ring instead.
+      try {
+        const daemonSessions = await api.daemonListSessions();
+        if (disposed) return;
+        daemonSessionAliveAtMount = daemonSessions.some(
+          (session) => session.id === sessionId && session.alive,
+        );
+      } catch {
+        daemonSessionAliveAtMount = false;
+      }
+
+      // Restore the xterm-rendered disk snapshot before spawning so the user
+      // sees the previous terminal screen immediately on app restart. Dead or
+      // newly spawned sessions can safely use that snapshot; already-live
+      // daemon sessions must use the daemon ring instead so cursor state
+      // matches the running PTY.
       try {
         const saved = await invoke<string | null>("scrollback_load", {
           sessionId,
         });
         if (disposed) return;
-        if (saved && saved.length > 0) {
+        restoredDiskScrollback = !daemonSessionAliveAtMount && saved !== null;
+        const restored = saved ? stripRestoreMarkers(saved) : "";
+        if (
+          !daemonSessionAliveAtMount &&
+          restored &&
+          shouldRestoreScrollback(restored)
+        ) {
           // Each step is awaited individually. Previously the mode
           // resets and marker were fired without awaiting and `spawnPty`
           // was called immediately after, so the new shell's first
@@ -1179,7 +1599,7 @@ export function Terminal({
           const writeAndDrain = (data: string): Promise<void> =>
             new Promise<void>((resolve) => term.write(data, resolve));
 
-          await writeAndDrain(saved);
+          await writeAndDrain(restored);
           if (disposed) return;
           // Only exit alt-screen if the snapshot actually left us in it
           // — issuing `\x1b[?1049l` from the normal buffer pushes the
@@ -1213,7 +1633,7 @@ export function Terminal({
           await writeAndDrain(RESETS);
           if (disposed) return;
           await writeAndDrain(
-            `\r\n${ANSI_DIM}— restored from previous session —${ANSI_RESET}\r\n`,
+            `\r\n${ANSI_DIM}${RESTORE_MARKER_TEXT}${ANSI_RESET}\r\n`,
           );
           if (disposed) return;
         }
@@ -1258,7 +1678,10 @@ export function Terminal({
         const data = serializeAddon.serialize({
           scrollback: SCROLLBACK_MAX_ROWS,
         });
-        await invoke("scrollback_save", { sessionId, data });
+        await invoke("scrollback_save", {
+          sessionId,
+          data: prepareScrollbackForSave(data),
+        });
       } catch (err) {
         console.warn("[Terminal] scrollback_save failed", err);
       }
@@ -1271,6 +1694,7 @@ export function Terminal({
     return () => {
       disposed = true;
       unsubSettings();
+      hideLinkTooltip();
       if (themeFrame !== null) {
         cancelAnimationFrame(themeFrame);
         themeFrame = null;
@@ -1283,6 +1707,10 @@ export function Terminal({
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
         viewportRepaintTimer = null;
+      }
+      if (viewportRepaintFrame !== null) {
+        cancelAnimationFrame(viewportRepaintFrame);
+        viewportRepaintFrame = null;
       }
       // No cleanup-time save: under React.StrictMode the cleanup of the
       // first dev mount fires while the buffer is still empty (load
@@ -1297,6 +1725,7 @@ export function Terminal({
         resizeTimer = null;
       }
       resizeObserver.disconnect();
+      commandSizeSyncScheduler.dispose();
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("paste", onPaste, true);
@@ -1311,6 +1740,12 @@ export function Terminal({
       contextScrollDisposable.dispose();
       unsubStickyToggle();
       resizeDisposable.dispose();
+      if (liveCwdProbeTimer !== null) {
+        window.clearTimeout(liveCwdProbeTimer);
+      }
+      if (agentProbeTimer !== null) {
+        window.clearTimeout(agentProbeTimer);
+      }
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }
@@ -1323,8 +1758,20 @@ export function Terminal({
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      fitTerminalRef.current = null;
     };
   }, [sessionId, cwd]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.cursorBlink = isFocusedPane;
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch {
+      // ignore
+    }
+  }, [isFocusedPane]);
 
   // Steal keyboard focus for newly created sessions so the user can type
   // immediately after Cmd+T (or any other creation path). Store dispatches
@@ -1354,38 +1801,51 @@ export function Terminal({
   // each refresh so xterm's row geometry is up to date.
   useEffect(() => {
     if (!isActive) return;
-    const term = termRef.current;
-    const fit = fitRef.current;
-    const container = containerRef.current;
-    if (!term || !fit || !container) return;
-
     const refresh = () => {
-      // Force layout reflow so any pending visibility/size changes commit
-      // before xterm queries its container dimensions.
-      void container.offsetHeight;
-      try {
-        fit.fit();
-      } catch {
-        // ignore
-      }
-      try {
-        term.refresh(0, term.rows - 1);
-      } catch {
-        // ignore
-      }
-      try {
-        term.scrollToBottom();
-      } catch {
-        // ignore
-      }
+      const term = termRef.current;
+      const fit = fitTerminalRef.current;
+      const container = containerRef.current;
+      if (!term || !fit || !container) return;
+      repaintTerminalViewport({
+        container,
+        fit,
+        term,
+        scrollToBottom: true,
+      });
     };
 
-    refresh();
-    const raf = requestAnimationFrame(refresh);
-    const timeout = window.setTimeout(refresh, 50);
+    const scheduler = createTerminalRepaintScheduler(refresh);
+    scheduler.schedule();
+    return scheduler.dispose;
+  }, [isActive]);
+
+  // WKWebView can defer paints while the app window is not focused. PTY
+  // output still reaches xterm's buffer, but the DOM renderer may return with
+  // stale row elements until another terminal event happens. On focus/visible
+  // return, force the same layout + full-row repaint used for tab activation,
+  // without scrolling the user's viewport.
+  useEffect(() => {
+    if (!isActive) return;
+
+    const refresh = () => {
+      const term = termRef.current;
+      const fit = fitTerminalRef.current;
+      const container = containerRef.current;
+      if (!term || !fit || !container) return;
+      repaintTerminalViewport({ container, fit, term });
+    };
+    const scheduler = createTerminalRepaintScheduler(refresh);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") return;
+      scheduler.schedule();
+    };
+
+    window.addEventListener("focus", scheduler.schedule);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      cancelAnimationFrame(raf);
-      window.clearTimeout(timeout);
+      window.removeEventListener("focus", scheduler.schedule);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      scheduler.dispose();
     };
   }, [isActive]);
 
@@ -1405,7 +1865,19 @@ export function Terminal({
       }}
     >
       <div className="acorn-bg-terminal" aria-hidden="true" />
-      <div ref={containerRef} className="acorn-terminal relative z-10 h-full w-full" />
+      <div
+        ref={containerRef}
+        className={`acorn-terminal relative z-10 h-full w-full ${
+          isFocusedPane ? "" : "acorn-terminal-inactive"
+        }`}
+      />
+      <FloatingTooltip
+        label={`${MODIFIER_LINK_LABEL} to open link`}
+        anchorRect={linkTooltip?.anchorRect ?? null}
+        side="top"
+        overlayClassName="xterm-hover"
+        dismissOnScroll={false}
+      />
       {/* Pinned-prompt overlay. */}
       <StickyUserPrompt sessionId={sessionId} />
     </div>

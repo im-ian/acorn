@@ -4,13 +4,41 @@ import { homeDir } from "@tauri-apps/api/path";
 import { Activity, Loader2, Settings } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
-import type { MemoryProcess } from "../lib/types";
+import type { MemoryProcess, SessionStatus } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
 import { Tooltip } from "./Tooltip";
 
 const MEMORY_POLL_MS = 2000;
+
+type StatusBarTranslationKey = Extract<TranslationKey, `statusBar.${string}`>;
+
+const SESSION_STATUS_KEYS: Record<SessionStatus, StatusBarTranslationKey> = {
+  idle: "statusBar.sessionStatus.idle",
+  running: "statusBar.sessionStatus.running",
+  needs_input: "statusBar.sessionStatus.needsInput",
+  failed: "statusBar.sessionStatus.failed",
+  completed: "statusBar.sessionStatus.completed",
+};
+
+function statusBarText(t: Translator, key: StatusBarTranslationKey): string {
+  return t(key);
+}
+
+function statusBarFormat(
+  t: Translator,
+  key: StatusBarTranslationKey,
+  values: Record<string, string | number>,
+): string {
+  return statusBarText(t, key).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(values, name)
+      ? String(values[name])
+      : match,
+  );
+}
 
 function useHomeDir(): string | null {
   const [home, setHome] = useState<string | null>(null);
@@ -103,8 +131,10 @@ function GitHubMark() {
 }
 
 export function StatusBar() {
+  const t = useTranslation();
   const { sessions, activeSessionId, activeProject, error, loading } =
     useAppStore();
+  const multiInputEnabled = useAppStore((s) => s.multiInputEnabled);
   const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
   const showSessionCount = useSettings(
     (s) => s.settings.statusBar.showSessionCount,
@@ -114,6 +144,9 @@ export function StatusBar() {
   );
   const showGithubAccount = useSettings(
     (s) => s.settings.statusBar.showGithubAccount,
+  );
+  const showWorkingDirectory = useSettings(
+    (s) => s.settings.statusBar.showWorkingDirectory,
   );
   const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
@@ -129,7 +162,12 @@ export function StatusBar() {
 
   return (
     <>
-      <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
+      {/* `overflow-hidden` + `whitespace-nowrap` on inline children keeps
+          the bar at a strict h-7 even at narrow widths. Without it, the
+          branch text wraps inside its span, the row grows to two lines,
+          and Terminal's ResizeObserver fires SIGWINCH mid-claude-launch —
+          which leaves cursor/cells offset until a tab-switch refit. */}
+      <footer className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         {/* Left: aggregate counters about acorn itself — total sessions and
             the active session's lifecycle status. The IPC and daemon
             buttons sit first so the user can recover from a dead
@@ -137,30 +175,61 @@ export function StatusBar() {
             the main view. */}
         <ServicesStatusButton />
         {showSessionCount ? (
-          <span>sessions: {sessions.length}</span>
+          <span className="whitespace-nowrap">
+            {statusBarFormat(t, "statusBar.sessionCount", {
+              count: sessions.length,
+            })}
+          </span>
         ) : null}
         {showSessionStatus && active ? (
           <>
             {showSessionCount ? (
               <span className="text-fg-muted/50">|</span>
             ) : null}
-            <span>status: {active.status}</span>
+            <span className="whitespace-nowrap">
+              {statusBarFormat(t, "statusBar.status", {
+                status: statusBarText(t, SESSION_STATUS_KEYS[active.status]),
+              })}
+            </span>
+          </>
+        ) : null}
+        {multiInputEnabled ? (
+          <>
+            {showSessionCount || (showSessionStatus && active) ? (
+              <span className="text-fg-muted/50">|</span>
+            ) : null}
+            <span className="whitespace-nowrap rounded bg-accent/15 px-1.5 py-0.5 text-accent">
+              {statusBarText(t, "statusBar.multiInputOn")}
+            </span>
           </>
         ) : null}
 
         {/* Right: per-active-session context — gh account, branch, working
             directory, memory. Grouped together so the eye scans them as
-            "where am I right now?". */}
+            "where am I right now?". `min-w-0` lets the truncatable
+            children (branch, path) shrink instead of forcing the row
+            wider than the footer. */}
         <span className="ml-auto flex min-w-0 items-center gap-3">
-          {loading ? <span>working...</span> : null}
+          {loading ? (
+            <span className="whitespace-nowrap">
+              {statusBarText(t, "statusBar.working")}
+            </span>
+          ) : null}
           {error ? (
             <Tooltip label={error} side="top" multiline>
-              <span className="truncate text-danger">error: {error}</span>
+              <span className="truncate whitespace-nowrap text-danger">
+                {statusBarFormat(t, "statusBar.error", { error })}
+              </span>
             </Tooltip>
           ) : null}
           {showGithubAccount && prAccount ? (
-            <Tooltip label={`PRs listed via gh account ${prAccount}`} side="top">
-              <span className="flex shrink-0 items-center gap-1 rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
+            <Tooltip
+              label={statusBarFormat(t, "statusBar.githubAccountTooltip", {
+                account: prAccount,
+              })}
+              side="top"
+            >
+              <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-fg-muted/15 px-1.5 py-0.5 text-[10px] text-fg-muted">
                 <GitHubMark />
                 {prAccount}
               </span>
@@ -169,14 +238,18 @@ export function StatusBar() {
           {active ? (
             <>
               <span className="text-fg-muted/50">|</span>
-              <span>branch: {active.branch}</span>
+              <span className="min-w-0 truncate whitespace-nowrap">
+                {statusBarFormat(t, "statusBar.branch", {
+                  branch: active.branch,
+                })}
+              </span>
             </>
           ) : null}
-          {active && displayPath ? (
+          {showWorkingDirectory && active && displayPath ? (
             <>
               <span className="text-fg-muted/50">|</span>
               <Tooltip label={active.worktree_path} side="top" multiline>
-                <span className="truncate text-right text-fg-muted">
+                <span className="min-w-0 truncate whitespace-nowrap text-right text-fg-muted">
                   {displayPath}
                 </span>
               </Tooltip>
@@ -185,14 +258,19 @@ export function StatusBar() {
           {showMemory ? (
             <>
               <span className="text-fg-muted/50">|</span>
-              <Tooltip label="Click to view per-process breakdown" side="top">
+              <Tooltip
+                label={statusBarText(t, "statusBar.memoryTooltip")}
+                side="top"
+              >
                 <button
                   type="button"
                   disabled={!memory}
                   onClick={() => setBreakdownOpen(true)}
-                  className="rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+                  className="whitespace-nowrap rounded px-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
                 >
-                  memory: {memory ? formatBytes(memory.bytes) : "–"}
+                  {statusBarFormat(t, "statusBar.memory", {
+                    memory: memory ? formatBytes(memory.bytes) : "-",
+                  })}
                 </button>
               </Tooltip>
             </>
@@ -248,6 +326,7 @@ function StatusDot({ state }: { state: DotState }) {
 }
 
 function ServicesStatusButton() {
+  const t = useTranslation();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -327,19 +406,28 @@ function ServicesStatusButton() {
   const tooltip = (() => {
     const ipcLabel =
       ipc.running === null
-        ? "ipc: loading"
+        ? statusBarText(t, "statusBar.services.tooltip.ipcLoading")
         : ipc.running
-          ? "ipc: on"
-          : "ipc: off";
+          ? statusBarText(t, "statusBar.services.tooltip.ipcOn")
+          : statusBarText(t, "statusBar.services.tooltip.ipcOff");
     const daemonLabel =
       daemon === null
-        ? "daemon: loading"
+        ? statusBarText(t, "statusBar.services.tooltip.daemonLoading")
         : !daemon.enabled
-          ? "daemon: disabled"
+          ? statusBarText(t, "statusBar.services.tooltip.daemonDisabled")
           : daemon.running
-            ? `daemon: on${daemon.sessions !== null ? ` (${daemon.sessions})` : ""}`
-            : "daemon: down";
-    return `${ipcLabel} · ${daemonLabel} — click for details`;
+            ? daemon.sessions !== null
+              ? statusBarFormat(
+                  t,
+                  "statusBar.services.tooltip.daemonOnWithSessions",
+                  { count: daemon.sessions },
+                )
+              : statusBarText(t, "statusBar.services.tooltip.daemonOn")
+            : statusBarText(t, "statusBar.services.tooltip.daemonDown");
+    return statusBarFormat(t, "statusBar.services.tooltip.details", {
+      ipc: ipcLabel,
+      daemon: daemonLabel,
+    });
   })();
 
   const ipcDotState: DotState =
@@ -359,7 +447,7 @@ function ServicesStatusButton() {
           onClick={() => setOpen((v) => !v)}
           aria-haspopup="menu"
           aria-expanded={open}
-          aria-label="Service status"
+          aria-label={statusBarText(t, "statusBar.services.ariaLabel")}
           className={cn(
             "flex h-5 items-center gap-1.5 rounded px-1.5 transition",
             "hover:bg-bg-elevated",
@@ -411,6 +499,7 @@ function ServicesDropdown({
   onRestartIpc,
   onOpenDaemonSettings,
 }: ServicesDropdownProps) {
+  const t = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<{ left: number; bottom: number } | null>(
     null,
@@ -461,20 +550,24 @@ function ServicesDropdown({
 
   const ipcStatusText =
     ipc.running === null
-      ? "loading"
+      ? statusBarText(t, "statusBar.services.status.loading")
       : ipc.running
-        ? "running"
-        : "down";
+        ? statusBarText(t, "statusBar.services.status.running")
+        : statusBarText(t, "statusBar.services.status.down");
   const daemonStatusText =
     daemon === null
-      ? "loading"
+      ? statusBarText(t, "statusBar.services.status.loading")
       : !daemon.enabled
-        ? "disabled"
+        ? statusBarText(t, "statusBar.services.status.disabled")
         : daemon.running
           ? daemon.sessions !== null
-            ? `running · ${daemon.sessions} session${daemon.sessions === 1 ? "" : "s"}`
-            : "running"
-          : "down";
+            ? statusBarFormat(
+                t,
+                "statusBar.services.status.runningSessions",
+                { count: daemon.sessions },
+              )
+            : statusBarText(t, "statusBar.services.status.running")
+          : statusBarText(t, "statusBar.services.status.down");
 
   return createPortal(
     <div
@@ -486,11 +579,18 @@ function ServicesDropdown({
       <ul className="divide-y divide-border text-[11px]">
         <li>
           <ServiceRow
-            label="IPC server"
-            description="control-session ↔ app socket"
+            label={statusBarText(t, "statusBar.services.ipc.label")}
+            description={statusBarText(
+              t,
+              "statusBar.services.ipc.description",
+            )}
             dot={ipcDotState}
             statusText={ipcStatusText}
-            actionLabel={ipc.busy ? "Restarting…" : "Restart"}
+            actionLabel={
+              ipc.busy
+                ? statusBarText(t, "statusBar.services.actions.restarting")
+                : statusBarText(t, "statusBar.services.actions.restart")
+            }
             actionIcon={
               ipc.busy ? <Loader2 size={11} className="animate-spin" /> : null
             }
@@ -501,11 +601,17 @@ function ServicesDropdown({
         </li>
         <li>
           <ServiceRow
-            label="acornd daemon"
-            description="persistent PTY sessions"
+            label={statusBarText(t, "statusBar.services.daemon.label")}
+            description={statusBarText(
+              t,
+              "statusBar.services.daemon.description",
+            )}
             dot={daemonDotState}
             statusText={daemonStatusText}
-            actionLabel="Settings"
+            actionLabel={statusBarText(
+              t,
+              "statusBar.services.actions.settings",
+            )}
             actionIcon={<Settings size={11} />}
             actionDisabled={false}
             onAction={onOpenDaemonSettings}

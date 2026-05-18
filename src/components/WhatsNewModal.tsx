@@ -1,9 +1,17 @@
 import { Download, ExternalLink, Sparkles } from "lucide-react";
 import type { ReactElement } from "react";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal } from "./ui/Modal";
 import { ModalHeader } from "./ui/ModalHeader";
 import { Markdown } from "./ui/Markdown";
 import { TextSwap } from "./ui/TextSwap";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface WhatsNewModalProps {
   open: boolean;
@@ -65,13 +73,14 @@ export function WhatsNewModal({
   htmlUrl,
   isFallback = false,
 }: WhatsNewModalProps): ReactElement | null {
+  const t = useTranslation();
   const trimmedBody = body.trim();
   const subtitle = isFallback
-    ? `latest published — no public release for ${currentVersion ?? "your version"}`
+    ? `${dt(t, "dialogs.whatsNew.latestPublished")} ${currentVersion ?? dt(t, "dialogs.whatsNew.yourVersion")}`
     : currentVersion && currentVersion !== version
-      ? `currently running ${currentVersion}`
+      ? `${dt(t, "dialogs.whatsNew.currentlyRunning")} ${currentVersion}`
       : currentVersion === version
-        ? "you're on this version"
+        ? dt(t, "dialogs.whatsNew.onThisVersion")
         : undefined;
 
   return (
@@ -83,7 +92,7 @@ export function WhatsNewModal({
       ariaLabelledBy="acorn-whatsnew-title"
     >
       <ModalHeader
-        title={`What's new in Acorn ${version}`}
+        title={`${dt(t, "dialogs.whatsNew.titlePrefix")} ${version}`}
         subtitle={subtitle}
         titleId="acorn-whatsnew-title"
         icon={<Sparkles size={14} className="text-accent" />}
@@ -95,7 +104,7 @@ export function WhatsNewModal({
           <Markdown content={trimmedBody} className="text-xs" />
         ) : (
           <p className="text-xs text-fg-muted">
-            No release notes were published with this version.
+            {dt(t, "dialogs.whatsNew.noReleaseNotes")}
           </p>
         )}
       </div>
@@ -113,7 +122,7 @@ export function WhatsNewModal({
             className="inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
             <ExternalLink size={12} />
-            View on GitHub
+            {dt(t, "dialogs.whatsNew.viewOnGithub")}
           </a>
         ) : null}
         <button
@@ -121,7 +130,7 @@ export function WhatsNewModal({
           onClick={onClose}
           className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
-          Close
+          {dt(t, "dialogs.common.close")}
         </button>
         {showInstall && onInstall ? (
           <button
@@ -131,7 +140,11 @@ export function WhatsNewModal({
             className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
             <Download size={12} />
-            <TextSwap>{busy ? "Installing…" : "Install & relaunch"}</TextSwap>
+            <TextSwap>
+              {busy
+                ? dt(t, "dialogs.whatsNew.installing")
+                : dt(t, "dialogs.whatsNew.installRelaunch")}
+            </TextSwap>
           </button>
         ) : null}
       </footer>

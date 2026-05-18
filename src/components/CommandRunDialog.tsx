@@ -3,7 +3,15 @@ import { Copy, Play, Terminal as TerminalIcon } from "lucide-react";
 import { useAppStore } from "../store";
 import { useToasts } from "../lib/toasts";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader, TextSwap } from "./ui";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface CommandRunDialogProps {
   open: boolean;
@@ -46,6 +54,7 @@ export function CommandRunDialog({
   repoPath,
   onClose,
 }: CommandRunDialogProps): ReactElement {
+  const t = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const projects = useAppStore((s) => s.projects);
@@ -74,16 +83,16 @@ export function CommandRunDialog({
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(command);
-      showToast(`Copied: ${command}`);
+      showToast(`${dt(t, "dialogs.commandRun.copiedPrefix")} ${command}`);
       onClose();
     } catch (e) {
-      setError(`Copy failed: ${String(e)}`);
+      setError(`${dt(t, "dialogs.commandRun.copyFailedPrefix")} ${String(e)}`);
     }
   }
 
   async function handleRun() {
     if (!resolvedRepoPath) {
-      setError("No project available to host the new session.");
+      setError(dt(t, "dialogs.commandRun.noProjectError"));
       return;
     }
     setBusy(true);
@@ -95,7 +104,7 @@ export function CommandRunDialog({
       );
       if (!created) {
         const storeError = useAppStore.getState().error;
-        setError(storeError ?? "Failed to create session.");
+        setError(storeError ?? dt(t, "dialogs.commandRun.createFailed"));
         setBusy(false);
         return;
       }
@@ -103,7 +112,7 @@ export function CommandRunDialog({
       // queue inside its own `pty_spawn` resolver, so the value just has
       // to be present by the time the spawn completes.
       setPendingTerminalInput(created.id, command);
-      showToast(`Running: ${command}`);
+      showToast(`${dt(t, "dialogs.commandRun.runningPrefix")} ${command}`);
       setBusy(false);
       onClose();
     } catch (e) {
@@ -118,30 +127,31 @@ export function CommandRunDialog({
       onClose={close}
       variant="dialog"
       size="md"
-      ariaLabel="Run command"
+      ariaLabel={dt(t, "dialogs.commandRun.ariaLabel")}
     >
       <ModalHeader
-        title="Run this command?"
+        title={dt(t, "dialogs.commandRun.title")}
         icon={<TerminalIcon size={14} className="text-accent" />}
         variant="dialog"
         onClose={close}
       />
       <div className="space-y-3 px-4 py-4 text-xs text-fg-muted">
         <p className="text-fg">
-          A new terminal session will open and run:
+          {dt(t, "dialogs.commandRun.description")}
         </p>
         <pre className="overflow-x-auto rounded-md border border-border bg-bg-sidebar/70 px-3 py-2 font-mono text-[12px] text-fg">
           {command}
         </pre>
         {resolvedRepoPath ? (
           <p>
-            <span className="opacity-70">cwd:</span>{" "}
+            <span className="opacity-70">
+              {dt(t, "dialogs.commandRun.cwdLabel")}
+            </span>{" "}
             <span className="font-mono text-fg">{resolvedRepoPath}</span>
           </p>
         ) : (
           <p className="text-danger">
-            No project is registered — add a project before running this
-            command, or use "Copy" to paste it into an existing terminal.
+            {dt(t, "dialogs.commandRun.noProjectHint")}
           </p>
         )}
         {error ? (
@@ -157,7 +167,7 @@ export function CommandRunDialog({
           disabled={busy}
           className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Cancel
+          {dt(t, "dialogs.common.cancel")}
         </button>
         <button
           type="button"
@@ -166,7 +176,7 @@ export function CommandRunDialog({
           className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Copy size={12} />
-          Copy
+          {dt(t, "dialogs.common.copy")}
         </button>
         <button
           type="button"
@@ -175,7 +185,9 @@ export function CommandRunDialog({
           className="inline-flex items-center gap-1.5 rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Play size={12} />
-          <TextSwap>{busy ? "Running…" : "Run"}</TextSwap>
+          <TextSwap>
+            {busy ? dt(t, "dialogs.commandRun.running") : dt(t, "dialogs.commandRun.run")}
+          </TextSwap>
         </button>
       </footer>
     </Modal>

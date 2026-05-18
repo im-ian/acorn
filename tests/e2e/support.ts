@@ -2,6 +2,9 @@ import { test as base, expect, type Page } from "@playwright/test";
 import { tauriMockSource } from "./fixtures/tauriMock";
 
 type InvokeHandler = (args: unknown) => unknown | Promise<unknown>;
+type TestLanguage = "en" | "ko";
+
+const SETTINGS_STORAGE_KEY = "acorn:settings:v1";
 
 export interface TauriMock {
   /**
@@ -184,7 +187,9 @@ export async function pressHotkey(
         "[": "BracketLeft",
         "]": "BracketRight",
         "-": "Minus",
+        "_": "Minus",
         "=": "Equal",
+        "+": "Equal",
         "`": "Backquote",
         " ": "Space",
         Tab: "Tab",
@@ -211,6 +216,18 @@ export async function pressHotkey(
     });
     window.dispatchEvent(ev);
   }, combo);
+}
+
+export async function seedSettingsLanguage(
+  page: Page,
+  language: TestLanguage,
+): Promise<void> {
+  await page.addInitScript(
+    ({ storageKey, language }) => {
+      window.localStorage.setItem(storageKey, JSON.stringify({ language }));
+    },
+    { storageKey: SETTINGS_STORAGE_KEY, language },
+  );
 }
 
 export { expect };

@@ -11,7 +11,7 @@
 #
 # Tauri passes the active target through `TAURI_ENV_TARGET_TRIPLE` to
 # commands spawned via `beforeBuildCommand`. Standalone callers (local
-# `bun run build:sidecar`, manual runs) fall back to the host triple so
+# `pnpm run build:sidecar`, manual runs) fall back to the host triple so
 # the script keeps working without extra setup.
 #
 # Exits non-zero on any failure so the build surfaces the problem instead
@@ -29,18 +29,22 @@ if [ -z "$target_triple" ]; then
   exit 1
 fi
 
-# List of [[bin]] targets that need to land in the bundle. Adding a new
-# sidecar here is a single-line change; `externalBin` in tauri.conf.json
-# must match.
-sidecars=(acorn-ipc acornd)
+# List of [[bin]] targets that need to land in the bundle. Each entry is
+# `<bin-name>:<cargo-package>` because the sidecars now live in separate
+# workspace crates (`acorn-ipc` is its own leaf crate; `acornd` ships
+# from the main `acorn` package). Adding a new sidecar here is a
+# single-line change; `externalBin` in tauri.conf.json must match.
+sidecars=("acorn-ipc:acorn-ipc" "acornd:acorn")
 
 # Always cross-compile with `--target` so the output lands in
 # `target/<triple>/<profile>/` even when host == target. The uniform
 # layout removes a branching copy step below and matches how the rest of
 # the release workflow already invokes cargo for the main binary.
 cargo_flags=(--target "$target_triple")
-for bin in "${sidecars[@]}"; do
-  cargo_flags+=(--bin "$bin")
+for entry in "${sidecars[@]}"; do
+  bin="${entry%%:*}"
+  pkg="${entry##*:}"
+  cargo_flags+=(-p "$pkg" --bin "$bin")
 done
 if [ "$profile" = "release" ]; then
   cargo_flags+=(--release)
@@ -55,7 +59,8 @@ fi
 # `cargo build` finishes.
 dest_dir="binaries"
 mkdir -p "$dest_dir"
-for bin in "${sidecars[@]}"; do
+for entry in "${sidecars[@]}"; do
+  bin="${entry%%:*}"
   dest="$dest_dir/$bin-$target_triple"
   if [ ! -f "$dest" ]; then
     : > "$dest"
@@ -65,7 +70,8 @@ done
 echo "build-sidecar: cargo build ${cargo_flags[*]}"
 cargo build "${cargo_flags[@]}"
 
-for bin in "${sidecars[@]}"; do
+for entry in "${sidecars[@]}"; do
+  bin="${entry%%:*}"
   src="target/$target_triple/$profile/$bin"
   dest="$dest_dir/$bin-$target_triple"
   if [ ! -f "$src" ]; then

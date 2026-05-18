@@ -1,12 +1,12 @@
-//! `acorn-ipc` IPC: in-process Unix-socket server and shared wire protocol.
+//! `acorn-ipc` IPC server wiring.
 //!
-//! The server (in `server.rs`) is started once at app boot from `lib.rs`.
-//! The protocol types in `proto.rs` are reused by the `acorn-ipc` CLI
-//! binary (`src/bin/acorn-ipc.rs`), so they intentionally avoid any
-//! Tauri- or runtime-specific types.
+//! The wire protocol, socket-path resolver, bundled-CLI PATH helpers,
+//! and control-session primer live in the standalone `acorn-ipc` crate
+//! so the CLI binary can link against them without dragging in the
+//! host app's module graph.
+//!
+//! `server.rs` stays in the host crate because it touches `AppState`,
+//! `SessionStore`, `persistence`, and worktree-creation helpers in
+//! `commands` — none of which are available to a leaf crate.
 
-pub mod cli_path;
-pub mod primer;
-pub mod proto;
 pub mod server;
-pub mod socket_path;

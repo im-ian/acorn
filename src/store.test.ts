@@ -16,6 +16,7 @@ vi.mock("./lib/api", () => {
         async (_ids: string[]) =>
           [] as { id: string; status: SessionStatus }[],
       ),
+      ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
       createSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => undefined),
       renameSession: vi.fn(async () => ({}) as Session),
@@ -38,6 +39,7 @@ vi.mock("./lib/api", () => {
 
 import { api } from "./lib/api";
 import { useAppStore } from "./store";
+import { defaultTabByGroup } from "./lib/rightPanelGroups";
 
 const mockApi = vi.mocked(api);
 
@@ -70,6 +72,7 @@ function session(
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
     kind: "regular",
+    owner: { kind: "user" },
     position: null,
     in_worktree: false,
     ...overrides,
@@ -88,17 +91,22 @@ function resetStore(): void {
       workspaces: {},
       activeProject: null,
       layout: { kind: "pane", id: "root" },
-      panes: { root: { id: "root", sessionIds: [], activeSessionId: null } },
+      panes: { root: { id: "root", tabIds: [], activeTabId: null } },
       focusedPaneId: "root",
+      activeTabId: null,
       activeSessionId: null,
       rightTab: "commits",
+      rightTabByGroup: defaultTabByGroup(),
+      workspaceTabs: {},
       prAccountByRepo: {},
       pendingTerminalInput: {},
+      multiInputEnabled: false,
       loading: false,
       error: null,
       pendingRemoveId: null,
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
+      liveInWorktree: {},
     },
     false,
   );
@@ -129,6 +137,16 @@ beforeEach(() => {
   mockApi.removeSession.mockResolvedValue(undefined);
   mockApi.removeProject.mockResolvedValue(undefined);
   resetStore();
+});
+
+describe("multi-input", () => {
+  it("starts disabled and toggles in memory", () => {
+    expect(useAppStore.getState().multiInputEnabled).toBe(false);
+    expect(useAppStore.getState().toggleMultiInput()).toBe(true);
+    expect(useAppStore.getState().multiInputEnabled).toBe(true);
+    expect(useAppStore.getState().toggleMultiInput()).toBe(false);
+    expect(useAppStore.getState().multiInputEnabled).toBe(false);
+  });
 });
 
 describe("refreshAll", () => {
@@ -193,6 +211,63 @@ describe("selectSession", () => {
   });
 });
 
+describe("workspace tabs", () => {
+  it("opens a code viewer as a workspace tab without making it the active session", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+
+    const s = useAppStore.getState();
+    expect(s.activeSessionId).toBeNull();
+    expect(s.activeTabId).toMatch(/^code-viewer:/);
+    expect(s.sessions.map((x) => x.id)).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([
+      "a1",
+      s.activeTabId,
+    ]);
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "code",
+      lifecycle: "ephemeral",
+      path: `${REPO_A}/src/App.tsx`,
+      repoPath: REPO_A,
+      title: "App.tsx",
+    });
+  });
+
+  it("scopes code viewer tabs to the active session worktree", async () => {
+    const s1 = session("a1", REPO_A, {
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+    });
+    await seed([project(REPO_A, 0)], [s1]);
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${s1.worktree_path}/src/App.tsx`, s1.worktree_path);
+
+    const s = useAppStore.getState();
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "code",
+      path: `${s1.worktree_path}/src/App.tsx`,
+      repoPath: s1.worktree_path,
+    });
+  });
+
+  it("closes the active code viewer instead of requesting session removal", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const tabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().closeFocusedTab();
+
+    const s = useAppStore.getState();
+    expect(s.pendingRemoveId).toBeNull();
+    expect(s.workspaceTabs[tabId]).toBeUndefined();
+    expect(s.activeTabId).toBe("a1");
+    expect(s.activeSessionId).toBe("a1");
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
+  });
+});
+
 describe("splitFocusedPane", () => {
   it("creates a new pane and focuses it; layout becomes a split", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
@@ -202,8 +277,23 @@ describe("splitFocusedPane", () => {
     const s = useAppStore.getState();
     expect(s.layout.kind).toBe("split");
     expect(Object.keys(s.panes)).toHaveLength(2);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual([]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([]);
     expect(s.activeSessionId).toBeNull();
+  });
+
+  it("focuses the adjacent pane by visual direction", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    const rootPaneId = useAppStore.getState().focusedPaneId;
+
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const rightPaneId = useAppStore.getState().focusedPaneId;
+    expect(rightPaneId).not.toBe(rootPaneId);
+
+    useAppStore.getState().focusAdjacentPane("left");
+    expect(useAppStore.getState().focusedPaneId).toBe(rootPaneId);
+
+    useAppStore.getState().focusAdjacentPane("right");
+    expect(useAppStore.getState().focusedPaneId).toBe(rightPaneId);
   });
 });
 
@@ -215,20 +305,20 @@ describe("moveTab", () => {
     );
     useAppStore.getState().splitFocusedPane("horizontal");
     const fromPaneId = Object.keys(useAppStore.getState().panes).find(
-      (pid) => useAppStore.getState().panes[pid].sessionIds.length === 2,
+      (pid) => useAppStore.getState().panes[pid].tabIds.length === 2,
     )!;
     const toPaneId = useAppStore.getState().focusedPaneId;
     expect(fromPaneId).not.toBe(toPaneId);
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId,
       toPaneId,
     });
 
     const s = useAppStore.getState();
-    expect(s.panes[fromPaneId].sessionIds).toEqual(["a2"]);
-    expect(s.panes[toPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[fromPaneId].tabIds).toEqual(["a2"]);
+    expect(s.panes[toPaneId].tabIds).toEqual(["a1"]);
     expect(s.focusedPaneId).toBe(toPaneId);
     expect(s.activeSessionId).toBe("a1");
   });
@@ -243,7 +333,7 @@ describe("moveTab", () => {
     )!;
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId: sourcePaneId,
       toPaneId: focusedAfterSplit,
     });
@@ -251,7 +341,7 @@ describe("moveTab", () => {
     const s = useAppStore.getState();
     expect(s.layout.kind).toBe("pane");
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 
   it("creates a new pane when splitDirection/splitSide are provided; empty source collapses", async () => {
@@ -259,7 +349,7 @@ describe("moveTab", () => {
     const fromPaneId = useAppStore.getState().focusedPaneId;
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId,
       toPaneId: fromPaneId,
       splitDirection: "horizontal",
@@ -270,7 +360,7 @@ describe("moveTab", () => {
     // Splitting then immediately collapsing the empty source leaves a single pane.
     expect(s.layout.kind).toBe("pane");
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
     expect(s.activeSessionId).toBe("a1");
   });
 
@@ -282,7 +372,7 @@ describe("moveTab", () => {
     const fromPaneId = useAppStore.getState().focusedPaneId;
 
     useAppStore.getState().moveTab({
-      sessionId: "a1",
+      tabId: "a1",
       fromPaneId,
       toPaneId: fromPaneId,
       splitDirection: "horizontal",
@@ -292,7 +382,7 @@ describe("moveTab", () => {
     const s = useAppStore.getState();
     expect(s.layout.kind).toBe("split");
     expect(Object.keys(s.panes)).toHaveLength(2);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 });
 
@@ -309,7 +399,7 @@ describe("closePane", () => {
     )!;
     // Move a2 to the new (focused) pane so both panes hold sessions.
     useAppStore.getState().moveTab({
-      sessionId: "a2",
+      tabId: "a2",
       fromPaneId: otherPaneId,
       toPaneId: focusedAfterSplit,
     });
@@ -319,7 +409,7 @@ describe("closePane", () => {
     expect(s.layout.kind).toBe("pane");
     expect(Object.keys(s.panes)).toHaveLength(1);
     const surviving = s.panes[s.focusedPaneId];
-    expect(surviving.sessionIds.sort()).toEqual(["a1", "a2"]);
+    expect(surviving.tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
   it("is a no-op when only one pane exists", async () => {
@@ -387,7 +477,7 @@ describe("reconcile via refreshSessions", () => {
       [project(REPO_A, 0)],
       [session("a1", REPO_A), session("a2", REPO_A)],
     );
-    expect(useAppStore.getState().panes[useAppStore.getState().focusedPaneId].sessionIds.sort()).toEqual([
+    expect(useAppStore.getState().panes[useAppStore.getState().focusedPaneId].tabIds.sort()).toEqual([
       "a1",
       "a2",
     ]);
@@ -397,12 +487,12 @@ describe("reconcile via refreshSessions", () => {
 
     const s = useAppStore.getState();
     expect(s.sessions.map((x) => x.id)).toEqual(["a1"]);
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["a1"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 
   // TODO(acorn-tests): cross-pane collapse on session removal reproduces
   // reliably on macOS+local but the empty pane is not collapsed when run
-  // under Linux + (bun OR node) on CI. The state ends up with the empty
+  // under Linux + Node on CI. The state ends up with the empty
   // pane still attached to a `split` layout. Likely a real bug in
   // `reconcileWorkspace`'s collapse loop — file an issue and re-enable
   // once root-caused.
@@ -417,7 +507,7 @@ describe("reconcile via refreshSessions", () => {
       (pid) => pid !== focusedAfterSplit,
     )!;
     useAppStore.getState().moveTab({
-      sessionId: "a2",
+      tabId: "a2",
       fromPaneId: otherPaneId,
       toPaneId: focusedAfterSplit,
     });
@@ -426,7 +516,7 @@ describe("reconcile via refreshSessions", () => {
 
     const s = useAppStore.getState();
     expect(Object.keys(s.panes)).toHaveLength(1);
-    expect(Object.values(s.panes)[0].sessionIds).toEqual(["a1"]);
+    expect(Object.values(s.panes)[0].tabIds).toEqual(["a1"]);
   });
 
   it("places newly seen sessions in the focused pane", async () => {
@@ -437,10 +527,10 @@ describe("reconcile via refreshSessions", () => {
     ]);
     await useAppStore.getState().refreshSessions();
     const s = useAppStore.getState();
-    expect(s.panes[s.focusedPaneId].sessionIds.sort()).toEqual(["a1", "a2"]);
+    expect(s.panes[s.focusedPaneId].tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
-  it("does NOT wipe persisted sessionIds when load_status reports unclean", async () => {
+  it("does NOT wipe persisted tabIds when load_status reports unclean", async () => {
     // Seed: persisted layout with two sessions in one pane.
     await seed(
       [project(REPO_A, 0)],
@@ -448,7 +538,7 @@ describe("reconcile via refreshSessions", () => {
     );
     expect(
       useAppStore.getState().panes[useAppStore.getState().focusedPaneId]
-        .sessionIds.sort(),
+        .tabIds.sort(),
     ).toEqual(["a1", "a2"]);
 
     // Simulate boot-time corruption: backend returns empty + reports unclean.
@@ -464,7 +554,7 @@ describe("reconcile via refreshSessions", () => {
     const s = useAppStore.getState();
     expect(s.sessions).toEqual([]);
     expect(s.sessionsLoadedCleanly).toBe(false);
-    expect(s.panes[s.focusedPaneId].sessionIds.sort()).toEqual(["a1", "a2"]);
+    expect(s.panes[s.focusedPaneId].tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
   it("clears the wipe guard once backend returns at least one session", async () => {
@@ -657,7 +747,7 @@ describe("createSession", () => {
     await useAppStore.getState().createSession("new", REPO_A);
 
     const s = useAppStore.getState();
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual([
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([
       "a1",
       "a2",
       "a4",
@@ -675,7 +765,7 @@ describe("createSession", () => {
     await useAppStore.getState().createSession("first", REPO_A);
 
     const s = useAppStore.getState();
-    expect(s.panes[s.focusedPaneId].sessionIds).toEqual(["first"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["first"]);
     expect(s.activeSessionId).toBe("first");
   });
 });
@@ -718,11 +808,15 @@ describe("pendingTerminalInput", () => {
     const { setPendingTerminalInput, consumePendingTerminalInput } =
       useAppStore.getState();
     setPendingTerminalInput("sess-1", "gh auth login");
-    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toBe(
-      "gh auth login",
-    );
+    expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toEqual({
+      command: "gh auth login",
+      adoptWorktreeOnExit: false,
+    });
     const consumed = consumePendingTerminalInput("sess-1");
-    expect(consumed).toBe("gh auth login");
+    expect(consumed).toEqual({
+      command: "gh auth login",
+      adoptWorktreeOnExit: false,
+    });
     expect(useAppStore.getState().pendingTerminalInput["sess-1"]).toBeUndefined();
   });
 
@@ -738,7 +832,10 @@ describe("pendingTerminalInput", () => {
       useAppStore.getState();
     setPendingTerminalInput("sess-1", "first");
     setPendingTerminalInput("sess-1", "second");
-    expect(consumePendingTerminalInput("sess-1")).toBe("second");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "second",
+      adoptWorktreeOnExit: false,
+    });
   });
 
   it("does not cross-contaminate session ids", () => {
@@ -746,8 +843,24 @@ describe("pendingTerminalInput", () => {
       useAppStore.getState();
     setPendingTerminalInput("sess-1", "one");
     setPendingTerminalInput("sess-2", "two");
-    expect(consumePendingTerminalInput("sess-1")).toBe("one");
-    expect(useAppStore.getState().pendingTerminalInput["sess-2"]).toBe("two");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "one",
+      adoptWorktreeOnExit: false,
+    });
+    expect(useAppStore.getState().pendingTerminalInput["sess-2"]).toEqual({
+      command: "two",
+      adoptWorktreeOnExit: false,
+    });
+  });
+
+  it("marks explicit claude worktree commands for after-exit adoption", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "claude --worktree");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "claude --worktree",
+      adoptWorktreeOnExit: true,
+    });
   });
 });
 
@@ -771,5 +884,45 @@ describe("createSession returns the created session", () => {
       .createSession("x", REPO_A);
     expect(result).toBeNull();
     expect(useAppStore.getState().error).toBe("nope");
+  });
+});
+
+describe("right panel groups", () => {
+  it("setRightTab records the tab and assigns it to its group's memory slot", () => {
+    useAppStore.getState().setRightTab("prs");
+    let s = useAppStore.getState();
+    expect(s.rightTab).toBe("prs");
+    expect(s.rightTabByGroup.github).toBe("prs");
+
+    useAppStore.getState().setRightTab("actions");
+    s = useAppStore.getState();
+    expect(s.rightTab).toBe("actions");
+    expect(s.rightTabByGroup.github).toBe("actions");
+    // Other groups untouched.
+    expect(s.rightTabByGroup.code).toBe("files");
+    expect(s.rightTabByGroup.agents).toBe("todos");
+  });
+
+  it("setRightGroup restores the group's last sub-tab", () => {
+    useAppStore.getState().setRightTab("commits");
+    useAppStore.getState().setRightTab("actions");
+    useAppStore.getState().setRightTab("history");
+    expect(useAppStore.getState().rightTab).toBe("history");
+
+    useAppStore.getState().setRightGroup("code");
+    expect(useAppStore.getState().rightTab).toBe("commits");
+
+    useAppStore.getState().setRightGroup("github");
+    expect(useAppStore.getState().rightTab).toBe("actions");
+
+    useAppStore.getState().setRightGroup("agents");
+    expect(useAppStore.getState().rightTab).toBe("history");
+  });
+
+  it("setRightGroup falls back to the group's default tab when no memory exists", () => {
+    // Fresh store — rightTabByGroup is seeded with defaults; switching to a
+    // group whose memory was never written returns the default.
+    useAppStore.getState().setRightGroup("github");
+    expect(useAppStore.getState().rightTab).toBe("prs");
   });
 });

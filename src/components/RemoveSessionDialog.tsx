@@ -2,10 +2,17 @@ import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
+import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader } from "./ui";
 
 type RemoveChoice = "session_only" | "session_and_worktree" | "cancel";
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
 
 interface RemoveSessionDialogProps {
   session: Session | null;
@@ -13,6 +20,7 @@ interface RemoveSessionDialogProps {
 }
 
 export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogProps) {
+  const t = useTranslation();
   const isolated = session?.isolated ?? false;
   const patchSessions = useSettings((s) => s.patchSessions);
   const [dontAskAgain, setDontAskAgain] = useState(false);
@@ -50,31 +58,33 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
       {session ? (
         <>
           <ModalHeader
-            title="Remove session"
+            title={dt(t, "dialogs.removeSession.title")}
             icon={<AlertTriangle size={16} className="text-warning" />}
             variant="dialog"
             onClose={() => commit("cancel")}
           />
           <div className="space-y-3 px-4 py-3 text-sm text-fg">
             <p>
-              Remove session{" "}
+              {dt(t, "dialogs.removeSession.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{session.name}</span>?
             </p>
             {isolated ? (
               <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
                 <p className="text-xs text-fg-muted">
-                  This is an isolated worktree:
+                  {dt(t, "dialogs.removeSession.isolatedWorktree")}
                 </p>
                 <p className="break-all font-mono text-xs text-fg">
                   {session.worktree_path}
                 </p>
                 <p className="text-xs text-fg-muted">
-                  Also delete the worktree from disk?
+                  {dt(t, "dialogs.removeSession.deleteWorktreeQuestion")}
                 </p>
               </div>
             ) : (
               <p className="text-xs text-fg-muted">
-                Files in {session.worktree_path} will not be touched.
+                {dt(t, "dialogs.removeSession.filesIn")}{" "}
+                {session.worktree_path}{" "}
+                {dt(t, "dialogs.removeSession.willNotBeTouched")}
               </p>
             )}
             {!isolated ? (
@@ -85,7 +95,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
                   onChange={(e) => setDontAskAgain(e.target.checked)}
                   className="accent-[var(--color-accent)]"
                 />
-                Don't ask again (toggle in Settings → Sessions)
+                {dt(t, "dialogs.removeSession.dontAskAgain")}
               </label>
             ) : null}
           </div>
@@ -95,7 +105,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
               onClick={() => commit("cancel")}
               className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
             >
-              Cancel
+              {dt(t, "dialogs.common.cancel")}
             </button>
             {isolated ? (
               <>
@@ -104,14 +114,14 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
                   onClick={() => commit("session_only")}
                   className="rounded-md px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
                 >
-                  Keep worktree
+                  {dt(t, "dialogs.removeSession.keepWorktree")}
                 </button>
                 <button
                   type="button"
                   onClick={() => commit("session_and_worktree")}
                   className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
                 >
-                  Delete worktree
+                  {dt(t, "dialogs.removeSession.deleteWorktree")}
                 </button>
               </>
             ) : (
@@ -120,7 +130,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
                 onClick={() => commit("session_only")}
                 className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
               >
-                Remove
+                {dt(t, "dialogs.removeSession.remove")}
               </button>
             )}
           </footer>

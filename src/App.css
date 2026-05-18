@@ -21,6 +21,13 @@
   background-color: transparent !important;
 }
 
+.acorn-terminal-inactive .xterm-cursor,
+.acorn-terminal-inactive .xterm-cursor.xterm-cursor-block {
+  outline: 1px solid color-mix(in oklab, var(--color-fg-muted) 70%, transparent);
+  background-color: transparent !important;
+  opacity: 0.55;
+}
+
 .acorn-terminal .xterm-scrollable-element > .scrollbar.vertical {
   width: 6px !important;
 }
@@ -28,6 +35,15 @@
 .acorn-terminal .xterm-scrollable-element > .scrollbar.vertical > .slider {
   width: 6px !important;
   border-radius: 4px;
+}
+
+.acorn-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.acorn-no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 .acorn-bg-app,
@@ -117,6 +133,11 @@ textarea,
   user-select: text;
 }
 
+.acorn-selectable,
+.acorn-selectable * {
+  -webkit-user-drag: auto;
+}
+
 .acorn-terminal,
 .acorn-terminal * {
   cursor: text;
@@ -144,4 +165,11 @@ textarea,
  */
 [draggable="true"] {
   -webkit-user-drag: element;
+}
+
+.acorn-app-shell {
+  width: calc(100vw / var(--acorn-ui-scale, 1));
+  height: calc(100vh / var(--acorn-ui-scale, 1));
+  transform: scale(var(--acorn-ui-scale, 1));
+  transform-origin: top left;
 }

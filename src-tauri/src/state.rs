@@ -5,9 +5,11 @@ use parking_lot::Mutex;
 
 use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
+use crate::fs_explorer::WatcherState;
 use crate::ipc::server::IpcServerHandle;
-use crate::pty::PtyManager;
-use crate::session::{ProjectStore, SessionStore};
+use acorn_session::{ProjectStore, SessionStore};
+use crate::staged_rev_reconcile::StagedRevMismatch;
+use acorn_pty::PtyManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +38,16 @@ pub struct AppState {
     /// check the dispatch helpers use to decide between daemon and
     /// in-process routing on subsequent calls.
     pub stream_registry: Arc<StreamRegistry>,
+    /// Result of the boot-time staged-dotfile reconcile. `Some` when
+    /// the daemon owns PTYs spawned against older rc bodies; `None`
+    /// when in sync or reconcile has not run. Frontend pulls this at
+    /// mount so a listener registered after the matching emit still
+    /// sees the prompt.
+    pub staged_rev_mismatch: Arc<Mutex<Option<StagedRevMismatch>>>,
+    /// Filesystem watcher for the right-panel file explorer. Holds a single
+    /// recursive watcher rooted at the active session's cwd; rebound by
+    /// `fs_watch_set_root` whenever the active tab (or its cwd) changes.
+    pub fs_watcher: Arc<WatcherState>,
 }
 
 impl AppState {
@@ -49,6 +61,8 @@ impl AppState {
             ipc_handle: Arc::new(Mutex::new(None)),
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),
+            staged_rev_mismatch: Arc::new(Mutex::new(None)),
+            fs_watcher: WatcherState::new(),
         }
     }
 }

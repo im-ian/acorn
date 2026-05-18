@@ -1,6 +1,64 @@
+[workspace]
+members = [
+    ".",
+    "crates/acorn-daemon",
+    "crates/acorn-ipc",
+    "crates/acorn-pty",
+    "crates/acorn-session",
+    "crates/acorn-transcript",
+]
+
+# Shared dependencies referenced from each member crate with
+# `<name> = { workspace = true }`. Keeping the version + feature set in
+# one place removes drift risk between the main `acorn` crate and the
+# extracted leaf crates (`acorn-daemon`, `acorn-ipc`, `acorn-pty`,
+# `acorn-session`, `acorn-transcript`).
+[workspace.dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+portable-pty = "0.9"
+parking_lot = "0.12"
+dashmap = "6"
+directories = "5"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+interprocess = "2"
+notify = "6"
+ignore = "0.4"
+trash = "5"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# CI release profile — trades a small binary-size increase for much faster
+# compile time. Used by `.github/workflows/release.yml`. Local releases
+# (developers running `pnpm run tauri build`) still use [profile.release]
+# above, so shipped artifact size is unchanged for ad-hoc builds.
+[profile.release-ci]
+inherits = "release"
+lto = false
+codegen-units = 32
+incremental = false
+strip = "debuginfo"
+
 [package]
 name = "acorn"
-version = "1.0.11"
+version = "1.2.2"
 description = "Acorn — orchestrate parallel Claude Code sessions across isolated git worktrees"
 authors = ["im-ian"]
 edition = "2021"
@@ -9,14 +67,6 @@ default-run = "acorn"
 [lib]
 name = "acorn_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
-
-# Legacy companion CLI — talks to the in-process IPC server inside the running
-# Acorn app over a Unix domain socket. Replaced by `acornd` (which subsumes
-# both the daemon process and the CLI surface). Retained during the daemon
-# rollout so existing control sessions keep working; removed in Sprint 3.
-[[bin]]
-name = "acorn-ipc"
-path = "src/bin/acorn-ipc.rs"
 
 # Background daemon that owns persistent PTY sessions across Acorn app
 # launches. Also doubles as the CLI surface used inside control sessions
@@ -38,58 +88,57 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+acorn-daemon = { path = "crates/acorn-daemon" }
+acorn-ipc = { path = "crates/acorn-ipc" }
+acorn-pty = { path = "crates/acorn-pty" }
+acorn-session = { path = "crates/acorn-session" }
+acorn-transcript = { path = "crates/acorn-transcript" }
+tauri = { workspace = true }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-anyhow = "1"
-thiserror = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
-portable-pty = "0.9"
-parking_lot = "0.12"
-dashmap = "6"
-directories = "5"
-sysinfo = { version = "0.32", default-features = false, features = ["system"] }
-base64 = "0.22"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+git2 = { workspace = true }
+portable-pty = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+directories = { workspace = true }
+sysinfo = { workspace = true }
+base64 = { workspace = true }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2"
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 # Cross-platform local IPC abstraction. Wraps Unix domain sockets on
 # macOS/Linux and named pipes on Windows behind a single API so the daemon
 # socket layer doesn't fork on `#[cfg(unix)]` vs `#[cfg(windows)]`. The
 # `tokio` feature is intentionally NOT enabled here: the daemon's accept
 # loop is a small synchronous thread per socket — pulling tokio's async
 # runtime into the daemon binary would dwarf the work it actually does.
-interprocess = "2"
+interprocess = { workspace = true }
+# File-explorer support: cross-platform fs watcher (FSEvents on macOS),
+# gitignore matcher aggregated per directory from repo root, and OS trash.
+notify = { workspace = true }
+ignore = { workspace = true }
+trash = { workspace = true }
+
+[dev-dependencies]
+# Used by `fs_explorer` unit tests for scratch directories.
+tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # `setsid()` and `getpid()` wrappers for detaching the daemon from the
 # spawning Acorn app's process group. Feature-flagged to only what we use
 # so the build stays lean.
 nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
-
-# CI release profile — trades a small binary-size increase for much faster
-# compile time. Used by `.github/workflows/release.yml`. Local releases
-# (developers running `bun run tauri build`) still use [profile.release]
-# above, so shipped artifact size is unchanged for ad-hoc builds.
-[profile.release-ci]
-inherits = "release"
-lto = "thin"
-codegen-units = 16

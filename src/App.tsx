@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Panel,
   PanelGroup,
@@ -12,10 +12,11 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { LayoutRenderer } from "./components/LayoutRenderer";
-import { EQUALIZE_PANES_EVENT } from "./lib/layoutEvents";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
+import { AgentResumeModal } from "./components/AgentResumeModal";
+import { StagedRevMismatchModal } from "./components/StagedRevMismatchModal";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ControlSessionGuideModal,
@@ -25,24 +26,59 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { api } from "./lib/api";
-import { Hotkeys, useHotkeys } from "./lib/hotkeys";
+import {
+  api,
+  STAGED_REV_MISMATCH_EVENT,
+  type AgentKind,
+  type ResumeCandidate,
+  type StagedRevMismatch,
+} from "./lib/api";
+import {
+  Hotkeys,
+  shouldUseTinykeysToggleMultiInputFallback,
+  useHotkeys,
+} from "./lib/hotkeys";
+import {
+  EQUALIZE_PANES_EVENT,
+  EXPAND_PANEL_EVENT,
+  type ExpandPanelDetail,
+  RESET_PANEL_SIZES_EVENT,
+} from "./lib/layoutEvents";
 import {
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
 import { findFocusedSessionId } from "./lib/focus";
+import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
-import { useSettings } from "./lib/settings";
+import {
+  normalizeUiScalePercent,
+  UI_SCALE_PERCENT_STEP,
+  useSettings,
+} from "./lib/settings";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
+import type { TranslationKey, Translator } from "./lib/i18n";
+import type { SessionStatus } from "./lib/types";
+import { useTranslation } from "./lib/useTranslation";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
+
+const SIDEBAR_DEFAULT_SIZE = 18;
+const SIDEBAR_MIN_SIZE = 12;
+const RIGHT_PANEL_DEFAULT_SIZE = 26;
+const RIGHT_PANEL_MIN_SIZE = 16;
+
+type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
+
+function appText(t: Translator, key: AppTranslationKey): string {
+  return t(key);
+}
 
 function focusPanel(id: "sidebar" | "main" | "right") {
   const panel = document.querySelector(
@@ -59,7 +95,39 @@ function focusPanel(id: "sidebar" | "main" | "right") {
   target?.focus();
 }
 
+function updateUiScalePercent(delta: number) {
+  const settings = useSettings.getState().settings;
+  useSettings.getState().patchAppearance({
+    uiScalePercent: normalizeUiScalePercent(
+      settings.appearance.uiScalePercent + delta,
+      settings.appearance.uiScalePercent,
+    ),
+  });
+}
+
+function focusPaneTerminal(paneId: string) {
+  const escaped =
+    typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(paneId)
+      : paneId.replace(/(["\\\]\[])/g, "\\$1");
+  const pane = document.querySelector(
+    `[data-pane-body="${escaped}"]`,
+  ) as HTMLElement | null;
+  const target =
+    (pane?.querySelector(".xterm-helper-textarea") as HTMLElement | null) ??
+    (pane?.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
+  target?.focus();
+}
+
+function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
+  useAppStore.getState().focusAdjacentPane(direction);
+  requestAnimationFrame(() => {
+    focusPaneTerminal(useAppStore.getState().focusedPaneId);
+  });
+}
+
 function App() {
+  const t = useTranslation();
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
@@ -78,8 +146,29 @@ function App() {
   const pendingProjectSessions = pendingProject
     ? sessions.filter((s) => s.repo_path === pendingProject.repo_path)
     : [];
+  const sessionIdsKey = useMemo(
+    () => sessions.map((session) => session.id).join("\0"),
+    [sessions],
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const [resumeCandidates, setResumeCandidates] = useState<
+    Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
+  >(new Map());
+  const [stagedRevMismatch, setStagedRevMismatch] =
+    useState<StagedRevMismatch | null>(null);
+
+  const toggleMultiInput = useCallback(() => {
+    const enabled = useAppStore.getState().toggleMultiInput();
+    useToasts
+      .getState()
+      .show(
+        enabled
+          ? appText(t, "app.toast.multiInputOn")
+          : appText(t, "app.toast.multiInputOff"),
+      );
+  }, [t]);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
   const themes = useThemes((s) => s.themes);
@@ -89,6 +178,46 @@ function App() {
   useEffect(() => {
     void refreshThemes();
   }, [refreshThemes]);
+
+  useEffect(() => {
+    // Pull at mount + listen. The pull defeats a listener-mount-
+    // after-emit race: if the daemon boot thread reconciled before
+    // this effect attached, the AppState cache still holds the
+    // result.
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    void api
+      .stagedRevMismatchStatus()
+      .then((m) => {
+        if (!cancelled && m) setStagedRevMismatch(m);
+      })
+      .catch((err) => {
+        console.error(
+          "[App] staged_rev_mismatch_status pull failed",
+          err,
+        );
+      });
+    listen<StagedRevMismatch>(STAGED_REV_MISMATCH_EVENT, (event) => {
+      if (!cancelled) setStagedRevMismatch(event.payload);
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[App] staged-rev-mismatch listener attach failed",
+          err,
+        );
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const theme = themes.find((t) => t.id === appearance.themeId) ?? themes[0];
@@ -116,6 +245,152 @@ function App() {
     appearance.background.applyToTerminal,
   ]);
 
+  // Probe every persisted session for a "이전 대화" candidate exactly
+  // once per Acorn launch — at mount, not on focus. The intended UX is
+  // "boot Acorn after a system off-and-on, get a one-shot prompt per
+  // session to pick up where I left off", which includes sessions that
+  // live in non-focused panes (multi-pane layouts) where `activeSessionId`
+  // alone would never surface them. Results land in `resumeCandidates`
+  // keyed by session id; the rendered modal is a pure derivation of
+  // `activeSessionId × resumeCandidates`, so dismissal only needs to
+  // drop the entry — no separate "currently shown" state to keep in
+  // sync.
+  // Probe each non-busy session for a "이전 대화" candidate exactly once
+  // per Acorn launch. Per-session ref dedup so the effect re-firing when
+  // zustand pushes a new `sessions` array reference (boot rehydrate,
+  // reconcile, refresh, status polling) does NOT re-probe sessions we
+  // already checked. Busy sessions are marked as checked without hitting
+  // the candidate APIs, because an active claude/codex should never be
+  // interrupted by a resume prompt for the transcript it is already using.
+  // That dedup is what holds the "cold boot only" UX promise: after
+  // the user finishes a claude run and the persister updates
+  // `claude.id`, the in-memory map stays stable, so the modal never
+  // pops mid-session.
+  const resumeModalEnabled = useSettings(
+    (s) => s.settings.experiments.resumeModal,
+  );
+  const primedResumeSessionsRef = useRef<Set<string>>(new Set());
+  const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
+  const probedSessionsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!resumeModalEnabled) {
+      primedResumeSessionsRef.current.clear();
+      setResumePrimeVersion((version) => version + 1);
+      return;
+    }
+    const unprimedIds = sessions
+      .map((session) => session.id)
+      .filter((id) => !primedResumeSessionsRef.current.has(id));
+    if (unprimedIds.length === 0) return;
+    let cancelled = false;
+    void useAppStore
+      .getState()
+      .pollSessionStatuses()
+      .finally(() => {
+        if (cancelled) return;
+        for (const id of unprimedIds) {
+          primedResumeSessionsRef.current.add(id);
+        }
+        setResumePrimeVersion((version) => version + 1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeModalEnabled, sessionIdsKey]);
+
+  useEffect(() => {
+    if (!resumeModalEnabled) return;
+    const latestById = new Map(
+      useAppStore.getState().sessions.map((session) => [session.id, session]),
+    );
+    const effectiveSessions = sessions.map(
+      (session) => latestById.get(session.id) ?? session,
+    );
+    if (
+      effectiveSessions.some(
+        (session) => !primedResumeSessionsRef.current.has(session.id),
+      )
+    ) {
+      return;
+    }
+    const activeSessions = effectiveSessions.filter((s) =>
+      shouldSkipResumeProbeForStatus(s.status),
+    );
+    if (activeSessions.length > 0) {
+      for (const session of activeSessions) {
+        probedSessionsRef.current.add(session.id);
+      }
+      setResumeCandidates((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const session of activeSessions) {
+          changed = next.delete(session.id) || changed;
+        }
+        return changed ? next : prev;
+      });
+    }
+    const toProbe = effectiveSessions
+      .filter(
+        (session) =>
+          !shouldSkipResumeProbeForStatus(session.status) &&
+          !probedSessionsRef.current.has(session.id),
+      )
+      .map((session) => session.id);
+    if (toProbe.length === 0) return;
+    // Mark *before* the await so a concurrent effect run (caused by
+    // the same `sessions` array re-emitting a new reference during
+    // boot) does not race to launch a duplicate probe for the same
+    // id. We deliberately do NOT use an `if (cancelled) return` gate
+    // on the `.then` — when the effect re-runs and cleans the prior
+    // run, the in-flight probe still needs to land its result, and
+    // the functional `setResumeCandidates(prev => ...)` is race-safe.
+    for (const sid of toProbe) probedSessionsRef.current.add(sid);
+    void Promise.all(
+      toProbe.map(async (sid) => {
+        const [claude, codex] = await Promise.all([
+          api.getClaudeResumeCandidate(sid).catch(() => null),
+          api.getCodexResumeCandidate(sid).catch(() => null),
+        ]);
+        const pick = pickResumeCandidate(claude, codex);
+        return pick ? ([sid, pick] as const) : null;
+      }),
+    )
+      .then((entries) => {
+        const additions = entries.filter(
+          (e): e is readonly [string, { agent: AgentKind; candidate: ResumeCandidate }] =>
+            e !== null,
+        );
+        if (additions.length === 0) return;
+        setResumeCandidates((prev) => {
+          const next = new Map(prev);
+          for (const [sid, pick] of additions) next.set(sid, pick);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Best-effort probe — failures here just mean a session won't
+        // surface its modal on this boot. The next launch retries.
+      });
+  }, [sessions, resumeModalEnabled, resumePrimeVersion]);
+
+  const resumeCandidate = useMemo(() => {
+    if (!activeSessionId) return null;
+    const entry = resumeCandidates.get(activeSessionId);
+    if (!entry) return null;
+    return {
+      sessionId: activeSessionId,
+      agent: entry.agent,
+      candidate: entry.candidate,
+    };
+  }, [activeSessionId, resumeCandidates]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--acorn-ui-scale",
+      String(appearance.uiScalePercent / 100),
+    );
+  }, [appearance.uiScalePercent]);
+
   useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
     // first reconcile can run. If the backend reports sessions.json failed
@@ -140,7 +415,7 @@ function App() {
       const ws = state.workspaces[state.activeProject];
       if (!ws) return;
       for (const [pid, pane] of Object.entries(ws.panes)) {
-        if (pane.sessionIds.includes(sid)) {
+        if (pane.tabIds.includes(sid)) {
           if (ws.focusedPaneId !== pid) state.setFocusedPane(pid);
           return;
         }
@@ -149,6 +424,29 @@ function App() {
     document.addEventListener("focusin", handler);
     return () => document.removeEventListener("focusin", handler);
   }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>("acorn:toggle-multi-input", () => {
+      toggleMultiInput();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach multi-input listener", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [toggleMultiInput]);
 
   // Refresh the "live cwd is inside a linked worktree" map whenever the
   // window regains focus — the user may have `cd`'d into a worktree (or
@@ -224,9 +522,11 @@ function App() {
   // (idle/running). The Rust side does the file work; this just kicks the tick.
   useEffect(() => {
     const tick = () => useAppStore.getState().pollSessionStatuses();
-    tick();
+    void tick();
     const handle = setInterval(tick, 1000);
-    return () => clearInterval(handle);
+    return () => {
+      clearInterval(handle);
+    };
   }, []);
 
   // Skip the confirmation dialog for non-isolated sessions when the user has
@@ -239,6 +539,42 @@ function App() {
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
   }, [pendingRemove, clearPendingRemove, removeSession]);
+
+  // Restore the root layout (sidebar + right panel) and equalize the
+  // workspace pane splits when the command palette fires the reset event.
+  // Useful when the user has nudged the 1px handle into a barely-visible
+  // strip and wants a one-shot way back to the default layout.
+  useEffect(() => {
+    const handler = () => {
+      sidebarPanelRef.current?.expand();
+      sidebarPanelRef.current?.resize(SIDEBAR_DEFAULT_SIZE);
+      rightPanelRef.current?.expand();
+      rightPanelRef.current?.resize(RIGHT_PANEL_DEFAULT_SIZE);
+      window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
+    };
+    window.addEventListener(RESET_PANEL_SIZES_EVENT, handler);
+    return () => window.removeEventListener(RESET_PANEL_SIZES_EVENT, handler);
+  }, []);
+
+  // ResizeHandle dispatches this on double-click when the adjacent panel
+  // is collapsed. Expand to minSize via the imperative ref so the panel
+  // animates from its current state instead of jumping straight to the
+  // last user-set size.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<ExpandPanelDetail>).detail;
+      if (!detail) return;
+      if (detail.panelId === "sidebar") {
+        sidebarPanelRef.current?.expand();
+        sidebarPanelRef.current?.resize(SIDEBAR_MIN_SIZE);
+      } else if (detail.panelId === "right") {
+        rightPanelRef.current?.expand();
+        rightPanelRef.current?.resize(RIGHT_PANEL_MIN_SIZE);
+      }
+    };
+    window.addEventListener(EXPAND_PANEL_EVENT, handler);
+    return () => window.removeEventListener(EXPAND_PANEL_EVENT, handler);
+  }, []);
 
   // Surface the one-time guide modal after the first control-session
   // creation. The store dispatches `acorn:show-control-guide` only when the
@@ -453,8 +789,8 @@ function App() {
             const ws = s.workspaces[s.activeProject];
             if (ws) {
               for (const pane of Object.values(ws.panes)) {
-                if (pane.activeSessionId) {
-                  sessionId = pane.activeSessionId;
+                if (pane.activeTabId && isSessionTabId(pane.activeTabId)) {
+                  sessionId = pane.activeTabId;
                   break;
                 }
               }
@@ -484,6 +820,64 @@ function App() {
       [Hotkeys.togglePrs]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().setRightTab("prs");
+      },
+      [Hotkeys.toggleFiles]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        const panel = rightPanelRef.current;
+        const state = useAppStore.getState();
+        if (!panel) {
+          state.setRightTab("files");
+          return;
+        }
+        if (panel.isCollapsed()) {
+          panel.expand();
+          state.setRightTab("files");
+        } else if (state.rightTab === "files") {
+          panel.collapse();
+        } else {
+          state.setRightTab("files");
+        }
+      },
+      [Hotkeys.uiScaleDown]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleDownShift]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleUp]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleUpShift]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+      },
+      [Hotkeys.uiScaleReset]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useSettings.getState().patchAppearance({ uiScalePercent: 100 });
+      },
+      [Hotkeys.toggleMultiInput]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        if (!shouldUseTinykeysToggleMultiInputFallback()) return;
+        toggleMultiInput();
+      },
+      [Hotkeys.focusPaneLeft]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("left");
+      },
+      [Hotkeys.focusPaneRight]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("right");
+      },
+      [Hotkeys.focusPaneUp]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("up");
+      },
+      [Hotkeys.focusPaneDown]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        focusAdjacentPane("down");
       },
       [Hotkeys.splitVertical]: (e: KeyboardEvent) => {
         e.preventDefault();
@@ -530,11 +924,21 @@ function App() {
             // Existing PTY children keep the env they forked with —
             // surfacing this so the user knows why their already-open
             // session didn't change.
-            show("Shell environment reloaded. Open a new session to apply.");
+            show(
+              appText(
+                t,
+                "app.toast.shellEnvironmentReloaded",
+              ),
+            );
           })
           .catch((err: unknown) => {
             console.error("[App] reloadShellEnv failed", err);
-            show("Failed to reload shell environment.");
+            show(
+              appText(
+                t,
+                "app.toast.shellEnvironmentReloadFailed",
+              ),
+            );
           });
       },
       [Hotkeys.closeEmptyPane]: (e: KeyboardEvent) => {
@@ -542,14 +946,14 @@ function App() {
         // available for inputs, dialogs, and the command palette.
         const { focusedPaneId, panes } = useAppStore.getState();
         const pane = panes[focusedPaneId];
-        if (!pane || pane.sessionIds.length > 0) return;
+        if (!pane || pane.tabIds.length > 0) return;
         const total = Object.keys(panes).length;
         if (total <= 1) return;
         e.preventDefault();
         useAppStore.getState().closePane(focusedPaneId);
       },
     }),
-    [],
+    [t, toggleMultiInput],
   );
 
   useHotkeys(bindings);
@@ -567,8 +971,8 @@ function App() {
             ref={sidebarPanelRef}
             id="sidebar"
             order={1}
-            defaultSize={18}
-            minSize={12}
+            defaultSize={SIDEBAR_DEFAULT_SIZE}
+            minSize={SIDEBAR_MIN_SIZE}
             maxSize={40}
             collapsible
             collapsedSize={0}
@@ -584,8 +988,8 @@ function App() {
             ref={rightPanelRef}
             id="right"
             order={3}
-            defaultSize={26}
-            minSize={16}
+            defaultSize={RIGHT_PANEL_DEFAULT_SIZE}
+            minSize={RIGHT_PANEL_MIN_SIZE}
             maxSize={50}
             collapsible
             collapsedSize={0}
@@ -610,6 +1014,25 @@ function App() {
         }}
       />
       <SettingsModal />
+      <StagedRevMismatchModal
+        mismatch={stagedRevMismatch}
+        onDismiss={() => setStagedRevMismatch(null)}
+      />
+      <AgentResumeModal
+        sessionId={resumeCandidate?.sessionId ?? ""}
+        agent={resumeCandidate?.agent ?? "claude"}
+        candidate={resumeCandidate?.candidate ?? null}
+        onDismiss={() => {
+          const dismissed = resumeCandidate?.sessionId;
+          if (!dismissed) return;
+          setResumeCandidates((prev) => {
+            if (!prev.has(dismissed)) return prev;
+            const next = new Map(prev);
+            next.delete(dismissed);
+            return next;
+          });
+        }}
+      />
       <RemoveSessionDialog
         session={pendingRemove}
         onClose={(choice) => {
@@ -631,6 +1054,30 @@ function App() {
       />
     </div>
   );
+}
+
+/**
+ * Decide which agent's resume candidate to show first when both are
+ * non-null. Larger `lastActivityUnix` wins so the user is offered the
+ * conversation they most recently touched. `lastActivityUnix === 0`
+ * means the transcript path could not be stat'd; treat as oldest.
+ */
+function pickResumeCandidate(
+  claude: ResumeCandidate | null,
+  codex: ResumeCandidate | null,
+): { agent: AgentKind; candidate: ResumeCandidate } | null {
+  if (claude && codex) {
+    return claude.lastActivityUnix >= codex.lastActivityUnix
+      ? { agent: "claude", candidate: claude }
+      : { agent: "codex", candidate: codex };
+  }
+  if (claude) return { agent: "claude", candidate: claude };
+  if (codex) return { agent: "codex", candidate: codex };
+  return null;
+}
+
+function shouldSkipResumeProbeForStatus(status: SessionStatus): boolean {
+  return status === "running" || status === "needs_input";
 }
 
 export default App;
