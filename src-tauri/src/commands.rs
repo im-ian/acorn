@@ -19,6 +19,7 @@ use crate::todos::{self, TodoItem};
 use crate::worktree;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
+use acorn_session::status::AgentKind as StatusAgentKind;
 use acorn_session::{Project, Session, SessionKind, SessionStatus};
 
 use serde::Serialize;
@@ -1779,16 +1780,20 @@ pub async fn detect_session_statuses(
             // live in `state.pty`. Each side drives its own shell-state
             // machine because the sticky NeedsInput deadline is
             // per-attachment, not global.
+            let root_pid = parsed_id.and_then(|uuid| {
+                state
+                    .stream_registry
+                    .pid(&uuid)
+                    .or_else(|| state.pty.child_pid(&uuid))
+            });
             let shell_hint = parsed_id.and_then(|uuid| {
+                let root = root_pid?;
+                let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
                 if state.stream_registry.contains(&uuid) {
-                    let root = state.stream_registry.pid(&uuid)?;
-                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
                     state
                         .stream_registry
                         .update_shell_state(&uuid, has_child_now)
                 } else {
-                    let root = state.pty.child_pid(&uuid)?;
-                    let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
                     state.pty.update_shell_state(&uuid, has_child_now)
                 }
             });
@@ -1813,6 +1818,14 @@ pub async fn detect_session_statuses(
                     .flatten()
                     .map(|p| (p, acorn_session::status::AgentKind::Claude)),
             };
+            let live_agent_kind = root_pid.and_then(|pid| {
+                live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
+            });
+            let shell_hint = refine_shell_hint_for_unpaired_agent(
+                shell_hint,
+                transcript.is_some(),
+                live_agent_kind,
+            );
             let status = session_status::detect(transcript, previous, shell_hint);
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
@@ -1857,11 +1870,96 @@ fn build_children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
     map
 }
 
+fn refine_shell_hint_for_unpaired_agent(
+    shell_hint: Option<acorn_pty::ShellHint>,
+    has_transcript: bool,
+    live_agent_kind: Option<StatusAgentKind>,
+) -> Option<acorn_pty::ShellHint> {
+    if has_transcript {
+        return shell_hint;
+    }
+    match (shell_hint, live_agent_kind) {
+        (Some(acorn_pty::ShellHint::Running), Some(StatusAgentKind::Codex)) => {
+            Some(acorn_pty::ShellHint::NeedsInput)
+        }
+        _ => shell_hint,
+    }
+}
+
+fn live_agent_kind_in_descendants(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> Option<StatusAgentKind> {
+    let mut stack = children.get(&root).cloned().unwrap_or_default();
+    while let Some(pid) = stack.pop() {
+        if let Some(proc) = sys.process(pid) {
+            match process_basename(proc) {
+                "codex" => return Some(StatusAgentKind::Codex),
+                "claude" => return Some(StatusAgentKind::Claude),
+                _ => {}
+            }
+        }
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    None
+}
+
+fn process_basename(proc: &sysinfo::Process) -> &str {
+    proc.exe()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or_else(|| proc.name().to_str().unwrap_or(""))
+}
+
 /// `true` if any descendant of `root` exists in the children map. The root
 /// itself does not count — we only care about commands launched *under* the
 /// PTY shell, which is what flips Idle ↔ Running for terminal sessions.
 fn has_live_descendant(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> bool {
     children.get(&root).is_some_and(|direct| !direct.is_empty())
+}
+
+#[cfg(test)]
+mod status_hint_tests {
+    use super::*;
+
+    #[test]
+    fn unpaired_live_codex_process_maps_running_hint_to_needs_input() {
+        assert_eq!(
+            refine_shell_hint_for_unpaired_agent(
+                Some(acorn_pty::ShellHint::Running),
+                false,
+                Some(StatusAgentKind::Codex),
+            ),
+            Some(acorn_pty::ShellHint::NeedsInput),
+        );
+    }
+
+    #[test]
+    fn paired_codex_transcript_keeps_running_hint_for_transcript_classifier() {
+        assert_eq!(
+            refine_shell_hint_for_unpaired_agent(
+                Some(acorn_pty::ShellHint::Running),
+                true,
+                Some(StatusAgentKind::Codex),
+            ),
+            Some(acorn_pty::ShellHint::Running),
+        );
+    }
+
+    #[test]
+    fn unpaired_non_codex_process_keeps_original_hint() {
+        assert_eq!(
+            refine_shell_hint_for_unpaired_agent(
+                Some(acorn_pty::ShellHint::Running),
+                false,
+                Some(StatusAgentKind::Claude),
+            ),
+            Some(acorn_pty::ShellHint::Running),
+        );
+    }
 }
 
 #[tauri::command]
