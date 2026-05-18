@@ -63,6 +63,7 @@ import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
+import type { SessionStatus } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
 
 const FOCUSABLE_SELECTOR =
@@ -250,24 +251,46 @@ function App() {
   // `activeSessionId × resumeCandidates`, so dismissal only needs to
   // drop the entry — no separate "currently shown" state to keep in
   // sync.
-  // Probe each session for a "이전 대화" candidate exactly once per
-  // Acorn launch. Per-session ref dedup so the effect re-firing when
+  // Probe each non-busy session for a "이전 대화" candidate exactly once
+  // per Acorn launch. Per-session ref dedup so the effect re-firing when
   // zustand pushes a new `sessions` array reference (boot rehydrate,
-  // reconcile, refresh) does NOT re-probe sessions we already checked.
+  // reconcile, refresh, status polling) does NOT re-probe sessions we
+  // already checked. Busy sessions are marked as checked without hitting
+  // the candidate APIs, because an active claude/codex should never be
+  // interrupted by a resume prompt for the transcript it is already using.
   // That dedup is what holds the "cold boot only" UX promise: after
   // the user finishes a claude run and the persister updates
   // `claude.id`, the in-memory map stays stable, so the modal never
   // pops mid-session.
-  const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
   const resumeModalEnabled = useSettings(
     (s) => s.settings.experiments.resumeModal,
   );
   const probedSessionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!resumeModalEnabled) return;
-    const toProbe = sessionIds.filter(
-      (sid) => !probedSessionsRef.current.has(sid),
+    const activeSessions = sessions.filter((s) =>
+      shouldSkipResumeProbeForStatus(s.status),
     );
+    if (activeSessions.length > 0) {
+      for (const session of activeSessions) {
+        probedSessionsRef.current.add(session.id);
+      }
+      setResumeCandidates((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const session of activeSessions) {
+          changed = next.delete(session.id) || changed;
+        }
+        return changed ? next : prev;
+      });
+    }
+    const toProbe = sessions
+      .filter(
+        (session) =>
+          !shouldSkipResumeProbeForStatus(session.status) &&
+          !probedSessionsRef.current.has(session.id),
+      )
+      .map((session) => session.id);
     if (toProbe.length === 0) return;
     // Mark *before* the await so a concurrent effect run (caused by
     // the same `sessions` array re-emitting a new reference during
@@ -303,7 +326,7 @@ function App() {
         // Best-effort probe — failures here just mean a session won't
         // surface its modal on this boot. The next launch retries.
       });
-  }, [sessionIds, resumeModalEnabled]);
+  }, [sessions, resumeModalEnabled]);
 
   const resumeCandidate = useMemo(() => {
     if (!activeSessionId) return null;
@@ -1004,6 +1027,10 @@ function pickResumeCandidate(
   if (claude) return { agent: "claude", candidate: claude };
   if (codex) return { agent: "codex", candidate: codex };
   return null;
+}
+
+function shouldSkipResumeProbeForStatus(status: SessionStatus): boolean {
+  return status === "running" || status === "needs_input";
 }
 
 export default App;

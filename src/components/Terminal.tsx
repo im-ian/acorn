@@ -541,6 +541,7 @@ export function Terminal({
     let liveCwdProbeTimer: number | null = null;
     let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
+    let daemonSessionAliveAtMount = false;
     let codexImagePasteActive = false;
 
     const refreshAgentDetection = () => {
@@ -1366,7 +1367,7 @@ export function Terminal({
           env: {},
           cols: spawnCols,
           rows: spawnRows,
-          replayScrollback: !restoredDiskScrollback,
+          replayScrollback: daemonSessionAliveAtMount || !restoredDiskScrollback,
         });
         if (disposed) {
           // Cleanup ran mid-spawn — the pty just got created has no UI.
@@ -1551,19 +1552,40 @@ export function Terminal({
       });
       unlistenFns.push(() => restartDisposable.dispose());
 
+      // If the daemon already owns a live PTY for this session, its ring
+      // buffer is the freshest representation of the screen. Disk scrollback
+      // is only the last saved frontend snapshot and can be stale after the
+      // app has been closed while Claude/Codex kept running. Replaying that
+      // stale snapshot first leaves xterm's buffer/cursor out of sync with
+      // the next daemon redraw, so live daemon reattach skips disk restore
+      // and asks `pty_spawn` to replay the daemon ring instead.
+      try {
+        const daemonSessions = await api.daemonListSessions();
+        if (disposed) return;
+        daemonSessionAliveAtMount = daemonSessions.some(
+          (session) => session.id === sessionId && session.alive,
+        );
+      } catch {
+        daemonSessionAliveAtMount = false;
+      }
+
       // Restore the xterm-rendered disk snapshot before spawning so the user
-      // sees the previous terminal screen immediately on app restart. If this
-      // succeeds, `spawnPty()` tells the daemon attachment not to replay its
-      // raw PTY ring buffer: raw TUI output contains intermediate Claude
-      // redraw frames, while the disk snapshot is already parsed by xterm.
+      // sees the previous terminal screen immediately on app restart. Dead or
+      // newly spawned sessions can safely use that snapshot; already-live
+      // daemon sessions must use the daemon ring instead so cursor state
+      // matches the running PTY.
       try {
         const saved = await invoke<string | null>("scrollback_load", {
           sessionId,
         });
         if (disposed) return;
-        restoredDiskScrollback = saved !== null;
+        restoredDiskScrollback = !daemonSessionAliveAtMount && saved !== null;
         const restored = saved ? stripRestoreMarkers(saved) : "";
-        if (restored && shouldRestoreScrollback(restored)) {
+        if (
+          !daemonSessionAliveAtMount &&
+          restored &&
+          shouldRestoreScrollback(restored)
+        ) {
           // Each step is awaited individually. Previously the mode
           // resets and marker were fired without awaiting and `spawnPty`
           // was called immediately after, so the new shell's first
