@@ -64,6 +64,7 @@ import type {
   PullRequestChecksSummary,
   PullRequestDetail,
   PullRequestInfo,
+  PullRequestLabel,
   PullRequestListing,
   StagedFile,
   TodoItem,
@@ -3125,6 +3126,25 @@ function NoAccessBanner({
   );
 }
 
+function PrLabelChip({ label }: { label: PullRequestLabel }) {
+  const hex = label.color.replace(/^#/, "");
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const textColor = luminance > 0.5 ? "#000000" : "#ffffff";
+  return (
+    <Tooltip label={label.name} side="top">
+      <span
+        className="shrink-0 rounded px-1.5 py-px text-[9px] font-medium leading-tight"
+        style={{ backgroundColor: `#${hex}`, color: textColor }}
+      >
+        {label.name}
+      </span>
+    </Tooltip>
+  );
+}
+
 function PrChecksBadge({
   checks,
 }: {
@@ -3297,6 +3317,16 @@ function PrRow({
         >
           <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
         </Tooltip>
+        {pr.labels.length > 0 ? (
+          <span className="flex shrink-0 items-center gap-1">
+            {pr.labels.slice(0, 3).map((label) => (
+              <PrLabelChip key={label.name} label={label} />
+            ))}
+            {pr.labels.length > 3 ? (
+              <span className="text-[9px] text-fg-muted">+{pr.labels.length - 3}</span>
+            ) : null}
+          </span>
+        ) : null}
       </span>
       <span
         className={cn(

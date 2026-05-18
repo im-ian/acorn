@@ -33,6 +33,7 @@ import type {
   PullRequestCommit,
   PullRequestDetail,
   PullRequestDetailListing,
+  PullRequestLabel,
   PullRequestReview,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
@@ -378,6 +379,13 @@ function DetailBody({
               {detail.changed_files} {dt(t, "dialogs.pullRequestDetail.files")}
             </span>
           </p>
+          {detail.labels.length > 0 ? (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {detail.labels.map((label) => (
+                <PrDetailLabelChip key={label.name} label={label} />
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {detail.state.toUpperCase() === "OPEN" ? (
@@ -837,6 +845,23 @@ function ResizableBody({ children }: { children: React.ReactNode }) {
         <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
       </div>
     </>
+  );
+}
+
+function PrDetailLabelChip({ label }: { label: PullRequestLabel }) {
+  const hex = label.color.replace(/^#/, "");
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const textColor = luminance > 0.5 ? "#000000" : "#ffffff";
+  return (
+    <span
+      className="rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight"
+      style={{ backgroundColor: `#${hex}`, color: textColor }}
+    >
+      {label.name}
+    </span>
   );
 }
 

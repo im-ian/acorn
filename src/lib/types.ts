@@ -131,6 +131,12 @@ export interface TodoItem {
 
 export type PrStateFilter = "open" | "closed" | "merged" | "all";
 
+export interface PullRequestLabel {
+  name: string;
+  /** Hex color without the leading `#`, as returned by gh. */
+  color: string;
+}
+
 export interface PullRequestChecksSummary {
   passed: number;
   failed: number;
@@ -149,6 +155,7 @@ export interface PullRequestInfo {
   is_draft: boolean;
   /** Aggregate of head-sha checks. null when gh returned no rollup entries. */
   checks: PullRequestChecksSummary | null;
+  labels: PullRequestLabel[];
 }
 
 export interface AccountSummary {
@@ -221,6 +228,7 @@ export interface PullRequestDetail {
   changed_files: number;
   /** "MERGEABLE" | "CONFLICTING" | "UNKNOWN" — null when gh omits the field. */
   mergeable: string | null;
+  labels: PullRequestLabel[];
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
   checks: PullRequestCheck[];
