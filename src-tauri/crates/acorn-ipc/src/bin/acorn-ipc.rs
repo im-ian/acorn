@@ -17,14 +17,10 @@ use std::process::ExitCode;
 use base64::Engine;
 use clap::{Parser, Subcommand};
 
-#[path = "../ipc/proto.rs"]
-mod proto;
-#[path = "../ipc/socket_path.rs"]
-mod socket_path;
-
-use proto::{
+use acorn_ipc::proto::{
     Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
 };
+use acorn_ipc::socket_path;
 
 const ENV_SESSION_ID: &str = "ACORN_SESSION_ID";
 

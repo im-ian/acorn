@@ -66,7 +66,7 @@ pub fn get_acorn_ipc_status(state: State<'_, AppState>) -> AcornIpcStatus {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let bundled_exists = bundled.as_ref().map(|p| p.exists()).unwrap_or(false);
-    let socket_path = crate::ipc::socket_path::resolve().unwrap_or_default();
+    let socket_path = acorn_ipc::socket_path::resolve().unwrap_or_default();
     let server_running = state
         .ipc_handle
         .lock()
@@ -1159,7 +1159,7 @@ pub async fn pty_spawn<R: Runtime>(
             effective_env
                 .entry("ACORN_SESSION_ID".to_string())
                 .or_insert_with(|| session.id.to_string());
-            let socket = crate::ipc::socket_path::resolve().unwrap_or_default();
+            let socket = acorn_ipc::socket_path::resolve().unwrap_or_default();
             if !socket.as_os_str().is_empty() {
                 effective_env
                     .entry("ACORN_IPC_SOCKET".to_string())
@@ -1184,7 +1184,7 @@ pub async fn pty_spawn<R: Runtime>(
             // keeps the user's existing PATH intact for every other
             // binary; dedup in `prepend_to_path` prevents the entry
             // from accumulating across reconnects.
-            if let Some(bin_dir) = crate::ipc::cli_path::bundled_cli_dir() {
+            if let Some(bin_dir) = acorn_ipc::cli_path::bundled_cli_dir() {
                 let existing = effective_env
                     .get("PATH")
                     .cloned()
@@ -1192,7 +1192,7 @@ pub async fn pty_spawn<R: Runtime>(
                     .unwrap_or_default();
                 effective_env.insert(
                     "PATH".to_string(),
-                    crate::ipc::cli_path::prepend_to_path(&bin_dir, &existing),
+                    acorn_ipc::cli_path::prepend_to_path(&bin_dir, &existing),
                 );
                 // Expose the dir so the staged `.zshrc` can re-prepend
                 // the IPC CLI entry after the user's rc runs — covers
@@ -1208,9 +1208,15 @@ pub async fn pty_spawn<R: Runtime>(
             // an ordinary shell (`AgentFlavor::Unknown`) and only takes
             // effect on the rare configuration where `$SHELL` itself
             // resolves to a recognised agent binary.
-            let primer = crate::ipc::primer::primer_for(&session, &socket);
-            let flavor = crate::ipc::primer::AgentFlavor::detect(&resolved_command);
-            primed_args = crate::ipc::primer::inject_primer_args(flavor, primed_args, &primer);
+            let daemon_socket = crate::daemon::paths::control_socket_path().ok();
+            let primer = acorn_ipc::primer::primer_for(
+                &session.id.to_string(),
+                &session.repo_path,
+                &socket,
+                daemon_socket.as_deref(),
+            );
+            let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);
+            primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, &primer);
             write_control_marker(&cwd, &primer);
         }
     }
