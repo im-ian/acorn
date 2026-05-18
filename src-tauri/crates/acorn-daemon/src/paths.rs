@@ -129,13 +129,7 @@ pub fn crash_dir() -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parking_lot::Mutex;
-
-    // Serialize env mutation across tests in this module so concurrent
-    // `cargo test` runs do not race on `ACORN_DATA_DIR`. parking_lot's
-    // Mutex does not poison on panic, so a test that crashes holding
-    // the lock does not cascade into the rest of the module.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::test_env::ENV_LOCK;
 
     /// Pick a short root for test data dirs. macOS's default temp_dir()
     /// returns `/var/folders/qb/xxxxxxxx/T/` which already eats ~50 chars
