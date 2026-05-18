@@ -6,9 +6,9 @@
 //!   * a process child handle used to kill the process
 //!   * a stop flag used to signal the reader task to exit cleanly
 //!
-//! Output bytes are read on a blocking thread, base64-encoded, and emitted to
-//! the frontend via Tauri events:
-//!   * `pty:output:{session_id}` — payload `{ "data": "<base64>" }`
+//! Output bytes are read on a blocking thread and forwarded through the
+//! host-provided output sink. The host can send raw bytes through a Tauri
+//! Channel and fall back to legacy events when needed.
 //!   * `pty:exit:{session_id}` — payload `{ "code": Option<i32> }`
 
 use std::collections::VecDeque;
@@ -51,6 +51,7 @@ pub enum PtyError {
 }
 
 pub type PtyResult<T> = Result<T, PtyError>;
+pub type PtyOutputSink = Arc<dyn Fn(&str, &Uuid, &[u8]) + Send + Sync + 'static>;
 
 /// Coarse classification of a shell-mode session's liveness, derived purely
 /// from "does the PTY child have any descendant processes right now?".
@@ -88,8 +89,8 @@ struct PtyHandle {
     /// deadline passes.
     needs_input_until: Mutex<Option<Instant>>,
     /// Rolling tail of raw PTY output bytes. Appended by `read_loop` before
-    /// the bytes are base64-encoded and emitted to the frontend; consumed
-    /// out of band by `tail_bytes` for the IPC `read-buffer` command.
+    /// the bytes are forwarded through the host output sink; consumed out of
+    /// band by `tail_bytes` for the IPC `read-buffer` command.
     /// Capped at `TAIL_BUFFER_CAP` — older bytes are dropped from the
     /// front when the cap is hit.
     tail_buf: Mutex<VecDeque<u8>>,
@@ -99,11 +100,6 @@ struct PtyHandle {
 #[derive(Default)]
 pub struct PtyManager {
     handles: Arc<DashMap<Uuid, Arc<PtyHandle>>>,
-}
-
-#[derive(Serialize, Clone)]
-struct OutputPayload {
-    data: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -129,6 +125,7 @@ impl PtyManager {
     pub fn spawn<R, F>(
         &self,
         app: AppHandle<R>,
+        output_sink: PtyOutputSink,
         session_id: Uuid,
         cwd: PathBuf,
         command: String,
@@ -199,18 +196,17 @@ impl PtyManager {
 
         self.handles.insert(session_id, Arc::clone(&handle));
 
-        let app_for_reader = app.clone();
         let stop_for_reader = stop.clone();
         let handle_for_reader = Arc::clone(&handle);
         std::thread::Builder::new()
             .name(format!("acorn-pty-read-{session_id}"))
             .spawn(move || {
                 read_loop(
-                    app_for_reader,
                     session_id,
                     reader,
                     stop_for_reader,
                     handle_for_reader,
+                    output_sink,
                 );
             })
             .map_err(|e| PtyError::Other(format!("spawn reader thread: {e}")))?;
@@ -360,12 +356,12 @@ impl PtyManager {
     }
 }
 
-fn read_loop<R: Runtime>(
-    app: AppHandle<R>,
+fn read_loop(
     session_id: Uuid,
     mut reader: Box<dyn Read + Send>,
     stop: Arc<AtomicBool>,
     handle: Arc<PtyHandle>,
+    output_sink: PtyOutputSink,
 ) {
     let event = format!("pty:output:{session_id}");
     let mut buf = [0u8; READ_BUFFER_SIZE];
@@ -377,12 +373,7 @@ fn read_loop<R: Runtime>(
             Ok(0) => break, // EOF — child closed the slave
             Ok(n) => {
                 push_tail(&handle.tail_buf, &buf[..n]);
-                let payload = OutputPayload {
-                    data: base64_encode(&buf[..n]),
-                };
-                if let Err(e) = app.emit(&event, payload) {
-                    tracing::warn!(%session_id, error = %e, "failed to emit pty output");
-                }
+                output_sink(&event, &session_id, &buf[..n]);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
@@ -434,76 +425,10 @@ fn wait_loop<R: Runtime>(
     }
 }
 
-/// Minimal RFC 4648 base64 encoder. Avoids pulling in a runtime dep purely
-/// for transport encoding of PTY chunks.
-fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
-    let mut chunks = input.chunks_exact(3);
-    for chunk in &mut chunks {
-        let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
-        out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
-        out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
-        out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
-        out.push(ALPHABET[(n & 0x3f) as usize] as char);
-    }
-    let rem = chunks.remainder();
-    match rem.len() {
-        0 => {}
-        1 => {
-            let n = u32::from(rem[0]) << 16;
-            out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
-            out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        2 => {
-            let n = (u32::from(rem[0]) << 16) | (u32::from(rem[1]) << 8);
-            out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
-            out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
-            out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
-            out.push('=');
-        }
-        _ => unreachable!(),
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn base64_encodes_empty_input() {
-        assert_eq!(base64_encode(&[]), "");
-    }
-
-    #[test]
-    fn base64_encodes_single_byte() {
-        assert_eq!(base64_encode(b"f"), "Zg==");
-    }
-
-    #[test]
-    fn base64_encodes_two_bytes() {
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-    }
-
-    #[test]
-    fn base64_encodes_three_bytes() {
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-    }
-
-    #[test]
-    fn base64_encodes_classic_man() {
-        assert_eq!(base64_encode(b"Man"), "TWFu");
-    }
-
-    #[test]
-    fn base64_encodes_long_input() {
-        assert_eq!(base64_encode(b"hello world"), "aGVsbG8gd29ybGQ=");
-    }
-
-    #[test]
     fn push_tail_keeps_recent_bytes_when_cap_exceeded() {
         let tail: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
         // Push twice the cap; expect exactly TAIL_BUFFER_CAP bytes left,

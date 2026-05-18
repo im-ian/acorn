@@ -7,15 +7,19 @@ use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
 use crate::fs_explorer::WatcherState;
 use crate::ipc::server::IpcServerHandle;
-use acorn_session::{ProjectStore, SessionStore};
+use crate::pty_output::PtyOutputRouter;
 use crate::staged_rev_reconcile::StagedRevMismatch;
 use acorn_pty::PtyManager;
+use acorn_session::{ProjectStore, SessionStore};
 
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: Arc<SessionStore>,
     pub projects: Arc<ProjectStore>,
     pub pty: Arc<PtyManager>,
+    /// Raw-byte output channels registered by renderer terminals. PTY output
+    /// falls back to the legacy base64 event path when no channel is active.
+    pub pty_output: Arc<PtyOutputRouter>,
     /// Set to false at boot if `persistence::load_sessions_with_status`
     /// reported a recoverable load failure (file existed but could not be
     /// read or parsed). Frontend reads this via `load_status` and skips the
@@ -56,6 +60,7 @@ impl AppState {
             sessions: SessionStore::new(),
             projects: ProjectStore::new(),
             pty: PtyManager::new(),
+            pty_output: Arc::new(PtyOutputRouter::default()),
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             ipc_handle: Arc::new(Mutex::new(None)),

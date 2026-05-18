@@ -1,17 +1,16 @@
 //! App-side stream attachment to a daemon-managed PTY.
 //!
-//! Bridges the daemon's per-session stream socket to the Tauri event bus
-//! the frontend already listens on (`pty:output:{uuid}` / `pty:exit:{uuid}`),
-//! so `commands::pty_spawn` can route through the daemon without the
-//! frontend `Terminal.tsx` knowing whether a session is daemon-managed
-//! or in-process.
+//! Bridges the daemon's per-session stream socket to the same output router
+//! used by in-process PTYs, so renderer terminals receive raw bytes through
+//! a Tauri Channel when subscribed and fall back to the legacy event bus when
+//! needed.
 //!
 //! Each attach owns one background thread that reads `StreamFrame`s
-//! line-by-line, re-emits the byte chunks as Tauri events, and exits on
-//! a clean `Exit` frame or socket close. A second thread (input/resize)
-//! is intentionally NOT spawned — keystrokes and resizes go through the
-//! control socket via `daemon_bridge::send_input` / `resize`, which is a
-//! single short RPC round-trip per event and avoids managing two
+//! line-by-line, routes output chunks through the shared output router, and
+//! exits on a clean `Exit` frame or socket close. A second thread
+//! (input/resize) is intentionally NOT spawned — keystrokes and resizes go
+//! through the control socket via `daemon_bridge::send_input` / `resize`,
+//! which is a single short RPC round-trip per event and avoids managing two
 //! per-session sockets on the app side.
 
 use std::io::{BufRead, BufReader, Write};
@@ -26,6 +25,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
+use crate::pty_output::{self, PtyOutputRouter};
 use acorn_daemon::protocol::{ClientRole, Hello, StreamAttach, StreamFrame};
 use acorn_daemon::socket;
 
@@ -135,15 +135,6 @@ impl StreamRegistry {
     }
 }
 
-/// Payload shape the frontend Terminal listens for on `pty:output:{uuid}`.
-/// Matches `crate::pty::OutputPayload` (private to that module, hence
-/// duplicated here — same key name `data`, same base64 value, so a
-/// daemon-attached terminal is byte-equivalent to an in-process one).
-#[derive(Serialize, Clone)]
-struct OutputPayload {
-    data: String,
-}
-
 #[derive(Serialize, Clone)]
 struct ExitPayload {
     code: Option<i32>,
@@ -158,6 +149,7 @@ struct ExitPayload {
 pub fn attach<R: Runtime>(
     app: AppHandle<R>,
     registry: Arc<StreamRegistry>,
+    output_router: Arc<PtyOutputRouter>,
     session_id: Uuid,
     pid: Option<u32>,
     replay_scrollback: bool,
@@ -206,7 +198,14 @@ pub fn attach<R: Runtime>(
     std::thread::Builder::new()
         .name(format!("acorn-daemon-stream-{session_id}"))
         .spawn(move || {
-            pump_loop(app, registry_for_thread, session_id, reader, stop);
+            pump_loop(
+                app,
+                registry_for_thread,
+                output_router,
+                session_id,
+                reader,
+                stop,
+            );
         })?;
     Ok(())
 }
@@ -214,6 +213,7 @@ pub fn attach<R: Runtime>(
 fn pump_loop<R: Runtime>(
     app: AppHandle<R>,
     registry: Arc<StreamRegistry>,
+    output_router: Arc<PtyOutputRouter>,
     session_id: Uuid,
     mut reader: BufReader<Stream>,
     stop: Arc<AtomicBool>,
@@ -252,8 +252,12 @@ fn pump_loop<R: Runtime>(
         };
         match frame {
             StreamFrame::Output { data_b64 } => {
-                if let Err(err) = app.emit(&out_event, OutputPayload { data: data_b64 }) {
-                    tracing::warn!(%session_id, error = %err, "failed to emit pty output");
+                if let Some(bytes) = pty_output::base64_decode(&data_b64) {
+                    output_router.send_or_emit(&app, &out_event, &session_id, &bytes);
+                } else if let Err(err) =
+                    app.emit(&out_event, pty_output::OutputPayload { data: data_b64 })
+                {
+                    tracing::warn!(%session_id, error = %err, "failed to emit invalid pty output fallback");
                 }
             }
             StreamFrame::Exit { code } => {

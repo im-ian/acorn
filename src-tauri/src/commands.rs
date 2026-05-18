@@ -1,7 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
+use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
@@ -1285,10 +1286,17 @@ pub async fn pty_spawn<R: Runtime>(
         }
     }
 
+    let output_router = state.pty_output.clone();
+    let app_for_output = app.clone();
+    let output_sink: acorn_pty::PtyOutputSink = Arc::new(move |event, session_id, bytes| {
+        output_router.send_or_emit(&app_for_output, event, session_id, bytes);
+    });
+
     state
         .pty
         .spawn(
             app,
+            output_sink,
             id,
             cwd,
             resolved_command,
@@ -1359,8 +1367,15 @@ fn spawn_via_daemon<R: Runtime>(
     // tree to walk without an extra round-trip on every poll.
     if bridge.is_alive(id) {
         let pid = bridge.session_pid(id);
-        crate::daemon_stream::attach(app.clone(), registry.clone(), id, pid, replay_scrollback)
-            .map_err(|e| format!("daemon stream attach failed: {e}"))?;
+        crate::daemon_stream::attach(
+            app.clone(),
+            registry.clone(),
+            state.pty_output.clone(),
+            id,
+            pid,
+            replay_scrollback,
+        )
+        .map_err(|e| format!("daemon stream attach failed: {e}"))?;
         return Ok(());
     }
 
@@ -1395,8 +1410,15 @@ fn spawn_via_daemon<R: Runtime>(
     }
     persist(state);
 
-    crate::daemon_stream::attach(app.clone(), registry, id, outcome.pid, replay_scrollback)
-        .map_err(|e| format!("daemon stream attach failed: {e}"))
+    crate::daemon_stream::attach(
+        app.clone(),
+        registry,
+        state.pty_output.clone(),
+        id,
+        outcome.pid,
+        replay_scrollback,
+    )
+    .map_err(|e| format!("daemon stream attach failed: {e}"))
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session
@@ -1419,6 +1441,27 @@ fn write_control_marker(cwd: &std::path::Path, primer: &str) {
             "failed to write .acorn-control.md marker",
         );
     }
+}
+
+#[tauri::command]
+pub fn pty_subscribe_output(
+    state: State<'_, AppState>,
+    session_id: String,
+    channel: Channel<Response>,
+) -> AppResult<u64> {
+    let id = parse_id(&session_id)?;
+    Ok(state.pty_output.subscribe(id, channel))
+}
+
+#[tauri::command]
+pub fn pty_unsubscribe_output(
+    state: State<'_, AppState>,
+    session_id: String,
+    token: u64,
+) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    state.pty_output.unsubscribe(&id, token);
+    Ok(())
 }
 
 #[tauri::command]

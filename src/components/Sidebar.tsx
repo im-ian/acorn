@@ -93,21 +93,19 @@ interface ProjectGroup {
 
 export function Sidebar() {
   const t = useTranslation();
-  const {
-    sessions,
-    projects,
-    activeSessionId,
-    activeProject,
-    selectSession,
-    setActiveProject,
-    createSession,
-    requestRemoveSession,
-    requestRemoveProject,
-    addProject,
-    createNewProject,
-    reorderProjects,
-    reorderSessions,
-  } = useAppStore();
+  const sessions = useAppStore((s) => s.sessions);
+  const projects = useAppStore((s) => s.projects);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeProject = useAppStore((s) => s.activeProject);
+  const selectSession = useAppStore((s) => s.selectSession);
+  const setActiveProject = useAppStore((s) => s.setActiveProject);
+  const createSession = useAppStore((s) => s.createSession);
+  const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
+  const requestRemoveProject = useAppStore((s) => s.requestRemoveProject);
+  const addProject = useAppStore((s) => s.addProject);
+  const createNewProject = useAppStore((s) => s.createNewProject);
+  const reorderProjects = useAppStore((s) => s.reorderProjects);
+  const reorderSessions = useAppStore((s) => s.reorderSessions);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
@@ -835,6 +833,7 @@ function ProjectGroupView({
                 <SessionRow
                   key={session.id}
                   session={session}
+                  projectSessions={project.sessions}
                   active={session.id === activeSessionId}
                   onSelect={() => onSelectSession(session.id)}
                   onRemove={() => onRemoveSession(session)}
@@ -850,15 +849,21 @@ function ProjectGroupView({
 
 interface SessionRowProps {
   session: Session;
+  projectSessions: Session[];
   active: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }
 
-function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
+function SessionRow({
+  session,
+  projectSessions,
+  active,
+  onSelect,
+  onRemove,
+}: SessionRowProps) {
   const t = useTranslation();
   const renameSession = useAppStore((s) => s.renameSession);
-  const sessions = useAppStore((s) => s.sessions);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
@@ -890,7 +895,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
 
   async function duplicate() {
     const base = session.name;
-    const taken = new Set(sessions.map((s) => s.name));
+    const taken = new Set(useAppStore.getState().sessions.map((s) => s.name));
     let next = `${base}-copy`;
     let n = 2;
     while (taken.has(next)) {
@@ -911,11 +916,10 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
     }
   }
 
-  const projectSiblings = useMemo(
-    () => sessions.filter((s) => s.repo_path === session.repo_path),
-    [sessions, session.repo_path],
+  const otherSiblings = useMemo(
+    () => projectSessions.filter((s) => s.id !== session.id),
+    [projectSessions, session.id],
   );
-  const otherSiblings = projectSiblings.filter((s) => s.id !== session.id);
 
   const sessionMenuItems: ContextMenuItem[] = [
     {
@@ -999,10 +1003,10 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
     {
       label: sidebarText(t, "sidebar.actions.removeAllInProject"),
       icon: <SquareX size={12} />,
-      disabled: projectSiblings.length === 0,
+      disabled: projectSessions.length === 0,
       onClick: () => {
         const request = useAppStore.getState().requestRemoveSession;
-        for (const s of projectSiblings) request(s.id);
+        for (const s of projectSessions) request(s.id);
       },
     },
   ];
