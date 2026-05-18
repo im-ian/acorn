@@ -27,6 +27,25 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
+impl From<acorn_session::SessionError> for AppError {
+    fn from(value: acorn_session::SessionError) -> Self {
+        match value {
+            acorn_session::SessionError::NotFound(id) => AppError::SessionNotFound(id),
+        }
+    }
+}
+
+impl From<acorn_session::scrollback::ScrollbackError> for AppError {
+    fn from(value: acorn_session::scrollback::ScrollbackError) -> Self {
+        match value {
+            acorn_session::scrollback::ScrollbackError::Io(err) => AppError::Io(err),
+            acorn_session::scrollback::ScrollbackError::InvalidSessionId(id) => {
+                AppError::Other(format!("invalid session id: {id}"))
+            }
+        }
+    }
+}
+
 impl Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())

@@ -8,12 +8,15 @@
 //!
 //! Atomic writes use a temp file + rename. Files are best-effort: read errors
 //! return `None` so the UI can proceed with an empty buffer.
+//!
+//! Callers pass the application's data directory in explicitly so this crate
+//! does not depend on the main `acorn` crate's `persistence::data_dir()`
+//! resolver. The single per-process data dir is resolved once at boot and
+//! threaded through.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-
-use crate::error::{AppError, AppResult};
-use crate::persistence;
 
 const SCROLLBACK_DIR: &str = "scrollback";
 /// Hard upper bound on a single session's persisted buffer. Frontend caps the
@@ -21,17 +24,30 @@ const SCROLLBACK_DIR: &str = "scrollback";
 /// belt-and-braces guard against runaway payloads.
 const MAX_PAYLOAD_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 
-fn scrollback_dir() -> AppResult<PathBuf> {
-    let dir = persistence::data_dir()?.join(SCROLLBACK_DIR);
+/// Errors surfaced by the scrollback API. Path-traversal rejection and
+/// unrecoverable IO failures bubble up here; ordinary missing-file reads
+/// short-circuit to `Ok(None)` instead.
+#[derive(Debug, thiserror::Error)]
+pub enum ScrollbackError {
+    #[error("io error: {0}")]
+    Io(#[from] io::Error),
+    #[error("invalid session id: {0}")]
+    InvalidSessionId(String),
+}
+
+pub type ScrollbackResult<T> = Result<T, ScrollbackError>;
+
+fn scrollback_dir(data_dir: &Path) -> ScrollbackResult<PathBuf> {
+    let dir = data_dir.join(SCROLLBACK_DIR);
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
-fn session_file(session_id: &str) -> AppResult<PathBuf> {
+fn session_file(data_dir: &Path, session_id: &str) -> ScrollbackResult<PathBuf> {
     if !is_safe_session_id(session_id) {
-        return Err(AppError::Other(format!("invalid session id: {session_id}")));
+        return Err(ScrollbackError::InvalidSessionId(session_id.to_string()));
     }
-    Ok(scrollback_dir()?.join(format!("{session_id}.txt")))
+    Ok(scrollback_dir(data_dir)?.join(format!("{session_id}.txt")))
 }
 
 /// UUIDs only. Reject anything that could traverse paths.
@@ -39,8 +55,8 @@ fn is_safe_session_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-pub fn save(session_id: &str, data: &str) -> AppResult<()> {
-    let final_path = session_file(session_id)?;
+pub fn save(data_dir: &Path, session_id: &str, data: &str) -> ScrollbackResult<()> {
+    let final_path = session_file(data_dir, session_id)?;
     let payload = if data.len() > MAX_PAYLOAD_BYTES {
         // Drop the oldest bytes; xterm-rendered ANSI may break mid-sequence
         // here, but the frontend re-clears the screen on full restore so a
@@ -52,8 +68,8 @@ pub fn save(session_id: &str, data: &str) -> AppResult<()> {
     write_atomic(&final_path, payload.as_bytes())
 }
 
-pub fn load(session_id: &str) -> AppResult<Option<String>> {
-    let path = session_file(session_id)?;
+pub fn load(data_dir: &Path, session_id: &str) -> ScrollbackResult<Option<String>> {
+    let path = session_file(data_dir, session_id)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -66,8 +82,8 @@ pub fn load(session_id: &str) -> AppResult<Option<String>> {
     }
 }
 
-pub fn delete(session_id: &str) -> AppResult<()> {
-    let path = session_file(session_id)?;
+pub fn delete(data_dir: &Path, session_id: &str) -> ScrollbackResult<()> {
+    let path = session_file(data_dir, session_id)?;
     if path.exists() {
         fs::remove_file(&path)?;
     }
@@ -76,12 +92,12 @@ pub fn delete(session_id: &str) -> AppResult<()> {
 
 /// Remove scrollback files for any session id not present in `keep`.
 /// Called at boot to evict files left behind by sessions that no longer exist.
-pub fn prune_orphans<I, S>(keep: I) -> AppResult<usize>
+pub fn prune_orphans<I, S>(data_dir: &Path, keep: I) -> ScrollbackResult<usize>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let dir = scrollback_dir()?;
+    let dir = scrollback_dir(data_dir)?;
     let keep_set: std::collections::HashSet<String> =
         keep.into_iter().map(|s| s.as_ref().to_string()).collect();
     let mut removed = 0usize;
@@ -122,12 +138,12 @@ where
 /// counted because they cannot be safely reclaimed without losing the
 /// session's restorable buffer; the user-facing "Clear cache" UI only
 /// surfaces the reclaimable portion. Returns 0 on read errors.
-pub fn orphan_size_bytes<I, S>(keep: I) -> AppResult<u64>
+pub fn orphan_size_bytes<I, S>(data_dir: &Path, keep: I) -> ScrollbackResult<u64>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let dir = scrollback_dir()?;
+    let dir = scrollback_dir(data_dir)?;
     let keep_set: std::collections::HashSet<String> =
         keep.into_iter().map(|s| s.as_ref().to_string()).collect();
     let entries = match fs::read_dir(&dir) {
@@ -153,7 +169,7 @@ where
     Ok(total)
 }
 
-fn write_atomic(final_path: &Path, bytes: &[u8]) -> AppResult<()> {
+fn write_atomic(final_path: &Path, bytes: &[u8]) -> ScrollbackResult<()> {
     let tmp_path = final_path.with_extension("txt.tmp");
     fs::write(&tmp_path, bytes)?;
     fs::rename(&tmp_path, final_path)?;
@@ -173,5 +189,50 @@ mod tests {
         assert!(!is_safe_session_id(&"x".repeat(65)));
         assert!(is_safe_session_id("550e8400-e29b-41d4-a716-446655440000"));
         assert!(is_safe_session_id("abcdef0123456789"));
+    }
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        save(&tmp, id, "hello\n\x1b[31mred\x1b[0m\n").expect("save");
+        let got = load(&tmp, id).expect("load").expect("some");
+        assert!(got.contains("hello"));
+        // Cleanup
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_returns_none_for_missing() {
+        let tmp = tempdir_path();
+        let id = "550e8400-e29b-41d4-a716-446655440001";
+        let got = load(&tmp, id).expect("load");
+        assert!(got.is_none());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn prune_orphans_drops_unknown_ids() {
+        let tmp = tempdir_path();
+        let kept = "550e8400-e29b-41d4-a716-44665544000a";
+        let orphan = "550e8400-e29b-41d4-a716-44665544000b";
+        save(&tmp, kept, "k").expect("kept");
+        save(&tmp, orphan, "o").expect("orphan");
+        let removed = prune_orphans(&tmp, [kept]).expect("prune");
+        assert_eq!(removed, 1);
+        assert!(load(&tmp, kept).expect("load kept").is_some());
+        assert!(load(&tmp, orphan).expect("load orphan").is_none());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    fn tempdir_path() -> PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("acorn-session-scrollback-{ns}"));
+        fs::create_dir_all(&p).unwrap();
+        p
     }
 }

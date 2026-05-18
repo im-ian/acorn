@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 use crate::commands::{create_unique_worktree, sanitize_worktree_name};
 use crate::persistence;
-use crate::session::{Session, SessionKind, SessionOwner, SessionStore};
+use acorn_session::{Session, SessionKind, SessionOwner, SessionStore};
 use crate::state::AppState;
 use crate::worktree;
 
@@ -574,7 +574,7 @@ fn handle_kill_session<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessionStatus;
+    use acorn_session::SessionStatus;
     use std::path::PathBuf;
 
     fn make_session(repo: &str, name: &str, kind: SessionKind) -> Session {

@@ -14,9 +14,6 @@ mod ipc;
 mod persistence;
 mod pty_env;
 mod pull_requests;
-mod scrollback;
-mod session;
-mod session_status;
 mod shell_args;
 mod shell_env;
 mod shell_init;
@@ -207,8 +204,18 @@ pub fn run() {
                 tracing::warn!(
                     "skipping scrollback prune: session load was unclean and no live ids"
                 );
-            } else if let Err(err) = scrollback::prune_orphans(&live_ids) {
-                tracing::warn!("scrollback prune at boot failed: {err}");
+            } else {
+                match persistence::data_dir() {
+                    Ok(dir) => {
+                        if let Err(err) = acorn_session::scrollback::prune_orphans(&dir, &live_ids)
+                        {
+                            tracing::warn!("scrollback prune at boot failed: {err}");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("scrollback prune at boot: data_dir failed: {err}");
+                    }
+                }
             }
             // Start the IPC server in the background. It owns its own
             // listener thread; if bind fails it logs and the app keeps

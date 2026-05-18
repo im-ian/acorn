@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use directories::ProjectDirs;
 
 use crate::error::{AppError, AppResult};
-use crate::session::{Project, Session};
+use acorn_session::{Project, Session};
 
 const SESSIONS_FILE: &str = "sessions.json";
 const SESSIONS_TMP_FILE: &str = "sessions.json.tmp";
