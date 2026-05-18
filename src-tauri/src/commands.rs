@@ -2128,6 +2128,7 @@ pub async fn merge_pull_request(
     method: MergeMethod,
     commit_title: Option<String>,
     commit_body: Option<String>,
+    admin: Option<bool>,
 ) -> AppResult<()> {
     pull_requests::merge_pull_request(
         &PathBuf::from(repo_path),
@@ -2135,6 +2136,7 @@ pub async fn merge_pull_request(
         method,
         commit_title,
         commit_body,
+        admin.unwrap_or(false),
     )
 }
 

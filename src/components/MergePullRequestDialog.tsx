@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { GitMerge, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, GitMerge, ShieldAlert, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
@@ -10,7 +10,11 @@ import {
   resolveAiCommitCommand,
   useSettings,
 } from "../lib/settings";
-import type { MergeMethod, PullRequestDetail } from "../lib/types";
+import type {
+  MergeMethod,
+  PullRequestCheck,
+  PullRequestDetail,
+} from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader, TextSwap } from "./ui";
@@ -43,6 +47,37 @@ function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
 }
 
+interface ChecksBlock {
+  blocked: boolean;
+  failed: number;
+  pending: number;
+}
+
+function summarizeBlockingChecks(checks: PullRequestCheck[]): ChecksBlock {
+  let failed = 0;
+  let pending = 0;
+  for (const c of checks) {
+    if (c.status.toUpperCase() !== "COMPLETED") {
+      pending += 1;
+      continue;
+    }
+    switch ((c.conclusion ?? "").toUpperCase()) {
+      case "FAILURE":
+      case "TIMED_OUT":
+      case "ACTION_REQUIRED":
+        failed += 1;
+        break;
+      default:
+        break;
+    }
+  }
+  return { blocked: failed > 0 || pending > 0, failed, pending };
+}
+
+function formatCount(template: string, count: number): string {
+  return template.replace("{count}", String(count));
+}
+
 interface MergePullRequestDialogProps {
   open: boolean;
   repoPath: string;
@@ -66,6 +101,12 @@ export function MergePullRequestDialog({
   const [submitting, setSubmitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [adminMerge, setAdminMerge] = useState(false);
+
+  const checksBlock = useMemo<ChecksBlock>(
+    () => summarizeBlockingChecks(detail?.checks ?? []),
+    [detail?.checks],
+  );
 
   // Monotonic counter that bumps on every open/close so in-flight AI
   // generation calls can detect that the dialog was reset under them. The
@@ -86,6 +127,7 @@ export function MergePullRequestDialog({
     setError(null);
     setSubmitting(false);
     setGenerating(false);
+    setAdminMerge(false);
   }, [open, detail]);
 
   // Close also bumps the epoch — a generate kicked off right before the
@@ -121,6 +163,7 @@ export function MergePullRequestDialog({
         method,
         acceptsMessage ? title : null,
         acceptsMessage ? body : null,
+        checksBlock.blocked && adminMerge,
       );
       onMerged();
     } catch (e) {
@@ -159,6 +202,7 @@ export function MergePullRequestDialog({
 
   const providerLabel = aiCommitProviderLabel(settings);
   const busy = submitting || generating;
+  const mergeBlocked = checksBlock.blocked && !adminMerge;
 
   return (
     <Modal open={open} onClose={onClose} variant="dialog" size="lg">
@@ -259,6 +303,53 @@ export function MergePullRequestDialog({
               </p>
             )}
 
+            {checksBlock.blocked ? (
+              <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                  <div className="space-y-0.5">
+                    {checksBlock.failed > 0 ? (
+                      <p>
+                        {formatCount(
+                          dt(t, "dialogs.mergePullRequest.checksFailing"),
+                          checksBlock.failed,
+                        )}
+                      </p>
+                    ) : null}
+                    {checksBlock.pending > 0 ? (
+                      <p>
+                        {formatCount(
+                          dt(t, "dialogs.mergePullRequest.checksPending"),
+                          checksBlock.pending,
+                        )}
+                      </p>
+                    ) : null}
+                    <p className="text-amber-200/80">
+                      {dt(t, "dialogs.mergePullRequest.checksBlocking")}
+                    </p>
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-amber-100 transition hover:bg-amber-500/15">
+                  <input
+                    type="checkbox"
+                    checked={adminMerge}
+                    onChange={(e) => setAdminMerge(e.target.checked)}
+                    disabled={busy}
+                    className="mt-0.5 h-3 w-3 cursor-pointer accent-amber-400"
+                  />
+                  <span className="flex flex-col gap-0.5">
+                    <span className="flex items-center gap-1 font-medium">
+                      <ShieldAlert size={11} />
+                      {dt(t, "dialogs.mergePullRequest.adminMerge")}
+                    </span>
+                    <span className="text-[10px] leading-snug text-amber-200/80">
+                      {dt(t, "dialogs.mergePullRequest.adminMergeHint")}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            ) : null}
+
             {error ? (
               <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
                 {error}
@@ -278,8 +369,13 @@ export function MergePullRequestDialog({
             <button
               type="button"
               onClick={() => void handleMerge()}
-              disabled={busy}
-              className="rounded-md bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={busy || mergeBlocked}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-60",
+                checksBlock.blocked && adminMerge
+                  ? "bg-amber-500/25 text-amber-100 hover:bg-amber-500/35"
+                  : "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30",
+              )}
             >
               <TextSwap>
                 {submitting
