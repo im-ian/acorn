@@ -15,10 +15,12 @@
 //!      Code's `--append-system-prompt`, llm CLI's `-s`) the primer is
 //!      threaded into argv at spawn time. For ordinary shells the
 //!      `AgentFlavor::Unknown` branch is a no-op.
+//!
+//! This module takes plain primitives (session id, repo path, socket
+//! paths) instead of an `acorn` `Session` struct so the crate stays a
+//! leaf with no upstream dependency on the host app's module graph.
 
 use std::path::Path;
-
-use crate::session::Session;
 
 /// Distinguishes our few well-known agent CLIs from arbitrary user commands.
 /// Detection is by file-basename, so paths like
@@ -45,11 +47,20 @@ impl AgentFlavor {
 }
 
 /// Build the primer string for a given control session. Substitutes the
-/// session id and socket path so the agent can copy-paste examples
+/// session id and socket paths so the agent can copy-paste examples
 /// verbatim. Kept short on purpose — every byte goes into every
 /// agent-call's system prompt.
-pub fn primer_for(session: &Session, socket_path: &Path) -> String {
-    let daemon_socket = crate::daemon::paths::control_socket_path()
+///
+/// `daemon_socket_path` is `None` when the daemon's socket path could
+/// not be resolved (e.g. data dir lookup failure); the primer prints an
+/// empty path in that case so the rest of the message still renders.
+pub fn primer_for(
+    session_id: &str,
+    repo_path: &Path,
+    socket_path: &Path,
+    daemon_socket_path: Option<&Path>,
+) -> String {
+    let daemon = daemon_socket_path
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     format!(
@@ -95,10 +106,10 @@ pub fn primer_for(session: &Session, socket_path: &Path) -> String {
          instead of running it serially here; this seat is the orchestrator.\n\
          - `read-buffer` after a `send-keys` may need a brief wait — the sibling \
          is a real PTY, not a synchronous RPC.",
-        repo = session.repo_path.display(),
-        session_id = session.id,
+        repo = repo_path.display(),
+        session_id = session_id,
         socket = socket_path.display(),
-        daemon = daemon_socket,
+        daemon = daemon,
     )
 }
 
@@ -142,19 +153,7 @@ fn insert_llm_system_arg(args: Vec<String>, primer: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessionKind;
     use std::path::PathBuf;
-
-    fn session() -> Session {
-        Session::new(
-            "ctl".to_string(),
-            PathBuf::from("/tmp/repo"),
-            PathBuf::from("/tmp/repo"),
-            "main".to_string(),
-            false,
-            SessionKind::Control,
-        )
-    }
 
     #[test]
     fn detect_recognizes_known_agents() {
@@ -170,12 +169,31 @@ mod tests {
 
     #[test]
     fn primer_substitutes_session_and_socket() {
-        let s = session();
-        let p = primer_for(&s, &PathBuf::from("/tmp/ipc.sock"));
-        assert!(p.contains(&s.id.to_string()));
+        let p = primer_for(
+            "00000000-0000-0000-0000-000000000001",
+            &PathBuf::from("/tmp/repo"),
+            &PathBuf::from("/tmp/ipc.sock"),
+            Some(&PathBuf::from("/tmp/daemon.sock")),
+        );
+        assert!(p.contains("00000000-0000-0000-0000-000000000001"));
         assert!(p.contains("/tmp/ipc.sock"));
         assert!(p.contains("/tmp/repo"));
+        assert!(p.contains("/tmp/daemon.sock"));
         assert!(p.contains("acorn-ipc list-sessions"));
+    }
+
+    #[test]
+    fn primer_renders_empty_daemon_when_unresolved() {
+        let p = primer_for(
+            "00000000-0000-0000-0000-000000000001",
+            &PathBuf::from("/tmp/repo"),
+            &PathBuf::from("/tmp/ipc.sock"),
+            None,
+        );
+        // The line still renders, just with an empty value after the
+        // label — same shape as the pre-extraction behaviour where the
+        // daemon resolver returned an empty string on lookup failure.
+        assert!(p.contains("Daemon socket:   \n"));
     }
 
     #[test]

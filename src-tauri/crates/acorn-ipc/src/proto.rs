@@ -1,5 +1,6 @@
-//! Wire protocol shared between the in-process IPC server (this crate's lib)
-//! and the out-of-process `acorn-ipc` CLI (`src/bin/acorn-ipc.rs`).
+//! Wire protocol shared between the in-process IPC server (wired in the
+//! main `acorn` crate, see `src/ipc/server.rs`) and the out-of-process
+//! `acorn-ipc` CLI in this crate's `src/bin/acorn-ipc.rs`.
 //!
 //! Each request/response pair travels as a single newline-terminated JSON
 //! object over a Unix domain socket. The CLI sends exactly one request and

@@ -1,0 +1,23 @@
+[package]
+name = "acorn-ipc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "acorn_ipc"
+
+# Companion CLI for the in-app IPC server. The host crate's
+# `scripts/build-sidecar.sh` builds this with `-p acorn-ipc --bin acorn-ipc`
+# and stages it under `src-tauri/binaries/acorn-ipc-<target-triple>` so
+# Tauri's `externalBin` machinery bundles it next to the app.
+[[bin]]
+name = "acorn-ipc"
+path = "src/bin/acorn-ipc.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+directories = { workspace = true }
+base64 = { workspace = true }
+clap = { workspace = true }

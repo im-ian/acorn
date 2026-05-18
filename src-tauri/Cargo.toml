@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/acorn-ipc",
     "crates/acorn-pty",
     "crates/acorn-transcript",
 ]
@@ -8,7 +9,7 @@ members = [
 # Shared dependencies referenced from each member crate with
 # `<name> = { workspace = true }`. Keeping the version + feature set in
 # one place removes drift risk between the main `acorn` crate and the
-# extracted leaf crates (`acorn-pty`, `acorn-transcript`).
+# extracted leaf crates (`acorn-ipc`, `acorn-pty`, `acorn-transcript`).
 [workspace.dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
@@ -64,14 +65,6 @@ default-run = "acorn"
 name = "acorn_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# Legacy companion CLI — talks to the in-process IPC server inside the running
-# Acorn app over a Unix domain socket. Replaced by `acornd` (which subsumes
-# both the daemon process and the CLI surface). Retained during the daemon
-# rollout so existing control sessions keep working; removed in Sprint 3.
-[[bin]]
-name = "acorn-ipc"
-path = "src/bin/acorn-ipc.rs"
-
 # Background daemon that owns persistent PTY sessions across Acorn app
 # launches. Also doubles as the CLI surface used inside control sessions
 # (e.g. `acornd create-tab`) — both modes share the same IPC protocol types
@@ -92,6 +85,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+acorn-ipc = { path = "crates/acorn-ipc" }
 acorn-pty = { path = "crates/acorn-pty" }
 acorn-transcript = { path = "crates/acorn-transcript" }
 tauri = { workspace = true }
