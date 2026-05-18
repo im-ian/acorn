@@ -362,7 +362,7 @@ export function Sidebar() {
           </Tooltip>
         </div>
       </header>
-      <div className="flex-1 overflow-y-auto px-1 pb-2">
+      <div className="acorn-no-scrollbar flex-1 overflow-y-auto px-1 pb-2">
         {projectGroups.length === 0 ? (
           <EmptyState />
         ) : (

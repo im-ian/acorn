@@ -37,6 +37,15 @@
   border-radius: 4px;
 }
 
+.acorn-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.acorn-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 .acorn-bg-app,
 .acorn-bg-terminal {
   position: absolute;

@@ -671,7 +671,7 @@ function TodosTab({ todos }: { todos: TodoItem[] }) {
           </span>
         ) : null}
       </div>
-      <ul className="flex-1 overflow-y-auto p-2 text-xs">
+      <ul className="acorn-no-scrollbar flex-1 overflow-y-auto p-2 text-xs">
         {todos.map((t, i) => (
           <TodoRow key={`${i}-${t.content}`} todo={t} />
         ))}
@@ -859,7 +859,7 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
           size={12}
         />
       </div>
-      <div className="flex-1 overflow-x-hidden overflow-y-auto">
+      <div className="acorn-no-scrollbar flex-1 overflow-x-hidden overflow-y-auto">
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
         ) : !items ? (
@@ -1333,13 +1333,13 @@ function CommitsTab({
     return (
       <PanelGroup direction="vertical" autoSaveId="acorn:layout:commits">
         <Panel id="commits-list" order={1} defaultSize={50} minSize={20}>
-          <div className="h-full overflow-y-auto">
+          <div className="acorn-no-scrollbar h-full overflow-y-auto">
             <SkeletonList count={8} />
           </div>
         </Panel>
         <ResizeHandle direction="vertical" />
         <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
-          <div className="h-full overflow-y-auto p-3">
+          <div className="acorn-no-scrollbar h-full overflow-y-auto p-3">
             <div className="h-3 w-1/2 animate-pulse rounded bg-fg-muted/15" />
             <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-fg-muted/10" />
             <div className="mt-2 h-3 w-2/3 animate-pulse rounded bg-fg-muted/10" />
@@ -1354,7 +1354,7 @@ function CommitsTab({
       <Panel id="commits-list" order={1} defaultSize={50} minSize={20}>
         <div
           ref={scrollRef}
-          className="h-full overflow-x-hidden overflow-y-auto"
+          className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto"
         >
         <div
           style={{ height: virtualizer.getTotalSize(), position: "relative" }}
@@ -1447,7 +1447,7 @@ function CommitsTab({
       </Panel>
       <ResizeHandle direction="vertical" />
       <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
-        <div className="h-full overflow-y-auto">
+        <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selected && diff ? (
             <DiffView
               payload={diff}
@@ -1627,7 +1627,7 @@ function StagedTab({
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
-        <ul className="h-full overflow-x-hidden overflow-y-auto">
+        <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
           {files.map((f) => (
             <li
               key={f.path}
@@ -1653,7 +1653,7 @@ function StagedTab({
       </Panel>
       <ResizeHandle direction="vertical" />
       <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
-        <div className="h-full overflow-y-auto">
+        <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {diff ? (
             <DiffView
               payload={diff}
@@ -2047,7 +2047,7 @@ function PullRequestsTab({
         />
       </div>
       <div
-        className="flex-1 overflow-x-hidden overflow-y-auto"
+        className="acorn-no-scrollbar flex-1 overflow-x-hidden overflow-y-auto"
         onScroll={handleScroll}
       >
         {error || rowActions.error ? (
@@ -2188,7 +2188,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
           size={12}
         />
       </div>
-      <div className="flex-1 overflow-x-hidden overflow-y-auto">
+      <div className="acorn-no-scrollbar flex-1 overflow-x-hidden overflow-y-auto">
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
         ) : !listing ? (
@@ -2447,7 +2447,7 @@ function WorkflowRunDetailModal({
         }
         onClose={onClose}
       />
-      <div className="flex-1 min-h-0 overflow-y-auto text-xs">
+      <div className="acorn-no-scrollbar flex-1 min-h-0 overflow-y-auto text-xs">
         <div className="px-4 py-3">
         {error ? (
           <div className="p-2 text-danger">{error}</div>
@@ -3180,7 +3180,7 @@ function PullRequestSearchModal({
         </div>
       </div>
       <div
-        className="h-[60vh] overflow-y-auto"
+        className="acorn-no-scrollbar h-[60vh] overflow-y-auto"
         onScroll={handleScroll}
       >
         {!debouncedQuery ? (
