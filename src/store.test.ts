@@ -234,6 +234,24 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("scopes code viewer tabs to the active session worktree", async () => {
+    const s1 = session("a1", REPO_A, {
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+    });
+    await seed([project(REPO_A, 0)], [s1]);
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${s1.worktree_path}/src/App.tsx`, s1.worktree_path);
+
+    const s = useAppStore.getState();
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "code",
+      path: `${s1.worktree_path}/src/App.tsx`,
+      repoPath: s1.worktree_path,
+    });
+  });
+
   it("closes the active code viewer instead of requesting session removal", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
     useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
