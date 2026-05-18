@@ -57,13 +57,6 @@ impl SupervisorState {
         self.enospc_logged = true;
     }
 
-    /// Reset the restart counter. Consumed by the full restart-with-backoff
-    /// supervisor thread (deferred follow-up) when a fresh watcher attaches.
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.restarts = 0;
-    }
-
     fn backoff(&self) -> Duration {
         let shift = self.restarts.min(4);
         let ms = SUPERVISOR_INITIAL_BACKOFF
@@ -540,12 +533,17 @@ pub fn fs_git_status_with_limit(
         .statuses(Some(&mut opts))
         .map_err(|e| AppError::Other(format!("git status failed: {e}")))?;
 
-    let total = statuses.len();
-    let huge = (total as u64) > limit as u64;
+    // Count valid-path entries first so `huge` reflects what the frontend
+    // can actually see — libgit2 occasionally emits pathless entries for
+    // renames/conflicts which we skip below, and we don't want them to
+    // inflate the count past the truncation threshold.
+    let limit_usize = limit as usize;
+    let valid_total = statuses.iter().filter(|e| e.path().is_some()).count();
+    let huge = valid_total > limit_usize;
     let mut out: HashMap<String, GitStatusEntry> =
-        HashMap::with_capacity(total.min(limit as usize));
-    for (idx, entry) in statuses.iter().enumerate() {
-        if (idx as u64) >= limit as u64 {
+        HashMap::with_capacity(valid_total.min(limit_usize));
+    for entry in statuses.iter() {
+        if out.len() >= limit_usize {
             break;
         }
         let Some(rel) = entry.path() else { continue };
@@ -649,37 +647,49 @@ pub fn fs_git_diff_stats(
         for (_, rel) in &diffable {
             opts.pathspec(rel);
         }
-        if let Ok(diff) =
-            repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))
-        {
-            let mut per_path: HashMap<String, (u32, u32)> = HashMap::new();
-            let _ = diff.foreach(
-                &mut |_delta, _progress| true,
-                None,
-                None,
-                Some(&mut |delta, _hunk, line| {
-                    let rel = delta
-                        .new_file()
-                        .path()
-                        .or_else(|| delta.old_file().path())
-                        .and_then(|p| p.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    if rel.is_empty() {
-                        return true;
-                    }
-                    let entry = per_path.entry(rel).or_default();
-                    match line.origin() {
-                        '+' => entry.0 = entry.0.saturating_add(1),
-                        '-' => entry.1 = entry.1.saturating_add(1),
-                        _ => {}
-                    }
-                    true
-                }),
-            );
-            for (abs, rel) in diffable {
-                let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
-                out.insert(abs, GitDiffStatsEntry { additions: a, deletions: d });
+        match repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts)) {
+            Ok(diff) => {
+                let mut per_path: HashMap<String, (u32, u32)> = HashMap::new();
+                let foreach_result = diff.foreach(
+                    &mut |_delta, _progress| true,
+                    None,
+                    None,
+                    Some(&mut |delta, _hunk, line| {
+                        let rel = delta
+                            .new_file()
+                            .path()
+                            .or_else(|| delta.old_file().path())
+                            .and_then(|p| p.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if rel.is_empty() {
+                            return true;
+                        }
+                        let entry = per_path.entry(rel).or_default();
+                        match line.origin() {
+                            '+' => entry.0 = entry.0.saturating_add(1),
+                            '-' => entry.1 = entry.1.saturating_add(1),
+                            _ => {}
+                        }
+                        true
+                    }),
+                );
+                if let Err(err) = foreach_result {
+                    // Partial walk: per_path holds whatever landed before the
+                    // error. Surface so callers can see zero counts are not
+                    // "no changes" but "we lost track halfway".
+                    tracing::warn!(error = %err, "diff foreach interrupted; stats may be partial");
+                }
+                for (abs, rel) in diffable {
+                    let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
+                    out.insert(abs, GitDiffStatsEntry { additions: a, deletions: d });
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "diff_tree_to_workdir_with_index failed; diff stats zeroed");
+                for (abs, _rel) in diffable {
+                    out.insert(abs, GitDiffStatsEntry { additions: 0, deletions: 0 });
+                }
             }
         }
     }
@@ -1020,11 +1030,10 @@ fn throttle_delay(last_emit: Option<Instant>, now: Instant) -> Duration {
 }
 
 /// Funnel a single notify result into the batch, classifying any error via
-/// the supervisor state machine before swallowing it. This gives one-shot
-/// ENOSPC warnings, distinguished trace levels for known vs unknown errors,
-/// and `tracing::info!` on FSEvents rescan requests — all without restarting
-/// the watcher yet. Full restart-with-backoff is a follow-up that will
-/// rebuild the `RecommendedWatcher`; for now we keep observability only.
+/// the supervisor state machine before swallowing it. ENOSPC is logged once
+/// at warn level; transient and unknown errors get their own trace levels so
+/// log grepping can distinguish "self-heals on next event" from "watcher is
+/// drifting toward give-up".
 fn ingest_result(
     batch: &mut WatchBatch,
     res: notify::Result<Event>,

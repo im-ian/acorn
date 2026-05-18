@@ -337,6 +337,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const refreshDeferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDotgitRef = useRef(false);
   const pendingWorkingTreeRef = useRef(false);
+  // The scheduler and refreshGitStatus call each other (in-flight re-fire
+  // re-enters the scheduler). useCallback would deadlock-cycle on deps, so
+  // route the back-edge through a ref filled by the effect below.
+  const scheduleRefreshRef = useRef<
+    ((trigger: "mount" | "fs-event" | "user") => void) | null
+  >(null);
   // Tracks the focused session id so the menu can write into the right
   // PTY without re-importing the store at every click.
   const [activeSessionId, setActiveSessionIdLocal] = useState<string | null>(
@@ -395,7 +401,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           return next;
         });
         lastStatusSuccessRef.current = Date.now();
-      } catch {
+      } catch (err) {
+        // Surface the failure so a broken backend (Tauri invoke error,
+        // serialization mismatch) does not silently leave the file tree
+        // without status decorations.
+        console.warn("[FileExplorer] fsGitStatus failed", err);
         gitStatusRef.current = {};
         setGitStatus({});
       }
@@ -405,7 +415,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       statusInFlightRef.current = null;
       if (statusRefreshPendingRef.current) {
         statusRefreshPendingRef.current = false;
-        void refreshGitStatus();
+        // Route through the scheduler so huge / focus / quiet-window guards
+        // still apply to the re-fire instead of bypassing them.
+        scheduleRefreshRef.current?.("fs-event");
       }
     });
     statusInFlightRef.current = promise;
@@ -449,8 +461,13 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
             scheduleGitStatusRefresh(trigger);
           }, decision.waitMs);
           break;
-        case "defer-until-focus":
         case "coalesce-with-inflight":
+          // The in-flight refreshGitStatus will re-enter the scheduler via
+          // scheduleRefreshRef once it settles; flag the pending so the
+          // .finally arm fires the retry.
+          statusRefreshPendingRef.current = true;
+          break;
+        case "defer-until-focus":
         case "skip-huge":
         case "skip-nothing-changed":
           break;
@@ -458,6 +475,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     },
     [refreshGitStatus],
   );
+
+  useEffect(() => {
+    scheduleRefreshRef.current = scheduleGitStatusRefresh;
+  }, [scheduleGitStatusRefresh]);
 
   useEffect(() => {
     const onFocus = () => {
