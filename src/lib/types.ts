@@ -46,12 +46,19 @@ export interface Project {
 
 export type AgentHistoryProvider = "claude" | "codex";
 
+export interface AgentHistoryWorktree {
+  name: string;
+  path: string;
+  exists: boolean;
+}
+
 export interface AgentHistoryItem {
   provider: AgentHistoryProvider;
   id: string;
   title: string;
   preview: string | null;
   cwd: string | null;
+  worktree: AgentHistoryWorktree | null;
   transcript_path: string;
   updated_at: number;
   resume_command: string | null;

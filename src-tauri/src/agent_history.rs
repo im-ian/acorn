@@ -3,10 +3,11 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
+use crate::worktree;
 
 const MAX_SCAN_FILES_PER_PROVIDER: usize = 5_000;
 const DEFAULT_LIMIT: usize = 100;
@@ -16,7 +17,7 @@ const READ_HEAD_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const READ_TAIL_BYTES: u64 = 256 * 1024;
 const PREVIEW_CHARS: usize = 160;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentHistoryProvider {
     Claude,
@@ -30,9 +31,17 @@ pub struct AgentHistoryItem {
     pub title: String,
     pub preview: Option<String>,
     pub cwd: Option<String>,
+    pub worktree: Option<AgentHistoryWorktree>,
     pub transcript_path: String,
     pub updated_at: u64,
     pub resume_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentHistoryWorktree {
+    pub name: String,
+    pub path: String,
+    pub exists: bool,
 }
 
 pub fn list_agent_history(
@@ -51,6 +60,68 @@ pub fn list_agent_history(
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
+}
+
+pub fn trash_agent_history_transcript(
+    provider: AgentHistoryProvider,
+    id: String,
+    transcript_path: PathBuf,
+) -> AppResult<()> {
+    let path = transcript_path.canonicalize().map_err(|_| {
+        AppError::InvalidPath(format!("transcript missing: {}", transcript_path.display()))
+    })?;
+    if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+        return Err(AppError::InvalidPath(format!(
+            "not a transcript jsonl: {}",
+            path.display()
+        )));
+    }
+    if !path.is_file() {
+        return Err(AppError::InvalidPath(format!(
+            "not a file: {}",
+            path.display()
+        )));
+    }
+
+    match provider {
+        AgentHistoryProvider::Codex => {
+            let root = codex_sessions_root()
+                .and_then(|p| p.canonicalize().ok())
+                .ok_or_else(|| AppError::InvalidPath("Codex sessions root missing".to_string()))?;
+            if !path.starts_with(&root) {
+                return Err(AppError::InvalidPath(format!(
+                    "transcript is outside Codex sessions: {}",
+                    path.display()
+                )));
+            }
+            if codex_id_from_filename(&path).as_deref() != Some(id.as_str()) {
+                return Err(AppError::InvalidPath(
+                    "transcript id does not match selected Codex session".to_string(),
+                ));
+            }
+        }
+        AgentHistoryProvider::Claude => {
+            let root = home_dir()
+                .map(|home| home.join(".claude"))
+                .and_then(|p| p.canonicalize().ok())
+                .ok_or_else(|| AppError::InvalidPath("Claude sessions root missing".to_string()))?;
+            if !path.starts_with(&root) {
+                return Err(AppError::InvalidPath(format!(
+                    "transcript is outside Claude sessions: {}",
+                    path.display()
+                )));
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str());
+            if stem != Some(id.as_str()) {
+                return Err(AppError::InvalidPath(
+                    "transcript id does not match selected Claude session".to_string(),
+                ));
+            }
+        }
+    }
+
+    trash::delete(&path).map_err(|e| AppError::Other(format!("trash failed: {e}")))?;
+    Ok(())
 }
 
 fn scan_codex(repo: &Path) -> Vec<AgentHistoryItem> {
@@ -146,9 +217,10 @@ fn parse_codex_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
     }
 
     let cwd = state.cwd.clone()?;
-    if !path_is_within(&cwd, repo) {
+    if !path_belongs_to_project(&cwd, repo) {
         return None;
     }
+    let worktree = worktree_for_cwd(&cwd, repo);
     let id = state.id.or_else(|| codex_id_from_filename(path))?;
     let title = state
         .title
@@ -164,6 +236,7 @@ fn parse_codex_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
             .preview
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
         cwd: Some(cwd),
+        worktree,
         transcript_path: path.display().to_string(),
         updated_at: file_updated_at(path),
     })
@@ -193,9 +266,10 @@ fn parse_claude_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
     }
 
     let cwd = state.cwd.clone()?;
-    if !path_is_within(&cwd, repo) {
+    if !path_belongs_to_project(&cwd, repo) {
         return None;
     }
+    let worktree = worktree_for_cwd(&cwd, repo);
     let id = state.id.or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
@@ -215,6 +289,7 @@ fn parse_claude_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
             .preview
             .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
         cwd: Some(cwd),
+        worktree,
         transcript_path: path.display().to_string(),
         updated_at: file_updated_at(path),
     })
@@ -374,6 +449,103 @@ fn collapse_preview(s: &str, max_chars: usize) -> Option<String> {
 fn path_is_within(cwd: &str, repo: &Path) -> bool {
     let cwd = normalize_path(Path::new(cwd));
     cwd == repo || cwd.starts_with(repo)
+}
+
+fn path_belongs_to_project(cwd: &str, repo: &Path) -> bool {
+    path_is_within(cwd, repo)
+        || registered_worktree_for_cwd(cwd, repo).is_some()
+        || same_git_common_dir(Path::new(cwd), repo)
+}
+
+fn same_git_common_dir(a: &Path, b: &Path) -> bool {
+    let Ok(a_repo) = git2::Repository::discover(a) else {
+        return false;
+    };
+    let Ok(b_repo) = git2::Repository::discover(b) else {
+        return false;
+    };
+    normalize_path(a_repo.commondir()) == normalize_path(b_repo.commondir())
+}
+
+fn worktree_for_cwd(cwd: &str, repo: &Path) -> Option<AgentHistoryWorktree> {
+    registered_worktree_for_cwd(cwd, repo)
+        .or_else(|| discovered_worktree_for_cwd(cwd))
+        .or_else(|| managed_worktree_from_path(cwd))
+}
+
+fn registered_worktree_for_cwd(cwd: &str, repo: &Path) -> Option<AgentHistoryWorktree> {
+    let cwd = normalize_path(Path::new(cwd));
+    let repo = git2::Repository::discover(repo).ok()?;
+    let names = repo.worktrees().ok()?;
+    for name in names.iter().flatten() {
+        let Ok(wt) = repo.find_worktree(name) else {
+            continue;
+        };
+        let path = normalize_path(wt.path());
+        if cwd == path || cwd.starts_with(&path) {
+            return Some(AgentHistoryWorktree {
+                name: name.to_string(),
+                path: path.display().to_string(),
+                exists: path.exists(),
+            });
+        }
+    }
+    None
+}
+
+fn discovered_worktree_for_cwd(cwd: &str) -> Option<AgentHistoryWorktree> {
+    let repo = git2::Repository::discover(cwd).ok()?;
+    let workdir = repo.workdir()?;
+    if !worktree::is_linked_worktree_root(workdir) {
+        return None;
+    }
+    let path = normalize_path(workdir);
+    Some(AgentHistoryWorktree {
+        name: linked_worktree_name(&repo).unwrap_or_else(|| {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("worktree")
+                .to_string()
+        }),
+        path: path.display().to_string(),
+        exists: path.exists(),
+    })
+}
+
+fn linked_worktree_name(repo: &git2::Repository) -> Option<String> {
+    repo.path()
+        .components()
+        .next_back()
+        .and_then(|c| c.as_os_str().to_str())
+        .filter(|name| !name.is_empty() && *name != ".git")
+        .map(str::to_string)
+}
+
+fn managed_worktree_from_path(cwd: &str) -> Option<AgentHistoryWorktree> {
+    let path = normalize_path(Path::new(cwd));
+    let parts = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for idx in 0..parts.len().saturating_sub(2) {
+        let marker = parts[idx].as_str();
+        if (marker == ".acorn" || marker == ".claude") && parts[idx + 1] == "worktrees" {
+            let name = parts[idx + 2].clone();
+            let worktree_path = parts
+                .iter()
+                .take(idx + 3)
+                .fold(PathBuf::new(), |mut acc, part| {
+                    acc.push(part);
+                    acc
+                });
+            return Some(AgentHistoryWorktree {
+                name,
+                path: worktree_path.display().to_string(),
+                exists: worktree_path.exists(),
+            });
+        }
+    }
+    None
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
