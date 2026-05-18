@@ -560,6 +560,7 @@ function HistorySkeletonRow({ index }: { index: number }) {
   const showWorktree = index % 3 !== 1;
   return (
     <div
+      aria-hidden="true"
       className="flex items-start gap-2 border-b border-border/40 px-3 py-2.5"
       style={{ animationDelay: `${index * 60}ms` }}
     >
@@ -1125,7 +1126,11 @@ function AgentHistoryTab({
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
         ) : !items ? (
-          <div>
+          <div
+            role="status"
+            aria-busy="true"
+            aria-label={rt(t, "rightPanel.history.loading")}
+          >
             {Array.from({ length: 8 }).map((_, i) => (
               <HistorySkeletonRow key={i} index={i} />
             ))}
