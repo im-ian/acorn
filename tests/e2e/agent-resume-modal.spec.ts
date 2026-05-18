@@ -59,6 +59,41 @@ test.describe("agent resume modal", () => {
       .toBe(0);
   });
 
+  test("waits for the first status poll before probing idle persisted sessions", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+    await tauri.handle("detect_session_statuses", () => [
+      { id: "s-resume", status: "running", branch: null },
+    ]);
+    await tauri.handle("get_claude_resume_candidate", () => {
+      const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };
+      w.__ACORN_RESUME_PROBES__ = (w.__ACORN_RESUME_PROBES__ ?? 0) + 1;
+      return {
+        uuid: CANDIDATE_UUID,
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Preview of the previous conversation",
+      };
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("dialog", { name: /Resume previous conversation/ }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __ACORN_RESUME_PROBES__?: number })
+              .__ACORN_RESUME_PROBES__ ?? 0,
+        ),
+      )
+      .toBe(0);
+  });
+
   test("focusing a session with a claude candidate pops the modal and Resume writes claude --resume", async ({
     page,
     tauri,

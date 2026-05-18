@@ -146,6 +146,10 @@ function App() {
   const pendingProjectSessions = pendingProject
     ? sessions.filter((s) => s.repo_path === pendingProject.repo_path)
     : [];
+  const sessionIdsKey = useMemo(
+    () => sessions.map((session) => session.id).join("\0"),
+    [sessions],
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -265,10 +269,51 @@ function App() {
   const resumeModalEnabled = useSettings(
     (s) => s.settings.experiments.resumeModal,
   );
+  const primedResumeSessionsRef = useRef<Set<string>>(new Set());
+  const [resumePrimeVersion, setResumePrimeVersion] = useState(0);
   const probedSessionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    if (!resumeModalEnabled) {
+      primedResumeSessionsRef.current.clear();
+      setResumePrimeVersion((version) => version + 1);
+      return;
+    }
+    const unprimedIds = sessions
+      .map((session) => session.id)
+      .filter((id) => !primedResumeSessionsRef.current.has(id));
+    if (unprimedIds.length === 0) return;
+    let cancelled = false;
+    void useAppStore
+      .getState()
+      .pollSessionStatuses()
+      .finally(() => {
+        if (cancelled) return;
+        for (const id of unprimedIds) {
+          primedResumeSessionsRef.current.add(id);
+        }
+        setResumePrimeVersion((version) => version + 1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeModalEnabled, sessionIdsKey]);
+
+  useEffect(() => {
     if (!resumeModalEnabled) return;
-    const activeSessions = sessions.filter((s) =>
+    const latestById = new Map(
+      useAppStore.getState().sessions.map((session) => [session.id, session]),
+    );
+    const effectiveSessions = sessions.map(
+      (session) => latestById.get(session.id) ?? session,
+    );
+    if (
+      effectiveSessions.some(
+        (session) => !primedResumeSessionsRef.current.has(session.id),
+      )
+    ) {
+      return;
+    }
+    const activeSessions = effectiveSessions.filter((s) =>
       shouldSkipResumeProbeForStatus(s.status),
     );
     if (activeSessions.length > 0) {
@@ -284,7 +329,7 @@ function App() {
         return changed ? next : prev;
       });
     }
-    const toProbe = sessions
+    const toProbe = effectiveSessions
       .filter(
         (session) =>
           !shouldSkipResumeProbeForStatus(session.status) &&
@@ -326,7 +371,7 @@ function App() {
         // Best-effort probe — failures here just mean a session won't
         // surface its modal on this boot. The next launch retries.
       });
-  }, [sessions, resumeModalEnabled]);
+  }, [sessions, resumeModalEnabled, resumePrimeVersion]);
 
   const resumeCandidate = useMemo(() => {
     if (!activeSessionId) return null;
@@ -477,9 +522,11 @@ function App() {
   // (idle/running). The Rust side does the file work; this just kicks the tick.
   useEffect(() => {
     const tick = () => useAppStore.getState().pollSessionStatuses();
-    tick();
+    void tick();
     const handle = setInterval(tick, 1000);
-    return () => clearInterval(handle);
+    return () => {
+      clearInterval(handle);
+    };
   }, []);
 
   // Skip the confirmation dialog for non-isolated sessions when the user has
