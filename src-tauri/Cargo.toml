@@ -47,8 +47,10 @@ strip = true
 # above, so shipped artifact size is unchanged for ad-hoc builds.
 [profile.release-ci]
 inherits = "release"
-lto = "thin"
-codegen-units = 16
+lto = false
+codegen-units = 32
+incremental = false
+strip = "debuginfo"
 
 [package]
 name = "acorn"
