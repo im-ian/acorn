@@ -61,6 +61,11 @@ import {
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
+import {
+  nextSessionStatusPollDelayMs,
+  selectDueSessionStatusPollIds,
+  selectImmediateSessionStatusPollIds,
+} from "./lib/sessionStatusPolling";
 import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { SessionStatus } from "./lib/types";
@@ -171,6 +176,7 @@ function App() {
   }, [t]);
   const sidebarPanelRef = useRef<ImperativePanelHandle | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle | null>(null);
+  const statusPollLastPolledAtRef = useRef<Map<string, number>>(new Map());
   const themes = useThemes((s) => s.themes);
   const refreshThemes = useThemes((s) => s.refresh);
   const appearance = useSettings((s) => s.settings.appearance);
@@ -518,16 +524,142 @@ function App() {
     };
   }, []);
 
-  // Periodically probe each session's transcript JSONL to infer live status
-  // (idle/running). The Rust side does the file work; this just kicks the tick.
+  // Probe session status adaptively: active tabs stay fresh, volatile sessions
+  // get a moderate cadence, and stable sessions fall back to a slow safety
+  // sweep. The Rust side accepts an id subset, so each tick sends only ids
+  // whose cadence has elapsed.
   useEffect(() => {
-    const tick = () => useAppStore.getState().pollSessionStatuses();
-    void tick();
-    const handle = setInterval(tick, 1000);
-    return () => {
-      clearInterval(handle);
+    const lastPolledAt = statusPollLastPolledAtRef.current;
+    const currentSessions = useAppStore.getState().sessions;
+    const currentIds = new Set(currentSessions.map((session) => session.id));
+    for (const id of Array.from(lastPolledAt.keys())) {
+      if (!currentIds.has(id)) lastPolledAt.delete(id);
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    let windowFocused =
+      typeof document === "undefined" ||
+      typeof document.hasFocus !== "function" ||
+      document.hasFocus();
+    let timer: ReturnType<typeof window.setTimeout> | null = null;
+    const pendingImmediateIds = new Set(
+      selectImmediateSessionStatusPollIds({
+        sessions: currentSessions,
+        activeSessionId: useAppStore.getState().activeSessionId,
+        lastPolledAt,
+      }),
+    );
+
+    const isForeground = () =>
+      windowFocused &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden");
+
+    const clearTimer = () => {
+      if (timer === null) return;
+      window.clearTimeout(timer);
+      timer = null;
     };
-  }, []);
+
+    const scheduleNext = (delay?: number) => {
+      clearTimer();
+      if (cancelled || !isForeground()) return;
+      const state = useAppStore.getState();
+      const nextDelay =
+        delay ??
+        nextSessionStatusPollDelayMs({
+          sessions: state.sessions,
+          activeSessionId: state.activeSessionId,
+          lastPolledAt,
+          now: Date.now(),
+        });
+      if (nextDelay === null) return;
+      timer = window.setTimeout(() => {
+        void runPoll();
+      }, nextDelay);
+    };
+
+    const enqueueImmediate = (ids: string[]) => {
+      for (const id of ids) pendingImmediateIds.add(id);
+      scheduleNext(0);
+    };
+
+    const runPoll = async () => {
+      clearTimer();
+      if (cancelled || !isForeground()) return;
+      if (inFlight) return;
+
+      const state = useAppStore.getState();
+      const existingIds = new Set(state.sessions.map((session) => session.id));
+      const immediateIds = Array.from(pendingImmediateIds).filter((id) =>
+        existingIds.has(id),
+      );
+      pendingImmediateIds.clear();
+      const dueIds =
+        immediateIds.length > 0
+          ? immediateIds
+          : selectDueSessionStatusPollIds({
+              sessions: state.sessions,
+              activeSessionId: state.activeSessionId,
+              lastPolledAt,
+              now: Date.now(),
+            });
+
+      if (dueIds.length === 0) {
+        scheduleNext();
+        return;
+      }
+
+      inFlight = true;
+      try {
+        await useAppStore.getState().pollSessionStatuses(dueIds);
+      } finally {
+        const completedAt = Date.now();
+        for (const id of dueIds) lastPolledAt.set(id, completedAt);
+        inFlight = false;
+        scheduleNext(pendingImmediateIds.size > 0 ? 0 : undefined);
+      }
+    };
+
+    const foregroundImmediateIds = () => {
+      const state = useAppStore.getState();
+      return selectImmediateSessionStatusPollIds({
+        sessions: state.sessions,
+        activeSessionId: state.activeSessionId,
+        lastPolledAt,
+        includeVolatile: true,
+      });
+    };
+
+    const onFocus = () => {
+      windowFocused = true;
+      enqueueImmediate(foregroundImmediateIds());
+    };
+    const onBlur = () => {
+      windowFocused = false;
+      clearTimer();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        clearTimer();
+      } else {
+        enqueueImmediate(foregroundImmediateIds());
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    scheduleNext(0);
+
+    return () => {
+      cancelled = true;
+      clearTimer();
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [activeSessionId, sessionIdsKey]);
 
   // Skip the confirmation dialog for non-isolated sessions when the user has
   // opted out via Settings. Isolated worktrees always prompt because the
