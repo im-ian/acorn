@@ -204,16 +204,17 @@ mod tests {
         let r = RingBuffer::new();
         // Push 2 × LINE_CAP single-char lines; only the last LINE_CAP
         // should remain.
-        let many_lines: String = (0..(LINE_CAP * 2))
-            .map(|i| format!("L{i}\n"))
-            .collect();
+        let many_lines: String = (0..(LINE_CAP * 2)).map(|i| format!("L{i}\n")).collect();
         r.push(many_lines.as_bytes());
         assert_eq!(r.line_count(), LINE_CAP);
         let snap = r.snapshot();
         // First retained line must start with "L<LINE_CAP>" because
         // lines 0..LINE_CAP were evicted.
         let head: String = String::from_utf8_lossy(&snap).chars().take(20).collect();
-        assert!(head.starts_with(&format!("L{LINE_CAP}\n")), "head was {head:?}");
+        assert!(
+            head.starts_with(&format!("L{LINE_CAP}\n")),
+            "head was {head:?}"
+        );
     }
 
     #[test]

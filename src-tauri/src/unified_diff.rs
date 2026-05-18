@@ -80,9 +80,8 @@ pub fn parse_unified_diff(text: &str) -> DiffPayload {
                 files.push(prev);
             }
             let (old_path, new_path) = split_diff_git_header(rest);
-            let is_image = looks_like_image(
-                new_path.as_deref().or(old_path.as_deref()).unwrap_or(""),
-            );
+            let is_image =
+                looks_like_image(new_path.as_deref().or(old_path.as_deref()).unwrap_or(""));
             current = Some(DiffFile {
                 old_path,
                 new_path,

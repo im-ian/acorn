@@ -15,8 +15,8 @@
 //! per-session sockets on the app side.
 
 use std::io::{BufRead, BufReader, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
@@ -104,8 +104,8 @@ impl StreamRegistry {
         &self,
         id: &Uuid,
         has_child_now: bool,
-    ) -> Option<crate::pty::ShellHint> {
-        use crate::pty::ShellHint;
+    ) -> Option<acorn_pty::ShellHint> {
+        use acorn_pty::ShellHint;
         let handle = self.inner.get(id)?.value().clone();
         let had_child = handle.had_child.swap(has_child_now, Ordering::SeqCst);
         let mut sticky = handle.needs_input_until.lock();

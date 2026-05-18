@@ -347,8 +347,7 @@ mod tests {
             .output()
             .expect("shell should run");
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let map = parse_env_block(&stdout)
-            .expect("markers present in real shell output");
+        let map = parse_env_block(&stdout).expect("markers present in real shell output");
         assert_eq!(
             map.get("ACORN_SHELL_ENV_TEST").map(String::as_str),
             Some("round-trip-ok")

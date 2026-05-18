@@ -175,7 +175,7 @@ pub fn probe_daemon() -> io::Result<bool> {
 /// tokio / tracing init.
 #[cfg(unix)]
 pub fn detach_into_own_session() -> io::Result<DetachStatus> {
-    use nix::unistd::{ForkResult, fork, setsid};
+    use nix::unistd::{fork, setsid, ForkResult};
 
     // First fork — parent exits, child continues. This guarantees the
     // child is NOT a process group leader, so `setsid()` can succeed.
@@ -245,7 +245,11 @@ mod tests {
         match try_acquire_pid_lock().unwrap() {
             PidLock::Acquired(path) => {
                 assert!(path.exists());
-                let pid: u32 = std::fs::read_to_string(&path).unwrap().trim().parse().unwrap();
+                let pid: u32 = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
                 assert_eq!(pid, std::process::id());
                 release_pid_lock(&path);
                 assert!(!path.exists());
@@ -259,8 +263,7 @@ mod tests {
     #[test]
     fn pid_lock_reclaims_stale_file() {
         let _g = ENV_LOCK.lock();
-        let tmp =
-            short_tmp_root().join(format!("acn-pid-stale-{}", uuid::Uuid::new_v4().simple()));
+        let tmp = short_tmp_root().join(format!("acn-pid-stale-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         unsafe { std::env::set_var(paths::ENV_DATA_DIR_OVERRIDE, &tmp) };
         // Pre-write a guaranteed-dead PID. `1` is `launchd` on macOS and

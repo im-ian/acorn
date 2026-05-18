@@ -32,10 +32,8 @@ pub fn bundled_cli_dir() -> Option<PathBuf> {
 /// separator.
 pub fn prepend_to_path(dir: &Path, existing: &str) -> String {
     let mut entries = vec![dir.to_path_buf()];
-    entries.extend(
-        std::env::split_paths(existing)
-            .filter(|p| !p.as_os_str().is_empty() && p != dir),
-    );
+    entries
+        .extend(std::env::split_paths(existing).filter(|p| !p.as_os_str().is_empty() && p != dir));
     std::env::join_paths(entries)
         .map(|s| s.to_string_lossy().into_owned())
         // join_paths only errors on entries containing the platform

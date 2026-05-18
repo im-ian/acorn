@@ -42,9 +42,7 @@ pub fn ensure_session_state_dir(session_id: uuid::Uuid) -> io::Result<PathBuf> {
 }
 
 fn ensure_session_state_dir_at(base: &Path, session_id: uuid::Uuid) -> io::Result<PathBuf> {
-    let dir = base
-        .join(AGENT_STATE_DIR_NAME)
-        .join(session_id.to_string());
+    let dir = base.join(AGENT_STATE_DIR_NAME).join(session_id.to_string());
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -57,9 +55,7 @@ fn session_state_dir_if_exists_at(
     base: &Path,
     session_id: uuid::Uuid,
 ) -> io::Result<Option<PathBuf>> {
-    let dir = base
-        .join(AGENT_STATE_DIR_NAME)
-        .join(session_id.to_string());
+    let dir = base.join(AGENT_STATE_DIR_NAME).join(session_id.to_string());
     Ok(if dir.is_dir() { Some(dir) } else { None })
 }
 
@@ -82,9 +78,7 @@ pub struct ResumeCandidate {
 /// Surface the claude-side modal candidate for `session_id`, or `Ok(None)`
 /// when there is nothing to ask the user about (no claude has run, or the
 /// latest UUID was already acknowledged).
-pub fn claude_resume_candidate(
-    session_id: uuid::Uuid,
-) -> io::Result<Option<ResumeCandidate>> {
+pub fn claude_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
     candidate_at(
         &crate::daemon::paths::data_dir()?,
         session_id,
@@ -95,9 +89,7 @@ pub fn claude_resume_candidate(
 }
 
 /// Surface the codex-side modal candidate for `session_id`, or `Ok(None)`.
-pub fn codex_resume_candidate(
-    session_id: uuid::Uuid,
-) -> io::Result<Option<ResumeCandidate>> {
+pub fn codex_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
     candidate_at(
         &crate::daemon::paths::data_dir()?,
         session_id,
@@ -282,7 +274,9 @@ fn extract_claude_preview(path: &Path) -> io::Result<Option<String>> {
         if trimmed.is_empty() || !trimmed.starts_with('{') {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
         if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
             continue;
         }
@@ -295,7 +289,9 @@ fn extract_claude_preview(path: &Path) -> io::Result<Option<String>> {
             if item.get("type").and_then(|t| t.as_str()) != Some("text") {
                 continue;
             }
-            let Some(text) = item.get("text").and_then(|t| t.as_str()) else { continue };
+            let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
+                continue;
+            };
             if let Some(p) = collapse_preview(text) {
                 return Ok(Some(p));
             }
@@ -317,7 +313,9 @@ fn extract_codex_preview(path: &Path) -> io::Result<Option<String>> {
         if trimmed.is_empty() || !trimmed.starts_with('{') {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
 
         if v.pointer("/payload/role").and_then(|r| r.as_str()) == Some("assistant") {
             if let Some(content) = v.pointer("/payload/content").and_then(|c| c.as_array()) {
@@ -351,7 +349,9 @@ fn extract_codex_preview(path: &Path) -> io::Result<Option<String>> {
             v.pointer("/payload/output"),
         ];
         for arr in arrays.into_iter().flatten() {
-            let Some(items) = arr.as_array() else { continue };
+            let Some(items) = arr.as_array() else {
+                continue;
+            };
             for item in items.iter().rev() {
                 let content = item.get("content").and_then(|c| c.as_array());
                 let Some(content) = content else { continue };
@@ -460,8 +460,18 @@ mod tests {
     fn claude_candidate_surfaced_after_new_uuid_overrides_ack() {
         let base = ScratchDir::new("rotated");
         let sid = uuid::Uuid::new_v4();
-        write_id(base.path(), sid, CLAUDE_ID_ACK_FILE, "11111111-1111-1111-1111-111111111111");
-        write_id(base.path(), sid, CLAUDE_ID_FILE, "22222222-2222-2222-2222-222222222222");
+        write_id(
+            base.path(),
+            sid,
+            CLAUDE_ID_ACK_FILE,
+            "11111111-1111-1111-1111-111111111111",
+        );
+        write_id(
+            base.path(),
+            sid,
+            CLAUDE_ID_FILE,
+            "22222222-2222-2222-2222-222222222222",
+        );
         let result = candidate_at(
             base.path(),
             sid,

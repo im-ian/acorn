@@ -1,0 +1,16 @@
+[package]
+name = "acorn-transcript"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "acorn_transcript"
+
+[dependencies]
+serde_json = { workspace = true }
+sysinfo = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+directories = { workspace = true }
+parking_lot = { workspace = true }

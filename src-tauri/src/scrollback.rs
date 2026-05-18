@@ -29,18 +29,14 @@ fn scrollback_dir() -> AppResult<PathBuf> {
 
 fn session_file(session_id: &str) -> AppResult<PathBuf> {
     if !is_safe_session_id(session_id) {
-        return Err(AppError::Other(format!(
-            "invalid session id: {session_id}"
-        )));
+        return Err(AppError::Other(format!("invalid session id: {session_id}")));
     }
     Ok(scrollback_dir()?.join(format!("{session_id}.txt")))
 }
 
 /// UUIDs only. Reject anything that could traverse paths.
 fn is_safe_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 pub fn save(session_id: &str, data: &str) -> AppResult<()> {
