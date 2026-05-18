@@ -134,8 +134,7 @@ fn cached_ssh_hostname(alias: &str) -> Option<String> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> =
-        OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
     if let Ok(map) = cache.lock() {
@@ -173,11 +172,7 @@ fn resolve_ssh_hostname(alias: &str) -> Option<String> {
     None
 }
 
-pub fn list_commits(
-    repo_path: &Path,
-    offset: usize,
-    limit: usize,
-) -> AppResult<Vec<CommitInfo>> {
+pub fn list_commits(repo_path: &Path, offset: usize, limit: usize) -> AppResult<Vec<CommitInfo>> {
     let repo = ensure_repo(repo_path)?;
     let pushed_set = pushed_oid_set(&repo);
 
@@ -308,11 +303,7 @@ pub fn diff_for_commit(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
     let parent_tree = parent.as_ref().map(|p| p.tree()).transpose()?;
     let commit_tree = commit.tree()?;
     let mut opts = DiffOptions::new();
-    let diff = repo.diff_tree_to_tree(
-        parent_tree.as_ref(),
-        Some(&commit_tree),
-        Some(&mut opts),
-    )?;
+    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut opts))?;
     collect_diff(&repo, &diff)
 }
 
@@ -344,11 +335,7 @@ fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> 
             let (old_image, new_image) = if is_image {
                 (
                     image_data_uri(repo, delta.old_file().id(), old_path.as_deref()),
-                    image_data_uri_workdir(
-                        repo,
-                        delta.new_file().id(),
-                        new_path.as_deref(),
-                    ),
+                    image_data_uri_workdir(repo, delta.new_file().id(), new_path.as_deref()),
                 )
             } else {
                 (None, None)
@@ -439,11 +426,7 @@ fn image_data_uri(repo: &Repository, oid: git2::Oid, path: Option<&str>) -> Opti
 /// Resolve image bytes for the "new" side of a diff.
 /// Falls back to reading the workdir file when the diff has no oid (untracked
 /// or staged-but-unwritten cases).
-fn image_data_uri_workdir(
-    repo: &Repository,
-    oid: git2::Oid,
-    path: Option<&str>,
-) -> Option<String> {
+fn image_data_uri_workdir(repo: &Repository, oid: git2::Oid, path: Option<&str>) -> Option<String> {
     let path = path?;
     if !oid.is_zero() {
         if let Ok(blob) = repo.find_blob(oid) {

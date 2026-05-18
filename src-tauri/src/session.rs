@@ -57,13 +57,18 @@ impl ProjectStore {
     }
 
     pub fn insert(&self, project: Project) -> Project {
-        self.inner.insert(project.repo_path.clone(), project.clone());
+        self.inner
+            .insert(project.repo_path.clone(), project.clone());
         project
     }
 
     pub fn list(&self) -> Vec<Project> {
         let mut v: Vec<Project> = self.inner.iter().map(|r| r.value().clone()).collect();
-        v.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
+        v.sort_by(|a, b| {
+            a.position
+                .cmp(&b.position)
+                .then_with(|| a.name.cmp(&b.name))
+        });
         v
     }
 
@@ -308,11 +313,7 @@ impl SessionStore {
     /// — leaving the API stable today avoids a second schema migration.
     /// Idempotent: passing `None` detaches.
     #[allow(dead_code)]
-    pub fn set_daemon_session_id(
-        &self,
-        id: &Uuid,
-        daemon_id: Option<Uuid>,
-    ) -> AppResult<Session> {
+    pub fn set_daemon_session_id(&self, id: &Uuid, daemon_id: Option<Uuid>) -> AppResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
@@ -326,11 +327,7 @@ impl SessionStore {
     /// daemon re-injects this on every respawn. Pairs with
     /// `set_daemon_session_id` — wired by the same downstream path.
     #[allow(dead_code)]
-    pub fn set_agent_resume_token(
-        &self,
-        id: &Uuid,
-        token: Option<String>,
-    ) -> AppResult<Session> {
+    pub fn set_agent_resume_token(&self, id: &Uuid, token: Option<String>) -> AppResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)

@@ -145,8 +145,7 @@ fn handle_item(
         match name {
             "TodoWrite" => {
                 if let Some(todos_val) = item.get("input").and_then(|i| i.get("todos")) {
-                    if let Ok(parsed) = serde_json::from_value::<Vec<TodoItem>>(todos_val.clone())
-                    {
+                    if let Ok(parsed) = serde_json::from_value::<Vec<TodoItem>>(todos_val.clone()) {
                         *todo_write_snapshot = Some(parsed);
                     }
                 }
@@ -179,13 +178,11 @@ fn handle_item(
             }
             "TaskUpdate" => {
                 let input = item.get("input");
-                let task_id = input
-                    .and_then(|i| i.get("taskId"))
-                    .and_then(|t| {
-                        t.as_str()
-                            .and_then(|s| s.parse::<u32>().ok())
-                            .or_else(|| t.as_u64().map(|n| n as u32))
-                    });
+                let task_id = input.and_then(|i| i.get("taskId")).and_then(|t| {
+                    t.as_str()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .or_else(|| t.as_u64().map(|n| n as u32))
+                });
                 let status = input
                     .and_then(|i| i.get("status"))
                     .and_then(|s| s.as_str())

@@ -20,8 +20,7 @@ fn main() {
     let mut hash: u64 = 0xcbf29ce4_84222325;
     for path in STAGED_DOTFILES {
         println!("cargo:rerun-if-changed={path}");
-        let bytes = fs::read(Path::new(path))
-            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let bytes = fs::read(Path::new(path)).unwrap_or_else(|e| panic!("read {path}: {e}"));
         for b in bytes {
             hash ^= b as u64;
             hash = hash.wrapping_mul(0x100000001b3);

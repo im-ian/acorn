@@ -52,10 +52,7 @@ impl RotatingFile {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
         Ok(Self {
             inner: Mutex::new(Inner {

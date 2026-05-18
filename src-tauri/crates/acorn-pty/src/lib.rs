@@ -11,23 +11,19 @@
 //!   * `pty:output:{session_id}` — payload `{ "data": "<base64>" }`
 //!   * `pty:exit:{session_id}` — payload `{ "code": Option<i32> }`
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use portable_pty::{
-    Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system,
-};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
-
-use crate::error::{AppError, AppResult};
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -44,6 +40,17 @@ const TAIL_BUFFER_CAP: usize = 4 * 1024 * 1024;
 /// catch the user's eye after a transient command (`ls`, `git status`),
 /// short enough that an abandoned shell does not look perpetually pending.
 const NEEDS_INPUT_STICKY: Duration = Duration::from_secs(5);
+
+/// Errors surfaced by [`PtyManager`]. The host crate maps these into its
+/// own application error type — keeping a dedicated enum here means the
+/// pty crate stays decoupled from acorn's `AppError`.
+#[derive(Debug, thiserror::Error)]
+pub enum PtyError {
+    #[error("pty error: {0}")]
+    Other(String),
+}
+
+pub type PtyResult<T> = Result<T, PtyError>;
 
 /// Coarse classification of a shell-mode session's liveness, derived purely
 /// from "does the PTY child have any descendant processes right now?".
@@ -112,19 +119,30 @@ impl PtyManager {
     /// Spawn a new PTY-backed process for the given session.
     ///
     /// `cols`/`rows` of 0 fall back to 80x24.
-    pub fn spawn<R: Runtime>(
+    ///
+    /// `env_applier` is called once with the freshly built `CommandBuilder`,
+    /// before spawn. The host crate uses it to layer Acorn's render-capability
+    /// env, login-shell dotfile env, and caller-supplied overrides on top of
+    /// `CommandBuilder`'s base — keeping that policy in the host crate (it
+    /// depends on `crate::shell_env`) without dragging those modules into
+    /// the pty crate.
+    pub fn spawn<R, F>(
         &self,
         app: AppHandle<R>,
         session_id: Uuid,
         cwd: PathBuf,
         command: String,
         args: Vec<String>,
-        env: HashMap<String, String>,
+        env_applier: F,
         cols: u16,
         rows: u16,
-    ) -> AppResult<()> {
+    ) -> PtyResult<()>
+    where
+        R: Runtime,
+        F: FnOnce(&mut CommandBuilder),
+    {
         if self.handles.contains_key(&session_id) {
-            return Err(AppError::Pty(format!(
+            return Err(PtyError::Other(format!(
                 "session already has an active pty: {session_id}"
             )));
         }
@@ -139,19 +157,19 @@ impl PtyManager {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
-            .map_err(|e| AppError::Pty(format!("openpty failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("openpty failed: {e}")))?;
 
         let mut cmd = CommandBuilder::new(command);
         for arg in args {
             cmd.arg(arg);
         }
         cmd.cwd(&cwd);
-        crate::pty_env::apply_layered_env(&mut cmd, env);
+        env_applier(&mut cmd);
 
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| AppError::Pty(format!("spawn_command failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("spawn_command failed: {e}")))?;
         // Slave is no longer needed in this process; dropping it lets the child
         // own the pty slave fd and prevents EOF stalls when the child exits.
         drop(pair.slave);
@@ -159,11 +177,11 @@ impl PtyManager {
         let writer = pair
             .master
             .take_writer()
-            .map_err(|e| AppError::Pty(format!("take_writer failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("take_writer failed: {e}")))?;
         let reader = pair
             .master
             .try_clone_reader()
-            .map_err(|e| AppError::Pty(format!("try_clone_reader failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("try_clone_reader failed: {e}")))?;
         let killer = child.clone_killer();
         let pid = child.process_id();
 
@@ -195,7 +213,7 @@ impl PtyManager {
                     handle_for_reader,
                 );
             })
-            .map_err(|e| AppError::Pty(format!("spawn reader thread: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("spawn reader thread: {e}")))?;
 
         let app_for_waiter = app;
         let manager_handles = Arc::clone(&self.handles);
@@ -204,25 +222,25 @@ impl PtyManager {
             .spawn(move || {
                 wait_loop(app_for_waiter, session_id, child, manager_handles, stop);
             })
-            .map_err(|e| AppError::Pty(format!("spawn wait thread: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("spawn wait thread: {e}")))?;
 
         Ok(())
     }
 
     /// Forward raw bytes to the PTY master (stdin).
-    pub fn write(&self, session_id: &Uuid, data: &[u8]) -> AppResult<()> {
+    pub fn write(&self, session_id: &Uuid, data: &[u8]) -> PtyResult<()> {
         let handle = self
             .handles
             .get(session_id)
-            .ok_or_else(|| AppError::Pty(format!("no pty for session {session_id}")))?
+            .ok_or_else(|| PtyError::Other(format!("no pty for session {session_id}")))?
             .clone();
         let mut writer = handle.writer.lock();
         writer
             .write_all(data)
-            .map_err(|e| AppError::Pty(format!("write failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("write failed: {e}")))?;
         writer
             .flush()
-            .map_err(|e| AppError::Pty(format!("flush failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("flush failed: {e}")))?;
         // The user typed — they've moved on from the previous "command just
         // exited" cue, so suppress the sticky NeedsInput before the next
         // liveness poll lands.
@@ -232,11 +250,11 @@ impl PtyManager {
     }
 
     /// Resize the PTY window.
-    pub fn resize(&self, session_id: &Uuid, cols: u16, rows: u16) -> AppResult<()> {
+    pub fn resize(&self, session_id: &Uuid, cols: u16, rows: u16) -> PtyResult<()> {
         let handle = self
             .handles
             .get(session_id)
-            .ok_or_else(|| AppError::Pty(format!("no pty for session {session_id}")))?
+            .ok_or_else(|| PtyError::Other(format!("no pty for session {session_id}")))?
             .clone();
         let size = PtySize {
             cols: if cols == 0 { DEFAULT_COLS } else { cols },
@@ -248,23 +266,23 @@ impl PtyManager {
             .master
             .lock()
             .resize(size)
-            .map_err(|e| AppError::Pty(format!("resize failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("resize failed: {e}")))?;
         Ok(())
     }
 
     /// Kill the child process and stop the reader task.
-    pub fn kill(&self, session_id: &Uuid) -> AppResult<()> {
+    pub fn kill(&self, session_id: &Uuid) -> PtyResult<()> {
         let handle = self
             .handles
             .get(session_id)
-            .ok_or_else(|| AppError::Pty(format!("no pty for session {session_id}")))?
+            .ok_or_else(|| PtyError::Other(format!("no pty for session {session_id}")))?
             .clone();
         handle.stop.store(true, Ordering::SeqCst);
         handle
             .killer
             .lock()
             .kill()
-            .map_err(|e| AppError::Pty(format!("kill failed: {e}")))?;
+            .map_err(|e| PtyError::Other(format!("kill failed: {e}")))?;
         Ok(())
     }
 
@@ -289,11 +307,7 @@ impl PtyManager {
     ///
     /// Returns `None` when the session has no live PTY (e.g. exited between
     /// the snapshot and this call) — the caller should treat that as Idle.
-    pub fn update_shell_state(
-        &self,
-        session_id: &Uuid,
-        has_child_now: bool,
-    ) -> Option<ShellHint> {
+    pub fn update_shell_state(&self, session_id: &Uuid, has_child_now: bool) -> Option<ShellHint> {
         let handle = self.handles.get(session_id)?.clone();
         let had_child = handle.had_child.swap(has_child_now, Ordering::SeqCst);
         let mut sticky = handle.needs_input_until.lock();
@@ -333,11 +347,7 @@ impl PtyManager {
     /// for the session (`truncated` indicates whether the underlying tail
     /// buffer held more bytes than were returned), or `None` when the
     /// session has no live PTY. Pure read — does not drain the buffer.
-    pub fn tail_bytes(
-        &self,
-        session_id: &Uuid,
-        max_bytes: usize,
-    ) -> Option<(Vec<u8>, bool)> {
+    pub fn tail_bytes(&self, session_id: &Uuid, max_bytes: usize) -> Option<(Vec<u8>, bool)> {
         let handle = self.handles.get(session_id)?.clone();
         let buf = handle.tail_buf.lock();
         let total = buf.len();
@@ -427,8 +437,7 @@ fn wait_loop<R: Runtime>(
 /// Minimal RFC 4648 base64 encoder. Avoids pulling in a runtime dep purely
 /// for transport encoding of PTY chunks.
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {
@@ -491,10 +500,7 @@ mod tests {
 
     #[test]
     fn base64_encodes_long_input() {
-        assert_eq!(
-            base64_encode(b"hello world"),
-            "aGVsbG8gd29ybGQ="
-        );
+        assert_eq!(base64_encode(b"hello world"), "aGVsbG8gd29ybGQ=");
     }
 
     #[test]

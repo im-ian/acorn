@@ -1,7 +1,6 @@
 mod agent_history;
 mod agent_resume;
 mod agent_resume_persister;
-mod claude_util;
 mod cli_resolver;
 mod commands;
 pub mod daemon;
@@ -13,7 +12,6 @@ mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
-mod pty;
 mod pty_env;
 mod pull_requests;
 mod scrollback;
@@ -26,7 +24,6 @@ mod shell_util;
 mod staged_rev_reconcile;
 mod state;
 mod todos;
-mod transcript_watcher;
 mod unified_diff;
 mod worktree;
 

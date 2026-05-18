@@ -128,7 +128,10 @@ pub fn trash_agent_history_transcript(
 /// twice that before rebinding so the previous listener has dropped its
 /// file descriptor.
 #[tauri::command]
-pub fn ipc_restart<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> Result<(), String> {
+pub fn ipc_restart<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let previous = state.ipc_handle.lock().take();
     if let Some(handle) = previous {
         handle.signal_stop();
@@ -674,7 +677,9 @@ pub fn create_new_project(
         return Err(AppError::Git(err));
     }
 
-    let project = state.projects.ensure(target.clone(), project_basename(&target));
+    let project = state
+        .projects
+        .ensure(target.clone(), project_basename(&target));
     persist(&state);
     Ok(project)
 }
@@ -712,7 +717,9 @@ fn validate_new_project_name(name: &str, ignore_safe_name: bool) -> AppResult<&s
 
 fn safe_project_name_error(name: &str) -> Option<String> {
     if name.as_bytes().len() > 255 {
-        return Some("project name is longer than 255 bytes, which common filesystems reject".into());
+        return Some(
+            "project name is longer than 255 bytes, which common filesystems reject".into(),
+        );
     }
     None
 }
@@ -738,7 +745,12 @@ pub fn reorder_sessions(
         .collect();
     state.sessions.reorder(&path, &ids);
     persist(&state);
-    Ok(state.sessions.list().into_iter().map(enrich_session).collect())
+    Ok(state
+        .sessions
+        .list()
+        .into_iter()
+        .map(enrich_session)
+        .collect())
 }
 
 #[tauri::command]
@@ -870,10 +882,7 @@ pub struct AgentDetection {
 ///     characters cannot make us materialise directories outside the
 ///     claude project root.
 #[tauri::command]
-pub fn prepare_claude_fork(
-    parent_uuid: String,
-    new_cwd: String,
-) -> AppResult<()> {
+pub fn prepare_claude_fork(parent_uuid: String, new_cwd: String) -> AppResult<()> {
     if Uuid::parse_str(&parent_uuid).is_err() {
         return Err(AppError::Other(format!(
             "parent_uuid must be a valid UUID, got: {parent_uuid}"
@@ -907,7 +916,7 @@ pub fn prepare_claude_fork(
         )));
     };
 
-    let dst_slug = crate::claude_util::slug_for_cwd(std::path::Path::new(&new_cwd));
+    let dst_slug = acorn_transcript::slug_for_cwd(std::path::Path::new(&new_cwd));
     let dst_dir = projects_root.join(&dst_slug);
 
     // Path-traversal guard: resolve both ends and verify the destination
@@ -917,15 +926,14 @@ pub fn prepare_claude_fork(
     // the slug. A weird `new_cwd` (e.g. containing `..` segments that
     // slugify to bare dashes) shouldn't matter given the per-char filter,
     // but defense in depth is cheap.
-    if !dst_slug.starts_with('-')
-        || dst_slug.contains('/')
-        || dst_slug.contains("..")
-    {
+    if !dst_slug.starts_with('-') || dst_slug.contains('/') || dst_slug.contains("..") {
         return Err(AppError::Other(format!(
             "refusing to stage transcript under unsafe slug: {dst_slug}"
         )));
     }
-    let canonical_root = projects_root.canonicalize().unwrap_or(projects_root.clone());
+    let canonical_root = projects_root
+        .canonicalize()
+        .unwrap_or(projects_root.clone());
     let prospective = canonical_root.join(&dst_slug);
     if !prospective.starts_with(&canonical_root) {
         return Err(AppError::Other(format!(
@@ -938,8 +946,7 @@ pub fn prepare_claude_fork(
     std::fs::create_dir_all(&dst_dir)?;
     let dst = dst_dir.join(&filename);
     if !dst.exists() {
-        std::fs::copy(&src, &dst)
-            .map_err(|e| AppError::Other(format!("copy transcript: {e}")))?;
+        std::fs::copy(&src, &dst).map_err(|e| AppError::Other(format!("copy transcript: {e}")))?;
     }
     Ok(())
 }
@@ -961,17 +968,18 @@ pub fn detect_session_agent(
     session_id: String,
 ) -> AppResult<AgentDetection> {
     let parsed = parse_id(&session_id)?;
-    let mappings = crate::transcript_watcher::collect_live_mappings(&state);
+    let session_pids = crate::agent_resume_persister::collect_session_pids(&state);
+    let mappings = acorn_transcript::collect_live_mappings(&session_pids);
     let mut detection = AgentDetection::default();
     for (sid, kind, uuid) in mappings {
         if sid != parsed {
             continue;
         }
         match kind {
-            crate::transcript_watcher::AgentKind::Claude => {
+            acorn_transcript::AgentKind::Claude => {
                 detection.claude = Some(uuid);
             }
-            crate::transcript_watcher::AgentKind::Codex => {
+            acorn_transcript::AgentKind::Codex => {
                 detection.codex = Some(uuid);
             }
         }
@@ -1202,11 +1210,7 @@ pub async fn pty_spawn<R: Runtime>(
             // resolves to a recognised agent binary.
             let primer = crate::ipc::primer::primer_for(&session, &socket);
             let flavor = crate::ipc::primer::AgentFlavor::detect(&resolved_command);
-            primed_args = crate::ipc::primer::inject_primer_args(
-                flavor,
-                primed_args,
-                &primer,
-            );
+            primed_args = crate::ipc::primer::inject_primer_args(flavor, primed_args, &primer);
             write_control_marker(&cwd, &primer);
         }
     }
@@ -1236,16 +1240,19 @@ pub async fn pty_spawn<R: Runtime>(
         }
     }
 
-    state.pty.spawn(
-        app,
-        id,
-        cwd,
-        resolved_command,
-        primed_args,
-        effective_env,
-        cols.unwrap_or(0),
-        rows.unwrap_or(0),
-    )
+    state
+        .pty
+        .spawn(
+            app,
+            id,
+            cwd,
+            resolved_command,
+            primed_args,
+            |cmd| crate::pty_env::apply_layered_env(cmd, effective_env),
+            cols.unwrap_or(0),
+            rows.unwrap_or(0),
+        )
+        .map_err(|e| AppError::Pty(e.to_string()))
 }
 
 /// Route a `pty_spawn` through the daemon. Three cases:
@@ -1383,7 +1390,10 @@ pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -
             .send_input(id, &bytes)
             .map_err(|e| AppError::Pty(e.to_string()));
     }
-    state.pty.write(&id, &bytes)
+    state
+        .pty
+        .write(&id, &bytes)
+        .map_err(|e| AppError::Pty(e.to_string()))
 }
 
 #[tauri::command]
@@ -1400,7 +1410,10 @@ pub fn pty_resize(
             .resize(id, cols, rows)
             .map_err(|e| AppError::Pty(e.to_string()));
     }
-    state.pty.resize(&id, cols, rows)
+    state
+        .pty
+        .resize(&id, cols, rows)
+        .map_err(|e| AppError::Pty(e.to_string()))
 }
 
 #[tauri::command]
@@ -1421,7 +1434,10 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         state.stream_registry.drop_attachment(&id);
         return result;
     }
-    state.pty.kill(&id)
+    state
+        .pty
+        .kill(&id)
+        .map_err(|e| AppError::Pty(e.to_string()))
 }
 
 /// Drop the cached snapshot of the user's shell environment. The next PTY
@@ -1452,9 +1468,8 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
         return Ok(None);
     };
 
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -1484,19 +1499,14 @@ fn session_root_pid(state: &State<'_, AppState>, id: &Uuid) -> Option<u32> {
 /// banner appearing inside the panel any time the PTY drifts outside a
 /// repo.
 #[tauri::command]
-pub fn pty_repo_root(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<Option<String>> {
+pub fn pty_repo_root(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
     let Some(cwd) = pty_cwd(state, session_id)? else {
         return Ok(None);
     };
     let Ok(repo) = git2::Repository::discover(&cwd) else {
         return Ok(None);
     };
-    Ok(repo
-        .workdir()
-        .map(|p| p.to_string_lossy().into_owned()))
+    Ok(repo.workdir().map(|p| p.to_string_lossy().into_owned()))
 }
 
 /// BFS over `sys`, starting at `root`, returning the cwd of the deepest
@@ -1511,7 +1521,9 @@ fn deepest_descendant_cwd(sys: &System, root: Pid) -> Option<String> {
         if !visited.insert(pid) {
             continue;
         }
-        let Some(proc) = sys.process(pid) else { continue };
+        let Some(proc) = sys.process(pid) else {
+            continue;
+        };
         if let Some(cwd) = proc.cwd() {
             let path = cwd.to_string_lossy().into_owned();
             match &best {
@@ -1575,9 +1587,8 @@ pub fn pty_in_worktree_all(state: State<'_, AppState>) -> HashMap<String, bool> 
         return HashMap::new();
     }
 
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -1686,9 +1697,8 @@ pub async fn detect_session_statuses(
     // root). Without this, the StatusBar/Sidebar branch stays pinned to the
     // project root's branch regardless of `git checkout` performed inside
     // the PTY.
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -1719,15 +1729,16 @@ pub async fn detect_session_statuses(
                 if state.stream_registry.contains(&uuid) {
                     let root = state.stream_registry.pid(&uuid)?;
                     let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
-                    state.stream_registry.update_shell_state(&uuid, has_child_now)
+                    state
+                        .stream_registry
+                        .update_shell_state(&uuid, has_child_now)
                 } else {
                     let root = state.pty.child_pid(&uuid)?;
                     let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
                     state.pty.update_shell_state(&uuid, has_child_now)
                 }
             });
-            let status =
-                session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
+            let status = session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
             //     performed inside the terminal (and `claude -w` worktrees)
@@ -1775,9 +1786,7 @@ fn build_children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
 /// itself does not count — we only care about commands launched *under* the
 /// PTY shell, which is what flips Idle ↔ Running for terminal sessions.
 fn has_live_descendant(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> bool {
-    children
-        .get(&root)
-        .is_some_and(|direct| !direct.is_empty())
+    children.get(&root).is_some_and(|direct| !direct.is_empty())
 }
 
 #[tauri::command]
@@ -2178,7 +2187,10 @@ mod tests {
     #[test]
     fn validate_new_project_name_allows_macos_linux_valid_names() {
         assert_eq!(validate_new_project_name("CON", false).unwrap(), "CON");
-        assert_eq!(validate_new_project_name("nul.txt", false).unwrap(), "nul.txt");
+        assert_eq!(
+            validate_new_project_name("nul.txt", false).unwrap(),
+            "nul.txt"
+        );
         assert_eq!(
             validate_new_project_name("foo:bar", false).unwrap(),
             "foo:bar"

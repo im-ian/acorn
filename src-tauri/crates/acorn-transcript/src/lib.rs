@@ -27,13 +27,11 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
+use parking_lot::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
-
-use crate::state::AppState;
 
 // Maximum age (mtime → now) of a transcript that will be paired with
 // a live agent process. Generous so an idle agent waiting on user
@@ -63,32 +61,63 @@ pub enum AgentKind {
     Codex,
 }
 
+/// Per-session input handed to [`collect_live_mappings`]: the Acorn
+/// session id and the PTY root pid (if any) whose descendant tree
+/// should be walked for live agent processes. The host crate builds
+/// this slice from its `AppState` (sessions list + stream/pty pid
+/// lookups) so this crate stays decoupled from acorn's app state.
+#[derive(Clone, Debug)]
+pub struct SessionPid {
+    pub session_id: uuid::Uuid,
+    pub root_pid: Option<u32>,
+}
+
+/// Convert a filesystem cwd into the dash-slug directory name Claude
+/// uses to bucket its JSONL transcripts.
+///
+/// Examples:
+///   `/Users/me/proj`                          → `-Users-me-proj`
+///   `/Users/me/proj/.claude/worktrees/foo`    → `-Users-me-proj--claude-worktrees-foo`
+pub fn slug_for_cwd(cwd: &Path) -> String {
+    let s = cwd.to_string_lossy();
+    let trimmed = s.trim_start_matches('/');
+    let mut slug = String::with_capacity(s.len() + 1);
+    slug.push('-');
+    for ch in trimmed.chars() {
+        if ch == '/' || ch == '.' {
+            slug.push('-');
+        } else {
+            slug.push(ch);
+        }
+    }
+    slug
+}
+
 /// On-demand pairing scan. `detect_session_agent` calls this every
 /// time the Fork menu opens; results are cached for `SCAN_CACHE_TTL_MS`
 /// so repeated menu opens within a short window do not multiply the
 /// per-process syscall cost.
-pub fn collect_live_mappings(state: &AppState) -> Vec<(uuid::Uuid, AgentKind, String)> {
+pub fn collect_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
     {
-        let guard = scan_cache().lock().unwrap();
+        let guard = scan_cache().lock();
         if let Some(cache) = guard.as_ref() {
             if cache.captured_at.elapsed() < Duration::from_millis(SCAN_CACHE_TTL_MS) {
                 return cache.mappings.clone();
             }
         }
     }
-    let mappings = scan_live_mappings(state);
-    *scan_cache().lock().unwrap() = Some(ScanCache {
+    let mappings = scan_live_mappings(sessions);
+    *scan_cache().lock() = Some(ScanCache {
         captured_at: Instant::now(),
         mappings: mappings.clone(),
     });
     mappings
 }
 
-fn scan_live_mappings(state: &AppState) -> Vec<(uuid::Uuid, AgentKind, String)> {
+fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
     let mut out = Vec::new();
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -130,12 +159,10 @@ fn scan_live_mappings(state: &AppState) -> Vec<(uuid::Uuid, AgentKind, String)> 
     }
     let mut candidates: Vec<Candidate> = Vec::new();
 
-    for session in state.sessions.list() {
-        let root_pid = state
-            .stream_registry
-            .pid(&session.id)
-            .or_else(|| state.pty.child_pid(&session.id));
-        let Some(root_pid) = root_pid else { continue };
+    for session in sessions {
+        let Some(root_pid) = session.root_pid else {
+            continue;
+        };
 
         let mut stack = vec![Pid::from_u32(root_pid)];
         while let Some(pid) = stack.pop() {
@@ -148,10 +175,10 @@ fn scan_live_mappings(state: &AppState) -> Vec<(uuid::Uuid, AgentKind, String)> 
                 };
                 if let Some(kind) = kind {
                     if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
-                        let start_time = SystemTime::UNIX_EPOCH
-                            + Duration::from_secs(proc.start_time());
+                        let start_time =
+                            SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
                         candidates.push(Candidate {
-                            session_id: session.id,
+                            session_id: session.session_id,
                             kind,
                             pid: pid.as_u32(),
                             cwd,
@@ -221,17 +248,13 @@ fn codex_sessions_root() -> Option<PathBuf> {
     std::env::var("CODEX_HOME")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| {
-            directories::UserDirs::new()
-                .map(|d| d.home_dir().join(".codex"))
-        })
+        .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
         .map(|p| p.join("sessions"))
 }
 
-/// Convert a filesystem cwd into the dash-slugged directory name claude
-/// uses to bucket transcripts. Examples:
-///   `/Users/me/proj`       → `-Users-me-proj`
-///   `/Users/me/proj/sub`   → `-Users-me-proj-sub`
+/// Resolve the JSONL transcript a `claude` process is currently writing
+/// in the given cwd. The slug derivation matches Claude Code's on-disk
+/// bucketing — see [`slug_for_cwd`].
 fn find_recent_claude_jsonl(
     cwd: &Path,
     projects_root: Option<&Path>,
@@ -240,7 +263,7 @@ fn find_recent_claude_jsonl(
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     let root = projects_root?;
-    let slug_dir = root.join(crate::claude_util::slug_for_cwd(cwd));
+    let slug_dir = root.join(slug_for_cwd(cwd));
     pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, assigned)
 }
 
@@ -442,6 +465,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn slug_for_simple_cwd() {
+        assert_eq!(slug_for_cwd(Path::new("/Users/me/proj")), "-Users-me-proj");
+    }
+
+    #[test]
+    fn slug_for_cwd_with_dot_dirs() {
+        // Claude doubles the leading dash before any `.` segment.
+        assert_eq!(
+            slug_for_cwd(Path::new("/Users/me/proj/.claude/worktrees/foo")),
+            "-Users-me-proj--claude-worktrees-foo"
+        );
+    }
+
+    #[test]
     fn extracts_uuid_from_claude_path() {
         let path = Path::new(
             "/Users/me/.claude/projects/-slug/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl",
@@ -489,33 +526,23 @@ mod tests {
     #[test]
     fn pick_newest_unassigned_jsonl_includes_same_second_mtime() {
         use std::fs::{self, File};
-        let dir = std::env::temp_dir().join(format!(
-            "acorn-mtime-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("acorn-mtime-{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir_all(&dir).unwrap();
         let jsonl = dir.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
         File::create(&jsonl).unwrap();
         let mtime = fs::metadata(&jsonl).unwrap().modified().unwrap();
         // Process start equals transcript mtime → must include (>=).
-        let result = pick_newest_unassigned_jsonl(
-            &dir,
-            SystemTime::UNIX_EPOCH,
-            mtime,
-            &HashSet::new(),
-        );
+        let result =
+            pick_newest_unassigned_jsonl(&dir, SystemTime::UNIX_EPOCH, mtime, &HashSet::new());
         assert!(
             result.is_some(),
             "transcript with mtime == process_start must be a valid pair"
         );
         // Process started one second after the transcript → exclude.
         let later = mtime + Duration::from_secs(1);
-        let result_later = pick_newest_unassigned_jsonl(
-            &dir,
-            SystemTime::UNIX_EPOCH,
-            later,
-            &HashSet::new(),
-        );
+        let result_later =
+            pick_newest_unassigned_jsonl(&dir, SystemTime::UNIX_EPOCH, later, &HashSet::new());
         assert!(
             result_later.is_none(),
             "transcript predating the process must be excluded"

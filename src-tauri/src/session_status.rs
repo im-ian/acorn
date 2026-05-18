@@ -18,8 +18,9 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
+use acorn_pty::ShellHint;
+
 use crate::error::AppResult;
-use crate::pty::ShellHint;
 use crate::session::SessionStatus;
 use crate::todos;
 
@@ -223,10 +224,7 @@ mod tests {
         // The walker must drop it and still find the user turn behind it
         // instead of bailing to None.
         let tail = format!("ent\":[]}}}}\n{}\n", user_turn());
-        assert_eq!(
-            last_meaningful_kind(&tail, false),
-            Some(LastKind::User),
-        );
+        assert_eq!(last_meaningful_kind(&tail, false), Some(LastKind::User),);
     }
 
     #[test]
@@ -252,7 +250,10 @@ mod tests {
 
     #[test]
     fn shell_hint_running_maps_to_running() {
-        assert_eq!(map_shell_hint(Some(ShellHint::Running)), SessionStatus::Running);
+        assert_eq!(
+            map_shell_hint(Some(ShellHint::Running)),
+            SessionStatus::Running
+        );
     }
 
     #[test]
@@ -277,14 +278,7 @@ mod tests {
     fn assistant_without_message_is_skipped() {
         // Defensive: a malformed assistant line without a `message` field
         // must not be classified — the walker should keep looking.
-        let tail = format!(
-            "{}\n{}\n",
-            r#"{"type":"assistant"}"#,
-            user_turn(),
-        );
-        assert_eq!(
-            last_meaningful_kind(&tail, true),
-            Some(LastKind::User),
-        );
+        let tail = format!("{}\n{}\n", r#"{"type":"assistant"}"#, user_turn(),);
+        assert_eq!(last_meaningful_kind(&tail, true), Some(LastKind::User),);
     }
 }

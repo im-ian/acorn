@@ -215,8 +215,7 @@ pub fn daemon_send_input(
     data_b64: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     let bytes = base64_decode(&data_b64)?;
     state
         .daemon_bridge
@@ -231,8 +230,7 @@ pub fn daemon_resize(
     rows: u16,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state
         .daemon_bridge
         .resize(id, cols, rows)
@@ -244,8 +242,7 @@ pub fn daemon_kill_session(
     target_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state.daemon_bridge.kill(id).map_err(|e| e.to_string())
 }
 
@@ -254,8 +251,7 @@ pub fn daemon_forget_session(
     target_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state.daemon_bridge.forget(id).map_err(|e| e.to_string())
 }
 
@@ -272,8 +268,7 @@ pub fn daemon_adopt_session(
     target_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
+    let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
 
     if state.sessions.get(&id).is_ok() {
         return Ok(());
@@ -306,9 +301,7 @@ pub fn daemon_adopt_session(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| repo_path.display().to_string());
-    state
-        .projects
-        .ensure(repo_path.clone(), project_name);
+    state.projects.ensure(repo_path.clone(), project_name);
 
     let now = chrono::Utc::now();
     let session = crate::session::Session {
@@ -399,7 +392,8 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         let v1 = val(chunk[1])?;
         let v2 = if pad >= 2 { 0 } else { val(chunk[2])? };
         let v3 = if pad >= 1 { 0 } else { val(chunk[3])? };
-        let n = (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
+        let n =
+            (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
         out.push((n >> 16) as u8);
         if pad < 2 {
             out.push((n >> 8) as u8);
