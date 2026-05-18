@@ -30,6 +30,33 @@ async function seedActiveSession(
   ]);
 }
 
+async function seedActiveWorktreeSession(
+  tauri: { handle: (cmd: string, fn: (args: unknown) => unknown) => Promise<void> },
+) {
+  await tauri.handle("list_projects", () => [
+    {
+      repo_path: "/tmp/demo",
+      name: "demo",
+      created_at: "2026-01-01T00:00:00Z",
+      position: 0,
+    },
+  ]);
+  await tauri.handle("list_sessions", () => [
+    {
+      id: "s-1",
+      name: "sess",
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo/.acorn/worktrees/demo-1",
+      branch: "main",
+      isolated: true,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    },
+  ]);
+}
+
 test.describe("right panel: tab switching", () => {
   test("each tab shows its own empty placeholder when seeded with a project", async ({
     page,
@@ -407,6 +434,74 @@ test.describe("right panel: groups", () => {
     await expect(
       page.getByRole("dialog", { name: "Running in worktree" }),
     ).toBeVisible();
+  });
+
+  test("History run in new terminal hosts resumed sessions in the project root", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveWorktreeSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-root",
+        title: "Resume without project duplication",
+        preview: null,
+        cwd: "/tmp/demo/.acorn/worktrees/demo-1",
+        worktree: {
+          name: "demo-1",
+          path: "/tmp/demo/.acorn/worktrees/demo-1",
+          exists: true,
+        },
+        transcript_path: "/tmp/codex-root.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-root",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as { __createSessionCalls?: unknown[] };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      return {
+        id: "created-root",
+        name: (args as { name: string }).name,
+        repo_path: (args as { repoPath: string }).repoPath,
+        worktree_path: (args as { repoPath: string }).repoPath,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Resume without project duplication").click({
+      button: "right",
+    });
+    await page.getByRole("menuitem", { name: "Run in new terminal" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __createSessionCalls?: unknown[] })
+                .__createSessionCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{ repoPath: string }>;
+    expect(calls[0].repoPath).toBe("/tmp/demo");
   });
 
   test("History context menu can explicitly resume in a worktree", async ({

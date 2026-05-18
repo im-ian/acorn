@@ -149,6 +149,8 @@ export function RightPanel() {
   const fallbackPath =
     active?.worktree_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? null;
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath, rightTab);
+  const sessionHostRepoPath =
+    active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
   const [prDetail, setPrDetail] = useState<{
     repoPath: string;
@@ -295,7 +297,11 @@ export function RightPanel() {
           )
         ) : rightTab === "history" ? (
           repoPath ? (
-            <AgentHistoryTab key={repoPath} repoPath={repoPath} />
+            <AgentHistoryTab
+              key={repoPath}
+              repoPath={repoPath}
+              sessionHostRepoPath={sessionHostRepoPath ?? repoPath}
+            />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
@@ -736,7 +742,13 @@ function countByStatus(todos: TodoItem[]) {
   return { pending, in_progress, completed };
 }
 
-function AgentHistoryTab({ repoPath }: { repoPath: string }) {
+function AgentHistoryTab({
+  repoPath,
+  sessionHostRepoPath,
+}: {
+  repoPath: string;
+  sessionHostRepoPath: string;
+}) {
   const t = useTranslation();
   const createSession = useAppStore((s) => s.createSession);
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
@@ -802,7 +814,7 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
     try {
       const created = await createSession(
         `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
-        repoPath,
+        sessionHostRepoPath,
       );
       if (!created) {
         setError(
