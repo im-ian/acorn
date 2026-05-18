@@ -12,6 +12,7 @@ mod git_ops;
 mod ipc;
 mod persistence;
 pub mod pty_env;
+mod pty_output;
 mod pull_requests;
 mod shell_args;
 mod shell_env;
@@ -314,6 +315,8 @@ pub fn run() {
             commands::list_workflow_runs,
             commands::get_workflow_run_detail,
             commands::pty_spawn,
+            commands::pty_subscribe_output,
+            commands::pty_unsubscribe_output,
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,

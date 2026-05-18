@@ -9,7 +9,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
@@ -369,6 +369,39 @@ function decodeBase64ToBytes(b64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function decodePtyChannelPayload(payload: unknown): Uint8Array {
+  if (payload instanceof ArrayBuffer) {
+    return new Uint8Array(payload);
+  }
+  if (ArrayBuffer.isView(payload)) {
+    return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  }
+  if (Array.isArray(payload)) {
+    return new Uint8Array(payload);
+  }
+  if (typeof payload === "string") {
+    return decodeBase64ToBytes(payload);
+  }
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "data" in payload &&
+    typeof (payload as { data?: unknown }).data === "string"
+  ) {
+    return decodeBase64ToBytes((payload as { data: string }).data);
+  }
+  throw new Error("unsupported pty output payload");
+}
+
+function unregisterTauriChannel(channel: Channel<unknown>) {
+  const internals = (
+    window as typeof window & {
+      __TAURI_INTERNALS__?: { unregisterCallback?: (id: number) => void };
+    }
+  ).__TAURI_INTERNALS__;
+  internals?.unregisterCallback?.(channel.id);
 }
 
 function encodeStringToBase64(input: string): string {
@@ -1421,39 +1454,76 @@ export function Terminal({
     // collision then orphans one PTY, which exits and triggers the second
     // PTY to also exit (zsh prints "Saving session..." twice). Guard every
     // await resumption point so a disposed mount short-circuits cleanly.
+    const handlePtyOutput = (bytes: Uint8Array) => {
+      term.write(bytes, () => {
+        if (disposed) return;
+        // The parser has drained this chunk. Force a frame-bound
+        // refresh so fast cursor-move/erase TUIs do not leave stale
+        // DOM cursor blocks or cells behind.
+        scheduleViewportFrameRepaint();
+        // Also schedule a viewport repaint once the burst goes quiet,
+        // so a TUI redraw interrupted mid-stream doesn't leave stale
+        // glyphs from a wider previous line painted on screen.
+        scheduleViewportIdleRepaint();
+        // A new prompt row may have just been rendered. Rescan the
+        // buffer so the sticky banner picks it up in the same frame
+        // instead of waiting for the user's next scroll.
+        scheduleContextDispatch();
+      });
+      // Output will land in the buffer — schedule a debounced save so the
+      // new content reaches disk ~1s after activity ends.
+      scheduleScrollbackSave();
+      // Agents can create a worktree and chdir a descendant process without
+      // triggering our shell's OSC 7 prompt hook. Probe the live descendant
+      // cwd on output bursts so exit adoption stays tied to this session.
+      scheduleLiveCwdProbe();
+      scheduleAgentDetection();
+    };
+
     (async () => {
+      let outputChannel: Channel<unknown> | null = null;
       try {
+        outputChannel = new Channel<unknown>((payload) => {
+          if (disposed) return;
+          try {
+            handlePtyOutput(decodePtyChannelPayload(payload));
+          } catch (err) {
+            console.error("[Terminal] decode channel payload failed", err);
+          }
+        });
+        const outputToken = await invoke<number>("pty_subscribe_output", {
+          sessionId,
+          channel: outputChannel,
+        });
+        const subscribedOutputChannel = outputChannel;
+        if (disposed) {
+          invoke("pty_unsubscribe_output", {
+            sessionId,
+            token: outputToken,
+          })
+            .catch(() => {
+              // best effort
+            })
+            .finally(() => unregisterTauriChannel(subscribedOutputChannel));
+          return;
+        }
+        unlistenFns.push(() => {
+          invoke("pty_unsubscribe_output", {
+            sessionId,
+            token: outputToken,
+          })
+            .catch(() => {
+              // best effort
+            })
+            .finally(() => unregisterTauriChannel(subscribedOutputChannel));
+        });
+
         const unlistenOutput = await listen<PtyOutputPayload>(
           `pty:output:${sessionId}`,
           (event) => {
             if (disposed) return;
             try {
-              const bytes = decodeBase64ToBytes(event.payload.data);
-              term.write(bytes, () => {
-                if (disposed) return;
-                // The parser has drained this chunk. Force a frame-bound
-                // refresh so fast cursor-move/erase TUIs do not leave stale
-                // DOM cursor blocks or cells behind.
-                scheduleViewportFrameRepaint();
-                // Also schedule a viewport repaint once the burst goes
-                // quiet, so a TUI redraw interrupted mid-stream doesn't
-                // leave stale glyphs from a wider previous line painted on
-                // screen.
-                scheduleViewportIdleRepaint();
-                // A new prompt row may have just been rendered. Rescan the
-                // buffer so the sticky banner picks it up in the same frame
-                // (instead of waiting for the user's next scroll).
-                scheduleContextDispatch();
-              });
-              // Output will land in the buffer — schedule a debounced save
-              // so the new content reaches disk ~1s after activity ends.
-              scheduleScrollbackSave();
-              // Agents can create a worktree and chdir a descendant process
-              // without triggering our shell's OSC 7 prompt hook. Probe the
-              // live descendant cwd on output bursts so exit adoption can
-              // remain tied to this session rather than a repo-global diff.
-              scheduleLiveCwdProbe();
-              scheduleAgentDetection();
+              handlePtyOutput(decodeBase64ToBytes(event.payload.data));
             } catch (err) {
               console.error("[Terminal] decode payload failed", err);
             }
@@ -1529,6 +1599,9 @@ export function Terminal({
         }
         unlistenFns.push(unlistenExit);
       } catch (err) {
+        if (outputChannel) {
+          unregisterTauriChannel(outputChannel);
+        }
         if (!disposed) {
           term.write(
             `\r\n${ANSI_RED}[acorn] Failed to attach pty listeners: ${formatError(err)}${ANSI_RESET}\r\n`,

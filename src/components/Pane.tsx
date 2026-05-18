@@ -23,7 +23,7 @@ import {
   type CSSProperties,
 } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useAppStore } from "../store";
+import { selectSessionsById, useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -98,6 +98,7 @@ export function Pane({ paneId }: PaneProps) {
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
   const closePane = useAppStore((s) => s.closePane);
+  const sessionsById = useAppStore(selectSessionsById);
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -121,10 +122,9 @@ export function Pane({ paneId }: PaneProps) {
   const workspaceTabs = useAppStore((s) => s.workspaceTabs);
   const tabs = useMemo<PaneTab[]>(() => {
     if (!pane) return [];
-    const lookup = new Map(sessions.map((s) => [s.id, s] as const));
     const ordered: PaneTab[] = [];
     for (const id of pane.tabIds) {
-      const s = lookup.get(id);
+      const s = sessionsById.get(id);
       if (s) {
         ordered.push({
           ...makeSessionWorkspaceTab({
@@ -149,7 +149,7 @@ export function Pane({ paneId }: PaneProps) {
       }
     }
     return ordered;
-  }, [pane, sessions, workspaceTabs]);
+  }, [pane, sessionsById, workspaceTabs]);
 
   const active = useMemo<PaneTab | null>(() => {
     if (!pane?.activeTabId) return null;
