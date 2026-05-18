@@ -1344,6 +1344,13 @@ function AgentHistoryTab({
   );
 }
 
+// Per-repo cache for the commits list. Survives remounts so revisiting a
+// project shows its commit log synchronously; the safety interval still kicks
+// off a background refresh on mount to splice newer commits over the cached
+// prefix. Process memory only.
+type CommitsCacheEntry = { commits: CommitInfo[]; hasMore: boolean };
+const commitsCache = new Map<string, CommitsCacheEntry>();
+
 function CommitsTab({
   repoPath,
   invalidateKey,
@@ -1354,18 +1361,22 @@ function CommitsTab({
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
-  const [commits, setCommits] = useState<CommitInfo[]>([]);
+  const cachedCommits = commitsCache.get(repoPath);
+  const [commits, setCommits] = useState<CommitInfo[]>(
+    () => cachedCommits?.commits ?? [],
+  );
   const [commitLogins, setCommitLogins] = useState<
     Record<string, string | null>
   >({});
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState<DiffPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(() => cachedCommits?.hasMore ?? true);
   const [loadingMore, setLoadingMore] = useState(false);
   // Tracks the very first fetch for the current `repoPath` so we can show
-  // skeleton rows instead of a blank panel on project switch.
-  const [loadingFirst, setLoadingFirst] = useState(true);
+  // skeleton rows instead of a blank panel on project switch. Cache hit
+  // skips the skeleton entirely.
+  const [loadingFirst, setLoadingFirst] = useState(!cachedCommits);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -1373,7 +1384,9 @@ function CommitsTab({
   } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const generationRef = useRef(0);
-  const loadedTopRef = useRef(false);
+  // Hydrated cache counts as a successful top-of-history load so a failed
+  // background refresh doesn't replace good data with an error banner.
+  const loadedTopRef = useRef(!!cachedCommits);
 
   const refreshFirstPage = useCallback(async () => {
     const generation = generationRef.current;
@@ -1403,17 +1416,12 @@ function CommitsTab({
 
   const { refreshNow, scheduleRefresh } = useRefreshScheduler(refreshFirstPage);
 
+  // Parent mounts CommitsTab with key={repoPath}, so this effect only fires
+  // on initial mount — useState initializers already seeded the right state
+  // for that mount (cache hit or empty). We only need the cleanup bump so
+  // any in-flight refresh from the previous instance bails on unmount.
   useEffect(() => {
     generationRef.current += 1;
-    loadedTopRef.current = false;
-    setError(null);
-    setSelected(null);
-    setDiff(null);
-    setHasMore(true);
-    setLoadingMore(false);
-    setLoadingFirst(true);
-    setCommits([]);
-    setCommitLogins({});
     return () => {
       generationRef.current += 1;
     };
@@ -1427,6 +1435,15 @@ function CommitsTab({
   useEffect(() => {
     if (invalidateKey > 0) scheduleRefresh();
   }, [invalidateKey, scheduleRefresh]);
+
+  // Mirror local list state into the module-level cache so the next mount of
+  // CommitsTab for this repo hydrates synchronously. Skip the very first
+  // pre-fetch state (empty + loadingFirst) so we don't pollute the cache with
+  // a blank entry that suppresses the skeleton on a true first visit.
+  useEffect(() => {
+    if (loadingFirst) return;
+    commitsCache.set(repoPath, { commits, hasMore });
+  }, [repoPath, commits, hasMore, loadingFirst]);
 
   // Resolve commit author logins via GitHub GraphQL for any sha we don't
   // already have. The backend caches by (slug, sha) so re-fetches across
@@ -1804,6 +1821,11 @@ function absoluteTime(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+// Per-repo cache for the staged-files snapshot. Same lifecycle as
+// commitsCache — survives remounts, refreshed on every safety interval mount.
+type StagedCacheEntry = { files: StagedFile[]; diff: DiffPayload | null };
+const stagedCache = new Map<string, StagedCacheEntry>();
+
 function StagedTab({
   repoPath,
   invalidateKey,
@@ -1814,10 +1836,15 @@ function StagedTab({
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
-  const [files, setFiles] = useState<StagedFile[]>([]);
-  const [diff, setDiff] = useState<DiffPayload | null>(null);
+  const cachedStaged = stagedCache.get(repoPath);
+  const [files, setFiles] = useState<StagedFile[]>(
+    () => cachedStaged?.files ?? [],
+  );
+  const [diff, setDiff] = useState<DiffPayload | null>(
+    () => cachedStaged?.diff ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
-  const [loadingFirst, setLoadingFirst] = useState(true);
+  const [loadingFirst, setLoadingFirst] = useState(!cachedStaged);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -1846,12 +1873,11 @@ function StagedTab({
 
   const { refreshNow, scheduleRefresh } = useRefreshScheduler(refresh);
 
+  // Same shape as CommitsTab: key={repoPath} on the parent means this only
+  // fires on initial mount, so useState initializers handle the hydration.
+  // Cleanup bump still cancels any in-flight refresh on unmount.
   useEffect(() => {
     generationRef.current += 1;
-    setError(null);
-    setLoadingFirst(true);
-    setFiles([]);
-    setDiff(null);
     return () => {
       generationRef.current += 1;
     };
@@ -1865,6 +1891,12 @@ function StagedTab({
   useEffect(() => {
     if (invalidateKey > 0) scheduleRefresh();
   }, [invalidateKey, scheduleRefresh]);
+
+  // Mirror to module cache so the next mount for this repo hydrates instantly.
+  useEffect(() => {
+    if (loadingFirst) return;
+    stagedCache.set(repoPath, { files, diff });
+  }, [repoPath, files, diff, loadingFirst]);
 
   function isDeleted(file: StagedFile): boolean {
     return file.status.toLowerCase().includes("delete");
