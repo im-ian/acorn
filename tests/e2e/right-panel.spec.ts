@@ -565,7 +565,7 @@ test.describe("right panel: groups", () => {
 
     await expect(
       page.getByRole("menu").getByRole("separator"),
-    ).toHaveCount(3);
+    ).toHaveCount(2);
     await page.getByRole("menuitem", { name: "Run in worktree" }).click();
 
     await expect
