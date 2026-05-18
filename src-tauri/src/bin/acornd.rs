@@ -18,10 +18,12 @@
 
 use std::io;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-use acorn_lib::daemon;
+use acorn_daemon as daemon;
+use acorn_lib::pty_env;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -186,7 +188,15 @@ fn run_serve(detach: bool) -> io::Result<()> {
     );
 
     // 6) Run the daemon. Blocks until shutdown.
-    let daemon_handle = daemon::server::Daemon::new();
+    //
+    // `env_applier` wires the same layered shell-env policy (`pty_env`
+    // + `shell_env`) the in-process spawn path uses, so PTYs created
+    // through the daemon receive identical TERM/LANG/PATH layering.
+    // Keeping the closure in this binary (host crate) avoids pulling
+    // host-only modules into the `acorn-daemon` leaf crate.
+    let env_applier: daemon::pty::EnvApplier =
+        Arc::new(|cmd, env| pty_env::apply_layered_env(cmd, env));
+    let daemon_handle = daemon::server::Daemon::new(env_applier);
     let serve_result = daemon_handle.serve(listeners);
 
     // 7) Cleanup on the way out. Always reached on graceful shutdown;

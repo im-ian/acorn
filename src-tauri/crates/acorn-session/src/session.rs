@@ -484,6 +484,6 @@ mod tests {
     fn reconcile_missing_worktree_errors_for_unknown_session() {
         let store = SessionStore::new();
         let result = store.reconcile_missing_worktree(&Uuid::new_v4());
-        assert!(matches!(result, Err(AppError::SessionNotFound(_))));
+        assert!(matches!(result, Err(SessionError::NotFound(_))));
     }
 }
