@@ -349,45 +349,61 @@ function DetailBody({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <PrStateGlyph state={detail.state} isDraft={detail.is_draft} />
-            <span className="shrink-0 font-mono text-xs text-fg-muted">
+            <span
+              className={cn(
+                "shrink-0 font-mono text-xs leading-5",
+                detail.is_draft && detail.state.toUpperCase() === "OPEN"
+                  ? "text-fg-muted"
+                  : detail.state.toUpperCase() === "OPEN"
+                    ? "text-emerald-400"
+                    : detail.state.toUpperCase() === "MERGED"
+                      ? "text-purple-400"
+                      : "text-rose-400",
+              )}
+            >
               #{detail.number}
             </span>
-            <Tooltip label={detail.title} side="bottom" multiline className="min-w-0 flex-1">
-              <h3 className="truncate text-sm font-semibold tracking-tight text-fg">
+            <Tooltip
+              label={detail.title}
+              side="bottom"
+              multiline
+              className="min-w-0 flex-1"
+            >
+              <h3 className="truncate text-sm font-semibold leading-5 tracking-tight text-fg">
                 {detail.title}
               </h3>
             </Tooltip>
-            {detail.labels.length > 0 ? (
-              <span className="flex shrink-0 items-center gap-1">
-                {detail.labels.map((label) => (
-                  <PrDetailLabelChip key={label.name} label={label} />
-                ))}
-              </span>
-            ) : null}
           </div>
-          <p className="mt-1 truncate text-[11px] text-fg-muted">
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-fg-muted">
             <AuthorTag
               login={detail.author}
               size={16}
               nameClass="text-[11px] text-fg-muted"
             />
-            <span className="opacity-50"> · </span>
+            <span className="opacity-50">·</span>
             <span className="font-mono">
               {detail.head_branch} → {detail.base_branch}
             </span>
-            <span className="opacity-50"> · </span>
+            <span className="opacity-50">·</span>
             <span className="font-mono text-emerald-400">
               +{detail.additions}
             </span>
-            <span className="opacity-50"> </span>
             <span className="font-mono text-rose-400">
               −{detail.deletions}
             </span>
-            <span className="opacity-50"> · </span>
+            <span className="opacity-50">·</span>
             <span>
               {detail.changed_files} {dt(t, "dialogs.pullRequestDetail.files")}
             </span>
-          </p>
+            {detail.labels.length > 0 ? (
+              <>
+                <span className="opacity-50">·</span>
+                {detail.labels.map((label) => (
+                  <PrDetailLabelChip key={label.name} label={label} />
+                ))}
+              </>
+            ) : null}
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {detail.state.toUpperCase() === "OPEN" ? (
