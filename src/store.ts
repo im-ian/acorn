@@ -1206,18 +1206,10 @@ export const useAppStore = create<AppStateModel>()(
       const focused = ws.focusedPaneId;
       const pane = ws.panes[focused];
       if (!pane) return s;
-      const activeSessionId = activeSessionIdFromTabId(pane.activeTabId);
-      const activeSession = activeSessionId
-        ? s.sessions.find((session) => session.id === activeSessionId)
-        : null;
       const activeWorkspaceTab = pane.activeTabId
         ? s.workspaceTabs[pane.activeTabId]
         : undefined;
-      const targetRepoPath =
-        repoPath ??
-        activeSession?.worktree_path ??
-        activeWorkspaceTab?.repoPath ??
-        s.activeProject;
+      const targetRepoPath = repoPath ?? activeWorkspaceTab?.repoPath ?? s.activeProject;
       // Reuse an existing code tab for the same path if there is one;
       // this avoids piling up identical tabs when the user double-clicks
       // the same file repeatedly. The reuse cycles focus to the tab.

@@ -242,7 +242,7 @@ describe("workspace tabs", () => {
 
     useAppStore
       .getState()
-      .openCodeViewerTab(`${s1.worktree_path}/src/App.tsx`);
+      .openCodeViewerTab(`${s1.worktree_path}/src/App.tsx`, s1.worktree_path);
 
     const s = useAppStore.getState();
     expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
