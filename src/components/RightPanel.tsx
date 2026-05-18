@@ -133,17 +133,21 @@ export function RightPanel() {
   const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeTabId = useAppStore((s) => s.activeTabId);
   const activeProject = useAppStore((s) => s.activeProject);
+  const workspaceTabs = useAppStore((s) => s.workspaceTabs);
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
   const setRightGroup = useAppStore((s) => s.setRightGroup);
   const active = sessions.find((s) => s.id === activeSessionId);
+  const activeWorkspaceTab = activeTabId ? workspaceTabs[activeTabId] : undefined;
   // The session's recorded worktree path is what we set at spawn time. The
   // PTY child (or any descendant) may have chdir'd since — most notably via
   // `claude --worktree`, which silently moves the running session into a
   // freshly created worktree. `useLiveRepoPath` asks the backend on demand
   // and falls back to the recorded path when there's no live PTY.
-  const fallbackPath = active?.worktree_path ?? activeProject ?? null;
+  const fallbackPath =
+    active?.worktree_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? null;
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath, rightTab);
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
   const [prDetail, setPrDetail] = useState<{
