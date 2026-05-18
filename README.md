@@ -28,15 +28,15 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 ## 스크린샷
 
 <div align="center">
-  <img width="1392" height="912" alt="Acorn 메인 워크스페이스" src="https://github.com/user-attachments/assets/0405cb4e-f178-4ccd-8c72-83b8fb17c14a" />
+  <img width="1392" height="912" alt="Acorn 메인 워크스페이스" src="https://github.com/user-attachments/assets/745d2ae3-63f4-4422-9022-634cad396ad5" />
   <br/>
   <sub>메인 워크스페이스 — 사이드바 + 분할 Pane + 우측 패널</sub>
   <br/><br/>
-  <img width="1392" height="912" alt="Acorn PR 상세 모달" src="https://github.com/user-attachments/assets/35c29493-6585-445f-8409-c0ce1e5e01fa" />
+  <img width="1392" height="912" alt="Acorn PR 상세 모달" src="https://github.com/user-attachments/assets/745c71db-aa16-48dc-b8e2-0a4ee02d4a3d" />
   <br/>
   <sub>PR 상세 모달 — 체크 상태 + 변경 사항 + 머지 옵션</sub>
   <br/><br/>
-  <img width="1552" height="916" alt="Acorn control session — acorn-ipc" src="https://github.com/user-attachments/assets/b7c4ae60-622c-4f62-9a15-fb2522f287a5" />
+  <video width="1392" controls src="https://github.com/user-attachments/assets/6705d903-d56a-44a0-b324-194fcebc8545"></video>
   <br/>
   <sub>Control session — `acorn-ipc`로 형제 세션 조작</sub>
 </div>
