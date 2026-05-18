@@ -3127,17 +3127,14 @@ function NoAccessBanner({
 }
 
 function PrLabelChip({ label }: { label: PullRequestLabel }) {
-  const hex = label.color.replace(/^#/, "");
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  const textColor = luminance > 0.5 ? "#000000" : "#ffffff";
   return (
     <Tooltip label={label.name} side="top">
       <span
-        className="shrink-0 rounded px-1.5 py-px text-[9px] font-medium leading-tight"
-        style={{ backgroundColor: `#${hex}`, color: textColor }}
+        className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
+        style={{
+          backgroundColor: `#${label.color.replace(/^#/, "")}26`,
+          color: `#${label.color.replace(/^#/, "")}`,
+        }}
       >
         {label.name}
       </span>
@@ -3202,44 +3199,6 @@ function PrChecksBadge({
   );
 }
 
-function PrStateBadge({ state, isDraft }: { state: string; isDraft: boolean }) {
-  const t = useTranslation();
-  const upper = state.toUpperCase();
-  const showDraft = isDraft && upper === "OPEN";
-  const label = showDraft
-    ? rt(t, "rightPanel.prStates.draft")
-    : stateLabelForBadge(t, upper);
-  const tone = showDraft
-    ? "bg-fg-muted/15 text-fg-muted"
-    : upper === "OPEN"
-      ? "bg-emerald-500/15 text-emerald-400"
-      : upper === "MERGED"
-        ? "bg-purple-500/15 text-purple-400"
-        : "bg-rose-500/15 text-rose-400";
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
-        tone,
-      )}
-    >
-      {label}
-    </span>
-  );
-}
-
-function stateLabelForBadge(t: Translator, upper: string): string {
-  switch (upper) {
-    case "OPEN":
-      return rt(t, "rightPanel.prStates.open").toUpperCase();
-    case "CLOSED":
-      return rt(t, "rightPanel.prStates.closed").toUpperCase();
-    case "MERGED":
-      return rt(t, "rightPanel.prStates.merged").toUpperCase();
-    default:
-      return upper;
-  }
-}
 
 function toUnixSeconds(iso: string): number {
   const ms = Date.parse(iso);
@@ -3284,6 +3243,15 @@ function PrRow({
   // doesn't dominate visually. Plain rows stay compact at the prior size.
   const titleSize = showAvatar ? "text-[13px]" : "text-xs";
   const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
+  const upper = pr.state.toUpperCase();
+  const isDraft = pr.is_draft && upper === "OPEN";
+  const numberColor = isDraft
+    ? "text-fg-muted"
+    : upper === "OPEN"
+      ? "text-emerald-400"
+      : upper === "MERGED"
+        ? "text-purple-400"
+        : "text-rose-400";
   return (
     <li
       role="button"
@@ -3307,8 +3275,7 @@ function PrRow({
           titleSize,
         )}
       >
-        <span className="shrink-0 font-mono text-fg-muted">#{pr.number}</span>
-        <PrStateBadge state={pr.state} isDraft={pr.is_draft} />
+        <span className={cn("shrink-0 font-mono", numberColor)}>#{pr.number}</span>
         <Tooltip
           label={pr.title}
           side="top"
