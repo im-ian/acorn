@@ -48,12 +48,14 @@ pub fn resolve() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn env_override_takes_precedence() {
-        // SAFETY: tests run on a single thread inside this test process and
-        // we restore the previous value before returning so neighbouring
-        // tests are not perturbed.
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // SAFETY: serialized via ENV_LOCK and restored before returning.
         let prev = std::env::var(ENV_OVERRIDE).ok();
         unsafe {
             std::env::set_var(ENV_OVERRIDE, "/tmp/acorn-test.sock");
@@ -70,6 +72,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_data_dir() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let prev = std::env::var(ENV_OVERRIDE).ok();
         unsafe {
             std::env::remove_var(ENV_OVERRIDE);

@@ -30,7 +30,7 @@ pub struct AcornIpcStatus {
     /// never happen in a packaged build but is handled gracefully for dev.
     pub bundled_path: String,
     /// True when the bundled binary actually exists at `bundled_path`. False
-    /// in dev mode before `cargo build --bin acorn-ipc` has run.
+    /// in dev mode before `cargo build -p acorn-ipc --bin acorn-ipc` has run.
     pub bundled_exists: bool,
     /// Canonical Unix-socket path used by the IPC server.
     pub socket_path: String,

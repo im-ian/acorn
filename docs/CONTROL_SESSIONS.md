@@ -109,7 +109,7 @@ pnpm run tauri dev
 which both compiles `acorn-ipc` *and* stages it at
 `src-tauri/binaries/acorn-ipc-<target-triple>`, the path Tauri's
 `externalBin` existence check requires before `tauri dev` / `tauri build`
-will even start. Plain `cargo build --bin acorn-ipc` skips the staging
+will even start. Plain `cargo build -p acorn-ipc --bin acorn-ipc` skips the staging
 step, so the build fails with
 `resource path 'binaries/acorn-ipc-...' doesn't exist`.
 
@@ -232,7 +232,7 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
 
 - **macOS and Linux only.** Both `acorn-ipc` and the in-app server import
   `std::os::unix::net::{UnixListener, UnixStream}` directly (see
-  `src-tauri/src/ipc/server.rs` and `src-tauri/src/bin/acorn-ipc.rs`), so the
+  `src-tauri/src/ipc/server.rs` and `src-tauri/crates/acorn-ipc/src/bin/acorn-ipc.rs`), so the
   crate does not compile on Windows targets at all. Porting would mean
   abstracting the transport — e.g. via the `interprocess` crate, which
   unifies Unix domain sockets and Windows named pipes behind one API — and

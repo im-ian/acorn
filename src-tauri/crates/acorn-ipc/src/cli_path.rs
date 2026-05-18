@@ -8,9 +8,9 @@
 //! receive this addition — they stay sandboxed from the IPC surface.
 //!
 //! In `tauri dev` the same `current_exe().parent()` resolves to
-//! `src-tauri/target/debug/`, where `cargo build --bin acorn-ipc` writes
-//! the dev binary, so dev and production converge without a code path
-//! split.
+//! `src-tauri/target/debug/`, where
+//! `cargo build -p acorn-ipc --bin acorn-ipc` writes the dev binary, so
+//! dev and production converge without a code path split.
 
 use std::path::{Path, PathBuf};
 
