@@ -201,6 +201,9 @@ struct FsChangePayload {
     overflow: bool,
     cap: usize,
     refresh: Option<FsRefreshHint>,
+    /// Set when any `.git/...` path (excluding index.lock variants and
+    /// watchman-cookie noise) was touched during this batch.
+    dotgit_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1028,6 +1031,7 @@ struct WatchBatch {
     common_ancestor: Option<PathBuf>,
     overflow: bool,
     ignore: Arc<WatchIgnoreMatcher>,
+    dotgit_changed: bool,
 }
 
 impl WatchBatch {
@@ -1038,6 +1042,7 @@ impl WatchBatch {
             common_ancestor: None,
             overflow: false,
             ignore,
+            dotgit_changed: false,
         }
     }
 
@@ -1069,6 +1074,14 @@ impl WatchBatch {
             };
             if !path_is_inside_root(&path, &self.root) {
                 continue;
+            }
+            match classify_watch_path(&path, &self.root) {
+                WatchPathClass::Drop => continue,
+                WatchPathClass::DotGit => {
+                    self.dotgit_changed = true;
+                    continue;
+                }
+                WatchPathClass::WorkingTree => {}
             }
             if self.ignore.is_ignored(&path, &self.root) {
                 continue;
@@ -1103,7 +1116,7 @@ impl WatchBatch {
     }
 
     fn finish(self) -> Option<FsChangePayload> {
-        if self.seen.is_empty() && !self.overflow {
+        if self.seen.is_empty() && !self.overflow && !self.dotgit_changed {
             return None;
         }
 
@@ -1158,6 +1171,7 @@ impl WatchBatch {
             overflow: self.overflow,
             cap: WATCH_EVENT_CAP,
             refresh,
+            dotgit_changed: self.dotgit_changed,
         })
     }
 }
@@ -1193,6 +1207,45 @@ fn normalize_absolute_path(path: &Path) -> Option<PathBuf> {
 
 fn path_is_inside_root(path: &Path, root: &Path) -> bool {
     path == root || path.starts_with(root)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchPathClass {
+    /// Pure noise — drop the event entirely.
+    Drop,
+    /// Lives under `<root>/.git/` and survives the noise filter.
+    DotGit,
+    /// Ordinary working-tree path.
+    WorkingTree,
+}
+
+/// Classify a watch event path. Mirrors VSCode's git extension regex at
+/// repository.ts:470 — drop `.git/index.lock`, `.git/worktrees/*/index.lock`,
+/// and `.watchman-cookie-*`; mark anything else inside `<root>/.git/` so the
+/// frontend can drive git status without invalidating working-tree caches.
+pub fn classify_watch_path(path: &Path, root: &Path) -> WatchPathClass {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return WatchPathClass::Drop;
+    };
+    if let Some(name) = rel.file_name().and_then(|n| n.to_str()) {
+        if name.starts_with(".watchman-cookie-") {
+            return WatchPathClass::Drop;
+        }
+    }
+    let mut components = rel.components();
+    let first = match components.next() {
+        Some(Component::Normal(c)) => c.to_str(),
+        _ => return WatchPathClass::WorkingTree,
+    };
+    if first != Some(".git") {
+        return WatchPathClass::WorkingTree;
+    }
+    if let Some(name) = rel.file_name().and_then(|n| n.to_str()) {
+        if name == "index.lock" {
+            return WatchPathClass::Drop;
+        }
+    }
+    WatchPathClass::DotGit
 }
 
 fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
@@ -1304,10 +1357,6 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                root.join(".git")
-                    .join("index")
-                    .to_string_lossy()
-                    .into_owned(),
                 root.join("src")
                     .join("lib.rs")
                     .to_string_lossy()
@@ -1320,6 +1369,7 @@ mod tests {
         );
         assert!(!payload.overflow);
         assert!(payload.refresh.is_none());
+        assert!(payload.dotgit_changed, ".git/index sets the dotgit flag");
     }
 
     #[test]
@@ -1568,6 +1618,76 @@ mod tests {
                 delay: Duration::from_millis(800)
             }
         );
+    }
+
+    #[test]
+    fn classify_drops_index_lock_files() {
+        let root = Path::new("/r");
+        assert_eq!(
+            classify_watch_path(&root.join(".git/index.lock"), root),
+            WatchPathClass::Drop,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join(".git/worktrees/wt-a/index.lock"), root),
+            WatchPathClass::Drop,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join("src/.watchman-cookie-1234"), root),
+            WatchPathClass::Drop,
+        );
+    }
+
+    #[test]
+    fn classify_treats_dotgit_paths_as_dotgit() {
+        let root = Path::new("/r");
+        assert_eq!(
+            classify_watch_path(&root.join(".git/index"), root),
+            WatchPathClass::DotGit,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join(".git/HEAD"), root),
+            WatchPathClass::DotGit,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join(".git/refs/heads/main"), root),
+            WatchPathClass::DotGit,
+        );
+    }
+
+    #[test]
+    fn classify_keeps_working_tree_paths() {
+        let root = Path::new("/r");
+        assert_eq!(
+            classify_watch_path(&root.join("src/main.rs"), root),
+            WatchPathClass::WorkingTree,
+        );
+    }
+
+    #[test]
+    fn watch_batch_sets_dotgit_flag_and_omits_path_from_paths_list() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        batch.add_event(create_event(vec![
+            root.join("src/main.rs"),
+            root.join(".git/index"),
+            root.join(".git/index.lock"),
+        ]));
+        let payload = batch.finish().expect("payload");
+        assert_eq!(
+            payload.paths,
+            vec![root.join("src/main.rs").to_string_lossy().into_owned()]
+        );
+        assert!(payload.dotgit_changed);
+    }
+
+    #[test]
+    fn watch_batch_does_not_set_dotgit_flag_when_only_noise_seen() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        batch.add_event(create_event(vec![root.join(".git/index.lock")]));
+        assert!(batch.finish().is_none(), "noise-only batch produces no payload");
     }
 
     #[test]

@@ -600,6 +600,7 @@ export interface FsChangePayload {
   overflow?: boolean;
   cap?: number;
   refresh?: FsRefreshHint | null;
+  dotgit_changed?: boolean;
 }
 
 export const FS_CHANGED_EVENT = "acorn:fs-changed";
