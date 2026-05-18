@@ -93,6 +93,50 @@ test.describe("pane / sidebar shortcuts", () => {
     await expect(panes).toHaveCount(3);
   });
 
+  test("focused pane renders a small active indicator", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+
+    await page.goto("/");
+
+    await page
+      .locator('[data-panel-id="sidebar"]')
+      .getByRole("button", { name: /^alpha main · Idle/ })
+      .first()
+      .click();
+
+    const indicator = page.locator("[data-active-pane-indicator]");
+    await expect(indicator).toHaveCount(1);
+    const initialPaneId = await indicator.getAttribute(
+      "data-active-pane-indicator",
+    );
+
+    const box = await indicator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box?.width).toBeLessThanOrEqual(3);
+    expect(box?.height).toBeGreaterThanOrEqual(40);
+
+    await pressHotkey(page, { mod: true, key: "d" });
+    await expect(page.locator("[data-pane-body]")).toHaveCount(2);
+    await expect(indicator).toHaveCount(1);
+    const splitPaneId = await indicator.getAttribute(
+      "data-active-pane-indicator",
+    );
+    expect(splitPaneId).not.toBe(initialPaneId);
+
+    await page
+      .locator(`[data-pane-body="${initialPaneId}"]`)
+      .click({ position: { x: 12, y: 12 } });
+    await expect(indicator).toHaveCount(1);
+    await expect(indicator).toHaveAttribute(
+      "data-active-pane-indicator",
+      initialPaneId ?? "",
+    );
+  });
+
   test("$mod+Alt+E dispatches equalize panes", async ({ page }) => {
     await page.goto("/");
     await page.evaluate(() => {
