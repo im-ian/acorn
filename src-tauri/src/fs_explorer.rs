@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use git2::{Repository, Status, StatusOptions};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
@@ -18,23 +19,155 @@ use crate::state::AppState;
 const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
 const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
 const WATCH_EVENT_CAP: usize = 256;
-const WATCH_IGNORED_COMPONENTS: &[&str] = &[
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    "out",
-    ".next",
-    ".nuxt",
-    ".svelte-kit",
-    ".vite",
-    ".turbo",
-    ".cache",
-    ".parcel-cache",
-    ".pytest_cache",
-    "__pycache__",
-    "coverage",
+const WATCH_THROTTLE_GAP: Duration = Duration::from_millis(200);
+
+const SUPERVISOR_INITIAL_BACKOFF: Duration = Duration::from_millis(800);
+const SUPERVISOR_MAX_BACKOFF: Duration = Duration::from_millis(12_800);
+const SUPERVISOR_MAX_RESTARTS: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    Enospc,
+    PathMissing,
+    RescanRequired,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupervisorAction {
+    NoOp,
+    WarnOnce,
+    Restart { delay: Duration },
+    Suspend,
+    GiveUp,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SupervisorState {
+    restarts: u32,
+    enospc_logged: bool,
+}
+
+impl SupervisorState {
+    pub fn record_restart(&mut self) {
+        self.restarts = self.restarts.saturating_add(1);
+    }
+
+    pub fn record_enospc_logged(&mut self) {
+        self.enospc_logged = true;
+    }
+
+    fn backoff(&self) -> Duration {
+        let shift = self.restarts.min(4);
+        let ms = SUPERVISOR_INITIAL_BACKOFF
+            .as_millis()
+            .saturating_mul(1u128 << shift);
+        let capped = ms.min(SUPERVISOR_MAX_BACKOFF.as_millis()) as u64;
+        Duration::from_millis(capped)
+    }
+}
+
+pub fn classify_error_message(msg: &str) -> ErrorClass {
+    if msg.contains("No space left on device") {
+        ErrorClass::Enospc
+    } else if msg.contains("File system must be re-scanned") {
+        ErrorClass::RescanRequired
+    } else if msg.contains("No such file or directory") {
+        ErrorClass::PathMissing
+    } else {
+        ErrorClass::Unknown
+    }
+}
+
+pub fn decide(state: &SupervisorState, class: ErrorClass) -> SupervisorAction {
+    match class {
+        ErrorClass::Enospc => {
+            if state.enospc_logged {
+                SupervisorAction::NoOp
+            } else {
+                SupervisorAction::WarnOnce
+            }
+        }
+        ErrorClass::PathMissing => SupervisorAction::Suspend,
+        ErrorClass::RescanRequired | ErrorClass::Unknown => {
+            if state.restarts >= SUPERVISOR_MAX_RESTARTS {
+                SupervisorAction::GiveUp
+            } else {
+                SupervisorAction::Restart {
+                    delay: state.backoff(),
+                }
+            }
+        }
+    }
+}
+
+/// Glue between an error message and the supervisor state machine.
+/// Mutates `state` (enospc_logged or restarts) as a side effect of the
+/// returned action so callers do not have to remember which counter to bump.
+pub fn handle_supervisor_error(msg: &str, state: &mut SupervisorState) -> SupervisorAction {
+    let class = classify_error_message(msg);
+    let action = decide(state, class);
+    match action {
+        SupervisorAction::WarnOnce => state.record_enospc_logged(),
+        SupervisorAction::Restart { .. } => state.record_restart(),
+        _ => {}
+    }
+    action
+}
+
+const DEFAULT_IGNORE_GLOBS: &[&str] = &[
+    "**/node_modules/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/.nuxt/**",
+    "**/.svelte-kit/**",
+    "**/.vite/**",
+    "**/.turbo/**",
+    "**/.cache/**",
+    "**/.parcel-cache/**",
+    "**/.pytest_cache/**",
+    "**/__pycache__/**",
+    "**/coverage/**",
 ];
+
+#[derive(Debug)]
+pub struct WatchIgnoreMatcher {
+    set: GlobSet,
+}
+
+impl WatchIgnoreMatcher {
+    pub fn with_defaults(user_globs: &[String]) -> Self {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in DEFAULT_IGNORE_GLOBS {
+            builder.add(Glob::new(pattern).expect("default ignore glob compiles"));
+        }
+        for user in user_globs {
+            match Glob::new(user) {
+                Ok(g) => {
+                    builder.add(g);
+                }
+                Err(err) => {
+                    tracing::warn!(pattern = %user, error = %err, "ignoring malformed watch exclude");
+                }
+            }
+        }
+        let set = builder.build().unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "watch ignore globset build failed; using empty set");
+            GlobSet::empty()
+        });
+        Self { set }
+    }
+
+    pub fn is_ignored(&self, path: &Path, root: &Path) -> bool {
+        match path.strip_prefix(root) {
+            Ok(rel) => self.set.is_match(rel),
+            Err(_) => true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileEntry {
@@ -78,6 +211,9 @@ struct FsChangePayload {
     overflow: bool,
     cap: usize,
     refresh: Option<FsRefreshHint>,
+    /// Set when any `.git/...` path (excluding index.lock variants and
+    /// watchman-cookie noise) was touched during this batch.
+    dotgit_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -339,21 +475,53 @@ pub struct GitStatusEntry {
 ///
 /// Paths are absolute strings keyed by full path so the FileExplorer's
 /// flat lookup matches its entry paths.
+///
+/// `status_limit` mirrors VSCode's `git.statusLimit` (default 10_000).
+/// When the libgit2 status list exceeds the limit the response is
+/// truncated to the first `limit` entries and `huge=true` so the
+/// frontend can stop auto-refreshing.
+const DEFAULT_GIT_STATUS_LIMIT: u32 = 10_000;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitStatusResult {
+    pub statuses: HashMap<String, GitStatusEntry>,
+    pub huge: bool,
+    pub limit: u32,
+}
+
 #[tauri::command]
-pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEntry>> {
+pub fn fs_git_status(
+    repo_root: String,
+    status_limit: Option<u32>,
+) -> AppResult<GitStatusResult> {
+    fs_git_status_with_limit(repo_root, status_limit)
+}
+
+/// Same as `fs_git_status` but explicit about the limit; kept callable
+/// from unit tests without the `tauri::command` wrapper.
+pub fn fs_git_status_with_limit(
+    repo_root: String,
+    status_limit: Option<u32>,
+) -> AppResult<GitStatusResult> {
+    let limit = status_limit.unwrap_or(DEFAULT_GIT_STATUS_LIMIT);
     let root = PathBuf::from(&repo_root);
     if !root.exists() {
         return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
     }
+    let empty = || GitStatusResult {
+        statuses: HashMap::new(),
+        huge: false,
+        limit,
+    };
     let repo = match Repository::discover(&root) {
         Ok(r) => r,
-        // Not a git repo — return empty map, frontend treats this as "no
-        // status colors to apply".
-        Err(_) => return Ok(HashMap::new()),
+        // Not a git repo — return empty envelope, frontend treats this
+        // as "no status colors to apply".
+        Err(_) => return Ok(empty()),
     };
     let workdir = match repo.workdir() {
         Some(p) => p.to_path_buf(),
-        None => return Ok(HashMap::new()),
+        None => return Ok(empty()),
     };
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
@@ -365,13 +533,23 @@ pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEn
         .statuses(Some(&mut opts))
         .map_err(|e| AppError::Other(format!("git status failed: {e}")))?;
 
-    let mut out: HashMap<String, GitStatusEntry> = HashMap::with_capacity(statuses.len());
+    // Count valid-path entries first so `huge` reflects what the frontend
+    // can actually see — libgit2 occasionally emits pathless entries for
+    // renames/conflicts which we skip below, and we don't want them to
+    // inflate the count past the truncation threshold.
+    let limit_usize = limit as usize;
+    let valid_total = statuses.iter().filter(|e| e.path().is_some()).count();
+    let huge = valid_total > limit_usize;
+    let mut out: HashMap<String, GitStatusEntry> =
+        HashMap::with_capacity(valid_total.min(limit_usize));
     for entry in statuses.iter() {
+        if out.len() >= limit_usize {
+            break;
+        }
         let Some(rel) = entry.path() else { continue };
         let abs = workdir.join(rel);
         let abs_str = abs.to_string_lossy().into_owned();
-        let s = entry.status();
-        let kind = classify_status(s);
+        let kind = classify_status(entry.status());
         out.insert(
             abs_str,
             GitStatusEntry {
@@ -381,7 +559,11 @@ pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEn
             },
         );
     }
-    Ok(out)
+    Ok(GitStatusResult {
+        statuses: out,
+        huge,
+        limit,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -414,70 +596,105 @@ pub fn fs_git_diff_stats(
         None => return Ok(HashMap::new()),
     };
 
-    let mut out = HashMap::with_capacity(entries.len());
+    // Partition entries by handling strategy so one diff covers every
+    // modified / renamed / conflicted path in a single pass.
+    let mut added: Vec<(String, PathBuf)> = Vec::new();
+    let mut deleted: Vec<(String, String)> = Vec::new();
+    let mut diffable: Vec<(String, String)> = Vec::new();
     for entry in entries {
         let path = PathBuf::from(&entry.path);
         reject_dangerous(&path)?;
         let Ok(rel_path) = path.strip_prefix(&workdir) else {
             continue;
         };
-        let rel = rel_path.to_string_lossy();
-        let (additions, deletions) = file_diff_stats(&repo, &workdir, &rel, &entry.kind);
-        out.insert(
-            path.to_string_lossy().into_owned(),
-            GitDiffStatsEntry {
-                additions,
-                deletions,
-            },
-        );
-    }
-    Ok(out)
-}
-
-/// Compute additions/deletions for a single path against HEAD. For
-/// untracked files we count line count as additions; for deleted files
-/// the count comes from the HEAD blob.
-fn file_diff_stats(repo: &Repository, workdir: &Path, rel: &str, kind: &str) -> (u32, u32) {
-    if kind == "added" {
-        // Untracked or freshly-added file. Count file lines as additions.
-        let abs = workdir.join(rel);
-        if let Ok(bytes) = std::fs::read(&abs) {
-            let lines = count_lines(&bytes);
-            return (lines, 0);
+        let rel = rel_path.to_string_lossy().into_owned();
+        let abs = path.to_string_lossy().into_owned();
+        match entry.kind.as_str() {
+            "added" => added.push((abs, path)),
+            "deleted" => deleted.push((abs, rel)),
+            _ => diffable.push((abs, rel)),
         }
-        return (0, 0);
     }
-    if kind == "deleted" {
-        // Read HEAD blob to know the original line count.
-        if let Ok(head) = repo.head() {
-            if let Ok(commit) = head.peel_to_commit() {
-                if let Ok(tree) = commit.tree() {
-                    if let Ok(entry) = tree.get_path(Path::new(rel)) {
-                        if let Ok(obj) = entry.to_object(repo) {
-                            if let Some(blob) = obj.as_blob() {
-                                return (0, count_lines(blob.content()));
-                            }
+
+    let mut out: HashMap<String, GitDiffStatsEntry> =
+        HashMap::with_capacity(added.len() + deleted.len() + diffable.len());
+
+    // Untracked / freshly-added: line count of the working-tree file.
+    for (abs, path) in added {
+        let additions = std::fs::read(&path)
+            .map(|b| count_lines(&b))
+            .unwrap_or(0);
+        out.insert(abs, GitDiffStatsEntry { additions, deletions: 0 });
+    }
+
+    // Deleted: line count of the HEAD blob.
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    for (abs, rel) in deleted {
+        let deletions = head_tree
+            .as_ref()
+            .and_then(|t| t.get_path(Path::new(&rel)).ok())
+            .and_then(|e| e.to_object(&repo).ok())
+            .and_then(|o| o.as_blob().map(|b| count_lines(b.content())))
+            .unwrap_or(0);
+        out.insert(abs, GitDiffStatsEntry { additions: 0, deletions });
+    }
+
+    // Modified / renamed / conflicted: one diff scoped to every diffable
+    // pathspec, fan out via `foreach` line callbacks per delta path.
+    if !diffable.is_empty() {
+        let mut opts = git2::DiffOptions::new();
+        opts.include_untracked(true).recurse_untracked_dirs(false);
+        for (_, rel) in &diffable {
+            opts.pathspec(rel);
+        }
+        match repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts)) {
+            Ok(diff) => {
+                let mut per_path: HashMap<String, (u32, u32)> = HashMap::new();
+                let foreach_result = diff.foreach(
+                    &mut |_delta, _progress| true,
+                    None,
+                    None,
+                    Some(&mut |delta, _hunk, line| {
+                        let rel = delta
+                            .new_file()
+                            .path()
+                            .or_else(|| delta.old_file().path())
+                            .and_then(|p| p.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if rel.is_empty() {
+                            return true;
                         }
-                    }
+                        let entry = per_path.entry(rel).or_default();
+                        match line.origin() {
+                            '+' => entry.0 = entry.0.saturating_add(1),
+                            '-' => entry.1 = entry.1.saturating_add(1),
+                            _ => {}
+                        }
+                        true
+                    }),
+                );
+                if let Err(err) = foreach_result {
+                    // Partial walk: per_path holds whatever landed before the
+                    // error. Surface so callers can see zero counts are not
+                    // "no changes" but "we lost track halfway".
+                    tracing::warn!(error = %err, "diff foreach interrupted; stats may be partial");
+                }
+                for (abs, rel) in diffable {
+                    let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
+                    out.insert(abs, GitDiffStatsEntry { additions: a, deletions: d });
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "diff_tree_to_workdir_with_index failed; diff stats zeroed");
+                for (abs, _rel) in diffable {
+                    out.insert(abs, GitDiffStatsEntry { additions: 0, deletions: 0 });
                 }
             }
         }
-        return (0, 0);
     }
-    // modified / renamed / conflicted — run a diff vs HEAD scoped to
-    // this single path so we get the patch stats directly.
-    let mut opts = git2::DiffOptions::new();
-    opts.pathspec(rel)
-        .include_untracked(true)
-        .recurse_untracked_dirs(false);
-    let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let diff = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts));
-    if let Ok(d) = diff {
-        if let Ok(stats) = d.stats() {
-            return (stats.insertions() as u32, stats.deletions() as u32);
-        }
-    }
-    (0, 0)
+
+    Ok(out)
 }
 
 fn count_lines(bytes: &[u8]) -> u32 {
@@ -729,6 +946,14 @@ pub fn fs_watch_set_root<R: Runtime>(
         watcher
             .watch(&root, RecursiveMode::Recursive)
             .map_err(|e| AppError::Other(format!("notify watch failed: {e}")))?;
+        // Backend type name surfaces FSEvents vs inotify vs ReadDirectoryChangesW
+        // vs PollWatcher in traces — support diagnostics can tell which path
+        // notify picked at runtime without having to reproduce locally.
+        tracing::info!(
+            root = %root.display(),
+            backend = std::any::type_name::<RecommendedWatcher>(),
+            "fs watcher attached"
+        );
         *guard = Some(WatcherHandle {
             _watcher: watcher,
             _batcher: batcher,
@@ -754,13 +979,15 @@ fn run_watch_batcher<R: Runtime>(
     root: PathBuf,
     rx: Receiver<notify::Result<Event>>,
 ) {
+    let mut last_emit: Option<Instant> = None;
+    let mut supervisor = SupervisorState::default();
     loop {
         let first = match rx.recv() {
             Ok(res) => res,
             Err(_) => break,
         };
-        let mut batch = WatchBatch::new(&root);
-        batch.add_result(first);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
+        ingest_result(&mut batch, first, &mut supervisor);
 
         let deadline = Instant::now() + WATCH_BATCH_WINDOW;
         loop {
@@ -769,7 +996,7 @@ fn run_watch_batcher<R: Runtime>(
                 break;
             }
             match rx.recv_timeout(deadline.saturating_duration_since(now)) {
-                Ok(res) => batch.add_result(res),
+                Ok(res) => ingest_result(&mut batch, res, &mut supervisor),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -778,56 +1005,128 @@ fn run_watch_batcher<R: Runtime>(
         let Some(payload) = batch.finish() else {
             continue;
         };
+
+        // Cap emit rate at one payload per WATCH_THROTTLE_GAP so a sustained
+        // burst (e.g. a long `cargo build` rewriting `target/`) cannot
+        // deliver more than ~5 payloads/sec to the frontend.
+        let wait = throttle_delay(last_emit, Instant::now());
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+        }
+
+        last_emit = Some(Instant::now());
         if let Err(e) = app.emit(EVENT_FS_CHANGED, payload) {
             tracing::warn!(error = %e, "fs-changed emit failed");
         }
     }
 }
 
+fn throttle_delay(last_emit: Option<Instant>, now: Instant) -> Duration {
+    let Some(last) = last_emit else {
+        return Duration::ZERO;
+    };
+    let elapsed = now.saturating_duration_since(last);
+    WATCH_THROTTLE_GAP.saturating_sub(elapsed)
+}
+
+/// Funnel a single notify result into the batch, classifying any error via
+/// the supervisor state machine before swallowing it. ENOSPC is logged once
+/// at warn level; transient and unknown errors get their own trace levels so
+/// log grepping can distinguish "self-heals on next event" from "watcher is
+/// drifting toward give-up".
+fn ingest_result(
+    batch: &mut WatchBatch,
+    res: notify::Result<Event>,
+    supervisor: &mut SupervisorState,
+) {
+    match res {
+        Ok(event) => batch.add_event(event),
+        Err(err) => {
+            let msg = err.to_string();
+            match handle_supervisor_error(&msg, supervisor) {
+                SupervisorAction::NoOp => {
+                    tracing::debug!(error = %msg, "fs watch error (suppressed)");
+                }
+                SupervisorAction::WarnOnce => {
+                    tracing::warn!(error = %msg, "fs watcher hit inotify limit (ENOSPC)");
+                }
+                SupervisorAction::Restart { .. } => {
+                    tracing::warn!(error = %msg, "fs watcher error (restart deferred to follow-up)");
+                }
+                SupervisorAction::Suspend => {
+                    tracing::warn!(error = %msg, "fs watcher root missing (suspend deferred to follow-up)");
+                }
+                SupervisorAction::GiveUp => {
+                    tracing::error!(error = %msg, "fs watcher exceeded restart budget");
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchedKind {
+    Added,
+    Updated,
+    Removed,
+}
+
+impl BatchedKind {
+    fn from_event_kind(k: &EventKind) -> Option<Self> {
+        match k {
+            EventKind::Create(_) => Some(Self::Added),
+            EventKind::Modify(_) => Some(Self::Updated),
+            EventKind::Remove(_) => Some(Self::Removed),
+            _ => None,
+        }
+    }
+}
+
+/// Merge a new event kind for an already-seen path. Returns `None` when
+/// the new event cancels the existing one (Add+Remove). Mirrors VSCode's
+/// `coalesceEvents` rules in `watcher-common.ts:342-470`.
+fn merge_kinds(existing: BatchedKind, incoming: BatchedKind) -> Option<BatchedKind> {
+    use BatchedKind::*;
+    match (existing, incoming) {
+        (Added, Removed) => None,
+        (Removed, Added) => Some(Updated),
+        (Added, Updated) => Some(Added),
+        _ => Some(incoming),
+    }
+}
+
 #[derive(Debug)]
 struct WatchBatch {
     root: PathBuf,
-    seen: HashSet<PathBuf>,
-    paths: Vec<PathBuf>,
+    seen: HashMap<PathBuf, BatchedKind>,
     common_ancestor: Option<PathBuf>,
     overflow: bool,
+    ignore: Arc<WatchIgnoreMatcher>,
+    dotgit_changed: bool,
 }
 
 impl WatchBatch {
-    fn new(root: &Path) -> Self {
+    fn new(root: &Path, ignore: Arc<WatchIgnoreMatcher>) -> Self {
         Self {
             root: root.to_path_buf(),
-            seen: HashSet::new(),
-            paths: Vec::new(),
+            seen: HashMap::new(),
             common_ancestor: None,
             overflow: false,
+            ignore,
+            dotgit_changed: false,
         }
-    }
-
-    fn add_result(&mut self, res: notify::Result<Event>) {
-        let event = match res {
-            Ok(e) => e,
-            Err(err) => {
-                tracing::debug!(error = %err, "fs watch error");
-                return;
-            }
-        };
-        self.add_event(event);
     }
 
     fn add_event(&mut self, event: Event) {
         if event.need_rescan() {
-            self.add_path(self.root.clone());
+            self.add_path(self.root.clone(), BatchedKind::Updated);
             self.overflow = true;
             return;
         }
 
-        if !matches!(
-            event.kind,
-            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-        ) {
+        let Some(kind) = BatchedKind::from_event_kind(&event.kind) else {
             return;
-        }
+        };
 
         for path in event.paths {
             let Some(path) = normalize_watch_path(&path) else {
@@ -836,43 +1135,83 @@ impl WatchBatch {
             if !path_is_inside_root(&path, &self.root) {
                 continue;
             }
-            if should_ignore_watch_path(&path, &self.root) {
+            match classify_watch_path(&path, &self.root) {
+                WatchPathClass::Drop => continue,
+                WatchPathClass::DotGit => {
+                    self.dotgit_changed = true;
+                    continue;
+                }
+                WatchPathClass::WorkingTree => {}
+            }
+            if self.ignore.is_ignored(&path, &self.root) {
                 continue;
             }
-            self.add_path(path);
+            self.add_path(path, kind);
         }
     }
 
-    fn add_path(&mut self, path: PathBuf) {
+    fn add_path(&mut self, path: PathBuf, kind: BatchedKind) {
         self.common_ancestor = Some(match self.common_ancestor.take() {
             Some(current) => common_ancestor(&current, &path),
             None => path.clone(),
         });
-        if !self.seen.insert(path.clone()) {
-            return;
-        }
-        if self.paths.len() >= WATCH_EVENT_CAP {
+
+        if self.seen.len() >= WATCH_EVENT_CAP && !self.seen.contains_key(&path) {
             self.overflow = true;
             return;
         }
-        self.paths.push(path);
+
+        let merged = match self.seen.get(&path).copied() {
+            None => Some(kind),
+            Some(existing) => merge_kinds(existing, kind),
+        };
+        match merged {
+            None => {
+                self.seen.remove(&path);
+            }
+            Some(k) => {
+                self.seen.insert(path, k);
+            }
+        }
     }
 
     fn finish(self) -> Option<FsChangePayload> {
-        if self.paths.is_empty() && !self.overflow {
+        if self.seen.is_empty() && !self.overflow && !self.dotgit_changed {
             return None;
         }
+
+        // Split: collect deletes, sort shortest-first, suppress any delete
+        // whose ancestor is also being deleted (folder-delete fan-in).
+        let mut deletes: Vec<PathBuf> = Vec::new();
+        let mut others: Vec<PathBuf> = Vec::new();
+        for (path, kind) in self.seen.into_iter() {
+            match kind {
+                BatchedKind::Removed => deletes.push(path),
+                _ => others.push(path),
+            }
+        }
+        deletes.sort_by_key(|p| p.as_os_str().len());
+        let mut kept_deletes: Vec<PathBuf> = Vec::with_capacity(deletes.len());
+        for d in deletes {
+            let suppressed = kept_deletes
+                .iter()
+                .any(|parent| d != *parent && d.starts_with(parent));
+            if suppressed {
+                continue;
+            }
+            kept_deletes.push(d);
+        }
+
+        let mut all: Vec<PathBuf> = kept_deletes;
+        all.append(&mut others);
+
         let refresh = self.overflow.then(|| {
             let refresh_path = self
                 .common_ancestor
                 .as_deref()
                 .filter(|p| path_is_inside_root(p, &self.root))
-                .unwrap_or(&self.root);
-            let refresh_path = if refresh_path == self.root.as_path() {
-                self.root.clone()
-            } else {
-                refresh_path.to_path_buf()
-            };
+                .unwrap_or(&self.root)
+                .to_path_buf();
             FsRefreshHint {
                 kind: if refresh_path == self.root {
                     FsRefreshKind::Root
@@ -882,9 +1221,9 @@ impl WatchBatch {
                 path: refresh_path.to_string_lossy().into_owned(),
             }
         });
+
         Some(FsChangePayload {
-            paths: self
-                .paths
+            paths: all
                 .into_iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect(),
@@ -892,14 +1231,15 @@ impl WatchBatch {
             overflow: self.overflow,
             cap: WATCH_EVENT_CAP,
             refresh,
+            dotgit_changed: self.dotgit_changed,
         })
     }
 }
 
 fn normalize_watch_path(path: &Path) -> Option<PathBuf> {
-    if path.exists() {
-        return path.canonicalize().ok();
-    }
+    // The watcher root is canonicalized at watch start (fs_watch_set_root),
+    // and notify delivers paths in the same canonical form on macOS/Linux/
+    // Windows. Avoid a per-event stat() — pure component walk only.
     normalize_absolute_path(path)
 }
 
@@ -929,19 +1269,43 @@ fn path_is_inside_root(path: &Path, root: &Path) -> bool {
     path == root || path.starts_with(root)
 }
 
-fn should_ignore_watch_path(path: &Path, root: &Path) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchPathClass {
+    /// Pure noise — drop the event entirely.
+    Drop,
+    /// Lives under `<root>/.git/` and survives the noise filter.
+    DotGit,
+    /// Ordinary working-tree path.
+    WorkingTree,
+}
+
+/// Classify a watch event path. Mirrors VSCode's git extension regex at
+/// repository.ts:470 — drop `.git/index.lock`, `.git/worktrees/*/index.lock`,
+/// and `.watchman-cookie-*`; mark anything else inside `<root>/.git/` so the
+/// frontend can drive git status without invalidating working-tree caches.
+pub fn classify_watch_path(path: &Path, root: &Path) -> WatchPathClass {
     let Ok(rel) = path.strip_prefix(root) else {
-        return true;
+        return WatchPathClass::Drop;
     };
-    rel.components().any(|component| {
-        let Component::Normal(name) = component else {
-            return false;
-        };
-        let Some(name) = name.to_str() else {
-            return false;
-        };
-        WATCH_IGNORED_COMPONENTS.contains(&name)
-    })
+    if let Some(name) = rel.file_name().and_then(|n| n.to_str()) {
+        if name.starts_with(".watchman-cookie-") {
+            return WatchPathClass::Drop;
+        }
+    }
+    let mut components = rel.components();
+    let first = match components.next() {
+        Some(Component::Normal(c)) => c.to_str(),
+        _ => return WatchPathClass::WorkingTree,
+    };
+    if first != Some(".git") {
+        return WatchPathClass::WorkingTree;
+    }
+    if let Some(name) = rel.file_name().and_then(|n| n.to_str()) {
+        if name == "index.lock" {
+            return WatchPathClass::Drop;
+        }
+    }
+    WatchPathClass::DotGit
 }
 
 fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
@@ -958,7 +1322,7 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::CreateKind;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use std::fs;
 
     fn tmpdir() -> tempfile::TempDir {
@@ -969,6 +1333,22 @@ mod tests {
         let mut event = Event::new(EventKind::Create(CreateKind::Any));
         event.paths = paths;
         event
+    }
+
+    fn remove_event(paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(EventKind::Remove(RemoveKind::Any));
+        event.paths = paths;
+        event
+    }
+
+    fn modify_event(paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(EventKind::Modify(ModifyKind::Any));
+        event.paths = paths;
+        event
+    }
+
+    fn new_batch(root: &Path) -> WatchBatch {
+        WatchBatch::new(root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])))
     }
 
     #[test]
@@ -1019,7 +1399,7 @@ mod tests {
     fn watch_batch_filters_noisy_and_outside_paths() {
         let d = tmpdir();
         let root = d.path().canonicalize().unwrap();
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
 
         batch.add_event(create_event(vec![
             root.join("src").join("main.rs"),
@@ -1037,10 +1417,6 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                root.join(".git")
-                    .join("index")
-                    .to_string_lossy()
-                    .into_owned(),
                 root.join("src")
                     .join("lib.rs")
                     .to_string_lossy()
@@ -1053,6 +1429,7 @@ mod tests {
         );
         assert!(!payload.overflow);
         assert!(payload.refresh.is_none());
+        assert!(payload.dotgit_changed, ".git/index sets the dotgit flag");
     }
 
     #[test]
@@ -1060,7 +1437,7 @@ mod tests {
         let d = tmpdir();
         let root = d.path().canonicalize().unwrap();
         let src = root.join("src");
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
 
         for n in 0..(WATCH_EVENT_CAP + 10) {
             batch.add_event(create_event(vec![src.join(format!("file-{n}.rs"))]));
@@ -1083,7 +1460,7 @@ mod tests {
     fn watch_batch_rescan_requests_root_refresh() {
         let d = tmpdir();
         let root = d.path().canonicalize().unwrap();
-        let mut batch = WatchBatch::new(&root);
+        let mut batch = WatchBatch::new(&root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])));
 
         batch.add_event(Event::new(EventKind::Any).set_flag(notify::event::Flag::Rescan));
 
@@ -1097,6 +1474,85 @@ mod tests {
                 path: root.to_string_lossy().into_owned(),
             })
         );
+    }
+
+    #[test]
+    fn ignore_matcher_blocks_default_dirs() {
+        let m = WatchIgnoreMatcher::with_defaults(&[]);
+        let root = Path::new("/proj");
+        assert!(m.is_ignored(&root.join("node_modules/pkg/index.js"), root));
+        assert!(m.is_ignored(&root.join("target/debug/acorn"), root));
+        assert!(m.is_ignored(&root.join("src/__pycache__/x.pyc"), root));
+        assert!(!m.is_ignored(&root.join("src/main.rs"), root));
+    }
+
+    #[test]
+    fn ignore_matcher_accepts_user_globs() {
+        let m = WatchIgnoreMatcher::with_defaults(&[
+            "out/**".to_string(),
+            "**/*.log".to_string(),
+        ]);
+        let root = Path::new("/proj");
+        assert!(m.is_ignored(&root.join("out/bundle.js"), root));
+        assert!(m.is_ignored(&root.join("nested/a.log"), root));
+        assert!(!m.is_ignored(&root.join("src/a.rs"), root));
+    }
+
+    #[test]
+    fn ignore_matcher_treats_outside_root_as_ignored() {
+        let m = WatchIgnoreMatcher::with_defaults(&[]);
+        let root = Path::new("/proj");
+        assert!(m.is_ignored(Path::new("/other/file.rs"), root));
+    }
+
+    #[test]
+    fn ignore_matcher_skips_bad_user_globs() {
+        let m = WatchIgnoreMatcher::with_defaults(&["[[invalid".to_string()]);
+        let root = Path::new("/proj");
+        assert!(!m.is_ignored(&root.join("src/a.rs"), root));
+    }
+
+    #[test]
+    fn fs_git_status_marks_huge_when_over_limit() {
+        use git2::Repository;
+
+        let d = tmpdir();
+        // Canonicalize to dodge macOS /tmp -> /private/tmp symlink — libgit2
+        // returns workdir as the canonicalized path.
+        let repo_path = d.path().canonicalize().unwrap();
+        Repository::init(&repo_path).unwrap();
+        // 12 untracked files; we'll set the limit to 5.
+        for i in 0..12 {
+            fs::write(repo_path.join(format!("u{i}.txt")), b"x").unwrap();
+        }
+
+        let res = fs_git_status_with_limit(
+            repo_path.to_string_lossy().into_owned(),
+            Some(5),
+        )
+        .unwrap();
+        assert!(res.huge);
+        assert_eq!(res.limit, 5);
+        assert_eq!(res.statuses.len(), 5);
+    }
+
+    #[test]
+    fn fs_git_status_default_envelope_not_huge_for_small_repo() {
+        let d = tmpdir();
+        // Canonicalize to dodge macOS /tmp -> /private/tmp symlink.
+        let repo_path = d.path().canonicalize().unwrap();
+        git2::Repository::init(&repo_path).unwrap();
+        fs::write(repo_path.join("a.txt"), b"hi").unwrap();
+        let res = fs_git_status_with_limit(
+            repo_path.to_string_lossy().into_owned(),
+            Some(10_000),
+        )
+        .unwrap();
+        assert!(!res.huge);
+        assert_eq!(res.limit, 10_000);
+        assert!(res.statuses.contains_key(
+            &repo_path.join("a.txt").to_string_lossy().into_owned()
+        ));
     }
 
     #[test]
@@ -1118,5 +1574,380 @@ mod tests {
         .unwrap();
         assert!(!a.exists());
         assert!(b.exists());
+    }
+
+    #[test]
+    fn normalize_event_path_is_pure_for_missing_files() {
+        // Path does not exist; must still normalize via component walk only.
+        let p = normalize_watch_path(Path::new("/tmp/does-not-exist/a/./b/../c"));
+        assert_eq!(p, Some(PathBuf::from("/tmp/does-not-exist/a/c")));
+    }
+
+    #[test]
+    fn normalize_event_path_rejects_relative() {
+        assert_eq!(normalize_watch_path(Path::new("relative/path")), None);
+    }
+
+    #[test]
+    fn normalize_event_path_preserves_existing_absolute() {
+        let d = tmpdir();
+        let f = d.path().join("real.txt");
+        fs::write(&f, b"x").unwrap();
+        let out = normalize_watch_path(&f).expect("normalized");
+        // No requirement to canonicalize; equality up to component walk is enough.
+        assert!(out.is_absolute());
+        assert!(out.ends_with("real.txt"));
+    }
+
+    #[test]
+    fn supervisor_classifies_enospc() {
+        let msg = "No space left on device (os error 28)";
+        assert_eq!(classify_error_message(msg), ErrorClass::Enospc);
+    }
+
+    #[test]
+    fn supervisor_classifies_rescan_required() {
+        let msg = "File system must be re-scanned";
+        assert_eq!(classify_error_message(msg), ErrorClass::RescanRequired);
+    }
+
+    #[test]
+    fn supervisor_classifies_path_not_found() {
+        assert_eq!(
+            classify_error_message("Operation not permitted (os error 1)"),
+            ErrorClass::Unknown,
+        );
+        assert_eq!(
+            classify_error_message("No such file or directory (os error 2)"),
+            ErrorClass::PathMissing,
+        );
+    }
+
+    #[test]
+    fn supervisor_restarts_first_unknown_error_after_800ms() {
+        let state = SupervisorState::default();
+        let action = decide(&state, ErrorClass::Unknown);
+        assert_eq!(
+            action,
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
+    }
+
+    #[test]
+    fn supervisor_doubles_backoff_up_to_cap() {
+        let mut state = SupervisorState::default();
+        for expected_ms in [800u64, 1600, 3200, 6400, 12800] {
+            let action = decide(&state, ErrorClass::Unknown);
+            assert_eq!(
+                action,
+                SupervisorAction::Restart {
+                    delay: Duration::from_millis(expected_ms)
+                }
+            );
+            state.record_restart();
+        }
+        // After 5 restarts, give up.
+        assert_eq!(decide(&state, ErrorClass::Unknown), SupervisorAction::GiveUp);
+    }
+
+    #[test]
+    fn supervisor_suspends_on_path_missing() {
+        let state = SupervisorState::default();
+        assert_eq!(
+            decide(&state, ErrorClass::PathMissing),
+            SupervisorAction::Suspend
+        );
+    }
+
+    #[test]
+    fn supervisor_emits_warn_only_once_for_enospc() {
+        let mut state = SupervisorState::default();
+        assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::WarnOnce);
+        state.record_enospc_logged();
+        assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::NoOp);
+    }
+
+    #[test]
+    fn supervisor_treats_rescan_required_as_restart() {
+        let state = SupervisorState::default();
+        assert_eq!(
+            decide(&state, ErrorClass::RescanRequired),
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
+    }
+
+    #[test]
+    fn handle_supervisor_error_records_enospc_dedup() {
+        // Locks down the mutation side-effect of handle_supervisor_error
+        // so a regression that drops the state.record_enospc_logged() call
+        // is caught directly instead of only through the existing
+        // decide()-only tests.
+        let mut state = SupervisorState::default();
+        assert_eq!(
+            handle_supervisor_error("No space left on device", &mut state),
+            SupervisorAction::WarnOnce,
+        );
+        assert_eq!(
+            handle_supervisor_error("No space left on device", &mut state),
+            SupervisorAction::NoOp,
+        );
+    }
+
+    #[test]
+    fn handle_supervisor_error_records_restart_increment() {
+        let mut state = SupervisorState::default();
+        let first = handle_supervisor_error("boom", &mut state);
+        let second = handle_supervisor_error("boom", &mut state);
+        assert_eq!(
+            first,
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
+        assert_eq!(
+            second,
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(1_600)
+            }
+        );
+    }
+
+    #[test]
+    fn classify_drops_index_lock_files() {
+        let root = Path::new("/r");
+        assert_eq!(
+            classify_watch_path(&root.join(".git/index.lock"), root),
+            WatchPathClass::Drop,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join(".git/worktrees/wt-a/index.lock"), root),
+            WatchPathClass::Drop,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join("src/.watchman-cookie-1234"), root),
+            WatchPathClass::Drop,
+        );
+    }
+
+    #[test]
+    fn classify_treats_dotgit_paths_as_dotgit() {
+        let root = Path::new("/r");
+        assert_eq!(
+            classify_watch_path(&root.join(".git/index"), root),
+            WatchPathClass::DotGit,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join(".git/HEAD"), root),
+            WatchPathClass::DotGit,
+        );
+        assert_eq!(
+            classify_watch_path(&root.join(".git/refs/heads/main"), root),
+            WatchPathClass::DotGit,
+        );
+    }
+
+    #[test]
+    fn classify_keeps_working_tree_paths() {
+        let root = Path::new("/r");
+        assert_eq!(
+            classify_watch_path(&root.join("src/main.rs"), root),
+            WatchPathClass::WorkingTree,
+        );
+    }
+
+    #[test]
+    fn watch_batch_sets_dotgit_flag_and_omits_path_from_paths_list() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        batch.add_event(create_event(vec![
+            root.join("src/main.rs"),
+            root.join(".git/index"),
+            root.join(".git/index.lock"),
+        ]));
+        let payload = batch.finish().expect("payload");
+        assert_eq!(
+            payload.paths,
+            vec![root.join("src/main.rs").to_string_lossy().into_owned()]
+        );
+        assert!(payload.dotgit_changed);
+    }
+
+    #[test]
+    fn watch_batch_does_not_set_dotgit_flag_when_only_noise_seen() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        batch.add_event(create_event(vec![root.join(".git/index.lock")]));
+        assert!(batch.finish().is_none(), "noise-only batch produces no payload");
+    }
+
+    #[test]
+    fn throttle_delay_returns_zero_for_first_emit() {
+        let now = Instant::now();
+        assert_eq!(throttle_delay(None, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn throttle_delay_returns_zero_when_gap_already_exceeded() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(500);
+        assert_eq!(throttle_delay(Some(last), now), Duration::ZERO);
+    }
+
+    #[test]
+    fn throttle_delay_returns_remainder_when_too_soon() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(120);
+        let got = throttle_delay(Some(last), now);
+        // 200ms target - 120ms elapsed = 80ms remaining.
+        assert!(got >= Duration::from_millis(75) && got <= Duration::from_millis(85));
+    }
+
+    #[test]
+    fn coalesce_drops_create_then_delete_pair() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        let f = root.join("a.txt");
+        batch.add_event(create_event(vec![f.clone()]));
+        batch.add_event(remove_event(vec![f]));
+        assert!(batch.finish().is_none(), "create+delete must net to nothing");
+    }
+
+    #[test]
+    fn coalesce_flattens_delete_then_create_to_single_path() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        let f = root.join("a.txt");
+        batch.add_event(remove_event(vec![f.clone()]));
+        batch.add_event(create_event(vec![f.clone()]));
+        let payload = batch.finish().expect("payload");
+        assert_eq!(payload.paths, vec![f.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn coalesce_suppresses_child_deletes_under_parent_delete() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let dir = root.join("dir");
+        let mut batch = new_batch(&root);
+        batch.add_event(remove_event(vec![
+            dir.join("a.txt"),
+            dir.join("sub").join("b.txt"),
+            dir.clone(),
+        ]));
+        let payload = batch.finish().expect("payload");
+        assert_eq!(payload.paths, vec![dir.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn coalesce_keeps_unrelated_updates_alongside_deletes() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        let parent = root.join("dir");
+        let other = root.join("untouched.txt");
+        batch.add_event(modify_event(vec![other.clone()]));
+        batch.add_event(remove_event(vec![parent.join("inside.txt"), parent.clone()]));
+        let payload = batch.finish().expect("payload");
+        let mut got = payload.paths;
+        got.sort();
+        let mut want = vec![
+            parent.to_string_lossy().into_owned(),
+            other.to_string_lossy().into_owned(),
+        ];
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn diff_stats_modified_returns_correct_counts() {
+        use git2::{Repository, Signature};
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+
+        fs::write(repo_path.join("a.rs"), "1\n2\n3\n4\n5\n").unwrap();
+        fs::write(repo_path.join("b.rs"), "x\ny\n").unwrap();
+
+        let sig = Signature::now("t", "t@t").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("a.rs")).unwrap();
+            index.add_path(Path::new("b.rs")).unwrap();
+            index.write().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        }
+
+        // Purely additive: insert 3 new lines between "2" and "3".
+        fs::write(repo_path.join("a.rs"), "1\n2\nNEW1\nNEW2\nNEW3\n3\n4\n5\n").unwrap();
+
+        let entries = vec![GitDiffStatsRequest {
+            path: repo_path.join("a.rs").to_string_lossy().into_owned(),
+            kind: "modified".to_string(),
+        }];
+        let stats = fs_git_diff_stats(
+            repo_path.to_string_lossy().into_owned(),
+            entries,
+        )
+        .unwrap();
+        let entry = stats.values().next().expect("one entry");
+        assert_eq!(entry.additions, 3);
+        assert_eq!(entry.deletions, 0);
+    }
+
+    #[test]
+    fn diff_stats_handles_multiple_modified_paths_in_one_call() {
+        use git2::{Repository, Signature};
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        fs::write(repo_path.join("x.rs"), "a\nb\nc\n").unwrap();
+        fs::write(repo_path.join("y.rs"), "a\nb\nc\n").unwrap();
+        let sig = Signature::now("t", "t@t").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("x.rs")).unwrap();
+            index.add_path(Path::new("y.rs")).unwrap();
+            index.write().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        }
+        // x.rs: +2 lines (purely additive). y.rs: -1 line.
+        fs::write(repo_path.join("x.rs"), "a\nb\nc\nNEW1\nNEW2\n").unwrap();
+        fs::write(repo_path.join("y.rs"), "a\nc\n").unwrap();
+
+        let entries = vec![
+            GitDiffStatsRequest {
+                path: repo_path.join("x.rs").to_string_lossy().into_owned(),
+                kind: "modified".to_string(),
+            },
+            GitDiffStatsRequest {
+                path: repo_path.join("y.rs").to_string_lossy().into_owned(),
+                kind: "modified".to_string(),
+            },
+        ];
+        let stats = fs_git_diff_stats(
+            repo_path.to_string_lossy().into_owned(),
+            entries,
+        )
+        .unwrap();
+        let x_key = repo_path.join("x.rs").to_string_lossy().into_owned();
+        let y_key = repo_path.join("y.rs").to_string_lossy().into_owned();
+        assert_eq!(stats[&x_key].additions, 2);
+        assert_eq!(stats[&x_key].deletions, 0);
+        assert_eq!(stats[&y_key].additions, 0);
+        assert_eq!(stats[&y_key].deletions, 1);
     }
 }
