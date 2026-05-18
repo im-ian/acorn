@@ -39,6 +39,7 @@ import {
   hasConfiguredEditor,
   openInConfiguredEditor,
 } from "../lib/editor";
+import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
 import { useTranslation } from "../lib/useTranslation";
@@ -702,18 +703,21 @@ function TabItem({
     {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
+      shortcut: formatHotkey(Hotkeys.splitVertical),
       onClick: () => onSplitTab("horizontal"),
       disabled: siblingCount <= 1,
     },
     {
       label: paneT(t, "pane.menu.splitDown"),
       icon: <SplitSquareVertical size={12} />,
+      shortcut: formatHotkey(Hotkeys.splitHorizontal),
       onClick: () => onSplitTab("vertical"),
       disabled: siblingCount <= 1,
     },
     {
       label: paneT(t, "pane.menu.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
+      shortcut: formatHotkey(Hotkeys.equalizePanes),
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
@@ -781,6 +785,7 @@ function TabItem({
     {
       label: paneT(t, "pane.menu.close"),
       icon: <X size={12} />,
+      shortcut: formatHotkey(Hotkeys.closeTab),
       onClick: onClose,
     },
     {
@@ -1013,6 +1018,7 @@ function buildPaneMenuItems({
     {
       label: paneT(t, "pane.menu.newSessionInThisPane"),
       icon: <TerminalIcon size={12} />,
+      shortcut: formatHotkey(Hotkeys.newSession),
       onClick: onNewTab,
       disabled: !activeSession && activeProjectFallback === null,
     },
@@ -1020,16 +1026,19 @@ function buildPaneMenuItems({
     {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
+      shortcut: formatHotkey(Hotkeys.splitVertical),
       onClick: () => onSplit("horizontal"),
     },
     {
       label: paneT(t, "pane.menu.splitDown"),
       icon: <SplitSquareVertical size={12} />,
+      shortcut: formatHotkey(Hotkeys.splitHorizontal),
       onClick: () => onSplit("vertical"),
     },
     {
       label: paneT(t, "pane.menu.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
+      shortcut: formatHotkey(Hotkeys.equalizePanes),
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
@@ -1040,6 +1049,7 @@ function buildPaneMenuItems({
     {
       label: paneT(t, "pane.menu.closePane"),
       icon: <X size={12} />,
+      shortcut: formatHotkey(Hotkeys.closeEmptyPane),
       onClick: onClose,
       disabled: totalPanes <= 1,
     },
