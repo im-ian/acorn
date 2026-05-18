@@ -12,9 +12,49 @@ on:
         type: string
 
 jobs:
+  # Build the Vite frontend once and share `dist/` with every downstream
+  # bundler job. The frontend output is identical across macOS targets,
+  # so doing it twice in the per-target matrix was pure waste. Runs on
+  # ubuntu-latest because it is the cheapest runner and the build is
+  # platform-agnostic.
+  frontend:
+    name: Build shared frontend bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     name: Build & sign macOS bundles
     runs-on: macos-latest
+    needs: frontend
     timeout-minutes: 60
     permissions:
       contents: write
@@ -86,6 +126,17 @@ jobs:
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
 
+      # Pull the prebuilt Vite output from the `frontend` job into `dist/`.
+      # The `tauri build` step below skips `pnpm run build` by overriding
+      # `beforeBuildCommand` to only run the sidecar staging script — that
+      # half MUST stay in the matrix because each macOS target cross-builds
+      # `acorn-ipc` / `acornd` for its own triple.
+      - name: Download shared frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
       - name: Build & sign tauri bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -104,7 +155,13 @@ jobs:
         # and rely on `bundle.createUpdaterArtifacts: true` in
         # tauri.conf.json to emit the updater tarball alongside the app
         # bundle automatically.
-        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg -- --profile release-ci
+        #
+        # `--config` inline-overrides `build.beforeBuildCommand` so Vite
+        # does NOT rebuild the frontend — we restored `dist/` from the
+        # `frontend` job's artifact one step ago. The sidecar staging
+        # script still runs per-target because it cross-compiles for each
+        # apple triple.
+        run: pnpm run tauri build --target ${{ matrix.target }} --bundles app dmg --config '{"build":{"beforeBuildCommand":"pnpm run build:sidecar"}}' -- --profile release-ci
 
       - name: Stage release artifacts
         id: stage
@@ -160,6 +217,55 @@ jobs:
           name: bundles-${{ matrix.target }}
           path: ${{ steps.stage.outputs.dir }}/**
           if-no-files-found: error
+
+  # Manual-only benchmark of nightly Rust + `-Z share-generics` + parallel
+  # rustc against the same shared frontend. Skipped on tag pushes; trigger
+  # via the Actions tab when measuring whether unstable flags are worth
+  # the toolchain risk. Produces no release artifact — wall-clock time in
+  # the run log is the deliverable.
+  build-nightly-experiment:
+    name: Build (nightly share-generics experiment)
+    runs-on: macos-latest
+    if: github.event_name == 'workflow_dispatch'
+    needs: frontend
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
+      - name: Setup nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: nightly-aarch64
+          cache-on-failure: true
+
+      - name: Build with share-generics + parallel rustc
+        env:
+          RUSTFLAGS: "-Z share-generics=y -Z threads=8"
+          CARGO_INCREMENTAL: "0"
+        run: pnpm run tauri build --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":"pnpm run build:sidecar"}}' -- --profile release-ci
 
   release:
     name: Publish GitHub Release + latest.json
