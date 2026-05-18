@@ -124,6 +124,7 @@ mod tests {
         let body = fs::read_to_string(&zprofile).unwrap();
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
         assert!(body.contains(".zprofile"));
+        assert!(body.contains("[ \"$_acorn_user_zd\" != \"$_acorn_zd_save\" ]"));
         // Restore ZDOTDIR so subsequent stage files keep resolving to
         // our forwarders.
         assert!(body.contains("_acorn_zd_save"));

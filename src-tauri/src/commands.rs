@@ -1183,11 +1183,14 @@ pub async fn pty_spawn<R: Runtime>(
     // forwards to the user's `$HOME/.zshenv` (rustup, asdf etc. live there
     // and break without it) before pinning `ZDOTDIR` back to ours.
     if let Ok(dir) = crate::shell_init::ensure_shell_init_dir() {
-        let user_zdotdir = effective_env
+        let mut user_zdotdir = effective_env
             .get("ZDOTDIR")
             .cloned()
             .or_else(|| std::env::var("ZDOTDIR").ok())
             .unwrap_or_default();
+        if user_zdotdir.is_empty() || user_zdotdir == dir.display().to_string() {
+            user_zdotdir = std::env::var("HOME").unwrap_or_default();
+        }
         effective_env.insert("ACORN_USER_ZDOTDIR".to_string(), user_zdotdir);
         effective_env.insert("ZDOTDIR".to_string(), dir.display().to_string());
     } else {

@@ -13,7 +13,12 @@
 
 _acorn_zd_save=$ZDOTDIR
 _acorn_user_zd=${ACORN_USER_ZDOTDIR:-$HOME}
-ZDOTDIR=$_acorn_user_zd
-[ -f "$ZDOTDIR/.zprofile" ] && source "$ZDOTDIR/.zprofile"
+if [ "$_acorn_user_zd" = "$_acorn_zd_save" ]; then
+    _acorn_user_zd=$HOME
+fi
+if [ "$_acorn_user_zd" != "$_acorn_zd_save" ]; then
+    ZDOTDIR=$_acorn_user_zd
+    [ -f "$ZDOTDIR/.zprofile" ] && source "$ZDOTDIR/.zprofile"
+fi
 ZDOTDIR=$_acorn_zd_save
 unset _acorn_zd_save _acorn_user_zd
