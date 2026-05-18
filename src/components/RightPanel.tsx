@@ -2190,6 +2190,14 @@ function usePrRowActions(
   return { openContextMenu, overlays, error };
 }
 
+// Per-(repo, stateFilter) cache for PR listings. Keeps rows on screen across
+// remounts and filter toggles so the user doesn't see a skeleton every time
+// they revisit a project. Process memory only — turns over on app restart.
+const pullRequestsCache = new Map<string, PullRequestListing>();
+function pullRequestsCacheKey(repoPath: string, stateFilter: PrStateFilter) {
+  return `${repoPath} ${stateFilter}`;
+}
+
 function PullRequestsTab({
   repoPath,
   onOpenDetail,
@@ -2208,7 +2216,9 @@ function PullRequestsTab({
   );
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
-  const [listing, setListing] = useState<PullRequestListing | null>(null);
+  const [listing, setListing] = useState<PullRequestListing | null>(
+    () => pullRequestsCache.get(pullRequestsCacheKey(repoPath, "open")) ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Grows by PR_PAGE_SIZE each time the user scrolls to the bottom. Resets on
@@ -2222,6 +2232,10 @@ function PullRequestsTab({
       try {
         const result = await api.listPullRequests(repoPath, stateFilter, limit);
         if (signal?.cancelled) return;
+        pullRequestsCache.set(
+          pullRequestsCacheKey(repoPath, stateFilter),
+          result,
+        );
         setListing(result);
         setError(null);
         setPrAccountForRepo(
@@ -2238,11 +2252,14 @@ function PullRequestsTab({
     [repoPath, stateFilter, limit, setPrAccountForRepo],
   );
 
-  // Reset list state on context change (project / filter) but NOT on limit
-  // growth — keeping the existing rows during a "load more" prevents the
-  // skeleton from flashing while the larger page lands.
+  // On filter change, hydrate from the cache for that filter (or show the
+  // skeleton if we've never fetched it). The accompanying fetch below still
+  // runs SWR-style. Limit resets so a fresh filter context starts at one page.
   useEffect(() => {
-    setListing(null);
+    setListing(
+      pullRequestsCache.get(pullRequestsCacheKey(repoPath, stateFilter)) ??
+        null,
+    );
     setError(null);
     setLimit(PR_PAGE_SIZE);
   }, [repoPath, stateFilter]);
@@ -2388,12 +2405,19 @@ function PullRequestsTab({
 const WORKFLOW_RUNS_LIMIT = 50;
 const ALL_WORKFLOWS = "__all__";
 
+// Per-repo cache for workflow runs. Same idea as pullRequestsCache —
+// re-opening a project surfaces its runs synchronously while a background
+// fetch reconciles fresh results.
+const workflowRunsCache = new Map<string, WorkflowRunsListing>();
+
 function ActionsTab({ repoPath }: { repoPath: string }) {
   const t = useTranslation();
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
   );
-  const [listing, setListing] = useState<WorkflowRunsListing | null>(null);
+  const [listing, setListing] = useState<WorkflowRunsListing | null>(
+    () => workflowRunsCache.get(repoPath) ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [workflowFilter, setWorkflowFilter] = useState<string>(ALL_WORKFLOWS);
@@ -2405,6 +2429,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
       try {
         const result = await api.listWorkflowRuns(repoPath, WORKFLOW_RUNS_LIMIT);
         if (signal?.cancelled) return;
+        workflowRunsCache.set(repoPath, result);
         setListing(result);
         setError(null);
       } catch (e) {
@@ -2416,13 +2441,6 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
     },
     [repoPath],
   );
-
-  useEffect(() => {
-    setListing(null);
-    setError(null);
-    setWorkflowFilter(ALL_WORKFLOWS);
-    setDetailRunId(null);
-  }, [repoPath]);
 
   useEffect(() => {
     const signal = { cancelled: false };
