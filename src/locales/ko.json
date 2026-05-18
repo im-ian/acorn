@@ -887,7 +887,12 @@
       "bodyPlaceholder": "본문(선택 사항)",
       "rebaseMessageLocked": "Rebase는 원래 커밋을 기본 브랜치 위에 다시 적용하므로 여기서 커밋 메시지를 변경할 수 없습니다.",
       "merging": "병합 중...",
-      "merge": "병합"
+      "merge": "병합",
+      "checksFailing": "head 커밋의 체크 {count}개가 실패했습니다.",
+      "checksPending": "head 커밋의 체크 {count}개가 아직 진행 중입니다.",
+      "checksBlocking": "브랜치 보호 정책에 따라 체크가 완료/통과될 때까지 머지가 차단됩니다.",
+      "adminMerge": "관리자 머지 (브랜치 보호 무시)",
+      "adminMergeHint": "gh에 --admin 옵션을 전달해 강제로 머지합니다. 저장소 정책상 허용되며 필수 체크를 무시해도 되는 경우에만 사용하세요."
     },
     "stagedRevMismatch": {
       "title": "셸 환경 업데이트됨",

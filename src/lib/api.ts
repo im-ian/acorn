@@ -162,6 +162,7 @@ export const api = {
     method: MergeMethod,
     commitTitle: string | null,
     commitBody: string | null,
+    admin: boolean = false,
   ): Promise<void> {
     return invoke<void>("merge_pull_request", {
       repoPath,
@@ -169,6 +170,7 @@ export const api = {
       method,
       commitTitle,
       commitBody,
+      admin,
     });
   },
   closePullRequest(repoPath: string, number: number): Promise<void> {
