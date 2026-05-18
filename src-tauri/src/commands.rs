@@ -444,16 +444,19 @@ fn daemon_pid_from_status_sessions_or_pidfile(
     snapshots_by_pid: &HashMap<u32, &ProcessMemorySnapshot>,
 ) -> Option<u32> {
     match state.daemon_bridge.status() {
-        Ok(snapshot) => snapshot.pid.or_else(|| {
-            let session_pids: Vec<u32> = state
-                .daemon_bridge
-                .list_sessions()
-                .ok()?
-                .into_iter()
-                .filter_map(|session| session.pid)
-                .collect();
-            infer_acornd_root_from_session_pids(snapshots_by_pid, &session_pids)
-        }),
+        Ok(snapshot) => snapshot
+            .pid
+            .or_else(|| {
+                let session_pids: Vec<u32> = state
+                    .daemon_bridge
+                    .list_sessions()
+                    .ok()?
+                    .into_iter()
+                    .filter_map(|session| session.pid)
+                    .collect();
+                infer_acornd_root_from_session_pids(snapshots_by_pid, &session_pids)
+            })
+            .or_else(daemon_pid_from_pidfile),
         Err(_) => daemon_pid_from_pidfile(),
     }
 }
