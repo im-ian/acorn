@@ -1188,8 +1188,17 @@ pub async fn pty_spawn<R: Runtime>(
             .cloned()
             .or_else(|| std::env::var("ZDOTDIR").ok())
             .unwrap_or_default();
-        if user_zdotdir.is_empty() || user_zdotdir == dir.display().to_string() {
-            user_zdotdir = std::env::var("HOME").unwrap_or_default();
+        let shell_init_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        let points_at_shell_init = Path::new(&user_zdotdir)
+            .canonicalize()
+            .map(|path| path == shell_init_dir)
+            .unwrap_or(false);
+        if user_zdotdir.is_empty() || points_at_shell_init {
+            user_zdotdir = effective_env
+                .get("HOME")
+                .cloned()
+                .or_else(|| std::env::var("HOME").ok())
+                .unwrap_or_default();
         }
         effective_env.insert("ACORN_USER_ZDOTDIR".to_string(), user_zdotdir);
         effective_env.insert("ZDOTDIR".to_string(), dir.display().to_string());

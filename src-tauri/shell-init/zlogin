@@ -14,12 +14,19 @@
 
 _acorn_zd_save=$ZDOTDIR
 _acorn_user_zd=${ACORN_USER_ZDOTDIR:-$HOME}
-if [ "$_acorn_user_zd" = "$_acorn_zd_save" ]; then
+_acorn_realpath() {
+    (cd -P -- "$1" 2>/dev/null && pwd -P)
+}
+_acorn_zd_real=$(_acorn_realpath "$_acorn_zd_save")
+_acorn_user_zd_real=$(_acorn_realpath "$_acorn_user_zd")
+if [ -n "$_acorn_zd_real" ] && [ "$_acorn_user_zd_real" = "$_acorn_zd_real" ]; then
     _acorn_user_zd=$HOME
+    _acorn_user_zd_real=$(_acorn_realpath "$_acorn_user_zd")
 fi
-if [ "$_acorn_user_zd" != "$_acorn_zd_save" ]; then
+if [ -n "$_acorn_user_zd_real" ] && [ "$_acorn_user_zd_real" != "$_acorn_zd_real" ]; then
     ZDOTDIR=$_acorn_user_zd
     [ -f "$ZDOTDIR/.zlogin" ] && source "$ZDOTDIR/.zlogin"
 fi
 ZDOTDIR=$_acorn_zd_save
-unset _acorn_zd_save _acorn_user_zd
+unset -f _acorn_realpath
+unset _acorn_zd_save _acorn_user_zd _acorn_zd_real _acorn_user_zd_real

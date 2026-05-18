@@ -95,6 +95,8 @@ mod tests {
         assert!(body.contains("_acorn_osc7"));
         assert!(body.contains("precmd_functions"));
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
+        assert!(body.contains("_acorn_realpath"));
+        assert!(body.contains("_acorn_user_zd_real"));
         assert!(body.contains("ACORN_CLI_DIR"));
         // Restore ZDOTDIR before .zlogin runs (otherwise the staged
         // .zlogin would resolve to the user's dir on its own).
@@ -111,7 +113,8 @@ mod tests {
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
         assert!(body.contains(".zshenv"));
         assert!(body.contains("_acorn_user_zd=$HOME"));
-        assert!(body.contains("[ \"$_acorn_user_zd\" != \"$_acorn_zd\" ]"));
+        assert!(body.contains("_acorn_realpath"));
+        assert!(body.contains("_acorn_user_zd_real"));
         assert!(body.contains("ZDOTDIR=$_acorn_zd"));
     }
 
@@ -124,7 +127,8 @@ mod tests {
         let body = fs::read_to_string(&zprofile).unwrap();
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
         assert!(body.contains(".zprofile"));
-        assert!(body.contains("[ \"$_acorn_user_zd\" != \"$_acorn_zd_save\" ]"));
+        assert!(body.contains("_acorn_realpath"));
+        assert!(body.contains("_acorn_user_zd_real"));
         // Restore ZDOTDIR so subsequent stage files keep resolving to
         // our forwarders.
         assert!(body.contains("_acorn_zd_save"));
@@ -139,6 +143,8 @@ mod tests {
         let body = fs::read_to_string(&zlogin).unwrap();
         assert!(body.contains("ACORN_USER_ZDOTDIR"));
         assert!(body.contains(".zlogin"));
+        assert!(body.contains("_acorn_realpath"));
+        assert!(body.contains("_acorn_user_zd_real"));
     }
 
     #[test]
