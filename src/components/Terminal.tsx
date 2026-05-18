@@ -1136,8 +1136,61 @@ export function Terminal({
     container.addEventListener("compositionupdate", swallowComposition, true);
     container.addEventListener("compositionend", swallowComposition, true);
 
+    let ptyReady = false;
+    let lastPtyResize:
+      | {
+          cols: number;
+          rows: number;
+        }
+      | null = null;
+    const sendPtyResize = (
+      force = false,
+      size: { cols: number; rows: number } = {
+        cols: term.cols,
+        rows: term.rows,
+      },
+    ) => {
+      if (!ptyReady || size.cols <= 0 || size.rows <= 0) return;
+      if (
+        !force &&
+        lastPtyResize?.cols === size.cols &&
+        lastPtyResize.rows === size.rows
+      ) {
+        return;
+      }
+      lastPtyResize = { cols: size.cols, rows: size.rows };
+      invoke("pty_resize", {
+        sessionId,
+        cols: size.cols,
+        rows: size.rows,
+      }).catch((err: unknown) => {
+        if (
+          lastPtyResize?.cols === size.cols &&
+          lastPtyResize.rows === size.rows
+        ) {
+          lastPtyResize = null;
+        }
+        console.error("[Terminal] pty_resize failed", err);
+      });
+    };
+    const syncViewportAndPtySize = () => {
+      const fit = fitTerminalRef.current;
+      if (!fit) return;
+      repaintTerminalViewport({ container, fit, term });
+      // Even when xterm's cols/rows are unchanged, force a backend resize so
+      // TUIs launched from an already-open shell observe the current pane size.
+      sendPtyResize(true);
+    };
+    const commandSizeSyncScheduler = createTerminalRepaintScheduler(
+      syncViewportAndPtySize,
+      120,
+    );
+
     const inputDisposable = term.onData((data: string) => {
       sendUserInputToPty(data);
+      if (data.includes("\r") || data.includes("\n")) {
+        commandSizeSyncScheduler.schedule();
+      }
     });
 
     // Re-anchor the composition preview to the cursor on every xterm render.
@@ -1240,9 +1293,7 @@ export function Terminal({
     window.addEventListener("acorn:terminal-clear", onClearRequested);
 
     const resizeDisposable = term.onResize(({ cols, rows }) => {
-      invoke("pty_resize", { sessionId, cols, rows }).catch((err: unknown) => {
-        console.error("[Terminal] pty_resize failed", err);
-      });
+      sendPtyResize(false, { cols, rows });
     });
 
     // Debounce resize-driven `fit()` + SIGWINCH. Without this, dragging the
@@ -1281,6 +1332,8 @@ export function Terminal({
     async function spawnPty() {
       if (disposed) return;
       try {
+        ptyReady = false;
+        lastPtyResize = null;
         observedLinkedWorktreePath = null;
         worktreeAdoptionIntent = { kind: "none" };
         worktreeSnapshot = null;
@@ -1305,12 +1358,14 @@ export function Terminal({
         // "no pty for session".
         //
         // Sessions always drop into $SHELL on the backend.
+        const spawnCols = term.cols;
+        const spawnRows = term.rows;
         await invoke("pty_spawn", {
           sessionId,
           cwd,
           env: {},
-          cols: term.cols,
-          rows: term.rows,
+          cols: spawnCols,
+          rows: spawnRows,
           replayScrollback: !restoredDiskScrollback,
         });
         if (disposed) {
@@ -1321,6 +1376,9 @@ export function Terminal({
           });
           return;
         }
+        ptyReady = true;
+        lastPtyResize = { cols: spawnCols, rows: spawnRows };
+        commandSizeSyncScheduler.schedule();
         exited = false;
         // CommandRunDialog may have queued a one-shot command for this
         // session (e.g. `gh auth login` launched from the NoAccessBanner).
@@ -1408,6 +1466,8 @@ export function Terminal({
 
         const unlistenExit = await listen(`pty:exit:${sessionId}`, () => {
           if (disposed) return;
+          ptyReady = false;
+          lastPtyResize = null;
           codexImagePasteActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
@@ -1643,6 +1703,7 @@ export function Terminal({
         resizeTimer = null;
       }
       resizeObserver.disconnect();
+      commandSizeSyncScheduler.dispose();
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("paste", onPaste, true);

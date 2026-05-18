@@ -46,6 +46,12 @@ test.describe("terminal: spawn", () => {
       });
       return null;
     });
+    await tauri.handle("pty_resize", (args) => {
+      const w = window as unknown as { __ptyResizeCalls?: unknown[] };
+      w.__ptyResizeCalls = w.__ptyResizeCalls ?? [];
+      w.__ptyResizeCalls.push(args);
+      return null;
+    });
 
     await page.goto("/");
 
@@ -78,5 +84,65 @@ test.describe("terminal: spawn", () => {
     expect(first.cwd).toBe("/tmp/demo");
     expect(first.parentPane).not.toBeNull();
     expect(first.parentLimbo).toBeNull();
+  });
+
+  test("submitting a command resyncs the PTY size for agent TUIs", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_resize", (args) => {
+      const w = window as unknown as { __ptyResizeCalls?: unknown[] };
+      w.__ptyResizeCalls = w.__ptyResizeCalls ?? [];
+      w.__ptyResizeCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyResizeCalls?: unknown[] })
+        .__ptyResizeCalls = [];
+    });
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __ptyResizeCalls?: unknown[] })
+                .__ptyResizeCalls?.length ?? 0,
+          ),
+        { timeout: 1_000 },
+      )
+      .toBeGreaterThanOrEqual(1);
   });
 });
