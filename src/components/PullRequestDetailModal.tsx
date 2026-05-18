@@ -1077,25 +1077,33 @@ function CommitsPane({
   cwd?: string;
 }) {
   const t = useTranslation();
+  // gh returns commits in chronological order (oldest first); flip so the
+  // newest commit lands at the top of the list and is the default selection.
+  const orderedCommits = useMemo(() => commits.slice().reverse(), [commits]);
   const [selectedOid, setSelectedOid] = useState<string | null>(
-    commits[0]?.oid ?? null,
+    orderedCommits[0]?.oid ?? null,
   );
 
   // Re-select first commit whenever the list identity changes (PR switch /
   // refresh adds new commits). Compare by joined oid list to avoid resetting
   // on every render.
-  const oidsKey = useMemo(() => commits.map((c) => c.oid).join(","), [commits]);
+  const oidsKey = useMemo(
+    () => orderedCommits.map((c) => c.oid).join(","),
+    [orderedCommits],
+  );
   useEffect(() => {
-    if (commits.length === 0) {
+    if (orderedCommits.length === 0) {
       setSelectedOid(null);
       return;
     }
     setSelectedOid((cur) =>
-      cur && commits.some((c) => c.oid === cur) ? cur : commits[0].oid,
+      cur && orderedCommits.some((c) => c.oid === cur)
+        ? cur
+        : orderedCommits[0].oid,
     );
-  }, [oidsKey, commits]);
+  }, [oidsKey, orderedCommits]);
 
-  if (commits.length === 0) {
+  if (orderedCommits.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-fg-muted">
         {dt(t, "dialogs.pullRequestDetail.noCommits")}
@@ -1103,7 +1111,8 @@ function CommitsPane({
     );
   }
 
-  const selected = commits.find((c) => c.oid === selectedOid) ?? null;
+  const selected =
+    orderedCommits.find((c) => c.oid === selectedOid) ?? null;
 
   return (
     <PanelGroup
@@ -1114,7 +1123,7 @@ function CommitsPane({
       <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
         <aside className="flex h-full flex-col overflow-y-auto border-r border-border text-xs">
           <ul className="flex flex-col">
-            {commits.map((c) => (
+            {orderedCommits.map((c) => (
               <CommitListItem
                 key={c.oid}
                 commit={c}
