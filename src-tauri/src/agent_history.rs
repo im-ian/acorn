@@ -94,7 +94,7 @@ pub fn trash_agent_history_transcript(
                     path.display()
                 )));
             }
-            if codex_id_from_filename(&path).as_deref() != Some(id.as_str()) {
+            if !codex_transcript_matches_id(&path, &id) {
                 return Err(AppError::InvalidPath(
                     "transcript id does not match selected Codex session".to_string(),
                 ));
@@ -434,6 +434,27 @@ fn codex_id_from_filename(path: &Path) -> Option<String> {
     stem.rsplit('-').next().map(str::to_string)
 }
 
+fn codex_id_from_transcript(path: &Path) -> Option<String> {
+    for line in sample_lines(path).ok()? {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        let payload = value.get("payload");
+        if let Some(id) = string_at(payload, "id")
+            .or_else(|| string_at(payload, "session_id"))
+            .or_else(|| string_at(Some(&value), "session_id"))
+        {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn codex_transcript_matches_id(path: &Path, id: &str) -> bool {
+    codex_id_from_filename(path).as_deref() == Some(id)
+        || codex_id_from_transcript(path).as_deref() == Some(id)
+}
+
 fn collapse_preview(s: &str, max_chars: usize) -> Option<String> {
     let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
@@ -582,4 +603,26 @@ fn codex_sessions_root() -> Option<PathBuf> {
 
 fn home_dir() -> Option<PathBuf> {
     directories::UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn codex_transcript_match_accepts_payload_id_when_filename_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-05-18T00-00-00-000Z-filename-id.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"payload":{{"id":"payload-id","cwd":"/tmp/demo"}}}}"#
+        )
+        .unwrap();
+
+        assert!(codex_transcript_matches_id(&path, "payload-id"));
+    }
 }
