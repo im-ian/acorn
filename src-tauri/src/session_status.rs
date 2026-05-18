@@ -1,6 +1,7 @@
-//! Detects a Claude Code session's live status by inspecting the tail of its
-//! JSONL transcript. Status mapping:
+//! Detects a session's live status by inspecting the tail of the JSONL
+//! transcript the in-flight agent is writing. Status mapping:
 //!
+//! Claude transcripts:
 //! - last assistant turn with `stop_reason=end_turn` → NeedsInput (claude
 //!   has finished its turn and is awaiting the user's next prompt). Surfaces
 //!   the warning-tone status dot in the Sidebar and triggers the
@@ -9,17 +10,39 @@
 //! - last user turn (new prompt or tool_result) → Running (assistant pending)
 //! - no transcript yet → Idle (session has not produced any conversation)
 //!
-//! Meta-only lines (type `last-prompt`, `permission-mode`, `attachment`,
-//! `file-history-snapshot`) are ignored when picking the last message. The
-//! transcript line itself is the source of truth — we deliberately do NOT
-//! gate on mtime, otherwise the moment after `end_turn` (when the file is
-//! still warm) gets misreported as Running.
+//! Codex transcripts:
+//! - last `payload.type=task_complete` (or `agent_message` with
+//!   `phase=final_answer`) → NeedsInput (codex finished a turn).
+//! - last `payload.type=user_message` → Running (the user just sent a
+//!   prompt and codex is composing the response).
+//! - everything else with content → Running (function calls, intermediate
+//!   `agent_message phase=commentary`, reasoning, etc.).
+//!
+//! Meta-only lines (claude: `last-prompt` / `permission-mode` /
+//! `attachment` / `file-history-snapshot` / `system`; codex: `token_count`
+//! and other event_msg telemetry) are ignored when picking the last
+//! message. The transcript line itself is the source of truth — we
+//! deliberately do NOT gate on mtime, otherwise the moment after a turn
+//! ends (file still warm) gets misreported as Running.
+//!
+//! Transcript resolution. The on-disk markers `<data_dir>/agent-state/
+//! <acorn-session-uuid>/{claude,codex}.id` (kept fresh by
+//! `agent_resume_persister`) are the canonical bridge from an Acorn
+//! session UUID to the agent's transcript filename. Without this, the
+//! detector could only consult `~/.claude/projects/*/<acorn-uuid>.jsonl`,
+//! which never matches in the common case where the user runs
+//! `claude` / `codex` *inside* an Acorn shell session (the JSONL is
+//! named after the agent's own UUID, not Acorn's). The result was that
+//! every claude/codex run looked perpetually `Running` until the agent
+//! process exited — `NeedsInput` was structurally unreachable.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 use acorn_pty::ShellHint;
 
+use crate::agent_resume::{self, AgentKind, LiveTranscript};
 use crate::error::AppResult;
 use crate::session::SessionStatus;
 use crate::todos;
@@ -29,47 +52,75 @@ use crate::todos;
 // response can be many KB on a single line.
 const TAIL_BYTES: u64 = 262_144;
 
-/// Locate the JSONL transcript via `todos::locate_transcript` and infer the
-/// session's status from its tail.
+/// Resolve the session's live transcript (via the persister's resume
+/// markers or — as a legacy fallback — the Acorn UUID itself) and infer
+/// status from its tail.
 ///
 /// `previous` is the last status the caller observed for this session. It is
 /// only consulted when the transcript file exists but the tail buffer is
-/// filled entirely with non-`user`/`assistant` entries (long bursts of
-/// `system`/`last-prompt`/`attachment`/`file-history-snapshot` lines from
-/// recent claude versions can push the actual turn out of the 256 KiB tail
-/// window). Without this fallback, polling momentarily reclassifies a live
-/// session as Idle, leaving the Sidebar dot stuck at Idle until claude
-/// emits another user/assistant line within the tail window — which for
-/// long sessions can be never.
+/// filled entirely with non-turn entries (long bursts of `system`/
+/// `last-prompt`/`attachment`/`file-history-snapshot` lines from recent
+/// claude versions, or codex `token_count` telemetry, can push the actual
+/// turn out of the 256 KiB tail window). Without this fallback, polling
+/// momentarily reclassifies a live session as Idle, leaving the Sidebar
+/// dot stuck at Idle until the agent emits another turn line within the
+/// tail window — which for long sessions can be never.
 ///
 /// `shell_hint` carries the descendant-process snapshot for shell-mode
 /// sessions (no transcript on disk). It is the only signal we have for
-/// terminal sessions, so when the transcript path is empty we map it
-/// directly to a status. `None` means "no live PTY" → Idle.
+/// terminal sessions, so when no transcript resolves we map it directly
+/// to a status. `None` means "no live PTY" → Idle.
 pub fn detect(
     session_id: &str,
     previous: SessionStatus,
     shell_hint: Option<ShellHint>,
 ) -> AppResult<SessionStatus> {
-    let path = match todos::locate_transcript_for(session_id)? {
-        Some(p) => p,
+    let resolved = resolve_transcript(session_id);
+    let (path, kind) = match resolved {
+        Some(LiveTranscript { path, kind }) => (path, kind),
         None => return Ok(map_shell_hint(shell_hint)),
     };
 
     let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let read_full = file_size <= TAIL_BYTES;
     let tail = read_tail(&path, TAIL_BYTES).unwrap_or_default();
-    let last_kind = last_meaningful_kind(&tail, read_full);
+    let classified = match kind {
+        AgentKind::Claude => classify_claude_tail(&tail, read_full),
+        AgentKind::Codex => classify_codex_tail(&tail, read_full),
+    };
 
-    Ok(match last_kind {
-        Some(LastKind::AssistantEndTurn) => SessionStatus::NeedsInput,
-        Some(LastKind::AssistantToolUse) => SessionStatus::Running,
-        Some(LastKind::User) => SessionStatus::Running,
-        // Transcript exists but the tail held no user/assistant lines; keep
-        // whatever the caller previously observed instead of regressing to
-        // Idle. The next poll that lands on a real turn line corrects it.
+    Ok(match classified {
+        Some(TurnClass::NeedsInput) => SessionStatus::NeedsInput,
+        Some(TurnClass::Running) => SessionStatus::Running,
+        // Transcript exists but the tail held no turn lines; keep
+        // whatever the caller previously observed instead of regressing
+        // to Idle. The next poll that lands on a real turn line corrects
+        // it.
         None => previous,
     })
+}
+
+/// Two-stage transcript lookup. First the persister marker (the canonical
+/// path for "user ran `claude` / `codex` inside a shell session"), then
+/// the legacy Acorn-UUID-named JSONL (kept so any direct caller that
+/// passes a claude session-id continues to work, and so the dedicated
+/// unit tests below can stage a fixture without standing up a fake
+/// `agent-state` tree). Returns `None` only when neither lookup
+/// resolves — that's the cue for `detect` to fall back to `shell_hint`.
+fn resolve_transcript(session_id: &str) -> Option<LiveTranscript> {
+    let parsed = uuid::Uuid::parse_str(session_id).ok();
+    if let Some(uuid) = parsed {
+        if let Some(found) = agent_resume::live_transcript(uuid) {
+            return Some(found);
+        }
+    }
+    todos::locate_transcript_for(session_id)
+        .ok()
+        .flatten()
+        .map(|path| LiveTranscript {
+            path,
+            kind: AgentKind::Claude,
+        })
 }
 
 fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
@@ -81,13 +132,12 @@ fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum LastKind {
-    AssistantEndTurn,
-    AssistantToolUse,
-    User,
+enum TurnClass {
+    NeedsInput,
+    Running,
 }
 
-fn read_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<String> {
+fn read_tail(path: &Path, max_bytes: u64) -> std::io::Result<String> {
     let mut f = File::open(path)?;
     let len = f.metadata()?.len();
     let start = len.saturating_sub(max_bytes);
@@ -97,51 +147,99 @@ fn read_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<String> 
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn last_meaningful_kind(tail: &str, read_full: bool) -> Option<LastKind> {
-    // Walk lines newest-first; skip meta lines.
-    let mut lines: Vec<&str> = tail.lines().collect();
-    if lines.is_empty() {
-        return None;
+fn classify_claude_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
+    for line in tail_lines_newest_first(tail, read_full) {
+        let Some(v) = parse_json_line(line) else {
+            continue;
+        };
+        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if line_type != "user" && line_type != "assistant" {
+            continue;
+        }
+        let Some(msg) = v.get("message") else {
+            continue;
+        };
+        if line_type == "user" {
+            return Some(TurnClass::Running);
+        }
+        let stop_reason = msg
+            .get("stop_reason")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        return Some(match stop_reason {
+            "end_turn" | "stop_sequence" => TurnClass::NeedsInput,
+            "tool_use" => TurnClass::Running,
+            // Unknown / null → assume the assistant turn is still live.
+            _ => TurnClass::Running,
+        });
     }
+    None
+}
+
+fn classify_codex_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
+    for line in tail_lines_newest_first(tail, read_full) {
+        let Some(v) = parse_json_line(line) else {
+            continue;
+        };
+        let payload_type = v
+            .pointer("/payload/type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        match payload_type {
+            // `task_complete` is emitted exactly once per turn, after the
+            // final `agent_message`. Authoritative "codex is waiting".
+            "task_complete" => return Some(TurnClass::NeedsInput),
+            "user_message" => return Some(TurnClass::Running),
+            "function_call" | "function_call_output" | "reasoning" => {
+                return Some(TurnClass::Running);
+            }
+            "agent_message" => {
+                // The final answer phase is the user-visible "turn over"
+                // signal when `task_complete` got truncated out of the
+                // tail window. `commentary` is intermediate narration
+                // between tool calls — keep treating those as Running.
+                let phase = v
+                    .pointer("/payload/phase")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("");
+                return Some(if phase == "final_answer" {
+                    TurnClass::NeedsInput
+                } else {
+                    TurnClass::Running
+                });
+            }
+            "message" => {
+                // `response_item` mirror of an `agent_message`. Treat
+                // assistant messages as in-flight unless we have stronger
+                // signal upstream (the `task_complete` / `final_answer`
+                // branches above land first when present).
+                if v.pointer("/payload/role").and_then(|r| r.as_str()) == Some("assistant") {
+                    return Some(TurnClass::Running);
+                }
+                continue;
+            }
+            // event_msg lines that are pure telemetry (`token_count`,
+            // `agent_reasoning_*`, `rate_limit_*`, etc.) are skipped —
+            // they don't change the turn-completion state.
+            _ => continue,
+        }
+    }
+    None
+}
+
+fn tail_lines_newest_first(tail: &str, read_full: bool) -> impl Iterator<Item = &str> {
+    let mut lines: Vec<&str> = tail.lines().collect();
     // The first line in the buffer may be truncated when we tail-read; drop
     // it. When the entire file fit in the buffer, the first line is intact
     // and we keep it.
     if !read_full && lines.len() > 1 {
         lines.remove(0);
     }
-    for line in lines.into_iter().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if line_type != "user" && line_type != "assistant" {
-            continue;
-        }
-        let msg = match v.get("message") {
-            Some(m) => m,
-            None => continue,
-        };
-        if line_type == "user" {
-            return Some(LastKind::User);
-        }
-        // assistant
-        let stop_reason = msg
-            .get("stop_reason")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
-        return match stop_reason {
-            "end_turn" | "stop_sequence" => Some(LastKind::AssistantEndTurn),
-            "tool_use" => Some(LastKind::AssistantToolUse),
-            // Unknown / null → assume the assistant turn is still live.
-            _ => Some(LastKind::AssistantToolUse),
-        };
-    }
-    None
+    lines.into_iter().rev().filter(|l| !l.trim().is_empty())
+}
+
+fn parse_json_line(line: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(line.trim()).ok()
 }
 
 #[cfg(test)]
@@ -175,14 +273,14 @@ mod tests {
 
     #[test]
     fn empty_tail_returns_none() {
-        assert_eq!(last_meaningful_kind("", true), None);
+        assert_eq!(classify_claude_tail("", true), None);
     }
 
     #[test]
-    fn user_turn_maps_to_user() {
+    fn user_turn_maps_to_running() {
         assert_eq!(
-            last_meaningful_kind(user_turn(), true),
-            Some(LastKind::User),
+            classify_claude_tail(user_turn(), true),
+            Some(TurnClass::Running),
         );
     }
 
@@ -196,56 +294,45 @@ mod tests {
             tail.push('\n');
         }
         assert_eq!(
-            last_meaningful_kind(&tail, true),
-            Some(LastKind::AssistantEndTurn),
+            classify_claude_tail(&tail, true),
+            Some(TurnClass::NeedsInput),
         );
     }
 
     #[test]
-    fn assistant_tool_use_maps_to_tool_use() {
+    fn assistant_tool_use_maps_to_running() {
         assert_eq!(
-            last_meaningful_kind(&assistant("tool_use"), true),
-            Some(LastKind::AssistantToolUse),
+            classify_claude_tail(&assistant("tool_use"), true),
+            Some(TurnClass::Running),
         );
     }
 
     #[test]
-    fn unknown_stop_reason_treated_as_tool_use() {
+    fn unknown_stop_reason_treated_as_running() {
         assert_eq!(
-            last_meaningful_kind(&assistant("max_tokens"), true),
-            Some(LastKind::AssistantToolUse),
+            classify_claude_tail(&assistant("max_tokens"), true),
+            Some(TurnClass::Running),
         );
     }
 
     #[test]
     fn truncated_first_line_is_dropped_when_not_read_full() {
-        // Synthesize a buffer whose first line is a partial JSON fragment
-        // (the kind tail-reading produces when the file exceeds TAIL_BYTES).
-        // The walker must drop it and still find the user turn behind it
-        // instead of bailing to None.
         let tail = format!("ent\":[]}}}}\n{}\n", user_turn());
-        assert_eq!(last_meaningful_kind(&tail, false), Some(LastKind::User),);
+        assert_eq!(classify_claude_tail(&tail, false), Some(TurnClass::Running),);
     }
 
     #[test]
     fn intact_first_line_is_kept_when_read_full() {
-        // When the entire file fits in the buffer, the first line is intact
-        // and must be considered — otherwise short transcripts with a single
-        // user turn would report Idle.
         assert_eq!(
-            last_meaningful_kind(user_turn(), true),
-            Some(LastKind::User),
+            classify_claude_tail(user_turn(), true),
+            Some(TurnClass::Running),
         );
     }
 
     #[test]
     fn meta_only_tail_returns_none() {
-        // Documents the case the `previous`-status fallback in
-        // `detect()` exists to compensate for: a tail packed with
-        // meta lines (no user/assistant turn within the window) leaves
-        // the walker with nothing to classify.
         let tail = meta_lines().join("\n");
-        assert_eq!(last_meaningful_kind(&tail, true), None);
+        assert_eq!(classify_claude_tail(&tail, true), None);
     }
 
     #[test]
@@ -276,9 +363,60 @@ mod tests {
 
     #[test]
     fn assistant_without_message_is_skipped() {
-        // Defensive: a malformed assistant line without a `message` field
-        // must not be classified — the walker should keep looking.
         let tail = format!("{}\n{}\n", r#"{"type":"assistant"}"#, user_turn(),);
-        assert_eq!(last_meaningful_kind(&tail, true), Some(LastKind::User),);
+        assert_eq!(classify_claude_tail(&tail, true), Some(TurnClass::Running),);
+    }
+
+    // --- codex format ---
+
+    #[test]
+    fn codex_task_complete_maps_to_needs_input() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+    }
+
+    #[test]
+    fn codex_final_answer_agent_message_maps_to_needs_input() {
+        // Simulates `task_complete` falling outside the tail window so
+        // the walker falls back to the most recent `agent_message`
+        // phase.
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+    }
+
+    #[test]
+    fn codex_function_call_maps_to_running() {
+        let tail = r#"{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c1"}}"#;
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+    }
+
+    #[test]
+    fn codex_commentary_agent_message_maps_to_running() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"checking","phase":"commentary","memory_citation":null}}"#;
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+    }
+
+    #[test]
+    fn codex_user_message_maps_to_running() {
+        let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"hi","images":[],"local_images":[],"text_elements":[]}}"#;
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+    }
+
+    #[test]
+    fn codex_token_count_telemetry_is_skipped() {
+        // A `token_count` event after a `task_complete` must not flip
+        // the classification — the walker should skip it and find the
+        // `task_complete` behind it.
+        let tail = concat!(
+            r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#,
+            "\n",
+            r#"{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{}}}"#,
+        );
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+    }
+
+    #[test]
+    fn codex_empty_tail_returns_none() {
+        assert_eq!(classify_codex_tail("", true), None);
     }
 }

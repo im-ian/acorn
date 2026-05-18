@@ -528,7 +528,10 @@ fn collect_memory_usage_from_roots(
     let mut children_of: HashMap<u32, Vec<u32>> = HashMap::new();
     for snapshot in snapshots {
         if let Some(parent_pid) = snapshot.parent_pid {
-            children_of.entry(parent_pid).or_default().push(snapshot.pid);
+            children_of
+                .entry(parent_pid)
+                .or_default()
+                .push(snapshot.pid);
         }
     }
 

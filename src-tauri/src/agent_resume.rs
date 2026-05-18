@@ -84,7 +84,7 @@ pub fn claude_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<Resu
         session_id,
         CLAUDE_ID_FILE,
         CLAUDE_ID_ACK_FILE,
-        AgentTranscript::Claude,
+        AgentKind::Claude,
     )
 }
 
@@ -95,8 +95,75 @@ pub fn codex_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<Resum
         session_id,
         CODEX_ID_FILE,
         CODEX_ID_ACK_FILE,
-        AgentTranscript::Codex,
+        AgentKind::Codex,
     )
+}
+
+/// Identifier + live transcript path resolved through the persister's
+/// `<data_dir>/agent-state/<session-uuid>/{claude,codex}.id` marker. The
+/// status detector consumes this to read the actual JSONL the agent is
+/// writing instead of guessing from PTY descendant liveness.
+#[derive(Debug, Clone)]
+pub struct LiveTranscript {
+    pub path: PathBuf,
+    pub kind: AgentKind,
+}
+
+/// Which agent's transcript a marker points at. Public so other modules
+/// (e.g. `session_status`) can dispatch their per-format parser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentKind {
+    Claude,
+    Codex,
+}
+
+/// Resolve `session_id` to the live transcript its in-flight agent is
+/// writing, by reading the on-disk resume markers and looking up the
+/// matching JSONL. Returns `None` when neither marker is present, both
+/// point to UUIDs whose transcript files have not (or no longer) exist on
+/// disk, or `data_dir()` fails to resolve.
+///
+/// When both `claude.id` and `codex.id` exist, the marker file with the
+/// newer mtime wins — that matches the persister's behaviour of only
+/// touching a marker when the live UUID rotates, so "most recently
+/// written marker" is "the agent the session was last paired with".
+pub fn live_transcript(session_id: uuid::Uuid) -> Option<LiveTranscript> {
+    let base = crate::daemon::paths::data_dir().ok()?;
+    live_transcript_at(&base, session_id)
+}
+
+fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscript> {
+    let dir = session_state_dir_if_exists_at(base, session_id)
+        .ok()
+        .flatten()?;
+    let claude_mtime = fs::metadata(dir.join(CLAUDE_ID_FILE))
+        .and_then(|m| m.modified())
+        .ok();
+    let codex_mtime = fs::metadata(dir.join(CODEX_ID_FILE))
+        .and_then(|m| m.modified())
+        .ok();
+    let prefer_codex = match (claude_mtime, codex_mtime) {
+        (Some(c), Some(x)) => x > c,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let resolve = |kind: AgentKind| -> Option<LiveTranscript> {
+        let file = match kind {
+            AgentKind::Claude => CLAUDE_ID_FILE,
+            AgentKind::Codex => CODEX_ID_FILE,
+        };
+        let uuid = fs::read_to_string(dir.join(file)).ok()?.trim().to_string();
+        if uuid.is_empty() {
+            return None;
+        }
+        let path = locate_transcript(kind, &uuid)?;
+        Some(LiveTranscript { path, kind })
+    };
+    if prefer_codex {
+        resolve(AgentKind::Codex).or_else(|| resolve(AgentKind::Claude))
+    } else {
+        resolve(AgentKind::Claude).or_else(|| resolve(AgentKind::Codex))
+    }
 }
 
 /// Mark the current `claude.id` value as seen so the modal stops popping
@@ -121,18 +188,12 @@ pub fn acknowledge_codex_resume(session_id: uuid::Uuid) -> io::Result<()> {
     )
 }
 
-#[derive(Clone, Copy)]
-enum AgentTranscript {
-    Claude,
-    Codex,
-}
-
 fn candidate_at(
     base: &Path,
     session_id: uuid::Uuid,
     id_file: &str,
     ack_file: &str,
-    kind: AgentTranscript,
+    kind: AgentKind,
 ) -> io::Result<Option<ResumeCandidate>> {
     let Some(state_dir) = session_state_dir_if_exists_at(base, session_id)? else {
         return Ok(None);
@@ -188,10 +249,10 @@ fn acknowledge_at(
     fs::write(state_dir.join(ack_file), id)
 }
 
-fn locate_transcript(kind: AgentTranscript, uuid: &str) -> Option<PathBuf> {
+fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> {
     match kind {
-        AgentTranscript::Claude => crate::todos::locate_transcript_for(uuid).ok().flatten(),
-        AgentTranscript::Codex => locate_codex_transcript(uuid),
+        AgentKind::Claude => crate::todos::locate_transcript_for(uuid).ok().flatten(),
+        AgentKind::Codex => locate_codex_transcript(uuid),
     }
 }
 
@@ -253,10 +314,10 @@ fn find_rollout_for_uuid(day_dir: &Path, uuid: &str) -> Option<PathBuf> {
     None
 }
 
-fn extract_preview(kind: AgentTranscript, path: &Path) -> io::Result<Option<String>> {
+fn extract_preview(kind: AgentKind, path: &Path) -> io::Result<Option<String>> {
     match kind {
-        AgentTranscript::Claude => extract_claude_preview(path),
-        AgentTranscript::Codex => extract_codex_preview(path),
+        AgentKind::Claude => extract_claude_preview(path),
+        AgentKind::Codex => extract_codex_preview(path),
     }
 }
 
@@ -432,7 +493,7 @@ mod tests {
             sid,
             CLAUDE_ID_FILE,
             CLAUDE_ID_ACK_FILE,
-            AgentTranscript::Claude,
+            AgentKind::Claude,
         )
         .unwrap();
         assert!(result.is_none());
@@ -450,7 +511,7 @@ mod tests {
             sid,
             CLAUDE_ID_FILE,
             CLAUDE_ID_ACK_FILE,
-            AgentTranscript::Claude,
+            AgentKind::Claude,
         )
         .unwrap();
         assert!(result.is_none());
@@ -477,7 +538,7 @@ mod tests {
             sid,
             CLAUDE_ID_FILE,
             CLAUDE_ID_ACK_FILE,
-            AgentTranscript::Claude,
+            AgentKind::Claude,
         )
         .unwrap();
         let candidate = result.expect("rotated UUID must re-surface");
@@ -526,5 +587,29 @@ mod tests {
         let out = collapse_preview(&long).unwrap();
         assert!(out.ends_with("…"));
         assert!(out.chars().count() <= PREVIEW_CHARS + 1);
+    }
+
+    #[test]
+    fn live_transcript_returns_none_when_no_marker_dir() {
+        let base = ScratchDir::new("live-empty");
+        let sid = uuid::Uuid::new_v4();
+        assert!(live_transcript_at(base.path(), sid).is_none());
+    }
+
+    #[test]
+    fn live_transcript_returns_none_when_marker_points_at_missing_transcript() {
+        // Marker present but no JSONL exists on disk for that UUID. The
+        // resolver must report None so the status detector falls back to
+        // its shell-hint path instead of mistakenly classifying nothing.
+        let base = ScratchDir::new("live-missing-jsonl");
+        let sid = uuid::Uuid::new_v4();
+        write_id(
+            base.path(),
+            sid,
+            CLAUDE_ID_FILE,
+            "00000000-0000-0000-0000-000000000000",
+        );
+        // No fixture JSONL exists for that UUID under ~/.claude/projects.
+        assert!(live_transcript_at(base.path(), sid).is_none());
     }
 }
