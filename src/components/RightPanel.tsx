@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DependencyList,
   type ReactNode,
 } from "react";
 import {
@@ -37,11 +38,13 @@ import {
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup } from "react-resizable-panels";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import { api } from "../lib/api";
+import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
+import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
 import { useIsGitHubRepo } from "../lib/useIsGitHubRepo";
@@ -151,6 +154,7 @@ export function RightPanel() {
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath, rightTab);
   const sessionHostRepoPath =
     active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
+  const invalidations = useRightPanelInvalidations(repoPath);
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
   const [prDetail, setPrDetail] = useState<{
     repoPath: string;
@@ -262,6 +266,7 @@ export function RightPanel() {
             <CommitsTab
               key={repoPath}
               repoPath={repoPath}
+              invalidateKey={invalidations.commits}
               onExpand={setExpanded}
             />
           ) : (
@@ -272,6 +277,7 @@ export function RightPanel() {
             <StagedTab
               key={repoPath}
               repoPath={repoPath}
+              invalidateKey={invalidations.staged}
               onExpand={setExpanded}
             />
           ) : (
@@ -540,7 +546,11 @@ function PrSkeletonList({ count = 6 }: { count?: number }) {
   );
 }
 
-const TODOS_POLL_INTERVAL_MS = 1500;
+const RIGHT_PANEL_REFRESH_DEBOUNCE_MS = 150;
+const TODOS_ACTIVITY_DEBOUNCE_MS = 750;
+const TODOS_SAFETY_INTERVAL_MS = 30_000;
+const COMMITS_SAFETY_INTERVAL_MS = 30_000;
+const STAGED_SAFETY_INTERVAL_MS = 30_000;
 
 interface SessionTodosState {
   todos: TodoItem[];
@@ -548,10 +558,170 @@ interface SessionTodosState {
   error: string | null;
 }
 
+interface RightPanelInvalidationKeys {
+  commits: number;
+  staged: number;
+}
+
 interface LiveRepoCache {
   sessionId: string;
   fallbackPath: string | null;
   repoPath: string | null;
+}
+
+function useRefreshScheduler(
+  refresh: () => Promise<void>,
+  debounceMs = RIGHT_PANEL_REFRESH_DEBOUNCE_MS,
+) {
+  const refreshRef = useRef(refresh);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
+  const pendingRef = useRef(false);
+  const unmountedRef = useRef(false);
+  const runRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  const run = useCallback(() => {
+    if (unmountedRef.current) return;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (inFlightRef.current) {
+      pendingRef.current = true;
+      return;
+    }
+
+    inFlightRef.current = true;
+    void refreshRef
+      .current()
+      .catch((err: unknown) => {
+        console.debug("[RightPanel] scheduled refresh failed", err);
+      })
+      .finally(() => {
+        inFlightRef.current = false;
+        if (pendingRef.current && !unmountedRef.current) {
+          pendingRef.current = false;
+          timerRef.current = setTimeout(() => runRef.current(), debounceMs);
+        }
+      });
+  }, [debounceMs]);
+
+  useEffect(() => {
+    runRef.current = run;
+  }, [run]);
+
+  useEffect(
+    () => {
+      unmountedRef.current = false;
+      return () => {
+        unmountedRef.current = true;
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        pendingRef.current = false;
+      };
+    },
+    [],
+  );
+
+  const scheduleRefresh = useCallback(
+    (delayMs = debounceMs) => {
+      if (unmountedRef.current) return;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => runRef.current(), delayMs);
+    },
+    [debounceMs],
+  );
+
+  const refreshNow = useCallback(() => {
+    scheduleRefresh(0);
+  }, [scheduleRefresh]);
+
+  return { refreshNow, scheduleRefresh };
+}
+
+function useSafetyRefreshInterval(
+  refreshNow: () => void,
+  intervalMs: number,
+  deps: DependencyList,
+) {
+  useEffect(() => {
+    refreshNow();
+    const handle = setInterval(refreshNow, intervalMs);
+    return () => clearInterval(handle);
+    // The caller owns the lifecycle dependencies that should restart the
+    // safety interval; `refreshNow` is stable across refresh callback changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
+function useRightPanelInvalidations(
+  repoPath: string | null,
+): RightPanelInvalidationKeys {
+  const [keys, setKeys] = useState<RightPanelInvalidationKeys>({
+    commits: 0,
+    staged: 0,
+  });
+
+  useEffect(() => {
+    void api.fsWatchSetRoot(repoPath).catch((e) => {
+      console.debug("[RightPanel] fs_watch_set_root failed", e);
+    });
+    return () => {
+      void api.fsWatchSetRoot(null).catch(() => {});
+    };
+  }, [repoPath]);
+
+  useEffect(() => {
+    if (!repoPath) return;
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let pending: RightPanelInvalidationKeys = { commits: 0, staged: 0 };
+
+    const flush = () => {
+      flushTimer = null;
+      const next = pending;
+      pending = { commits: 0, staged: 0 };
+      if (next.commits === 0 && next.staged === 0) return;
+      setKeys((prev) => ({
+        commits: prev.commits + next.commits,
+        staged: prev.staged + next.staged,
+      }));
+    };
+
+    void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
+      if (cancelled) return;
+      const invalidation = classifyRightPanelFsChange(
+        repoPath,
+        event.payload.paths,
+      );
+      if (invalidation.commits) pending.commits = 1;
+      if (invalidation.staged) pending.staged = 1;
+      if (!flushTimer && (pending.commits || pending.staged)) {
+        flushTimer = setTimeout(flush, RIGHT_PANEL_REFRESH_DEBOUNCE_MS);
+      }
+    }).then((cancel) => {
+      if (cancelled) {
+        cancel();
+        return;
+      }
+      unlisten = cancel;
+    });
+
+    return () => {
+      cancelled = true;
+      if (flushTimer) clearTimeout(flushTimer);
+      if (unlisten) unlisten();
+    };
+  }, [repoPath]);
+
+  return keys;
 }
 
 /**
@@ -622,40 +792,63 @@ function useSessionTodos(
     loaded: false,
     error: null,
   });
+  const generationRef = useRef(0);
+
+  const refresh = useCallback(async () => {
+    if (!sessionId || !cwd) return;
+    const generation = generationRef.current;
+    try {
+      const result = await api.readSessionTodos(sessionId, cwd);
+      if (generationRef.current !== generation) return;
+      // Defensive: the Rust contract returns Vec<TodoItem> (→ []), but a
+      // serialization edge or future error path that produces null would
+      // crash on the `todos.length` access elsewhere in this panel.
+      setState({
+        todos: Array.isArray(result) ? result : [],
+        loaded: true,
+        error: null,
+      });
+    } catch (e) {
+      if (generationRef.current !== generation) return;
+      setState((prev) => ({ ...prev, loaded: true, error: String(e) }));
+    }
+  }, [sessionId, cwd]);
+
+  const { refreshNow, scheduleRefresh } = useRefreshScheduler(refresh);
 
   useEffect(() => {
+    generationRef.current += 1;
     if (!sessionId || !cwd) {
       setState({ todos: [], loaded: true, error: null });
       return;
     }
-    let cancelled = false;
     setState({ todos: [], loaded: false, error: null });
-
-    const poll = async () => {
-      try {
-        const result = await api.readSessionTodos(sessionId, cwd);
-        if (cancelled) return;
-        // Defensive: the Rust contract returns Vec<TodoItem> (→ []), but a
-        // serialization edge or future error path that produces null would
-        // crash on the `todos.length` access elsewhere in this panel.
-        setState({
-          todos: Array.isArray(result) ? result : [],
-          loaded: true,
-          error: null,
-        });
-      } catch (e) {
-        if (cancelled) return;
-        setState((prev) => ({ ...prev, loaded: true, error: String(e) }));
-      }
-    };
-
-    void poll();
-    const handle = setInterval(poll, TODOS_POLL_INTERVAL_MS);
+    refreshNow();
+    const handle = setInterval(refreshNow, TODOS_SAFETY_INTERVAL_MS);
     return () => {
-      cancelled = true;
+      generationRef.current += 1;
       clearInterval(handle);
     };
-  }, [sessionId, cwd]);
+  }, [sessionId, cwd, refreshNow]);
+
+  useEffect(() => {
+    if (!sessionId || !cwd) return;
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    void listen(`pty:output:${sessionId}`, () => {
+      if (!cancelled) scheduleRefresh(TODOS_ACTIVITY_DEBOUNCE_MS);
+    }).then((cancel) => {
+      if (cancelled) {
+        cancel();
+        return;
+      }
+      unlisten = cancel;
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [sessionId, cwd, scheduleRefresh]);
 
   return state;
 }
@@ -1091,9 +1284,11 @@ function AgentHistoryTab({
 
 function CommitsTab({
   repoPath,
+  invalidateKey,
   onExpand,
 }: {
   repoPath: string;
+  invalidateKey: number;
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
@@ -1115,9 +1310,40 @@ function CommitsTab({
     commit: CommitInfo;
   } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const generationRef = useRef(0);
+  const loadedTopRef = useRef(false);
+
+  const refreshFirstPage = useCallback(async () => {
+    const generation = generationRef.current;
+    try {
+      const page = await api.listCommits(repoPath, 0, COMMITS_PAGE_SIZE);
+      if (generationRef.current !== generation) return;
+      loadedTopRef.current = true;
+      setCommits((prev) => {
+        if (prev.length === 0) {
+          return page;
+        }
+        // The fetched page is authoritative for the top of history. Splice it
+        // over the equivalent prefix of `prev` so abandoned commits (e.g.
+        // after `git reset` / amend) get evicted instead of lingering in the
+        // middle of the list.
+        return [...page, ...prev.slice(page.length)];
+      });
+      setHasMore(page.length === COMMITS_PAGE_SIZE);
+      setError(null);
+    } catch (e) {
+      if (generationRef.current !== generation) return;
+      if (!loadedTopRef.current) setError(String(e));
+    } finally {
+      if (generationRef.current === generation) setLoadingFirst(false);
+    }
+  }, [repoPath]);
+
+  const { refreshNow, scheduleRefresh } = useRefreshScheduler(refreshFirstPage);
 
   useEffect(() => {
-    let cancelled = false;
+    generationRef.current += 1;
+    loadedTopRef.current = false;
     setError(null);
     setSelected(null);
     setDiff(null);
@@ -1126,24 +1352,19 @@ function CommitsTab({
     setLoadingFirst(true);
     setCommits([]);
     setCommitLogins({});
-    api
-      .listCommits(repoPath, 0, COMMITS_PAGE_SIZE)
-      .then((page) => {
-        if (cancelled) return;
-        setCommits(page);
-        setHasMore(page.length === COMMITS_PAGE_SIZE);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingFirst(false);
-      });
     return () => {
-      cancelled = true;
+      generationRef.current += 1;
     };
   }, [repoPath]);
+
+  useSafetyRefreshInterval(refreshNow, COMMITS_SAFETY_INTERVAL_MS, [
+    repoPath,
+    refreshNow,
+  ]);
+
+  useEffect(() => {
+    if (invalidateKey > 0) scheduleRefresh();
+  }, [invalidateKey, scheduleRefresh]);
 
   // Resolve commit author logins via GitHub GraphQL for any sha we don't
   // already have. The backend caches by (slug, sha) so re-fetches across
@@ -1189,33 +1410,6 @@ function CommitsTab({
       cancelled = true;
     };
   }, [repoPath, commits, commitLogins]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const page = await api.listCommits(repoPath, 0, COMMITS_PAGE_SIZE);
-        if (cancelled) return;
-        setCommits((prev) => {
-          if (prev.length === 0) {
-            return page;
-          }
-          // The fetched page is authoritative for the top of history. Splice it
-          // over the equivalent prefix of `prev` so abandoned commits (e.g.
-          // after `git reset` / amend) get evicted instead of lingering in the
-          // middle of the list.
-          return [...page, ...prev.slice(page.length)];
-        });
-      } catch {
-        // silent — next tick retries
-      }
-    };
-    const handle = setInterval(poll, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(handle);
-    };
-  }, [repoPath]);
 
   const loadMore = useCallback(() => {
     setLoadingMore((cur) => {
@@ -1550,9 +1744,11 @@ function absoluteTime(unixSeconds: number): string {
 
 function StagedTab({
   repoPath,
+  invalidateKey,
   onExpand,
 }: {
   repoPath: string;
+  invalidateKey: number;
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
@@ -1565,38 +1761,48 @@ function StagedTab({
     y: number;
     file: StagedFile;
   } | null>(null);
+  const generationRef = useRef(0);
+
+  const refresh = useCallback(async () => {
+    const generation = generationRef.current;
+    try {
+      const [f, d] = await Promise.all([
+        api.listStaged(repoPath),
+        api.stagedDiff(repoPath),
+      ]);
+      if (generationRef.current !== generation) return;
+      setFiles(f);
+      setDiff(d);
+      setError(null);
+    } catch (e) {
+      if (generationRef.current !== generation) return;
+      setError(String(e));
+    } finally {
+      if (generationRef.current === generation) setLoadingFirst(false);
+    }
+  }, [repoPath]);
+
+  const { refreshNow, scheduleRefresh } = useRefreshScheduler(refresh);
 
   useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const [f, d] = await Promise.all([
-          api.listStaged(repoPath),
-          api.stagedDiff(repoPath),
-        ]);
-        if (cancelled) return;
-        setFiles(f);
-        setDiff(d);
-        setError(null);
-      } catch (e) {
-        if (cancelled) return;
-        setError(String(e));
-      } finally {
-        if (!cancelled) setLoadingFirst(false);
-      }
-    };
-
+    generationRef.current += 1;
     setError(null);
     setLoadingFirst(true);
     setFiles([]);
     setDiff(null);
-    void refresh();
-    const handle = setInterval(refresh, 2000);
     return () => {
-      cancelled = true;
-      clearInterval(handle);
+      generationRef.current += 1;
     };
   }, [repoPath]);
+
+  useSafetyRefreshInterval(refreshNow, STAGED_SAFETY_INTERVAL_MS, [
+    repoPath,
+    refreshNow,
+  ]);
+
+  useEffect(() => {
+    if (invalidateKey > 0) scheduleRefresh();
+  }, [invalidateKey, scheduleRefresh]);
 
   function isDeleted(file: StagedFile): boolean {
     return file.status.toLowerCase().includes("delete");
