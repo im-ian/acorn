@@ -61,6 +61,13 @@ impl PrStateFilter {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PullRequestLabel {
+    pub name: String,
+    /// Hex color without the leading `#`, as returned by gh.
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PullRequestInfo {
     pub number: u64,
     pub title: String,
@@ -76,6 +83,7 @@ pub struct PullRequestInfo {
     /// Aggregate of status checks on the head sha, mirroring the detail
     /// modal's badge logic. `None` when gh returned no rollup entries.
     pub checks: Option<ChecksSummary>,
+    pub labels: Vec<PullRequestLabel>,
 }
 
 /// Pass / fail / pending counts derived from `statusCheckRollup`. NEUTRAL,
@@ -116,6 +124,16 @@ struct GhPullRequest {
     is_draft: bool,
     #[serde(rename = "statusCheckRollup", default)]
     status_check_rollup: Option<Vec<GhCheck>>,
+    #[serde(default)]
+    labels: Vec<GhLabel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhLabel {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -306,7 +324,7 @@ fn run_pr_list(
                 &limit_s,
                 "--json",
                 "number,title,state,author,headRefName,baseRefName,url,updatedAt,\
-                 isDraft,statusCheckRollup",
+                 isDraft,statusCheckRollup,labels",
             ]);
         if let Some(q) = query {
             cmd.args(["--search", q]);
@@ -347,6 +365,14 @@ fn run_pr_list(
                 updated_at: pr.updated_at,
                 is_draft: pr.is_draft,
                 checks,
+                labels: pr
+                    .labels
+                    .into_iter()
+                    .map(|l| PullRequestLabel {
+                        name: l.name,
+                        color: l.color,
+                    })
+                    .collect(),
             }
         })
         .collect())
@@ -692,6 +718,7 @@ pub struct PullRequestDetail {
     /// by `gh pr view --json mergeable`. The frontend uses this to decide
     /// whether to enable the merge button.
     pub mergeable: Option<String>,
+    pub labels: Vec<PullRequestLabel>,
     pub comments: Vec<PullRequestComment>,
     pub reviews: Vec<PullRequestReview>,
     pub checks: Vec<PullRequestCheck>,
@@ -865,6 +892,14 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         deletions: view.deletions.unwrap_or(0),
         changed_files: view.changed_files.unwrap_or(0),
         mergeable: view.mergeable,
+        labels: view
+            .labels
+            .into_iter()
+            .map(|l| PullRequestLabel {
+                name: l.name,
+                color: l.color,
+            })
+            .collect(),
         comments,
         reviews,
         checks,
@@ -885,7 +920,7 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
             "--json",
             "number,title,body,state,isDraft,author,headRefName,baseRefName,url,\
                  createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,\
-                 mergeable,comments,reviews,statusCheckRollup,commits",
+                 mergeable,labels,comments,reviews,statusCheckRollup,commits",
         ]);
     })?;
 
@@ -1156,6 +1191,8 @@ struct GhPullRequestView {
     #[serde(rename = "changedFiles")]
     changed_files: Option<u64>,
     mergeable: Option<String>,
+    #[serde(default)]
+    labels: Vec<GhLabel>,
     comments: Option<Vec<GhComment>>,
     reviews: Option<Vec<GhReview>>,
     #[serde(rename = "statusCheckRollup")]

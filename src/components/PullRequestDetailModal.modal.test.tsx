@@ -51,6 +51,7 @@ function fakeDetail(body: string): PullRequestDetail {
     deletions: 0,
     changed_files: 0,
     mergeable: "MERGEABLE",
+    labels: [],
     comments: [],
     reviews: [],
     checks: [],
