@@ -238,6 +238,21 @@ function emptyWorkspace(): ProjectWorkspace {
   };
 }
 
+let indexedSessions: Session[] | null = null;
+let indexedSessionsById: ReadonlyMap<string, Session> = new Map();
+
+export function selectSessionsById(state: {
+  sessions: Session[];
+}): ReadonlyMap<string, Session> {
+  if (state.sessions !== indexedSessions) {
+    indexedSessions = state.sessions;
+    indexedSessionsById = new Map(
+      state.sessions.map((session) => [session.id, session]),
+    );
+  }
+  return indexedSessionsById;
+}
+
 function fallbackEmptyMirror() {
   const activeTabId = null as string | null;
   return {

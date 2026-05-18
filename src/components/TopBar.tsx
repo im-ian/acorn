@@ -1,10 +1,11 @@
-import { useAppStore } from "../store";
+import { selectSessionsById, useAppStore } from "../store";
 import { useTranslation } from "../lib/useTranslation";
 
 export function TopBar() {
   const t = useTranslation();
-  const { sessions, activeSessionId } = useAppStore();
-  const active = sessions.find((s) => s.id === activeSessionId);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const sessionsById = useAppStore(selectSessionsById);
+  const active = activeSessionId ? sessionsById.get(activeSessionId) : null;
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-bg-elevated px-4">

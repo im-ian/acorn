@@ -32,6 +32,13 @@ const HOST_TERMINAL_ENV: &[&str] = &[
     "VTE_VERSION",
 ];
 
+const HOST_COLOR_POLICY_ENV: &[&str] = &[
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+];
+
 /// Apply layered env to `cmd`, lowest-to-highest priority:
 ///   * (A) Render capability — TERM / COLORTERM defaults.
 ///   * (B) System locale — LANG default.
@@ -68,6 +75,17 @@ pub fn apply_layered_env(cmd: &mut CommandBuilder, env: HashMap<String, String>)
     // a terminal Acorn is not actually running. Strip inherited fingerprints;
     // explicit caller env below can still opt back in for tests/tools.
     for k in HOST_TERMINAL_ENV {
+        if !applied.contains(*k) {
+            cmd.env_remove(k);
+        }
+    }
+
+    // These are process-output policy hints for the environment that launched
+    // Acorn, not terminal capabilities. If the app inherits `NO_COLOR=1`
+    // from a test runner or parent shell, color-aware CLIs inside Acorn
+    // (Claude, chalk-based tools, etc.) suppress ANSI even though xterm.js can
+    // render it. Keep only explicit per-session overrides.
+    for k in HOST_COLOR_POLICY_ENV {
         if !applied.contains(*k) {
             cmd.env_remove(k);
         }
@@ -216,6 +234,35 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM_PROGRAM").and_then(|s| s.to_str()),
             Some("AcornTest"),
+        );
+    }
+
+    #[test]
+    fn layered_env_removes_inherited_color_policy() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("NO_COLOR", "1");
+        cmd.env("FORCE_COLOR", "0");
+        cmd.env("CLICOLOR", "0");
+        cmd.env("CLICOLOR_FORCE", "0");
+        apply_layered_env(&mut cmd, HashMap::new());
+        assert_eq!(cmd.get_env("NO_COLOR"), None);
+        assert_eq!(cmd.get_env("FORCE_COLOR"), None);
+        assert_eq!(cmd.get_env("CLICOLOR"), None);
+        assert_eq!(cmd.get_env("CLICOLOR_FORCE"), None);
+    }
+
+    #[test]
+    fn layered_env_preserves_explicit_color_policy_override() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env_clear();
+        cmd.env("NO_COLOR", "0");
+        let mut env = HashMap::new();
+        env.insert("NO_COLOR".to_string(), "1".to_string());
+        apply_layered_env(&mut cmd, env);
+        assert_eq!(
+            cmd.get_env("NO_COLOR").and_then(|s| s.to_str()),
+            Some("1"),
         );
     }
 }

@@ -14,15 +14,27 @@
 # source the user's real rc.
 
 _acorn_zd=$ZDOTDIR
-if [ -n "${ACORN_USER_ZDOTDIR-}" ]; then
-    [ -f "$ACORN_USER_ZDOTDIR/.zshenv" ] && . "$ACORN_USER_ZDOTDIR/.zshenv"
-elif [ -f "$HOME/.zshenv" ]; then
-    . "$HOME/.zshenv"
+_acorn_user_zd=${ACORN_USER_ZDOTDIR:-$HOME}
+_acorn_realpath() {
+    (cd -P -- "$1" 2>/dev/null && pwd -P)
+}
+_acorn_zd_real=$(_acorn_realpath "$_acorn_zd")
+_acorn_user_zd_real=$(_acorn_realpath "$_acorn_user_zd")
+if [ -n "$_acorn_zd_real" ] && [ "$_acorn_user_zd_real" = "$_acorn_zd_real" ]; then
+    _acorn_user_zd=$HOME
+    _acorn_user_zd_real=$(_acorn_realpath "$_acorn_user_zd")
+fi
+if [ -n "$_acorn_user_zd_real" ] && [ "$_acorn_user_zd_real" != "$_acorn_zd_real" ] && [ -f "$_acorn_user_zd/.zshenv" ]; then
+    . "$_acorn_user_zd/.zshenv"
 fi
 # If user .zshenv reset ZDOTDIR, treat that as their real rc dir for
 # .zshrc lookup. Otherwise keep whatever Acorn injected.
-if [ "$ZDOTDIR" != "$_acorn_zd" ]; then
+_acorn_new_zd_real=$(_acorn_realpath "$ZDOTDIR")
+if [ -n "$_acorn_zd_real" ] && [ -n "$_acorn_new_zd_real" ] && [ "$_acorn_new_zd_real" != "$_acorn_zd_real" ]; then
     ACORN_USER_ZDOTDIR=$ZDOTDIR
+else
+    ACORN_USER_ZDOTDIR=$_acorn_user_zd
 fi
 ZDOTDIR=$_acorn_zd
-unset _acorn_zd
+unset -f _acorn_realpath
+unset _acorn_zd _acorn_user_zd _acorn_zd_real _acorn_user_zd_real _acorn_new_zd_real
