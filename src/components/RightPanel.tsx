@@ -19,6 +19,7 @@ import {
   ExternalLink,
   FileDiff,
   FolderTree,
+  GitBranch,
   GitCommit,
   GitMerge,
   GitPullRequest,
@@ -31,6 +32,7 @@ import {
   MinusCircle,
   Play,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -733,6 +735,7 @@ function countByStatus(todos: TodoItem[]) {
 function AgentHistoryTab({ repoPath }: { repoPath: string }) {
   const t = useTranslation();
   const createSession = useAppStore((s) => s.createSession);
+  const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
   const [items, setItems] = useState<AgentHistoryItem[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -742,6 +745,19 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
     y: number;
     item: AgentHistoryItem;
   } | null>(null);
+  const [worktreeNotice, setWorktreeNotice] = useState<
+    NonNullable<AgentHistoryItem["worktree"]> | null
+  >(null);
+  const [trashCandidate, setTrashCandidate] = useState<AgentHistoryItem | null>(
+    null,
+  );
+
+  useDialogShortcuts(worktreeNotice !== null, {
+    onCancel: () => setWorktreeNotice(null),
+  });
+  useDialogShortcuts(trashCandidate !== null, {
+    onCancel: () => setTrashCandidate(null),
+  });
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -767,9 +783,18 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
     }
   }
 
-  async function runSession(item: AgentHistoryItem) {
+  async function runSession(
+    item: AgentHistoryItem,
+    mode: "auto" | "repo" | "worktree" = "auto",
+  ) {
     if (!item.resume_command) return;
     setError(null);
+    const shouldUseWorktree =
+      mode !== "repo" && item.worktree !== null && item.worktree.exists;
+    if (mode === "worktree" && !shouldUseWorktree) {
+      setError(rt(t, "rightPanel.history.worktreeUnavailable"));
+      return;
+    }
     try {
       const created = await createSession(
         `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
@@ -782,8 +807,40 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
         );
         return;
       }
+      if (shouldUseWorktree && item.worktree) {
+        try {
+          await adoptSessionWorktree(created.id, item.worktree.path);
+        } catch (e) {
+          setError(String(e));
+          return;
+        }
+      }
       setPendingTerminalInput(created.id, item.resume_command);
+      if (shouldUseWorktree && item.worktree) {
+        setWorktreeNotice(item.worktree);
+      }
     } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function moveTranscriptToTrash(item: AgentHistoryItem) {
+    setError(null);
+    try {
+      await api.trashAgentHistoryTranscript(item);
+      setItems((prev) =>
+        prev
+          ? prev.filter(
+              (candidate) =>
+                candidate.provider !== item.provider ||
+                candidate.id !== item.id ||
+                candidate.transcript_path !== item.transcript_path,
+            )
+          : prev,
+      );
+      setTrashCandidate(null);
+    } catch (e) {
+      setTrashCandidate(null);
       setError(String(e));
     }
   }
@@ -845,18 +902,36 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
                         {item.preview}
                       </div>
                     ) : null}
+                    {item.worktree ? (
+                      <Tooltip
+                        label={
+                          item.worktree.exists
+                            ? item.worktree.path
+                            : `${item.worktree.path} (${rt(t, "rightPanel.history.worktreeMissing")})`
+                        }
+                        side="bottom"
+                      >
+                        <div
+                          className={cn(
+                            "mt-1 flex min-w-0 items-center gap-1 text-[10.5px] font-mono",
+                            item.worktree.exists
+                              ? "text-accent"
+                              : "text-fg-muted",
+                          )}
+                        >
+                          <GitBranch size={11} className="shrink-0" />
+                          <span className="truncate">
+                            {item.worktree.name}
+                          </span>
+                        </div>
+                      </Tooltip>
+                    ) : null}
                     <div className="mt-1 flex min-w-0 items-center gap-2 text-[10.5px] text-fg-muted/80">
                       <Tooltip label={absoluteTime(item.updated_at)} side="bottom">
                         <span className="shrink-0 font-mono">
                           {relativeTime(item.updated_at, t)}
                         </span>
                       </Tooltip>
-                      {item.cwd ? (
-                        <>
-                          <span className="shrink-0 opacity-50">·</span>
-                          <span className="truncate font-mono">{item.cwd}</span>
-                        </>
-                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -877,8 +952,16 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
                   label: rt(t, "rightPanel.history.runSession"),
                   icon: <Play size={12} />,
                   disabled: !menu.item.resume_command,
-                  onClick: () => void runSession(menu.item),
+                  onClick: () => void runSession(menu.item, "repo"),
                 },
+                {
+                  label: rt(t, "rightPanel.history.runInWorktree"),
+                  icon: <GitBranch size={12} />,
+                  disabled:
+                    !menu.item.resume_command || !menu.item.worktree?.exists,
+                  onClick: () => void runSession(menu.item, "worktree"),
+                },
+                { type: "separator" },
                 {
                   label: rt(t, "rightPanel.history.copyResume"),
                   icon: <Copy size={12} />,
@@ -886,14 +969,106 @@ function AgentHistoryTab({ repoPath }: { repoPath: string }) {
                   onClick: () => void copy(menu.item.resume_command ?? ""),
                 },
                 {
+                  label: rt(t, "rightPanel.history.copyWorktreePath"),
+                  icon: <GitBranch size={12} />,
+                  disabled: !menu.item.worktree,
+                  onClick: () => void copy(menu.item.worktree?.path ?? ""),
+                },
+                { type: "separator" },
+                {
                   label: rt(t, "rightPanel.history.openTranscript"),
                   icon: <ExternalLink size={12} />,
                   onClick: () => void openPath(menu.item.transcript_path),
+                },
+                { type: "separator" },
+                {
+                  label: rt(t, "rightPanel.history.moveTranscriptToTrash"),
+                  icon: <Trash2 size={12} />,
+                  onClick: () => setTrashCandidate(menu.item),
                 },
               ] satisfies ContextMenuItem[])
             : []
         }
       />
+      <Modal
+        open={worktreeNotice !== null}
+        onClose={() => setWorktreeNotice(null)}
+        variant="dialog"
+        size="md"
+        ariaLabel={rt(t, "rightPanel.history.worktreeRunTitle")}
+      >
+        <ModalHeader
+          title={rt(t, "rightPanel.history.worktreeRunTitle")}
+          icon={<GitBranch size={15} className="text-accent" />}
+          variant="dialog"
+          onClose={() => setWorktreeNotice(null)}
+        />
+        <div className="space-y-3 px-4 py-4 text-sm text-fg">
+          <p className="text-sm leading-5 text-fg-muted">
+            {rtf(t, "rightPanel.history.worktreeRunBody", {
+              name: worktreeNotice?.name ?? "",
+            })}
+          </p>
+          {worktreeNotice ? (
+            <div className="rounded border border-border bg-bg-sidebar px-3 py-2 font-mono text-[11px] text-fg-muted">
+              {worktreeNotice.path}
+            </div>
+          ) : null}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="rounded border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
+              onClick={() => setWorktreeNotice(null)}
+            >
+              {rt(t, "rightPanel.history.worktreeRunConfirm")}
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        open={trashCandidate !== null}
+        onClose={() => setTrashCandidate(null)}
+        variant="dialog"
+        size="md"
+        ariaLabel={rt(t, "rightPanel.history.trashTranscriptTitle")}
+      >
+        <ModalHeader
+          title={rt(t, "rightPanel.history.trashTranscriptTitle")}
+          icon={<Trash2 size={15} className="text-danger" />}
+          variant="dialog"
+          onClose={() => setTrashCandidate(null)}
+        />
+        <div className="space-y-3 px-4 py-4 text-sm text-fg">
+          <p className="text-sm leading-5 text-fg-muted">
+            {rt(t, "rightPanel.history.trashTranscriptBody")}
+          </p>
+          {trashCandidate ? (
+            <div className="rounded border border-border bg-bg-sidebar px-3 py-2 font-mono text-[11px] text-fg-muted">
+              {trashCandidate.transcript_path}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="rounded border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
+              onClick={() => setTrashCandidate(null)}
+            >
+              {rt(t, "rightPanel.history.trashTranscriptCancel")}
+            </button>
+            <button
+              type="button"
+              className="rounded border border-danger/50 bg-danger/10 px-3 py-1.5 text-xs text-danger transition hover:bg-danger/15"
+              onClick={() =>
+                trashCandidate
+                  ? void moveTranscriptToTrash(trashCandidate)
+                  : undefined
+              }
+            >
+              {rt(t, "rightPanel.history.trashTranscriptConfirm")}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

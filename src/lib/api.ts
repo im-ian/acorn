@@ -248,6 +248,13 @@ export const api = {
       limit,
     });
   },
+  trashAgentHistoryTranscript(item: AgentHistoryItem): Promise<void> {
+    return invoke<void>("trash_agent_history_transcript", {
+      provider: item.provider,
+      id: item.id,
+      transcriptPath: item.transcript_path,
+    });
+  },
   readSessionTodos(sessionId: string, cwd: string): Promise<TodoItem[]> {
     return invoke<TodoItem[]>("read_session_todos", { sessionId, cwd });
   },
