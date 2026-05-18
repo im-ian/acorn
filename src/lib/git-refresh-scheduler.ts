@@ -19,7 +19,14 @@ export type GitRefreshDecision =
   | { action: "skip-huge" }
   | { action: "skip-nothing-changed" };
 
+// Quiet for 5s after a successful status, mirroring VSCode's git extension
+// `await timeout(5000)` in repository.ts:3201. Keeps a busy repo from
+// re-running `git status` on every fs burst.
 const QUIET_WINDOW_MS = 5_000;
+
+// Debounce fs-event-driven refreshes by 1s, mirroring VSCode's
+// `@debounce(1000)` in repository.ts:3192. Collapses a single user save
+// (which often emits 2-3 fs events) into one status call.
 const DEBOUNCE_MS = 1_000;
 
 export function planGitRefresh(input: GitRefreshInput): GitRefreshDecision {
@@ -44,7 +51,10 @@ export function planGitRefresh(input: GitRefreshInput): GitRefreshDecision {
   }
 
   if (input.lastSuccessAt !== null) {
-    const elapsed = input.now - input.lastSuccessAt;
+    // Math.max guards against `now < lastSuccessAt` (clock skew, NTP step,
+    // tests using fixed timestamps) — without it, elapsed goes negative and
+    // remaining exceeds QUIET_WINDOW_MS, deferring refreshes indefinitely.
+    const elapsed = Math.max(0, input.now - input.lastSuccessAt);
     if (elapsed < QUIET_WINDOW_MS) {
       const remaining = QUIET_WINDOW_MS - elapsed;
       if (remaining > DEBOUNCE_MS) {

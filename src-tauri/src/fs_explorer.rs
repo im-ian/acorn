@@ -1681,6 +1681,42 @@ mod tests {
     }
 
     #[test]
+    fn handle_supervisor_error_records_enospc_dedup() {
+        // Locks down the mutation side-effect of handle_supervisor_error
+        // so a regression that drops the state.record_enospc_logged() call
+        // is caught directly instead of only through the existing
+        // decide()-only tests.
+        let mut state = SupervisorState::default();
+        assert_eq!(
+            handle_supervisor_error("No space left on device", &mut state),
+            SupervisorAction::WarnOnce,
+        );
+        assert_eq!(
+            handle_supervisor_error("No space left on device", &mut state),
+            SupervisorAction::NoOp,
+        );
+    }
+
+    #[test]
+    fn handle_supervisor_error_records_restart_increment() {
+        let mut state = SupervisorState::default();
+        let first = handle_supervisor_error("boom", &mut state);
+        let second = handle_supervisor_error("boom", &mut state);
+        assert_eq!(
+            first,
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(800)
+            }
+        );
+        assert_eq!(
+            second,
+            SupervisorAction::Restart {
+                delay: Duration::from_millis(1_600)
+            }
+        );
+    }
+
+    #[test]
     fn classify_drops_index_lock_files() {
         let root = Path::new("/r");
         assert_eq!(

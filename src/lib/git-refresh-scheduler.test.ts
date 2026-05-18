@@ -78,4 +78,17 @@ describe("planGitRefresh", () => {
       }),
     ).toEqual({ action: "skip-nothing-changed" });
   });
+
+  it("bounds clock-skew defer (now < lastSuccessAt) to one quiet window", () => {
+    // Without the Math.max guard, negative elapsed makes remaining exceed
+    // QUIET_WINDOW_MS, indefinitely deferring. The guard clamps to at most
+    // one full QUIET_WINDOW_MS.
+    expect(
+      planGitRefresh({
+        ...base,
+        now: 5_000,
+        lastSuccessAt: 10_000,
+      }),
+    ).toEqual({ action: "defer", waitMs: 5_000 });
+  });
 });
