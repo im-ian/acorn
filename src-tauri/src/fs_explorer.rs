@@ -19,6 +19,7 @@ use crate::state::AppState;
 const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
 const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
 const WATCH_EVENT_CAP: usize = 256;
+const WATCH_THROTTLE_GAP: Duration = Duration::from_millis(200);
 
 const SUPERVISOR_INITIAL_BACKOFF: Duration = Duration::from_millis(800);
 const SUPERVISOR_MAX_BACKOFF: Duration = Duration::from_millis(12_800);
@@ -940,6 +941,7 @@ fn run_watch_batcher<R: Runtime>(
     root: PathBuf,
     rx: Receiver<notify::Result<Event>>,
 ) {
+    let mut last_emit: Option<Instant> = None;
     loop {
         let first = match rx.recv() {
             Ok(res) => res,
@@ -964,10 +966,28 @@ fn run_watch_batcher<R: Runtime>(
         let Some(payload) = batch.finish() else {
             continue;
         };
+
+        // Cap emit rate at one payload per WATCH_THROTTLE_GAP so a sustained
+        // burst (e.g. a long `cargo build` rewriting `target/`) cannot
+        // deliver more than ~5 payloads/sec to the frontend.
+        let wait = throttle_delay(last_emit, Instant::now());
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+        }
+
+        last_emit = Some(Instant::now());
         if let Err(e) = app.emit(EVENT_FS_CHANGED, payload) {
             tracing::warn!(error = %e, "fs-changed emit failed");
         }
     }
+}
+
+fn throttle_delay(last_emit: Option<Instant>, now: Instant) -> Duration {
+    let Some(last) = last_emit else {
+        return Duration::ZERO;
+    };
+    let elapsed = now.saturating_duration_since(last);
+    WATCH_THROTTLE_GAP.saturating_sub(elapsed)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1548,6 +1568,28 @@ mod tests {
                 delay: Duration::from_millis(800)
             }
         );
+    }
+
+    #[test]
+    fn throttle_delay_returns_zero_for_first_emit() {
+        let now = Instant::now();
+        assert_eq!(throttle_delay(None, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn throttle_delay_returns_zero_when_gap_already_exceeded() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(500);
+        assert_eq!(throttle_delay(Some(last), now), Duration::ZERO);
+    }
+
+    #[test]
+    fn throttle_delay_returns_remainder_when_too_soon() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(120);
+        let got = throttle_delay(Some(last), now);
+        // 200ms target - 120ms elapsed = 80ms remaining.
+        assert!(got >= Duration::from_millis(75) && got <= Duration::from_millis(85));
     }
 
     #[test]
