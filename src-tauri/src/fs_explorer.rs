@@ -936,6 +936,14 @@ pub fn fs_watch_set_root<R: Runtime>(
         watcher
             .watch(&root, RecursiveMode::Recursive)
             .map_err(|e| AppError::Other(format!("notify watch failed: {e}")))?;
+        // Backend type name surfaces FSEvents vs inotify vs ReadDirectoryChangesW
+        // vs PollWatcher in traces — support diagnostics can tell which path
+        // notify picked at runtime without having to reproduce locally.
+        tracing::info!(
+            root = %root.display(),
+            backend = std::any::type_name::<RecommendedWatcher>(),
+            "fs watcher attached"
+        );
         *guard = Some(WatcherHandle {
             _watcher: watcher,
             _batcher: batcher,
