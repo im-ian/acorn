@@ -577,70 +577,93 @@ pub fn fs_git_diff_stats(
         None => return Ok(HashMap::new()),
     };
 
-    let mut out = HashMap::with_capacity(entries.len());
+    // Partition entries by handling strategy so one diff covers every
+    // modified / renamed / conflicted path in a single pass.
+    let mut added: Vec<(String, PathBuf)> = Vec::new();
+    let mut deleted: Vec<(String, String)> = Vec::new();
+    let mut diffable: Vec<(String, String)> = Vec::new();
     for entry in entries {
         let path = PathBuf::from(&entry.path);
         reject_dangerous(&path)?;
         let Ok(rel_path) = path.strip_prefix(&workdir) else {
             continue;
         };
-        let rel = rel_path.to_string_lossy();
-        let (additions, deletions) = file_diff_stats(&repo, &workdir, &rel, &entry.kind);
-        out.insert(
-            path.to_string_lossy().into_owned(),
-            GitDiffStatsEntry {
-                additions,
-                deletions,
-            },
-        );
-    }
-    Ok(out)
-}
-
-/// Compute additions/deletions for a single path against HEAD. For
-/// untracked files we count line count as additions; for deleted files
-/// the count comes from the HEAD blob.
-fn file_diff_stats(repo: &Repository, workdir: &Path, rel: &str, kind: &str) -> (u32, u32) {
-    if kind == "added" {
-        // Untracked or freshly-added file. Count file lines as additions.
-        let abs = workdir.join(rel);
-        if let Ok(bytes) = std::fs::read(&abs) {
-            let lines = count_lines(&bytes);
-            return (lines, 0);
+        let rel = rel_path.to_string_lossy().into_owned();
+        let abs = path.to_string_lossy().into_owned();
+        match entry.kind.as_str() {
+            "added" => added.push((abs, path)),
+            "deleted" => deleted.push((abs, rel)),
+            _ => diffable.push((abs, rel)),
         }
-        return (0, 0);
     }
-    if kind == "deleted" {
-        // Read HEAD blob to know the original line count.
-        if let Ok(head) = repo.head() {
-            if let Ok(commit) = head.peel_to_commit() {
-                if let Ok(tree) = commit.tree() {
-                    if let Ok(entry) = tree.get_path(Path::new(rel)) {
-                        if let Ok(obj) = entry.to_object(repo) {
-                            if let Some(blob) = obj.as_blob() {
-                                return (0, count_lines(blob.content()));
-                            }
-                        }
+
+    let mut out: HashMap<String, GitDiffStatsEntry> =
+        HashMap::with_capacity(added.len() + deleted.len() + diffable.len());
+
+    // Untracked / freshly-added: line count of the working-tree file.
+    for (abs, path) in added {
+        let additions = std::fs::read(&path)
+            .map(|b| count_lines(&b))
+            .unwrap_or(0);
+        out.insert(abs, GitDiffStatsEntry { additions, deletions: 0 });
+    }
+
+    // Deleted: line count of the HEAD blob.
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    for (abs, rel) in deleted {
+        let deletions = head_tree
+            .as_ref()
+            .and_then(|t| t.get_path(Path::new(&rel)).ok())
+            .and_then(|e| e.to_object(&repo).ok())
+            .and_then(|o| o.as_blob().map(|b| count_lines(b.content())))
+            .unwrap_or(0);
+        out.insert(abs, GitDiffStatsEntry { additions: 0, deletions });
+    }
+
+    // Modified / renamed / conflicted: one diff scoped to every diffable
+    // pathspec, fan out via `foreach` line callbacks per delta path.
+    if !diffable.is_empty() {
+        let mut opts = git2::DiffOptions::new();
+        opts.include_untracked(true).recurse_untracked_dirs(false);
+        for (_, rel) in &diffable {
+            opts.pathspec(rel);
+        }
+        if let Ok(diff) =
+            repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))
+        {
+            let mut per_path: HashMap<String, (u32, u32)> = HashMap::new();
+            let _ = diff.foreach(
+                &mut |_delta, _progress| true,
+                None,
+                None,
+                Some(&mut |delta, _hunk, line| {
+                    let rel = delta
+                        .new_file()
+                        .path()
+                        .or_else(|| delta.old_file().path())
+                        .and_then(|p| p.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if rel.is_empty() {
+                        return true;
                     }
-                }
+                    let entry = per_path.entry(rel).or_default();
+                    match line.origin() {
+                        '+' => entry.0 = entry.0.saturating_add(1),
+                        '-' => entry.1 = entry.1.saturating_add(1),
+                        _ => {}
+                    }
+                    true
+                }),
+            );
+            for (abs, rel) in diffable {
+                let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
+                out.insert(abs, GitDiffStatsEntry { additions: a, deletions: d });
             }
         }
-        return (0, 0);
     }
-    // modified / renamed / conflicted — run a diff vs HEAD scoped to
-    // this single path so we get the patch stats directly.
-    let mut opts = git2::DiffOptions::new();
-    opts.pathspec(rel)
-        .include_untracked(true)
-        .recurse_untracked_dirs(false);
-    let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let diff = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts));
-    if let Ok(d) = diff {
-        if let Ok(stats) = d.stats() {
-            return (stats.insertions() as u32, stats.deletions() as u32);
-        }
-    }
-    (0, 0)
+
+    Ok(out)
 }
 
 fn count_lines(bytes: &[u8]) -> u32 {
@@ -1451,5 +1474,90 @@ mod tests {
                 delay: Duration::from_millis(800)
             }
         );
+    }
+
+    #[test]
+    fn diff_stats_modified_returns_correct_counts() {
+        use git2::{Repository, Signature};
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+
+        fs::write(repo_path.join("a.rs"), "1\n2\n3\n4\n5\n").unwrap();
+        fs::write(repo_path.join("b.rs"), "x\ny\n").unwrap();
+
+        let sig = Signature::now("t", "t@t").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("a.rs")).unwrap();
+            index.add_path(Path::new("b.rs")).unwrap();
+            index.write().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        }
+
+        // Purely additive: insert 3 new lines between "2" and "3".
+        fs::write(repo_path.join("a.rs"), "1\n2\nNEW1\nNEW2\nNEW3\n3\n4\n5\n").unwrap();
+
+        let entries = vec![GitDiffStatsRequest {
+            path: repo_path.join("a.rs").to_string_lossy().into_owned(),
+            kind: "modified".to_string(),
+        }];
+        let stats = fs_git_diff_stats(
+            repo_path.to_string_lossy().into_owned(),
+            entries,
+        )
+        .unwrap();
+        let entry = stats.values().next().expect("one entry");
+        assert_eq!(entry.additions, 3);
+        assert_eq!(entry.deletions, 0);
+    }
+
+    #[test]
+    fn diff_stats_handles_multiple_modified_paths_in_one_call() {
+        use git2::{Repository, Signature};
+
+        let d = tmpdir();
+        let repo_path = d.path().canonicalize().unwrap();
+        let repo = Repository::init(&repo_path).unwrap();
+        fs::write(repo_path.join("x.rs"), "a\nb\nc\n").unwrap();
+        fs::write(repo_path.join("y.rs"), "a\nb\nc\n").unwrap();
+        let sig = Signature::now("t", "t@t").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("x.rs")).unwrap();
+            index.add_path(Path::new("y.rs")).unwrap();
+            index.write().unwrap();
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        }
+        // x.rs: +2 lines (purely additive). y.rs: -1 line.
+        fs::write(repo_path.join("x.rs"), "a\nb\nc\nNEW1\nNEW2\n").unwrap();
+        fs::write(repo_path.join("y.rs"), "a\nc\n").unwrap();
+
+        let entries = vec![
+            GitDiffStatsRequest {
+                path: repo_path.join("x.rs").to_string_lossy().into_owned(),
+                kind: "modified".to_string(),
+            },
+            GitDiffStatsRequest {
+                path: repo_path.join("y.rs").to_string_lossy().into_owned(),
+                kind: "modified".to_string(),
+            },
+        ];
+        let stats = fs_git_diff_stats(
+            repo_path.to_string_lossy().into_owned(),
+            entries,
+        )
+        .unwrap();
+        let x_key = repo_path.join("x.rs").to_string_lossy().into_owned();
+        let y_key = repo_path.join("y.rs").to_string_lossy().into_owned();
+        assert_eq!(stats[&x_key].additions, 2);
+        assert_eq!(stats[&x_key].deletions, 0);
+        assert_eq!(stats[&y_key].additions, 0);
+        assert_eq!(stats[&y_key].deletions, 1);
     }
 }
