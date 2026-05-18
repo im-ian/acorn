@@ -6,6 +6,12 @@ import { highlightDiff, langFromPath } from "../lib/highlight";
 import type { DiffFile, DiffPayload } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
+import {
+  estimateMaxLineWidthCh,
+  lineIndexProps,
+  lineTextContentProps,
+  VirtualizedLineList,
+} from "./VirtualizedLines";
 
 interface DiffViewProps {
   payload: DiffPayload;
@@ -147,13 +153,11 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
         file.is_image ? (
           <ImageDiff file={file} />
         ) : (
-          <div className="acorn-selectable max-h-80 overflow-auto font-mono text-[11px] leading-5 select-text">
-            <div className="w-max min-w-full">
-              {lines.map((line, i) => (
-                <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
-              ))}
-            </div>
-          </div>
+          <DiffLineList
+            lines={lines}
+            highlighted={highlighted}
+            className="acorn-selectable max-h-80 overflow-auto font-mono text-[11px] leading-5 select-text"
+          />
         )
       ) : null}
     </div>
@@ -290,21 +294,29 @@ export function useHighlightedDiff(
 export function DiffLine({
   line,
   html,
+  index,
 }: {
   line: ParsedLine;
   html?: string | null;
+  index?: number;
 }) {
   if (line.kind === "hunk") {
     return (
-      <div className="bg-[oklch(28%_0.04_250)] px-3 py-0.5 text-[oklch(70%_0.05_250)] whitespace-pre">
-        {line.text}
+      <div
+        className="bg-[oklch(28%_0.04_250)] px-3 py-0.5 text-[oklch(70%_0.05_250)] whitespace-pre"
+        {...lineDataProps(index)}
+      >
+        <span {...lineTextContentProps()}>{line.text}</span>
       </div>
     );
   }
   if (line.kind === "meta") {
     return (
-      <div className="bg-bg-elevated/40 px-3 py-0.5 text-fg-muted whitespace-pre">
-        {line.text}
+      <div
+        className="bg-bg-elevated/40 px-3 py-0.5 text-fg-muted whitespace-pre"
+        {...lineDataProps(index)}
+      >
+        <span {...lineTextContentProps()}>{line.text}</span>
       </div>
     );
   }
@@ -323,20 +335,71 @@ export function DiffLine({
   const marker =
     line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
   return (
-    <div className={`flex gap-2 px-2 py-0 ${cls}`}>
+    <div className={`flex gap-2 px-2 py-0 ${cls}`} {...lineDataProps(index)}>
       <span className="select-none w-3 shrink-0 text-center opacity-70">
         {marker}
       </span>
       {html ? (
         <span
+          {...lineTextContentProps()}
           className="whitespace-pre"
           dangerouslySetInnerHTML={{ __html: html || "&nbsp;" }}
         />
       ) : (
-        <span className={`whitespace-pre ${fallbackText}`}>
+        <span
+          {...lineTextContentProps()}
+          className={`whitespace-pre ${fallbackText}`}
+        >
           {line.text || " "}
         </span>
       )}
     </div>
   );
+}
+
+export function DiffLineList({
+  lines,
+  highlighted,
+  className,
+}: {
+  lines: ParsedLine[];
+  highlighted: (string | null)[];
+  className: string;
+}) {
+  const lineTexts = useMemo(() => lines.map(diffLineCopyText), [lines]);
+  const minWidthCh = useMemo(
+    () => estimateMaxLineWidthCh(lineTexts, 5),
+    [lineTexts],
+  );
+
+  return (
+    <VirtualizedLineList
+      count={lines.length}
+      className={className}
+      innerClassName="w-max min-w-full"
+      estimateSize={(index) => estimateDiffLineHeight(lines[index])}
+      getLineText={(index) => lineTexts[index] ?? ""}
+      minWidthCh={minWidthCh}
+      renderLine={(index) => (
+        <DiffLine
+          key={index}
+          index={index}
+          line={lines[index]}
+          html={highlighted[index] ?? null}
+        />
+      )}
+    />
+  );
+}
+
+function lineDataProps(index: number | undefined) {
+  return index === undefined ? {} : lineIndexProps(index);
+}
+
+function diffLineCopyText(line: ParsedLine): string {
+  return line.text;
+}
+
+function estimateDiffLineHeight(line: ParsedLine | undefined): number {
+  return line?.kind === "hunk" || line?.kind === "meta" ? 24 : 20;
 }

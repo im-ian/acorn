@@ -7,6 +7,12 @@ import {
 import { highlightCode, langFromPath } from "../lib/highlight";
 import { cn } from "../lib/cn";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  estimateMaxLineWidthCh,
+  lineIndexProps,
+  lineTextContentProps,
+  VirtualizedLineList,
+} from "./VirtualizedLines";
 
 interface CodeViewerProps {
   path: string;
@@ -32,6 +38,8 @@ const DIFF_KIND_CLASS: Record<FsLineDiffEntry["kind"], string> = {
   modified: "bg-amber-400",
   deleted: "bg-rose-400",
 };
+
+const CODE_LINE_HEIGHT = 18;
 
 export function CodeViewer({ path, isActive }: CodeViewerProps) {
   const t = useTranslation();
@@ -93,6 +101,20 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
     for (const d of diffLines) map.set(d.line, d.kind);
     return map;
   }, [diffLines]);
+  const sourceLines = useMemo(
+    () =>
+      state.data && !state.data.binary ? state.data.content.split("\n") : [],
+    [state.data],
+  );
+  const plainHighlightedLines = useMemo(
+    () => sourceLines.map(() => null),
+    [sourceLines],
+  );
+  const gutterWidth = String(Math.max(1, sourceLines.length)).length;
+  const minWidthCh = useMemo(
+    () => estimateMaxLineWidthCh(sourceLines, gutterWidth + 7),
+    [gutterWidth, sourceLines],
+  );
 
   if (state.loading) {
     return (
@@ -121,10 +143,7 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   }
   if (!state.data) return null;
 
-  const sourceLines = state.data.content.split("\n");
-  const lines =
-    state.highlightedLines ?? sourceLines.map(() => null);
-  const gutterWidth = String(sourceLines.length).length;
+  const lines = state.highlightedLines ?? plainHighlightedLines;
 
   return (
     <div
@@ -138,37 +157,65 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
           {t("codeViewer.truncated")}
         </div>
       ) : null}
-      <pre className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent font-mono text-[12px] leading-[1.5] text-fg">
-        {sourceLines.map((rawText, i) => {
-          const tokens = lines[i];
-          const diff = diffByLine.get(i + 1);
-          return (
-            <div key={i} className="flex whitespace-pre">
-              <span
-                aria-hidden
-                className={cn(
-                  "shrink-0 self-stretch",
-                  diff ? DIFF_KIND_CLASS[diff] : "bg-transparent",
-                )}
-                style={{ width: 3 }}
-              />
-              <span
-                aria-hidden
-                className="select-none shrink-0 pl-2 pr-3 text-right text-fg-muted/60 tabular-nums"
-                style={{ minWidth: `${gutterWidth + 3}ch` }}
-              >
-                {i + 1}
-              </span>
-              <span
-                className="grow"
-                {...(tokens
-                  ? { dangerouslySetInnerHTML: { __html: tokens } }
-                  : { children: rawText })}
-              />
-            </div>
-          );
-        })}
-      </pre>
+      <VirtualizedLineList
+        as="pre"
+        count={sourceLines.length}
+        className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent font-mono text-[12px] leading-[1.5] text-fg"
+        estimateSize={() => CODE_LINE_HEIGHT}
+        getLineText={(index) => sourceLines[index] ?? ""}
+        minWidthCh={minWidthCh}
+        renderLine={(index) => (
+          <CodeLine
+            key={index}
+            index={index}
+            rawText={sourceLines[index] ?? ""}
+            tokens={lines[index] ?? null}
+            diff={diffByLine.get(index + 1)}
+            gutterWidth={gutterWidth}
+          />
+        )}
+      />
+    </div>
+  );
+}
+
+function CodeLine({
+  index,
+  rawText,
+  tokens,
+  diff,
+  gutterWidth,
+}: {
+  index: number;
+  rawText: string;
+  tokens: string | null;
+  diff?: FsLineDiffEntry["kind"];
+  gutterWidth: number;
+}) {
+  return (
+    <div className="flex whitespace-pre" {...lineIndexProps(index)}>
+      <span
+        aria-hidden
+        className={cn(
+          "shrink-0 self-stretch",
+          diff ? DIFF_KIND_CLASS[diff] : "bg-transparent",
+        )}
+        style={{ width: 3 }}
+      />
+      <span
+        aria-hidden
+        className="select-none shrink-0 pl-2 pr-3 text-right text-fg-muted/60 tabular-nums"
+        style={{ minWidth: `${gutterWidth + 3}ch` }}
+      >
+        {index + 1}
+      </span>
+      <span
+        {...lineTextContentProps()}
+        className="grow"
+        {...(tokens
+          ? { dangerouslySetInnerHTML: { __html: tokens } }
+          : { children: rawText })}
+      />
     </div>
   );
 }

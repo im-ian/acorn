@@ -8,7 +8,7 @@ import type { DiffFile, DiffPayload } from "../lib/types";
 import { Tooltip } from "./Tooltip";
 import { joinPath } from "../lib/paths";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { DiffLine, useHighlightedDiff } from "./DiffView";
+import { DiffLineList, useHighlightedDiff } from "./DiffView";
 import { ResizeHandle } from "./ResizeHandle";
 import { useTranslation } from "../lib/useTranslation";
 
@@ -229,13 +229,11 @@ function DiffSplitContent({ entry }: { entry: FileEntry }) {
     return <ImageDiffPane file={entry.file} />;
   }
   return (
-    <div className="acorn-selectable min-h-0 flex-1 select-text overflow-auto font-mono text-[11px] leading-5">
-      <div className="w-max min-w-full">
-        {entry.lines.map((line, i) => (
-          <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
-        ))}
-      </div>
-    </div>
+    <DiffLineList
+      lines={entry.lines}
+      highlighted={highlighted}
+      className="acorn-selectable min-h-0 flex-1 select-text overflow-auto font-mono text-[11px] leading-5"
+    />
   );
 }
 
