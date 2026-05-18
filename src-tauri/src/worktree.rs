@@ -12,13 +12,35 @@ pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
     // can pass any subdirectory (e.g. a session's PTY cwd that drifted into
     // `<repo>/src-tauri`) without the open failing. Also handles linked
     // worktrees, where `.git` is a file pointing at the parent repo.
-    Repository::discover(path).map_err(|e| {
+    //
+    // If `path` itself no longer exists (typical when a linked worktree was
+    // pruned externally — e.g. `claude -w` cleaning up on exit — but the
+    // session row in our store still references it), libgit2 refuses to
+    // resolve the path and `discover` returns "failed to resolve path".
+    // Walk up to the nearest existing ancestor first so the call survives
+    // until the persistent reconcile sweep in `list_sessions` rewrites the
+    // session's `worktree_path` back to the main repo. Without this layer,
+    // any UI poll (`list_commits`, `list_staged`, `diff_*`) racing the
+    // sweep still bubbles the raw git error into the right panel.
+    let start = walk_to_existing_ancestor(path);
+    Repository::discover(&start).map_err(|e| {
         AppError::Other(format!(
             "could not find git repository from '{}': {}",
             path.display(),
             e.message()
         ))
     })
+}
+
+fn walk_to_existing_ancestor(path: &Path) -> PathBuf {
+    let mut probe = path.to_path_buf();
+    while !probe.exists() {
+        match probe.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => probe = parent.to_path_buf(),
+            _ => return path.to_path_buf(),
+        }
+    }
+    probe
 }
 
 pub fn worktree_root(repo_path: &Path) -> PathBuf {
@@ -167,6 +189,25 @@ mod tests {
             msg.contains("could not find git repository from"),
             "unexpected error message: {msg}"
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_repo_walks_up_when_path_missing() {
+        let root = unique_temp_dir("pruned");
+        Repository::init(&root).expect("init repo");
+        // Simulate a pruned linked worktree path that no longer exists, sitting
+        // under the still-present repo root.
+        let pruned = root.join(".acorn").join("worktrees").join("gone");
+        assert!(!pruned.exists());
+
+        let opened = ensure_repo(&pruned).expect("walk up to repo root");
+        let workdir = opened.workdir().expect("workdir present");
+        assert_eq!(
+            workdir.canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+        );
+
         std::fs::remove_dir_all(&root).ok();
     }
 }
