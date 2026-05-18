@@ -224,12 +224,7 @@ fn io_other(err: nix::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parking_lot::Mutex;
-
-    // Same env-mutation lock as the paths module. parking_lot's Mutex
-    // does not poison on a panicking holder so one crashed test does
-    // not cascade.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::test_env::ENV_LOCK;
 
     /// Short tmp root to dodge `sockaddr_un` length limits when the
     /// same dir is reused for socket-bearing tests.

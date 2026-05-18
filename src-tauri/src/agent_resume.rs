@@ -38,7 +38,7 @@ const CODEX_ID_ACK_FILE: &str = "codex.id.acknowledged";
 /// `claude.id` / `codex.id` into. The directory is also the modal's
 /// read source via `claude_resume_candidate` / `codex_resume_candidate`.
 pub fn ensure_session_state_dir(session_id: uuid::Uuid) -> io::Result<PathBuf> {
-    ensure_session_state_dir_at(&crate::daemon::paths::data_dir()?, session_id)
+    ensure_session_state_dir_at(&acorn_daemon::paths::data_dir()?, session_id)
 }
 
 fn ensure_session_state_dir_at(base: &Path, session_id: uuid::Uuid) -> io::Result<PathBuf> {
@@ -80,7 +80,7 @@ pub struct ResumeCandidate {
 /// latest UUID was already acknowledged).
 pub fn claude_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
     candidate_at(
-        &crate::daemon::paths::data_dir()?,
+        &acorn_daemon::paths::data_dir()?,
         session_id,
         CLAUDE_ID_FILE,
         CLAUDE_ID_ACK_FILE,
@@ -91,7 +91,7 @@ pub fn claude_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<Resu
 /// Surface the codex-side modal candidate for `session_id`, or `Ok(None)`.
 pub fn codex_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
     candidate_at(
-        &crate::daemon::paths::data_dir()?,
+        &acorn_daemon::paths::data_dir()?,
         session_id,
         CODEX_ID_FILE,
         CODEX_ID_ACK_FILE,
@@ -128,7 +128,7 @@ pub enum AgentKind {
 /// touching a marker when the live UUID rotates, so "most recently
 /// written marker" is "the agent the session was last paired with".
 pub fn live_transcript(session_id: uuid::Uuid) -> Option<LiveTranscript> {
-    let base = crate::daemon::paths::data_dir().ok()?;
+    let base = acorn_daemon::paths::data_dir().ok()?;
     live_transcript_at(&base, session_id)
 }
 
@@ -170,7 +170,7 @@ fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscr
 /// for the same UUID. No-op if `claude.id` does not exist.
 pub fn acknowledge_claude_resume(session_id: uuid::Uuid) -> io::Result<()> {
     acknowledge_at(
-        &crate::daemon::paths::data_dir()?,
+        &acorn_daemon::paths::data_dir()?,
         session_id,
         CLAUDE_ID_FILE,
         CLAUDE_ID_ACK_FILE,
@@ -181,7 +181,7 @@ pub fn acknowledge_claude_resume(session_id: uuid::Uuid) -> io::Result<()> {
 /// not exist.
 pub fn acknowledge_codex_resume(session_id: uuid::Uuid) -> io::Result<()> {
     acknowledge_at(
-        &crate::daemon::paths::data_dir()?,
+        &acorn_daemon::paths::data_dir()?,
         session_id,
         CODEX_ID_FILE,
         CODEX_ID_ACK_FILE,

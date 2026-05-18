@@ -27,12 +27,12 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use uuid::Uuid;
 
-use crate::daemon::client::ControlConn;
-use crate::daemon::protocol::{
+use acorn_daemon::client::ControlConn;
+use acorn_daemon::protocol::{
     AgentKind, ControlPayload, ControlResult, SessionKind, SessionSummary, SpawnSpec,
     StatusSnapshot,
 };
-use crate::daemon::{client, paths};
+use acorn_daemon::{client, paths};
 
 /// How long the bridge waits for `acornd` to become reachable after
 /// spawning it. Conservative because the first launch on a cold disk
@@ -65,7 +65,7 @@ pub enum BridgeError {
     /// The daemon answered with a typed protocol error. The original
     /// error code and message are preserved for UI surfacing.
     Daemon {
-        code: crate::daemon::protocol::ErrorCode,
+        code: acorn_daemon::protocol::ErrorCode,
         message: String,
     },
     /// Anything else (OS I/O, JSON parse, etc.).
@@ -395,7 +395,7 @@ impl DaemonBridge {
 
 fn unexpected(result: ControlResult) -> BridgeError {
     BridgeError::Daemon {
-        code: crate::daemon::protocol::ErrorCode::Internal,
+        code: acorn_daemon::protocol::ErrorCode::Internal,
         message: format!("unexpected response: {result:?}"),
     }
 }

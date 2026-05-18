@@ -1,6 +1,6 @@
 //! Shared env layering for PTY child spawn. Used by both the in-process
 //! [`crate::pty::PtyManager`] and the daemon-side
-//! [`crate::daemon::pty::PtyManager`] so the two spawn paths produce
+//! [`acorn_daemon::pty::PtyManager`] so the two spawn paths produce
 //! identical child env regardless of which one services a session — the
 //! daemon used to skip the layering entirely, which left zsh with empty
 //! `TERM` whenever the daemon process inherited a sanitized env from

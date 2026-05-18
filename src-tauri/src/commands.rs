@@ -507,7 +507,7 @@ fn daemon_pid_from_status_sessions_or_pidfile(
 }
 
 fn daemon_pid_from_pidfile() -> Option<u32> {
-    let path = crate::daemon::paths::pid_file_path().ok()?;
+    let path = acorn_daemon::paths::pid_file_path().ok()?;
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
@@ -1210,7 +1210,7 @@ pub async fn pty_spawn<R: Runtime>(
             // session graphs today (daemon vs in-process); they
             // converge when `pty_spawn` itself routes through the
             // daemon.
-            if let Ok(daemon_sock) = crate::daemon::paths::control_socket_path() {
+            if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
                 effective_env
                     .entry("ACORN_DAEMON_SOCKET".to_string())
                     .or_insert_with(|| daemon_sock.display().to_string());
@@ -1246,7 +1246,7 @@ pub async fn pty_spawn<R: Runtime>(
             // an ordinary shell (`AgentFlavor::Unknown`) and only takes
             // effect on the rare configuration where `$SHELL` itself
             // resolves to a recognised agent binary.
-            let daemon_socket = crate::daemon::paths::control_socket_path().ok();
+            let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
             let primer = acorn_ipc::primer::primer_for(
                 &session.id.to_string(),
                 &session.repo_path,
@@ -1344,7 +1344,7 @@ fn spawn_via_daemon<R: Runtime>(
     // directly, so the daemon's per-agent resume strategy registry
     // has nothing to react to here. The shim layer in the PTY is
     // what specialises behaviour by agent.
-    let agent_kind: Option<crate::daemon::protocol::AgentKind> = None;
+    let agent_kind: Option<acorn_daemon::protocol::AgentKind> = None;
 
     // The resume token == Acorn session UUID; stamped onto the
     // daemon's session record (mirrors the PTY env var the shim
@@ -1364,8 +1364,8 @@ fn spawn_via_daemon<R: Runtime>(
     }
 
     let kind = match session_kind {
-        SessionKind::Regular => crate::daemon::protocol::SessionKind::Regular,
-        SessionKind::Control => crate::daemon::protocol::SessionKind::Control,
+        SessionKind::Regular => acorn_daemon::protocol::SessionKind::Regular,
+        SessionKind::Control => acorn_daemon::protocol::SessionKind::Control,
     };
 
     let outcome = bridge

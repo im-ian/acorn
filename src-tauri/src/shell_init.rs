@@ -48,7 +48,7 @@ pub const STAGED_REV: &str = env!("ACORN_STAGED_REV");
 /// body is rewritten every call so a shipped fix lands without a data
 /// dir version bump.
 pub fn ensure_shell_init_dir() -> io::Result<PathBuf> {
-    ensure_shell_init_dir_at(&crate::daemon::paths::data_dir()?)
+    ensure_shell_init_dir_at(&acorn_daemon::paths::data_dir()?)
 }
 
 fn ensure_shell_init_dir_at(base: &Path) -> io::Result<PathBuf> {

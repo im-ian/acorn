@@ -6,6 +6,7 @@ version = 4
 name = "acorn"
 version = "1.1.0"
 dependencies = [
+ "acorn-daemon",
  "acorn-ipc",
  "acorn-pty",
  "acorn-session",
@@ -43,6 +44,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trash",
+ "uuid",
+]
+
+[[package]]
+name = "acorn-daemon"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "directories",
+ "interprocess",
+ "nix 0.31.3",
+ "parking_lot",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

@@ -45,10 +45,15 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new() -> Arc<Self> {
+    /// `env_applier` is threaded into [`PtyManager`] and called once per
+    /// spawned PTY to layer login-shell env + caller overrides; see
+    /// [`crate::pty::EnvApplier`]. The host crate's `acornd` binary
+    /// provides the same closure that wires `pty_env::apply_layered_env`,
+    /// keeping daemon and in-process spawn paths byte-identical.
+    pub fn new(env_applier: crate::pty::EnvApplier) -> Arc<Self> {
         Arc::new(Self {
             registry: SessionRegistry::new(),
-            pty: PtyManager::new(),
+            pty: PtyManager::new(env_applier),
             started_at: Instant::now(),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             next_seq: AtomicU64::new(1),
@@ -620,6 +625,13 @@ mod tests {
     use super::super::protocol::SessionKind;
     use super::*;
 
+    /// No-op env applier for tests. Production wiring lives in the
+    /// `acornd` binary in the host crate; tests here only exercise
+    /// protocol dispatch and don't actually spawn PTYs.
+    fn noop_env_applier() -> crate::pty::EnvApplier {
+        Arc::new(|_cmd, _env| {})
+    }
+
     #[test]
     fn base64_roundtrip() {
         let cases = [
@@ -637,7 +649,7 @@ mod tests {
 
     #[test]
     fn ping_returns_pong() {
-        let d = Daemon::new();
+        let d = Daemon::new(noop_env_applier());
         let req = ControlRequest {
             seq: 1,
             payload: ControlPayload::Ping,
@@ -652,7 +664,7 @@ mod tests {
 
     #[test]
     fn forget_alive_session_is_rejected() {
-        let d = Daemon::new();
+        let d = Daemon::new(noop_env_applier());
         let id = uuid::Uuid::new_v4();
         d.registry.insert(super::super::session::DaemonSession::new(
             id,
@@ -675,7 +687,7 @@ mod tests {
 
     #[test]
     fn forget_dead_session_succeeds() {
-        let d = Daemon::new();
+        let d = Daemon::new(noop_env_applier());
         let id = uuid::Uuid::new_v4();
         d.registry.insert(super::super::session::DaemonSession::new(
             id,
