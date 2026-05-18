@@ -78,6 +78,34 @@ function parentOf(path: string): string {
   return path.slice(0, idx);
 }
 
+function trimTrailingSlash(path: string): string {
+  if (path.length <= 1) return path;
+  return path.replace(/\/+$/, "");
+}
+
+function pathInsideRoot(path: string, rootPath: string): boolean {
+  const root = trimTrailingSlash(rootPath);
+  const target = trimTrailingSlash(path);
+  if (root === "/") return target.startsWith("/");
+  return target === root || target.startsWith(root + "/");
+}
+
+function nearestCachedRefreshDir(
+  path: string,
+  cache: Cache,
+  rootPath: string,
+): string {
+  const root = trimTrailingSlash(rootPath);
+  let current = trimTrailingSlash(path);
+  if (!pathInsideRoot(current, root)) return rootPath;
+
+  while (current !== root) {
+    if (cache[current]) return current;
+    current = parentOf(current);
+  }
+  return rootPath;
+}
+
 function joinPath(parent: string, name: string): string {
   if (parent.endsWith("/")) return parent + name;
   return parent + "/" + name;
@@ -554,37 +582,52 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     cacheRef.current = cache;
   }, [cache]);
 
-  // Listen for backend fs-changed events and refresh the parent dir of
-  // each changed path. Backend emits raw notify events, no debouncing —
-  // collapse here within a 100ms window to avoid refresh storms.
+  // Listen for backend fs-changed batches and refresh only loaded
+  // directories. Overflow batches carry a subtree/root refresh hint so
+  // large generated-file bursts do not fan out into per-file work.
   useEffect(() => {
     let cancel: (() => void) | null = null;
-    const pending = new Set<string>();
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
-    const flush = () => {
-      flushTimer = null;
-      const toFetch = Array.from(pending);
-      pending.clear();
+    void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
+      const payload = event.payload;
+      if (
+        payload.root &&
+        payload.root !== rootPath &&
+        !pathInsideRoot(payload.root, rootPath) &&
+        !pathInsideRoot(rootPath, payload.root)
+      ) {
+        return;
+      }
+
       const current = cacheRef.current;
-      for (const dir of toFetch) {
-        if (current[dir] || dir === rootPath) {
-          void fetchDir(dir);
+      const toFetch = new Set<string>();
+      const changedPaths = payload.paths.filter((p) => pathInsideRoot(p, rootPath));
+
+      for (const p of changedPaths) {
+        changedPathsRef.current.add(p);
+      }
+
+      if (payload.overflow && payload.refresh) {
+        const refreshPath =
+          payload.refresh.kind === "root" ? rootPath : payload.refresh.path;
+        toFetch.add(nearestCachedRefreshDir(refreshPath, current, rootPath));
+      } else {
+        for (const p of changedPaths) {
+          const dir = parentOf(p);
+          if (current[dir] || dir === rootPath) {
+            toFetch.add(dir);
+          }
         }
+      }
+
+      for (const dir of toFetch) {
+        void fetchDir(dir);
       }
       void refreshGitStatus();
       scheduleGitDiffStats();
-    };
-    void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
-      for (const p of event.payload.paths) {
-        changedPathsRef.current.add(p);
-        pending.add(parentOf(p));
-      }
-      if (!flushTimer) flushTimer = setTimeout(flush, 100);
     }).then((unlisten) => {
       cancel = unlisten;
     });
     return () => {
-      if (flushTimer) clearTimeout(flushTimer);
       if (cancel) cancel();
     };
   }, [rootPath, fetchDir, refreshGitStatus, scheduleGitDiffStats]);

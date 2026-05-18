@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use git2::{Repository, Status, StatusOptions};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -14,6 +16,25 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 const EVENT_FS_CHANGED: &str = "acorn:fs-changed";
+const WATCH_BATCH_WINDOW: Duration = Duration::from_millis(75);
+const WATCH_EVENT_CAP: usize = 256;
+const WATCH_IGNORED_COMPONENTS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".vite",
+    ".turbo",
+    ".cache",
+    ".parcel-cache",
+    ".pytest_cache",
+    "__pycache__",
+    "coverage",
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileEntry {
@@ -42,12 +63,34 @@ impl WatcherState {
 
 struct WatcherHandle {
     _watcher: RecommendedWatcher,
+    _batcher: WatchBatcher,
     root: PathBuf,
+}
+
+struct WatchBatcher {
+    _thread: std::thread::JoinHandle<()>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct FsChangePayload {
     paths: Vec<String>,
+    root: String,
+    overflow: bool,
+    cap: usize,
+    refresh: Option<FsRefreshHint>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct FsRefreshHint {
+    kind: FsRefreshKind,
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum FsRefreshKind {
+    Root,
+    Subtree,
 }
 
 fn canonical(path: &str) -> AppResult<PathBuf> {
@@ -675,9 +718,12 @@ pub fn fs_watch_set_root<R: Runtime>(
                 return Ok(());
             }
         }
-        let app_for_cb = app.clone();
+        let (tx, rx) = mpsc::channel();
+        let batcher = spawn_watch_batcher(app.clone(), root.clone(), rx);
+        let tx_for_cb = tx.clone();
+        drop(tx);
         let mut watcher: RecommendedWatcher = notify::recommended_watcher(move |res| {
-            handle_watch_event(&app_for_cb, res);
+            let _ = tx_for_cb.send(res);
         })
         .map_err(|e| AppError::Other(format!("notify init failed: {e}")))?;
         watcher
@@ -685,6 +731,7 @@ pub fn fs_watch_set_root<R: Runtime>(
             .map_err(|e| AppError::Other(format!("notify watch failed: {e}")))?;
         *guard = Some(WatcherHandle {
             _watcher: watcher,
+            _batcher: batcher,
             root,
         });
     } else {
@@ -693,40 +740,235 @@ pub fn fs_watch_set_root<R: Runtime>(
     Ok(())
 }
 
-fn handle_watch_event<R: Runtime>(app: &AppHandle<R>, res: notify::Result<Event>) {
-    let event = match res {
-        Ok(e) => e,
-        Err(err) => {
-            tracing::debug!(error = %err, "fs watch error");
+fn spawn_watch_batcher<R: Runtime>(
+    app: AppHandle<R>,
+    root: PathBuf,
+    rx: Receiver<notify::Result<Event>>,
+) -> WatchBatcher {
+    let thread = std::thread::spawn(move || run_watch_batcher(app, root, rx));
+    WatchBatcher { _thread: thread }
+}
+
+fn run_watch_batcher<R: Runtime>(
+    app: AppHandle<R>,
+    root: PathBuf,
+    rx: Receiver<notify::Result<Event>>,
+) {
+    loop {
+        let first = match rx.recv() {
+            Ok(res) => res,
+            Err(_) => break,
+        };
+        let mut batch = WatchBatch::new(&root);
+        batch.add_result(first);
+
+        let deadline = Instant::now() + WATCH_BATCH_WINDOW;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match rx.recv_timeout(deadline.saturating_duration_since(now)) {
+                Ok(res) => batch.add_result(res),
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let Some(payload) = batch.finish() else {
+            continue;
+        };
+        if let Err(e) = app.emit(EVENT_FS_CHANGED, payload) {
+            tracing::warn!(error = %e, "fs-changed emit failed");
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WatchBatch {
+    root: PathBuf,
+    seen: HashSet<PathBuf>,
+    paths: Vec<PathBuf>,
+    common_ancestor: Option<PathBuf>,
+    overflow: bool,
+}
+
+impl WatchBatch {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            seen: HashSet::new(),
+            paths: Vec::new(),
+            common_ancestor: None,
+            overflow: false,
+        }
+    }
+
+    fn add_result(&mut self, res: notify::Result<Event>) {
+        let event = match res {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::debug!(error = %err, "fs watch error");
+                return;
+            }
+        };
+        self.add_event(event);
+    }
+
+    fn add_event(&mut self, event: Event) {
+        if event.need_rescan() {
+            self.add_path(self.root.clone());
+            self.overflow = true;
             return;
         }
+
+        if !matches!(
+            event.kind,
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+        ) {
+            return;
+        }
+
+        for path in event.paths {
+            let Some(path) = normalize_watch_path(&path) else {
+                continue;
+            };
+            if !path_is_inside_root(&path, &self.root) {
+                continue;
+            }
+            if should_ignore_watch_path(&path, &self.root) {
+                continue;
+            }
+            self.add_path(path);
+        }
+    }
+
+    fn add_path(&mut self, path: PathBuf) {
+        self.common_ancestor = Some(match self.common_ancestor.take() {
+            Some(current) => common_ancestor(&current, &path),
+            None => path.clone(),
+        });
+        if !self.seen.insert(path.clone()) {
+            return;
+        }
+        if self.paths.len() >= WATCH_EVENT_CAP {
+            self.overflow = true;
+            return;
+        }
+        self.paths.push(path);
+    }
+
+    fn finish(self) -> Option<FsChangePayload> {
+        if self.paths.is_empty() && !self.overflow {
+            return None;
+        }
+        let refresh = self.overflow.then(|| {
+            let refresh_path = self
+                .common_ancestor
+                .as_deref()
+                .filter(|p| path_is_inside_root(p, &self.root))
+                .unwrap_or(&self.root);
+            let refresh_path = if refresh_path == self.root.as_path() {
+                self.root.clone()
+            } else {
+                refresh_path.to_path_buf()
+            };
+            FsRefreshHint {
+                kind: if refresh_path == self.root {
+                    FsRefreshKind::Root
+                } else {
+                    FsRefreshKind::Subtree
+                },
+                path: refresh_path.to_string_lossy().into_owned(),
+            }
+        });
+        Some(FsChangePayload {
+            paths: self
+                .paths
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            root: self.root.to_string_lossy().into_owned(),
+            overflow: self.overflow,
+            cap: WATCH_EVENT_CAP,
+            refresh,
+        })
+    }
+}
+
+fn normalize_watch_path(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return path.canonicalize().ok();
+    }
+    normalize_absolute_path(path)
+}
+
+fn normalize_absolute_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    Some(out)
+}
+
+fn path_is_inside_root(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
+}
+
+fn should_ignore_watch_path(path: &Path, root: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return true;
     };
-    if !matches!(
-        event.kind,
-        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-    ) {
-        return;
+    rel.components().any(|component| {
+        let Component::Normal(name) = component else {
+            return false;
+        };
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        WATCH_IGNORED_COMPONENTS.contains(&name)
+    })
+}
+
+fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for (a_component, b_component) in a.components().zip(b.components()) {
+        if a_component != b_component {
+            break;
+        }
+        out.push(a_component.as_os_str());
     }
-    let paths: Vec<String> = event
-        .paths
-        .into_iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
-    if paths.is_empty() {
-        return;
-    }
-    if let Err(e) = app.emit(EVENT_FS_CHANGED, FsChangePayload { paths }) {
-        tracing::warn!(error = %e, "fs-changed emit failed");
-    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::CreateKind;
     use std::fs;
 
     fn tmpdir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    fn create_event(paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(EventKind::Create(CreateKind::Any));
+        event.paths = paths;
+        event
     }
 
     #[test]
@@ -771,6 +1013,90 @@ mod tests {
         let off = fs_list_dir(d.path().to_string_lossy().into_owned(), false, false).unwrap();
         let off_names: Vec<_> = off.entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(off_names, vec!["build", "keep.txt", "secret.txt"]);
+    }
+
+    #[test]
+    fn watch_batch_filters_noisy_and_outside_paths() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = WatchBatch::new(&root);
+
+        batch.add_event(create_event(vec![
+            root.join("src").join("main.rs"),
+            root.join(".git").join("index"),
+            root.join("node_modules").join("pkg").join("index.js"),
+            root.join("target").join("debug").join("acorn"),
+            root.join("src").join("..").join("src").join("lib.rs"),
+            root.join("..").join("outside.rs"),
+            PathBuf::from("relative.rs"),
+        ]));
+
+        let payload = batch.finish().unwrap();
+        let mut paths = payload.paths;
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                root.join(".git")
+                    .join("index")
+                    .to_string_lossy()
+                    .into_owned(),
+                root.join("src")
+                    .join("lib.rs")
+                    .to_string_lossy()
+                    .into_owned(),
+                root.join("src")
+                    .join("main.rs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]
+        );
+        assert!(!payload.overflow);
+        assert!(payload.refresh.is_none());
+    }
+
+    #[test]
+    fn watch_batch_caps_paths_and_provides_subtree_refresh() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let src = root.join("src");
+        let mut batch = WatchBatch::new(&root);
+
+        for n in 0..(WATCH_EVENT_CAP + 10) {
+            batch.add_event(create_event(vec![src.join(format!("file-{n}.rs"))]));
+        }
+
+        let payload = batch.finish().unwrap();
+        assert_eq!(payload.paths.len(), WATCH_EVENT_CAP);
+        assert!(payload.overflow);
+        assert_eq!(payload.cap, WATCH_EVENT_CAP);
+        assert_eq!(
+            payload.refresh,
+            Some(FsRefreshHint {
+                kind: FsRefreshKind::Subtree,
+                path: src.to_string_lossy().into_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn watch_batch_rescan_requests_root_refresh() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = WatchBatch::new(&root);
+
+        batch.add_event(Event::new(EventKind::Any).set_flag(notify::event::Flag::Rescan));
+
+        let payload = batch.finish().unwrap();
+        assert_eq!(payload.paths, vec![root.to_string_lossy().into_owned()]);
+        assert!(payload.overflow);
+        assert_eq!(
+            payload.refresh,
+            Some(FsRefreshHint {
+                kind: FsRefreshKind::Root,
+                path: root.to_string_lossy().into_owned(),
+            })
+        );
     }
 
     #[test]
