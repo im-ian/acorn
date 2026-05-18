@@ -347,14 +347,23 @@ function DetailBody({
     <>
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <PrStateGlyph state={detail.state} isDraft={detail.is_draft} />
-            <span className="font-mono text-xs text-fg-muted">
+            <span className="shrink-0 font-mono text-xs text-fg-muted">
               #{detail.number}
             </span>
-            <h3 className="truncate text-sm font-semibold tracking-tight text-fg">
-              {detail.title}
-            </h3>
+            <Tooltip label={detail.title} side="bottom" multiline className="min-w-0 flex-1">
+              <h3 className="truncate text-sm font-semibold tracking-tight text-fg">
+                {detail.title}
+              </h3>
+            </Tooltip>
+            {detail.labels.length > 0 ? (
+              <span className="flex shrink-0 items-center gap-1">
+                {detail.labels.map((label) => (
+                  <PrDetailLabelChip key={label.name} label={label} />
+                ))}
+              </span>
+            ) : null}
           </div>
           <p className="mt-1 truncate text-[11px] text-fg-muted">
             <AuthorTag
@@ -379,13 +388,6 @@ function DetailBody({
               {detail.changed_files} {dt(t, "dialogs.pullRequestDetail.files")}
             </span>
           </p>
-          {detail.labels.length > 0 ? (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {detail.labels.map((label) => (
-                <PrDetailLabelChip key={label.name} label={label} />
-              ))}
-            </div>
-          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {detail.state.toUpperCase() === "OPEN" ? (
