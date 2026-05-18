@@ -148,9 +148,11 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
           <ImageDiff file={file} />
         ) : (
           <div className="acorn-selectable max-h-80 overflow-auto font-mono text-[11px] leading-5 select-text">
-            {lines.map((line, i) => (
-              <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
-            ))}
+            <div className="w-max min-w-full">
+              {lines.map((line, i) => (
+                <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
+              ))}
+            </div>
           </div>
         )
       ) : null}
@@ -294,14 +296,14 @@ export function DiffLine({
 }) {
   if (line.kind === "hunk") {
     return (
-      <div className="bg-[oklch(28%_0.04_250)] px-3 py-0.5 text-[oklch(70%_0.05_250)]">
+      <div className="bg-[oklch(28%_0.04_250)] px-3 py-0.5 text-[oklch(70%_0.05_250)] whitespace-pre">
         {line.text}
       </div>
     );
   }
   if (line.kind === "meta") {
     return (
-      <div className="bg-bg-elevated/40 px-3 py-0.5 text-fg-muted">
+      <div className="bg-bg-elevated/40 px-3 py-0.5 text-fg-muted whitespace-pre">
         {line.text}
       </div>
     );

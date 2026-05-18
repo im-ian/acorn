@@ -230,9 +230,11 @@ function DiffSplitContent({ entry }: { entry: FileEntry }) {
   }
   return (
     <div className="acorn-selectable min-h-0 flex-1 select-text overflow-auto font-mono text-[11px] leading-5">
-      {entry.lines.map((line, i) => (
-        <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
-      ))}
+      <div className="w-max min-w-full">
+        {entry.lines.map((line, i) => (
+          <DiffLine key={i} line={line} html={highlighted[i] ?? null} />
+        ))}
+      </div>
     </div>
   );
 }
