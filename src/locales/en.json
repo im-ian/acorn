@@ -887,7 +887,12 @@
       "bodyPlaceholder": "Body (optional)",
       "rebaseMessageLocked": "Rebase replays the original commits onto the base branch - the commit messages are not customizable here.",
       "merging": "Merging...",
-      "merge": "Merge"
+      "merge": "Merge",
+      "checksFailing": "{count} check(s) failing on the head ref.",
+      "checksPending": "{count} check(s) still running on the head ref.",
+      "checksBlocking": "Merge is blocked by branch protection until checks finish or pass.",
+      "adminMerge": "Admin merge (override branch protection)",
+      "adminMergeHint": "Forces the merge by passing --admin to gh. Use only when repo policy permits and you accept overriding required checks."
     },
     "stagedRevMismatch": {
       "title": "Shell environment updated",

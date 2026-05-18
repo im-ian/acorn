@@ -1259,6 +1259,7 @@ pub fn merge_pull_request(
     method: MergeMethod,
     commit_title: Option<String>,
     commit_body: Option<String>,
+    admin: bool,
 ) -> AppResult<()> {
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Err(AppError::Other(
@@ -1274,6 +1275,7 @@ pub fn merge_pull_request(
             method,
             commit_title.as_deref(),
             commit_body.as_deref(),
+            admin,
         )
     })? {
         AccountOutcome::Ok { value, .. } => Ok(value),
@@ -1322,6 +1324,7 @@ fn run_pr_merge(
     method: MergeMethod,
     commit_title: Option<&str>,
     commit_body: Option<&str>,
+    admin: bool,
 ) -> AppResult<()> {
     use std::io::Write;
     use std::process::Stdio;
@@ -1340,6 +1343,13 @@ fn run_pr_merge(
         slug,
         method.flag(),
     ]);
+
+    // `--admin` instructs gh to use admin privileges to override branch
+    // protection rules. Required when checks are failing or pending but the
+    // user has the role to force-merge against repo policy.
+    if admin {
+        cmd.arg("--admin");
+    }
 
     if method.accepts_message_override() {
         if let Some(title) = commit_title {
