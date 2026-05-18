@@ -1,7 +1,12 @@
 import { ChevronRight, Maximize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "../lib/cn";
-import { countStats, parseDiff, type ParsedLine } from "../lib/diff";
+import {
+  countStats,
+  diffGutterWidth,
+  parseDiff,
+  type ParsedLine,
+} from "../lib/diff";
 import { highlightDiff, langFromPath } from "../lib/highlight";
 import type { DiffFile, DiffPayload } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
@@ -295,10 +300,12 @@ export function DiffLine({
   line,
   html,
   index,
+  gutterWidth = 1,
 }: {
   line: ParsedLine;
   html?: string | null;
   index?: number;
+  gutterWidth?: number;
 }) {
   if (line.kind === "hunk") {
     return (
@@ -334,8 +341,23 @@ export function DiffLine({
         : "text-fg-muted";
   const marker =
     line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+  const gutterStyle = { minWidth: `${Math.max(1, gutterWidth)}ch` };
   return (
     <div className={`flex gap-2 px-2 py-0 ${cls}`} {...lineDataProps(index)}>
+      <span
+        aria-hidden
+        className="select-none shrink-0 text-right tabular-nums text-fg-muted/55"
+        style={gutterStyle}
+      >
+        {line.oldLine ?? ""}
+      </span>
+      <span
+        aria-hidden
+        className="select-none shrink-0 text-right tabular-nums text-fg-muted/55"
+        style={gutterStyle}
+      >
+        {line.newLine ?? ""}
+      </span>
       <span className="select-none w-3 shrink-0 text-center opacity-70">
         {marker}
       </span>
@@ -367,9 +389,10 @@ export function DiffLineList({
   className: string;
 }) {
   const lineTexts = useMemo(() => lines.map(diffLineCopyText), [lines]);
+  const gutterWidth = useMemo(() => diffGutterWidth(lines), [lines]);
   const minWidthCh = useMemo(
-    () => estimateMaxLineWidthCh(lineTexts, 5),
-    [lineTexts],
+    () => estimateMaxLineWidthCh(lineTexts, gutterWidth * 2 + 7),
+    [lineTexts, gutterWidth],
   );
 
   return (
@@ -386,6 +409,7 @@ export function DiffLineList({
           index={index}
           line={lines[index]}
           html={highlighted[index] ?? null}
+          gutterWidth={gutterWidth}
         />
       )}
     />
