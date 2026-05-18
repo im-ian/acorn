@@ -8,6 +8,7 @@ version = "1.1.0"
 dependencies = [
  "acorn-ipc",
  "acorn-pty",
+ "acorn-session",
  "acorn-transcript",
  "anyhow",
  "base64 0.22.1",
@@ -67,6 +68,20 @@ dependencies = [
  "tauri",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acorn-session"
+version = "0.1.0"
+dependencies = [
+ "acorn-pty",
+ "chrono",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
  "tracing",
  "uuid",
 ]

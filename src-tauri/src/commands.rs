@@ -14,12 +14,12 @@ use crate::pull_requests::{
     self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
     PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
 };
-use crate::scrollback;
-use crate::session::{Project, Session, SessionKind, SessionStatus};
-use crate::session_status;
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
+use acorn_session::scrollback;
+use acorn_session::status as session_status;
+use acorn_session::{Project, Session, SessionKind, SessionStatus};
 
 use serde::Serialize;
 
@@ -829,7 +829,9 @@ pub async fn remove_session(
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
     state.pty.kill(&id).ok();
-    scrollback::delete(&id.to_string()).ok();
+    if let Ok(dir) = persistence::data_dir() {
+        scrollback::delete(&dir, &id.to_string()).ok();
+    }
     if session.isolated && remove_worktree.unwrap_or(false) {
         let safe_name = sanitize_worktree_name(&session.name);
         worktree::remove_worktree(&session.repo_path, &safe_name).ok();
@@ -1667,17 +1669,23 @@ pub async fn scrollback_save(
     if state.sessions.get(&id).is_err() {
         return Ok(());
     }
-    scrollback::save(&session_id, &data)
+    let dir = persistence::data_dir()?;
+    scrollback::save(&dir, &session_id, &data)?;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn scrollback_load(session_id: String) -> AppResult<Option<String>> {
-    scrollback::load(&session_id)
+    let dir = persistence::data_dir()?;
+    let value = scrollback::load(&dir, &session_id)?;
+    Ok(value)
 }
 
 #[tauri::command]
 pub async fn scrollback_delete(session_id: String) -> AppResult<()> {
-    scrollback::delete(&session_id)
+    let dir = persistence::data_dir()?;
+    scrollback::delete(&dir, &session_id)?;
+    Ok(())
 }
 
 /// Return the on-disk size (in bytes) of scrollback files whose session
@@ -1691,7 +1699,9 @@ pub async fn scrollback_orphan_size(state: State<'_, AppState>) -> AppResult<u64
         .iter()
         .map(|s| s.id.to_string())
         .collect();
-    scrollback::orphan_size_bytes(live_ids)
+    let dir = persistence::data_dir()?;
+    let value = scrollback::orphan_size_bytes(&dir, live_ids)?;
+    Ok(value)
 }
 
 /// Delete scrollback files whose session id no longer matches a known
@@ -1705,7 +1715,9 @@ pub async fn scrollback_orphan_clear(state: State<'_, AppState>) -> AppResult<us
         .iter()
         .map(|s| s.id.to_string())
         .collect();
-    scrollback::prune_orphans(live_ids)
+    let dir = persistence::data_dir()?;
+    let count = scrollback::prune_orphans(&dir, live_ids)?;
+    Ok(count)
 }
 
 #[tauri::command]
@@ -1780,7 +1792,28 @@ pub async fn detect_session_statuses(
                     state.pty.update_shell_state(&uuid, has_child_now)
                 }
             });
-            let status = session_status::detect(&id, previous, shell_hint).unwrap_or(previous);
+            // Resolve the live transcript via the persister's resume markers
+            // first (covers claude/codex run inside a shell session — JSONL
+            // is named after the agent's own UUID, not Acorn's). Fall back
+            // to the legacy Acorn-UUID-named JSONL so any direct claude
+            // session-id caller keeps working.
+            let live = parsed_id.and_then(agent_resume::live_transcript);
+            let transcript = match live {
+                Some(t) => {
+                    let kind = match t.kind {
+                        agent_resume::AgentKind::Claude => {
+                            acorn_session::status::AgentKind::Claude
+                        }
+                        agent_resume::AgentKind::Codex => acorn_session::status::AgentKind::Codex,
+                    };
+                    Some((t.path, kind))
+                }
+                None => todos::locate_transcript_for(&id)
+                    .ok()
+                    .flatten()
+                    .map(|p| (p, acorn_session::status::AgentKind::Claude)),
+            };
+            let status = session_status::detect(transcript, previous, shell_hint);
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
             //     performed inside the terminal (and `claude -w` worktrees)

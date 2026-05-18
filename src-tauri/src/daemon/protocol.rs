@@ -185,7 +185,7 @@ pub struct SpawnSpec {
     #[serde(default)]
     pub rows: u16,
     /// Session classification (regular / control). Mirrors the
-    /// `SessionKind` enum in `crate::session`. The daemon preserves it
+    /// `SessionKind` enum in `acorn_session`. The daemon preserves it
     /// in metadata so reattach can re-augment the env on respawn.
     #[serde(default)]
     pub kind: SessionKind,

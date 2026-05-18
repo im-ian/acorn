@@ -5,7 +5,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::error::{AppError, AppResult};
+/// Errors produced by `SessionStore` lookups. Kept local so the crate does
+/// not need to share `AppError` with the main `acorn` crate; the main crate
+/// adapts via `From<SessionError>`.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    #[error("session not found: {0}")]
+    NotFound(String),
+}
+
+pub type SessionResult<T> = Result<T, SessionError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -270,11 +279,11 @@ impl SessionStore {
         session
     }
 
-    pub fn get(&self, id: &Uuid) -> AppResult<Session> {
+    pub fn get(&self, id: &Uuid) -> SessionResult<Session> {
         self.inner
             .get(id)
             .map(|r| r.value().clone())
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
     }
 
     pub fn list(&self) -> Vec<Session> {
@@ -283,11 +292,11 @@ impl SessionStore {
         v
     }
 
-    pub fn update_status(&self, id: &Uuid, status: SessionStatus) -> AppResult<Session> {
+    pub fn update_status(&self, id: &Uuid, status: SessionStatus) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.status = status;
         entry.updated_at = Utc::now();
         Ok(entry.clone())
@@ -296,11 +305,11 @@ impl SessionStore {
     /// Update status without bumping `updated_at`. No-op if the status is
     /// unchanged. Used by the periodic liveness probe so polling doesn't
     /// reshuffle the sidebar's most-recent-first ordering.
-    pub fn refresh_status(&self, id: &Uuid, status: SessionStatus) -> AppResult<Session> {
+    pub fn refresh_status(&self, id: &Uuid, status: SessionStatus) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         if entry.status != status {
             entry.status = status;
         }
@@ -313,11 +322,15 @@ impl SessionStore {
     /// — leaving the API stable today avoids a second schema migration.
     /// Idempotent: passing `None` detaches.
     #[allow(dead_code)]
-    pub fn set_daemon_session_id(&self, id: &Uuid, daemon_id: Option<Uuid>) -> AppResult<Session> {
+    pub fn set_daemon_session_id(
+        &self,
+        id: &Uuid,
+        daemon_id: Option<Uuid>,
+    ) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.daemon_session_id = daemon_id;
         Ok(entry.clone())
     }
@@ -327,20 +340,24 @@ impl SessionStore {
     /// daemon re-injects this on every respawn. Pairs with
     /// `set_daemon_session_id` — wired by the same downstream path.
     #[allow(dead_code)]
-    pub fn set_agent_resume_token(&self, id: &Uuid, token: Option<String>) -> AppResult<Session> {
+    pub fn set_agent_resume_token(
+        &self,
+        id: &Uuid,
+        token: Option<String>,
+    ) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.agent_resume_token = token;
         Ok(entry.clone())
     }
 
-    pub fn rename(&self, id: &Uuid, name: String) -> AppResult<Session> {
+    pub fn rename(&self, id: &Uuid, name: String) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.name = name;
         entry.updated_at = Utc::now();
         Ok(entry.clone())
@@ -357,11 +374,11 @@ impl SessionStore {
         &self,
         id: &Uuid,
         worktree_path: std::path::PathBuf,
-    ) -> AppResult<Session> {
+    ) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.worktree_path = worktree_path;
         entry.updated_at = Utc::now();
         Ok(entry.clone())
@@ -373,22 +390,22 @@ impl SessionStore {
     /// the session row alive so PTY/agent history stays addressable;
     /// downstream git ops resolve against the main repo instead of erroring
     /// on a missing path.
-    pub fn reconcile_missing_worktree(&self, id: &Uuid) -> AppResult<Session> {
+    pub fn reconcile_missing_worktree(&self, id: &Uuid) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.worktree_path = entry.repo_path.clone();
         entry.isolated = false;
         entry.updated_at = Utc::now();
         Ok(entry.clone())
     }
 
-    pub fn remove(&self, id: &Uuid) -> AppResult<Session> {
+    pub fn remove(&self, id: &Uuid) -> SessionResult<Session> {
         self.inner
             .remove(id)
             .map(|(_, v)| v)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
     }
 
     /// Assign explicit positions (0..N) to the sessions listed in `order`,

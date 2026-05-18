@@ -293,8 +293,8 @@ pub fn daemon_adopt_session(
     let branch = summary.branch.clone().unwrap_or_default();
 
     let kind = match summary.kind {
-        crate::daemon::protocol::SessionKind::Regular => crate::session::SessionKind::Regular,
-        crate::daemon::protocol::SessionKind::Control => crate::session::SessionKind::Control,
+        crate::daemon::protocol::SessionKind::Regular => acorn_session::SessionKind::Regular,
+        crate::daemon::protocol::SessionKind::Control => acorn_session::SessionKind::Control,
     };
 
     let project_name = repo_path
@@ -304,19 +304,19 @@ pub fn daemon_adopt_session(
     state.projects.ensure(repo_path.clone(), project_name);
 
     let now = chrono::Utc::now();
-    let session = crate::session::Session {
+    let session = acorn_session::Session {
         id,
         name: summary.name.clone(),
         repo_path: repo_path.clone(),
         worktree_path,
         branch,
         isolated: false,
-        status: crate::session::SessionStatus::Idle,
+        status: acorn_session::SessionStatus::Idle,
         created_at: now,
         updated_at: now,
         last_message: None,
         kind,
-        owner: crate::session::SessionOwner::User,
+        owner: acorn_session::SessionOwner::User,
         position: None,
         daemon_session_id: Some(id),
         agent_resume_token: Some(id.to_string()),

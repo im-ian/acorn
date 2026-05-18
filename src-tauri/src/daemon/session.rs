@@ -13,7 +13,7 @@
 //!
 //! Anything else (timestamps for ordering, last-message previews, etc.)
 //! stays in the app DB. The daemon-side struct here is intentionally
-//! smaller than `crate::session::Session`.
+//! smaller than `acorn_session::Session`.
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
