@@ -589,6 +589,136 @@ describe("pollSessionStatuses", () => {
     expect(sessions.find((s) => s.id === "a2")?.status).toBe("running");
   });
 
+  it("polls only the requested existing session ids", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      { id: "a2", status: "running", branch: "feat/a2-live" },
+    ]);
+
+    await useAppStore
+      .getState()
+      .pollSessionStatuses(["a2", "missing", "a2"]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a2"]);
+    const sessions = useAppStore.getState().sessions;
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("idle");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("running");
+    expect(sessions.find((s) => s.id === "a2")?.branch).toBe("feat/a2-live");
+  });
+
+  it("does not call the backend when the requested ids are absent", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    await useAppStore.getState().pollSessionStatuses(["missing"]);
+
+    expect(mockApi.detectSessionStatuses).not.toHaveBeenCalled();
+  });
+
+  it("serializes overlapping polls and runs queued subsets afterward", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    let releaseFirst!: () => void;
+    const firstBlocker = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mockApi.detectSessionStatuses
+      .mockImplementationOnce(async () => {
+        await firstBlocker;
+        return [{ id: "a1", status: "running", branch: null }];
+      })
+      .mockResolvedValueOnce([
+        { id: "a2", status: "needs_input", branch: null },
+      ]);
+
+    const first = useAppStore.getState().pollSessionStatuses(["a1"]);
+    const second = useAppStore.getState().pollSessionStatuses(["a2"]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
+    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(1, ["a1"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(2);
+    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(2, ["a2"]);
+    const sessions = useAppStore.getState().sessions;
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("running");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("needs_input");
+  });
+
+  it("coalesces subset requests covered by an active full poll", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    let releaseFull!: () => void;
+    const fullBlocker = new Promise<void>((resolve) => {
+      releaseFull = resolve;
+    });
+    mockApi.detectSessionStatuses.mockImplementationOnce(async () => {
+      await fullBlocker;
+      return [
+        { id: "a1", status: "running", branch: null },
+        { id: "a2", status: "needs_input", branch: null },
+      ];
+    });
+
+    const full = useAppStore.getState().pollSessionStatuses();
+    const subset = useAppStore.getState().pollSessionStatuses(["a2"]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a1", "a2"]);
+
+    releaseFull();
+    await Promise.all([full, subset]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
+    const sessions = useAppStore.getState().sessions;
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("running");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("needs_input");
+  });
+
+  it("queues new session ids that appear during an active full poll", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    let releaseFull!: () => void;
+    const fullBlocker = new Promise<void>((resolve) => {
+      releaseFull = resolve;
+    });
+    mockApi.detectSessionStatuses
+      .mockImplementationOnce(async () => {
+        await fullBlocker;
+        return [{ id: "a1", status: "running", branch: null }];
+      })
+      .mockResolvedValueOnce([
+        { id: "a2", status: "needs_input", branch: null },
+      ]);
+
+    const full = useAppStore.getState().pollSessionStatuses();
+    useAppStore.setState((s) => ({
+      sessions: [...s.sessions, session("a2", REPO_A)],
+    }));
+    const newSessionPoll = useAppStore
+      .getState()
+      .pollSessionStatuses(["a2"]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(1);
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledWith(["a1"]);
+
+    releaseFull();
+    await Promise.all([full, newSessionPoll]);
+
+    expect(mockApi.detectSessionStatuses).toHaveBeenCalledTimes(2);
+    expect(mockApi.detectSessionStatuses).toHaveBeenNthCalledWith(2, ["a2"]);
+    const sessions = useAppStore.getState().sessions;
+    expect(sessions.find((s) => s.id === "a1")?.status).toBe("running");
+    expect(sessions.find((s) => s.id === "a2")?.status).toBe("needs_input");
+  });
+
   it("is a no-op when there are no sessions to poll", async () => {
     await useAppStore.getState().pollSessionStatuses();
     expect(mockApi.detectSessionStatuses).not.toHaveBeenCalled();
