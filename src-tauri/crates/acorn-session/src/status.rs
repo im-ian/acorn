@@ -69,15 +69,22 @@ pub enum AgentKind {
 /// dot stuck at Idle until the agent emits another turn line within the
 /// tail window — which for long sessions can be never.
 ///
-/// `shell_hint` carries the descendant-process snapshot for shell-mode
-/// sessions (no transcript on disk). It is the only signal we have for
-/// terminal sessions, so when no transcript resolves we map it directly
-/// to a status. `None` means "no live PTY" → Idle.
+/// `shell_hint` carries the descendant-process snapshot for the session's
+/// PTY. It also guards transcript markers from becoming sticky state:
+/// resume markers are durable, so an old transcript can still end in
+/// `NeedsInput` long after the agent process exited. When the PTY is idle
+/// (or gone), the durable marker is stale for status purposes and the
+/// session should be Idle. When a live descendant exists, the transcript
+/// tail refines that live process into Running vs NeedsInput.
 pub fn detect(
     transcript: Option<(PathBuf, AgentKind)>,
     previous: SessionStatus,
     shell_hint: Option<ShellHint>,
 ) -> SessionStatus {
+    if matches!(shell_hint, Some(ShellHint::Idle) | None) {
+        return SessionStatus::Idle;
+    }
+
     let (path, kind) = match transcript {
         Some(t) => t,
         None => return map_shell_hint(shell_hint),
@@ -415,5 +422,56 @@ mod tests {
             detect(None, SessionStatus::Idle, Some(ShellHint::Running)),
             SessionStatus::Running
         );
+    }
+
+    #[test]
+    fn detect_ignores_stale_needs_input_transcript_when_shell_is_idle() {
+        let path = write_status_transcript(&assistant("end_turn"));
+
+        assert_eq!(
+            detect(
+                Some((path, AgentKind::Claude)),
+                SessionStatus::NeedsInput,
+                Some(ShellHint::Idle),
+            ),
+            SessionStatus::Idle,
+        );
+    }
+
+    #[test]
+    fn detect_ignores_stale_needs_input_transcript_without_live_pty() {
+        let path = write_status_transcript(&assistant("end_turn"));
+
+        assert_eq!(
+            detect(
+                Some((path, AgentKind::Claude)),
+                SessionStatus::NeedsInput,
+                None,
+            ),
+            SessionStatus::Idle,
+        );
+    }
+
+    #[test]
+    fn detect_uses_needs_input_transcript_while_shell_has_live_child() {
+        let path = write_status_transcript(&assistant("end_turn"));
+
+        assert_eq!(
+            detect(
+                Some((path, AgentKind::Claude)),
+                SessionStatus::Running,
+                Some(ShellHint::Running),
+            ),
+            SessionStatus::NeedsInput,
+        );
+    }
+
+    fn write_status_transcript(body: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "acorn-status-test-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, body).expect("write status transcript");
+        path
     }
 }
