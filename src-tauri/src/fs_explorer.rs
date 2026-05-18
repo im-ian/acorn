@@ -461,21 +461,53 @@ pub struct GitStatusEntry {
 ///
 /// Paths are absolute strings keyed by full path so the FileExplorer's
 /// flat lookup matches its entry paths.
+///
+/// `status_limit` mirrors VSCode's `git.statusLimit` (default 10_000).
+/// When the libgit2 status list exceeds the limit the response is
+/// truncated to the first `limit` entries and `huge=true` so the
+/// frontend can stop auto-refreshing.
+const DEFAULT_GIT_STATUS_LIMIT: u32 = 10_000;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitStatusResult {
+    pub statuses: HashMap<String, GitStatusEntry>,
+    pub huge: bool,
+    pub limit: u32,
+}
+
 #[tauri::command]
-pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEntry>> {
+pub fn fs_git_status(
+    repo_root: String,
+    status_limit: Option<u32>,
+) -> AppResult<GitStatusResult> {
+    fs_git_status_with_limit(repo_root, status_limit)
+}
+
+/// Same as `fs_git_status` but explicit about the limit; kept callable
+/// from unit tests without the `tauri::command` wrapper.
+pub fn fs_git_status_with_limit(
+    repo_root: String,
+    status_limit: Option<u32>,
+) -> AppResult<GitStatusResult> {
+    let limit = status_limit.unwrap_or(DEFAULT_GIT_STATUS_LIMIT);
     let root = PathBuf::from(&repo_root);
     if !root.exists() {
         return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
     }
+    let empty = || GitStatusResult {
+        statuses: HashMap::new(),
+        huge: false,
+        limit,
+    };
     let repo = match Repository::discover(&root) {
         Ok(r) => r,
-        // Not a git repo — return empty map, frontend treats this as "no
-        // status colors to apply".
-        Err(_) => return Ok(HashMap::new()),
+        // Not a git repo — return empty envelope, frontend treats this
+        // as "no status colors to apply".
+        Err(_) => return Ok(empty()),
     };
     let workdir = match repo.workdir() {
         Some(p) => p.to_path_buf(),
-        None => return Ok(HashMap::new()),
+        None => return Ok(empty()),
     };
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
@@ -487,13 +519,18 @@ pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEn
         .statuses(Some(&mut opts))
         .map_err(|e| AppError::Other(format!("git status failed: {e}")))?;
 
-    let mut out: HashMap<String, GitStatusEntry> = HashMap::with_capacity(statuses.len());
-    for entry in statuses.iter() {
+    let total = statuses.len();
+    let huge = (total as u64) > limit as u64;
+    let mut out: HashMap<String, GitStatusEntry> =
+        HashMap::with_capacity(total.min(limit as usize));
+    for (idx, entry) in statuses.iter().enumerate() {
+        if (idx as u64) >= limit as u64 {
+            break;
+        }
         let Some(rel) = entry.path() else { continue };
         let abs = workdir.join(rel);
         let abs_str = abs.to_string_lossy().into_owned();
-        let s = entry.status();
-        let kind = classify_status(s);
+        let kind = classify_status(entry.status());
         out.insert(
             abs_str,
             GitStatusEntry {
@@ -503,7 +540,11 @@ pub fn fs_git_status(repo_root: String) -> AppResult<HashMap<String, GitStatusEn
             },
         );
     }
-    Ok(out)
+    Ok(GitStatusResult {
+        statuses: out,
+        huge,
+        limit,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1242,6 +1283,49 @@ mod tests {
         let m = WatchIgnoreMatcher::with_defaults(&["[[invalid".to_string()]);
         let root = Path::new("/proj");
         assert!(!m.is_ignored(&root.join("src/a.rs"), root));
+    }
+
+    #[test]
+    fn fs_git_status_marks_huge_when_over_limit() {
+        use git2::Repository;
+
+        let d = tmpdir();
+        // Canonicalize to dodge macOS /tmp -> /private/tmp symlink — libgit2
+        // returns workdir as the canonicalized path.
+        let repo_path = d.path().canonicalize().unwrap();
+        Repository::init(&repo_path).unwrap();
+        // 12 untracked files; we'll set the limit to 5.
+        for i in 0..12 {
+            fs::write(repo_path.join(format!("u{i}.txt")), b"x").unwrap();
+        }
+
+        let res = fs_git_status_with_limit(
+            repo_path.to_string_lossy().into_owned(),
+            Some(5),
+        )
+        .unwrap();
+        assert!(res.huge);
+        assert_eq!(res.limit, 5);
+        assert_eq!(res.statuses.len(), 5);
+    }
+
+    #[test]
+    fn fs_git_status_default_envelope_not_huge_for_small_repo() {
+        let d = tmpdir();
+        // Canonicalize to dodge macOS /tmp -> /private/tmp symlink.
+        let repo_path = d.path().canonicalize().unwrap();
+        git2::Repository::init(&repo_path).unwrap();
+        fs::write(repo_path.join("a.txt"), b"hi").unwrap();
+        let res = fs_git_status_with_limit(
+            repo_path.to_string_lossy().into_owned(),
+            Some(10_000),
+        )
+        .unwrap();
+        assert!(!res.huge);
+        assert_eq!(res.limit, 10_000);
+        assert!(res.statuses.contains_key(
+            &repo_path.join("a.txt").to_string_lossy().into_owned()
+        ));
     }
 
     #[test]

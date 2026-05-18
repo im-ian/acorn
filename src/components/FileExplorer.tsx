@@ -327,6 +327,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   }>({ claude: null, codex: null });
   const gitStatsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gitStatusRef = useRef<Record<string, FsGitStatusEntry>>({});
+  const gitHugeRef = useRef(false);
   const visiblePathsRef = useRef<Set<string>>(new Set());
   const changedPathsRef = useRef<Set<string>>(new Set());
   const statusInFlightRef = useRef<Promise<void> | null>(null);
@@ -370,10 +371,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
 
     const run = async () => {
       try {
-        const map = await api.fsGitStatus(rootPath);
+        const result = await api.fsGitStatus(rootPath);
+        gitHugeRef.current = result.huge;
         setGitStatus((prev) => {
           const next: Record<string, FsGitStatusEntry> = {};
-          for (const [path, entry] of Object.entries(map)) {
+          for (const [path, entry] of Object.entries(result.statuses)) {
             const previous = prev[path];
             next[path] =
               previous && previous.kind === entry.kind

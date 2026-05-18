@@ -541,9 +541,11 @@ export const api = {
   },
   fsGitStatus(
     repoRoot: string,
-  ): Promise<Record<string, FsGitStatusEntry>> {
-    return invoke<Record<string, FsGitStatusEntry>>("fs_git_status", {
+    statusLimit?: number,
+  ): Promise<FsGitStatusResult> {
+    return invoke<FsGitStatusResult>("fs_git_status", {
       repoRoot,
+      statusLimit,
     });
   },
   fsGitDiffStats(
@@ -616,6 +618,13 @@ export interface FsGitStatusEntry {
   kind: FsGitStatus;
   additions: number;
   deletions: number;
+}
+
+/** Mirror of `crate::fs_explorer::GitStatusResult`. */
+export interface FsGitStatusResult {
+  statuses: Record<string, FsGitStatusEntry>;
+  huge: boolean;
+  limit: number;
 }
 
 export interface FsGitDiffStatsRequest {
