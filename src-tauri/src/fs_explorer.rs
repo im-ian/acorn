@@ -937,9 +937,9 @@ impl WatchBatch {
 }
 
 fn normalize_watch_path(path: &Path) -> Option<PathBuf> {
-    if path.exists() {
-        return path.canonicalize().ok();
-    }
+    // The watcher root is canonicalized at watch start (fs_watch_set_root),
+    // and notify delivers paths in the same canonical form on macOS/Linux/
+    // Windows. Avoid a per-event stat() — pure component walk only.
     normalize_absolute_path(path)
 }
 
@@ -1179,5 +1179,28 @@ mod tests {
         .unwrap();
         assert!(!a.exists());
         assert!(b.exists());
+    }
+
+    #[test]
+    fn normalize_event_path_is_pure_for_missing_files() {
+        // Path does not exist; must still normalize via component walk only.
+        let p = normalize_watch_path(Path::new("/tmp/does-not-exist/a/./b/../c"));
+        assert_eq!(p, Some(PathBuf::from("/tmp/does-not-exist/a/c")));
+    }
+
+    #[test]
+    fn normalize_event_path_rejects_relative() {
+        assert_eq!(normalize_watch_path(Path::new("relative/path")), None);
+    }
+
+    #[test]
+    fn normalize_event_path_preserves_existing_absolute() {
+        let d = tmpdir();
+        let f = d.path().join("real.txt");
+        fs::write(&f, b"x").unwrap();
+        let out = normalize_watch_path(&f).expect("normalized");
+        // No requirement to canonicalize; equality up to component walk is enough.
+        assert!(out.is_absolute());
+        assert!(out.ends_with("real.txt"));
     }
 }
