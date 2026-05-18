@@ -36,6 +36,13 @@ export type { RightGroup, RightTab };
 
 const ROOT_PANE_ID: PaneId = "root";
 
+let statusPollRunning = false;
+let statusPollChain: Promise<void> | null = null;
+let pendingStatusPollAll = false;
+let pendingStatusPollIds = new Set<string>();
+let activeStatusPollAll = false;
+let activeStatusPollIds = new Set<string>();
+
 export interface PaneState {
   id: PaneId;
   tabIds: string[];
@@ -129,8 +136,9 @@ interface AppStateModel {
   refreshProjects: () => Promise<void>;
   refreshAll: () => Promise<void>;
   /** Probe session liveness via JSONL transcripts; updates session statuses
-   *  in place without touching `updated_at`. */
-  pollSessionStatuses: () => Promise<void>;
+   *  in place without touching `updated_at`. When `ids` is provided, only
+   *  the requested subset is sent to the backend. */
+  pollSessionStatuses: (ids?: string[]) => Promise<void>;
   selectTab: (id: string | null) => void;
   selectSession: (id: string | null) => void;
   setActiveProject: (repoPath: string) => void;
@@ -557,31 +565,84 @@ export const useAppStore = create<AppStateModel>()(
     await Promise.all([get().refreshSessions(), get().refreshProjects()]);
   },
 
-  async pollSessionStatuses() {
-    const ids = get().sessions.map((s) => s.id);
-    if (ids.length === 0) return;
-    try {
-      const updates = await api.detectSessionStatuses(ids);
-      const map = new Map(updates.map((u) => [u.id, u]));
-      set((s) => {
-        let changed = false;
-        const nextSessions = s.sessions.map((sess) => {
-          const update = map.get(sess.id);
-          if (!update) return sess;
-          const nextStatus = update.status;
-          const nextBranch = update.branch ?? sess.branch;
-          if (nextStatus !== sess.status || nextBranch !== sess.branch) {
-            changed = true;
-            return { ...sess, status: nextStatus, branch: nextBranch };
-          }
-          return sess;
-        });
-        return changed ? { sessions: nextSessions } : s;
-      });
-    } catch (e) {
-      // Polling errors are non-fatal: log and move on.
-      console.warn("[acorn] pollSessionStatuses failed", e);
+  async pollSessionStatuses(ids) {
+    const requestedIds =
+      ids === undefined
+        ? undefined
+        : Array.from(new Set(ids)).filter((id) =>
+            get().sessions.some((session) => session.id === id),
+          );
+    if (requestedIds !== undefined && requestedIds.length === 0) return;
+
+    if (requestedIds === undefined) {
+      const currentIds = get().sessions.map((session) => session.id);
+      const activePollCoversAll =
+        activeStatusPollAll &&
+        currentIds.every((id) => activeStatusPollIds.has(id));
+      if (!activePollCoversAll && !pendingStatusPollAll) {
+        pendingStatusPollAll = true;
+        pendingStatusPollIds.clear();
+      }
+    } else if (!pendingStatusPollAll) {
+      for (const id of requestedIds) {
+        if (!activeStatusPollIds.has(id)) pendingStatusPollIds.add(id);
+      }
     }
+
+    if (!statusPollRunning) {
+      statusPollRunning = true;
+      statusPollChain = (async () => {
+        while (pendingStatusPollAll || pendingStatusPollIds.size > 0) {
+          const pollAll = pendingStatusPollAll;
+          const queuedIds = pollAll
+            ? undefined
+            : Array.from(pendingStatusPollIds);
+          pendingStatusPollAll = false;
+          pendingStatusPollIds.clear();
+
+          const sessionIds = new Set(get().sessions.map((s) => s.id));
+          const idsToPoll = Array.from(
+            new Set(queuedIds ?? get().sessions.map((s) => s.id)),
+          ).filter((id) => sessionIds.has(id));
+          if (idsToPoll.length === 0) continue;
+
+          activeStatusPollAll = pollAll;
+          activeStatusPollIds = new Set(idsToPoll);
+          try {
+            const updates = await api.detectSessionStatuses(idsToPoll);
+            const map = new Map(updates.map((u) => [u.id, u]));
+            set((s) => {
+              let changed = false;
+              const nextSessions = s.sessions.map((sess) => {
+                const update = map.get(sess.id);
+                if (!update) return sess;
+                const nextStatus = update.status;
+                const nextBranch = update.branch ?? sess.branch;
+                if (nextStatus !== sess.status || nextBranch !== sess.branch) {
+                  changed = true;
+                  return { ...sess, status: nextStatus, branch: nextBranch };
+                }
+                return sess;
+              });
+              return changed ? { sessions: nextSessions } : s;
+            });
+          } catch (e) {
+            // Polling errors are non-fatal: log and move on.
+            console.warn("[acorn] pollSessionStatuses failed", e);
+          } finally {
+            activeStatusPollAll = false;
+            activeStatusPollIds.clear();
+          }
+        }
+      })().finally(() => {
+        statusPollRunning = false;
+        statusPollChain = null;
+        activeStatusPollAll = false;
+        activeStatusPollIds.clear();
+      });
+    }
+
+    await statusPollChain;
   },
 
   selectTab(id) {
