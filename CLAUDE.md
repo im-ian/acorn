@@ -65,7 +65,7 @@ pnpm run typecheck
 pnpm run build          # tsc + vite build
 ```
 
-`src-tauri/binaries/acorn-ipc-<target-triple>` is `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without it, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `pnpm run build:sidecar` once per worktree (and again after any IPC change); plain `cargo build --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
+`src-tauri/binaries/acorn-ipc-<target-triple>` is `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without it, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `pnpm run build:sidecar` once per worktree (and again after any IPC change); plain `cargo build -p acorn-ipc --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
 
 ## Reading webview logs in dev
 
