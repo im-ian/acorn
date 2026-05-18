@@ -178,7 +178,7 @@ interface AppStateModel {
   consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
   toggleMultiInput: () => boolean;
   /** Open a readonly code viewer tab for `path` in the focused pane. */
-  openCodeViewerTab: (path: string) => void;
+  openCodeViewerTab: (path: string, repoPath?: string) => void;
   /** Close any frontend-owned tab and remove it from panes. */
   closeWorkspaceTab: (id: string) => void;
 }
@@ -1198,11 +1198,18 @@ export const useAppStore = create<AppStateModel>()(
     return enabled;
   },
 
-  openCodeViewerTab(path) {
+  openCodeViewerTab(path, repoPath) {
     set((s) => {
       if (!s.activeProject) return s;
       const ws = s.workspaces[s.activeProject];
       if (!ws) return s;
+      const focused = ws.focusedPaneId;
+      const pane = ws.panes[focused];
+      if (!pane) return s;
+      const activeWorkspaceTab = pane.activeTabId
+        ? s.workspaceTabs[pane.activeTabId]
+        : undefined;
+      const targetRepoPath = repoPath ?? activeWorkspaceTab?.repoPath ?? s.activeProject;
       // Reuse an existing code tab for the same path if there is one;
       // this avoids piling up identical tabs when the user double-clicks
       // the same file repeatedly. The reuse cycles focus to the tab.
@@ -1210,12 +1217,9 @@ export const useAppStore = create<AppStateModel>()(
         (tab) =>
           tab.kind === "code" &&
           tab.path === path &&
-          tab.repoPath === s.activeProject,
+          tab.repoPath === targetRepoPath,
       );
-      const tab = existing ?? makeCodeWorkspaceTab(path, s.activeProject);
-      const focused = ws.focusedPaneId;
-      const pane = ws.panes[focused];
-      if (!pane) return s;
+      const tab = existing ?? makeCodeWorkspaceTab(path, targetRepoPath);
       const alreadyInPane = pane.tabIds.includes(tab.id);
       const newPane: PaneState = alreadyInPane
         ? { ...pane, activeTabId: tab.id }

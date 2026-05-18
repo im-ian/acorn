@@ -792,12 +792,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (entry.is_dir) return;
       try {
         const store = await import("../store");
-        store.useAppStore.getState().openCodeViewerTab(entry.path);
+        store.useAppStore.getState().openCodeViewerTab(entry.path, rootPath);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [],
+    [rootPath],
   );
 
   const handleBulkTrash = useCallback(async () => {
