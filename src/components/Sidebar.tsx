@@ -56,6 +56,7 @@ import {
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
 import type { Project, Session, SessionKind, SessionStatus } from "../lib/types";
+import { suggestSessionName } from "../lib/sessionName";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { Tooltip } from "./Tooltip";
@@ -234,7 +235,7 @@ export function Sidebar() {
               : sidebarText(t, "sidebar.dialog.selectDirectory"),
         }));
       if (!repoPath || typeof repoPath !== "string") return;
-      const name = suggestName(repoPath, sessions, kind);
+      const name = suggestSessionName(repoPath, sessions, kind, isolated);
       await createSession(name, repoPath, isolated, kind);
       setCollapsed((prev) => {
         if (!prev.has(repoPath)) return prev;
@@ -1317,24 +1318,6 @@ function buildSessionHoverDetails(t: Translator, session: Session): string {
     lines.push(sidebarText(t, "sidebar.metadata.isolatedWorktree"));
   }
   return lines.join("\n");
-}
-
-function suggestName(
-  repoPath: string,
-  existing: Session[],
-  kind: SessionKind = "regular",
-): string {
-  // Control sessions get a "control-" prefix so they sort into a clearly
-  // distinct namespace at-a-glance, mirroring how `tmux` users name dedicated
-  // controller panes.
-  const base = kind === "control" ? `control-${basename(repoPath)}` : basename(repoPath);
-  let candidate = base;
-  let n = 2;
-  const taken = new Set(existing.map((s) => s.name));
-  while (taken.has(candidate)) {
-    candidate = `${base}-${n++}`;
-  }
-  return candidate;
 }
 
 function loadCollapsed(): Set<string> {

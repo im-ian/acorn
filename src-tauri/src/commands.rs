@@ -1970,6 +1970,12 @@ pub(crate) fn create_unique_worktree(
             match worktree::create_worktree(repo, &candidate) {
                 Ok(path) => return Ok((candidate, path)),
                 Err(AppError::InvalidPath(_)) => {}
+                // libgit2 auto-creates a branch named after the worktree when
+                // no explicit reference is supplied. If a branch with that name
+                // already exists (e.g. a stale leftover or a real branch the
+                // user has been working on), it returns Exists. Treat that as
+                // "this candidate is taken" and bump the suffix.
+                Err(AppError::Git(ref e)) if e.code() == git2::ErrorCode::Exists => {}
                 Err(e) => return Err(e),
             }
         }
@@ -2140,10 +2146,11 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_memory_usage_from_roots, font_name_from_path, infer_acornd_root_from_session_pids,
-        memory_root_pids, validate_new_project_name, ProcessMemorySnapshot,
+        collect_memory_usage_from_roots, create_unique_worktree, font_name_from_path,
+        infer_acornd_root_from_session_pids, memory_root_pids, validate_new_project_name,
+        ProcessMemorySnapshot,
     };
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn font_name_from_path_strips_compound_style_suffixes() {
@@ -2239,6 +2246,66 @@ mod tests {
         assert_eq!(memory_root_pids(&by_pid, 10, Some(20)), vec![10, 20]);
         assert_eq!(memory_root_pids(&by_pid, 10, Some(30)), vec![10]);
         assert_eq!(memory_root_pids(&by_pid, 10, Some(999)), vec![10]);
+    }
+
+    fn unique_repo_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-commands-test-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn init_repo_with_commit(path: &Path) -> git2::Repository {
+        let repo = git2::Repository::init(path).expect("init repo");
+        let sig = git2::Signature::now("acorn-test", "test@acorn").expect("sig");
+        let tree_id = {
+            let mut idx = repo.index().expect("index");
+            idx.write_tree().expect("write tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .expect("initial commit");
+        drop(tree);
+        repo
+    }
+
+    // Regression: libgit2's default `Repository::worktree(name, path, None)`
+    // auto-creates a branch named after the worktree. When that branch
+    // already exists (e.g. the user's primary branch happens to share the
+    // repo basename), the call returned ErrorCode::Exists and bubbled up to
+    // the user as "failed to write reference 'refs/heads/<name>'". The
+    // retry loop now bumps the suffix on Exists just like it does for
+    // path collisions.
+    #[test]
+    fn create_unique_worktree_bumps_suffix_when_branch_name_taken() {
+        let repo_dir = unique_repo_dir("branch-collision");
+        let repo = init_repo_with_commit(&repo_dir);
+        // Create a branch named after the repo so the libgit2 auto-branch
+        // creation would collide on the first attempt.
+        let head_commit = repo
+            .head()
+            .and_then(|h| h.peel_to_commit())
+            .expect("HEAD commit");
+        repo.branch("acorn", &head_commit, false)
+            .expect("create acorn branch");
+        drop(head_commit);
+        drop(repo);
+
+        let (name, path) =
+            create_unique_worktree(&repo_dir, "acorn").expect("worktree should be created");
+        assert_eq!(
+            name, "acorn-2",
+            "expected suffix bump when `acorn` branch is taken"
+        );
+        assert!(path.exists(), "worktree path should exist on disk");
+
+        std::fs::remove_dir_all(&repo_dir).ok();
     }
 
     #[test]
