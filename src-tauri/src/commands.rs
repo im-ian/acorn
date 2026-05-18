@@ -1603,14 +1603,33 @@ fn session_root_pid(state: &State<'_, AppState>, id: &Uuid) -> Option<u32> {
 /// banner appearing inside the panel any time the PTY drifts outside a
 /// repo.
 #[tauri::command]
-pub fn pty_repo_root(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
-    let Some(cwd) = pty_cwd(state, session_id)? else {
+pub async fn pty_repo_root(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<String>> {
+    let id = parse_id(&session_id)?;
+    let Some(root_pid) = session_root_pid(&state, &id) else {
         return Ok(None);
     };
-    let Ok(repo) = git2::Repository::discover(&cwd) else {
-        return Ok(None);
-    };
-    Ok(repo.workdir().map(|p| p.to_string_lossy().into_owned()))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+        );
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        );
+        let Some(cwd) = deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)) else {
+            return Ok(None);
+        };
+        let Ok(repo) = git2::Repository::discover(&cwd) else {
+            return Ok(None);
+        };
+        Ok(repo.workdir().map(|p| p.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| crate::error::AppError::Other(format!("pty_repo_root join failed: {e}")))?
 }
 
 /// BFS over `sys`, starting at `root`, returning the cwd of the deepest

@@ -151,7 +151,7 @@ export function RightPanel() {
   // and falls back to the recorded path when there's no live PTY.
   const fallbackPath =
     active?.worktree_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? null;
-  const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath, rightTab);
+  const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath);
   const sessionHostRepoPath =
     active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
   const invalidations = useRightPanelInvalidations(repoPath);
@@ -775,7 +775,6 @@ function useRightPanelInvalidations(
 function useLiveRepoPath(
   sessionId: string | null,
   fallbackPath: string | null,
-  rightTab: string,
 ): string | null {
   const [liveRepo, setLiveRepo] = useState<LiveRepoCache | null>(null);
   const [tick, setTick] = useState(0);
@@ -800,7 +799,7 @@ function useLiveRepoPath(
     return () => {
       cancelled = true;
     };
-  }, [sessionId, fallbackPath, rightTab, tick]);
+  }, [sessionId, fallbackPath, tick]);
 
   // Refocusing the app is a strong signal the user is about to look at the
   // panel — re-resolve so a `claude --worktree` that happened while we were
@@ -972,6 +971,13 @@ function countByStatus(todos: TodoItem[]) {
   return { pending, in_progress, completed };
 }
 
+// Per-project History snapshot kept in module memory so re-opening a project
+// renders its rows synchronously. The accompanying SWR fetch still refreshes
+// in the background to pick up sessions created since the snapshot. Lives in
+// process memory only — wiped on app restart, which is the right TTL for
+// session lists that turn over often.
+const agentHistoryCache = new Map<string, AgentHistoryItem[]>();
+
 function AgentHistoryTab({
   repoPath,
   sessionHostRepoPath,
@@ -983,7 +989,12 @@ function AgentHistoryTab({
   const createSession = useAppStore((s) => s.createSession);
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
-  const [items, setItems] = useState<AgentHistoryItem[] | null>(null);
+  // Hydrate from the module-level cache so re-opening a project shows its
+  // list instantly. The accompanying fetch below still runs (SWR-style)
+  // to surface new sessions created since the cached snapshot.
+  const [items, setItems] = useState<AgentHistoryItem[] | null>(
+    () => agentHistoryCache.get(repoPath) ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{
@@ -1017,6 +1028,7 @@ function AgentHistoryTab({
     try {
       const result = await api.listAgentHistory(repoPath, 100);
       if (token !== fetchTokenRef.current) return;
+      agentHistoryCache.set(repoPath, result);
       setItems(result);
     } catch (e) {
       if (token !== fetchTokenRef.current) return;
@@ -1024,14 +1036,6 @@ function AgentHistoryTab({
     } finally {
       if (token === fetchTokenRef.current) setLoading(false);
     }
-  }, [repoPath]);
-
-  // Project switch: drop the previous project's items so the skeleton shows
-  // immediately instead of leaving stale data on screen while the scan runs.
-  useEffect(() => {
-    fetchTokenRef.current++;
-    setItems(null);
-    setError(null);
   }, [repoPath]);
 
   useEffect(() => {
@@ -1091,16 +1095,17 @@ function AgentHistoryTab({
     setError(null);
     try {
       await api.trashAgentHistoryTranscript(item);
-      setItems((prev) =>
-        prev
-          ? prev.filter(
-              (candidate) =>
-                candidate.provider !== item.provider ||
-                candidate.id !== item.id ||
-                candidate.transcript_path !== item.transcript_path,
-            )
-          : prev,
-      );
+      setItems((prev) => {
+        if (!prev) return prev;
+        const next = prev.filter(
+          (candidate) =>
+            candidate.provider !== item.provider ||
+            candidate.id !== item.id ||
+            candidate.transcript_path !== item.transcript_path,
+        );
+        agentHistoryCache.set(repoPath, next);
+        return next;
+      });
       setTrashCandidate(null);
     } catch (e) {
       setTrashCandidate(null);
