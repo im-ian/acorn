@@ -22,6 +22,10 @@ import {
   unpatchTerminalCellMeasurements,
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
+  createTerminalRepaintScheduler,
+  repaintTerminalViewport,
+} from "../lib/terminalRepaint";
+import {
   prepareScrollbackForSave,
   RESTORE_MARKER_TEXT,
   shouldRestoreScrollback,
@@ -386,6 +390,7 @@ export function Terminal({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const fitTerminalRef = useRef<(() => void) | null>(null);
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
   } | null>(null);
@@ -502,6 +507,7 @@ export function Terminal({
       fitAddon.fit();
       if (cjkEnabled) patchTerminalCellMeasurements(term);
     };
+    fitTerminalRef.current = fitWithCellMeasurements;
     try {
       fitWithCellMeasurements();
     } catch {
@@ -1669,6 +1675,7 @@ export function Terminal({
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      fitTerminalRef.current = null;
     };
   }, [sessionId, cwd]);
 
@@ -1711,38 +1718,51 @@ export function Terminal({
   // each refresh so xterm's row geometry is up to date.
   useEffect(() => {
     if (!isActive) return;
-    const term = termRef.current;
-    const fit = fitRef.current;
-    const container = containerRef.current;
-    if (!term || !fit || !container) return;
-
     const refresh = () => {
-      // Force layout reflow so any pending visibility/size changes commit
-      // before xterm queries its container dimensions.
-      void container.offsetHeight;
-      try {
-        fit.fit();
-      } catch {
-        // ignore
-      }
-      try {
-        term.refresh(0, term.rows - 1);
-      } catch {
-        // ignore
-      }
-      try {
-        term.scrollToBottom();
-      } catch {
-        // ignore
-      }
+      const term = termRef.current;
+      const fit = fitTerminalRef.current;
+      const container = containerRef.current;
+      if (!term || !fit || !container) return;
+      repaintTerminalViewport({
+        container,
+        fit,
+        term,
+        scrollToBottom: true,
+      });
     };
 
-    refresh();
-    const raf = requestAnimationFrame(refresh);
-    const timeout = window.setTimeout(refresh, 50);
+    const scheduler = createTerminalRepaintScheduler(refresh);
+    scheduler.schedule();
+    return scheduler.dispose;
+  }, [isActive]);
+
+  // WKWebView can defer paints while the app window is not focused. PTY
+  // output still reaches xterm's buffer, but the DOM renderer may return with
+  // stale row elements until another terminal event happens. On focus/visible
+  // return, force the same layout + full-row repaint used for tab activation,
+  // without scrolling the user's viewport.
+  useEffect(() => {
+    if (!isActive) return;
+
+    const refresh = () => {
+      const term = termRef.current;
+      const fit = fitTerminalRef.current;
+      const container = containerRef.current;
+      if (!term || !fit || !container) return;
+      repaintTerminalViewport({ container, fit, term });
+    };
+    const scheduler = createTerminalRepaintScheduler(refresh);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") return;
+      scheduler.schedule();
+    };
+
+    window.addEventListener("focus", scheduler.schedule);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      cancelAnimationFrame(raf);
-      window.clearTimeout(timeout);
+      window.removeEventListener("focus", scheduler.schedule);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      scheduler.dispose();
     };
   }, [isActive]);
 
