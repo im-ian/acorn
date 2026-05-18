@@ -532,16 +532,6 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootPath, showHidden, respectGitignore, fetchDir]);
 
-  // Bind backend watcher to current root.
-  useEffect(() => {
-    void api.fsWatchSetRoot(rootPath).catch((e) => {
-      console.debug("[FileExplorer] fs_watch_set_root failed", e);
-    });
-    return () => {
-      void api.fsWatchSetRoot(null).catch(() => {});
-    };
-  }, [rootPath]);
-
   // Reset state on root change so previous project's tree is not flashed.
   const rootRef = useRef(rootPath);
   useEffect(() => {
