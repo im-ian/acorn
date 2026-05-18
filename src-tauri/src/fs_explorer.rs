@@ -970,11 +970,41 @@ fn run_watch_batcher<R: Runtime>(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchedKind {
+    Added,
+    Updated,
+    Removed,
+}
+
+impl BatchedKind {
+    fn from_event_kind(k: &EventKind) -> Option<Self> {
+        match k {
+            EventKind::Create(_) => Some(Self::Added),
+            EventKind::Modify(_) => Some(Self::Updated),
+            EventKind::Remove(_) => Some(Self::Removed),
+            _ => None,
+        }
+    }
+}
+
+/// Merge a new event kind for an already-seen path. Returns `None` when
+/// the new event cancels the existing one (Add+Remove). Mirrors VSCode's
+/// `coalesceEvents` rules in `watcher-common.ts:342-470`.
+fn merge_kinds(existing: BatchedKind, incoming: BatchedKind) -> Option<BatchedKind> {
+    use BatchedKind::*;
+    match (existing, incoming) {
+        (Added, Removed) => None,
+        (Removed, Added) => Some(Updated),
+        (Added, Updated) => Some(Added),
+        _ => Some(incoming),
+    }
+}
+
 #[derive(Debug)]
 struct WatchBatch {
     root: PathBuf,
-    seen: HashSet<PathBuf>,
-    paths: Vec<PathBuf>,
+    seen: HashMap<PathBuf, BatchedKind>,
     common_ancestor: Option<PathBuf>,
     overflow: bool,
     ignore: Arc<WatchIgnoreMatcher>,
@@ -984,8 +1014,7 @@ impl WatchBatch {
     fn new(root: &Path, ignore: Arc<WatchIgnoreMatcher>) -> Self {
         Self {
             root: root.to_path_buf(),
-            seen: HashSet::new(),
-            paths: Vec::new(),
+            seen: HashMap::new(),
             common_ancestor: None,
             overflow: false,
             ignore,
@@ -1005,17 +1034,14 @@ impl WatchBatch {
 
     fn add_event(&mut self, event: Event) {
         if event.need_rescan() {
-            self.add_path(self.root.clone());
+            self.add_path(self.root.clone(), BatchedKind::Updated);
             self.overflow = true;
             return;
         }
 
-        if !matches!(
-            event.kind,
-            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-        ) {
+        let Some(kind) = BatchedKind::from_event_kind(&event.kind) else {
             return;
-        }
+        };
 
         for path in event.paths {
             let Some(path) = normalize_watch_path(&path) else {
@@ -1027,40 +1053,72 @@ impl WatchBatch {
             if self.ignore.is_ignored(&path, &self.root) {
                 continue;
             }
-            self.add_path(path);
+            self.add_path(path, kind);
         }
     }
 
-    fn add_path(&mut self, path: PathBuf) {
+    fn add_path(&mut self, path: PathBuf, kind: BatchedKind) {
         self.common_ancestor = Some(match self.common_ancestor.take() {
             Some(current) => common_ancestor(&current, &path),
             None => path.clone(),
         });
-        if !self.seen.insert(path.clone()) {
-            return;
-        }
-        if self.paths.len() >= WATCH_EVENT_CAP {
+
+        if self.seen.len() >= WATCH_EVENT_CAP && !self.seen.contains_key(&path) {
             self.overflow = true;
             return;
         }
-        self.paths.push(path);
+
+        let merged = match self.seen.get(&path).copied() {
+            None => Some(kind),
+            Some(existing) => merge_kinds(existing, kind),
+        };
+        match merged {
+            None => {
+                self.seen.remove(&path);
+            }
+            Some(k) => {
+                self.seen.insert(path, k);
+            }
+        }
     }
 
     fn finish(self) -> Option<FsChangePayload> {
-        if self.paths.is_empty() && !self.overflow {
+        if self.seen.is_empty() && !self.overflow {
             return None;
         }
+
+        // Split: collect deletes, sort shortest-first, suppress any delete
+        // whose ancestor is also being deleted (folder-delete fan-in).
+        let mut deletes: Vec<PathBuf> = Vec::new();
+        let mut others: Vec<PathBuf> = Vec::new();
+        for (path, kind) in self.seen.into_iter() {
+            match kind {
+                BatchedKind::Removed => deletes.push(path),
+                _ => others.push(path),
+            }
+        }
+        deletes.sort_by_key(|p| p.as_os_str().len());
+        let mut kept_deletes: Vec<PathBuf> = Vec::with_capacity(deletes.len());
+        for d in deletes {
+            let suppressed = kept_deletes
+                .iter()
+                .any(|parent| d != *parent && d.starts_with(parent));
+            if suppressed {
+                continue;
+            }
+            kept_deletes.push(d);
+        }
+
+        let mut all: Vec<PathBuf> = kept_deletes;
+        all.append(&mut others);
+
         let refresh = self.overflow.then(|| {
             let refresh_path = self
                 .common_ancestor
                 .as_deref()
                 .filter(|p| path_is_inside_root(p, &self.root))
-                .unwrap_or(&self.root);
-            let refresh_path = if refresh_path == self.root.as_path() {
-                self.root.clone()
-            } else {
-                refresh_path.to_path_buf()
-            };
+                .unwrap_or(&self.root)
+                .to_path_buf();
             FsRefreshHint {
                 kind: if refresh_path == self.root {
                     FsRefreshKind::Root
@@ -1070,9 +1128,9 @@ impl WatchBatch {
                 path: refresh_path.to_string_lossy().into_owned(),
             }
         });
+
         Some(FsChangePayload {
-            paths: self
-                .paths
+            paths: all
                 .into_iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect(),
@@ -1131,7 +1189,7 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::CreateKind;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use std::fs;
 
     fn tmpdir() -> tempfile::TempDir {
@@ -1142,6 +1200,22 @@ mod tests {
         let mut event = Event::new(EventKind::Create(CreateKind::Any));
         event.paths = paths;
         event
+    }
+
+    fn remove_event(paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(EventKind::Remove(RemoveKind::Any));
+        event.paths = paths;
+        event
+    }
+
+    fn modify_event(paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(EventKind::Modify(ModifyKind::Any));
+        event.paths = paths;
+        event
+    }
+
+    fn new_batch(root: &Path) -> WatchBatch {
+        WatchBatch::new(root, Arc::new(WatchIgnoreMatcher::with_defaults(&[])))
     }
 
     #[test]
@@ -1474,6 +1548,64 @@ mod tests {
                 delay: Duration::from_millis(800)
             }
         );
+    }
+
+    #[test]
+    fn coalesce_drops_create_then_delete_pair() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        let f = root.join("a.txt");
+        batch.add_event(create_event(vec![f.clone()]));
+        batch.add_event(remove_event(vec![f]));
+        assert!(batch.finish().is_none(), "create+delete must net to nothing");
+    }
+
+    #[test]
+    fn coalesce_flattens_delete_then_create_to_single_path() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        let f = root.join("a.txt");
+        batch.add_event(remove_event(vec![f.clone()]));
+        batch.add_event(create_event(vec![f.clone()]));
+        let payload = batch.finish().expect("payload");
+        assert_eq!(payload.paths, vec![f.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn coalesce_suppresses_child_deletes_under_parent_delete() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let dir = root.join("dir");
+        let mut batch = new_batch(&root);
+        batch.add_event(remove_event(vec![
+            dir.join("a.txt"),
+            dir.join("sub").join("b.txt"),
+            dir.clone(),
+        ]));
+        let payload = batch.finish().expect("payload");
+        assert_eq!(payload.paths, vec![dir.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn coalesce_keeps_unrelated_updates_alongside_deletes() {
+        let d = tmpdir();
+        let root = d.path().canonicalize().unwrap();
+        let mut batch = new_batch(&root);
+        let parent = root.join("dir");
+        let other = root.join("untouched.txt");
+        batch.add_event(modify_event(vec![other.clone()]));
+        batch.add_event(remove_event(vec![parent.join("inside.txt"), parent.clone()]));
+        let payload = batch.finish().expect("payload");
+        let mut got = payload.paths;
+        got.sort();
+        let mut want = vec![
+            parent.to_string_lossy().into_owned(),
+            other.to_string_lossy().into_owned(),
+        ];
+        want.sort();
+        assert_eq!(got, want);
     }
 
     #[test]
