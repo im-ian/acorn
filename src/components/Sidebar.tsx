@@ -43,6 +43,7 @@ import { useAppStore } from "../store";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
@@ -930,6 +931,7 @@ function SessionRow({ session, active, onSelect, onRemove }: SessionRowProps) {
     {
       label: sidebarText(t, "sidebar.actions.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
+      shortcut: formatHotkey(Hotkeys.equalizePanes),
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },

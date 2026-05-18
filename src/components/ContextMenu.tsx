@@ -8,6 +8,7 @@ interface ContextMenuButton {
   icon?: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  shortcut?: string;
 }
 
 interface ContextMenuSeparator {
@@ -79,7 +80,7 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
         top: position.top,
         zIndex: 60,
       }}
-      className="min-w-[9rem] overflow-hidden rounded-md border border-border bg-bg-elevated shadow-2xl"
+      className="min-w-[11rem] overflow-hidden rounded-md border border-border bg-bg-elevated shadow-2xl"
     >
       <ul className="py-1 text-[12px]">
         {items.map((item, i) => {
@@ -114,7 +115,18 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
                 {item.icon ? (
                   <span className="shrink-0 text-fg-muted">{item.icon}</span>
                 ) : null}
-                <span className="truncate">{item.label}</span>
+                <span className="flex-1 truncate">{item.label}</span>
+                {item.shortcut ? (
+                  <kbd
+                    aria-hidden
+                    className={cn(
+                      "shrink-0 pl-3 font-sans text-[11px] tabular-nums tracking-wide",
+                      item.disabled ? "text-fg-muted/40" : "text-fg-muted",
+                    )}
+                  >
+                    {item.shortcut}
+                  </kbd>
+                ) : null}
               </button>
             </li>
           );

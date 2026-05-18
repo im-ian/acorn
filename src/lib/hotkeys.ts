@@ -88,6 +88,99 @@ export function shouldUseTinykeysToggleMultiInputFallback(): boolean {
   return !isTauriRuntime();
 }
 
+function isMacPlatform(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    /Mac|iP(hone|od|ad)/.test(navigator.platform)
+  );
+}
+
+const MAC_KEY_SYMBOL: Record<string, string> = {
+  $mod: "⌘",
+  Meta: "⌘",
+  Cmd: "⌘",
+  Command: "⌘",
+  Control: "⌃",
+  Ctrl: "⌃",
+  Alt: "⌥",
+  Option: "⌥",
+  Shift: "⇧",
+  Enter: "↵",
+  Return: "↵",
+  Escape: "⎋",
+  Esc: "⎋",
+  Backspace: "⌫",
+  Delete: "⌦",
+  Tab: "⇥",
+  Space: "␣",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  Minus: "-",
+  Equal: "=",
+  Comma: ",",
+  Period: ".",
+};
+
+const NON_MAC_KEY_LABEL: Record<string, string> = {
+  $mod: "Ctrl",
+  Meta: "Meta",
+  Cmd: "Ctrl",
+  Command: "Ctrl",
+  Control: "Ctrl",
+  Alt: "Alt",
+  Option: "Alt",
+  Shift: "Shift",
+  Enter: "Enter",
+  Return: "Enter",
+  Escape: "Esc",
+  Esc: "Esc",
+  Backspace: "Backspace",
+  Delete: "Del",
+  Tab: "Tab",
+  Space: "Space",
+  Minus: "-",
+  Equal: "=",
+  Comma: ",",
+  Period: ".",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+};
+
+// Modifier order matches Apple HIG / Windows convention so the rendered
+// string reads naturally even when the tinykeys source list differs.
+const MAC_MODIFIER_ORDER = ["⌃", "⌥", "⇧", "⌘"];
+const NON_MAC_MODIFIER_ORDER = ["Ctrl", "Alt", "Shift", "Meta"];
+
+function formatKey(part: string, mac: boolean): string {
+  if (mac) {
+    return MAC_KEY_SYMBOL[part] ?? part.toUpperCase();
+  }
+  return NON_MAC_KEY_LABEL[part] ?? part.toUpperCase();
+}
+
+/**
+ * Render a tinykeys binding string (e.g. `$mod+Shift+t`) as a
+ * platform-appropriate label suitable for context-menu shortcut hints.
+ */
+export function formatHotkey(binding: string): string {
+  const mac = isMacPlatform();
+  const parts = binding.split("+").map((p) => formatKey(p, mac));
+  const order = mac ? MAC_MODIFIER_ORDER : NON_MAC_MODIFIER_ORDER;
+  const modifiers: string[] = [];
+  const rest: string[] = [];
+  for (const p of parts) {
+    if (order.includes(p)) modifiers.push(p);
+    else rest.push(p);
+  }
+  modifiers.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  if (mac) return [...modifiers, ...rest].join("");
+  return [...modifiers, ...rest].join("+");
+}
+
 /**
  * Subscribes the given keybinding map to `window` for the lifetime of the
  * component. Bindings are re-attached whenever the map identity changes,
