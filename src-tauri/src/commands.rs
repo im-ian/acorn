@@ -2122,6 +2122,11 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
         .stream_registry
         .pid(session_id)
         .or_else(|| state.pty.child_pid(session_id))
+        // On cold app boot with background sessions enabled, the resume
+        // probe can run before `pty_spawn` reattaches the frontend stream.
+        // Ask the daemon directly so live claude/codex processes still
+        // suppress the modal during that attach race.
+        .or_else(|| state.daemon_bridge.session_pid(*session_id))
     else {
         return false;
     };

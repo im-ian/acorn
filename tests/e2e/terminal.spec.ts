@@ -145,4 +145,78 @@ test.describe("terminal: spawn", () => {
       )
       .toBeGreaterThanOrEqual(1);
   });
+
+  test("reattaching a live daemon session replays daemon scrollback instead of stale disk scrollback", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("daemon_list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        kind: "regular",
+        alive: true,
+        cwd: "/tmp/demo",
+        repo_path: "/tmp/demo",
+        branch: "main",
+        agent_kind: null,
+      },
+    ]);
+    await tauri.handle("scrollback_load", () => "stale disk snapshot\r\n");
+    await tauri.handle("pty_spawn", (args) => {
+      const w = window as unknown as { __ptySpawnCalls?: unknown[] };
+      w.__ptySpawnCalls = w.__ptySpawnCalls ?? [];
+      w.__ptySpawnCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Running$/ })
+      .click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __ptySpawnCalls?: unknown[] })
+                .__ptySpawnCalls?.length ?? 0,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBeGreaterThanOrEqual(1);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __ptySpawnCalls?: unknown[] }).__ptySpawnCalls,
+    )) as Array<{ replayScrollback: boolean }>;
+
+    expect(calls[0].replayScrollback).toBe(true);
+    await expect(page.locator(".xterm")).not.toContainText(
+      "stale disk snapshot",
+    );
+  });
 });
