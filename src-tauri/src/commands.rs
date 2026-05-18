@@ -112,6 +112,15 @@ pub fn list_agent_history(
     agent_history::list_agent_history(PathBuf::from(repo_path), limit)
 }
 
+#[tauri::command]
+pub fn trash_agent_history_transcript(
+    provider: agent_history::AgentHistoryProvider,
+    id: String,
+    transcript_path: String,
+) -> AppResult<()> {
+    agent_history::trash_agent_history_transcript(provider, id, PathBuf::from(transcript_path))
+}
+
 /// Stop the running IPC listener (if any) and spawn a fresh one. Used by
 /// the Settings → Control sessions "Restart" button when the socket has
 /// gone stale (e.g. socket file removed under the app's feet). The signal

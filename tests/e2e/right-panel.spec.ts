@@ -287,4 +287,267 @@ test.describe("right panel: groups", () => {
       page.getByRole("button", { name: "History" }),
     ).toBeVisible();
   });
+
+  test("History rows surface linked worktree names", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "claude",
+        id: "claude-1",
+        title: "Investigate resume flow",
+        preview: null,
+        cwd: "/tmp/demo/.claude/worktrees/agent-a3f552/src",
+        worktree: {
+          name: "agent-a3f552",
+          path: "/tmp/demo/.claude/worktrees/agent-a3f552",
+          exists: true,
+        },
+        transcript_path: "/tmp/transcript.jsonl",
+        updated_at: 1770000000,
+        resume_command: "claude --resume claude-1",
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+
+    await expect(page.getByText("Investigate resume flow")).toBeVisible();
+    await expect(
+      page.getByText("agent-a3f552", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("/tmp/demo/.claude/worktrees/agent-a3f552/src", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  });
+
+  test("History resume adopts the source worktree for the new terminal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "codex",
+        id: "codex-1",
+        title: "Resume from codex worktree",
+        preview: null,
+        cwd: "/tmp/demo/.acorn/worktrees/acorn-2/src",
+        worktree: {
+          name: "acorn-2",
+          path: "/tmp/demo/.acorn/worktrees/acorn-2",
+          exists: true,
+        },
+        transcript_path: "/tmp/codex-rollout.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-1",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => ({
+      id: "created-1",
+      name: (args as { name: string }).name,
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    }));
+    await tauri.handle("update_session_worktree", (args) => {
+      const w = window as unknown as { __worktreeUpdates?: unknown[] };
+      w.__worktreeUpdates = w.__worktreeUpdates ?? [];
+      w.__worktreeUpdates.push(args);
+      return {
+        id: "created-1",
+        name: "codex resume",
+        repo_path: "/tmp/demo",
+        worktree_path: (args as { worktreePath: string }).worktreePath,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Resume from codex worktree").dblclick();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __worktreeUpdates?: unknown[] })
+                .__worktreeUpdates?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __worktreeUpdates?: unknown[] })
+          .__worktreeUpdates,
+    )) as Array<{ id: string; worktreePath: string }>;
+    expect(calls[0]).toEqual({
+      id: "created-1",
+      worktreePath: "/tmp/demo/.acorn/worktrees/acorn-2",
+    });
+    await expect(
+      page.getByRole("dialog", { name: "Running in worktree" }),
+    ).toBeVisible();
+  });
+
+  test("History context menu can explicitly resume in a worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "claude",
+        id: "claude-1",
+        title: "Resume from claude worktree",
+        preview: null,
+        cwd: "/tmp/demo/.claude/worktrees/agent-a3f552/src",
+        worktree: {
+          name: "agent-a3f552",
+          path: "/tmp/demo/.claude/worktrees/agent-a3f552",
+          exists: true,
+        },
+        transcript_path: "/tmp/claude.jsonl",
+        updated_at: 1770000000,
+        resume_command: "claude --resume claude-1",
+      },
+    ]);
+    await tauri.handle("create_session", (args) => ({
+      id: "created-2",
+      name: (args as { name: string }).name,
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    }));
+    await tauri.handle("update_session_worktree", (args) => {
+      const w = window as unknown as { __contextWorktreeUpdates?: unknown[] };
+      w.__contextWorktreeUpdates = w.__contextWorktreeUpdates ?? [];
+      w.__contextWorktreeUpdates.push(args);
+      return {
+        id: "created-2",
+        name: "claude resume",
+        repo_path: "/tmp/demo",
+        worktree_path: (args as { worktreePath: string }).worktreePath,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Resume from claude worktree").click({
+      button: "right",
+    });
+
+    await expect(
+      page.getByRole("menu").getByRole("separator"),
+    ).toHaveCount(3);
+    await page.getByRole("menuitem", { name: "Run in worktree" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __contextWorktreeUpdates?: unknown[] })
+                .__contextWorktreeUpdates?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByRole("dialog", { name: "Running in worktree" }),
+    ).toBeVisible();
+  });
+
+  test("History transcript trash action requires confirmation and removes the row", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("list_agent_history", () => [
+      {
+        provider: "claude",
+        id: "claude-trash",
+        title: "Disposable transcript",
+        preview: null,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/claude-trash.jsonl",
+        updated_at: 1770000000,
+        resume_command: "claude --resume claude-trash",
+      },
+    ]);
+    await tauri.handle("trash_agent_history_transcript", (args) => {
+      const w = window as unknown as { __trashTranscriptCalls?: unknown[] };
+      w.__trashTranscriptCalls = w.__trashTranscriptCalls ?? [];
+      w.__trashTranscriptCalls.push(args);
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+    await page.getByText("Disposable transcript").click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Move transcript to Trash..." })
+      .click();
+
+    await expect(
+      page.getByRole("dialog", { name: "Move transcript to Trash?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Move to Trash" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __trashTranscriptCalls?: unknown[] })
+                .__trashTranscriptCalls?.length ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBe(1);
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __trashTranscriptCalls?: unknown[] })
+          .__trashTranscriptCalls,
+    )) as Array<{ provider: string; id: string; transcriptPath: string }>;
+    expect(calls[0]).toEqual({
+      provider: "claude",
+      id: "claude-trash",
+      transcriptPath: "/tmp/claude-trash.jsonl",
+    });
+    await expect(page.getByText("Disposable transcript")).toHaveCount(0);
+  });
 });
