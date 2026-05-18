@@ -46,6 +46,15 @@ interface FloatingTooltipProps {
   multiline?: boolean;
   portalTarget?: HTMLElement | null;
   overlayClassName?: string;
+  /**
+   * Auto-dismiss when any ancestor scrolls. Default `true` matches the
+   * common case (anchor lives inside scrollable list / page). Set `false`
+   * for callers whose anchor sits inside a high-frequency internal
+   * scroller (e.g. xterm.js viewport) where bubbled scroll events from
+   * normal output would otherwise flicker the tooltip; those callers must
+   * drive show/hide themselves.
+   */
+  dismissOnScroll?: boolean;
 }
 
 interface TooltipPosition {
@@ -96,6 +105,7 @@ export function FloatingTooltip({
   multiline = false,
   portalTarget,
   overlayClassName,
+  dismissOnScroll = true,
 }: FloatingTooltipProps) {
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
@@ -111,13 +121,17 @@ export function FloatingTooltip({
   useEffect(() => {
     if (position === null) return;
     const onMove = () => setPosition(null);
-    window.addEventListener("scroll", onMove, true);
+    if (dismissOnScroll) {
+      window.addEventListener("scroll", onMove, true);
+    }
     window.addEventListener("resize", onMove);
     return () => {
-      window.removeEventListener("scroll", onMove, true);
+      if (dismissOnScroll) {
+        window.removeEventListener("scroll", onMove, true);
+      }
       window.removeEventListener("resize", onMove);
     };
-  }, [position]);
+  }, [position, dismissOnScroll]);
 
   // Clamp the tooltip into the viewport AFTER it has been measured. The
   // initial `computePosition` anchors at the trigger center, which can

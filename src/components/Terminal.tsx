@@ -1854,6 +1854,7 @@ export function Terminal({
         anchorRect={linkTooltip?.anchorRect ?? null}
         side="top"
         overlayClassName="xterm-hover"
+        dismissOnScroll={false}
       />
       {/* Pinned-prompt overlay. */}
       <StickyUserPrompt sessionId={sessionId} />
