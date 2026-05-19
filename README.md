@@ -178,6 +178,12 @@ pnpm run tauri build    # 프로덕션 빌드
 
 > ℹ️ `pnpm run tauri dev` / `tauri build`는 Tauri의 `externalBin` 규약에 따라 `src-tauri/binaries/acorn-ipc-<target-triple>`, `acornd-<target-triple>` 파일이 존재해야 시작합니다. 이 경로는 `.gitignore`에 포함돼 있어 fresh checkout(특히 `git worktree add`로 만들어진 worktree)에서는 비어 있고, 미리 빌드해두지 않으면 `resource path 'binaries/...' doesn't exist` 에러로 빌드가 실패합니다. `pnpm run build:sidecar`가 호스트 타깃에 맞는 두 바이너리를 빌드하고 올바른 위치에 stage합니다.
 
+개발 모드의 런타임 데이터는 설치된 앱과 분리되어
+`~/Library/Application Support/io.im-ian.acorn/profiles/dev/` 아래에 저장됩니다.
+프로덕션 빌드는 `profiles/prod/`를 사용합니다. 임시 격리가 필요하면
+`ACORN_PROFILE=<name>` 또는 `ACORN_DATA_DIR=/tmp/acorn-test`로 앱, IPC CLI,
+daemon이 볼 데이터 디렉터리를 바꿀 수 있습니다.
+
 ### 테스트
 
 ```bash

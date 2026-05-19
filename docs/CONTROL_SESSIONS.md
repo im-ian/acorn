@@ -49,6 +49,9 @@ layers that fire automatically every time a control-session PTY spawns:
    control session's PTY before any user code runs:
    - `ACORN_SESSION_ID` — this session's UUID, so `acorn-ipc` knows who
      is asking.
+   - `ACORN_DATA_DIR` — the resolved Acorn profile data directory. This
+     keeps bundled release sidecars aligned with the app's selected
+     profile.
    - `ACORN_IPC_SOCKET` — the canonical IPC socket path.
    - `ACORN_DAEMON_SOCKET` — the background daemon control socket path.
    - `PATH` — the directory containing the bundled `acorn-ipc` binary is
@@ -77,11 +80,18 @@ When Acorn spawns a control session it injects these env vars into the PTY:
 | Env var             | Source                            |
 | ------------------- | --------------------------------- |
 | `ACORN_SESSION_ID`  | The session's UUID                |
+| `ACORN_DATA_DIR`    | Resolved Acorn profile data dir   |
 | `ACORN_IPC_SOCKET`  | Path to the in-app IPC socket     |
 | `ACORN_DAEMON_SOCKET` | Path to the daemon control socket |
 
 The `acorn-ipc` binary reads `ACORN_SESSION_ID` and `ACORN_IPC_SOCKET`, so
 commands run straight from the shell without flags.
+
+By default, release builds use `profiles/prod` and debug builds use
+`profiles/dev` below Acorn's app data directory. Set `ACORN_PROFILE=<name>`
+to select another profile, or `ACORN_DATA_DIR=<path>` to pin all runtime
+state, IPC sockets, daemon sockets, and staged shell init files to an
+explicit directory.
 
 ### Install
 
