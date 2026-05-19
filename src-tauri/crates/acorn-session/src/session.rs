@@ -180,6 +180,13 @@ impl SessionOwner {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionAgentProvider {
+    Claude,
+    Codex,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -231,6 +238,11 @@ pub struct Session {
     /// worktrees when added.
     #[serde(default, skip_deserializing)]
     pub in_worktree: bool,
+    /// Derived from Acorn's per-session agent-state markers. This reflects
+    /// the most recently associated Claude/Codex transcript and is not
+    /// persisted in sessions.json.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub agent_provider: Option<SessionAgentProvider>,
 }
 
 impl Session {
@@ -260,6 +272,7 @@ impl Session {
             daemon_session_id: None,
             agent_resume_token: None,
             in_worktree: false,
+            agent_provider: None,
         }
     }
 }

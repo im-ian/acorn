@@ -258,11 +258,13 @@ export interface AcornSettings {
     };
     /**
      * Inline icon toggles. Status dot is the colored bullet at row start;
-     * sessionKind covers the isolated-worktree (GitBranch) and control
-     * (Bot) glyphs trailing the title.
+     * agentProvider lets live Claude/Codex sessions replace that dot with
+     * their provider mark; sessionKind covers the isolated-worktree
+     * (GitBranch) and control (Bot) glyphs trailing the title.
      */
     icons: {
       statusDot: boolean;
+      agentProvider: boolean;
       sessionKind: boolean;
     };
     /**
@@ -370,6 +372,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
     icons: {
       statusDot: true,
+      agentProvider: true,
       sessionKind: true,
     },
     showDetailsOnHover: true,

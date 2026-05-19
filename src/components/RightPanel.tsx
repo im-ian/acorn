@@ -48,6 +48,7 @@ import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
+import { AgentProviderIcon } from "../lib/agentProvider";
 import {
   invalidateGitRepositoryStatus,
   prefetchGitHubRepoStatus,
@@ -672,11 +673,17 @@ function PrSkeletonList({ count = 6 }: { count?: number }) {
 
 /**
  * Shaped placeholder for an Agents History row. Mirrors the real row's
- * structure — provider badge on the left, then title / preview / worktree /
+ * structure — provider icon on the left, then title / preview / worktree /
  * timestamp stacked on the right — so the panel doesn't reflow when items
  * arrive. Some rows skip the worktree bar to look like a real mixed list.
  */
-function HistorySkeletonRow({ index }: { index: number }) {
+function HistorySkeletonRow({
+  index,
+  showAgentProviderIcons,
+}: {
+  index: number;
+  showAgentProviderIcons: boolean;
+}) {
   const titleWidths = ["68%", "82%", "54%", "74%", "60%", "88%"];
   const previewWidths = ["92%", "76%", "60%", "84%"];
   const titleW = titleWidths[index % titleWidths.length];
@@ -688,7 +695,12 @@ function HistorySkeletonRow({ index }: { index: number }) {
       className="flex items-start gap-2 border-b border-border/40 px-3 py-2.5"
       style={{ animationDelay: `${index * 60}ms` }}
     >
-      <span className="mt-0.5 h-4 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
+      <span
+        className={cn(
+          "mt-0.5 shrink-0 animate-pulse rounded bg-fg-muted/15",
+          showAgentProviderIcons ? "size-5" : "h-4 w-12",
+        )}
+      />
       <div className="min-w-0 flex-1 space-y-1.5">
         <span
           className="block h-3 animate-pulse rounded bg-fg-muted/15"
@@ -1110,6 +1122,9 @@ function AgentHistoryTab({
   const createSession = useAppStore((s) => s.createSession);
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
+  const showAgentProviderIcons = useSettings(
+    (s) => s.settings.sessionDisplay.icons.agentProvider,
+  );
   // Hydrate from the module-level cache so re-opening a project shows its
   // list instantly. The accompanying fetch below still runs (SWR-style)
   // to surface new sessions created since the cached snapshot.
@@ -1259,83 +1274,110 @@ function AgentHistoryTab({
             aria-label={rt(t, "rightPanel.history.loading")}
           >
             {Array.from({ length: 8 }).map((_, i) => (
-              <HistorySkeletonRow key={i} index={i} />
+              <HistorySkeletonRow
+                key={i}
+                index={i}
+                showAgentProviderIcons={showAgentProviderIcons}
+              />
             ))}
           </div>
         ) : items.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.empty")} />
         ) : (
           <div className="divide-y divide-border/50">
-            {items.map((item) => (
-              <div
-                key={`${item.provider}:${item.id}:${item.transcript_path}`}
-                className="group cursor-default px-3 py-2.5 hover:bg-bg-elevated/60"
-                onDoubleClick={() => void runSession(item)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setMenu({ x: e.clientX, y: e.clientY, item });
-                }}
-              >
-                <div className="flex items-start gap-2">
-                  <span
-                    className={cn(
-                      "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                      item.provider === "codex"
-                        ? "bg-[#3867ff]/15 text-[#5f7dff]"
-                        : "bg-[#de7356]/15 text-[#de7356]",
-                    )}
-                  >
-                    {item.provider}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium text-fg">
-                      {item.title}
-                    </div>
-                    {item.preview ? (
-                      <div className="mt-1 max-h-8 overflow-hidden text-[11px] leading-4 text-fg-muted">
-                        {item.preview}
-                      </div>
-                    ) : null}
-                    {item.worktree ? (
-                      <Tooltip
-                        label={
-                          item.worktree.exists
-                            ? item.worktree.path
-                            : `${item.worktree.path} (${rt(t, "rightPanel.history.worktreeMissing")})`
-                        }
-                        side="bottom"
+            {items.map((item) => {
+              const providerTone =
+                item.provider === "codex"
+                  ? "bg-[#3867ff]/15 text-[#5f7dff]"
+                  : "bg-[#de7356]/15 text-[#de7356]";
+              return (
+                <div
+                  key={`${item.provider}:${item.id}:${item.transcript_path}`}
+                  className="group cursor-default px-3 py-2.5 hover:bg-bg-elevated/60"
+                  onDoubleClick={() => void runSession(item)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, item });
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    {showAgentProviderIcons ? (
+                      <span
+                        className={cn(
+                          "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded",
+                          providerTone,
+                        )}
                       >
-                        <div
-                          className={cn(
-                            "mt-1 flex min-w-0 items-center gap-1 text-[10.5px] font-mono",
+                        <Tooltip label={item.provider} side="right">
+                          <AgentProviderIcon
+                            provider={item.provider}
+                            className="size-3"
+                          />
+                        </Tooltip>
+                      </span>
+                    ) : (
+                      <span
+                        className={cn(
+                          "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                          providerTone,
+                        )}
+                      >
+                        {item.provider}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-fg">
+                        {item.title}
+                      </div>
+                      {item.preview ? (
+                        <div className="mt-1 max-h-8 overflow-hidden text-[11px] leading-4 text-fg-muted">
+                          {item.preview}
+                        </div>
+                      ) : null}
+                      {item.worktree ? (
+                        <Tooltip
+                          label={
                             item.worktree.exists
-                              ? "text-accent"
-                              : "text-fg-muted",
-                          )}
+                              ? item.worktree.path
+                              : `${item.worktree.path} (${rt(t, "rightPanel.history.worktreeMissing")})`
+                          }
+                          side="bottom"
                         >
-                          <GitBranch size={11} className="shrink-0" />
-                          <span
+                          <div
                             className={cn(
-                              "truncate",
-                              item.worktree.exists ? null : "line-through",
+                              "mt-1 flex min-w-0 items-center gap-1 text-[10.5px] font-mono",
+                              item.worktree.exists
+                                ? "text-accent"
+                                : "text-fg-muted",
                             )}
                           >
-                            {item.worktree.name}
+                            <GitBranch size={11} className="shrink-0" />
+                            <span
+                              className={cn(
+                                "truncate",
+                                item.worktree.exists ? null : "line-through",
+                              )}
+                            >
+                              {item.worktree.name}
+                            </span>
+                          </div>
+                        </Tooltip>
+                      ) : null}
+                      <div className="mt-1 flex min-w-0 items-center gap-2 text-[10.5px] text-fg-muted/80">
+                        <Tooltip
+                          label={absoluteTime(item.updated_at)}
+                          side="bottom"
+                        >
+                          <span className="shrink-0 font-mono">
+                            {relativeTime(item.updated_at, t)}
                           </span>
-                        </div>
-                      </Tooltip>
-                    ) : null}
-                    <div className="mt-1 flex min-w-0 items-center gap-2 text-[10.5px] text-fg-muted/80">
-                      <Tooltip label={absoluteTime(item.updated_at)} side="bottom">
-                        <span className="shrink-0 font-mono">
-                          {relativeTime(item.updated_at, t)}
-                        </span>
-                      </Tooltip>
+                        </Tooltip>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

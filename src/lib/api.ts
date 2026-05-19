@@ -12,6 +12,7 @@ import type {
   PullRequestDetailListing,
   PullRequestListing,
   Session,
+  SessionAgentProvider,
   SessionKind,
   SessionStatus,
   StagedFile,
@@ -266,9 +267,21 @@ export const api = {
   },
   detectSessionStatuses(
     ids: string[],
-  ): Promise<{ id: string; status: SessionStatus; branch: string | null }[]> {
+  ): Promise<
+    {
+      id: string;
+      status: SessionStatus;
+      agent_provider?: SessionAgentProvider | null;
+      branch: string | null;
+    }[]
+  > {
     return invoke<
-      { id: string; status: SessionStatus; branch: string | null }[]
+      {
+        id: string;
+        status: SessionStatus;
+        agent_provider?: SessionAgentProvider | null;
+        branch: string | null;
+      }[]
     >("detect_session_statuses", { ids });
   },
   /**

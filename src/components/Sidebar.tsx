@@ -40,6 +40,10 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
+import {
+  AgentProviderIcon,
+  resolveSessionAgentProvider,
+} from "../lib/agentProvider";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -68,6 +72,14 @@ const STATUS_DOT: Record<SessionStatus, string> = {
   needs_input: "bg-warning",
   failed: "bg-danger",
   completed: "bg-accent/60",
+};
+
+const STATUS_ICON: Record<SessionStatus, string> = {
+  idle: "text-fg-muted",
+  running: "text-accent animate-pulse",
+  needs_input: "text-warning",
+  failed: "text-danger",
+  completed: "text-accent/60",
 };
 
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
@@ -451,7 +463,12 @@ function renderDragOverlay(
     const repoPath = activeDragId.slice(PROJECT_DRAG_PREFIX.length);
     const group = projectGroups.find((g) => g.repoPath === repoPath);
     if (!group) return null;
-    return <ProjectHeaderPreview name={group.name} count={group.sessions.length} />;
+    return (
+      <ProjectHeaderPreview
+        name={group.name}
+        count={group.sessions.length}
+      />
+    );
   }
   if (activeDragId.startsWith(SESSION_DRAG_PREFIX)) {
     const sid = activeDragId.slice(SESSION_DRAG_PREFIX.length);
@@ -470,16 +487,18 @@ function ProjectHeaderPreview({
   count: number;
 }) {
   return (
-    <div className="flex items-center gap-1 rounded-md bg-bg-elevated/95 px-1 py-1.5 shadow-lg ring-1 ring-border/60">
-      <span className="flex shrink-0 items-center text-fg-muted/60">
+    <div className="flex min-h-8 items-center gap-1 rounded-md bg-bg-elevated/95 px-1 py-1.5 shadow-lg ring-1 ring-border/60">
+      <span className="flex size-4 shrink-0 items-center justify-center text-fg-muted/60">
         <GripVertical size={12} />
       </span>
-      <span className="flex shrink-0 items-center justify-center rounded p-1 text-fg-muted">
+      <span className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted">
         <ChevronRight size={14} />
       </span>
-      <span className="flex min-w-0 items-center gap-1.5 pr-2">
-        <span className="truncate text-sm font-medium text-fg">{name}</span>
-        <span className="ml-1 shrink-0 rounded bg-bg-elevated/80 px-1 text-[10px] text-fg-muted">
+      <span className="flex min-w-0 items-center gap-1.5 pr-2 leading-none">
+        <span className="truncate text-sm font-medium leading-5 text-fg">
+          {name}
+        </span>
+        <span className="ml-1 flex h-4 shrink-0 items-center rounded bg-bg-elevated/80 px-1 text-[10px] leading-none text-fg-muted">
           {count}
         </span>
       </span>
@@ -494,20 +513,38 @@ function SessionRowPreview({
   session: Session;
   t: Translator;
 }) {
+  const showAgentProviderIcons = useSettings(
+    (s) => s.settings.sessionDisplay.icons.agentProvider,
+  );
+  const agentProvider = showAgentProviderIcons
+    ? resolveSessionAgentProvider(session)
+    : null;
+
   return (
     <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
       <span className="mt-1 flex shrink-0 items-center text-fg-muted/60">
         <GripVertical size={10} />
       </span>
-      <span
-        className={cn(
-          "mt-1.5 size-1.5 shrink-0 rounded-full",
-          STATUS_DOT[session.status],
+      <span className="flex h-5 w-3 shrink-0 items-center justify-center">
+        {agentProvider ? (
+          <Tooltip label={agentProvider} side="right">
+            <AgentProviderIcon
+              provider={agentProvider}
+              className={cn("size-3", STATUS_ICON[session.status])}
+            />
+          </Tooltip>
+        ) : (
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              STATUS_DOT[session.status],
+            )}
+          />
         )}
-      />
+      </span>
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1">
-          <span className="truncate text-[13px] font-medium text-fg">
+        <span className="flex h-5 items-center gap-1">
+          <span className="truncate text-[13px] font-medium leading-5 text-fg">
             {session.name}
           </span>
           {session.isolated || session.in_worktree ? (
@@ -641,7 +678,7 @@ function ProjectGroupView({
         }}
         aria-label={`${sidebarText(t, "sidebar.aria.project")} ${project.name}`}
         className={cn(
-          "group flex items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
+          "group flex min-h-8 items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
@@ -655,7 +692,7 @@ function ProjectGroupView({
             {...listeners}
             onClick={(e) => e.stopPropagation()}
             aria-label={sidebarText(t, "sidebar.aria.dragToReorderProject")}
-            className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
+            className="invisible flex size-4 shrink-0 cursor-grab items-center justify-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
           >
             <GripVertical size={12} />
           </span>
@@ -672,18 +709,18 @@ function ProjectGroupView({
               : sidebarText(t, "sidebar.actions.collapseProject")
           }
           aria-expanded={!collapsed}
-          className="flex shrink-0 items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           <ChevronRight
             size={14}
             className={cn("transition-transform", !collapsed && "rotate-90")}
           />
         </button>
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className="truncate text-sm font-medium text-fg">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 leading-none">
+          <span className="truncate text-sm font-medium leading-5 text-fg">
             {project.name}
           </span>
-          <span className="ml-1 shrink-0 rounded bg-bg-elevated/80 px-1 text-[10px] text-fg-muted">
+          <span className="ml-1 flex h-4 shrink-0 items-center rounded bg-bg-elevated/80 px-1 text-[10px] leading-none text-fg-muted">
             {project.sessions.length}
           </span>
         </span>
@@ -697,7 +734,7 @@ function ProjectGroupView({
               e.stopPropagation();
               onAddSession(false, "regular");
             }}
-            className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
             aria-label={sidebarText(t, "sidebar.aria.newSessionInProject")}
           >
             <Plus size={12} />
@@ -713,7 +750,7 @@ function ProjectGroupView({
               e.stopPropagation();
               onAddSession(true, "regular");
             }}
-            className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
             aria-label={sidebarText(
               t,
               "sidebar.actions.newIsolatedSessionWorktree",
@@ -732,7 +769,7 @@ function ProjectGroupView({
               e.stopPropagation();
               onAddSession(false, "control");
             }}
-            className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
             aria-label={sidebarText(
               t,
               "sidebar.aria.newControlSessionInProject",
@@ -751,7 +788,7 @@ function ProjectGroupView({
               e.stopPropagation();
               onRemoveProject();
             }}
-            className="invisible rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover:visible"
+            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover:visible"
             aria-label={sidebarText(t, "sidebar.actions.closeProject")}
           >
             <X size={12} />
@@ -867,6 +904,7 @@ function SessionRow({
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const showAgentProviderIcons = sessionDisplay.icons.agentProvider;
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
     t,
@@ -920,6 +958,9 @@ function SessionRow({
     () => projectSessions.filter((s) => s.id !== session.id),
     [projectSessions, session.id],
   );
+  const agentProvider = showAgentProviderIcons
+    ? resolveSessionAgentProvider(session)
+    : null;
 
   const sessionMenuItems: ContextMenuItem[] = [
     {
@@ -1050,12 +1091,23 @@ function SessionRow({
           <GripVertical size={10} />
         </span>
         {sessionDisplay.icons.statusDot ? (
-          <span
-            className={cn(
-              "mt-1.5 size-1.5 shrink-0 rounded-full",
-              STATUS_DOT[session.status],
+          <span className="flex h-5 w-3 shrink-0 items-center justify-center">
+            {agentProvider ? (
+              <Tooltip label={agentProvider} side="right">
+                <AgentProviderIcon
+                  provider={agentProvider}
+                  className={cn("size-3", STATUS_ICON[session.status])}
+                />
+              </Tooltip>
+            ) : (
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  STATUS_DOT[session.status],
+                )}
+              />
             )}
-          />
+          </span>
         ) : null}
         <SessionRowLabel
           editing={editing}
@@ -1133,7 +1185,7 @@ function SessionRowLabel({
     liveInWorktree ?? (session.isolated || session.in_worktree);
   const body = (
     <span className="min-w-0 flex-1">
-      <span className="flex items-center gap-1">
+      <span className="flex h-5 items-center gap-1">
         {editing ? (
           <RenameInput
             initial={session.name}
@@ -1141,7 +1193,7 @@ function SessionRowLabel({
             onCancel={onCancelRename}
           />
         ) : (
-          <span className="truncate text-[13px] font-medium text-fg">
+          <span className="truncate text-[13px] font-medium leading-5 text-fg">
             {titleText}
           </span>
         )}
