@@ -456,8 +456,8 @@ export function Terminal({
       // `convertEol: true` that bare LF gains a phantom CR, so the cursor
       // jumps to column 0 mid-redraw; the following save/restore pair lands
       // at the wrong x and subsequent shell echo overwrites previously
-      // rendered cells (e.g. the prompt user "jthefloor" renders as
-      // "rhefloor"). PTY output is the only writer here, so `false` is the
+      // rendered cells (e.g. the prompt user "developer" renders as
+      // "develope"). PTY output is the only writer here, so `false` is the
       // correct setting.
       convertEol: false,
     });
