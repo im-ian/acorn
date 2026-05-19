@@ -49,6 +49,7 @@ import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
 import {
+  invalidateGitHubRepoStatus,
   prefetchGitHubRepoStatus,
   useIsGitHubRepo,
 } from "../lib/useIsGitHubRepo";
@@ -180,7 +181,16 @@ export function RightPanel() {
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath);
   const sessionHostRepoPath =
     active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
-  const invalidations = useRightPanelInvalidations(repoPath);
+  const [githubRepoProbeVersion, setGithubRepoProbeVersion] = useState(0);
+  const invalidateGitHubProbe = useCallback(() => {
+    if (!repoPath) return;
+    invalidateGitHubRepoStatus(repoPath);
+    setGithubRepoProbeVersion((version) => version + 1);
+  }, [repoPath]);
+  const invalidations = useRightPanelInvalidations(
+    repoPath,
+    invalidateGitHubProbe,
+  );
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
   const [prDetail, setPrDetail] = useState<{
     repoPath: string;
@@ -205,7 +215,7 @@ export function RightPanel() {
   // null while the first probe is in flight. Keep GitHub hidden until we know
   // the path is a git repo with a GitHub origin so non-git projects never show
   // GitHub-only actions.
-  const isGitHubRepo = useIsGitHubRepo(repoPath);
+  const isGitHubRepo = useIsGitHubRepo(repoPath, githubRepoProbeVersion);
   const githubVisible = isGitHubRepo === true;
 
   const visibleTabsByGroup = useMemo<
@@ -791,6 +801,7 @@ function useSafetyRefreshInterval(
 
 function useRightPanelInvalidations(
   repoPath: string | null,
+  onGitMetadataChanged?: () => void,
 ): RightPanelInvalidationKeys {
   const [keys, setKeys] = useState<RightPanelInvalidationKeys>({
     commits: 0,
@@ -826,6 +837,9 @@ function useRightPanelInvalidations(
 
     void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
       if (cancelled) return;
+      if (event.payload.dotgit_changed) {
+        onGitMetadataChanged?.();
+      }
       const invalidation = classifyRightPanelFsChange(
         repoPath,
         event.payload.paths,
@@ -848,7 +862,7 @@ function useRightPanelInvalidations(
       if (flushTimer) clearTimeout(flushTimer);
       if (unlisten) unlisten();
     };
-  }, [repoPath]);
+  }, [onGitMetadataChanged, repoPath]);
 
   return keys;
 }

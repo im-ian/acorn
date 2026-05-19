@@ -50,12 +50,14 @@ vi.mock("./FileExplorer", () => ({
 }));
 
 import { api } from "../lib/api";
+import { listen } from "@tauri-apps/api/event";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { __resetIsGitHubRepoCacheForTests } from "../lib/useIsGitHubRepo";
 import { useAppStore } from "../store";
 import { RightPanel } from "./RightPanel";
 
 const mockApi = vi.mocked(api);
+const mockListen = vi.mocked(listen);
 const REPO = "/tmp/acorn-test-repo";
 const REPO_B = "/tmp/acorn-other-repo";
 
@@ -63,6 +65,19 @@ async function flushPromises() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+  });
+}
+
+function emitFsChanged(payload: {
+  paths: string[];
+  dotgit_changed: boolean;
+}) {
+  const listener = mockListen.mock.calls[mockListen.mock.calls.length - 1]?.[1];
+  if (!listener) throw new Error("fs listener not registered");
+  listener({
+    event: "fs-changed",
+    id: 1,
+    payload,
   });
 }
 
@@ -200,5 +215,44 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
     expect(mockApi.listPullRequests).not.toHaveBeenCalled();
     expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
+  });
+
+  it("reprobes GitHub visibility when git metadata changes", async () => {
+    mockApi.isGitRepository.mockResolvedValueOnce(false);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+    expect(container.textContent).not.toContain("GitHub");
+    expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
+
+    mockApi.isGitRepository.mockResolvedValueOnce(true);
+    mockApi.githubOriginSlug.mockResolvedValueOnce("im-ian/acorn");
+    await act(async () => {
+      emitFsChanged({ paths: [], dotgit_changed: true });
+    });
+    await flushPromises();
+
+    expect(mockApi.isGitRepository).toHaveBeenCalledTimes(2);
+    expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
+    expect(container.textContent).toContain("GitHub");
+  });
+
+  it("hides GitHub tabs when git metadata is removed", async () => {
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+    expect(container.textContent).toContain("GitHub");
+
+    mockApi.isGitRepository.mockResolvedValueOnce(false);
+    await act(async () => {
+      emitFsChanged({ paths: [], dotgit_changed: true });
+    });
+    await flushPromises();
+
+    expect(mockApi.isGitRepository).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain("GitHub");
   });
 });
