@@ -25,6 +25,16 @@ use acorn_session::{Project, Session, SessionKind, SessionStatus};
 
 use serde::Serialize;
 
+async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> AppResult<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Other(format!("{label} task failed: {e}")))?
+}
+
 #[derive(Serialize)]
 pub struct AcornIpcStatus {
     /// Filesystem path to the `acorn-ipc` binary that ships next to the
@@ -111,11 +121,10 @@ pub async fn list_agent_history(
     repo_path: String,
     limit: Option<usize>,
 ) -> AppResult<Vec<AgentHistoryItem>> {
-    tauri::async_runtime::spawn_blocking(move || {
+    run_blocking("list_agent_history", move || {
         agent_history::list_agent_history(PathBuf::from(repo_path), limit)
     })
     .await
-    .map_err(|e| crate::error::AppError::Other(format!("history scan join failed: {e}")))?
 }
 
 #[tauri::command]
@@ -2073,7 +2082,10 @@ pub async fn commit_web_url(repo_path: String, sha: String) -> AppResult<Option<
 /// right panel for non-GitHub repos. Read-only and cheap — no network calls.
 #[tauri::command]
 pub async fn github_origin_slug(repo_path: String) -> AppResult<Option<String>> {
-    git_ops::github_owner_repo(&PathBuf::from(repo_path))
+    run_blocking("github_origin_slug", move || {
+        git_ops::github_owner_repo(&PathBuf::from(repo_path))
+    })
+    .await
 }
 
 /// Spawn an external editor on `path`. Used by the "Open in editor" action
@@ -2112,12 +2124,15 @@ pub async fn list_pull_requests(
     limit: Option<u32>,
     query: Option<String>,
 ) -> AppResult<PullRequestListing> {
-    pull_requests::list_pull_requests(
-        &PathBuf::from(repo_path),
-        state.unwrap_or(PrStateFilter::Open),
-        limit.unwrap_or(50),
-        query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-    )
+    run_blocking("list_pull_requests", move || {
+        pull_requests::list_pull_requests(
+            &PathBuf::from(repo_path),
+            state.unwrap_or(PrStateFilter::Open),
+            limit.unwrap_or(50),
+            query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2182,7 +2197,10 @@ pub async fn list_workflow_runs(
     repo_path: String,
     limit: Option<u32>,
 ) -> AppResult<WorkflowRunsListing> {
-    pull_requests::list_workflow_runs(&PathBuf::from(repo_path), limit.unwrap_or(50))
+    run_blocking("list_workflow_runs", move || {
+        pull_requests::list_workflow_runs(&PathBuf::from(repo_path), limit.unwrap_or(50))
+    })
+    .await
 }
 
 #[tauri::command]
