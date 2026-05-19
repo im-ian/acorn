@@ -166,4 +166,31 @@ mod tests {
         assert_eq!(p, custom);
         unsafe { std::env::remove_var(ENV_DAEMON_SOCKET_OVERRIDE) };
     }
+
+    #[test]
+    fn profile_env_selects_profile_subdir_under_acorn_app_dir() {
+        let _g = ENV_LOCK.lock();
+        unsafe {
+            std::env::remove_var(ENV_DATA_DIR_OVERRIDE);
+            std::env::set_var("ACORN_PROFILE", "unit-test");
+        }
+
+        let dir = data_dir().unwrap();
+        let rendered = dir.to_string_lossy();
+        assert!(
+            rendered.contains("io.im-ian.acorn") || rendered.contains("acorn"),
+            "profile dirs should stay rooted under the acorn app dir, got {dir:?}"
+        );
+        assert!(
+            !rendered.contains("acorn-dev"),
+            "profiles should not switch the app name to acorn-dev, got {dir:?}"
+        );
+        assert!(
+            dir.ends_with("profiles/unit-test"),
+            "profile data should live under profiles/<name>, got {dir:?}"
+        );
+
+        unsafe { std::env::remove_var("ACORN_PROFILE") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
