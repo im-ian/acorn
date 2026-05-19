@@ -214,4 +214,33 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn copies_legacy_persistence_file_only_when_profile_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "acorn-persist-migrate-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let legacy = tmp.join("legacy");
+        let profile = tmp.join("profile");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&profile).unwrap();
+
+        fs::write(legacy.join(SESSIONS_FILE), b"legacy").unwrap();
+        copy_legacy_file_if_missing(&legacy, &profile, SESSIONS_FILE).unwrap();
+        assert_eq!(fs::read(profile.join(SESSIONS_FILE)).unwrap(), b"legacy");
+
+        fs::write(legacy.join(PROJECTS_FILE), b"legacy-projects").unwrap();
+        fs::write(profile.join(PROJECTS_FILE), b"profile-projects").unwrap();
+        copy_legacy_file_if_missing(&legacy, &profile, PROJECTS_FILE).unwrap();
+        assert_eq!(
+            fs::read(profile.join(PROJECTS_FILE)).unwrap(),
+            b"profile-projects"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }
