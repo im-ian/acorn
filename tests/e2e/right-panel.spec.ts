@@ -296,10 +296,15 @@ test.describe("right panel: groups", () => {
     // Code group is always there; Agents group is too. GitHub must be gone.
     await expect(page.getByRole("button", { name: "Code" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Agents" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Files", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Staged" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Commits" })).toBeVisible();
     await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
   });
 
-  test("GitHub group is hidden when project is not a git repository", async ({
+  test("git-backed tabs are hidden when project is not a git repository", async ({
     page,
     tauri,
   }) => {
@@ -310,6 +315,11 @@ test.describe("right panel: groups", () => {
 
     await expect(page.getByRole("button", { name: "Code" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Agents" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Files", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Staged" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Commits" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
   });
 
