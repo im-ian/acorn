@@ -9,22 +9,33 @@ import { api } from "./api";
  */
 const cache = new Map<string, boolean>();
 const inFlight = new Map<string, Promise<boolean>>();
+const generations = new Map<string, number>();
+
+function generationOf(repoPath: string): number {
+  return generations.get(repoPath) ?? 0;
+}
 
 async function probe(repoPath: string): Promise<boolean> {
   const cached = cache.get(repoPath);
   if (cached !== undefined) return cached;
   const existing = inFlight.get(repoPath);
   if (existing) return existing;
+  const generation = generationOf(repoPath);
   const promise = api
     .isGitRepository(repoPath)
     .then(async (isGitRepo) => {
       if (!isGitRepo) {
-        cache.set(repoPath, false);
+        if (generationOf(repoPath) === generation) {
+          cache.set(repoPath, false);
+        }
         return false;
       }
       const slug = await api.githubOriginSlug(repoPath);
       const value = slug !== null;
-      cache.set(repoPath, value);
+      if (generationOf(repoPath) === generation) {
+        cache.set(repoPath, value);
+      }
+      if (generationOf(repoPath) !== generation) return false;
       return value;
     })
     .catch((error) => {
@@ -34,7 +45,9 @@ async function probe(repoPath: string): Promise<boolean> {
       return false;
     })
     .finally(() => {
-      inFlight.delete(repoPath);
+      if (inFlight.get(repoPath) === promise) {
+        inFlight.delete(repoPath);
+      }
     });
   inFlight.set(repoPath, promise);
   return promise;
@@ -44,11 +57,20 @@ export function prefetchGitHubRepoStatus(repoPath: string): Promise<boolean> {
   return probe(repoPath);
 }
 
+export function invalidateGitHubRepoStatus(repoPath: string): void {
+  cache.delete(repoPath);
+  inFlight.delete(repoPath);
+  generations.set(repoPath, generationOf(repoPath) + 1);
+}
+
 /**
  * Returns `true` when `repoPath` is inside a git repo with a GitHub `origin`
  * remote, `false` otherwise, or `null` while the first probe is in flight.
  */
-export function useIsGitHubRepo(repoPath: string | null): boolean | null {
+export function useIsGitHubRepo(
+  repoPath: string | null,
+  refreshKey = 0,
+): boolean | null {
   const [state, setState] = useState<boolean | null>(() =>
     repoPath ? (cache.get(repoPath) ?? null) : null,
   );
@@ -72,7 +94,7 @@ export function useIsGitHubRepo(repoPath: string | null): boolean | null {
     return () => {
       cancelled = true;
     };
-  }, [repoPath]);
+  }, [refreshKey, repoPath]);
 
   return state;
 }
@@ -81,4 +103,5 @@ export function useIsGitHubRepo(repoPath: string | null): boolean | null {
 export function __resetIsGitHubRepoCacheForTests(): void {
   cache.clear();
   inFlight.clear();
+  generations.clear();
 }
