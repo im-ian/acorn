@@ -870,7 +870,7 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
+          "group relative flex min-w-[80px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
@@ -931,7 +931,7 @@ function TabItem({
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
-            "rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+            "ml-auto mr-1 shrink-0 rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
             active
               ? "opacity-70 hover:opacity-100"
               : "opacity-0 group-hover:opacity-70 hover:opacity-100",
