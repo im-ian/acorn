@@ -78,10 +78,11 @@ describe("Sidebar source contract", () => {
     );
   });
 
-  it("session row classes are tightened (py-1, gap-1.5, status dot 1.5, name 13px, subtitle 11px)", () => {
+  it("session row classes are tightened (py-1, gap-1.5, status icon slot, name 13px, subtitle 11px)", () => {
     expect(SIDEBAR_SOURCE).toContain("gap-1.5 rounded-md px-2 py-1 text-left");
-    expect(SIDEBAR_SOURCE).toContain("size-1.5 shrink-0 rounded-full");
-    expect(SIDEBAR_SOURCE).toContain("truncate text-[13px] font-medium text-fg");
+    expect(SIDEBAR_SOURCE).toContain("flex h-5 w-3 shrink-0 items-center justify-center");
+    expect(SIDEBAR_SOURCE).toContain("size-1.5 rounded-full");
+    expect(SIDEBAR_SOURCE).toContain("truncate text-[13px] font-medium leading-5 text-fg");
     expect(SIDEBAR_SOURCE).toContain("block truncate text-[11px] text-fg-muted");
   });
 
@@ -90,7 +91,7 @@ describe("Sidebar source contract", () => {
       /aria-label=\{\s*collapsed\s*\?\s*sidebarText\(t, "sidebar\.actions\.expandProject"\)\s*:\s*sidebarText\(t, "sidebar\.actions\.collapseProject"\)\s*\}/,
     );
     expect(SIDEBAR_SOURCE).toMatch(
-      /flex shrink-0 items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg/,
+      /flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg/,
     );
   });
 
