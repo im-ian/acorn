@@ -96,7 +96,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 - **Todos** — 진행 중인 작업 (**Claude Code 전용** — transcript의 `TodoWrite` 이벤트 파싱)
 - **Commits** — 현재 worktree의 커밋 + Diff 모달, GitHub 작성자 정보
 - **Staged** — 스테이징된 변경
-- **Pull Requests** — 저장소 PR 리스트, 검색, 체크 상태 배지, 상세 보기에서 머지/클로즈
+- **Pull Requests** — 저장소 PR 리스트, 검색, 라벨/브랜치, 체크 상태와 CI 실행 시간, 상세 보기에서 머지/클로즈
   - Conversation / Commits / Checks / Files 탭
   - PR 본문의 task checkbox 토글
   - 머지 메시지를 설치된 AI CLI(`claude` / `codex` / `gemini` / `ollama` / `llm`)로 자동 생성
