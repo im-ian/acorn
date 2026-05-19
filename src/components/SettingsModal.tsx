@@ -603,6 +603,12 @@ function GithubSettings() {
           checked={settings.github.showAvatars}
           onChange={(v) => patchGithub({ showAvatars: v })}
         />
+        <CheckboxRow
+          label={st(t, "settings.github.showLabels.label")}
+          description={st(t, "settings.github.showLabels.description")}
+          checked={settings.github.showLabels}
+          onChange={(v) => patchGithub({ showLabels: v })}
+        />
       </Field>
     </section>
   );

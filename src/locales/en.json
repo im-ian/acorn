@@ -93,6 +93,10 @@
       "showAuthorAvatars": {
         "label": "Show author avatars",
         "description": "Render the GitHub avatar next to each PR row."
+      },
+      "showLabels": {
+        "label": "Show labels",
+        "description": "Render GitHub labels next to each PR row title."
       }
     },
     "appearance": {
