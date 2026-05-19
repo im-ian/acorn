@@ -1195,6 +1195,11 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   requestRemoveProject(repoPath) {
+    const hasSessions = get().sessions.some((s) => s.repo_path === repoPath);
+    if (!hasSessions) {
+      void get().removeProject(repoPath, false);
+      return;
+    }
     set({ pendingRemoveProject: repoPath });
   },
 

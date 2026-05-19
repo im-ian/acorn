@@ -211,7 +211,7 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
-  test("Close project removes the project after confirming", async ({
+  test("Close project skips the confirmation modal when the project has no sessions", async ({
     page,
     tauri,
   }) => {
@@ -248,14 +248,80 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
 
     // Hover the project header to reveal the (visually hidden) Close button,
-    // then click it. This opens the RemoveProjectDialog.
+    // then click it. With no sessions there should be no confirmation dialog.
     const projectRow = page.getByRole("button", { name: "Project demo" });
     await projectRow.hover();
     await page.getByRole("button", { name: "Close project" }).first().click();
 
-    // RemoveProjectDialog renders a Modal without an explicit aria-label,
-    // so we identify it by its heading. With no isolated worktrees the
-    // primary action button is also labeled "Close project".
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByText(/No projects yet/i)).toBeVisible();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ repoPath: string; removeWorktrees: boolean }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0].repoPath).toBe("/tmp/demo");
+    expect(calls[0].removeWorktrees).toBe(false);
+  });
+
+  test("Close project still shows the confirmation modal when sessions exist", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => {
+      const w = window as unknown as { __projectRemoved?: boolean };
+      return w.__projectRemoved
+        ? []
+        : [
+            {
+              repo_path: "/tmp/demo",
+              name: "demo",
+              created_at: "2026-01-01T00:00:00Z",
+              position: 0,
+            },
+          ];
+    });
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __projectRemoved?: boolean };
+      return w.__projectRemoved
+        ? []
+        : [
+            {
+              id: "sess-1",
+              name: "work",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo",
+              branch: "main",
+              isolated: false,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:05Z",
+              last_message: null,
+            },
+          ];
+    });
+    await tauri.handle("remove_project", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __projectRemoved?: boolean;
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      w.__projectRemoved = true;
+      return null;
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("listitem").filter({ hasText: "demo" }),
+    ).toBeVisible();
+
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.hover();
+    await page.getByRole("button", { name: "Close project" }).first().click();
+
     const confirmDialog = page.getByRole("dialog");
     await expect(
       confirmDialog.getByRole("heading", { name: "Close project" }),
