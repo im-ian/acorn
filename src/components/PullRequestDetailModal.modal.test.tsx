@@ -135,6 +135,41 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     expect(updated[1]?.checked).toBe(true);
   });
 
+  it("uses the API-provided conversation author avatar URL", async () => {
+    const detail = fakeDetail("");
+    detail.comments = [
+      {
+        author: "linear-code",
+        author_avatar_url:
+          "https://avatars.githubusercontent.com/in/1658531?s=80&v=4",
+        body: "Figma parity note",
+        created_at: "2026-05-19T02:00:00Z",
+      },
+    ];
+    mockApi.getPullRequestDetail.mockResolvedValueOnce({
+      kind: "ok",
+      account: "tester",
+      detail,
+    });
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const img = document.body.querySelector<HTMLImageElement>(
+      'img[title="linear-code"]',
+    );
+    expect(img?.src).toBe(
+      "https://avatars.githubusercontent.com/in/1658531?s=56&v=4",
+    );
+  });
+
   it("reverts and surfaces an error when updatePullRequestBody rejects", async () => {
     mockApi.getPullRequestDetail.mockResolvedValueOnce({
       kind: "ok",

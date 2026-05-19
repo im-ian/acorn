@@ -1024,6 +1024,7 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={comment.author}
+          avatarUrl={comment.author_avatar_url}
           size={28}
           nameClass="text-[12.5px] font-semibold tracking-tight"
         />
@@ -1054,6 +1055,7 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={review.author}
+          avatarUrl={review.author_avatar_url}
           size={28}
           nameClass="text-[12.5px] font-semibold tracking-tight"
         />

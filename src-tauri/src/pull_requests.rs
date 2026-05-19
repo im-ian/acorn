@@ -650,6 +650,7 @@ fn git_user_email(repo_path: &Path) -> Option<String> {
 #[derive(Debug, Clone, Serialize)]
 pub struct PullRequestComment {
     pub author: String,
+    pub author_avatar_url: Option<String>,
     pub body: String,
     pub created_at: String,
 }
@@ -657,6 +658,7 @@ pub struct PullRequestComment {
 #[derive(Debug, Clone, Serialize)]
 pub struct PullRequestReview {
     pub author: String,
+    pub author_avatar_url: Option<String>,
     /// Review state from GitHub: `APPROVED` / `CHANGES_REQUESTED` / `COMMENTED` / `DISMISSED` / `PENDING`.
     pub state: String,
     pub body: String,
@@ -801,14 +803,23 @@ fn enrich_image_previews_against_refs(
 }
 
 fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> PullRequestDetail {
+    let actor_avatars = view
+        .actor_avatars
+        .as_ref()
+        .map(|avatars| avatars.by_login.clone())
+        .unwrap_or_default();
     let comments = view
         .comments
         .unwrap_or_default()
         .into_iter()
-        .map(|c| PullRequestComment {
-            author: c.author.login.unwrap_or_else(|| "unknown".to_string()),
-            body: c.body.unwrap_or_default(),
-            created_at: c.created_at.unwrap_or_default(),
+        .map(|c| {
+            let author = c.author.login.unwrap_or_else(|| "unknown".to_string());
+            PullRequestComment {
+                author_avatar_url: actor_avatars.get(&author).cloned(),
+                author,
+                body: c.body.unwrap_or_default(),
+                created_at: c.created_at.unwrap_or_default(),
+            }
         })
         .collect();
 
@@ -826,11 +837,15 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
                     .map(|s| s == "APPROVED" || s == "CHANGES_REQUESTED" || s == "DISMISSED")
                     .unwrap_or(false)
         })
-        .map(|r| PullRequestReview {
-            author: r.author.login.unwrap_or_else(|| "unknown".to_string()),
-            state: r.state.unwrap_or_default(),
-            body: r.body.unwrap_or_default(),
-            submitted_at: r.submitted_at.unwrap_or_default(),
+        .map(|r| {
+            let author = r.author.login.unwrap_or_else(|| "unknown".to_string());
+            PullRequestReview {
+                author_avatar_url: actor_avatars.get(&author).cloned(),
+                author,
+                state: r.state.unwrap_or_default(),
+                body: r.body.unwrap_or_default(),
+                submitted_at: r.submitted_at.unwrap_or_default(),
+            }
         })
         .collect();
 
@@ -934,8 +949,85 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
         return Err(AppError::Other(msg));
     }
 
+    let mut view: GhPullRequestView = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
+    view.actor_avatars = Some(resolve_pr_actor_avatars(&view, token));
+    Ok(view)
+}
+
+#[derive(Debug, Default, Clone)]
+struct PrActorAvatars {
+    by_login: HashMap<String, String>,
+}
+
+fn resolve_pr_actor_avatars(view: &GhPullRequestView, token: &str) -> PrActorAvatars {
+    let mut logins = Vec::new();
+    for comment in view.comments.as_deref().unwrap_or(&[]) {
+        if let Some(login) = comment.author.login.as_deref() {
+            logins.push(login.to_string());
+        }
+    }
+    for review in view.reviews.as_deref().unwrap_or(&[]) {
+        if let Some(login) = review.author.login.as_deref() {
+            logins.push(login.to_string());
+        }
+    }
+    logins.sort();
+    logins.dedup();
+
+    let mut by_login = HashMap::new();
+    for login in logins {
+        if let Some(url) = resolve_actor_avatar_url(&login, token) {
+            by_login.insert(login, url);
+        }
+    }
+    PrActorAvatars { by_login }
+}
+
+fn resolve_actor_avatar_url(login: &str, token: &str) -> Option<String> {
+    let user_endpoint = format!("users/{login}");
+    if let Some(url) = gh_api_json::<GhRestUser>(&user_endpoint, token)
+        .ok()
+        .and_then(|u| u.avatar_url)
+    {
+        return Some(url);
+    }
+
+    let app_endpoint = format!("apps/{login}");
+    gh_api_json::<GhRestApp>(&app_endpoint, token)
+        .ok()
+        .map(|app| format!("https://avatars.githubusercontent.com/in/{}?v=4", app.id))
+}
+
+fn gh_api_json<T: serde::de::DeserializeOwned>(endpoint: &str, token: &str) -> AppResult<T> {
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["api", endpoint]);
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh api {endpoint} exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
     serde_json::from_slice(&output.stdout)
-        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))
+        .map_err(|e| AppError::Other(format!("failed to parse gh api output: {e}")))
+}
+
+#[derive(Debug, Deserialize)]
+struct GhRestUser {
+    #[serde(rename = "avatar_url")]
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhRestApp {
+    id: u64,
 }
 
 pub fn get_pull_request_commit_diff(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
@@ -1198,6 +1290,8 @@ struct GhPullRequestView {
     #[serde(rename = "statusCheckRollup")]
     status_check_rollup: Option<Vec<GhCheck>>,
     commits: Option<Vec<GhCommit>>,
+    #[serde(skip)]
+    actor_avatars: Option<PrActorAvatars>,
 }
 
 #[derive(Debug, Deserialize)]

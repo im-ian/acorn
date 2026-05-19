@@ -170,12 +170,14 @@ export type PullRequestListing =
 
 export interface PullRequestComment {
   author: string;
+  author_avatar_url: string | null;
   body: string;
   created_at: string;
 }
 
 export interface PullRequestReview {
   author: string;
+  author_avatar_url: string | null;
   /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING */
   state: string;
   body: string;
