@@ -67,6 +67,20 @@ pnpm run build          # tsc + vite build
 
 `src-tauri/binaries/acorn-ipc-<target-triple>` is `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without it, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `pnpm run build:sidecar` once per worktree (and again after any IPC change); plain `cargo build -p acorn-ipc --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
 
+**Launching `tauri dev` from inside a control session.** Acorn injects `ACORN_DATA_DIR` (and `ACORN_AGENT_STATE_DIR`, `ACORN_RESUME_TOKEN`, `ACORN_STAGED_REV`) into every control-session PTY so the bundled CLIs talk to the host profile. `acorn-paths::data_dir` honours `ACORN_DATA_DIR` ahead of the debug/release profile fallback, so a plain `pnpm run tauri dev` from that shell silently runs the debug build against `profiles/prod` — same daemon, same `sessions.json`, same staged shell-init dir as the installed app. Strip the overrides before launching:</p>
+
+```sh
+env -u ACORN_DATA_DIR \
+    -u ACORN_AGENT_STATE_DIR \
+    -u ACORN_RESUME_TOKEN \
+    -u ACORN_STAGED_REV \
+    -u ACORN_USER_ZDOTDIR \
+    ACORN_PROFILE=dev \
+    pnpm run tauri dev
+```
+
+Outside a control session (your own login shell, CI) the overrides aren't set, so a plain `pnpm run tauri dev` already lands on `profiles/dev`. See [`docs/CONTROL_SESSIONS.md`](docs/CONTROL_SESSIONS.md#the-acorn-ipc-cli) for the full env table.
+
 ## Reading webview logs in dev
 
 `vite-console-forward-plugin` is wired in `vite.config.ts` (dev only). Every `console.log` / `warn` / `error` / `info` / `debug` call inside the running webview is POSTed to the Vite dev server and printed to the same terminal `pnpm run tauri dev` is logging to, prefixed with `[browser]`. AI agents and humans can read app logs without opening the WKWebView inspector (which is blocked anyway by the keybinding guards in `src/main.tsx`).
