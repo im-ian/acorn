@@ -13,7 +13,7 @@ describe("terminal scrollback restore hygiene", () => {
   it("does not restore a shell prompt with no session content", () => {
     expect(
       shouldRestoreScrollback(
-        "jthefloor@jthefloorui-MacBookPro acorn %     \r\n",
+        "developer@workstation acorn %     \r\n",
       ),
     ).toBe(false);
   });
@@ -29,7 +29,7 @@ describe("terminal scrollback restore hygiene", () => {
 
   it("keeps real command output restorable", () => {
     const saved = prepareScrollbackForSave(
-      "jthefloor@host acorn % npm test\r\nPASS src/lib/foo.test.ts\r\njthefloor@host acorn % ",
+      "developer@host acorn % npm test\r\nPASS src/lib/foo.test.ts\r\ndeveloper@host acorn % ",
     );
 
     expect(saved).toContain("PASS src/lib/foo.test.ts");
