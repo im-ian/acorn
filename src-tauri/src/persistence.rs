@@ -54,8 +54,21 @@ fn copy_legacy_file_if_missing(
     Ok(())
 }
 
+fn data_dir_override_is_set() -> bool {
+    std::env::var(acorn_paths::ENV_DATA_DIR_OVERRIDE)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+fn should_migrate_legacy_prod_files() -> AppResult<bool> {
+    if data_dir_override_is_set() {
+        return Ok(false);
+    }
+    Ok(acorn_paths::effective_profile()? == acorn_paths::PROD_PROFILE)
+}
+
 fn migrate_legacy_prod_files(profile_dir: &Path) -> AppResult<()> {
-    if acorn_paths::effective_profile()? != acorn_paths::PROD_PROFILE {
+    if !should_migrate_legacy_prod_files()? {
         return Ok(());
     }
     let legacy_base = acorn_paths::base_data_dir()?;
@@ -203,6 +216,9 @@ pub fn save_projects(projects: &[Project]) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn data_dir_is_resolvable() {
@@ -271,5 +287,18 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn legacy_migration_skips_explicit_data_dir_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(acorn_paths::ENV_DATA_DIR_OVERRIDE, "/tmp/acorn-explicit-data-dir");
+            std::env::remove_var(acorn_paths::ENV_PROFILE);
+        }
+
+        assert!(!should_migrate_legacy_prod_files().unwrap());
+
+        unsafe { std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE) };
     }
 }
