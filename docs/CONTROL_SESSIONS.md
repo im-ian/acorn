@@ -93,6 +93,36 @@ to select another profile, or `ACORN_DATA_DIR=<path>` to pin all runtime
 state, IPC sockets, daemon sockets, and staged shell init files to an
 explicit directory.
 
+> **Gotcha for agents running inside a control session.** Acorn injects
+> `ACORN_DATA_DIR` into the PTY env so the bundled CLIs talk to the right
+> profile. `acorn-paths::data_dir` resolves `ACORN_DATA_DIR` **before** the
+> profile fallback (see `src-tauri/crates/acorn-paths/src/lib.rs`), so
+> running `pnpm run tauri dev` from that shell makes the debug build inherit
+> the host's `profiles/prod` directory — it reuses the prod sessions, prod
+> daemon socket, and prod sidecar persistence, even though it is a debug
+> binary. The dev app and the installed app then fight over the same daemon
+> and `sessions.json`.
+>
+> When launching `tauri dev` from inside a control session, strip the
+> inherited overrides (and any other prod-only env Acorn injects) and pin
+> the dev profile explicitly:
+>
+> ```sh
+> env -u ACORN_DATA_DIR \
+>     -u ACORN_AGENT_STATE_DIR \
+>     -u ACORN_RESUME_TOKEN \
+>     -u ACORN_STAGED_REV \
+>     -u ACORN_USER_ZDOTDIR \
+>     ACORN_PROFILE=dev \
+>     pnpm run tauri dev
+> ```
+>
+> The same caveat applies to any process that should run in dev-profile
+> isolation while being launched from a control-session shell — including
+> `pnpm exec playwright test` if it spawns the bundled `acornd` sidecar.
+> Outside a control session (your own login shell, CI) there is nothing to
+> strip; debug builds already default to `profiles/dev` on their own.
+
 ### Install
 
 `acorn-ipc` ships inside the Acorn `.app` bundle (Tauri's `externalBin`
