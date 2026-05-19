@@ -21,7 +21,7 @@ use crate::worktree;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::AgentKind as StatusAgentKind;
-use acorn_session::{Project, Session, SessionKind, SessionStatus};
+use acorn_session::{Project, Session, SessionAgentProvider, SessionKind, SessionStatus};
 
 use serde::Serialize;
 
@@ -393,6 +393,11 @@ fn enrich_session(mut s: Session) -> Session {
         s.branch = branch;
     }
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
+    s.agent_provider =
+        crate::agent_resume::live_transcript(s.id).map(|transcript| match transcript.kind {
+            crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
+            crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
+        });
     s
 }
 
@@ -1829,6 +1834,7 @@ pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Ve
 pub struct SessionStatusEntry {
     pub id: String,
     pub status: SessionStatus,
+    pub agent_provider: Option<SessionAgentProvider>,
     /// Current branch read live from the session's worktree on each poll.
     /// `None` when the worktree has no readable HEAD (e.g. detached, or
     /// path was deleted out from under acorn). Lets the frontend reflect
@@ -1904,9 +1910,7 @@ pub async fn detect_session_statuses(
             let transcript = match live {
                 Some(t) => {
                     let kind = match t.kind {
-                        agent_resume::AgentKind::Claude => {
-                            acorn_session::status::AgentKind::Claude
-                        }
+                        agent_resume::AgentKind::Claude => acorn_session::status::AgentKind::Claude,
                         agent_resume::AgentKind::Codex => acorn_session::status::AgentKind::Codex,
                     };
                     Some((t.path, kind))
@@ -1924,6 +1928,9 @@ pub async fn detect_session_statuses(
                 transcript.is_some(),
                 live_agent_kind,
             );
+            let agent_provider = live_agent_kind
+                .or_else(|| transcript.as_ref().map(|(_, kind)| *kind))
+                .map(status_agent_kind_to_provider);
             let status = session_status::detect(transcript, previous, shell_hint);
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
@@ -1950,9 +1957,21 @@ pub async fn detect_session_statuses(
             if let Some(uuid) = parsed_id {
                 let _ = state.sessions.refresh_status(&uuid, status);
             }
-            SessionStatusEntry { id, status, branch }
+            SessionStatusEntry {
+                id,
+                status,
+                agent_provider,
+                branch,
+            }
         })
         .collect())
+}
+
+fn status_agent_kind_to_provider(kind: StatusAgentKind) -> SessionAgentProvider {
+    match kind {
+        StatusAgentKind::Claude => SessionAgentProvider::Claude,
+        StatusAgentKind::Codex => SessionAgentProvider::Codex,
+    }
 }
 
 /// One pass over `sys.processes()` that yields parent→children adjacency.

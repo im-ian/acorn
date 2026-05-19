@@ -618,9 +618,20 @@ export const useAppStore = create<AppStateModel>()(
                 if (!update) return sess;
                 const nextStatus = update.status;
                 const nextBranch = update.branch ?? sess.branch;
-                if (nextStatus !== sess.status || nextBranch !== sess.branch) {
+                const nextAgentProvider =
+                  update.agent_provider ?? sess.agent_provider ?? null;
+                if (
+                  nextStatus !== sess.status ||
+                  nextBranch !== sess.branch ||
+                  nextAgentProvider !== (sess.agent_provider ?? null)
+                ) {
                   changed = true;
-                  return { ...sess, status: nextStatus, branch: nextBranch };
+                  return {
+                    ...sess,
+                    status: nextStatus,
+                    branch: nextBranch,
+                    agent_provider: nextAgentProvider,
+                  };
                 }
                 return sess;
               });

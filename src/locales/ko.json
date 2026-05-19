@@ -183,6 +183,10 @@
             "label": "상태 점",
             "description": "행 시작 부분의 색상 점입니다. 메타데이터에서 Status가 켜져 있으면 중복됩니다."
           },
+          "agentProvider": {
+            "label": "에이전트 제공자 아이콘",
+            "description": "상태 위치와 Agents History에 Claude/Codex 아이콘을 표시합니다. 끄면 상태 점과 텍스트 배지를 표시합니다."
+          },
           "sessionKind": {
             "label": "세션 종류 아이콘",
             "description": "격리된 worktree에는 브랜치 글리프를, 컨트롤 세션에는 봇 글리프를 표시합니다."

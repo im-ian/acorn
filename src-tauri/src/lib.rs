@@ -24,11 +24,32 @@ mod todos;
 mod unified_diff;
 mod worktree;
 
+use std::io::Write;
+
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
+
+#[derive(Clone, Copy)]
+struct NonPanickingStderr;
+
+impl Write for NonPanickingStderr {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut stderr = std::io::stderr();
+        match stderr.write(buf) {
+            Ok(written) => Ok(written),
+            Err(_) => Ok(buf.len()),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut stderr = std::io::stderr();
+        let _ = stderr.flush();
+        Ok(())
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,6 +57,7 @@ pub fn run() {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        .with_writer(|| NonPanickingStderr)
         .init();
 
     let app_state = AppState::new();

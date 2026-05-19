@@ -1045,6 +1045,18 @@ function SessionDisplaySection({
           <CheckboxRow
             label={st(
               t,
+              "settings.appearance.sessionDisplay.icons.agentProvider.label",
+            )}
+            description={st(
+              t,
+              "settings.appearance.sessionDisplay.icons.agentProvider.description",
+            )}
+            checked={sessionDisplay.icons.agentProvider}
+            onChange={(v) => patch({ icons: { agentProvider: v } })}
+          />
+          <CheckboxRow
+            label={st(
+              t,
               "settings.appearance.sessionDisplay.icons.sessionKind.label",
             )}
             description={st(

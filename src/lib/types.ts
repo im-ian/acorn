@@ -17,6 +17,8 @@ export type SessionOwner =
   | { kind: "user" }
   | { kind: "control"; session_id: string };
 
+export type SessionAgentProvider = "claude" | "codex";
+
 export interface Session {
   id: string;
   name: string;
@@ -35,6 +37,8 @@ export interface Session {
    * worktree marker). Surfaces the worktree icon regardless of whether Acorn,
    * `claude -w`, or the user originally created the worktree. */
   in_worktree: boolean;
+  /** Most recently associated agent transcript for this Acorn session. */
+  agent_provider?: SessionAgentProvider | null;
 }
 
 export interface Project {

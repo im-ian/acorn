@@ -26,6 +26,10 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { selectSessionsById, useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
+import {
+  AgentProviderIcon,
+  resolveSessionAgentProvider,
+} from "../lib/agentProvider";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
@@ -46,6 +50,7 @@ import { useTranslation } from "../lib/useTranslation";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
+import { Tooltip } from "./Tooltip";
 import type { Session, SessionKind, SessionStatus } from "../lib/types";
 import {
   makeSessionWorkspaceTab,
@@ -59,6 +64,14 @@ const STATUS_DOT: Record<SessionStatus, string> = {
   needs_input: "bg-warning",
   failed: "bg-danger",
   completed: "bg-accent/60",
+};
+
+const STATUS_ICON: Record<SessionStatus, string> = {
+  idle: "text-fg-muted",
+  running: "text-accent animate-pulse",
+  needs_input: "text-warning",
+  failed: "text-danger",
+  completed: "text-accent/60",
 };
 
 type PaneTranslationKey = Extract<TranslationKey, `pane.${string}`>;
@@ -610,6 +623,13 @@ function TabItem({
   const t = useTranslation();
   const renameSession = useAppStore((s) => s.renameSession);
   const session = tab.kind === "session" ? tab.session : null;
+  const showAgentProviderIcons = useSettings(
+    (s) => s.settings.sessionDisplay.icons.agentProvider,
+  );
+  const agentProvider =
+    showAgentProviderIcons && session
+      ? resolveSessionAgentProvider(session)
+      : null;
   const tabPath = tab.kind === "session" ? tab.session.worktree_path : tab.path;
   const liveInWorktree = useAppStore((s) =>
     session ? s.liveInWorktree[session.id] : false,
@@ -850,18 +870,30 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-xs transition",
+          "group relative flex shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
         )}
       >
-        <span
-          className={cn(
-            "pointer-events-none size-1.5 rounded-full",
-            session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
-          )}
-        />
+        {agentProvider ? (
+          <Tooltip label={agentProvider} side="bottom">
+            <AgentProviderIcon
+              provider={agentProvider}
+              className={cn(
+                "pointer-events-none size-2.5",
+                session && STATUS_ICON[session.status],
+              )}
+            />
+          </Tooltip>
+        ) : (
+          <span
+            className={cn(
+              "pointer-events-none size-1.5 rounded-full",
+              session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
+            )}
+          />
+        )}
         {editing ? (
           <TabRenameInput
             initial={tab.title}
@@ -874,7 +906,7 @@ function TabItem({
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <span className="pointer-events-none max-w-[12rem] truncate">
+          <span className="pointer-events-none max-w-[12rem] truncate leading-5">
             {tab.title}
           </span>
         )}

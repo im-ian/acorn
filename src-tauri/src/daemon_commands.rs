@@ -15,9 +15,9 @@ use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
 
-use acorn_daemon::protocol::{AgentKind, SessionKind};
 use crate::daemon_bridge::BridgeError;
 use crate::state::AppState;
+use acorn_daemon::protocol::{AgentKind, SessionKind};
 
 /// JSON shape for `daemon_status` — what the StatusBar indicator and the
 /// Settings → Background sessions panel render.
@@ -321,6 +321,7 @@ pub fn daemon_adopt_session(
         daemon_session_id: Some(id),
         agent_resume_token: Some(id.to_string()),
         in_worktree: false,
+        agent_provider: None,
     };
     state.sessions.insert(session);
 
