@@ -87,6 +87,18 @@ function openAppearanceTab() {
   });
 }
 
+function openGithubTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) => element.textContent === "GitHub",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("GitHub tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLInputElement.prototype,
@@ -291,6 +303,36 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("설정");
     expect(document.body.textContent).toContain("기본값으로 재설정");
     expect(document.body.textContent).toContain("글꼴 패밀리");
+  });
+
+  it("patches the GitHub PR row labels toggle", async () => {
+    const patchGithub = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchGithub,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openGithubTab();
+
+    const labelsToggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input.closest("label")?.textContent?.includes("Show labels"),
+    );
+
+    expect(document.body.textContent).toContain("Show labels");
+    expect(labelsToggle).toBeInstanceOf(HTMLInputElement);
+    expect(labelsToggle?.checked).toBe(true);
+
+    act(() => {
+      labelsToggle?.click();
+    });
+
+    expect(patchGithub).toHaveBeenCalledWith({ showLabels: false });
   });
 });
 
