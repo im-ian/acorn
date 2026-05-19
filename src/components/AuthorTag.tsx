@@ -63,12 +63,14 @@ export function buildProfileMenuItems(
  */
 export function AuthorTag({
   login,
+  avatarUrl,
   fallbackName,
   size = 24,
   nameClass,
   avatarOnly = false,
 }: {
   login: string | null | undefined;
+  avatarUrl?: string | null;
   /** Plain-text name shown when `login` isn't a resolvable GitHub handle. */
   fallbackName?: string;
   size?: number;
@@ -98,7 +100,7 @@ export function AuthorTag({
         }}
         className="inline-flex shrink-0 items-center gap-1.5 align-middle"
       >
-        <AuthorAvatar login={login} size={size} />
+        <AuthorAvatar login={login} avatarUrl={avatarUrl} size={size} />
         {avatarOnly ? null : (
           <span className={cn("font-mono text-fg", nameClass)}>{login}</span>
         )}
