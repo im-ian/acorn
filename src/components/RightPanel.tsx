@@ -47,7 +47,10 @@ import { joinPath } from "../lib/paths";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
-import { useIsGitHubRepo } from "../lib/useIsGitHubRepo";
+import {
+  prefetchGitHubRepoStatus,
+  useIsGitHubRepo,
+} from "../lib/useIsGitHubRepo";
 import {
   RIGHT_GROUPS,
   groupOfTab,
@@ -114,6 +117,10 @@ interface ExpandedDiff {
 
 const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
+const BACKGROUND_LOADED_TABS = new Set<RightTab>(["prs", "actions", "history"]);
+const PROJECT_PREFETCH_START_DELAY_MS = 1_000;
+const PROJECT_PREFETCH_GAP_MS = 250;
+const prefetchedProjectRepos = new Set<string>();
 
 type RightPanelTranslationKey = Extract<TranslationKey, `rightPanel.${string}`>;
 
@@ -133,9 +140,27 @@ function rtf(
   );
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function prefetchProjectPanelData(repoPath: string): Promise<void> {
+  void fetchAgentHistoryCached(repoPath).catch((error) => {
+    console.debug("[RightPanel] agent history prefetch failed", repoPath, error);
+  });
+  const isGitHub = await prefetchGitHubRepoStatus(repoPath);
+  if (!isGitHub) return;
+  await fetchPullRequestsCached(repoPath, "open", PR_PAGE_SIZE);
+  for (const filter of PR_BACKGROUND_PREFETCH_STATES) {
+    await fetchPullRequestsCached(repoPath, filter, PR_PAGE_SIZE);
+  }
+  await fetchWorkflowRunsCached(repoPath, WORKFLOW_RUNS_LIMIT);
+}
+
 export function RightPanel() {
   const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
+  const projects = useAppStore((s) => s.projects);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const activeProject = useAppStore((s) => s.activeProject);
@@ -202,6 +227,14 @@ export function RightPanel() {
     ? groupOfTab(rightTab)
     : (visibleGroups[0] ?? "code");
   const visibleTabs = visibleTabsByGroup[activeGroup];
+  const shouldLoadGitHubTabs =
+    repoPath !== null &&
+    (isGitHubRepo === true ||
+      (isGitHubRepo === null && activeGroup === "github"));
+  const projectKey = useMemo(
+    () => projects.map((project) => project.repo_path).join("\0"),
+    [projects],
+  );
 
   // If the user is sitting on a tab that just became invisible (Todos emptied,
   // GitHub origin disappeared, etc.), slide them to the nearest visible tab
@@ -212,6 +245,29 @@ export function RightPanel() {
       setRightTab(visibleTabs[0]);
     }
   }, [rightTab, visibleTabs, setRightTab]);
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    const repos = projects.map((project) => project.repo_path);
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        for (const repo of repos) {
+          if (cancelled) return;
+          if (prefetchedProjectRepos.has(repo)) continue;
+          prefetchedProjectRepos.add(repo);
+          await prefetchProjectPanelData(repo).catch((error) => {
+            console.debug("[RightPanel] project prefetch failed", repo, error);
+          });
+          if (!cancelled) await sleep(PROJECT_PREFETCH_GAP_MS);
+        }
+      })();
+    }, PROJECT_PREFETCH_START_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [projectKey, projects]);
 
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
@@ -284,39 +340,42 @@ export function RightPanel() {
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
-        ) : rightTab === "prs" ? (
-          repoPath ? (
-            <PullRequestsTab
-              key={repoPath}
-              repoPath={repoPath}
-              onOpenDetail={(number) => setPrDetail({ repoPath, number })}
-              onOpenSearch={() => setPrSearch({ repoPath })}
-              refreshKey={prListVersion}
-            />
-          ) : (
-            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
-          )
         ) : rightTab === "files" ? (
           repoPath ? (
             <FileExplorer key={repoPath} rootPath={repoPath} />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
-        ) : rightTab === "history" ? (
-          repoPath ? (
-            <AgentHistoryTab
-              key={repoPath}
-              repoPath={repoPath}
-              sessionHostRepoPath={sessionHostRepoPath ?? repoPath}
-            />
-          ) : (
-            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
-          )
-        ) : repoPath ? (
-          <ActionsTab key={repoPath} repoPath={repoPath} />
+        ) : BACKGROUND_LOADED_TABS.has(rightTab) ? (
+          repoPath ? null : <Empty msg={rt(t, "rightPanel.empty.noProject")} />
         ) : (
           <Empty msg={rt(t, "rightPanel.empty.noProject")} />
         )}
+        {repoPath && shouldLoadGitHubTabs ? (
+          <>
+            <BackgroundLoadedTab active={rightTab === "prs"}>
+              <PullRequestsTab
+                key={`prs:${repoPath}`}
+                repoPath={repoPath}
+                onOpenDetail={(number) => setPrDetail({ repoPath, number })}
+                onOpenSearch={() => setPrSearch({ repoPath })}
+                refreshKey={prListVersion}
+              />
+            </BackgroundLoadedTab>
+            <BackgroundLoadedTab active={rightTab === "actions"}>
+              <ActionsTab key={`actions:${repoPath}`} repoPath={repoPath} />
+            </BackgroundLoadedTab>
+          </>
+        ) : null}
+        {repoPath ? (
+          <BackgroundLoadedTab active={rightTab === "history"}>
+            <AgentHistoryTab
+              key={`history:${repoPath}`}
+              repoPath={repoPath}
+              sessionHostRepoPath={sessionHostRepoPath ?? repoPath}
+            />
+          </BackgroundLoadedTab>
+        ) : null}
       </div>
       <DiffViewerModal
         payload={expanded?.payload ?? null}
@@ -343,6 +402,23 @@ export function RightPanel() {
         onMutated={() => setPrListVersion((v) => v + 1)}
       />
     </aside>
+  );
+}
+
+function BackgroundLoadedTab({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn("h-full", active ? "block" : "hidden")}
+      aria-hidden={!active}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -978,6 +1054,32 @@ function countByStatus(todos: TodoItem[]) {
 // process memory only — wiped on app restart, which is the right TTL for
 // session lists that turn over often.
 const agentHistoryCache = new Map<string, AgentHistoryItem[]>();
+const agentHistoryInFlight = new Map<string, Promise<AgentHistoryItem[]>>();
+
+function cachedAgentHistory(repoPath: string): AgentHistoryItem[] | null {
+  return agentHistoryCache.get(repoPath) ?? null;
+}
+
+function fetchAgentHistoryCached(
+  repoPath: string,
+  options: { force?: boolean } = {},
+): Promise<AgentHistoryItem[]> {
+  const cached = agentHistoryCache.get(repoPath);
+  if (cached && !options.force) return Promise.resolve(cached);
+  const existing = agentHistoryInFlight.get(repoPath);
+  if (existing) return existing;
+  const promise = api
+    .listAgentHistory(repoPath, 100)
+    .then((items) => {
+      agentHistoryCache.set(repoPath, items);
+      return items;
+    })
+    .finally(() => {
+      agentHistoryInFlight.delete(repoPath);
+    });
+  agentHistoryInFlight.set(repoPath, promise);
+  return promise;
+}
 
 function AgentHistoryTab({
   repoPath,
@@ -993,8 +1095,8 @@ function AgentHistoryTab({
   // Hydrate from the module-level cache so re-opening a project shows its
   // list instantly. The accompanying fetch below still runs (SWR-style)
   // to surface new sessions created since the cached snapshot.
-  const [items, setItems] = useState<AgentHistoryItem[] | null>(
-    () => agentHistoryCache.get(repoPath) ?? null,
+  const [items, setItems] = useState<AgentHistoryItem[] | null>(() =>
+    cachedAgentHistory(repoPath),
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1027,9 +1129,8 @@ function AgentHistoryTab({
     setLoading(true);
     setError(null);
     try {
-      const result = await api.listAgentHistory(repoPath, 100);
+      const result = await fetchAgentHistoryCached(repoPath, { force: true });
       if (token !== fetchTokenRef.current) return;
-      agentHistoryCache.set(repoPath, result);
       setItems(result);
     } catch (e) {
       if (token !== fetchTokenRef.current) return;
@@ -2032,6 +2133,12 @@ const PR_STATE_OPTIONS: { value: PrStateFilter }[] = [
   { value: "merged" },
   { value: "all" },
 ];
+const PR_BACKGROUND_PREFETCH_STATES: ReadonlyArray<PrStateFilter> = [
+  "merged",
+  "closed",
+  "all",
+];
+const PR_BACKGROUND_PREFETCH_DELAY_MS = 700;
 
 function prStateLabelKey(value: PrStateFilter): RightPanelTranslationKey {
   return `rightPanel.prStates.${value}`;
@@ -2041,6 +2148,80 @@ function prStateLabelKey(value: PrStateFilter): RightPanelTranslationKey {
 const PR_PAGE_SIZE = 50;
 /** Backend clamps to 1000; mirror that here so the UI stops growing the limit. */
 const PR_PAGE_MAX = 1000;
+
+interface PrListState {
+  listing: PullRequestListing | null;
+  error: string | null;
+  limit: number;
+}
+
+const prListCache = new Map<string, PullRequestListing>();
+const prListInFlight = new Map<string, Promise<PullRequestListing>>();
+
+function prListCacheKey(
+  repoPath: string,
+  filter: PrStateFilter,
+  limit: number,
+): string {
+  return JSON.stringify([repoPath, filter, limit]);
+}
+
+function cachedPrListing(
+  repoPath: string,
+  filter: PrStateFilter,
+  limit = PR_PAGE_SIZE,
+): PullRequestListing | null {
+  return prListCache.get(prListCacheKey(repoPath, filter, limit)) ?? null;
+}
+
+function fetchPullRequestsCached(
+  repoPath: string,
+  filter: PrStateFilter,
+  limit: number,
+  options: { force?: boolean } = {},
+): Promise<PullRequestListing> {
+  const key = prListCacheKey(repoPath, filter, limit);
+  const cached = prListCache.get(key);
+  if (cached && !options.force) return Promise.resolve(cached);
+  const existing = prListInFlight.get(key);
+  if (existing) return existing;
+  const promise = api
+    .listPullRequests(repoPath, filter, limit)
+    .then((result) => {
+      prListCache.set(key, result);
+      return result;
+    })
+    .finally(() => {
+      prListInFlight.delete(key);
+    });
+  prListInFlight.set(key, promise);
+  return promise;
+}
+
+function emptyPrListState(): PrListState {
+  return { listing: null, error: null, limit: PR_PAGE_SIZE };
+}
+
+function initialPrListStates(repoPath?: string): Record<PrStateFilter, PrListState> {
+  return {
+    open: prListStateFromCache(repoPath, "open"),
+    closed: prListStateFromCache(repoPath, "closed"),
+    merged: prListStateFromCache(repoPath, "merged"),
+    all: prListStateFromCache(repoPath, "all"),
+  };
+}
+
+function prListStateFromCache(
+  repoPath: string | undefined,
+  filter: PrStateFilter,
+): PrListState {
+  if (!repoPath) return emptyPrListState();
+  return {
+    listing: cachedPrListing(repoPath, filter),
+    error: null,
+    limit: PR_PAGE_SIZE,
+  };
+}
 
 /**
  * Shared PR row actions: context menu, copy/open helpers, and the
@@ -2223,14 +2404,6 @@ function usePrRowActions(
   return { openContextMenu, overlays, error };
 }
 
-// Per-(repo, stateFilter) cache for PR listings. Keeps rows on screen across
-// remounts and filter toggles so the user doesn't see a skeleton every time
-// they revisit a project. Process memory only — turns over on app restart.
-const pullRequestsCache = new Map<string, PullRequestListing>();
-function pullRequestsCacheKey(repoPath: string, stateFilter: PrStateFilter) {
-  return `${repoPath} ${stateFilter}`;
-}
-
 function PullRequestsTab({
   repoPath,
   onOpenDetail,
@@ -2249,65 +2422,103 @@ function PullRequestsTab({
   );
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
-  const [listing, setListing] = useState<PullRequestListing | null>(
-    () => pullRequestsCache.get(pullRequestsCacheKey(repoPath, "open")) ?? null,
+  const [listsByState, setListsByState] = useState(() =>
+    initialPrListStates(repoPath),
   );
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  // Grows by PR_PAGE_SIZE each time the user scrolls to the bottom. Resets on
-  // project / state-filter change so a fresh context starts at one page.
-  const [limit, setLimit] = useState(PR_PAGE_SIZE);
+  const [loadingKeys, setLoadingKeys] = useState<string[]>([]);
   const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
+  const activeList = listsByState[stateFilter] ?? emptyPrListState();
+  const listing = activeList.listing;
+  const error = activeList.error;
+  const limit = activeList.limit;
+  const loading = loadingKeys.some((key) =>
+    key.startsWith(`${repoPath}:${stateFilter}:`),
+  );
 
   const fetchPrs = useCallback(
-    async (signal?: { cancelled: boolean }) => {
-      setLoading(true);
+    async (
+      filter: PrStateFilter,
+      requestedLimit: number,
+      signal?: { cancelled: boolean },
+    ) => {
+      const key = `${repoPath}:${filter}:${requestedLimit}`;
+      setLoadingKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
       try {
-        const result = await api.listPullRequests(repoPath, stateFilter, limit);
-        if (signal?.cancelled) return;
-        pullRequestsCache.set(
-          pullRequestsCacheKey(repoPath, stateFilter),
-          result,
+        const result = await fetchPullRequestsCached(
+          repoPath,
+          filter,
+          requestedLimit,
+          { force: true },
         );
-        setListing(result);
-        setError(null);
+        if (signal?.cancelled) return;
+        setListsByState((prev) => ({
+          ...prev,
+          [filter]: {
+            listing: result,
+            error: null,
+            limit: requestedLimit,
+          },
+        }));
         setPrAccountForRepo(
           repoPath,
           result.kind === "ok" ? result.account : null,
         );
       } catch (e) {
         if (signal?.cancelled) return;
-        setError(String(e));
+        setListsByState((prev) => ({
+          ...prev,
+          [filter]: {
+            ...(prev[filter] ?? emptyPrListState()),
+            error: String(e),
+            limit: requestedLimit,
+          },
+        }));
       } finally {
-        if (!signal?.cancelled) setLoading(false);
+        setLoadingKeys((prev) => prev.filter((candidate) => candidate !== key));
       }
     },
-    [repoPath, stateFilter, limit, setPrAccountForRepo],
+    [repoPath, setPrAccountForRepo],
+  );
+  const fetchActivePrs = useCallback(
+    (signal?: { cancelled: boolean }) => fetchPrs(stateFilter, limit, signal),
+    [fetchPrs, stateFilter, limit],
   );
 
-  // On filter change, hydrate from the cache for that filter (or show the
-  // skeleton if we've never fetched it). The accompanying fetch below still
-  // runs SWR-style. Limit resets so a fresh filter context starts at one page.
+  // Reset cached list state on project change. Individual filters keep their
+  // first page cached so switching Open → Merged can be instant once the
+  // background prefetch lands.
   useEffect(() => {
-    setListing(
-      pullRequestsCache.get(pullRequestsCacheKey(repoPath, stateFilter)) ??
-        null,
-    );
-    setError(null);
-    setLimit(PR_PAGE_SIZE);
-  }, [repoPath, stateFilter]);
+    setLoadingKeys([]);
+    setListsByState(initialPrListStates(repoPath));
+  }, [repoPath]);
 
   useEffect(() => {
     const signal = { cancelled: false };
-    void fetchPrs(signal);
+    void fetchActivePrs(signal);
     const handle = setInterval(() => {
-      void fetchPrs(signal);
+      void fetchActivePrs(signal);
     }, refreshIntervalMs);
     return () => {
       signal.cancelled = true;
       clearInterval(handle);
     };
-  }, [fetchPrs, refreshIntervalMs]);
+  }, [fetchActivePrs, refreshIntervalMs]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        for (const filter of PR_BACKGROUND_PREFETCH_STATES) {
+          if (signal.cancelled) return;
+          await fetchPrs(filter, PR_PAGE_SIZE, signal);
+        }
+      })();
+    }, PR_BACKGROUND_PREFETCH_DELAY_MS);
+    return () => {
+      signal.cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [repoPath, fetchPrs]);
 
   // Out-of-band refresh when the parent bumps `refreshKey` (e.g. PR merged via
   // the detail modal). Skip the very first render since the effect above
@@ -2319,14 +2530,16 @@ function PullRequestsTab({
       return;
     }
     const signal = { cancelled: false };
-    void fetchPrs(signal);
+    void Promise.all(
+      PR_STATE_OPTIONS.map((opt) => fetchPrs(opt.value, PR_PAGE_SIZE, signal)),
+    );
     return () => {
       signal.cancelled = true;
     };
   }, [refreshKey, fetchPrs]);
 
   const rowActions = usePrRowActions(repoPath, onOpenDetail, () => {
-    void fetchPrs();
+    void fetchActivePrs();
   });
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
@@ -2338,7 +2551,15 @@ function PullRequestsTab({
     if (limit >= PR_PAGE_MAX) return;
     const el = e.currentTarget;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
-      setLimit((prev) => Math.min(prev + PR_PAGE_SIZE, PR_PAGE_MAX));
+      setListsByState((prev) => {
+        const current = prev[stateFilter] ?? emptyPrListState();
+        const nextLimit = Math.min(current.limit + PR_PAGE_SIZE, PR_PAGE_MAX);
+        if (nextLimit === current.limit) return prev;
+        return {
+          ...prev,
+          [stateFilter]: { ...current, limit: nextLimit },
+        };
+      });
     }
   }
 
@@ -2375,7 +2596,7 @@ function PullRequestsTab({
           <Search size={12} />
         </button>
         <RefreshButton
-          onClick={() => void fetchPrs()}
+          onClick={() => void fetchActivePrs()}
           loading={loading}
           size={12}
         />
@@ -2437,19 +2658,50 @@ function PullRequestsTab({
 
 const WORKFLOW_RUNS_LIMIT = 50;
 const ALL_WORKFLOWS = "__all__";
-
-// Per-repo cache for workflow runs. Same idea as pullRequestsCache —
-// re-opening a project surfaces its runs synchronously while a background
-// fetch reconciles fresh results.
 const workflowRunsCache = new Map<string, WorkflowRunsListing>();
+const workflowRunsInFlight = new Map<string, Promise<WorkflowRunsListing>>();
+
+function workflowRunsCacheKey(repoPath: string, limit: number): string {
+  return JSON.stringify([repoPath, limit]);
+}
+
+function cachedWorkflowRuns(
+  repoPath: string,
+  limit = WORKFLOW_RUNS_LIMIT,
+): WorkflowRunsListing | null {
+  return workflowRunsCache.get(workflowRunsCacheKey(repoPath, limit)) ?? null;
+}
+
+function fetchWorkflowRunsCached(
+  repoPath: string,
+  limit: number,
+  options: { force?: boolean } = {},
+): Promise<WorkflowRunsListing> {
+  const key = workflowRunsCacheKey(repoPath, limit);
+  const cached = workflowRunsCache.get(key);
+  if (cached && !options.force) return Promise.resolve(cached);
+  const existing = workflowRunsInFlight.get(key);
+  if (existing) return existing;
+  const promise = api
+    .listWorkflowRuns(repoPath, limit)
+    .then((result) => {
+      workflowRunsCache.set(key, result);
+      return result;
+    })
+    .finally(() => {
+      workflowRunsInFlight.delete(key);
+    });
+  workflowRunsInFlight.set(key, promise);
+  return promise;
+}
 
 function ActionsTab({ repoPath }: { repoPath: string }) {
   const t = useTranslation();
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
   );
-  const [listing, setListing] = useState<WorkflowRunsListing | null>(
-    () => workflowRunsCache.get(repoPath) ?? null,
+  const [listing, setListing] = useState<WorkflowRunsListing | null>(() =>
+    cachedWorkflowRuns(repoPath),
   );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2460,9 +2712,12 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
     async (signal?: { cancelled: boolean }) => {
       setLoading(true);
       try {
-        const result = await api.listWorkflowRuns(repoPath, WORKFLOW_RUNS_LIMIT);
+        const result = await fetchWorkflowRunsCached(
+          repoPath,
+          WORKFLOW_RUNS_LIMIT,
+          { force: true },
+        );
         if (signal?.cancelled) return;
-        workflowRunsCache.set(repoPath, result);
         setListing(result);
         setError(null);
       } catch (e) {
@@ -2474,6 +2729,13 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
     },
     [repoPath],
   );
+
+  useEffect(() => {
+    setListing(cachedWorkflowRuns(repoPath));
+    setError(null);
+    setWorkflowFilter(ALL_WORKFLOWS);
+    setDetailRunId(null);
+  }, [repoPath]);
 
   useEffect(() => {
     const signal = { cancelled: false };

@@ -36,6 +36,10 @@ async function probe(repoPath: string): Promise<boolean> {
   return promise;
 }
 
+export function prefetchGitHubRepoStatus(repoPath: string): Promise<boolean> {
+  return probe(repoPath);
+}
+
 /**
  * Returns `true` when `repoPath` has a GitHub `origin` remote, `false`
  * otherwise, or `null` while the first probe is in flight (so callers can
