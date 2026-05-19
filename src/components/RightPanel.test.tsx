@@ -120,7 +120,7 @@ describe("RightPanel background tab loading", () => {
       activeProject: REPO,
       activeSessionId: null,
       activeTabId: null,
-      rightTab: "history",
+      rightTab: "commits",
       workspaceTabs: {},
       prAccountByRepo: {},
     });
@@ -203,7 +203,7 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.listWorkflowRuns).toHaveBeenCalledWith(REPO_B, 50);
   });
 
-  it("hides GitHub tabs for projects that are not git repositories", async () => {
+  it("hides git-backed tabs for projects that are not git repositories", async () => {
     mockApi.isGitRepository.mockResolvedValue(false);
 
     await act(async () => {
@@ -211,8 +211,28 @@ describe("RightPanel background tab loading", () => {
     });
     await flushPromises();
 
+    expect(container.textContent).toContain("Files");
+    expect(container.textContent).not.toContain("Staged");
+    expect(container.textContent).not.toContain("Commits");
     expect(container.textContent).not.toContain("GitHub");
     expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
+    expect(mockApi.listPullRequests).not.toHaveBeenCalled();
+    expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
+  });
+
+  it("keeps local git tabs visible when the git repository has no GitHub origin", async () => {
+    mockApi.githubOriginSlug.mockResolvedValue(null);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Files");
+    expect(container.textContent).toContain("Staged");
+    expect(container.textContent).toContain("Commits");
+    expect(container.textContent).not.toContain("GitHub");
+    expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
     expect(mockApi.listPullRequests).not.toHaveBeenCalled();
     expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
   });
@@ -225,7 +245,22 @@ describe("RightPanel background tab loading", () => {
     });
     await flushPromises();
     expect(container.textContent).not.toContain("GitHub");
+    expect(container.textContent).not.toContain("Staged");
+    expect(container.textContent).not.toContain("Commits");
     expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
+
+    mockApi.isGitRepository.mockResolvedValueOnce(true);
+    mockApi.githubOriginSlug.mockResolvedValueOnce(null);
+    await act(async () => {
+      emitFsChanged({ paths: [], dotgit_changed: true });
+    });
+    await flushPromises();
+
+    expect(mockApi.isGitRepository).toHaveBeenCalledTimes(2);
+    expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
+    expect(container.textContent).toContain("Staged");
+    expect(container.textContent).toContain("Commits");
+    expect(container.textContent).not.toContain("GitHub");
 
     mockApi.isGitRepository.mockResolvedValueOnce(true);
     mockApi.githubOriginSlug.mockResolvedValueOnce("im-ian/acorn");
@@ -234,17 +269,18 @@ describe("RightPanel background tab loading", () => {
     });
     await flushPromises();
 
-    expect(mockApi.isGitRepository).toHaveBeenCalledTimes(2);
-    expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
+    expect(mockApi.isGitRepository).toHaveBeenCalledTimes(3);
     expect(container.textContent).toContain("GitHub");
   });
 
-  it("hides GitHub tabs when git metadata is removed", async () => {
+  it("hides git-backed tabs when git metadata is removed", async () => {
     await act(async () => {
       root.render(<RightPanel />);
     });
     await flushPromises();
     expect(container.textContent).toContain("GitHub");
+    expect(container.textContent).toContain("Staged");
+    expect(container.textContent).toContain("Commits");
 
     mockApi.isGitRepository.mockResolvedValueOnce(false);
     await act(async () => {
@@ -254,5 +290,7 @@ describe("RightPanel background tab loading", () => {
 
     expect(mockApi.isGitRepository).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain("GitHub");
+    expect(container.textContent).not.toContain("Staged");
+    expect(container.textContent).not.toContain("Commits");
   });
 });

@@ -2,38 +2,69 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 
 /**
- * Per-repo cache for the git-repo + GitHub origin probe. The result rarely
- * changes during a session (only when the user runs `git init` or edits
- * `origin`), so we resolve once per repoPath and reuse across mounts.
+ * Per-repo caches for the git-repo + GitHub origin probes. The results rarely
+ * change during a session (only when the user runs `git init` or edits git
+ * metadata), so we resolve once per repoPath and reuse across mounts.
  * Concurrent callers for the same repoPath share one in-flight promise.
  */
-const cache = new Map<string, boolean>();
-const inFlight = new Map<string, Promise<boolean>>();
+const gitRepoCache = new Map<string, boolean>();
+const gitRepoInFlight = new Map<string, Promise<boolean>>();
+const githubRepoCache = new Map<string, boolean>();
+const githubRepoInFlight = new Map<string, Promise<boolean>>();
 const generations = new Map<string, number>();
 
 function generationOf(repoPath: string): number {
   return generations.get(repoPath) ?? 0;
 }
 
-async function probe(repoPath: string): Promise<boolean> {
-  const cached = cache.get(repoPath);
+async function probeGitRepository(repoPath: string): Promise<boolean> {
+  const cached = gitRepoCache.get(repoPath);
   if (cached !== undefined) return cached;
-  const existing = inFlight.get(repoPath);
+  const existing = gitRepoInFlight.get(repoPath);
   if (existing) return existing;
   const generation = generationOf(repoPath);
   const promise = api
     .isGitRepository(repoPath)
+    .then((isGitRepo) => {
+      if (generationOf(repoPath) === generation) {
+        gitRepoCache.set(repoPath, isGitRepo);
+      }
+      if (generationOf(repoPath) !== generation) return false;
+      return isGitRepo;
+    })
+    .catch((error) => {
+      // Treat probe failures as "not a git repo" so git-backed UI does not
+      // surface actions for paths whose repository state cannot be verified.
+      console.warn("[useIsGitHubRepo] git repository probe failed", error);
+      return false;
+    })
+    .finally(() => {
+      if (gitRepoInFlight.get(repoPath) === promise) {
+        gitRepoInFlight.delete(repoPath);
+      }
+    });
+  gitRepoInFlight.set(repoPath, promise);
+  return promise;
+}
+
+async function probeGitHubRepo(repoPath: string): Promise<boolean> {
+  const cached = githubRepoCache.get(repoPath);
+  if (cached !== undefined) return cached;
+  const existing = githubRepoInFlight.get(repoPath);
+  if (existing) return existing;
+  const generation = generationOf(repoPath);
+  const promise = probeGitRepository(repoPath)
     .then(async (isGitRepo) => {
       if (!isGitRepo) {
         if (generationOf(repoPath) === generation) {
-          cache.set(repoPath, false);
+          githubRepoCache.set(repoPath, false);
         }
         return false;
       }
       const slug = await api.githubOriginSlug(repoPath);
       const value = slug !== null;
       if (generationOf(repoPath) === generation) {
-        cache.set(repoPath, value);
+        githubRepoCache.set(repoPath, value);
       }
       if (generationOf(repoPath) !== generation) return false;
       return value;
@@ -45,22 +76,68 @@ async function probe(repoPath: string): Promise<boolean> {
       return false;
     })
     .finally(() => {
-      if (inFlight.get(repoPath) === promise) {
-        inFlight.delete(repoPath);
+      if (githubRepoInFlight.get(repoPath) === promise) {
+        githubRepoInFlight.delete(repoPath);
       }
     });
-  inFlight.set(repoPath, promise);
+  githubRepoInFlight.set(repoPath, promise);
   return promise;
 }
 
+export function prefetchGitRepositoryStatus(repoPath: string): Promise<boolean> {
+  return probeGitRepository(repoPath);
+}
+
 export function prefetchGitHubRepoStatus(repoPath: string): Promise<boolean> {
-  return probe(repoPath);
+  return probeGitHubRepo(repoPath);
+}
+
+export function invalidateGitRepositoryStatus(repoPath: string): void {
+  gitRepoCache.delete(repoPath);
+  gitRepoInFlight.delete(repoPath);
+  githubRepoCache.delete(repoPath);
+  githubRepoInFlight.delete(repoPath);
+  generations.set(repoPath, generationOf(repoPath) + 1);
 }
 
 export function invalidateGitHubRepoStatus(repoPath: string): void {
-  cache.delete(repoPath);
-  inFlight.delete(repoPath);
-  generations.set(repoPath, generationOf(repoPath) + 1);
+  invalidateGitRepositoryStatus(repoPath);
+}
+
+/**
+ * Returns `true` when `repoPath` is inside a git repo, `false` otherwise, or
+ * `null` while the first probe is in flight.
+ */
+export function useIsGitRepository(
+  repoPath: string | null,
+  refreshKey = 0,
+): boolean | null {
+  const [state, setState] = useState<boolean | null>(() =>
+    repoPath ? (gitRepoCache.get(repoPath) ?? null) : null,
+  );
+
+  useEffect(() => {
+    if (!repoPath) {
+      setState(null);
+      return;
+    }
+    const cached = gitRepoCache.get(repoPath);
+    if (cached !== undefined) {
+      setState(cached);
+      return;
+    }
+    setState(null);
+    let cancelled = false;
+    void probeGitRepository(repoPath).then((value) => {
+      if (cancelled) return;
+      setState(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey, repoPath]);
+
+  return state;
 }
 
 /**
@@ -72,7 +149,7 @@ export function useIsGitHubRepo(
   refreshKey = 0,
 ): boolean | null {
   const [state, setState] = useState<boolean | null>(() =>
-    repoPath ? (cache.get(repoPath) ?? null) : null,
+    repoPath ? (githubRepoCache.get(repoPath) ?? null) : null,
   );
 
   useEffect(() => {
@@ -80,14 +157,14 @@ export function useIsGitHubRepo(
       setState(null);
       return;
     }
-    const cached = cache.get(repoPath);
+    const cached = githubRepoCache.get(repoPath);
     if (cached !== undefined) {
       setState(cached);
       return;
     }
     setState(null);
     let cancelled = false;
-    void probe(repoPath).then((value) => {
+    void probeGitHubRepo(repoPath).then((value) => {
       if (cancelled) return;
       setState(value);
     });
@@ -101,7 +178,9 @@ export function useIsGitHubRepo(
 
 /** Test-only: clear the module-level cache between cases. */
 export function __resetIsGitHubRepoCacheForTests(): void {
-  cache.clear();
-  inFlight.clear();
+  gitRepoCache.clear();
+  gitRepoInFlight.clear();
+  githubRepoCache.clear();
+  githubRepoInFlight.clear();
   generations.clear();
 }

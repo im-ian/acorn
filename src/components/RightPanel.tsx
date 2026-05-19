@@ -49,8 +49,9 @@ import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
 import {
-  invalidateGitHubRepoStatus,
+  invalidateGitRepositoryStatus,
   prefetchGitHubRepoStatus,
+  useIsGitRepository,
   useIsGitHubRepo,
 } from "../lib/useIsGitHubRepo";
 import {
@@ -181,15 +182,15 @@ export function RightPanel() {
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath);
   const sessionHostRepoPath =
     active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
-  const [githubRepoProbeVersion, setGithubRepoProbeVersion] = useState(0);
-  const invalidateGitHubProbe = useCallback(() => {
+  const [gitRepoProbeVersion, setGitRepoProbeVersion] = useState(0);
+  const invalidateGitProbe = useCallback(() => {
     if (!repoPath) return;
-    invalidateGitHubRepoStatus(repoPath);
-    setGithubRepoProbeVersion((version) => version + 1);
+    invalidateGitRepositoryStatus(repoPath);
+    setGitRepoProbeVersion((version) => version + 1);
   }, [repoPath]);
   const invalidations = useRightPanelInvalidations(
     repoPath,
-    invalidateGitHubProbe,
+    invalidateGitProbe,
   );
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
   const [prDetail, setPrDetail] = useState<{
@@ -212,23 +213,24 @@ export function RightPanel() {
     active?.worktree_path ?? null,
   );
   const showTodos = todosState.todos.length > 0;
-  // null while the first probe is in flight. Keep GitHub hidden until we know
-  // the path is a git repo with a GitHub origin so non-git projects never show
-  // GitHub-only actions.
-  const isGitHubRepo = useIsGitHubRepo(repoPath, githubRepoProbeVersion);
+  const isGitRepo = useIsGitRepository(repoPath, gitRepoProbeVersion);
+  const isGitHubRepo = useIsGitHubRepo(repoPath, gitRepoProbeVersion);
   const githubVisible = isGitHubRepo === true;
+  const gitBackedTabsVisible = isGitRepo !== false;
 
   const visibleTabsByGroup = useMemo<
     Record<RightGroup, ReadonlyArray<RightTab>>
   >(
     () => ({
-      code: tabsForGroup("code"),
+      code: gitBackedTabsVisible
+        ? tabsForGroup("code")
+        : tabsForGroup("code").filter((tab) => tab === "files"),
       github: githubVisible ? tabsForGroup("github") : [],
       agents: showTodos
         ? tabsForGroup("agents")
         : tabsForGroup("agents").filter((tab) => tab !== "todos"),
     }),
-    [githubVisible, showTodos],
+    [gitBackedTabsVisible, githubVisible, showTodos],
   );
   const visibleGroups = useMemo(
     () => RIGHT_GROUPS.filter((g) => visibleTabsByGroup[g].length > 0),
@@ -263,10 +265,17 @@ export function RightPanel() {
   useEffect(() => {
     if (visibleTabs.length === 0) return;
     if (!visibleTabs.includes(rightTab)) {
+      if (
+        isGitRepo === null &&
+        groupOfTab(rightTab) === "code" &&
+        rightTab !== "files"
+      ) {
+        return;
+      }
       if (isGitHubRepo === null && groupOfTab(rightTab) === "github") return;
       setRightTab(visibleTabs[0]);
     }
-  }, [isGitHubRepo, rightTab, visibleTabs, setRightTab]);
+  }, [isGitHubRepo, isGitRepo, rightTab, visibleTabs, setRightTab]);
 
   useEffect(() => {
     if (projects.length === 0) return;
