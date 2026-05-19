@@ -79,6 +79,15 @@ const labeledPullRequest = {
   ],
 };
 
+const detailedPullRequest = {
+  ...labeledPullRequest,
+  number: 248,
+  title: "Add PR row display options",
+  head_branch: "display-head",
+  base_branch: "display-base",
+  checks: { passed: 1, failed: 0, pending: 1 },
+};
+
 async function flushPromises() {
   await act(async () => {
     await Promise.resolve();
@@ -338,5 +347,58 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).toContain("Hide git tabs outside repositories");
     expect(container.textContent).not.toContain("frontend");
     expect(container.textContent).not.toContain("fix");
+  });
+
+  it("hides PR row branches when the GitHub setting is disabled", async () => {
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        github: {
+          ...DEFAULT_SETTINGS.github,
+          showBranches: false,
+        },
+      },
+    });
+    useAppStore.setState({ rightTab: "prs" });
+    mockApi.listPullRequests.mockResolvedValue({
+      kind: "ok",
+      items: [detailedPullRequest],
+      account: "tester",
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Add PR row display options");
+    expect(container.textContent).not.toContain("display-head");
+    expect(container.textContent).not.toContain("display-base");
+  });
+
+  it("hides PR row CI status when the GitHub setting is disabled", async () => {
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        github: {
+          ...DEFAULT_SETTINGS.github,
+          showChecks: false,
+        },
+      },
+    });
+    useAppStore.setState({ rightTab: "prs" });
+    mockApi.listPullRequests.mockResolvedValue({
+      kind: "ok",
+      items: [detailedPullRequest],
+      account: "tester",
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Add PR row display options");
+    expect(container.textContent).not.toContain("1/2");
   });
 });

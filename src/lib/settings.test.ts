@@ -105,6 +105,14 @@ describe("github settings", () => {
     expect(DEFAULT_SETTINGS.github.showLabels).toBe(true);
   });
 
+  it("shows PR row branches by default", () => {
+    expect(DEFAULT_SETTINGS.github.showBranches).toBe(true);
+  });
+
+  it("shows PR row CI status by default", () => {
+    expect(DEFAULT_SETTINGS.github.showChecks).toBe(true);
+  });
+
   it("loads a persisted PR row labels preference", async () => {
     localStorage.setItem(
       STORAGE_KEY,
@@ -115,6 +123,21 @@ describe("github settings", () => {
     const { useSettings } = await import("./settings");
 
     expect(useSettings.getState().settings.github.showLabels).toBe(false);
+  });
+
+  it("loads persisted PR row branch and CI status preferences", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        github: { showBranches: false, showChecks: false },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.github.showBranches).toBe(false);
+    expect(useSettings.getState().settings.github.showChecks).toBe(false);
   });
 });
 
