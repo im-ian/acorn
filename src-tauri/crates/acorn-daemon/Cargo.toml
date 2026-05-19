@@ -8,6 +8,7 @@ publish = false
 name = "acorn_daemon"
 
 [dependencies]
+acorn-paths = { path = "../acorn-paths" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -16,7 +17,6 @@ dashmap = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 interprocess = { workspace = true }
-directories = { workspace = true }
 sysinfo = { workspace = true }
 portable-pty = { workspace = true }
 tracing = { workspace = true }

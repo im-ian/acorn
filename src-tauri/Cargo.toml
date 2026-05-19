@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/acorn-paths",
     "crates/acorn-daemon",
     "crates/acorn-ipc",
     "crates/acorn-pty",
@@ -91,6 +92,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 acorn-daemon = { path = "crates/acorn-daemon" }
 acorn-ipc = { path = "crates/acorn-ipc" }
+acorn-paths = { path = "crates/acorn-paths" }
 acorn-pty = { path = "crates/acorn-pty" }
 acorn-session = { path = "crates/acorn-session" }
 acorn-transcript = { path = "crates/acorn-transcript" }
