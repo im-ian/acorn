@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use directories::ProjectDirs;
-
 use crate::error::{AppError, AppResult};
 use acorn_session::{Project, Session};
 
@@ -44,19 +42,11 @@ fn backup_corrupt_file(path: &Path) {
 
 /// Resolve the application's data directory, creating it if missing.
 ///
-/// Debug builds (`pnpm run tauri dev`) write to `acorn-dev` so local testing
-/// does not clobber the installed Acorn's sessions/projects.
+/// Runtime state lives under the stable `io.im-ian.acorn` app dir, split by
+/// `ACORN_PROFILE` or by the build default (`dev` for debug, `prod` for
+/// release). `ACORN_DATA_DIR` can still redirect the whole tree for tests.
 pub fn data_dir() -> AppResult<PathBuf> {
-    let app_name = if cfg!(debug_assertions) {
-        "acorn-dev"
-    } else {
-        "acorn"
-    };
-    let project_dirs = ProjectDirs::from("io", "im-ian", app_name)
-        .ok_or_else(|| AppError::Other("could not resolve project data directory".to_string()))?;
-    let dir = project_dirs.data_dir().to_path_buf();
-    fs::create_dir_all(&dir)?;
-    Ok(dir)
+    Ok(acorn_paths::data_dir()?)
 }
 
 fn sessions_path() -> AppResult<PathBuf> {
