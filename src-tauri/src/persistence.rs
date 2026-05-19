@@ -40,13 +40,42 @@ fn backup_corrupt_file(path: &Path) {
     }
 }
 
+fn copy_legacy_file_if_missing(
+    legacy_base: &Path,
+    profile_dir: &Path,
+    file_name: &str,
+) -> std::io::Result<()> {
+    let source = legacy_base.join(file_name);
+    let target = profile_dir.join(file_name);
+    if target.exists() || !source.is_file() {
+        return Ok(());
+    }
+    fs::copy(source, target)?;
+    Ok(())
+}
+
+fn migrate_legacy_prod_files(profile_dir: &Path) -> AppResult<()> {
+    if acorn_paths::effective_profile()? != acorn_paths::PROD_PROFILE {
+        return Ok(());
+    }
+    let legacy_base = acorn_paths::base_data_dir()?;
+    if legacy_base == profile_dir {
+        return Ok(());
+    }
+    copy_legacy_file_if_missing(&legacy_base, profile_dir, SESSIONS_FILE)?;
+    copy_legacy_file_if_missing(&legacy_base, profile_dir, PROJECTS_FILE)?;
+    Ok(())
+}
+
 /// Resolve the application's data directory, creating it if missing.
 ///
 /// Runtime state lives under the stable `io.im-ian.acorn` app dir, split by
 /// `ACORN_PROFILE` or by the build default (`dev` for debug, `prod` for
 /// release). `ACORN_DATA_DIR` can still redirect the whole tree for tests.
 pub fn data_dir() -> AppResult<PathBuf> {
-    Ok(acorn_paths::data_dir()?)
+    let dir = acorn_paths::data_dir()?;
+    migrate_legacy_prod_files(&dir)?;
+    Ok(dir)
 }
 
 fn sessions_path() -> AppResult<PathBuf> {

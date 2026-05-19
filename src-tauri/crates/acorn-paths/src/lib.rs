@@ -11,8 +11,8 @@ use directories::ProjectDirs;
 pub const ENV_DATA_DIR_OVERRIDE: &str = "ACORN_DATA_DIR";
 pub const ENV_PROFILE: &str = "ACORN_PROFILE";
 
-const PROD_PROFILE: &str = "prod";
-const DEV_PROFILE: &str = "dev";
+pub const PROD_PROFILE: &str = "prod";
+pub const DEV_PROFILE: &str = "dev";
 
 pub fn default_profile() -> &'static str {
     if cfg!(debug_assertions) {
