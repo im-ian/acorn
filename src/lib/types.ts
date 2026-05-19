@@ -260,6 +260,8 @@ export interface WorkflowRun {
   url: string;
   created_at: string;
   updated_at: string;
+  /** When GitHub reports the run actually began. Null while still queued. */
+  started_at: string | null;
   attempt: number;
 }
 

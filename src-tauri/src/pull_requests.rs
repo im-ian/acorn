@@ -1788,6 +1788,7 @@ pub struct WorkflowRun {
     pub url: String,
     pub created_at: String,
     pub updated_at: String,
+    pub started_at: Option<String>,
     pub attempt: u32,
 }
 
@@ -1831,6 +1832,8 @@ struct GhWorkflowRun {
     created_at: String,
     #[serde(rename = "updatedAt", default)]
     updated_at: String,
+    #[serde(rename = "startedAt", default)]
+    started_at: Option<String>,
     #[serde(default = "default_attempt")]
     attempt: u32,
 }
@@ -1870,7 +1873,7 @@ fn run_workflow_list(slug: &str, token: &str, limit: u32) -> AppResult<Vec<Workf
             &limit_s,
             "--json",
             "databaseId,displayTitle,name,workflowName,status,conclusion,event,\
-             headBranch,headSha,url,createdAt,updatedAt,attempt",
+             headBranch,headSha,url,createdAt,updatedAt,startedAt,attempt",
         ]);
     })?;
 
@@ -1907,6 +1910,7 @@ fn run_workflow_list(slug: &str, token: &str, limit: u32) -> AppResult<Vec<Workf
                 url: r.url,
                 created_at: r.created_at,
                 updated_at: r.updated_at,
+                started_at: r.started_at,
                 attempt: r.attempt,
             }
         })
