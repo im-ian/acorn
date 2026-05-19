@@ -1,0 +1,112 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  AgentHistoryItem,
+  PullRequestListing,
+  WorkflowRunsListing,
+} from "./types";
+
+vi.mock("./api", () => ({
+  api: {
+    listAgentHistory:
+      vi.fn<(repoPath: string, limit: number) => Promise<AgentHistoryItem[]>>(),
+    listPullRequests:
+      vi.fn<
+        (
+          repoPath: string,
+          state: string,
+          limit: number,
+        ) => Promise<PullRequestListing>
+      >(),
+    listWorkflowRuns:
+      vi.fn<(repoPath: string, limit: number) => Promise<WorkflowRunsListing>>(),
+  },
+}));
+
+import { api } from "./api";
+import { rightPanelCache } from "./right-panel-cache";
+
+const mockApi = vi.mocked(api);
+const REPO = "/tmp/acorn";
+const OTHER_REPO = "/tmp/other";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+describe("rightPanelCache", () => {
+  beforeEach(() => {
+    rightPanelCache.resetForTests();
+    vi.clearAllMocks();
+  });
+
+  it("dedupes in-flight PR fetches and reuses cached results", async () => {
+    const listing: PullRequestListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const pending = deferred<PullRequestListing>();
+    mockApi.listPullRequests.mockReturnValueOnce(pending.promise);
+
+    const first = rightPanelCache.fetchPullRequests(REPO, "merged", 50);
+    const second = rightPanelCache.fetchPullRequests(REPO, "merged", 50);
+    expect(first).toBe(second);
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(1);
+
+    pending.resolve(listing);
+    await expect(first).resolves.toBe(listing);
+    await expect(
+      rightPanelCache.fetchPullRequests(REPO, "merged", 50),
+    ).resolves.toBe(listing);
+    expect(mockApi.listPullRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks project prefetch once until the repo is pruned", () => {
+    expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(true);
+    expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(false);
+
+    rightPanelCache.retainRepos([OTHER_REPO]);
+    expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(true);
+  });
+
+  it("drops cached repo data when the repo is no longer retained", async () => {
+    const history: AgentHistoryItem[] = [];
+    const workflows: WorkflowRunsListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    mockApi.listAgentHistory.mockResolvedValue(history);
+    mockApi.listWorkflowRuns.mockResolvedValue(workflows);
+
+    await rightPanelCache.fetchAgentHistory(REPO);
+    await rightPanelCache.fetchWorkflowRuns(REPO, 50);
+    expect(rightPanelCache.getAgentHistory(REPO)).toBe(history);
+    expect(rightPanelCache.getWorkflowRuns(REPO, 50)).toBe(workflows);
+
+    rightPanelCache.retainRepos([OTHER_REPO]);
+    expect(rightPanelCache.getAgentHistory(REPO)).toBeNull();
+    expect(rightPanelCache.getWorkflowRuns(REPO, 50)).toBeNull();
+  });
+
+  it("does not repopulate a pruned repo from a stale in-flight request", async () => {
+    const listing: PullRequestListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const pending = deferred<PullRequestListing>();
+    mockApi.listPullRequests.mockReturnValueOnce(pending.promise);
+
+    const request = rightPanelCache.fetchPullRequests(REPO, "open", 50);
+    rightPanelCache.retainRepos([OTHER_REPO]);
+    pending.resolve(listing);
+    await expect(request).resolves.toBe(listing);
+
+    expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBeNull();
+  });
+});

@@ -49,6 +49,7 @@ vi.mock("./FileExplorer", () => ({
 }));
 
 import { api } from "../lib/api";
+import { rightPanelCache } from "../lib/right-panel-cache";
 import { useAppStore } from "../store";
 import { RightPanel } from "./RightPanel";
 
@@ -69,6 +70,7 @@ describe("RightPanel background tab loading", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    rightPanelCache.resetForTests();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -109,6 +111,7 @@ describe("RightPanel background tab loading", () => {
     act(() => root.unmount());
     container.remove();
     vi.clearAllMocks();
+    rightPanelCache.resetForTests();
     vi.useRealTimers();
   });
 

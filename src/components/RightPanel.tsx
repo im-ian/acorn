@@ -44,6 +44,7 @@ import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
+import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
@@ -120,7 +121,6 @@ const COMMIT_ROW_HEIGHT = 48;
 const BACKGROUND_LOADED_TABS = new Set<RightTab>(["prs", "actions", "history"]);
 const PROJECT_PREFETCH_START_DELAY_MS = 1_000;
 const PROJECT_PREFETCH_GAP_MS = 250;
-const prefetchedProjectRepos = new Set<string>();
 
 type RightPanelTranslationKey = Extract<TranslationKey, `rightPanel.${string}`>;
 
@@ -145,16 +145,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function prefetchProjectPanelData(repoPath: string): Promise<void> {
-  void fetchAgentHistoryCached(repoPath).catch((error) => {
+  void rightPanelCache.fetchAgentHistory(repoPath).catch((error) => {
     console.debug("[RightPanel] agent history prefetch failed", repoPath, error);
   });
   const isGitHub = await prefetchGitHubRepoStatus(repoPath);
   if (!isGitHub) return;
-  await fetchPullRequestsCached(repoPath, "open", PR_PAGE_SIZE);
+  await rightPanelCache.fetchPullRequests(repoPath, "open", PR_PAGE_SIZE);
   for (const filter of PR_BACKGROUND_PREFETCH_STATES) {
-    await fetchPullRequestsCached(repoPath, filter, PR_PAGE_SIZE);
+    await rightPanelCache.fetchPullRequests(repoPath, filter, PR_PAGE_SIZE);
   }
-  await fetchWorkflowRunsCached(repoPath, WORKFLOW_RUNS_LIMIT);
+  await rightPanelCache.fetchWorkflowRuns(repoPath, WORKFLOW_RUNS_LIMIT);
 }
 
 export function RightPanel() {
@@ -235,6 +235,18 @@ export function RightPanel() {
     () => projects.map((project) => project.repo_path).join("\0"),
     [projects],
   );
+  const retainedRepoPaths = useMemo(() => {
+    const repos = new Set<string>();
+    for (const project of projects) repos.add(project.repo_path);
+    for (const session of sessions) {
+      repos.add(session.repo_path);
+      repos.add(session.worktree_path);
+    }
+    for (const tab of Object.values(workspaceTabs)) {
+      if (tab.repoPath) repos.add(tab.repoPath);
+    }
+    return Array.from(repos);
+  }, [projects, sessions, workspaceTabs]);
 
   // If the user is sitting on a tab that just became invisible (Todos emptied,
   // GitHub origin disappeared, etc.), slide them to the nearest visible tab
@@ -254,8 +266,7 @@ export function RightPanel() {
       void (async () => {
         for (const repo of repos) {
           if (cancelled) return;
-          if (prefetchedProjectRepos.has(repo)) continue;
-          prefetchedProjectRepos.add(repo);
+          if (!rightPanelCache.claimProjectPrefetch(repo)) continue;
           await prefetchProjectPanelData(repo).catch((error) => {
             console.debug("[RightPanel] project prefetch failed", repo, error);
           });
@@ -268,6 +279,10 @@ export function RightPanel() {
       window.clearTimeout(handle);
     };
   }, [projectKey, projects]);
+
+  useEffect(() => {
+    rightPanelCache.retainRepos(retainedRepoPaths);
+  }, [retainedRepoPaths]);
 
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
@@ -1048,39 +1063,6 @@ function countByStatus(todos: TodoItem[]) {
   return { pending, in_progress, completed };
 }
 
-// Per-project History snapshot kept in module memory so re-opening a project
-// renders its rows synchronously. The accompanying SWR fetch still refreshes
-// in the background to pick up sessions created since the snapshot. Lives in
-// process memory only — wiped on app restart, which is the right TTL for
-// session lists that turn over often.
-const agentHistoryCache = new Map<string, AgentHistoryItem[]>();
-const agentHistoryInFlight = new Map<string, Promise<AgentHistoryItem[]>>();
-
-function cachedAgentHistory(repoPath: string): AgentHistoryItem[] | null {
-  return agentHistoryCache.get(repoPath) ?? null;
-}
-
-function fetchAgentHistoryCached(
-  repoPath: string,
-  options: { force?: boolean } = {},
-): Promise<AgentHistoryItem[]> {
-  const cached = agentHistoryCache.get(repoPath);
-  if (cached && !options.force) return Promise.resolve(cached);
-  const existing = agentHistoryInFlight.get(repoPath);
-  if (existing) return existing;
-  const promise = api
-    .listAgentHistory(repoPath, 100)
-    .then((items) => {
-      agentHistoryCache.set(repoPath, items);
-      return items;
-    })
-    .finally(() => {
-      agentHistoryInFlight.delete(repoPath);
-    });
-  agentHistoryInFlight.set(repoPath, promise);
-  return promise;
-}
-
 function AgentHistoryTab({
   repoPath,
   sessionHostRepoPath,
@@ -1096,7 +1078,7 @@ function AgentHistoryTab({
   // list instantly. The accompanying fetch below still runs (SWR-style)
   // to surface new sessions created since the cached snapshot.
   const [items, setItems] = useState<AgentHistoryItem[] | null>(() =>
-    cachedAgentHistory(repoPath),
+    rightPanelCache.getAgentHistory(repoPath),
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1129,7 +1111,9 @@ function AgentHistoryTab({
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchAgentHistoryCached(repoPath, { force: true });
+      const result = await rightPanelCache.fetchAgentHistory(repoPath, {
+        force: true,
+      });
       if (token !== fetchTokenRef.current) return;
       setItems(result);
     } catch (e) {
@@ -1205,7 +1189,7 @@ function AgentHistoryTab({
             candidate.id !== item.id ||
             candidate.transcript_path !== item.transcript_path,
         );
-        agentHistoryCache.set(repoPath, next);
+        rightPanelCache.setAgentHistory(repoPath, next);
         return next;
       });
       setTrashCandidate(null);
@@ -1446,13 +1430,6 @@ function AgentHistoryTab({
   );
 }
 
-// Per-repo cache for the commits list. Survives remounts so revisiting a
-// project shows its commit log synchronously; the safety interval still kicks
-// off a background refresh on mount to splice newer commits over the cached
-// prefix. Process memory only.
-type CommitsCacheEntry = { commits: CommitInfo[]; hasMore: boolean };
-const commitsCache = new Map<string, CommitsCacheEntry>();
-
 function CommitsTab({
   repoPath,
   invalidateKey,
@@ -1463,7 +1440,7 @@ function CommitsTab({
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
-  const cachedCommits = commitsCache.get(repoPath);
+  const cachedCommits = rightPanelCache.getCommits(repoPath);
   const [commits, setCommits] = useState<CommitInfo[]>(
     () => cachedCommits?.commits ?? [],
   );
@@ -1544,7 +1521,7 @@ function CommitsTab({
   // a blank entry that suppresses the skeleton on a true first visit.
   useEffect(() => {
     if (loadingFirst) return;
-    commitsCache.set(repoPath, { commits, hasMore });
+    rightPanelCache.setCommits(repoPath, { commits, hasMore });
   }, [repoPath, commits, hasMore, loadingFirst]);
 
   // Resolve commit author logins via GitHub GraphQL for any sha we don't
@@ -1923,11 +1900,6 @@ function absoluteTime(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-// Per-repo cache for the staged-files snapshot. Same lifecycle as
-// commitsCache — survives remounts, refreshed on every safety interval mount.
-type StagedCacheEntry = { files: StagedFile[]; diff: DiffPayload | null };
-const stagedCache = new Map<string, StagedCacheEntry>();
-
 function StagedTab({
   repoPath,
   invalidateKey,
@@ -1938,7 +1910,7 @@ function StagedTab({
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
-  const cachedStaged = stagedCache.get(repoPath);
+  const cachedStaged = rightPanelCache.getStaged(repoPath);
   const [files, setFiles] = useState<StagedFile[]>(
     () => cachedStaged?.files ?? [],
   );
@@ -1997,7 +1969,7 @@ function StagedTab({
   // Mirror to module cache so the next mount for this repo hydrates instantly.
   useEffect(() => {
     if (loadingFirst) return;
-    stagedCache.set(repoPath, { files, diff });
+    rightPanelCache.setStaged(repoPath, { files, diff });
   }, [repoPath, files, diff, loadingFirst]);
 
   function isDeleted(file: StagedFile): boolean {
@@ -2155,23 +2127,12 @@ interface PrListState {
   limit: number;
 }
 
-const prListCache = new Map<string, PullRequestListing>();
-const prListInFlight = new Map<string, Promise<PullRequestListing>>();
-
-function prListCacheKey(
-  repoPath: string,
-  filter: PrStateFilter,
-  limit: number,
-): string {
-  return JSON.stringify([repoPath, filter, limit]);
-}
-
 function cachedPrListing(
   repoPath: string,
   filter: PrStateFilter,
   limit = PR_PAGE_SIZE,
 ): PullRequestListing | null {
-  return prListCache.get(prListCacheKey(repoPath, filter, limit)) ?? null;
+  return rightPanelCache.getPullRequests(repoPath, filter, limit);
 }
 
 function fetchPullRequestsCached(
@@ -2180,22 +2141,7 @@ function fetchPullRequestsCached(
   limit: number,
   options: { force?: boolean } = {},
 ): Promise<PullRequestListing> {
-  const key = prListCacheKey(repoPath, filter, limit);
-  const cached = prListCache.get(key);
-  if (cached && !options.force) return Promise.resolve(cached);
-  const existing = prListInFlight.get(key);
-  if (existing) return existing;
-  const promise = api
-    .listPullRequests(repoPath, filter, limit)
-    .then((result) => {
-      prListCache.set(key, result);
-      return result;
-    })
-    .finally(() => {
-      prListInFlight.delete(key);
-    });
-  prListInFlight.set(key, promise);
-  return promise;
+  return rightPanelCache.fetchPullRequests(repoPath, filter, limit, options);
 }
 
 function emptyPrListState(): PrListState {
@@ -2658,18 +2604,12 @@ function PullRequestsTab({
 
 const WORKFLOW_RUNS_LIMIT = 50;
 const ALL_WORKFLOWS = "__all__";
-const workflowRunsCache = new Map<string, WorkflowRunsListing>();
-const workflowRunsInFlight = new Map<string, Promise<WorkflowRunsListing>>();
-
-function workflowRunsCacheKey(repoPath: string, limit: number): string {
-  return JSON.stringify([repoPath, limit]);
-}
 
 function cachedWorkflowRuns(
   repoPath: string,
   limit = WORKFLOW_RUNS_LIMIT,
 ): WorkflowRunsListing | null {
-  return workflowRunsCache.get(workflowRunsCacheKey(repoPath, limit)) ?? null;
+  return rightPanelCache.getWorkflowRuns(repoPath, limit);
 }
 
 function fetchWorkflowRunsCached(
@@ -2677,22 +2617,7 @@ function fetchWorkflowRunsCached(
   limit: number,
   options: { force?: boolean } = {},
 ): Promise<WorkflowRunsListing> {
-  const key = workflowRunsCacheKey(repoPath, limit);
-  const cached = workflowRunsCache.get(key);
-  if (cached && !options.force) return Promise.resolve(cached);
-  const existing = workflowRunsInFlight.get(key);
-  if (existing) return existing;
-  const promise = api
-    .listWorkflowRuns(repoPath, limit)
-    .then((result) => {
-      workflowRunsCache.set(key, result);
-      return result;
-    })
-    .finally(() => {
-      workflowRunsInFlight.delete(key);
-    });
-  workflowRunsInFlight.set(key, promise);
-  return promise;
+  return rightPanelCache.fetchWorkflowRuns(repoPath, limit, options);
 }
 
 function ActionsTab({ repoPath }: { repoPath: string }) {
