@@ -747,6 +747,34 @@ describe("removeProject", () => {
   });
 });
 
+describe("requestRemoveProject", () => {
+  it("opens the confirmation modal when the project still has sessions", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("b1", REPO_B)],
+    );
+
+    useAppStore.getState().requestRemoveProject(REPO_B);
+
+    expect(useAppStore.getState().pendingRemoveProject).toBe(REPO_B);
+    expect(mockApi.removeProject).not.toHaveBeenCalled();
+  });
+
+  it("removes the project directly without a confirmation modal when no sessions remain", async () => {
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], []);
+    mockApi.removeProject.mockResolvedValueOnce(undefined);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValueOnce([]);
+
+    useAppStore.getState().requestRemoveProject(REPO_B);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(useAppStore.getState().pendingRemoveProject).toBeNull();
+    expect(mockApi.removeProject).toHaveBeenCalledWith(REPO_B, true, false);
+    expect(useAppStore.getState().workspaces[REPO_B]).toBeUndefined();
+  });
+});
+
 describe("reorderProjects", () => {
   it("optimistically reorders, then commits the server-returned order", async () => {
     await seed(
