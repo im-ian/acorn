@@ -2088,6 +2088,16 @@ pub async fn github_origin_slug(repo_path: String) -> AppResult<Option<String>> 
     .await
 }
 
+/// True when `repo_path` is inside a git repository. The frontend uses this
+/// to avoid showing GitHub-only UI for projects that have not run `git init`.
+#[tauri::command]
+pub async fn is_git_repository(repo_path: String) -> AppResult<bool> {
+    run_blocking("is_git_repository", move || {
+        Ok(git_ops::is_git_repository(&PathBuf::from(repo_path)))
+    })
+    .await
+}
+
 /// Spawn an external editor on `path`. Used by the "Open in editor" action
 /// when the user has configured a custom editor command in settings.
 ///

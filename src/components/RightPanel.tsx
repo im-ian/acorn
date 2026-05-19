@@ -202,10 +202,11 @@ export function RightPanel() {
     active?.worktree_path ?? null,
   );
   const showTodos = todosState.todos.length > 0;
-  // null while the first probe is in flight — keep GitHub visible during
-  // that brief window so the bar doesn't flicker on first paint.
+  // null while the first probe is in flight. Keep GitHub hidden until we know
+  // the path is a git repo with a GitHub origin so non-git projects never show
+  // GitHub-only actions.
   const isGitHubRepo = useIsGitHubRepo(repoPath);
-  const githubVisible = isGitHubRepo !== false;
+  const githubVisible = isGitHubRepo === true;
 
   const visibleTabsByGroup = useMemo<
     Record<RightGroup, ReadonlyArray<RightTab>>
@@ -228,9 +229,7 @@ export function RightPanel() {
     : (visibleGroups[0] ?? "code");
   const visibleTabs = visibleTabsByGroup[activeGroup];
   const shouldLoadGitHubTabs =
-    repoPath !== null &&
-    (isGitHubRepo === true ||
-      (isGitHubRepo === null && activeGroup === "github"));
+    repoPath !== null && isGitHubRepo === true;
   const projectKey = useMemo(
     () => projects.map((project) => project.repo_path).join("\0"),
     [projects],
@@ -254,9 +253,10 @@ export function RightPanel() {
   useEffect(() => {
     if (visibleTabs.length === 0) return;
     if (!visibleTabs.includes(rightTab)) {
+      if (isGitHubRepo === null && groupOfTab(rightTab) === "github") return;
       setRightTab(visibleTabs[0]);
     }
-  }, [rightTab, visibleTabs, setRightTab]);
+  }, [isGitHubRepo, rightTab, visibleTabs, setRightTab]);
 
   useEffect(() => {
     if (projects.length === 0) return;

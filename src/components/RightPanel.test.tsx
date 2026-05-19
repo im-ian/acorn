@@ -19,6 +19,7 @@ vi.mock("../lib/api", () => ({
   api: {
     fsWatchSetRoot: vi.fn<() => Promise<void>>(),
     githubOriginSlug: vi.fn<() => Promise<string | null>>(),
+    isGitRepository: vi.fn<() => Promise<boolean>>(),
     listPullRequests:
       vi.fn<
         (
@@ -50,6 +51,7 @@ vi.mock("./FileExplorer", () => ({
 
 import { api } from "../lib/api";
 import { rightPanelCache } from "../lib/right-panel-cache";
+import { __resetIsGitHubRepoCacheForTests } from "../lib/useIsGitHubRepo";
 import { useAppStore } from "../store";
 import { RightPanel } from "./RightPanel";
 
@@ -71,10 +73,12 @@ describe("RightPanel background tab loading", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     rightPanelCache.resetForTests();
+    __resetIsGitHubRepoCacheForTests();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     mockApi.githubOriginSlug.mockResolvedValue("im-ian/acorn");
+    mockApi.isGitRepository.mockResolvedValue(true);
     mockApi.fsWatchSetRoot.mockResolvedValue();
     mockApi.listPullRequests.mockResolvedValue({
       kind: "ok",
@@ -112,6 +116,7 @@ describe("RightPanel background tab loading", () => {
     container.remove();
     vi.clearAllMocks();
     rightPanelCache.resetForTests();
+    __resetIsGitHubRepoCacheForTests();
     vi.useRealTimers();
   });
 
@@ -181,5 +186,19 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO_B, "closed", 50);
     expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO_B, "all", 50);
     expect(mockApi.listWorkflowRuns).toHaveBeenCalledWith(REPO_B, 50);
+  });
+
+  it("hides GitHub tabs for projects that are not git repositories", async () => {
+    mockApi.isGitRepository.mockResolvedValue(false);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).not.toContain("GitHub");
+    expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
+    expect(mockApi.listPullRequests).not.toHaveBeenCalled();
+    expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
   });
 });

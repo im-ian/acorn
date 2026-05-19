@@ -302,6 +302,7 @@ pub fn run() {
             commands::commit_diff,
             commands::commit_web_url,
             commands::github_origin_slug,
+            commands::is_git_repository,
             commands::open_in_editor,
             commands::staged_diff,
             commands::list_pull_requests,

@@ -299,6 +299,20 @@ test.describe("right panel: groups", () => {
     await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
   });
 
+  test("GitHub group is hidden when project is not a git repository", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.handle("is_git_repository", () => false);
+
+    await page.goto("/");
+
+    await expect(page.getByRole("button", { name: "Code" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agents" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
+  });
+
   test("History sub-tab is labeled 'History' (renamed from 'Sessions')", async ({
     page,
     tauri,
