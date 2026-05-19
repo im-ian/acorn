@@ -5,24 +5,10 @@
 //! Resolution order:
 //! 1. `ACORN_IPC_SOCKET` env (override; takes precedence so test harnesses
 //!    can point at an isolated path).
-//! 2. `<data_dir>/ipc.sock`, where `data_dir` matches what the app uses for
-//!    `sessions.json` and friends (see `crate::persistence::data_dir`).
-//!
-//! The CLI cannot link `persistence::data_dir` without dragging the app's
-//! full module graph into the bin target, so this file re-derives the
-//! same `directories` lookup directly — the two paths must stay in lockstep.
-//!
-//! Debug vs release: `cfg!(debug_assertions)` swaps the project name to
-//! `acorn-dev` so `pnpm run tauri dev` cannot collide with the installed
-//! app. The sidecar `acorn-ipc` CLI is normally built `--release` (see
-//! `scripts/build-sidecar.sh`), so its fallback resolves to `acorn` even
-//! when the host runs debug. This is fine in practice because every
-//! control-session PTY gets `ACORN_IPC_SOCKET` injected and never reaches
-//! the fallback branch.
+//! 2. `<data_dir>/ipc.sock`, where `data_dir` comes from `acorn-paths` and
+//!    matches the app and daemon profile layout.
 
 use std::path::PathBuf;
-
-use directories::ProjectDirs;
 
 const SOCKET_FILE: &str = "ipc.sock";
 const ENV_OVERRIDE: &str = "ACORN_IPC_SOCKET";
@@ -35,14 +21,9 @@ pub fn resolve() -> Result<PathBuf, String> {
             return Ok(PathBuf::from(override_path));
         }
     }
-    let app_name = if cfg!(debug_assertions) {
-        "acorn-dev"
-    } else {
-        "acorn"
-    };
-    let project_dirs = ProjectDirs::from("io", "im-ian", app_name)
-        .ok_or_else(|| "could not resolve project data directory".to_string())?;
-    Ok(project_dirs.data_dir().join(SOCKET_FILE))
+    Ok(acorn_paths::data_dir()
+        .map_err(|err| err.to_string())?
+        .join(SOCKET_FILE))
 }
 
 #[cfg(test)]
@@ -74,15 +55,26 @@ mod tests {
     fn falls_back_to_data_dir() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let prev = std::env::var(ENV_OVERRIDE).ok();
+        let prev_profile = std::env::var(acorn_paths::ENV_PROFILE).ok();
         unsafe {
             std::env::remove_var(ENV_OVERRIDE);
+            std::env::set_var(acorn_paths::ENV_PROFILE, "ipc-test");
         }
         let resolved = resolve().expect("default resolves");
         assert!(resolved.ends_with(SOCKET_FILE));
+        assert!(
+            resolved.ends_with("profiles/ipc-test/ipc.sock"),
+            "fallback socket should use the selected profile data dir, got {resolved:?}"
+        );
         unsafe {
             if let Some(v) = prev {
                 std::env::set_var(ENV_OVERRIDE, v);
             }
+            match prev_profile {
+                Some(v) => std::env::set_var(acorn_paths::ENV_PROFILE, v),
+                None => std::env::remove_var(acorn_paths::ENV_PROFILE),
+            }
         }
+        let _ = std::fs::remove_dir_all(resolved.parent().unwrap());
     }
 }

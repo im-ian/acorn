@@ -61,6 +61,19 @@ fn ensure_shell_init_dir_at(base: &Path) -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+pub(crate) fn is_shell_init_dir(path: &Path) -> bool {
+    let zshenv = path.join(ZSHENV_NAME);
+    let zshrc = path.join(ZSHRC_NAME);
+    path.file_name()
+        .is_some_and(|name| name == SHELL_INIT_DIR_NAME)
+        && fs::read_to_string(zshenv)
+            .map(|body| body.contains("Acorn zsh env init."))
+            .unwrap_or(false)
+        && fs::read_to_string(zshrc)
+            .map(|body| body.contains("Acorn zsh interactive init."))
+            .unwrap_or(false)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -153,6 +166,14 @@ mod tests {
         let a = ensure_shell_init_dir_at(base.path()).unwrap();
         let b = ensure_shell_init_dir_at(base.path()).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn detects_acorn_shell_init_dirs() {
+        let base = ScratchDir::new("detect");
+        let dir = ensure_shell_init_dir_at(base.path()).unwrap();
+        assert!(is_shell_init_dir(&dir));
+        assert!(!is_shell_init_dir(base.path()));
     }
 
     #[test]

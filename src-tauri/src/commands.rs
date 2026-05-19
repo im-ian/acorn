@@ -1188,6 +1188,13 @@ pub async fn pty_spawn<R: Runtime>(
         tracing::warn!(%id, "agent state dir setup failed; resume modal will be inactive for this session");
     }
 
+    if let Ok(data_dir) = acorn_daemon::paths::data_dir() {
+        effective_env.insert(
+            acorn_daemon::paths::ENV_DATA_DIR_OVERRIDE.to_string(),
+            data_dir.display().to_string(),
+        );
+    }
+
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
     // Override `ZDOTDIR` with Acorn's staged dir so our `.zshrc` runs; stash
     // the user's original under `ACORN_USER_ZDOTDIR` so the staged rc can
@@ -1206,7 +1213,11 @@ pub async fn pty_spawn<R: Runtime>(
             .canonicalize()
             .map(|path| path == shell_init_dir)
             .unwrap_or(false);
-        if user_zdotdir.is_empty() || points_at_shell_init {
+        let points_at_acorn_shell_init = Path::new(&user_zdotdir)
+            .canonicalize()
+            .map(|path| crate::shell_init::is_shell_init_dir(&path))
+            .unwrap_or(false);
+        if user_zdotdir.is_empty() || points_at_shell_init || points_at_acorn_shell_init {
             user_zdotdir = effective_env
                 .get("HOME")
                 .cloned()

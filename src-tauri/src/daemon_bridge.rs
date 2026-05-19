@@ -204,7 +204,12 @@ impl DaemonBridge {
         }
         // `--detach` so the daemon survives the app's exit. Spawn
         // returns immediately; the detached grandchild keeps running.
-        Command::new(&path).arg("serve").arg("--detach").spawn()?;
+        let data_dir = paths::data_dir()?;
+        Command::new(&path)
+            .arg("serve")
+            .arg("--detach")
+            .env(paths::ENV_DATA_DIR_OVERRIDE, data_dir)
+            .spawn()?;
         // Wait for the socket to come up.
         let deadline = Instant::now() + SOCKET_WAIT_TIMEOUT;
         while Instant::now() < deadline {

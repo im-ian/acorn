@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use directories::ProjectDirs;
-
 use crate::error::{AppError, AppResult};
 use acorn_session::{Project, Session};
 
@@ -42,20 +40,54 @@ fn backup_corrupt_file(path: &Path) {
     }
 }
 
+fn copy_legacy_file_if_missing(
+    legacy_base: &Path,
+    profile_dir: &Path,
+    file_name: &str,
+) -> std::io::Result<()> {
+    let source = legacy_base.join(file_name);
+    let target = profile_dir.join(file_name);
+    if target.exists() || !source.is_file() {
+        return Ok(());
+    }
+    fs::copy(source, target)?;
+    Ok(())
+}
+
+fn data_dir_override_is_set() -> bool {
+    std::env::var(acorn_paths::ENV_DATA_DIR_OVERRIDE)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+fn should_migrate_legacy_prod_files() -> AppResult<bool> {
+    if data_dir_override_is_set() {
+        return Ok(false);
+    }
+    Ok(acorn_paths::effective_profile()? == acorn_paths::PROD_PROFILE)
+}
+
+fn migrate_legacy_prod_files(profile_dir: &Path) -> AppResult<()> {
+    if !should_migrate_legacy_prod_files()? {
+        return Ok(());
+    }
+    let legacy_base = acorn_paths::base_data_dir()?;
+    if legacy_base == profile_dir {
+        return Ok(());
+    }
+    copy_legacy_file_if_missing(&legacy_base, profile_dir, SESSIONS_FILE)?;
+    copy_legacy_file_if_missing(&legacy_base, profile_dir, PROJECTS_FILE)?;
+    Ok(())
+}
+
 /// Resolve the application's data directory, creating it if missing.
 ///
-/// Debug builds (`pnpm run tauri dev`) write to `acorn-dev` so local testing
-/// does not clobber the installed Acorn's sessions/projects.
+/// Runtime state lives under the stable `io.im-ian.acorn` app dir, split by
+/// `ACORN_PROFILE` or by the build default (`dev` for debug, `prod` for
+/// release). `ACORN_DATA_DIR` can still redirect the whole tree for tests.
 pub fn data_dir() -> AppResult<PathBuf> {
-    let app_name = if cfg!(debug_assertions) {
-        "acorn-dev"
-    } else {
-        "acorn"
-    };
-    let project_dirs = ProjectDirs::from("io", "im-ian", app_name)
-        .ok_or_else(|| AppError::Other("could not resolve project data directory".to_string()))?;
-    let dir = project_dirs.data_dir().to_path_buf();
-    fs::create_dir_all(&dir)?;
+    let dir = acorn_paths::data_dir()?;
+    migrate_legacy_prod_files(&dir)?;
     Ok(dir)
 }
 
@@ -184,6 +216,9 @@ pub fn save_projects(projects: &[Project]) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn data_dir_is_resolvable() {
@@ -223,5 +258,47 @@ mod tests {
             "expected a sessions.json.broken-* file, got {entries:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn copies_legacy_persistence_file_only_when_profile_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "acorn-persist-migrate-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let legacy = tmp.join("legacy");
+        let profile = tmp.join("profile");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&profile).unwrap();
+
+        fs::write(legacy.join(SESSIONS_FILE), b"legacy").unwrap();
+        copy_legacy_file_if_missing(&legacy, &profile, SESSIONS_FILE).unwrap();
+        assert_eq!(fs::read(profile.join(SESSIONS_FILE)).unwrap(), b"legacy");
+
+        fs::write(legacy.join(PROJECTS_FILE), b"legacy-projects").unwrap();
+        fs::write(profile.join(PROJECTS_FILE), b"profile-projects").unwrap();
+        copy_legacy_file_if_missing(&legacy, &profile, PROJECTS_FILE).unwrap();
+        assert_eq!(
+            fs::read(profile.join(PROJECTS_FILE)).unwrap(),
+            b"profile-projects"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn legacy_migration_skips_explicit_data_dir_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(acorn_paths::ENV_DATA_DIR_OVERRIDE, "/tmp/acorn-explicit-data-dir");
+            std::env::remove_var(acorn_paths::ENV_PROFILE);
+        }
+
+        assert!(!should_migrate_legacy_prod_files().unwrap());
+
+        unsafe { std::env::remove_var(acorn_paths::ENV_DATA_DIR_OVERRIDE) };
     }
 }

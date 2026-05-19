@@ -2,10 +2,10 @@
 //! daemon, app, and `acornd` CLI clients all derive the same locations
 //! without each rolling its own `directories::ProjectDirs` call.
 //!
-//! macOS layout (production):
+//! macOS layout (production profile):
 //!
 //! ```text
-//! ~/Library/Application Support/io.im-ian.acorn/
+//! ~/Library/Application Support/io.im-ian.acorn/profiles/prod/
 //! ├── sessions.json           (app-owned, untouched by the daemon)
 //! ├── projects.json           (app-owned)
 //! ├── ipc.sock                (in-process IPC socket for the legacy CLI)
@@ -21,18 +21,12 @@
 //!     └── <utc-timestamp>.log (panic / abnormal-exit captures)
 //! ```
 //!
-//! Test override: every helper consults `ACORN_DATA_DIR` first. Set this in
-//! tests to redirect every artifact into a `tempdir` without monkey-patching
-//! `directories` globally.
+//! Test override: every helper consults `ACORN_DATA_DIR` first. When unset,
+//! `ACORN_PROFILE` selects a profile below `io.im-ian.acorn/profiles/`.
 
 use std::path::PathBuf;
 
-use directories::ProjectDirs;
-
-/// Override env var. When set and non-empty, every helper rebases off this
-/// directory instead of `ProjectDirs`. Tests use this to isolate daemon
-/// state to a tempdir; production never sets it.
-pub const ENV_DATA_DIR_OVERRIDE: &str = "ACORN_DATA_DIR";
+pub use acorn_paths::{ENV_DATA_DIR_OVERRIDE, ENV_PROFILE};
 
 /// Override env var for the daemon control socket. Mirrors the existing
 /// `ACORN_IPC_SOCKET` override pattern used by `acorn_ipc::socket_path`
@@ -45,39 +39,12 @@ pub const ENV_DAEMON_SOCKET_OVERRIDE: &str = "ACORN_DAEMON_SOCKET";
 /// colliding paths.
 pub const ENV_DAEMON_STREAM_OVERRIDE: &str = "ACORN_DAEMON_STREAM_SOCKET";
 
-/// Resolve the data directory, creating it on demand. Returns a `PathBuf`
-/// rather than `&Path` because callers typically want to append to it
-/// without re-rooting on each call.
-///
-/// Debug builds resolve `ProjectDirs` against `acorn-dev` so the daemon's
-/// socket / pidfile / log / metadata land in the same isolated data dir
-/// that `pnpm run tauri dev` uses for the app. Without this the dev app
-/// (`acorn-dev`) and a dev-built `acornd` (`acorn`) would each pick a
-/// different directory and never see each other's sockets. The release
-/// sidecar is built `--release` (see `scripts/build-sidecar.sh`), so it
-/// keeps using `acorn` and stays aligned with the installed app.
+/// Resolve the data directory, creating it on demand. `ACORN_DATA_DIR` wins;
+/// otherwise `ACORN_PROFILE` selects `profiles/<name>` under the stable
+/// `io.im-ian.acorn` app dir. Without `ACORN_PROFILE`, debug builds use
+/// `dev` and release builds use `prod`.
 pub fn data_dir() -> std::io::Result<PathBuf> {
-    if let Ok(over) = std::env::var(ENV_DATA_DIR_OVERRIDE) {
-        if !over.is_empty() {
-            let p = PathBuf::from(over);
-            std::fs::create_dir_all(&p)?;
-            return Ok(p);
-        }
-    }
-    let app_name = if cfg!(debug_assertions) {
-        "acorn-dev"
-    } else {
-        "acorn"
-    };
-    let pd = ProjectDirs::from("io", "im-ian", app_name).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "could not resolve project data directory",
-        )
-    })?;
-    let p = pd.data_dir().to_path_buf();
-    std::fs::create_dir_all(&p)?;
-    Ok(p)
+    acorn_paths::data_dir()
 }
 
 /// Daemon control socket path. Honors `ACORN_DAEMON_SOCKET` override.
@@ -165,5 +132,32 @@ mod tests {
         let p = control_socket_path().unwrap();
         assert_eq!(p, custom);
         unsafe { std::env::remove_var(ENV_DAEMON_SOCKET_OVERRIDE) };
+    }
+
+    #[test]
+    fn profile_env_selects_profile_subdir_under_acorn_app_dir() {
+        let _g = ENV_LOCK.lock();
+        unsafe {
+            std::env::remove_var(ENV_DATA_DIR_OVERRIDE);
+            std::env::set_var(ENV_PROFILE, "unit-test");
+        }
+
+        let dir = data_dir().unwrap();
+        let rendered = dir.to_string_lossy();
+        assert!(
+            rendered.contains("io.im-ian.acorn") || rendered.contains("acorn"),
+            "profile dirs should stay rooted under the acorn app dir, got {dir:?}"
+        );
+        assert!(
+            !rendered.contains("acorn-dev"),
+            "profiles should not switch the app name to acorn-dev, got {dir:?}"
+        );
+        assert!(
+            dir.ends_with("profiles/unit-test"),
+            "profile data should live under profiles/<name>, got {dir:?}"
+        );
+
+        unsafe { std::env::remove_var(ENV_PROFILE) };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
