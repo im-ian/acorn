@@ -25,6 +25,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { useSettings } from "../lib/settings";
 import { ResizeHandle } from "./ResizeHandle";
 import type {
   DiffPayload,
@@ -50,6 +51,19 @@ type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
 function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
+}
+
+function useLiveUnixSeconds(enabled: boolean): number {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Math.floor(Date.now() / 1000));
+    const handle = window.setInterval(() => {
+      setNow(Math.floor(Date.now() / 1000));
+    }, 1_000);
+    return () => window.clearInterval(handle);
+  }, [enabled]);
+  return now;
 }
 
 interface PullRequestDetailModalProps {
@@ -78,6 +92,9 @@ export function PullRequestDetailModal({
   onMutated,
 }: PullRequestDetailModalProps) {
   const t = useTranslation();
+  const refreshIntervalMs = useSettings(
+    (s) => s.settings.github.refreshIntervalMs,
+  );
   const [listing, setListing] = useState<PullRequestDetailListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>("conversation");
@@ -132,6 +149,7 @@ export function PullRequestDetailModal({
       .then((result) => {
         if (cancelled) return;
         setListing(result);
+        setError(null);
         setRefreshing(false);
       })
       .catch((e) => {
@@ -144,6 +162,35 @@ export function PullRequestDetailModal({
     };
   }, [open, reloadKey]);
 
+  const detail = listing && listing.kind === "ok" ? listing.detail : null;
+  const hasRunningChecks =
+    detail?.checks.some((check) => check.status.toUpperCase() !== "COMPLETED") ??
+    false;
+
+  useEffect(() => {
+    if (!open || !hasRunningChecks) return;
+    let cancelled = false;
+    const handle = window.setInterval(() => {
+      void api
+        .getPullRequestDetail(open.repoPath, open.number)
+        .then((result) => {
+          if (!cancelled) {
+            setListing(result);
+            setError(null);
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            console.debug("[PullRequestDetailModal] polling failed", e);
+          }
+        });
+    }, refreshIntervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [open, hasRunningChecks, refreshIntervalMs]);
+
   const handleRefresh = useCallback(() => {
     setReloadKey((k) => k + 1);
   }, []);
@@ -153,8 +200,6 @@ export function PullRequestDetailModal({
     onMutated?.();
   }, [onMutated]);
 
-  const detail =
-    listing && listing.kind === "ok" ? listing.detail : null;
   const prKey = open ? `${open.repoPath}#${open.number}` : null;
   // Whenever a fresh detail arrives, the canonical body wins unless we have
   // an unsynced override from a click that happened mid-fetch. The override
@@ -1467,6 +1512,12 @@ function buildCommitUrl(prUrl: string, oid: string): string | null {
 
 function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
   const t = useTranslation();
+  const nowUnix = useLiveUnixSeconds(
+    checks.some(
+      (check) =>
+        check.status.toUpperCase() !== "COMPLETED" && !!check.started_at,
+    ),
+  );
   if (checks.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-fg-muted">
@@ -1477,34 +1528,50 @@ function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
   return (
     <ul className="flex h-full flex-col overflow-y-auto text-xs">
       {checks.map((c, i) => (
-        <li
-          key={`${c.name}-${i}`}
-          className="flex items-center gap-2 border-b border-border/40 px-3 py-2"
-        >
-          <CheckIcon status={c.status} conclusion={c.conclusion} />
-          <span className="min-w-0 flex-1 truncate text-fg">
-            {c.workflow_name ? (
-              <span className="text-fg-muted">{c.workflow_name} / </span>
-            ) : null}
-            {c.name}
-          </span>
-          <CheckStatusLabel status={c.status} conclusion={c.conclusion} />
-          {c.url ? (
-            <Tooltip label={dt(t, "dialogs.pullRequestDetail.openRun")} side="top">
-              <button
-                type="button"
-                onClick={() => {
-                  if (c.url) void openUrl(c.url);
-                }}
-                className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-              >
-                <ExternalLink size={11} />
-              </button>
-            </Tooltip>
-          ) : null}
-        </li>
+        <CheckRow key={`${c.name}-${i}`} check={c} nowUnix={nowUnix} />
       ))}
     </ul>
+  );
+}
+
+function CheckRow({
+  check,
+  nowUnix,
+}: {
+  check: PullRequestCheck;
+  nowUnix: number;
+}) {
+  const t = useTranslation();
+  const duration = formatCheckDuration(check, t, nowUnix);
+  return (
+    <li className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
+      <CheckIcon status={check.status} conclusion={check.conclusion} />
+      <span className="min-w-0 flex-1 truncate text-fg">
+        {check.workflow_name ? (
+          <span className="text-fg-muted">{check.workflow_name} / </span>
+        ) : null}
+        {check.name}
+      </span>
+      {duration ? (
+        <span className="shrink-0 font-mono text-[10px] text-fg-muted">
+          {duration}
+        </span>
+      ) : null}
+      <CheckStatusLabel status={check.status} conclusion={check.conclusion} />
+      {check.url ? (
+        <Tooltip label={dt(t, "dialogs.pullRequestDetail.openRun")} side="top">
+          <button
+            type="button"
+            onClick={() => {
+              if (check.url) void openUrl(check.url);
+            }}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <ExternalLink size={11} />
+          </button>
+        </Tooltip>
+      ) : null}
+    </li>
   );
 }
 
@@ -1569,6 +1636,47 @@ function CheckStatusLabel({
   return (
     <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
   );
+}
+
+function formatCheckDuration(
+  check: PullRequestCheck,
+  t: Translator,
+  nowUnix = Math.floor(Date.now() / 1000),
+): string {
+  if (!check.started_at) return "";
+  const start = toUnixSeconds(check.started_at);
+  if (start <= 0) return "";
+  const completed = check.status.toUpperCase() === "COMPLETED";
+  const end = completed && check.completed_at ? toUnixSeconds(check.completed_at) : nowUnix;
+  return formatDurationSeconds(Math.max(0, end - start), t);
+}
+
+function formatDurationSeconds(seconds: number, t: Translator): string {
+  if (seconds < 60) {
+    return t("rightPanel.duration.seconds").replace("{count}", String(seconds));
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  if (minutes < 60) {
+    return rem === 0
+      ? t("rightPanel.duration.minutes").replace("{count}", String(minutes))
+      : t("rightPanel.duration.minutesSeconds")
+          .replace("{minutes}", String(minutes))
+          .replace("{seconds}", String(rem));
+  }
+  const hours = Math.floor(minutes / 60);
+  const minRem = minutes % 60;
+  return minRem === 0
+    ? t("rightPanel.duration.hours").replace("{count}", String(hours))
+    : t("rightPanel.duration.hoursMinutes")
+        .replace("{hours}", String(hours))
+        .replace("{minutes}", String(minRem));
+}
+
+function toUnixSeconds(iso: string): number {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return Math.floor(Date.now() / 1000);
+  return Math.floor(ms / 1000);
 }
 
 /**

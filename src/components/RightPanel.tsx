@@ -146,6 +146,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function useLiveUnixSeconds(enabled: boolean): number {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Math.floor(Date.now() / 1000));
+    const handle = window.setInterval(() => {
+      setNow(Math.floor(Date.now() / 1000));
+    }, 1_000);
+    return () => window.clearInterval(handle);
+  }, [enabled]);
+  return now;
+}
+
 async function prefetchProjectPanelData(repoPath: string): Promise<void> {
   void rightPanelCache.fetchAgentHistory(repoPath).catch((error) => {
     console.debug("[RightPanel] agent history prefetch failed", repoPath, error);
@@ -2713,6 +2726,11 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
         ? listing.items
         : listing.items.filter((r) => r.workflow_name === workflowFilter)
       : [];
+  const nowUnix = useLiveUnixSeconds(
+    visibleItems.some(
+      (run) => run.status.toLowerCase() !== "completed" && !!run.started_at,
+    ),
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -2766,6 +2784,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
               <WorkflowRunRow
                 key={run.id}
                 run={run}
+                nowUnix={nowUnix}
                 onOpenDetail={() => setDetailRunId(run.id)}
               />
             ))}
@@ -2784,9 +2803,11 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
 
 function WorkflowRunRow({
   run,
+  nowUnix,
   onOpenDetail,
 }: {
   run: WorkflowRun;
+  nowUnix: number;
   onOpenDetail: () => void;
 }) {
   const t = useTranslation();
@@ -2800,6 +2821,9 @@ function WorkflowRunRow({
           workflow: run.workflow_name,
         });
   const branch = run.head_branch?.trim() ?? "";
+  const duration = run.started_at
+    ? formatRunDuration(run.started_at, run.status, run.updated_at, t, nowUnix)
+    : "";
 
   return (
     <li>
@@ -2854,6 +2878,11 @@ function WorkflowRunRow({
               {startedRelative}
             </span>
           </Tooltip>
+        ) : null}
+        {duration ? (
+          <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
+            {duration}
+          </span>
         ) : null}
       </button>
     </li>
@@ -3063,6 +3092,12 @@ function WorkflowRunDetailSkeleton() {
 
 function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
   const t = useTranslation();
+  const nowUnix = useLiveUnixSeconds(
+    detail.status.toLowerCase() !== "completed" ||
+      detail.jobs.some(
+        (job) => job.status.toLowerCase() !== "completed" && !!job.started_at,
+      ),
+  );
   const created = toUnixSeconds(detail.created_at);
   const updated = toUnixSeconds(detail.updated_at);
   const totalDuration = formatRunDuration(
@@ -3070,6 +3105,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
     detail.status,
     detail.updated_at,
     t,
+    nowUnix,
   );
   return (
     <div className="space-y-3">
@@ -3131,7 +3167,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
         ) : (
           <ul className="rounded border border-border/60 divide-y divide-border/40">
             {detail.jobs.map((job) => (
-              <WorkflowJobRow key={job.id} job={job} />
+              <WorkflowJobRow key={job.id} job={job} nowUnix={nowUnix} />
             ))}
           </ul>
         )}
@@ -3140,10 +3176,10 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
   );
 }
 
-function WorkflowJobRow({ job }: { job: WorkflowJob }) {
+function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number }) {
   const t = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const duration = formatJobDuration(job.started_at, job.completed_at, t);
+  const duration = formatJobDuration(job.started_at, job.completed_at, t, nowUnix);
   return (
     <li className="bg-bg/40">
       <button
@@ -3220,13 +3256,14 @@ function formatRunDuration(
   status: string,
   updatedAt: string,
   t: Translator,
+  nowUnix = Math.floor(Date.now() / 1000),
 ): string {
   const start = toUnixSeconds(startedAt);
   if (start <= 0) return "";
   const completed = status.toLowerCase() === "completed";
   const end = completed
-    ? toUnixSeconds(updatedAt) || Math.floor(Date.now() / 1000)
-    : Math.floor(Date.now() / 1000);
+    ? toUnixSeconds(updatedAt) || nowUnix
+    : nowUnix;
   return formatDurationSeconds(Math.max(0, end - start), t);
 }
 
@@ -3258,11 +3295,12 @@ function formatJobDuration(
   startedAt: string | null,
   completedAt: string | null,
   t: Translator,
+  nowUnix = Math.floor(Date.now() / 1000),
 ): string {
   if (!startedAt) return "";
   const start = toUnixSeconds(startedAt);
   if (start <= 0) return "";
-  const end = completedAt ? toUnixSeconds(completedAt) : Math.floor(Date.now() / 1000);
+  const end = completedAt ? toUnixSeconds(completedAt) : nowUnix;
   return formatDurationSeconds(Math.max(0, end - start), t);
 }
 

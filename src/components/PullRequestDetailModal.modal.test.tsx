@@ -29,6 +29,7 @@ vi.mock("../lib/api", () => {
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import { api } from "../lib/api";
+import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 
 const mockApi = vi.mocked(api);
@@ -77,11 +78,13 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     root = createRoot(container);
     mockApi.getPullRequestDetail.mockReset();
     mockApi.updatePullRequestBody.mockReset();
+    useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });
 
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
   });
 
   it("optimistically toggles a checkbox and calls updatePullRequestBody with the rewritten body", async () => {
@@ -203,5 +206,143 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     )!;
     expect(after.checked).toBe(false);
     expect(document.body.textContent).toContain("Couldn't save checkbox");
+  });
+
+  it("updates running check durations every second without refetching", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-19T12:00:05Z"));
+    mockApi.getPullRequestDetail.mockResolvedValueOnce({
+      kind: "ok",
+      account: "tester",
+      detail: {
+        ...fakeDetail(""),
+        checks: [
+          {
+            name: "test",
+            workflow_name: "CI",
+            status: "IN_PROGRESS",
+            conclusion: null,
+            started_at: "2026-05-19T12:00:00Z",
+            completed_at: null,
+            url: "https://github.com/x/y/actions/runs/1",
+          },
+        ],
+      },
+    });
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const checksTab = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("Checks"));
+    expect(checksTab).toBeDefined();
+    await act(async () => {
+      checksTab!.click();
+    });
+
+    expect(document.body.textContent).toContain("CI / test");
+    expect(document.body.textContent).toContain("5s");
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(document.body.textContent).toContain("6s");
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls PR detail while checks are running and freezes duration on completion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-19T12:00:05Z"));
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        github: {
+          ...DEFAULT_SETTINGS.github,
+          refreshIntervalMs: 2_000,
+        },
+      },
+    });
+    mockApi.getPullRequestDetail
+      .mockResolvedValueOnce({
+        kind: "ok",
+        account: "tester",
+        detail: {
+          ...fakeDetail(""),
+          checks: [
+            {
+              name: "test",
+              workflow_name: "CI",
+              status: "IN_PROGRESS",
+              conclusion: null,
+              started_at: "2026-05-19T12:00:00Z",
+              completed_at: null,
+              url: "https://github.com/x/y/actions/runs/1",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "ok",
+        account: "tester",
+        detail: {
+          ...fakeDetail(""),
+          checks: [
+            {
+              name: "test",
+              workflow_name: "CI",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              started_at: "2026-05-19T12:00:00Z",
+              completed_at: "2026-05-19T12:00:06Z",
+              url: "https://github.com/x/y/actions/runs/1",
+            },
+          ],
+        },
+      });
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const checksTab = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("Checks"));
+    expect(checksTab).toBeDefined();
+    await act(async () => {
+      checksTab!.click();
+    });
+    expect(document.body.textContent).toContain("5s");
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+    });
+    await flushPromises();
+
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain("6s");
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+    });
+    await flushPromises();
+
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain("6s");
   });
 });

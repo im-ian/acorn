@@ -30,6 +30,7 @@ vi.mock("../lib/api", () => ({
       >(),
     listWorkflowRuns:
       vi.fn<(repoPath: string, limit: number) => Promise<WorkflowRunsListing>>(),
+    getWorkflowRunDetail: vi.fn(),
     listAgentHistory:
       vi.fn<(repoPath: string, limit: number) => Promise<AgentHistoryItem[]>>(),
     readSessionTodos: vi.fn<() => Promise<[]>>(),
@@ -400,5 +401,48 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("Add PR row display options");
     expect(container.textContent).not.toContain("1/2");
+  });
+
+  it("updates running Actions run durations every second without refetching", async () => {
+    vi.setSystemTime(new Date("2026-05-19T12:00:05Z"));
+    useAppStore.setState({ rightTab: "actions" });
+    mockApi.listWorkflowRuns.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      items: [
+        {
+          id: 42,
+          display_title: "Run CI",
+          workflow_name: "CI",
+          status: "in_progress",
+          conclusion: null,
+          event: "pull_request",
+          head_branch: "feature",
+          head_sha: "abc1234",
+          url: "https://github.com/im-ian/acorn/actions/runs/42",
+          created_at: "2026-05-19T11:59:50Z",
+          updated_at: "2026-05-19T12:00:05Z",
+          started_at: "2026-05-19T12:00:00Z",
+          attempt: 1,
+        },
+      ],
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Run CI");
+    expect(container.textContent).toContain("5s");
+    expect(mockApi.listWorkflowRuns).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("6s");
+    expect(mockApi.listWorkflowRuns).toHaveBeenCalledTimes(1);
   });
 });
