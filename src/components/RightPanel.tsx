@@ -2390,6 +2390,7 @@ function PullRequestsTab({
     (s) => s.settings.github.refreshIntervalMs,
   );
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
+  const showLabels = useSettings((s) => s.settings.github.showLabels);
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const [listsByState, setListsByState] = useState(() =>
     initialPrListStates(repoPath),
@@ -2601,6 +2602,7 @@ function PullRequestsTab({
                 key={pr.number}
                 pr={pr}
                 showAvatar={showAvatars}
+                showLabels={showLabels}
                 onOpen={() => onOpenDetail(pr.number)}
                 onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />
@@ -3427,6 +3429,7 @@ function PrRow({
   onContextMenu,
   surface = "panel",
   showAvatar = false,
+  showLabels = true,
 }: {
   pr: PullRequestInfo;
   onOpen: () => void;
@@ -3443,6 +3446,8 @@ function PrRow({
    * recognition. Controlled by the `github.showAvatars` setting.
    */
   showAvatar?: boolean;
+  /** Render GitHub label chips next to the title. */
+  showLabels?: boolean;
 }) {
   const t = useTranslation();
   const hoverBg =
@@ -3494,7 +3499,7 @@ function PrRow({
         >
           <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
         </Tooltip>
-        {pr.labels.length > 0 ? (
+        {showLabels && pr.labels.length > 0 ? (
           <span className="flex shrink-0 items-center gap-1">
             {pr.labels.slice(0, 3).map((label) => (
               <PrLabelChip key={label.name} label={label} />
@@ -3577,6 +3582,7 @@ function PullRequestSearchModal({
   const t = useTranslation();
   const repoPath = open?.repoPath ?? null;
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
+  const showLabels = useSettings((s) => s.settings.github.showLabels);
   const [rawQuery, setRawQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("all");
@@ -3748,6 +3754,7 @@ function PullRequestSearchModal({
                 pr={pr}
                 surface="dialog"
                 showAvatar={showAvatars}
+                showLabels={showLabels}
                 onOpen={() => onOpenDetail(pr.number)}
                 onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />

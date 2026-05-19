@@ -93,6 +93,10 @@
       "showAuthorAvatars": {
         "label": "작성자 아바타 표시",
         "description": "각 PR 행 옆에 GitHub 아바타를 표시합니다."
+      },
+      "showLabels": {
+        "label": "라벨 표시",
+        "description": "각 PR 행 제목 옆에 GitHub 라벨을 표시합니다."
       }
     },
     "appearance": {

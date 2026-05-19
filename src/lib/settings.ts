@@ -231,6 +231,8 @@ export interface AcornSettings {
      * which already shows avatars in its header / conversation.
      */
     showAvatars: boolean;
+    /** Show GitHub labels next to each PR row title. */
+    showLabels: boolean;
   };
   /**
    * Sidebar session-row presentation. Mirrors Warp's "View as / Pane
@@ -351,6 +353,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   github: {
     refreshIntervalMs: 60_000,
     showAvatars: true,
+    showLabels: true,
   },
   sessionDisplay: {
     title: "name",
@@ -538,6 +541,7 @@ interface LegacyCommitMessage {
 interface LegacyPullRequests {
   refreshIntervalMs?: number;
   showAvatars?: boolean;
+  showLabels?: boolean;
 }
 
 function loadSettings(): AcornSettings {
@@ -695,6 +699,12 @@ function loadSettings(): AcornSettings {
             : typeof parsed.pullRequests?.showAvatars === "boolean"
               ? parsed.pullRequests.showAvatars
               : DEFAULT_SETTINGS.github.showAvatars,
+        showLabels:
+          typeof parsed.github?.showLabels === "boolean"
+            ? parsed.github.showLabels
+            : typeof parsed.pullRequests?.showLabels === "boolean"
+              ? parsed.pullRequests.showLabels
+              : DEFAULT_SETTINGS.github.showLabels,
       },
       sessionDisplay: {
         title: normalizeSessionTitle(

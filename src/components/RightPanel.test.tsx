@@ -52,6 +52,7 @@ vi.mock("./FileExplorer", () => ({
 import { api } from "../lib/api";
 import { listen } from "@tauri-apps/api/event";
 import { rightPanelCache } from "../lib/right-panel-cache";
+import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 import { __resetIsGitHubRepoCacheForTests } from "../lib/useIsGitHubRepo";
 import { useAppStore } from "../store";
 import { RightPanel } from "./RightPanel";
@@ -60,6 +61,23 @@ const mockApi = vi.mocked(api);
 const mockListen = vi.mocked(listen);
 const REPO = "/tmp/acorn-test-repo";
 const REPO_B = "/tmp/acorn-other-repo";
+
+const labeledPullRequest = {
+  number: 247,
+  title: "Hide git tabs outside repositories",
+  state: "OPEN",
+  author: "im-ian",
+  head_branch: "feature",
+  base_branch: "main",
+  url: "https://github.com/im-ian/acorn/pull/247",
+  updated_at: "2026-05-19T00:00:00Z",
+  is_draft: false,
+  checks: null,
+  labels: [
+    { name: "fix", color: "D93F0B" },
+    { name: "frontend", color: "0969DA" },
+  ],
+};
 
 async function flushPromises() {
   await act(async () => {
@@ -107,6 +125,7 @@ describe("RightPanel background tab loading", () => {
     });
     mockApi.listAgentHistory.mockResolvedValue([]);
     mockApi.readSessionTodos.mockResolvedValue([]);
+    useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
     useAppStore.setState({
       sessions: [],
       projects: [
@@ -292,5 +311,32 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).not.toContain("GitHub");
     expect(container.textContent).not.toContain("Staged");
     expect(container.textContent).not.toContain("Commits");
+  });
+
+  it("hides PR row labels when the GitHub setting is disabled", async () => {
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        github: {
+          ...DEFAULT_SETTINGS.github,
+          showLabels: false,
+        },
+      },
+    });
+    useAppStore.setState({ rightTab: "prs" });
+    mockApi.listPullRequests.mockResolvedValue({
+      kind: "ok",
+      items: [labeledPullRequest],
+      account: "tester",
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Hide git tabs outside repositories");
+    expect(container.textContent).not.toContain("frontend");
+    expect(container.textContent).not.toContain("fix");
   });
 });
