@@ -233,6 +233,10 @@ export interface AcornSettings {
     showAvatars: boolean;
     /** Show GitHub labels next to each PR row title. */
     showLabels: boolean;
+    /** Show source and target branches on each PR row. */
+    showBranches: boolean;
+    /** Show CI/check status on each PR row. */
+    showChecks: boolean;
   };
   /**
    * Sidebar session-row presentation. Mirrors Warp's "View as / Pane
@@ -354,6 +358,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     refreshIntervalMs: 60_000,
     showAvatars: true,
     showLabels: true,
+    showBranches: true,
+    showChecks: true,
   },
   sessionDisplay: {
     title: "name",
@@ -542,6 +548,8 @@ interface LegacyPullRequests {
   refreshIntervalMs?: number;
   showAvatars?: boolean;
   showLabels?: boolean;
+  showBranches?: boolean;
+  showChecks?: boolean;
 }
 
 function loadSettings(): AcornSettings {
@@ -705,6 +713,18 @@ function loadSettings(): AcornSettings {
             : typeof parsed.pullRequests?.showLabels === "boolean"
               ? parsed.pullRequests.showLabels
               : DEFAULT_SETTINGS.github.showLabels,
+        showBranches:
+          typeof parsed.github?.showBranches === "boolean"
+            ? parsed.github.showBranches
+            : typeof parsed.pullRequests?.showBranches === "boolean"
+              ? parsed.pullRequests.showBranches
+              : DEFAULT_SETTINGS.github.showBranches,
+        showChecks:
+          typeof parsed.github?.showChecks === "boolean"
+            ? parsed.github.showChecks
+            : typeof parsed.pullRequests?.showChecks === "boolean"
+              ? parsed.pullRequests.showChecks
+              : DEFAULT_SETTINGS.github.showChecks,
       },
       sessionDisplay: {
         title: normalizeSessionTitle(

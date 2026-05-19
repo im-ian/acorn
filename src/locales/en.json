@@ -88,7 +88,7 @@
       "manualRefresh": "Manual refresh (the icon in each tab) always works regardless of this interval.",
       "listDensity": {
         "label": "List density",
-        "hint": "Author avatars make rows easier to scan at a glance, but each row gets thicker."
+        "hint": "Choose which optional details appear in each PR row."
       },
       "showAuthorAvatars": {
         "label": "Show author avatars",
@@ -97,6 +97,14 @@
       "showLabels": {
         "label": "Show labels",
         "description": "Render GitHub labels next to each PR row title."
+      },
+      "showBranches": {
+        "label": "Show branches",
+        "description": "Render the source and target branch names in each PR row."
+      },
+      "showChecks": {
+        "label": "Show CI status",
+        "description": "Render the CI/check completion summary in each PR row."
       }
     },
     "appearance": {

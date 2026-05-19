@@ -305,7 +305,7 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("글꼴 패밀리");
   });
 
-  it("patches the GitHub PR row labels toggle", async () => {
+  it("patches the GitHub PR row display toggles", async () => {
     const patchGithub = vi.fn();
     useSettings.setState({
       settings: cloneSettings(),
@@ -318,21 +318,34 @@ describe("SettingsModal font controls", () => {
     });
     openGithubTab();
 
-    const labelsToggle = Array.from(
-      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
-    ).find((input) =>
-      input.closest("label")?.textContent?.includes("Show labels"),
-    );
+    const findToggle = (label: string) =>
+      Array.from(
+        document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+      ).find((input) => input.closest("label")?.textContent?.includes(label));
+
+    const labelsToggle = findToggle("Show labels");
+    const branchesToggle = findToggle("Show branches");
+    const checksToggle = findToggle("Show CI status");
 
     expect(document.body.textContent).toContain("Show labels");
+    expect(document.body.textContent).toContain("Show branches");
+    expect(document.body.textContent).toContain("Show CI status");
     expect(labelsToggle).toBeInstanceOf(HTMLInputElement);
+    expect(branchesToggle).toBeInstanceOf(HTMLInputElement);
+    expect(checksToggle).toBeInstanceOf(HTMLInputElement);
     expect(labelsToggle?.checked).toBe(true);
+    expect(branchesToggle?.checked).toBe(true);
+    expect(checksToggle?.checked).toBe(true);
 
     act(() => {
       labelsToggle?.click();
+      branchesToggle?.click();
+      checksToggle?.click();
     });
 
     expect(patchGithub).toHaveBeenCalledWith({ showLabels: false });
+    expect(patchGithub).toHaveBeenCalledWith({ showBranches: false });
+    expect(patchGithub).toHaveBeenCalledWith({ showChecks: false });
   });
 });
 

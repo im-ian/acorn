@@ -609,6 +609,18 @@ function GithubSettings() {
           checked={settings.github.showLabels}
           onChange={(v) => patchGithub({ showLabels: v })}
         />
+        <CheckboxRow
+          label={st(t, "settings.github.showBranches.label")}
+          description={st(t, "settings.github.showBranches.description")}
+          checked={settings.github.showBranches}
+          onChange={(v) => patchGithub({ showBranches: v })}
+        />
+        <CheckboxRow
+          label={st(t, "settings.github.showChecks.label")}
+          description={st(t, "settings.github.showChecks.description")}
+          checked={settings.github.showChecks}
+          onChange={(v) => patchGithub({ showChecks: v })}
+        />
       </Field>
     </section>
   );
