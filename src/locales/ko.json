@@ -88,7 +88,7 @@
       "manualRefresh": "수동 새로고침(각 탭의 아이콘)은 이 간격과 관계없이 항상 작동합니다.",
       "listDensity": {
         "label": "목록 밀도",
-        "hint": "작성자 아바타는 행을 한눈에 훑기 쉽게 하지만 각 행이 더 두꺼워집니다."
+        "hint": "각 PR 행에 표시할 선택 정보를 고릅니다."
       },
       "showAuthorAvatars": {
         "label": "작성자 아바타 표시",
@@ -97,6 +97,14 @@
       "showLabels": {
         "label": "라벨 표시",
         "description": "각 PR 행 제목 옆에 GitHub 라벨을 표시합니다."
+      },
+      "showBranches": {
+        "label": "브랜치 표시",
+        "description": "각 PR 행에 소스 및 대상 브랜치 이름을 표시합니다."
+      },
+      "showChecks": {
+        "label": "CI 상태 표시",
+        "description": "각 PR 행에 CI/check 완료 요약을 표시합니다."
       }
     },
     "appearance": {

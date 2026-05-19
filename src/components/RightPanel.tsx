@@ -2391,6 +2391,8 @@ function PullRequestsTab({
   );
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
   const showLabels = useSettings((s) => s.settings.github.showLabels);
+  const showBranches = useSettings((s) => s.settings.github.showBranches);
+  const showChecks = useSettings((s) => s.settings.github.showChecks);
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const [listsByState, setListsByState] = useState(() =>
     initialPrListStates(repoPath),
@@ -2603,6 +2605,8 @@ function PullRequestsTab({
                 pr={pr}
                 showAvatar={showAvatars}
                 showLabels={showLabels}
+                showBranches={showBranches}
+                showChecks={showChecks}
                 onOpen={() => onOpenDetail(pr.number)}
                 onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />
@@ -3430,6 +3434,8 @@ function PrRow({
   surface = "panel",
   showAvatar = false,
   showLabels = true,
+  showBranches = true,
+  showChecks = true,
 }: {
   pr: PullRequestInfo;
   onOpen: () => void;
@@ -3448,6 +3454,10 @@ function PrRow({
   showAvatar?: boolean;
   /** Render GitHub label chips next to the title. */
   showLabels?: boolean;
+  /** Render head/base branch names in the metadata row. */
+  showBranches?: boolean;
+  /** Render CI/check status in the metadata row. */
+  showChecks?: boolean;
 }) {
   const t = useTranslation();
   const hoverBg =
@@ -3520,22 +3530,28 @@ function PrRow({
           {showAvatar ? <AuthorAvatar login={pr.author} size={14} /> : null}
           <span className="truncate">{pr.author}</span>
         </span>
-        <span className="opacity-50">·</span>
-        <span className="flex min-w-0 items-center gap-1">
-          <Tooltip
-            label={`${pr.head_branch} → ${pr.base_branch}`}
-            side="top"
-            multiline
-            className="min-w-0"
-          >
-            <span className="flex min-w-0 items-center gap-1 font-mono">
-              <span className="truncate">{pr.head_branch}</span>
-              <span className="shrink-0">→</span>
-              <span className="truncate">{pr.base_branch}</span>
+        {showBranches || showChecks ? (
+          <>
+            <span className="opacity-50">·</span>
+            <span className="flex min-w-0 items-center gap-1">
+              {showBranches ? (
+                <Tooltip
+                  label={`${pr.head_branch} → ${pr.base_branch}`}
+                  side="top"
+                  multiline
+                  className="min-w-0"
+                >
+                  <span className="flex min-w-0 items-center gap-1 font-mono">
+                    <span className="truncate">{pr.head_branch}</span>
+                    <span className="shrink-0">→</span>
+                    <span className="truncate">{pr.base_branch}</span>
+                  </span>
+                </Tooltip>
+              ) : null}
+              {showChecks ? <PrChecksBadge checks={pr.checks} /> : null}
             </span>
-          </Tooltip>
-          <PrChecksBadge checks={pr.checks} />
-        </span>
+          </>
+        ) : null}
         <span className="shrink-0 opacity-50">·</span>
         <Tooltip
           label={absoluteTime(toUnixSeconds(pr.updated_at))}
@@ -3583,6 +3599,8 @@ function PullRequestSearchModal({
   const repoPath = open?.repoPath ?? null;
   const showAvatars = useSettings((s) => s.settings.github.showAvatars);
   const showLabels = useSettings((s) => s.settings.github.showLabels);
+  const showBranches = useSettings((s) => s.settings.github.showBranches);
+  const showChecks = useSettings((s) => s.settings.github.showChecks);
   const [rawQuery, setRawQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("all");
@@ -3755,6 +3773,8 @@ function PullRequestSearchModal({
                 surface="dialog"
                 showAvatar={showAvatars}
                 showLabels={showLabels}
+                showBranches={showBranches}
+                showChecks={showChecks}
                 onOpen={() => onOpenDetail(pr.number)}
                 onContextMenu={(e) => rowActions.openContextMenu(e, pr)}
               />
