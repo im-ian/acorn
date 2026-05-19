@@ -73,6 +73,10 @@ pub fn github_owner_repo(repo_path: &Path) -> AppResult<Option<String>> {
     Ok(parse_github_owner_repo(url))
 }
 
+pub fn is_git_repository(repo_path: &Path) -> bool {
+    Repository::discover(repo_path).is_ok()
+}
+
 fn parse_github_owner_repo(remote: &str) -> Option<String> {
     let trimmed = remote.trim();
     // Pull "host" + "owner/repo[.git]" out of any of the three common URL
