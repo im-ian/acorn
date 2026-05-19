@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 
 /**
- * Per-repo cache for the GitHub origin probe. The result rarely changes
- * during a session (only when the user edits `origin`), so we resolve once
- * per repoPath and reuse across mounts. Concurrent callers for the same
- * repoPath share one in-flight promise.
+ * Per-repo cache for the git-repo + GitHub origin probe. The result rarely
+ * changes during a session (only when the user runs `git init` or edits
+ * `origin`), so we resolve once per repoPath and reuse across mounts.
+ * Concurrent callers for the same repoPath share one in-flight promise.
  */
 const cache = new Map<string, boolean>();
 const inFlight = new Map<string, Promise<boolean>>();
@@ -16,18 +16,22 @@ async function probe(repoPath: string): Promise<boolean> {
   const existing = inFlight.get(repoPath);
   if (existing) return existing;
   const promise = api
-    .githubOriginSlug(repoPath)
-    .then((slug) => {
+    .isGitRepository(repoPath)
+    .then(async (isGitRepo) => {
+      if (!isGitRepo) {
+        cache.set(repoPath, false);
+        return false;
+      }
+      const slug = await api.githubOriginSlug(repoPath);
       const value = slug !== null;
       cache.set(repoPath, value);
       return value;
     })
     .catch((error) => {
-      // Treat probe failures as "unknown" → assume GitHub so the user still
-      // sees the GitHub tabs and their built-in error states (rather than
-      // silently hiding navigation). Don't poison the cache.
+      // Hide GitHub-only UI when the repo probe itself fails. This avoids
+      // surfacing PR/Actions controls for paths that may not be git repos.
       console.warn("[useIsGitHubRepo] probe failed", error);
-      return true;
+      return false;
     })
     .finally(() => {
       inFlight.delete(repoPath);
@@ -41,9 +45,8 @@ export function prefetchGitHubRepoStatus(repoPath: string): Promise<boolean> {
 }
 
 /**
- * Returns `true` when `repoPath` has a GitHub `origin` remote, `false`
- * otherwise, or `null` while the first probe is in flight (so callers can
- * avoid flicker between "show GitHub" and "hide GitHub" on first paint).
+ * Returns `true` when `repoPath` is inside a git repo with a GitHub `origin`
+ * remote, `false` otherwise, or `null` while the first probe is in flight.
  */
 export function useIsGitHubRepo(repoPath: string | null): boolean | null {
   const [state, setState] = useState<boolean | null>(() =>

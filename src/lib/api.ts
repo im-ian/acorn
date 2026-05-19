@@ -105,6 +105,10 @@ export const api = {
   githubOriginSlug(repoPath: string): Promise<string | null> {
     return invoke<string | null>("github_origin_slug", { repoPath });
   },
+  /** True when the path is inside a git repository. */
+  isGitRepository(repoPath: string): Promise<boolean> {
+    return invoke<boolean>("is_git_repository", { repoPath });
+  },
   openInEditor(command: string, args: string[], path: string): Promise<void> {
     return invoke<void>("open_in_editor", { command, args, path });
   },

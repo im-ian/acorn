@@ -65,6 +65,9 @@ export const tauriMockSource = `
     if (cmd === 'github_origin_slug') {
       return Promise.resolve('acorn/test');
     }
+    if (cmd === 'is_git_repository') {
+      return Promise.resolve(true);
+    }
     if (cmd === 'staged_diff') return Promise.resolve({ files: [] });
     if (cmd === 'commit_diff') return Promise.resolve({ files: [] });
     if (cmd === 'scrollback_load') return Promise.resolve(null);
