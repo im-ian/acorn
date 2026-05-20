@@ -111,6 +111,7 @@ mod tests {
         assert!(body.contains("_acorn_realpath"));
         assert!(body.contains("_acorn_user_zd_real"));
         assert!(body.contains("ACORN_CLI_DIR"));
+        assert!(body.contains("ACORN_AGENT_WRAPPER_DIR"));
         // Restore ZDOTDIR before .zlogin runs (otherwise the staged
         // .zlogin would resolve to the user's dir on its own).
         assert!(body.contains("_acorn_zd_save"));
