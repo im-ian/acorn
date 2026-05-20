@@ -4,11 +4,71 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use acorn_session::{SessionAgentProvider, SessionStatus, SessionStore};
+use serde::Deserialize;
+use uuid::Uuid;
+
+pub const AGENT_HOOK_STATUS_EVENT: &str = "acorn:agent-hook-status";
+
 const HOOK_PATH: &str = "/agent-hook";
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 const MAX_BODY_BYTES: usize = 16 * 1024;
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+type HookEventHandler = Arc<dyn Fn(AgentHookEvent) + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AgentHookEvent {
+    pub session_id: Uuid,
+    pub provider: SessionAgentProvider,
+    pub event: AgentHookEventKind,
+    pub message: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHookEventKind {
+    Start,
+    Stop,
+    NeedsInput,
+    Error,
+}
+
+impl AgentHookEventKind {
+    pub fn session_status(self) -> SessionStatus {
+        match self {
+            Self::Start => SessionStatus::Running,
+            Self::NeedsInput => SessionStatus::NeedsInput,
+            Self::Stop => SessionStatus::Completed,
+            Self::Error => SessionStatus::Failed,
+        }
+    }
+}
+
+pub fn apply_agent_hook_event(
+    sessions: &SessionStore,
+    event: AgentHookEvent,
+) -> Result<SessionStatus, String> {
+    let session = sessions
+        .get(&event.session_id)
+        .map_err(|_| format!("session not found: {}", event.session_id))?;
+    if let Some(provider) = session.agent_provider {
+        if provider != event.provider {
+            return Err(format!(
+                "provider mismatch for {}: expected {:?}, got {:?}",
+                event.session_id, provider, event.provider
+            ));
+        }
+    }
+
+    let status = event.event.session_status();
+    sessions
+        .refresh_status(&event.session_id, status)
+        .map_err(|err| err.to_string())?;
+    Ok(status)
+}
 
 pub struct AgentHookServer {
     hook_url: String,
@@ -18,7 +78,17 @@ pub struct AgentHookServer {
 
 impl AgentHookServer {
     pub fn start() -> io::Result<Self> {
-        Self::start_with_token(uuid::Uuid::new_v4().simple().to_string())
+        Self::start_with_handler(|_| {})
+    }
+
+    pub fn start_with_handler<F>(handler: F) -> io::Result<Self>
+    where
+        F: Fn(AgentHookEvent) + Send + Sync + 'static,
+    {
+        Self::start_with_token_and_handler(
+            uuid::Uuid::new_v4().simple().to_string(),
+            Arc::new(handler),
+        )
     }
 
     pub fn hook_url(&self) -> &str {
@@ -29,7 +99,7 @@ impl AgentHookServer {
         &self.token
     }
 
-    fn start_with_token(token: String) -> io::Result<Self> {
+    fn start_with_token_and_handler(token: String, handler: HookEventHandler) -> io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -40,7 +110,7 @@ impl AgentHookServer {
         let token_for_thread = token.clone();
         std::thread::Builder::new()
             .name("acorn-agent-hooks".to_string())
-            .spawn(move || run_listener(listener, token_for_thread, running_for_thread))?;
+            .spawn(move || run_listener(listener, token_for_thread, handler, running_for_thread))?;
 
         Ok(Self {
             hook_url,
@@ -56,15 +126,21 @@ impl Drop for AgentHookServer {
     }
 }
 
-fn run_listener(listener: TcpListener, token: String, running: Arc<AtomicBool>) {
+fn run_listener(
+    listener: TcpListener,
+    token: String,
+    handler: HookEventHandler,
+    running: Arc<AtomicBool>,
+) {
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _addr)) => {
                 let token = token.clone();
+                let handler = handler.clone();
                 std::thread::Builder::new()
                     .name("acorn-agent-hook-conn".to_string())
                     .spawn(move || {
-                        if let Err(err) = handle_connection(stream, &token) {
+                        if let Err(err) = handle_connection(stream, &token, &handler) {
                             tracing::warn!(error = %err, "agent hook connection failed");
                         }
                     })
@@ -84,7 +160,11 @@ fn run_listener(listener: TcpListener, token: String, running: Arc<AtomicBool>) 
     }
 }
 
-fn handle_connection(mut stream: TcpStream, token: &str) -> io::Result<()> {
+fn handle_connection(
+    mut stream: TcpStream,
+    token: &str,
+    handler: &HookEventHandler,
+) -> io::Result<()> {
     if let Ok(addr) = stream.peer_addr() {
         if !addr.ip().is_loopback() {
             let status = HttpStatus::Forbidden;
@@ -95,7 +175,7 @@ fn handle_connection(mut stream: TcpStream, token: &str) -> io::Result<()> {
 
     let mut request = Vec::new();
     let status = match read_request(&mut stream, &mut request) {
-        Ok(()) => validate_request(&request, token),
+        Ok(()) => validate_request(&request, token, handler),
         Err(ReadRequestError::TooLarge) => HttpStatus::PayloadTooLarge,
         Err(ReadRequestError::Io(err)) => return Err(err),
     };
@@ -152,7 +232,7 @@ fn request_complete(request: &[u8]) -> Result<bool, ReadRequestError> {
     Ok(request.len() >= header_end + 4 + content_length)
 }
 
-fn validate_request(request: &[u8], token: &str) -> HttpStatus {
+fn validate_request(request: &[u8], token: &str, handler: &HookEventHandler) -> HttpStatus {
     let Some(header_end) = find_header_end(request) else {
         return HttpStatus::BadRequest;
     };
@@ -173,9 +253,24 @@ fn validate_request(request: &[u8], token: &str) -> HttpStatus {
         return HttpStatus::MethodNotAllowed;
     }
     match header_value(head, "x-acorn-agent-hook-token") {
-        Some(value) if value == token => HttpStatus::NoContent,
-        _ => HttpStatus::Unauthorized,
+        Some(value) if value == token => {}
+        _ => return HttpStatus::Unauthorized,
     }
+    let body_start = header_end + 4;
+    let content_length = header_value(head, "content-length")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let body_end = body_start.saturating_add(content_length);
+    let body = request.get(body_start..body_end).unwrap_or_default();
+    let event = match serde_json::from_slice::<AgentHookEvent>(body) {
+        Ok(event) => event,
+        Err(err) => {
+            tracing::warn!(error = %err, "agent hook payload rejected");
+            return HttpStatus::BadRequest;
+        }
+    };
+    handler(event);
+    HttpStatus::NoContent
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
@@ -237,9 +332,13 @@ fn write_response(stream: &mut TcpStream, code: u16, reason: &str) -> io::Result
 
 #[cfg(test)]
 mod tests {
-    use super::AgentHookServer;
+    use super::{apply_agent_hook_event, AgentHookEvent, AgentHookEventKind, AgentHookServer};
+    use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionStatus};
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use uuid::Uuid;
 
     #[test]
     fn hook_server_exposes_local_url_and_token() {
@@ -253,17 +352,98 @@ mod tests {
     #[test]
     fn hook_server_rejects_invalid_token_and_accepts_valid_token() {
         let hooks = AgentHookServer::start().expect("hook server starts");
+        let body = format!(
+            "{{\"session_id\":\"{}\",\"provider\":\"codex\",\"event\":\"start\"}}",
+            Uuid::new_v4()
+        );
 
-        let invalid = post(&hooks, "invalid");
+        let invalid = post(&hooks, "invalid", &body);
         assert!(invalid.starts_with("HTTP/1.1 401 Unauthorized"));
 
-        let valid = post(&hooks, hooks.token());
+        let valid = post(&hooks, hooks.token(), &body);
         assert!(valid.starts_with("HTTP/1.1 204 No Content"));
     }
 
-    fn post(hooks: &AgentHookServer, token: &str) -> String {
+    #[test]
+    fn hook_server_parses_valid_event_and_invokes_handler() {
+        let (tx, rx) = mpsc::channel();
+        let hooks = AgentHookServer::start_with_handler(move |event| {
+            tx.send(event).expect("send event");
+        })
+        .expect("hook server starts");
+        let session_id = Uuid::new_v4();
+        let body = format!(
+            "{{\"session_id\":\"{session_id}\",\"provider\":\"codex\",\"event\":\"needs_input\",\"message\":\"ready\",\"source\":\"hook\"}}"
+        );
+
+        let response = post(&hooks, hooks.token(), &body);
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+
+        let event = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("event delivered");
+        assert_eq!(event.session_id, session_id);
+        assert_eq!(event.provider, SessionAgentProvider::Codex);
+        assert_eq!(event.event, AgentHookEventKind::NeedsInput);
+        assert_eq!(event.message.as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn hook_event_kind_maps_to_session_status() {
+        assert_eq!(
+            AgentHookEventKind::Start.session_status(),
+            acorn_session::SessionStatus::Running
+        );
+        assert_eq!(
+            AgentHookEventKind::NeedsInput.session_status(),
+            acorn_session::SessionStatus::NeedsInput
+        );
+        assert_eq!(
+            AgentHookEventKind::Stop.session_status(),
+            acorn_session::SessionStatus::Completed
+        );
+        assert_eq!(
+            AgentHookEventKind::Error.session_status(),
+            acorn_session::SessionStatus::Failed
+        );
+    }
+
+    #[test]
+    fn apply_agent_hook_event_updates_known_session_status() {
+        let sessions = acorn_session::SessionStore::new();
+        let mut session = Session::new(
+            "Codex".to_string(),
+            "/tmp/repo".into(),
+            "/tmp/repo".into(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        let session_id = session.id;
+        sessions.insert(session);
+
+        let status = apply_agent_hook_event(
+            &sessions,
+            AgentHookEvent {
+                session_id,
+                provider: SessionAgentProvider::Codex,
+                event: AgentHookEventKind::NeedsInput,
+                message: None,
+                source: Some("hook".to_string()),
+            },
+        )
+        .expect("event applies");
+
+        assert_eq!(status, SessionStatus::NeedsInput);
+        assert_eq!(
+            sessions.get(&session_id).expect("session").status,
+            SessionStatus::NeedsInput
+        );
+    }
+
+    fn post(hooks: &AgentHookServer, token: &str, body: &str) -> String {
         let mut stream = TcpStream::connect(addr_from_url(hooks.hook_url())).expect("connect hook");
-        let body = "{}";
         write!(
             stream,
             "POST /agent-hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Acorn-Agent-Hook-Token: {token}\r\nContent-Length: {}\r\n\r\n{body}",
