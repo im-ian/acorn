@@ -1,0 +1,137 @@
+import claudeIconUrl from "../assets/vendor/lobe-icons/claude.svg";
+import codexIconUrl from "../assets/vendor/lobe-icons/codex.svg";
+import type { AgentProviderDefinition, SessionAgentProvider } from "./types";
+
+export const AGENT_PROVIDER_ORDER = [
+  "claude",
+  "codex",
+] as const satisfies readonly SessionAgentProvider[];
+
+type AgentProviderRegistry = {
+  readonly [Provider in SessionAgentProvider]: AgentProviderDefinition<Provider>;
+};
+
+export const AGENT_PROVIDER_REGISTRY = {
+  claude: {
+    id: "claude",
+    label: "Claude",
+    icon: {
+      kind: "mask",
+      url: claudeIconUrl,
+      alt: "Claude",
+    },
+    capabilities: ["history", "resume", "fork", "status", "hooks"],
+    hooks: {
+      supportsHooks: true,
+      providerEnvValue: "claude",
+    },
+    session: {
+      supportsSessionResume: true,
+      markerFile: "claude.id",
+      acknowledgedMarkerFile: "claude.id.acknowledged",
+      resumeCommandPrefix: "claude --resume",
+      forkCommandPrefix: "claude --resume",
+      forkCommandSuffix: "--fork-session",
+      requiresForkTranscriptPrep: true,
+    },
+    inferNamePattern: /\bclaude\b/i,
+  },
+  codex: {
+    id: "codex",
+    label: "Codex",
+    icon: {
+      kind: "mask",
+      url: codexIconUrl,
+      alt: "Codex",
+    },
+    capabilities: ["history", "resume", "fork", "status", "hooks"],
+    hooks: {
+      supportsHooks: true,
+      providerEnvValue: "codex",
+    },
+    session: {
+      supportsSessionResume: true,
+      markerFile: "codex.id",
+      acknowledgedMarkerFile: "codex.id.acknowledged",
+      resumeCommandPrefix: "codex resume",
+      forkCommandPrefix: "codex fork",
+      requiresForkTranscriptPrep: false,
+    },
+    inferNamePattern: /\bcodex\b/i,
+  },
+} as const satisfies AgentProviderRegistry;
+
+export function getAgentProviderDefinition(
+  provider: SessionAgentProvider,
+): AgentProviderDefinition {
+  return AGENT_PROVIDER_REGISTRY[provider];
+}
+
+export function inferAgentProvider(name: string): SessionAgentProvider | null {
+  for (const provider of AGENT_PROVIDER_ORDER) {
+    const definition = getAgentProviderDefinition(provider);
+    if (definition.inferNamePattern.test(name)) return provider;
+  }
+  return null;
+}
+
+export function providerSupportsCapability(
+  provider: SessionAgentProvider,
+  capability: AgentProviderDefinition["capabilities"][number],
+): boolean {
+  return getAgentProviderDefinition(provider).capabilities.includes(capability);
+}
+
+export function providerSupportsHooks(provider: SessionAgentProvider): boolean {
+  const definition = getAgentProviderDefinition(provider);
+  return (
+    definition.hooks.supportsHooks &&
+    providerSupportsCapability(provider, "hooks") &&
+    Boolean(definition.hooks.providerEnvValue)
+  );
+}
+
+export function getAgentHookProviderEnvValue(
+  provider: SessionAgentProvider,
+): SessionAgentProvider | null {
+  if (!providerSupportsHooks(provider)) return null;
+  return getAgentProviderDefinition(provider).hooks.providerEnvValue ?? null;
+}
+
+export function buildAgentResumeCommand(
+  provider: SessionAgentProvider,
+  sessionId: string,
+): string {
+  const definition = getAgentProviderDefinition(provider);
+  const { session } = definition;
+  if (
+    !session.supportsSessionResume ||
+    !providerSupportsCapability(provider, "resume") ||
+    !session.resumeCommandPrefix
+  ) {
+    throw new Error(`${definition.label} does not support session resume`);
+  }
+  return `${session.resumeCommandPrefix} ${sessionId}`;
+}
+
+export function buildAgentForkCommand(
+  provider: SessionAgentProvider,
+  sessionId: string,
+): string {
+  const definition = getAgentProviderDefinition(provider);
+  const { session } = definition;
+  if (!providerSupportsCapability(provider, "fork") || !session.forkCommandPrefix) {
+    throw new Error(`${definition.label} does not support session fork`);
+  }
+  return [session.forkCommandPrefix, sessionId, session.forkCommandSuffix]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function providerRequiresForkTranscriptPrep(
+  provider: SessionAgentProvider,
+): boolean {
+  return Boolean(
+    getAgentProviderDefinition(provider).session.requiresForkTranscriptPrep,
+  );
+}

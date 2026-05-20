@@ -187,6 +187,19 @@ pub enum SessionAgentProvider {
     Codex,
 }
 
+impl SessionAgentProvider {
+    pub fn supports_hooks(self) -> bool {
+        matches!(self, Self::Claude | Self::Codex)
+    }
+
+    pub fn hook_provider_env_value(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -523,6 +536,20 @@ mod tests {
         assert_eq!(
             store.get(&session.id).expect("session persisted").kind,
             SessionKind::Control
+        );
+    }
+
+    #[test]
+    fn session_agent_provider_reports_hook_env_metadata() {
+        assert!(SessionAgentProvider::Claude.supports_hooks());
+        assert!(SessionAgentProvider::Codex.supports_hooks());
+        assert_eq!(
+            SessionAgentProvider::Claude.hook_provider_env_value(),
+            "claude"
+        );
+        assert_eq!(
+            SessionAgentProvider::Codex.hook_provider_env_value(),
+            "codex"
         );
     }
 }

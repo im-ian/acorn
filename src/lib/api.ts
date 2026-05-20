@@ -38,12 +38,14 @@ export const api = {
     repoPath: string,
     isolated = false,
     kind: SessionKind = "regular",
+    agentProvider?: SessionAgentProvider | null,
   ): Promise<Session> {
     return invoke<Session>("create_session", {
       name,
       repoPath,
       isolated,
       kind,
+      agentProvider,
     });
   },
   removeSession(id: string, removeWorktree = false): Promise<void> {
