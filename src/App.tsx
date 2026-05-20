@@ -28,6 +28,7 @@ import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import {
   api,
+  AGENT_HOOK_STATUS_EVENT,
   STAGED_REV_MISMATCH_EVENT,
   type AgentKind,
   type ResumeCandidate,
@@ -787,6 +788,31 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach ipc-sessions-changed listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Agent hook callbacks update backend session status immediately. Refresh
+  // the session list from backend state so hook status can surface without
+  // waiting for the next transcript/process poll.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<string>(AGENT_HOOK_STATUS_EVENT, () => {
+      useAppStore.getState().refreshSessions();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach agent-hook-status listener", err);
       });
     return () => {
       cancelled = true;
