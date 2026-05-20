@@ -1,6 +1,8 @@
 mod agent_history;
+mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
+mod agent_wrappers;
 mod cli_resolver;
 mod commands;
 mod daemon_bridge;
@@ -178,6 +180,38 @@ pub fn run() {
             });
 
             let state = app.state::<AppState>();
+            let hook_app = app.handle().clone();
+            let hook_sessions = state.sessions.clone();
+            match agent_hooks::AgentHookServer::start_with_handler(move |event| {
+                let session_id = event.session_id;
+                match agent_hooks::apply_agent_hook_event(&hook_sessions, event) {
+                    Ok(status) => {
+                        if let Err(err) = persistence::save_sessions(&hook_sessions.list()) {
+                            tracing::warn!(error = %err, "agent hook persist status failed");
+                        }
+                        if let Err(err) = hook_app
+                            .emit(agent_hooks::AGENT_HOOK_STATUS_EVENT, session_id.to_string())
+                        {
+                            tracing::warn!(
+                                error = %err,
+                                event = agent_hooks::AGENT_HOOK_STATUS_EVENT,
+                                "agent hook status emit failed",
+                            );
+                        }
+                        tracing::debug!(%session_id, ?status, "agent hook status applied");
+                    }
+                    Err(err) => {
+                        tracing::warn!(%session_id, error = %err, "agent hook event rejected");
+                    }
+                }
+            }) {
+                Ok(server) => {
+                    *state.agent_hooks.lock() = Some(std::sync::Arc::new(server));
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "agent hook server disabled");
+                }
+            }
             let (sessions_loaded, sessions_clean) = persistence::load_sessions_with_status()
                 .unwrap_or_else(|err| {
                     tracing::warn!("session path resolution failed at boot: {err}");
