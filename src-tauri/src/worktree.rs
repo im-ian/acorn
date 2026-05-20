@@ -108,15 +108,38 @@ pub fn list_worktree_paths(repo_path: &Path) -> AppResult<Vec<std::path::PathBuf
     Ok(paths)
 }
 
-pub fn remove_worktree(repo_path: &Path, name: &str) -> AppResult<()> {
-    let repo = ensure_repo(repo_path)?;
-    let wt = repo.find_worktree(name)?;
-    wt.prune(None)?;
-    let path = worktree_root(repo_path).join(name);
-    if path.exists() {
-        std::fs::remove_dir_all(&path).ok();
+pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppResult<()> {
+    if worktree_path.exists() && !is_linked_worktree_root(worktree_path) {
+        return Err(AppError::InvalidPath(format!(
+            "not a linked git worktree: {}",
+            worktree_path.display()
+        )));
     }
-    Ok(())
+
+    let repo = ensure_repo(repo_path)?;
+    let names = repo.worktrees()?;
+    for name in names.iter().flatten() {
+        let wt = repo.find_worktree(name)?;
+        if same_path(wt.path(), worktree_path) {
+            if worktree_path.exists() {
+                std::fs::remove_dir_all(worktree_path).ok();
+            }
+            wt.prune(None)?;
+            return Ok(());
+        }
+    }
+
+    Err(AppError::InvalidPath(format!(
+        "linked git worktree is not registered: {}",
+        worktree_path.display()
+    )))
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 /// Returns `true` when `path` is the root of a *linked* git worktree.

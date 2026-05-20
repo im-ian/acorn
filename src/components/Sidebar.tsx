@@ -54,6 +54,7 @@ import {
   type AcornSettings,
   type SessionTitleSource,
 } from "../lib/settings";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import {
   planChevronClick,
@@ -547,7 +548,7 @@ function SessionRowPreview({
           <span className="truncate text-[13px] font-medium leading-5 text-fg">
             {session.name}
           </span>
-          {session.isolated || session.in_worktree ? (
+          {hasRecordedWorktree(session) ? (
             <GitBranch size={10} className="shrink-0 text-fg-muted" />
           ) : null}
         </span>
@@ -1181,8 +1182,7 @@ function SessionRowLabel({
   // `in_worktree`) only apply as fallback when the session has no live PTY,
   // in which case `liveInWorktree[id]` is `undefined`.
   const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
-  const inWorktree =
-    liveInWorktree ?? (session.isolated || session.in_worktree);
+  const inWorktree = liveInWorktree ?? hasRecordedWorktree(session);
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex h-5 items-center gap-1">
