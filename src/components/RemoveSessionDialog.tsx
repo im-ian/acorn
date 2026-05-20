@@ -4,6 +4,7 @@ import type { Session } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader } from "./ui";
 
@@ -22,6 +23,7 @@ interface RemoveSessionDialogProps {
 export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogProps) {
   const t = useTranslation();
   const isolated = session?.isolated ?? false;
+  const recordedWorktree = session ? hasRecordedWorktree(session) : false;
   const patchSessions = useSettings((s) => s.patchSessions);
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
@@ -30,14 +32,14 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
     if (session) setDontAskAgain(false);
   }, [session?.id]);
 
-  // Enter triggers the same primary action as the rightmost destructive button:
-  // for isolated worktrees that means "Delete worktree", otherwise "Remove".
+  // Keep Enter conservative for non-isolated linked worktrees, which may be
+  // user-managed outside Acorn even though the session path is a real worktree.
   const primaryChoice: RemoveChoice = isolated
     ? "session_and_worktree"
     : "session_only";
 
   function commit(choice: RemoveChoice) {
-    if (choice !== "cancel" && dontAskAgain && !isolated) {
+    if (choice !== "cancel" && dontAskAgain && !recordedWorktree) {
       patchSessions({ confirmRemove: false });
     }
     onClose(choice);
@@ -68,10 +70,12 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
               {dt(t, "dialogs.removeSession.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{session.name}</span>?
             </p>
-            {isolated ? (
+            {recordedWorktree ? (
               <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
                 <p className="text-xs text-fg-muted">
-                  {dt(t, "dialogs.removeSession.isolatedWorktree")}
+                  {isolated
+                    ? dt(t, "dialogs.removeSession.isolatedWorktree")
+                    : dt(t, "dialogs.removeSession.linkedWorktree")}
                 </p>
                 <p className="break-all font-mono text-xs text-fg">
                   {session.worktree_path}
@@ -87,7 +91,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
                 {dt(t, "dialogs.removeSession.willNotBeTouched")}
               </p>
             )}
-            {!isolated ? (
+            {!recordedWorktree ? (
               <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
                 <input
                   type="checkbox"
@@ -107,7 +111,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
             >
               {dt(t, "dialogs.common.cancel")}
             </button>
-            {isolated ? (
+            {recordedWorktree ? (
               <>
                 <button
                   type="button"

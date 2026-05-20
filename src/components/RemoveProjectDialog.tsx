@@ -2,6 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import type { Project, Session } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader } from "./ui";
 
@@ -27,9 +28,13 @@ export function RemoveProjectDialog({
   onClose,
 }: RemoveProjectDialogProps) {
   const t = useTranslation();
-  const isolatedCount = sessions.filter((s) => s.isolated).length;
+  const worktreeSessions = sessions.filter(hasRecordedWorktree);
+  const worktreeCount = worktreeSessions.length;
+  const linkedCount = worktreeSessions.filter((s) => !s.isolated).length;
   const primaryChoice: RemoveProjectChoice =
-    isolatedCount > 0 ? "project_and_worktrees" : "project_only";
+    worktreeCount > 0 && linkedCount === 0
+      ? "project_and_worktrees"
+      : "project_only";
 
   useDialogShortcuts(project !== null, {
     onCancel: () => onClose("cancel"),
@@ -66,11 +71,11 @@ export function RemoveProjectDialog({
                   ? dt(t, "dialogs.removeProject.sessionSingular")
                   : dt(t, "dialogs.removeProject.sessionPlural")}{" "}
                 {dt(t, "dialogs.removeProject.willBeRemoved")}
-                {isolatedCount > 0
-                  ? ` (${isolatedCount} ${
-                      isolatedCount === 1
-                        ? dt(t, "dialogs.removeProject.isolatedWorktreeSingular")
-                        : dt(t, "dialogs.removeProject.isolatedWorktreePlural")
+                {worktreeCount > 0
+                  ? ` (${worktreeCount} ${
+                      worktreeCount === 1
+                        ? dt(t, "dialogs.removeProject.linkedWorktreeSingular")
+                        : dt(t, "dialogs.removeProject.linkedWorktreePlural")
                     })`
                   : ""}
                 .
@@ -85,7 +90,7 @@ export function RemoveProjectDialog({
             >
               {dt(t, "dialogs.common.cancel")}
             </button>
-            {isolatedCount > 0 ? (
+            {worktreeCount > 0 ? (
               <button
                 type="button"
                 onClick={() => onClose("project_only")}
@@ -98,12 +103,12 @@ export function RemoveProjectDialog({
               type="button"
               onClick={() =>
                 onClose(
-                  isolatedCount > 0 ? "project_and_worktrees" : "project_only",
+                  worktreeCount > 0 ? "project_and_worktrees" : "project_only",
                 )
               }
               className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
             >
-              {isolatedCount > 0
+              {worktreeCount > 0
                 ? dt(t, "dialogs.removeProject.closeDeleteWorktrees")
                 : dt(t, "dialogs.removeProject.closeProject")}
             </button>

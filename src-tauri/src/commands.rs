@@ -862,9 +862,8 @@ pub async fn remove_project(
             .collect();
         for session in session_ids {
             state.pty.kill(&session.id).ok();
-            if drop_worktrees && session.isolated {
-                let safe_name = sanitize_worktree_name(&session.name);
-                worktree::remove_worktree(&session.repo_path, &safe_name).ok();
+            if drop_worktrees {
+                remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
             }
             state.sessions.remove(&session.id).ok();
         }
@@ -886,9 +885,8 @@ pub async fn remove_session(
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
-    if session.isolated && remove_worktree.unwrap_or(false) {
-        let safe_name = sanitize_worktree_name(&session.name);
-        worktree::remove_worktree(&session.repo_path, &safe_name).ok();
+    if remove_worktree.unwrap_or(false) {
+        remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
     }
     state.sessions.remove(&id)?;
     persist(&state);
@@ -2365,6 +2363,13 @@ pub(crate) fn create_unique_worktree(
     }
 }
 
+pub(crate) fn remove_linked_worktree_at_path(
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<()> {
+    worktree::remove_worktree_at_path(repo_path, worktree_path)
+}
+
 /// Surface the "이전 Claude 대화 있음" candidate for a session — used by
 /// the frontend modal that pops on session focus. `None` means there is
 /// nothing the user needs to decide about (no claude has run, or the
@@ -2529,7 +2534,7 @@ mod tests {
     use super::{
         collect_memory_usage_from_roots, create_unique_worktree, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        validate_new_project_name, ProcessMemorySnapshot,
+        remove_linked_worktree_at_path, validate_new_project_name, ProcessMemorySnapshot,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
     use std::collections::HashMap;
@@ -2769,6 +2774,40 @@ mod tests {
         );
         assert!(path.exists(), "worktree path should exist on disk");
 
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn remove_linked_worktree_at_path_uses_actual_path_not_session_name() {
+        let repo_dir = unique_repo_dir("remove-by-path");
+        init_repo_with_commit(&repo_dir);
+        let (_name, path) =
+            create_unique_worktree(&repo_dir, "acorn-2").expect("worktree should be created");
+        assert!(path.exists(), "worktree path should exist before removal");
+
+        remove_linked_worktree_at_path(&repo_dir, &path).expect("remove by path");
+
+        assert!(
+            !path.exists(),
+            "worktree path should be removed even when the session name differs"
+        );
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn remove_linked_worktree_at_path_handles_project_root_that_is_a_worktree() {
+        let repo_dir = unique_repo_dir("remove-project-root-worktree-main");
+        init_repo_with_commit(&repo_dir);
+        let (_name, path) =
+            create_unique_worktree(&repo_dir, "external").expect("worktree should be created");
+        assert!(path.exists(), "linked project root should exist before removal");
+
+        remove_linked_worktree_at_path(&path, &path).expect("remove linked project root by path");
+
+        assert!(
+            !path.exists(),
+            "linked project root should be removed when explicitly requested"
+        );
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 
