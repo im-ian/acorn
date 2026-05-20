@@ -52,12 +52,22 @@ pub struct StreamAttachment {
     /// Deadline for the sticky NeedsInput cue. Cleared by an input
     /// write or by the next status poll past the deadline.
     needs_input_until: Mutex<Option<Instant>>,
+    /// Last terminal size observed from the renderer. Transcript-driven
+    /// redraw nudges use this to trigger a real TUI repaint even when the
+    /// frontend is not currently focused on the target tab.
+    last_size: Mutex<Option<StreamSize>>,
 }
 
 impl StreamAttachment {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamSize {
+    pub cols: u16,
+    pub rows: u16,
 }
 
 /// App-wide registry of live stream attachments, keyed by the Acorn
@@ -77,6 +87,21 @@ impl StreamRegistry {
 
     pub fn contains(&self, id: &Uuid) -> bool {
         self.inner.contains_key(id)
+    }
+
+    pub fn set_size(&self, id: &Uuid, cols: u16, rows: u16) {
+        if cols == 0 || rows == 0 {
+            return;
+        }
+        if let Some(handle) = self.inner.get(id) {
+            *handle.value().last_size.lock() = Some(StreamSize { cols, rows });
+        }
+    }
+
+    pub fn size(&self, id: &Uuid) -> Option<StreamSize> {
+        self.inner
+            .get(id)
+            .and_then(|handle| *handle.value().last_size.lock())
     }
 
     /// Stop and remove the attachment for a session. Idempotent — a
@@ -153,6 +178,7 @@ pub fn attach<R: Runtime>(
     session_id: Uuid,
     pid: Option<u32>,
     replay_scrollback: bool,
+    initial_size: Option<StreamSize>,
 ) -> std::io::Result<()> {
     let mut conn = socket::connect_stream()?;
 
@@ -191,6 +217,7 @@ pub fn attach<R: Runtime>(
         pid,
         had_child: AtomicBool::new(false),
         needs_input_until: Mutex::new(None),
+        last_size: Mutex::new(initial_size),
     });
     registry.insert(session_id, handle);
 

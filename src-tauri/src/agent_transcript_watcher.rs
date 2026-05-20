@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::agent_resume;
 use crate::state::AppState;
+use acorn_session::SessionStatus;
 
 pub const AGENT_TRANSCRIPT_ADVANCED_EVENT: &str = "acorn:agent-transcript-advanced";
 
@@ -98,6 +99,8 @@ fn tick(
             continue;
         }
 
+        nudge_terminal_redraw(state, session.id, session.status);
+
         let payload = AgentTranscriptAdvancedPayload {
             session_id: session.id.to_string(),
             transcript_path: next.path.display().to_string(),
@@ -114,6 +117,30 @@ fn tick(
         }
 
         cursors.insert(session.id, next);
+    }
+}
+
+fn nudge_terminal_redraw(state: &AppState, session_id: Uuid, status: SessionStatus) {
+    if status == SessionStatus::Running {
+        return;
+    }
+    let Some(size) = state.stream_registry.size(&session_id) else {
+        return;
+    };
+    if size.cols < 2 || size.rows < 1 {
+        return;
+    }
+    let nudge_cols = size.cols.saturating_sub(1).max(1);
+    if let Err(err) = state
+        .daemon_bridge
+        .resize(session_id, nudge_cols, size.rows)
+        .and_then(|_| state.daemon_bridge.resize(session_id, size.cols, size.rows))
+    {
+        tracing::debug!(
+            %session_id,
+            error = %err,
+            "agent_transcript_watcher: redraw nudge failed",
+        );
     }
 }
 

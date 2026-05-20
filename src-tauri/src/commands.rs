@@ -1458,6 +1458,7 @@ fn spawn_via_daemon<R: Runtime>(
             id,
             pid,
             replay_scrollback,
+            known_stream_size(cols, rows),
         )
         .map_err(|e| format!("daemon stream attach failed: {e}"))?;
         return Ok(());
@@ -1501,8 +1502,17 @@ fn spawn_via_daemon<R: Runtime>(
         id,
         outcome.pid,
         replay_scrollback,
+        known_stream_size(cols, rows),
     )
     .map_err(|e| format!("daemon stream attach failed: {e}"))
+}
+
+fn known_stream_size(cols: u16, rows: u16) -> Option<crate::daemon_stream::StreamSize> {
+    if cols == 0 || rows == 0 {
+        None
+    } else {
+        Some(crate::daemon_stream::StreamSize { cols, rows })
+    }
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session
@@ -1577,10 +1587,12 @@ pub fn pty_resize(
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     if state.stream_registry.contains(&id) {
-        return state
+        state
             .daemon_bridge
             .resize(id, cols, rows)
-            .map_err(|e| AppError::Pty(e.to_string()));
+            .map_err(|e| AppError::Pty(e.to_string()))?;
+        state.stream_registry.set_size(&id, cols, rows);
+        return Ok(());
     }
     state
         .pty

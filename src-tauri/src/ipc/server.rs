@@ -475,13 +475,66 @@ fn handle_send_keys(
             };
         }
     };
-    if let Err(err) = state.pty.write(&target.id, &bytes) {
+    let result = if state.stream_registry.contains(&target.id) {
+        let tail = state
+            .daemon_bridge
+            .read_buffer(target.id, Some(64 * 1024))
+            .map(|(b, _)| b)
+            .ok();
+        let bytes = normalize_input_for_terminal_mode(bytes, tail.as_deref());
+        state
+            .daemon_bridge
+            .send_input(target.id, &bytes)
+            .map_err(|err| err.to_string())
+    } else {
+        let tail = state.pty.tail_bytes(&target.id, 64 * 1024).map(|(b, _)| b);
+        let bytes = normalize_input_for_terminal_mode(bytes, tail.as_deref());
+        state
+            .pty
+            .write(&target.id, &bytes)
+            .map_err(|err| err.to_string())
+    };
+    if let Err(err) = result {
         return Response::Error {
             code: ErrorCode::Internal,
             message: format!("pty write failed: {err}"),
         };
     }
     Response::Ack
+}
+
+const ENHANCED_ENTER: &[u8] = b"\x1b[13u";
+
+fn normalize_input_for_terminal_mode(mut bytes: Vec<u8>, tail: Option<&[u8]>) -> Vec<u8> {
+    if bytes.last() == Some(&b'\r') && tail.map(uses_enhanced_keyboard_protocol).unwrap_or(false) {
+        bytes.pop();
+        bytes.extend_from_slice(ENHANCED_ENTER);
+    }
+    bytes
+}
+
+fn uses_enhanced_keyboard_protocol(bytes: &[u8]) -> bool {
+    let mut last_enable = None;
+    let mut last_disable = None;
+    for index in 0..bytes.len().saturating_sub(2) {
+        if bytes[index] != 0x1b || bytes[index + 1] != b'[' {
+            continue;
+        }
+        match bytes[index + 2] {
+            b'>' => {
+                if bytes[index + 3..bytes.len().min(index + 24)].contains(&b'u') {
+                    last_enable = Some(index);
+                }
+            }
+            b'<' => {
+                if bytes[index + 3..bytes.len().min(index + 24)].contains(&b'u') {
+                    last_disable = Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    last_enable > last_disable
 }
 
 fn handle_read_buffer(
@@ -496,7 +549,16 @@ fn handle_read_buffer(
         Err(err) => return err,
     };
     let cap = max_bytes.unwrap_or(64 * 1024).min(4 * 1024 * 1024);
-    match state.pty.tail_bytes(&target.id, cap) {
+    let buffer = if state.stream_registry.contains(&target.id) {
+        state
+            .daemon_bridge
+            .read_buffer(target.id, Some(cap))
+            .map_err(|err| err.to_string())
+            .ok()
+    } else {
+        state.pty.tail_bytes(&target.id, cap)
+    };
+    match buffer {
         Some((bytes, truncated)) => Response::Buffer {
             data_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             truncated,
@@ -760,6 +822,18 @@ mod tests {
         let target = store.insert(make_session("/tmp/A", "user", SessionKind::Regular));
         let res = resolve_action_target(&ctl, &target.id.to_string(), &store, true);
         assert!(res.is_ok(), "allow_foreign should bypass owner guard");
+    }
+
+    #[test]
+    fn enter_is_rewritten_when_enhanced_keyboard_mode_is_active() {
+        let bytes = normalize_input_for_terminal_mode(b"hello\r".to_vec(), Some(b"\x1b[>7u"));
+        assert_eq!(bytes, b"hello\x1b[13u");
+    }
+
+    #[test]
+    fn enter_stays_carriage_return_without_enhanced_keyboard_mode() {
+        let bytes = normalize_input_for_terminal_mode(b"hello\r".to_vec(), Some(b"shell prompt"));
+        assert_eq!(bytes, b"hello\r");
     }
 
     #[test]

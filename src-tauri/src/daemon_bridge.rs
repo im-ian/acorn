@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use parking_lot::Mutex;
 use uuid::Uuid;
 
@@ -367,6 +368,23 @@ impl DaemonBridge {
         }
     }
 
+    pub fn read_buffer(
+        &self,
+        target: Uuid,
+        max_bytes: Option<usize>,
+    ) -> BridgeResult<(Vec<u8>, bool)> {
+        match Self::unpack_error(self.call(ControlPayload::ReadBuffer {
+            target_session_id: target,
+            max_bytes,
+        })?)? {
+            ControlResult::Buffer {
+                data_b64,
+                truncated,
+            } => Ok((base64_decode(&data_b64)?, truncated)),
+            other => Err(unexpected(other)),
+        }
+    }
+
     pub fn kill(&self, target: Uuid) -> BridgeResult<()> {
         match Self::unpack_error(self.call(ControlPayload::KillSession {
             target_session_id: target,
@@ -439,6 +457,12 @@ fn base64_encode(input: &[u8]) -> String {
         _ => unreachable!(),
     }
     out
+}
+
+fn base64_decode(input: &str) -> io::Result<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 /// Convenience: peek at the data dir without going through the daemon
