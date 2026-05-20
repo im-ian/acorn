@@ -40,7 +40,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
     <img width="1392" height="912" alt="Acorn Control session (클릭해서 영상 재생)" src="./assets/screenshots/control-session-poster.png" />
   </a>
   <br/>
-  <sub>Control session — `acorn-ipc`로 형제 세션 조작 (클릭하면 영상 재생)</sub>
+  <sub>Control session — `acorn-ipc`로 다른 세션 조작 (클릭하면 영상 재생)</sub>
 </div>
 
 ---
@@ -86,7 +86,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 - 세션별 Kill / Restore / Forget 액션
 - 상태 표시줄 아이콘 → 드롭다운으로 서비스 상태 한눈에 확인
 
-### 🛰️ Control session — 에이전트가 형제 세션을 조작
+### 🛰️ Control session — 에이전트가 다른 세션을 조작
 - 한 세션 안의 AI 에이전트가 같은 프로젝트의 다른 세션을 직접 조작 (입력 전송, 화면 읽기, 새 세션 생성, 선택, 종료)
 - 시작: `⌘⌥⇧T` 또는 커맨드 팔레트 → **New control session** (사이드바에 🤖 아이콘)
 - 같은 프로젝트 내부로 권한 자동 스코프
