@@ -8,9 +8,11 @@ interface DomRenderer {
   _rowElements?: HTMLElement[];
   _rowFactory?: { defaultSpacing?: number };
   _setDefaultSpacing?: () => void;
+  handleResize?: (cols: number, rows: number) => void;
   _widthCache?: WidthCache;
   __acornCjkCellPatch?: {
     originalSetDefaultSpacing?: () => void;
+    originalHandleResize?: (cols: number, rows: number) => void;
     // Legacy fields from the previous CJK-basis implementation. Keep reading
     // them so dev/HMR sessions can recover without recreating the terminal.
     originalCellWidth?: number;
@@ -80,6 +82,7 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
   if (!renderer.__acornCjkCellPatch) {
     renderer.__acornCjkCellPatch = {
       originalSetDefaultSpacing: renderer._setDefaultSpacing?.bind(renderer),
+      originalHandleResize: renderer.handleResize?.bind(renderer),
       originalCellWidth: getCellWidth(renderer),
       originalCanvasWidth: renderer.dimensions?.css?.canvas?.width,
     };
@@ -92,6 +95,12 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
       }
       recalibrateDefaultSpacing(term, renderer, widthCache, targetCellWidth);
     };
+    if (renderer.handleResize) {
+      renderer.handleResize = (cols: number, rows: number) => {
+        renderer.__acornCjkCellPatch?.originalHandleResize?.(cols, rows);
+        patchTerminalCellMeasurements(term);
+      };
+    }
   }
 
   widthCache.clear?.();
@@ -124,9 +133,13 @@ function restoreTerminalCellMeasurements(
   if (!patch) return;
 
   const originalSetDefaultSpacing = patch.originalSetDefaultSpacing;
+  const originalHandleResize = patch.originalHandleResize;
   restoreLegacyCellWidthPatch(renderer);
   delete renderer.__acornCjkCellPatch;
 
+  if (originalHandleResize) {
+    renderer.handleResize = originalHandleResize;
+  }
   if (originalSetDefaultSpacing) {
     renderer._setDefaultSpacing = originalSetDefaultSpacing;
   } else {

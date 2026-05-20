@@ -152,6 +152,49 @@ describe("terminal CJK cell width patch", () => {
     expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
   });
 
+  it("reapplies patched metrics synchronously when xterm resize resets dimensions", () => {
+    const rowContainer = document.createElement("div");
+    const rowElement = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") {
+            return 8;
+          }
+          return 8;
+        },
+      },
+      handleResize: (_cols: number, _rows: number) => {
+        renderer.dimensions.css.cell.width = 8;
+        renderer.dimensions.css.canvas.width = 48;
+        rowElement.style.width = "48px";
+        rowContainer.style.letterSpacing = "0px";
+        Object.assign(rowFactory, { defaultSpacing: 0 });
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+    renderer.handleResize(6, 24);
+
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(renderer.dimensions.css.canvas.width).toBe(24);
+    expect(rowElement.style.width).toBe("24px");
+    expect(rowContainer.style.letterSpacing).toBe("-4px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
+  });
+
   it("keeps CJK width cache measurements unclamped so row rendering applies per-glyph spacing", () => {
     const rowContainer = document.createElement("div");
     const renderer = {
