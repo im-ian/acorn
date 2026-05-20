@@ -39,6 +39,7 @@ import {
   shouldUseTinykeysToggleMultiInputFallback,
   useHotkeys,
 } from "./lib/hotkeys";
+import { hasRecordedWorktree } from "./lib/sessionWorktree";
 import {
   EQUALIZE_PANES_EVENT,
   EXPAND_PANEL_EVENT,
@@ -662,13 +663,13 @@ function App() {
     };
   }, [activeSessionId, sessionIdsKey]);
 
-  // Skip the confirmation dialog for non-isolated sessions when the user has
-  // opted out via Settings. Isolated worktrees always prompt because the
-  // delete-worktree choice still matters.
+  // Skip the confirmation dialog for plain sessions when the user has opted
+  // out via Settings. Recorded worktrees still prompt because the
+  // delete-worktree choice matters.
   useEffect(() => {
     if (!pendingRemove) return;
     const confirm = useSettings.getState().settings.sessions.confirmRemove;
-    if (confirm || pendingRemove.isolated) return;
+    if (confirm || hasRecordedWorktree(pendingRemove)) return;
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
   }, [pendingRemove, clearPendingRemove, removeSession]);

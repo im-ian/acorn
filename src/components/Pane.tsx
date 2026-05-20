@@ -49,6 +49,7 @@ import {
 import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -920,7 +921,7 @@ function TabItem({
           </span>
         )}
         {session &&
-        (liveInWorktree ?? (session.isolated || session.in_worktree)) ? (
+        (liveInWorktree ?? hasRecordedWorktree(session)) ? (
           <GitBranch
             size={10}
             className="pointer-events-none text-fg-muted"
