@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Every request opens with the source session's UUID, captured by the CLI
-/// from the `ACORN_SESSION_ID` env var set on control-session PTYs. The
-/// server rejects requests from sessions that do not exist or whose
-/// `SessionKind` is not `Control`.
+/// from the PTY environment. The server rejects ordinary requests from
+/// sessions that do not exist or whose `SessionKind` is not `Control`;
+/// `PromoteSelf` is the explicit bootstrap exception.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Envelope {
     pub protocol_version: u32,
@@ -32,6 +32,9 @@ pub struct Envelope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Request {
+    /// Mark the source session itself as a control session. This is the only
+    /// request intentionally accepted from a regular source session.
+    PromoteSelf,
     /// Return the control-session context primer the agent should load before
     /// interpreting natural-language requests like "new session".
     Context,
@@ -111,6 +114,10 @@ pub enum Response {
     },
     SessionCreated {
         session_id: String,
+    },
+    SelfPromoted {
+        session_id: String,
+        already_control: bool,
     },
     Error {
         code: ErrorCode,
