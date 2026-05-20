@@ -28,15 +28,15 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 ## 스크린샷
 
 <div align="center">
-  <img width="1392" height="912" alt="Acorn 메인 워크스페이스" src="https://github.com/user-attachments/assets/745d2ae3-63f4-4422-9022-634cad396ad5" />
+  <img width="1392" height="912" alt="Acorn 메인 워크스페이스" src="./assets/screenshots/workspace.png" />
   <br/>
   <sub>메인 워크스페이스 — 사이드바 + 분할 Pane + 우측 패널</sub>
   <br/><br/>
-  <img width="1392" height="912" alt="Acorn PR 상세 모달" src="https://github.com/user-attachments/assets/745c71db-aa16-48dc-b8e2-0a4ee02d4a3d" />
+  <img width="1392" height="912" alt="Acorn PR 상세 모달" src="./assets/screenshots/pr-modal.png" />
   <br/>
   <sub>PR 상세 모달 — 체크 상태 + 변경 사항 + 머지 옵션</sub>
   <br/><br/>
-  <video width="1392" controls src="https://github.com/user-attachments/assets/6705d903-d56a-44a0-b324-194fcebc8545"></video>
+  <video width="1392" controls src="./assets/screenshots/control-session.mp4"></video>
   <br/>
   <sub>Control session — `acorn-ipc`로 형제 세션 조작</sub>
 </div>
