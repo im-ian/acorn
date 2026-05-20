@@ -197,4 +197,15 @@ mod tests {
         let parsed: Result<Envelope, _> = serde_json::from_str(bad);
         assert!(parsed.is_err());
     }
+
+    #[test]
+    fn promote_self_request_uses_kebab_case_kind() {
+        let env = Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            request: Request::PromoteSelf,
+        };
+        let encoded = serde_json::to_string(&env).expect("encode");
+        assert!(encoded.contains("\"kind\":\"promote-self\""));
+    }
 }
