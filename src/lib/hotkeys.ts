@@ -24,11 +24,15 @@ export const Hotkeys = {
   openPalette: "$mod+p",
   clearTerminal: "$mod+k",
   newSession: "$mod+t",
-  newIsolatedSession: "$mod+Alt+t",
+  // tinykeys matches `event.key` OR `event.code`. On macOS, Option as
+  // modifier rewrites `event.key` to a dead-key glyph (Option+T → "†"),
+  // so the literal-letter form never fires. The `KeyT` form falls back
+  // to `event.code`, which Option does not perturb.
+  newIsolatedSession: "$mod+Alt+KeyT",
   // "Control session" — extends the new-session family. Future PRs add the
   // `acorn-ipc` CLI so this kind of session can drive sibling sessions; the
   // hotkey lives next to the other terminal-creation bindings for symmetry.
-  newControlSession: "$mod+Alt+Shift+t",
+  newControlSession: "$mod+Alt+Shift+KeyT",
   addProject: "$mod+Shift+n",
   focusSidebar: "$mod+1",
   focusMain: "$mod+2",
@@ -45,14 +49,14 @@ export const Hotkeys = {
   uiScaleUp: "$mod+=",
   uiScaleUpShift: "$mod+Shift+Equal",
   uiScaleReset: "$mod+0",
-  toggleMultiInput: "$mod+Alt+i",
+  toggleMultiInput: "$mod+Alt+KeyI",
   focusPaneLeft: "$mod+Alt+ArrowLeft",
   focusPaneRight: "$mod+Alt+ArrowRight",
   focusPaneUp: "$mod+Alt+ArrowUp",
   focusPaneDown: "$mod+Alt+ArrowDown",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
-  equalizePanes: "$mod+Alt+e",
+  equalizePanes: "$mod+Alt+KeyE",
   closeTab: "$mod+w",
   closeEmptyPane: "Escape",
   openSettings: "$mod+Comma",
@@ -155,11 +159,23 @@ const NON_MAC_KEY_LABEL: Record<string, string> = {
 const MAC_MODIFIER_ORDER = ["⌃", "⌥", "⇧", "⌘"];
 const NON_MAC_MODIFIER_ORDER = ["Ctrl", "Alt", "Shift", "Meta"];
 
+// `KeyboardEvent.code` tokens (`KeyT`, `Digit3`, …) are used in binding
+// strings to bypass macOS Option dead-keys. Strip the prefix for display
+// so users see the natural letter/digit, not the raw code name.
+function stripCodePrefix(part: string): string {
+  const keyMatch = /^Key([A-Z])$/.exec(part);
+  if (keyMatch) return keyMatch[1];
+  const digitMatch = /^Digit([0-9])$/.exec(part);
+  if (digitMatch) return digitMatch[1];
+  return part;
+}
+
 function formatKey(part: string, mac: boolean): string {
+  const normalized = stripCodePrefix(part);
   if (mac) {
-    return MAC_KEY_SYMBOL[part] ?? part.toUpperCase();
+    return MAC_KEY_SYMBOL[normalized] ?? normalized.toUpperCase();
   }
-  return NON_MAC_KEY_LABEL[part] ?? part.toUpperCase();
+  return NON_MAC_KEY_LABEL[normalized] ?? normalized.toUpperCase();
 }
 
 /**
