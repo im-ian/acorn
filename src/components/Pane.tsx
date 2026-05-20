@@ -1,4 +1,5 @@
 import {
+  Bot,
   CircleX,
   Columns2,
   Copy,
@@ -916,6 +917,13 @@ function TabItem({
             size={10}
             className="pointer-events-none text-fg-muted"
             aria-label={paneT(t, "pane.aria.worktree")}
+          />
+        ) : null}
+        {session?.kind === "control" ? (
+          <Bot
+            size={10}
+            className="pointer-events-none text-accent"
+            aria-label={paneT(t, "pane.aria.controlSession")}
           />
         ) : null}
         <button
