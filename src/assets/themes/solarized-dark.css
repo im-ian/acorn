@@ -1,0 +1,31 @@
+:root[data-acorn-theme="solarized-dark"] {
+  --color-bg: #002b36;
+  --color-bg-elevated: #073642;
+  --color-bg-sidebar: #00212b;
+  --color-fg: #839496;
+  --color-fg-muted: #586e75;
+  --color-border: #073642;
+  --color-accent: #268bd2;
+  --color-accent-hover: #2aa198;
+  --color-danger: #dc322f;
+  --color-warning: #b58900;
+  --color-terminal-bg: #002b36;
+  --color-terminal-fg: #839496;
+  --color-term-selection: #073642;
+  --color-term-black: #073642;
+  --color-term-red: #dc322f;
+  --color-term-green: #859900;
+  --color-term-yellow: #b58900;
+  --color-term-blue: #268bd2;
+  --color-term-magenta: #d33682;
+  --color-term-cyan: #2aa198;
+  --color-term-white: #eee8d5;
+  --color-term-bright-black: #002b36;
+  --color-term-bright-red: #cb4b16;
+  --color-term-bright-green: #586e75;
+  --color-term-bright-yellow: #657b83;
+  --color-term-bright-blue: #839496;
+  --color-term-bright-magenta: #6c71c4;
+  --color-term-bright-cyan: #93a1a1;
+  --color-term-bright-white: #fdf6e3;
+}

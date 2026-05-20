@@ -1,0 +1,32 @@
+/* @mode light */
+:root[data-acorn-theme="flexoki-light"] {
+  --color-bg: #fffcf0;
+  --color-bg-elevated: #f2f0e5;
+  --color-bg-sidebar: #e6e4d9;
+  --color-fg: #100f0f;
+  --color-fg-muted: #6f6e69;
+  --color-border: #cecdc3;
+  --color-accent: #24837b;
+  --color-accent-hover: #3aa99f;
+  --color-danger: #af3029;
+  --color-warning: #ad8301;
+  --color-terminal-bg: #fffcf0;
+  --color-terminal-fg: #100f0f;
+  --color-term-selection: rgba(187, 220, 206, 0.3);
+  --color-term-black: #100f0f;
+  --color-term-red: #af3029;
+  --color-term-green: #66800b;
+  --color-term-yellow: #ad8301;
+  --color-term-blue: #205ea6;
+  --color-term-magenta: #a02f6f;
+  --color-term-cyan: #24837b;
+  --color-term-white: #6f6e69;
+  --color-term-bright-black: #575653;
+  --color-term-bright-red: #d14d41;
+  --color-term-bright-green: #879a39;
+  --color-term-bright-yellow: #d0a215;
+  --color-term-bright-blue: #4385be;
+  --color-term-bright-magenta: #ce5d97;
+  --color-term-bright-cyan: #3aa99f;
+  --color-term-bright-white: #878580;
+}

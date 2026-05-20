@@ -9,13 +9,21 @@ import ayuDarkCss from "../assets/themes/ayu-dark.css?raw";
 import catppuccinLatteCss from "../assets/themes/catppuccin-latte.css?raw";
 import catppuccinMochaCss from "../assets/themes/catppuccin-mocha.css?raw";
 import draculaCss from "../assets/themes/dracula.css?raw";
+import everforestDarkCss from "../assets/themes/everforest-dark.css?raw";
+import flexokiDarkCss from "../assets/themes/flexoki-dark.css?raw";
+import flexokiLightCss from "../assets/themes/flexoki-light.css?raw";
+import githubDarkCss from "../assets/themes/github-dark.css?raw";
 import githubLightCss from "../assets/themes/github-light.css?raw";
 import gruvboxDarkCss from "../assets/themes/gruvbox-dark.css?raw";
 import gruvboxLightCss from "../assets/themes/gruvbox-light.css?raw";
+import highContrastDarkCss from "../assets/themes/high-contrast-dark.css?raw";
+import kanagawaWaveCss from "../assets/themes/kanagawa-wave.css?raw";
+import monokaiProCss from "../assets/themes/monokai-pro.css?raw";
 import nordCss from "../assets/themes/nord.css?raw";
 import oneDarkProCss from "../assets/themes/one-dark-pro.css?raw";
 import oneLightCss from "../assets/themes/one-light.css?raw";
 import rosePineCss from "../assets/themes/rose-pine.css?raw";
+import solarizedDarkCss from "../assets/themes/solarized-dark.css?raw";
 import solarizedLightCss from "../assets/themes/solarized-light.css?raw";
 import tokyoNightCss from "../assets/themes/tokyo-night.css?raw";
 
@@ -57,6 +65,55 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     label: "One Dark Pro",
     mode: "dark",
     css: oneDarkProCss,
+    source: "builtin",
+  },
+  {
+    id: "monokai-pro",
+    label: "Monokai Pro",
+    mode: "dark",
+    css: monokaiProCss,
+    source: "builtin",
+  },
+  {
+    id: "kanagawa-wave",
+    label: "Kanagawa Wave",
+    mode: "dark",
+    css: kanagawaWaveCss,
+    source: "builtin",
+  },
+  {
+    id: "everforest-dark",
+    label: "Everforest Dark",
+    mode: "dark",
+    css: everforestDarkCss,
+    source: "builtin",
+  },
+  {
+    id: "github-dark",
+    label: "GitHub Dark",
+    mode: "dark",
+    css: githubDarkCss,
+    source: "builtin",
+  },
+  {
+    id: "solarized-dark",
+    label: "Solarized Dark",
+    mode: "dark",
+    css: solarizedDarkCss,
+    source: "builtin",
+  },
+  {
+    id: "flexoki-dark",
+    label: "Flexoki Dark",
+    mode: "dark",
+    css: flexokiDarkCss,
+    source: "builtin",
+  },
+  {
+    id: "high-contrast-dark",
+    label: "High Contrast Dark",
+    mode: "dark",
+    css: highContrastDarkCss,
     source: "builtin",
   },
   {
@@ -120,6 +177,13 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     label: "GitHub Light",
     mode: "light",
     css: githubLightCss,
+    source: "builtin",
+  },
+  {
+    id: "flexoki-light",
+    label: "Flexoki Light",
+    mode: "light",
+    css: flexokiLightCss,
     source: "builtin",
   },
   {
