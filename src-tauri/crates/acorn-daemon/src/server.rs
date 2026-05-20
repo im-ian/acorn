@@ -290,13 +290,17 @@ impl Daemon {
                 target_session_id,
                 data_b64,
             } => match base64_decode(&data_b64) {
-                Ok(bytes) => match self.pty.write(&target_session_id, &bytes) {
-                    Ok(()) => ControlResult::Ack,
-                    Err(err) => ControlResult::Error {
-                        code: io_error_to_code(&err),
-                        message: err.to_string(),
-                    },
-                },
+                Ok(bytes) => {
+                    let scrollback = self.pty.scrollback_snapshot(&target_session_id);
+                    let bytes = normalize_input_for_terminal_mode(bytes, scrollback.as_deref());
+                    match self.pty.write(&target_session_id, &bytes) {
+                        Ok(()) => ControlResult::Ack,
+                        Err(err) => ControlResult::Error {
+                            code: io_error_to_code(&err),
+                            message: err.to_string(),
+                        },
+                    }
+                }
                 Err(msg) => ControlResult::Error {
                     code: ErrorCode::Invalid,
                     message: msg,
@@ -476,6 +480,8 @@ impl Daemon {
                     match frame {
                         StreamFrame::Input { data_b64 } => {
                             if let Ok(b) = base64_decode(&data_b64) {
+                                let scrollback = pty_for_input.scrollback_snapshot(&session_id);
+                                let b = normalize_input_for_terminal_mode(b, scrollback.as_deref());
                                 let _ = pty_for_input.write(&session_id, &b);
                             }
                         }
@@ -529,6 +535,44 @@ impl Daemon {
         };
         serde_json::to_string(&env).unwrap()
     }
+}
+
+const ENHANCED_ENTER: &[u8] = b"\x1b[13u";
+
+fn normalize_input_for_terminal_mode(mut bytes: Vec<u8>, scrollback: Option<&[u8]>) -> Vec<u8> {
+    if bytes.last() == Some(&b'\r')
+        && scrollback
+            .map(uses_enhanced_keyboard_protocol)
+            .unwrap_or(false)
+    {
+        bytes.pop();
+        bytes.extend_from_slice(ENHANCED_ENTER);
+    }
+    bytes
+}
+
+fn uses_enhanced_keyboard_protocol(bytes: &[u8]) -> bool {
+    let mut last_enable = None;
+    let mut last_disable = None;
+    for index in 0..bytes.len().saturating_sub(2) {
+        if bytes[index] != 0x1b || bytes[index + 1] != b'[' {
+            continue;
+        }
+        match bytes[index + 2] {
+            b'>' => {
+                if bytes[index + 3..bytes.len().min(index + 24)].contains(&b'u') {
+                    last_enable = Some(index);
+                }
+            }
+            b'<' => {
+                if bytes[index + 3..bytes.len().min(index + 24)].contains(&b'u') {
+                    last_disable = Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    last_enable > last_disable
 }
 
 fn write_line<W: Write>(w: &mut W, line: &str) -> io::Result<()> {
@@ -645,6 +689,25 @@ mod tests {
             let decoded = base64_decode(&encoded).unwrap();
             assert_eq!(&decoded, input);
         }
+    }
+
+    #[test]
+    fn enter_is_rewritten_when_enhanced_keyboard_mode_is_active() {
+        let bytes = normalize_input_for_terminal_mode(b"hello\r".to_vec(), Some(b"\x1b[>7u"));
+        assert_eq!(bytes, b"hello\x1b[13u");
+    }
+
+    #[test]
+    fn enter_stays_carriage_return_without_enhanced_keyboard_mode() {
+        let bytes = normalize_input_for_terminal_mode(b"hello\r".to_vec(), Some(b"shell prompt"));
+        assert_eq!(bytes, b"hello\r");
+    }
+
+    #[test]
+    fn enhanced_keyboard_disable_clears_enter_rewrite() {
+        let bytes =
+            normalize_input_for_terminal_mode(b"hello\r".to_vec(), Some(b"\x1b[>7u later \x1b[<u"));
+        assert_eq!(bytes, b"hello\r");
     }
 
     #[test]
