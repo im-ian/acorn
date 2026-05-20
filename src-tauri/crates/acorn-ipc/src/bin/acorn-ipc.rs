@@ -1,9 +1,10 @@
 //! `acorn-ipc` — command-line client for the in-app IPC server.
 //!
-//! Run from inside a control session's PTY: the spawning code in
-//! `commands::pty_spawn` injects `ACORN_SESSION_ID` and `ACORN_IPC_SOCKET`
-//! into the environment so this binary can locate the server and identify
-//! itself without flags.
+//! Run from inside an Acorn PTY: the spawning code in `commands::pty_spawn`
+//! injects Acorn identity/path environment so this binary can locate the
+//! server and identify itself without flags. Regular sessions can bootstrap
+//! themselves with `promote-self`; other commands still require a control
+//! source session.
 //!
 //! Exits non-zero on protocol errors so it composes cleanly in shell scripts;
 //! the exit code maps the server's `ErrorCode` so callers can branch on the
@@ -23,16 +24,17 @@ use acorn_ipc::proto::{
 use acorn_ipc::socket_path;
 
 const ENV_SESSION_ID: &str = "ACORN_SESSION_ID";
+const ENV_RESUME_TOKEN: &str = "ACORN_RESUME_TOKEN";
 
 #[derive(Parser)]
 #[command(
     name = "acorn-ipc",
-    about = "Talk to a running Acorn app from inside a control session.",
+    about = "Talk to a running Acorn app from inside an Acorn terminal.",
     long_about = "acorn-ipc speaks to the in-app IPC server over a Unix \
-                  socket. The control session that launched this process \
-                  exports ACORN_SESSION_ID and ACORN_IPC_SOCKET into its \
-                  PTY environment — leave those alone unless you know what \
-                  you're doing."
+                  socket. Acorn terminals export session identity and socket \
+                  paths into their PTY environment. Run `promote-self` once \
+                  from a regular Acorn terminal to turn it into a control \
+                  session; other commands require that control permission."
 )]
 struct Cli {
     /// Print responses as raw JSON instead of the default table/text. Useful
@@ -45,7 +47,8 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     socket: Option<PathBuf>,
 
-    /// Override the source session id. Falls back to `$ACORN_SESSION_ID`.
+    /// Override the source session id. Falls back to `$ACORN_SESSION_ID`,
+    /// then `$ACORN_RESUME_TOKEN`.
     #[arg(long, global = true, value_name = "UUID")]
     source: Option<String>,
 
@@ -55,6 +58,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Promote this Acorn terminal into a control session.
+    PromoteSelf,
     /// Print the Acorn control-session context an agent should load.
     Context,
     /// List the sessions in your project, including this control session.
@@ -136,9 +141,7 @@ enum Command {
         allow_foreign: bool,
     },
     /// Report IPC reachability: socket path, file presence, and whether
-    /// the in-app server accepts connections. No `ACORN_SESSION_ID`
-    /// required — `status` is the only command that works before the
-    /// control-session env has been set up.
+    /// the in-app server accepts connections. No source session id required.
     Status,
 }
 
@@ -162,15 +165,11 @@ fn main() -> ExitCode {
         return run_status(&socket_path, cli.json);
     }
 
-    let source = match cli
-        .source
-        .clone()
-        .or_else(|| std::env::var(ENV_SESSION_ID).ok())
-    {
+    let source = match resolve_source_id(cli.source.clone()) {
         Some(s) if !s.is_empty() => s,
         _ => {
             eprintln!(
-                "acorn-ipc: ACORN_SESSION_ID is unset. Run me from inside a control session, \
+                "acorn-ipc: source session id is unset. Run me from inside an Acorn session, \
                  or pass --source <uuid>.",
             );
             return ExitCode::from(map_error_exit(ErrorCode::Unauthorized));
@@ -208,6 +207,7 @@ fn main() -> ExitCode {
 
 fn build_request(cmd: &Command) -> Result<Request, String> {
     Ok(match cmd {
+        Command::PromoteSelf => Request::PromoteSelf,
         Command::Context => Request::Context,
         Command::ListSessions => Request::ListSessions,
         Command::SendKeys {
@@ -284,6 +284,25 @@ fn build_request(cmd: &Command) -> Result<Request, String> {
     })
 }
 
+fn resolve_source_id(explicit: Option<String>) -> Option<String> {
+    resolve_source_id_from(
+        explicit,
+        std::env::var(ENV_SESSION_ID).ok(),
+        std::env::var(ENV_RESUME_TOKEN).ok(),
+    )
+}
+
+fn resolve_source_id_from(
+    explicit: Option<String>,
+    session_env: Option<String>,
+    resume_env: Option<String>,
+) -> Option<String> {
+    [explicit, session_env, resume_env]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
+}
+
 /// Probe the IPC socket and print a short reachability report. Connection
 /// failure is *not* a CLI error — the whole point of `status` is to surface
 /// down servers, so we exit 0 in both branches and let callers parse the
@@ -299,7 +318,7 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
         }
         Err(err) => (false, Some(err.to_string())),
     };
-    let source_env = std::env::var(ENV_SESSION_ID).ok().filter(|s| !s.is_empty());
+    let source_env = resolve_source_id(None);
     if json {
         let payload = serde_json::json!({
             "socket_path": socket_path.display().to_string(),
@@ -397,6 +416,20 @@ fn render(response: &Response, json: bool) -> ExitCode {
         }
         Response::SessionCreated { session_id } => {
             println!("{session_id}");
+            ExitCode::SUCCESS
+        }
+        Response::SelfPromoted {
+            session_id,
+            already_control,
+            context,
+        } => {
+            if *already_control {
+                println!("session {session_id} is already a control session");
+            } else {
+                println!("promoted session {session_id} to control session");
+            }
+            println!();
+            println!("{context}");
             ExitCode::SUCCESS
         }
         Response::Error { code, message } => {
@@ -560,6 +593,25 @@ mod tests {
     fn context_command_builds_context_request() {
         let req = build_request(&Command::Context).expect("build");
         assert!(matches!(req, Request::Context));
+    }
+
+    #[test]
+    fn promote_self_command_builds_request() {
+        let req = build_request(&Command::PromoteSelf).expect("build");
+        assert!(matches!(req, Request::PromoteSelf));
+    }
+
+    #[test]
+    fn source_resolution_falls_back_to_resume_token() {
+        let source = resolve_source_id_from(
+            None,
+            None,
+            Some("00000000-0000-0000-0000-000000000123".to_string()),
+        );
+        assert_eq!(
+            source.as_deref(),
+            Some("00000000-0000-0000-0000-000000000123")
+        );
     }
 
     #[test]

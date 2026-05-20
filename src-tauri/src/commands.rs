@@ -1141,10 +1141,10 @@ pub async fn pty_spawn<R: Runtime>(
     // to opening the user's native terminal.
     let resolved_command = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let resolved_args: Vec<String> = crate::shell_args::login_args_for(&resolved_command);
-    // Inject IPC env vars for control sessions so the user's shell (and any
-    // agent it launches) can address the running app via the `acorn-ipc`
-    // CLI without per-session configuration. Only control sessions get the
-    // env; regular sessions stay sandboxed from the IPC surface.
+    // Inject Acorn session identity and CLI reachability so a regular
+    // terminal can explicitly bootstrap itself with `acorn-ipc promote-self`.
+    // Privileged IPC commands still fail server-side until the session kind
+    // has been promoted to Control.
     let mut effective_env = env.unwrap_or_default();
     let mut primed_args = resolved_args;
 
@@ -1200,6 +1200,30 @@ pub async fn pty_spawn<R: Runtime>(
         );
     }
 
+    let ipc_socket = acorn_ipc::socket_path::resolve().unwrap_or_default();
+    if !ipc_socket.as_os_str().is_empty() {
+        effective_env
+            .entry("ACORN_IPC_SOCKET".to_string())
+            .or_insert_with(|| ipc_socket.display().to_string());
+    }
+    if let Some(bin_dir) = acorn_ipc::cli_path::bundled_cli_dir() {
+        let existing = effective_env
+            .get("PATH")
+            .cloned()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_default();
+        effective_env.insert(
+            "PATH".to_string(),
+            acorn_ipc::cli_path::prepend_to_path(&bin_dir, &existing),
+        );
+        // Expose the dir so the staged `.zshrc` can re-prepend the IPC CLI
+        // entry after the user's rc runs — covers `export PATH="…"` patterns
+        // that wipe Acorn's earlier prepend.
+        effective_env
+            .entry("ACORN_CLI_DIR".to_string())
+            .or_insert_with(|| bin_dir.display().to_string());
+    }
+
     // OSC 7 emitter — only zsh needs file-side help (bash/fish self-serve).
     // Override `ZDOTDIR` with Acorn's staged dir so our `.zshrc` runs; stash
     // the user's original under `ACORN_USER_ZDOTDIR` so the staged rc can
@@ -1240,12 +1264,6 @@ pub async fn pty_spawn<R: Runtime>(
             effective_env
                 .entry("ACORN_SESSION_ID".to_string())
                 .or_insert_with(|| session.id.to_string());
-            let socket = acorn_ipc::socket_path::resolve().unwrap_or_default();
-            if !socket.as_os_str().is_empty() {
-                effective_env
-                    .entry("ACORN_IPC_SOCKET".to_string())
-                    .or_insert_with(|| socket.display().to_string());
-            }
             // Daemon socket for the `acornd` CLI. Coexists with
             // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
             // the in-process server, while `acornd <subcommand>`
@@ -1258,31 +1276,6 @@ pub async fn pty_spawn<R: Runtime>(
                     .entry("ACORN_DAEMON_SOCKET".to_string())
                     .or_insert_with(|| daemon_sock.display().to_string());
             }
-            // Make the bundled `acorn-ipc` AND `acornd` CLIs resolvable
-            // from inside this PTY without the user installing a PATH
-            // shim. Both binaries ship in the same directory, so a
-            // single prepend covers both. Prepending — not replacing —
-            // keeps the user's existing PATH intact for every other
-            // binary; dedup in `prepend_to_path` prevents the entry
-            // from accumulating across reconnects.
-            if let Some(bin_dir) = acorn_ipc::cli_path::bundled_cli_dir() {
-                let existing = effective_env
-                    .get("PATH")
-                    .cloned()
-                    .or_else(|| std::env::var("PATH").ok())
-                    .unwrap_or_default();
-                effective_env.insert(
-                    "PATH".to_string(),
-                    acorn_ipc::cli_path::prepend_to_path(&bin_dir, &existing),
-                );
-                // Expose the dir so the staged `.zshrc` can re-prepend
-                // the IPC CLI entry after the user's rc runs — covers
-                // `export PATH="…"` patterns that wipe Acorn's earlier
-                // prepend.
-                effective_env
-                    .entry("ACORN_CLI_DIR".to_string())
-                    .or_insert_with(|| bin_dir.display().to_string());
-            }
             // Drop the primer in a worktree-local marker file so whichever
             // agent the user invokes inside the shell can read the IPC
             // protocol. `inject_primer_args` is a no-op while `$SHELL` is
@@ -1293,7 +1286,7 @@ pub async fn pty_spawn<R: Runtime>(
             let primer = acorn_ipc::primer::primer_for(
                 &session.id.to_string(),
                 &session.repo_path,
-                &socket,
+                &ipc_socket,
                 daemon_socket.as_deref(),
             );
             let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);

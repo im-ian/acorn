@@ -88,6 +88,7 @@ pub fn primer_for(
          \n\
          Available commands (project-scoped — other projects are not reachable):\n\
          \n\
+           acorn-ipc promote-self                       # idempotent; already promoted\n\
            acorn-ipc context                             # print this context\n\
            acorn-ipc list-sessions                       # see siblings + self\n\
            acorn-ipc new-session   <name> [--isolated] [--owner me|user]\n\

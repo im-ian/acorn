@@ -366,6 +366,16 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    pub fn set_kind(&self, id: &Uuid, kind: SessionKind) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.kind = kind;
+        entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
     pub fn rename(&self, id: &Uuid, name: String) -> SessionResult<Session> {
         let mut entry = self
             .inner
@@ -498,5 +508,21 @@ mod tests {
         let store = SessionStore::new();
         let result = store.reconcile_missing_worktree(&Uuid::new_v4());
         assert!(matches!(result, Err(SessionError::NotFound(_))));
+    }
+
+    #[test]
+    fn set_kind_promotes_regular_session() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+
+        let promoted = store
+            .set_kind(&session.id, SessionKind::Control)
+            .expect("session exists");
+
+        assert_eq!(promoted.kind, SessionKind::Control);
+        assert_eq!(
+            store.get(&session.id).expect("session persisted").kind,
+            SessionKind::Control
+        );
     }
 }
