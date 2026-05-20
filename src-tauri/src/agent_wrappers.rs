@@ -218,7 +218,7 @@ event=""
 case "$hook_event_name" in
   SessionStart|UserPromptSubmit) event="start" ;;
   Stop|SubagentStop) event="stop" ;;
-  Notification) event="needs_input" ;;
+  Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
 esac
 [ -n "$event" ] || exit 0
@@ -252,7 +252,8 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
 
 fn write_claude_settings(dir: &Path) -> io::Result<()> {
     let notify_path = dir.join(CLAUDE_NOTIFY_NAME);
-    let escaped = json_escape(&notify_path.display().to_string());
+    let command = format!("bash {}", shell_quote(&notify_path.display().to_string()));
+    let escaped = json_escape(&command);
     let body = format!(
         r#"{{
   "hooks": {{
@@ -260,13 +261,18 @@ fn write_claude_settings(dir: &Path) -> io::Result<()> {
     "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
     "SubagentStop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
-    "Notification": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}]
+    "Notification": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "PermissionRequest": [{{"matcher":"*","hooks":[{{"type":"command","command":"{cmd}"}}]}}]
   }}
 }}
 "#,
         cmd = escaped
     );
     fs::write(dir.join(CLAUDE_SETTINGS_NAME), body)
+}
+
+fn shell_quote(input: &str) -> String {
+    format!("'{}'", input.replace('\'', r"'\''"))
 }
 
 fn json_escape(input: &str) -> String {
@@ -319,6 +325,10 @@ mod tests {
         }
     }
 
+    fn shell_quote_for_test(input: &str) -> String {
+        format!("'{}'", input.replace('\'', r"'\''"))
+    }
+
     #[test]
     fn writes_codex_wrapper_and_notify_helper() {
         let base = ScratchDir::new("codex");
@@ -343,7 +353,12 @@ mod tests {
     fn wrapper_files_are_executable() {
         let base = ScratchDir::new("mode");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
-        for name in ["codex", "claude", "acorn-codex-notify", "acorn-claude-notify"] {
+        for name in [
+            "codex",
+            "claude",
+            "acorn-codex-notify",
+            "acorn-claude-notify",
+        ] {
             let mode = fs::metadata(dir.join(name)).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111, "{name} not executable");
         }
@@ -359,7 +374,9 @@ mod tests {
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_TOKEN"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_SESSION_ID"));
-        assert!(wrapper.contains("--settings \"$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json\""));
+        assert!(
+            wrapper.contains("--settings \"$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json\"")
+        );
         assert!(wrapper.contains("exec \"$REAL_BIN\" \"$@\""));
 
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
@@ -377,9 +394,29 @@ mod tests {
         assert!(settings.contains("\"Stop\""));
         assert!(settings.contains("\"SubagentStop\""));
         assert!(settings.contains("\"Notification\""));
+        assert!(settings.contains("\"PermissionRequest\""));
         assert!(
-            settings.contains(&format!("\"command\":\"{}\"", json_escape(&notify_path))),
+            settings.contains(&format!(
+                "\"command\":\"{}\"",
+                json_escape(&format!("bash {}", shell_quote_for_test(&notify_path)))
+            )),
             "settings missing absolute notify command: {settings}"
+        );
+    }
+
+    #[test]
+    fn claude_settings_shell_quotes_notify_command_with_spaces() {
+        let base = ScratchDir::new("claude space");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let settings = fs::read_to_string(dir.join("acorn-claude-settings.json")).unwrap();
+        let notify_path = dir.join("acorn-claude-notify").display().to_string();
+        assert!(
+            settings.contains(&format!(
+                "\"command\":\"{}\"",
+                json_escape(&format!("bash {}", shell_quote_for_test(&notify_path)))
+            )),
+            "settings must shell-quote the notify command path: {settings}"
         );
     }
 
@@ -408,7 +445,12 @@ mod tests {
                     "{label} body must not reference user config path {forbidden}"
                 );
             }
-            for forbidden_cmd in [" > ~/.claude", "tee ~/.claude", "cp ~/.claude", "mv ~/.claude"] {
+            for forbidden_cmd in [
+                " > ~/.claude",
+                "tee ~/.claude",
+                "cp ~/.claude",
+                "mv ~/.claude",
+            ] {
                 assert!(
                     !body.contains(forbidden_cmd),
                     "{label} body must not mutate user config via {forbidden_cmd}"
@@ -428,6 +470,7 @@ mod tests {
             ("Stop", "stop"),
             ("SubagentStop", "stop"),
             ("Notification", "needs_input"),
+            ("PermissionRequest", "needs_input"),
             ("Error", "error"),
         ] {
             assert!(
