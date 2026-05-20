@@ -1303,7 +1303,8 @@ pub async fn pty_spawn<R: Runtime>(
     }
 
     if let Ok(session) = state.sessions.get(&id) {
-        inject_agent_hook_env(&mut effective_env, &session, state.agent_hooks.as_deref());
+        let agent_hooks = state.agent_hooks.lock().clone();
+        inject_agent_hook_env(&mut effective_env, &session, agent_hooks.as_deref());
         if session.kind == SessionKind::Control {
             effective_env
                 .entry("ACORN_SESSION_ID".to_string())

@@ -55,18 +55,11 @@ pub struct AppState {
     /// Local HTTP endpoint used by provider hook scripts to report agent
     /// lifecycle events back into Acorn. `None` means bind failed; PTY
     /// spawning still works and falls back to existing polling.
-    pub agent_hooks: Option<Arc<crate::agent_hooks::AgentHookServer>>,
+    pub agent_hooks: Arc<Mutex<Option<Arc<crate::agent_hooks::AgentHookServer>>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        let agent_hooks = match crate::agent_hooks::AgentHookServer::start() {
-            Ok(server) => Some(Arc::new(server)),
-            Err(err) => {
-                tracing::warn!(error = %err, "agent hook server disabled");
-                None
-            }
-        };
         Self {
             sessions: SessionStore::new(),
             projects: ProjectStore::new(),
@@ -79,7 +72,7 @@ impl AppState {
             stream_registry: StreamRegistry::new(),
             staged_rev_mismatch: Arc::new(Mutex::new(None)),
             fs_watcher: WatcherState::new(),
-            agent_hooks,
+            agent_hooks: Arc::new(Mutex::new(None)),
         }
     }
 }
