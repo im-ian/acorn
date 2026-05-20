@@ -8,6 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 const WRAPPER_DIR_NAME: &str = "agent-wrappers";
 const CODEX_WRAPPER_NAME: &str = "codex";
 const CODEX_NOTIFY_NAME: &str = "acorn-codex-notify";
+const CLAUDE_WRAPPER_NAME: &str = "claude";
+const CLAUDE_NOTIFY_NAME: &str = "acorn-claude-notify";
+const CLAUDE_SETTINGS_NAME: &str = "acorn-claude-settings.json";
 
 const CODEX_WRAPPER_BODY: &str = r#"#!/bin/sh
 _acorn_find_real_binary() {
@@ -157,6 +160,81 @@ curl -sf -X POST \
   "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
 "#;
 
+// Claude Code wrapper.
+//
+// Claude Code does not expose a CLI flag to register hooks directly. The only
+// runtime-only injection channel that does NOT require editing the user's
+// `~/.claude/settings.json` (or any project-level `.claude/settings*.json`)
+// is `--settings <file-or-json>`, which loads ADDITIONAL settings on top of
+// the user's existing sources (merge semantics). We point that at an
+// Acorn-owned JSON file under the wrapper dir whose `hooks` block registers
+// `acorn-claude-notify` for the lifecycle events we care about. No write
+// ever touches a path under the user's home `.claude/`.
+const CLAUDE_WRAPPER_BODY: &str = r#"#!/bin/sh
+_acorn_find_real_binary() {
+  _acorn_name="$1"
+  _acorn_old_ifs=$IFS
+  IFS=:
+  for _acorn_dir in $PATH; do
+    [ -n "$_acorn_dir" ] || continue
+    _acorn_dir=${_acorn_dir%/}
+    case "$_acorn_dir" in
+      "$ACORN_AGENT_WRAPPER_DIR") continue ;;
+    esac
+    if [ -x "$_acorn_dir/$_acorn_name" ] && [ ! -d "$_acorn_dir/$_acorn_name" ]; then
+      IFS=$_acorn_old_ifs
+      printf '%s\n' "$_acorn_dir/$_acorn_name"
+      return 0
+    fi
+  done
+  IFS=$_acorn_old_ifs
+  return 1
+}
+
+REAL_BIN=$(_acorn_find_real_binary claude)
+if [ -z "$REAL_BIN" ]; then
+  echo "Acorn: claude not found in PATH. Install it and ensure it is available in your shell PATH." >&2
+  exit 127
+fi
+
+if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
+   [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] &&
+   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
+   [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+   [ -f "$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json" ] &&
+   [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-claude-notify" ]; then
+  exec "$REAL_BIN" --settings "$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json" "$@"
+fi
+
+exec "$REAL_BIN" "$@"
+"#;
+
+const CLAUDE_NOTIFY_BODY: &str = r#"#!/bin/sh
+input=$(cat 2>/dev/null || true)
+
+hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+
+event=""
+case "$hook_event_name" in
+  SessionStart|UserPromptSubmit) event="start" ;;
+  Stop|SubagentStop) event="stop" ;;
+  Notification) event="needs_input" ;;
+  Error) event="error" ;;
+esac
+[ -n "$event" ] || exit 0
+
+[ -n "${ACORN_AGENT_HOOK_URL-}" ] || exit 0
+[ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] || exit 0
+[ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
+
+payload=$(printf '{"session_id":"%s","provider":"claude","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
+curl -sf -X POST \
+  -H 'Content-Type: application/json' \
+  -H "X-Acorn-Agent-Hook-Token: $ACORN_AGENT_HOOK_TOKEN" \
+  -d "$payload" \
+  "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
+"#;
+
 pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
     ensure_agent_wrapper_dir_at(&acorn_daemon::paths::data_dir()?)
 }
@@ -166,7 +244,45 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(&dir)?;
     write_executable(&dir.join(CODEX_WRAPPER_NAME), CODEX_WRAPPER_BODY)?;
     write_executable(&dir.join(CODEX_NOTIFY_NAME), CODEX_NOTIFY_BODY)?;
+    write_executable(&dir.join(CLAUDE_WRAPPER_NAME), CLAUDE_WRAPPER_BODY)?;
+    write_executable(&dir.join(CLAUDE_NOTIFY_NAME), CLAUDE_NOTIFY_BODY)?;
+    write_claude_settings(&dir)?;
     Ok(dir)
+}
+
+fn write_claude_settings(dir: &Path) -> io::Result<()> {
+    let notify_path = dir.join(CLAUDE_NOTIFY_NAME);
+    let escaped = json_escape(&notify_path.display().to_string());
+    let body = format!(
+        r#"{{
+  "hooks": {{
+    "SessionStart": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "UserPromptSubmit": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "Stop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "SubagentStop": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}],
+    "Notification": [{{"hooks":[{{"type":"command","command":"{cmd}"}}]}}]
+  }}
+}}
+"#,
+        cmd = escaped
+    );
+    fs::write(dir.join(CLAUDE_SETTINGS_NAME), body)
+}
+
+fn json_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str(r"\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn write_executable(path: &Path, body: &str) -> io::Result<()> {
@@ -227,10 +343,101 @@ mod tests {
     fn wrapper_files_are_executable() {
         let base = ScratchDir::new("mode");
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
-        let mode = fs::metadata(dir.join("codex"))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o111, 0o111);
+        for name in ["codex", "claude", "acorn-codex-notify", "acorn-claude-notify"] {
+            let mode = fs::metadata(dir.join(name)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "{name} not executable");
+        }
+    }
+
+    #[test]
+    fn writes_claude_wrapper_notify_and_settings() {
+        let base = ScratchDir::new("claude");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let wrapper = fs::read_to_string(dir.join("claude")).unwrap();
+        assert!(wrapper.contains("_acorn_find_real_binary claude"));
+        assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
+        assert!(wrapper.contains("ACORN_AGENT_HOOK_TOKEN"));
+        assert!(wrapper.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+        assert!(wrapper.contains("--settings \"$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json\""));
+        assert!(wrapper.contains("exec \"$REAL_BIN\" \"$@\""));
+
+        let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
+        assert!(notify.contains("\"provider\":\"claude\""));
+        assert!(notify.contains("SessionStart|UserPromptSubmit"));
+        assert!(notify.contains("Stop|SubagentStop"));
+        assert!(notify.contains("Notification"));
+        assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
+        assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+
+        let settings = fs::read_to_string(dir.join("acorn-claude-settings.json")).unwrap();
+        let notify_path = dir.join("acorn-claude-notify").display().to_string();
+        assert!(settings.contains("\"SessionStart\""));
+        assert!(settings.contains("\"UserPromptSubmit\""));
+        assert!(settings.contains("\"Stop\""));
+        assert!(settings.contains("\"SubagentStop\""));
+        assert!(settings.contains("\"Notification\""));
+        assert!(
+            settings.contains(&format!("\"command\":\"{}\"", json_escape(&notify_path))),
+            "settings missing absolute notify command: {settings}"
+        );
+    }
+
+    #[test]
+    fn claude_wrapper_does_not_mutate_user_config() {
+        let base = ScratchDir::new("safety");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let wrapper = fs::read_to_string(dir.join("claude")).unwrap();
+        let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
+        let settings = fs::read_to_string(dir.join("acorn-claude-settings.json")).unwrap();
+
+        for (label, body) in [
+            ("wrapper", &wrapper),
+            ("notify", &notify),
+            ("settings", &settings),
+        ] {
+            for forbidden in [
+                "~/.claude",
+                "$HOME/.claude",
+                ".claude/settings.json",
+                ".claude/settings.local.json",
+            ] {
+                assert!(
+                    !body.contains(forbidden),
+                    "{label} body must not reference user config path {forbidden}"
+                );
+            }
+            for forbidden_cmd in [" > ~/.claude", "tee ~/.claude", "cp ~/.claude", "mv ~/.claude"] {
+                assert!(
+                    !body.contains(forbidden_cmd),
+                    "{label} body must not mutate user config via {forbidden_cmd}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn claude_notify_maps_runtime_hook_events() {
+        let base = ScratchDir::new("events");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
+        for (claude_event, acorn_event) in [
+            ("SessionStart", "start"),
+            ("UserPromptSubmit", "start"),
+            ("Stop", "stop"),
+            ("SubagentStop", "stop"),
+            ("Notification", "needs_input"),
+            ("Error", "error"),
+        ] {
+            assert!(
+                notify.contains(claude_event),
+                "notify missing claude event {claude_event}"
+            );
+            assert!(
+                notify.contains(&format!("event=\"{acorn_event}\"")),
+                "notify missing acorn event mapping {acorn_event}"
+            );
+        }
     }
 }
