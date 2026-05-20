@@ -16,6 +16,8 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
+import { getCurrentFilePayload } from "../lib/dnd";
+import { formatTerminalFileMention } from "../lib/fileMention";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
   patchTerminalCellMeasurements,
@@ -1157,6 +1159,21 @@ export function Terminal({
     };
     container.addEventListener("paste", onPaste, true);
 
+    const onDragOver = (e: DragEvent) => {
+      if (!getCurrentFilePayload()) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onDrop = (e: DragEvent) => {
+      const payload = getCurrentFilePayload();
+      if (!payload) return;
+      e.preventDefault();
+      sendUserInputToPty(formatTerminalFileMention(payload.path, cwd));
+      term.focus();
+    };
+    container.addEventListener("dragover", onDragOver);
+    container.addEventListener("drop", onDrop);
+
     // Swallow xterm's compositionstart/update/end. Its compositionend
     // handler re-emits the entire textarea contents on top of the
     // per-syllable PTY writes our `onInput` path already issued,
@@ -1802,6 +1819,8 @@ export function Terminal({
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("paste", onPaste, true);
+      container.removeEventListener("dragover", onDragOver);
+      container.removeEventListener("drop", onDrop);
       container.removeEventListener("compositionstart", swallowComposition, true);
       container.removeEventListener("compositionupdate", swallowComposition, true);
       container.removeEventListener("compositionend", swallowComposition, true);
