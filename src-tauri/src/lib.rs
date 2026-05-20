@@ -327,6 +327,7 @@ pub fn run() {
             commands::is_git_repository,
             commands::open_in_editor,
             commands::staged_diff,
+            commands::staged_file_diff,
             commands::list_pull_requests,
             commands::get_pull_request_detail,
             commands::get_pull_request_commit_diff,

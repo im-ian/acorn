@@ -1989,35 +1989,71 @@ function StagedTab({
 }) {
   const t = useTranslation();
   const cachedStaged = rightPanelCache.getStaged(repoPath);
+  const initialSelectedPath =
+    cachedStaged?.selectedPath &&
+    cachedStaged.files.some((file) => file.path === cachedStaged.selectedPath)
+      ? cachedStaged.selectedPath
+      : (cachedStaged?.files[0]?.path ?? null);
   const [files, setFiles] = useState<StagedFile[]>(
     () => cachedStaged?.files ?? [],
   );
-  const [diff, setDiff] = useState<DiffPayload | null>(
-    () => cachedStaged?.diff ?? null,
+  const [selectedPath, setSelectedPath] = useState<string | null>(
+    () => initialSelectedPath,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [diffByPath, setDiffByPath] = useState<Record<string, DiffPayload>>(
+    () => cachedStaged?.diffByPath ?? {},
+  );
+  const [listError, setListError] = useState<string | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingFirst, setLoadingFirst] = useState(!cachedStaged);
+  const [loadingDiff, setLoadingDiff] = useState(false);
+  const [diffRefreshKey, setDiffRefreshKey] = useState(0);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
     file: StagedFile;
   } | null>(null);
   const generationRef = useRef(0);
+  const diffGenerationRef = useRef(0);
+  const diffByPathRef = useRef(diffByPath);
+
+  useEffect(() => {
+    diffByPathRef.current = diffByPath;
+  }, [diffByPath]);
+
+  const selectedFile = useMemo(
+    () => files.find((file) => file.path === selectedPath) ?? null,
+    [files, selectedPath],
+  );
+  const selectedDiff = selectedPath ? (diffByPath[selectedPath] ?? null) : null;
 
   const refresh = useCallback(async () => {
     const generation = generationRef.current;
     try {
-      const [f, d] = await Promise.all([
-        api.listStaged(repoPath),
-        api.stagedDiff(repoPath),
-      ]);
+      const f = await api.listStaged(repoPath);
       if (generationRef.current !== generation) return;
+      const nextPaths = new Set(f.map((file) => file.path));
       setFiles(f);
-      setDiff(d);
-      setError(null);
+      setSelectedPath((prev) =>
+        prev && nextPaths.has(prev) ? prev : (f[0]?.path ?? null),
+      );
+      setDiffByPath((prev) => {
+        let changed = false;
+        const next: Record<string, DiffPayload> = {};
+        for (const [path, payload] of Object.entries(prev)) {
+          if (nextPaths.has(path)) {
+            next[path] = payload;
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+      setListError(null);
+      setDiffRefreshKey((key) => key + 1);
     } catch (e) {
       if (generationRef.current !== generation) return;
-      setError(String(e));
+      setListError(String(e));
     } finally {
       if (generationRef.current === generation) setLoadingFirst(false);
     }
@@ -2044,11 +2080,39 @@ function StagedTab({
     if (invalidateKey > 0) scheduleRefresh();
   }, [invalidateKey, scheduleRefresh]);
 
+  useEffect(() => {
+    if (!selectedPath) {
+      setLoadingDiff(false);
+      setDiffError(null);
+      return;
+    }
+    const token = ++diffGenerationRef.current;
+    const hasCachedDiff = Boolean(diffByPathRef.current[selectedPath]);
+    setLoadingDiff(!hasCachedDiff);
+    setDiffError(null);
+    void api
+      .stagedFileDiff(repoPath, selectedPath)
+      .then((payload) => {
+        if (diffGenerationRef.current !== token) return;
+        setDiffByPath((prev) => ({ ...prev, [selectedPath]: payload }));
+      })
+      .catch((e) => {
+        if (diffGenerationRef.current !== token) return;
+        setDiffError(String(e));
+      })
+      .finally(() => {
+        if (diffGenerationRef.current === token) setLoadingDiff(false);
+      });
+    return () => {
+      diffGenerationRef.current += 1;
+    };
+  }, [repoPath, selectedPath, diffRefreshKey]);
+
   // Mirror to module cache so the next mount for this repo hydrates instantly.
   useEffect(() => {
     if (loadingFirst) return;
-    rightPanelCache.setStaged(repoPath, { files, diff });
-  }, [repoPath, files, diff, loadingFirst]);
+    rightPanelCache.setStaged(repoPath, { files, selectedPath, diffByPath });
+  }, [repoPath, files, selectedPath, diffByPath, loadingFirst]);
 
   function isDeleted(file: StagedFile): boolean {
     return file.status.toLowerCase().includes("delete");
@@ -2058,35 +2122,37 @@ function StagedTab({
     try {
       await navigator.clipboard.writeText(text);
     } catch (e) {
-      setError(String(e));
+      setListError(String(e));
     }
   }
 
   async function openInEditor(file: StagedFile) {
     if (isDeleted(file)) {
-      setError(rt(t, "rightPanel.errors.deletedFile"));
+      setListError(rt(t, "rightPanel.errors.deletedFile"));
       return;
     }
     try {
       await openFileInEditor(joinPath(repoPath, file.path));
     } catch (e) {
-      setError(String(e));
+      setListError(String(e));
     }
   }
 
   async function openWithDefaultApp(file: StagedFile) {
     if (isDeleted(file)) {
-      setError(rt(t, "rightPanel.errors.deletedFile"));
+      setListError(rt(t, "rightPanel.errors.deletedFile"));
       return;
     }
     try {
       await openPath(joinPath(repoPath, file.path));
     } catch (e) {
-      setError(String(e));
+      setListError(String(e));
     }
   }
 
-  if (error) return <div className="p-3 text-xs text-danger">{error}</div>;
+  if (listError) {
+    return <div className="p-3 text-xs text-danger">{listError}</div>;
+  }
   if (files.length === 0) {
     if (loadingFirst) return <SkeletonList count={6} />;
     return <Empty msg={rt(t, "rightPanel.staged.empty")} />;
@@ -2099,6 +2165,7 @@ function StagedTab({
           {files.map((f) => (
             <li
               key={f.path}
+              onClick={() => setSelectedPath(f.path)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, file: f });
@@ -2107,7 +2174,10 @@ function StagedTab({
                 if (isDeleted(f)) return;
                 void openWithDefaultApp(f);
               }}
-              className="flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40"
+              className={cn(
+                "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
+                selectedPath === f.path && "bg-bg-elevated",
+              )}
             >
               <span className="w-24 shrink-0 truncate text-fg-muted">
                 {f.status}
@@ -2122,17 +2192,23 @@ function StagedTab({
       <ResizeHandle direction="vertical" />
       <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
-          {diff ? (
+          {selectedDiff ? (
             <DiffView
-              payload={diff}
+              payload={selectedDiff}
               onExpand={() =>
                 onExpand({
-                  payload: diff,
-                  title: rt(t, "rightPanel.staged.workingTreeChanges"),
+                  payload: selectedDiff,
+                  title:
+                    selectedFile?.path ??
+                    rt(t, "rightPanel.staged.workingTreeChanges"),
                   subtitle: <span className="font-mono">{repoPath}</span>,
                 })
               }
             />
+          ) : diffError ? (
+            <div className="p-3 text-xs text-danger">{diffError}</div>
+          ) : loadingDiff ? (
+            <Empty msg={rt(t, "rightPanel.loading.diffLower")} />
           ) : (
             <Empty msg={rt(t, "rightPanel.staged.noDiff")} />
           )}
