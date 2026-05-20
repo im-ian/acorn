@@ -28,6 +28,8 @@ import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
+  buildAgentForkCommand,
+  providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
@@ -51,7 +53,12 @@ import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import { Tooltip } from "./Tooltip";
-import type { Session, SessionKind, SessionStatus } from "../lib/types";
+import type {
+  Session,
+  SessionAgentProvider,
+  SessionKind,
+  SessionStatus,
+} from "../lib/types";
 import {
   makeSessionWorkspaceTab,
   type CodeWorkspaceTab,
@@ -197,7 +204,7 @@ export function Pane({ paneId }: PaneProps) {
   // args intact.
   async function forkSession(
     parent: Session,
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) {
@@ -208,6 +215,8 @@ export function Pane({ paneId }: PaneProps) {
         name,
         parent.repo_path,
         isolated,
+        "regular",
+        kind,
       );
       // Claude resolves `--resume <uuid>` by looking under
       // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
@@ -225,18 +234,17 @@ export function Pane({ paneId }: PaneProps) {
       // before queuing the resume. Codex stores rollouts cwd-
       // independently under `$CODEX_HOME/sessions/`, so neither branch
       // requires staging for codex.
-      if (kind === "claude" && isolated) {
+      if (providerRequiresForkTranscriptPrep(kind) && isolated) {
         try {
           await api.prepareClaudeFork(parentAgentId, created.worktree_path);
         } catch (err) {
           console.error("[Pane] prepare_claude_fork failed", err);
         }
       }
-      const command =
-        kind === "claude"
-          ? `claude --resume ${parentAgentId} --fork-session`
-          : `codex fork ${parentAgentId}`;
-      useAppStore.getState().setPendingTerminalInput(created.id, command);
+      const command = buildAgentForkCommand(kind, parentAgentId);
+      useAppStore.getState().setPendingTerminalInput(created.id, command, {
+        agentProvider: kind,
+      });
       await useAppStore.getState().refreshAll();
       selectTab(created.id);
     } catch (err) {
@@ -453,7 +461,7 @@ interface TabStripProps {
   onDuplicate: (repoPath: string, kind: SessionKind) => void;
   onFork: (
     parent: Session,
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) => void;
@@ -597,7 +605,7 @@ interface TabItemProps {
   onSplitTab: (direction: Direction) => void;
   onDuplicate?: () => void;
   onFork?: (
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) => void;

@@ -1203,6 +1203,9 @@ function AgentHistoryTab({
       const created = await createSession(
         `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
         sessionHostRepoPath,
+        false,
+        "regular",
+        item.provider,
       );
       if (!created) {
         setError(
@@ -1219,7 +1222,9 @@ function AgentHistoryTab({
           return;
         }
       }
-      setPendingTerminalInput(created.id, item.resume_command);
+      setPendingTerminalInput(created.id, item.resume_command, {
+        agentProvider: item.provider,
+      });
       if (shouldUseWorktree && item.worktree) {
         setWorktreeNotice(item.worktree);
       }

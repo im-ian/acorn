@@ -822,6 +822,7 @@ describe("createSession", () => {
       REPO_A,
       false,
       "regular",
+      null,
     );
   });
 
@@ -837,6 +838,23 @@ describe("createSession", () => {
       REPO_A,
       false,
       "control",
+      null,
+    );
+  });
+
+  it("forwards an explicit agent provider to the backend", async () => {
+    mockApi.createSession.mockResolvedValueOnce(
+      session("agent", REPO_A, { agent_provider: "codex" }),
+    );
+    await useAppStore
+      .getState()
+      .createSession("agent", REPO_A, false, "regular", "codex");
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "agent",
+      REPO_A,
+      false,
+      "regular",
+      "codex",
     );
   });
 
@@ -1018,6 +1036,19 @@ describe("pendingTerminalInput", () => {
     expect(consumePendingTerminalInput("sess-1")).toEqual({
       command: "claude --worktree",
       adoptWorktreeOnExit: true,
+    });
+  });
+
+  it("keeps queued provider metadata with pending terminal input", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "codex resume abc", {
+      agentProvider: "codex",
+    });
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "codex resume abc",
+      adoptWorktreeOnExit: false,
+      agentProvider: "codex",
     });
   });
 });
