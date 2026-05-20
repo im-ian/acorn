@@ -366,6 +366,16 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    pub fn set_kind(&self, id: &Uuid, kind: SessionKind) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.kind = kind;
+        entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
     pub fn rename(&self, id: &Uuid, name: String) -> SessionResult<Session> {
         let mut entry = self
             .inner

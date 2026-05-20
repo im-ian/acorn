@@ -27,6 +27,8 @@ Three entry points:
   whatever project is currently active.
 - Sidebar: hover a project header → click the `Bot` icon.
 - Command palette: `⌘P` → `New control session`.
+- Existing terminal: run `acorn-ipc promote-self` inside any Acorn terminal
+  session to mark that same session as the control session.
 
 The first time you create one, Acorn shows a one-time guide. You can re-open
 it from Settings → Sessions → "Control sessions" or by clearing
@@ -45,20 +47,23 @@ should be able to orchestrate siblings *immediately*, not only after the
 user has explained the protocol. Acorn ships that priming through two
 layers that fire automatically every time a control-session PTY spawns:
 
-1. **PTY environment.** Four pieces of state are injected into the
-   control session's PTY before any user code runs:
-   - `ACORN_SESSION_ID` — this session's UUID, so `acorn-ipc` knows who
-     is asking.
+1. **PTY environment.** All Acorn terminals get enough identity and socket
+   state to bootstrap `acorn-ipc`; control sessions get the privileged source
+   marker before any user code runs:
+   - `ACORN_RESUME_TOKEN` — this session's UUID. `acorn-ipc` uses it as a
+     fallback source id, which lets `promote-self` work from a regular
+     terminal.
    - `ACORN_DATA_DIR` — the resolved Acorn profile data directory. This
      keeps bundled release sidecars aligned with the app's selected
      profile.
    - `ACORN_IPC_SOCKET` — the canonical IPC socket path.
-   - `ACORN_DAEMON_SOCKET` — the background daemon control socket path.
    - `PATH` — the directory containing the bundled `acorn-ipc` binary is
-     prepended (de-duplicated), so the agent can invoke `acorn-ipc` by
-     name without the user installing a shim. Regular sessions do not
-     receive this prefix, keeping the IPC surface invisible outside
-     control sessions.
+     prepended (de-duplicated), so the agent can invoke `acorn-ipc` by name
+     without the user installing a shim.
+   - `ACORN_SESSION_ID` — injected only for sessions already marked as
+     control. This remains the primary source id for privileged operations.
+   - `ACORN_DAEMON_SOCKET` — injected for control sessions so scripts can
+     also reach the background daemon control socket.
 2. **Worktree marker file.** A `.acorn-control.md` is written to the
    session's cwd on every spawn (overwritten each time so the substituted
    session id is current). Agents that read project docs (Claude Code,
@@ -75,17 +80,25 @@ text at any time with `acorn-ipc context`.
 
 ## The `acorn-ipc` CLI
 
-When Acorn spawns a control session it injects these env vars into the PTY:
+When Acorn spawns a terminal it injects these env vars into the PTY:
+
+| Env var             | Source                            |
+| ------------------- | --------------------------------- |
+| `ACORN_RESUME_TOKEN` | The session's UUID               |
+| `ACORN_DATA_DIR`    | Resolved Acorn profile data dir   |
+| `ACORN_IPC_SOCKET`  | Path to the in-app IPC socket     |
+
+Control sessions additionally receive:
 
 | Env var             | Source                            |
 | ------------------- | --------------------------------- |
 | `ACORN_SESSION_ID`  | The session's UUID                |
-| `ACORN_DATA_DIR`    | Resolved Acorn profile data dir   |
-| `ACORN_IPC_SOCKET`  | Path to the in-app IPC socket     |
 | `ACORN_DAEMON_SOCKET` | Path to the daemon control socket |
 
-The `acorn-ipc` binary reads `ACORN_SESSION_ID` and `ACORN_IPC_SOCKET`, so
-commands run straight from the shell without flags.
+The `acorn-ipc` binary reads `ACORN_SESSION_ID` first, then falls back to
+`ACORN_RESUME_TOKEN`, and uses `ACORN_IPC_SOCKET` for transport. Commands run
+straight from the shell without flags. Except for `promote-self`, the server
+still rejects requests unless the source session is already `Control`.
 
 By default, release builds use `profiles/prod` and debug builds use
 `profiles/dev` below Acorn's app data directory. Set `ACORN_PROFILE=<name>`
@@ -93,8 +106,8 @@ to select another profile, or `ACORN_DATA_DIR=<path>` to pin all runtime
 state, IPC sockets, daemon sockets, and staged shell init files to an
 explicit directory.
 
-> **Gotcha for agents running inside a control session.** Acorn injects
-> `ACORN_DATA_DIR` into the PTY env so the bundled CLIs talk to the right
+> **Gotcha for agents running inside an Acorn terminal.** Acorn injects
+> `ACORN_DATA_DIR` into the PTY env so bundled CLIs talk to the right
 > profile. `acorn-paths::data_dir` resolves `ACORN_DATA_DIR` **before** the
 > profile fallback (see `src-tauri/crates/acorn-paths/src/lib.rs`), so
 > running `pnpm run tauri dev` from that shell makes the debug build inherit
@@ -118,20 +131,21 @@ explicit directory.
 > ```
 >
 > The same caveat applies to any process that should run in dev-profile
-> isolation while being launched from a control-session shell — including
+> isolation while being launched from an Acorn-managed shell — including
 > `pnpm exec playwright test` if it spawns the bundled `acornd` sidecar.
-> Outside a control session (your own login shell, CI) there is nothing to
+> Outside an Acorn-managed shell (your own login shell, CI) there is nothing to
 > strip; debug builds already default to `profiles/dev` on their own.
 
 ### Install
 
 `acorn-ipc` ships inside the Acorn `.app` bundle (Tauri's `externalBin`
-mechanism — see `src-tauri/tauri.conf.json`). Inside a control session
-PTY there is **nothing to install**: the bundled binary's directory is
-prepended to `PATH`, so `acorn-ipc list-sessions` works out of the box.
+mechanism — see `src-tauri/tauri.conf.json`). Inside an Acorn PTY there is
+**nothing to install**: the bundled binary's directory is prepended to `PATH`,
+so `acorn-ipc promote-self` and, once promoted, `acorn-ipc list-sessions` work
+out of the box.
 
 You only need a system-wide install when you want to call `acorn-ipc`
-from **outside** a control session (debugging from your own shell, an
+from **outside** an Acorn terminal (debugging from your own shell, an
 external script, a Makefile, …). In that case use the Settings shortcut
 under Sessions → "Control sessions", which generates a single-line
 `ln -sf` command pointing at the bundled binary. The Copy button lands
@@ -168,6 +182,7 @@ acorn-ipc --help
 ### Commands
 
 ```text
+acorn-ipc promote-self
 acorn-ipc context
 acorn-ipc list-sessions
 acorn-ipc new-session   <name> [--isolated] [--owner me|user]
@@ -193,7 +208,7 @@ exits non-zero with a stable code on error:
 
 Sessions created from the UI are owned by `user`. Sessions created through
 `acorn-ipc new-session` are owned by the source control session by default
-(`control:<ACORN_SESSION_ID>`), unless the caller passes `--owner user`.
+(`control:<source session id>`), unless the caller passes `--owner user`.
 
 `list-sessions` shows each session's owner and whether it is owned by the
 current controller. By default, `send-keys`, `read-buffer`, `select-session`,
@@ -218,6 +233,7 @@ done
 Spin up a fresh isolated worktree and focus it:
 
 ```sh
+acorn-ipc promote-self   # no-op if this terminal is already control
 new_id=$(acorn-ipc new-session "patch-bot" --isolated)
 acorn-ipc select-session -t "$new_id"
 ```
@@ -226,9 +242,10 @@ acorn-ipc select-session -t "$new_id"
 
 - The socket file is created with mode `0600`, so only the user the Acorn
   app is running as can connect.
-- Every request carries the source session's UUID. The server rejects any
-  request whose source is missing, expired, or whose `SessionKind` is not
-  `Control`.
+- Every request carries the source session's UUID. `promote-self` is the
+  bootstrap exception: it may mark its own regular source session as
+  `Control`. The server rejects every other request whose source is missing,
+  expired, or whose `SessionKind` is not `Control`.
 - Target lookups are scoped to the source's project (`repo_path`).
   Cross-project requests surface a distinct `OutOfScope` error so the CLI
   can give an accurate diagnostic instead of a misleading "not found".
@@ -236,8 +253,9 @@ acorn-ipc select-session -t "$new_id"
   badly-written agent can't accidentally remove the only seat it has.
 
 There is currently no inter-process whitelist beyond the env-var handshake.
-If a control session leaks its `ACORN_SESSION_ID` to a child it does not
-trust, that child can use it. Treat the env var like a credential.
+If an Acorn terminal leaks its `ACORN_RESUME_TOKEN` or a control session leaks
+its `ACORN_SESSION_ID` to a child it does not trust, that child can use it.
+Treat both env vars like credentials.
 
 ## Wire protocol
 
@@ -262,9 +280,9 @@ version `1`. See `src-tauri/src/ipc/proto.rs` for the canonical types.
 
 | Symptom                                              | Likely cause                                                          |
 | ---------------------------------------------------- | --------------------------------------------------------------------- |
-| `ACORN_SESSION_ID is unset`                          | Running `acorn-ipc` from a non-control session                        |
+| `source session id is unset`                         | Running `acorn-ipc` outside an Acorn-managed terminal without `--source` |
 | `connect: No such file or directory`                 | App not running, or socket path overridden                            |
-| Exit 2 inside a control session                      | Session was removed in the UI; env still pointing at a stale UUID     |
+| Exit 2 after `promote-self`                          | Session was removed in the UI; env still pointing at a stale UUID     |
 | Exit 4 even though both sessions look right          | Sessions belong to different `repo_path`s; check Sidebar grouping     |
 | `read-buffer` returns `truncated` for short sessions | Bytes still in flight to xterm but cleared by `clear`/`reset` already |
 
