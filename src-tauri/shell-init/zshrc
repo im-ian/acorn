@@ -51,6 +51,7 @@ _acorn_prepend_path() {
     esac
 }
 [ -n "${ACORN_CLI_DIR-}" ] && _acorn_prepend_path "$ACORN_CLI_DIR"
+[ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && _acorn_prepend_path "$ACORN_AGENT_WRAPPER_DIR"
 unset -f _acorn_prepend_path
 export PATH
 
