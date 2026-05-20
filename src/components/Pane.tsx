@@ -83,6 +83,8 @@ const STATUS_ICON: Record<SessionStatus, string> = {
   completed: "text-accent/60",
 };
 
+const EMPTY_PANE_DOUBLE_SPACE_MS = 500;
+
 type PaneTranslationKey = Extract<TranslationKey, `pane.${string}`>;
 
 function paneT(t: Translator, key: PaneTranslationKey): string {
@@ -179,6 +181,7 @@ export function Pane({ paneId }: PaneProps) {
   }, [pane, tabs]);
 
   const isFocused = focusedPaneId === paneId;
+  const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
 
   // Spawn a new session in the given project. Triggered by double-clicking
   // the empty pane body or the tab strip. `setFocusedPane` first so
@@ -271,6 +274,32 @@ export function Pane({ paneId }: PaneProps) {
   }
 
   const hasProjects = projects.length > 0;
+
+  useEffect(() => {
+    if (!isFocused || active || !hasProjects) {
+      lastEmptyPaneSpaceKeyDownAtRef.current = null;
+      return;
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (isNonTerminalTextEditingTarget(e.target)) return;
+      if (!isSpaceKeyEvent(e) || e.repeat) {
+        lastEmptyPaneSpaceKeyDownAtRef.current = null;
+        return;
+      }
+      e.preventDefault();
+      const now = e.timeStamp;
+      const previous = lastEmptyPaneSpaceKeyDownAtRef.current;
+      lastEmptyPaneSpaceKeyDownAtRef.current = now;
+      if (previous !== null && now - previous <= EMPTY_PANE_DOUBLE_SPACE_MS) {
+        lastEmptyPaneSpaceKeyDownAtRef.current = null;
+        void handleNewTabFromEmpty();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, handleNewTabFromEmpty, hasProjects, isFocused]);
 
   return (
     <div
@@ -446,6 +475,18 @@ function EmptyPane({
       )}
     </div>
   );
+}
+
+function isSpaceKeyEvent(e: KeyboardEvent): boolean {
+  return e.code === "Space" || e.key === " " || e.key === "Spacebar";
+}
+
+function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(".xterm")) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
 }
 
 interface TabStripProps {
