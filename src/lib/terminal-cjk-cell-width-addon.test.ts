@@ -195,6 +195,56 @@ describe("terminal CJK cell width patch", () => {
     expect(rowFactory).toMatchObject({ defaultSpacing: -4 });
   });
 
+  it("restores the resized renderer width when unpatching after xterm resize", () => {
+    const rowContainer = document.createElement("div");
+    const rowElement = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "가" || chars === "あ" || chars === "汉" || chars === "漢") {
+            return 8;
+          }
+          return 8;
+        },
+      },
+      handleResize: (cols: number, _rows: number) => {
+        renderer.dimensions.css.cell.width = 8;
+        renderer.dimensions.css.canvas.width = cols * 8;
+        rowElement.style.width = `${cols * 8}px`;
+        rowContainer.style.letterSpacing = "0px";
+        Object.assign(rowFactory, { defaultSpacing: 0 });
+      },
+      dimensions: { css: { cell: { width: 8 }, canvas: { width: 48 } } },
+    };
+    const terminal = {
+      cols: 6,
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+    terminal.cols = 10;
+    renderer.handleResize(10, 24);
+
+    expect(renderer.dimensions.css.cell.width).toBe(4);
+    expect(renderer.dimensions.css.canvas.width).toBe(40);
+    expect(rowElement.style.width).toBe("40px");
+
+    unpatchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(8);
+    expect(renderer.dimensions.css.canvas.width).toBe(80);
+    expect(rowElement.style.width).toBe("80px");
+    expect(rowContainer.style.letterSpacing).toBe("");
+    expect("defaultSpacing" in rowFactory).toBe(false);
+  });
+
   it("keeps CJK width cache measurements unclamped so row rendering applies per-glyph spacing", () => {
     const rowContainer = document.createElement("div");
     const renderer = {

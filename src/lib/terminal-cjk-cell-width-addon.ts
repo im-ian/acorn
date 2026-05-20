@@ -98,6 +98,7 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     if (renderer.handleResize) {
       renderer.handleResize = (cols: number, rows: number) => {
         renderer.__acornCjkCellPatch?.originalHandleResize?.(cols, rows);
+        rememberCurrentRendererMetrics(renderer);
         patchTerminalCellMeasurements(term);
       };
     }
@@ -154,6 +155,22 @@ function restoreTerminalCellMeasurements(
 
   widthCache.clear?.();
   originalSetDefaultSpacing?.();
+}
+
+function rememberCurrentRendererMetrics(renderer: DomRenderer): void {
+  const patch = renderer.__acornCjkCellPatch;
+  const css = renderer.dimensions?.css;
+  if (!patch || !css) return;
+
+  const cellWidth = css.cell?.width;
+  if (typeof cellWidth === "number" && Number.isFinite(cellWidth)) {
+    patch.originalCellWidth = cellWidth;
+  }
+
+  const canvasWidth = css.canvas?.width;
+  if (typeof canvasWidth === "number" && Number.isFinite(canvasWidth)) {
+    patch.originalCanvasWidth = canvasWidth;
+  }
 }
 
 function restoreLegacyCellWidthPatch(renderer: DomRenderer): void {
