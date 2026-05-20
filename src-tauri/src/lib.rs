@@ -1,4 +1,5 @@
 mod agent_history;
+mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
 mod cli_resolver;

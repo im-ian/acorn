@@ -35,6 +35,49 @@ where
         .map_err(|e| AppError::Other(format!("{label} task failed: {e}")))?
 }
 
+fn inject_agent_hook_env(
+    effective_env: &mut HashMap<String, String>,
+    session: &Session,
+    hooks: Option<&crate::agent_hooks::AgentHookServer>,
+) {
+    let Some(provider) = session.agent_provider else {
+        return;
+    };
+    if !hooks_enabled_for(provider) {
+        return;
+    }
+    let Some(hooks) = hooks else {
+        return;
+    };
+
+    effective_env
+        .entry("ACORN_AGENT_HOOK_URL".to_string())
+        .or_insert_with(|| hooks.hook_url().to_string());
+    effective_env
+        .entry("ACORN_AGENT_HOOK_TOKEN".to_string())
+        .or_insert_with(|| hooks.token().to_string());
+    effective_env
+        .entry("ACORN_AGENT_HOOK_SESSION_ID".to_string())
+        .or_insert_with(|| session.id.to_string());
+    effective_env
+        .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
+        .or_insert_with(|| agent_hook_provider_name(provider).to_string());
+}
+
+fn hooks_enabled_for(provider: SessionAgentProvider) -> bool {
+    matches!(
+        provider,
+        SessionAgentProvider::Claude | SessionAgentProvider::Codex
+    )
+}
+
+fn agent_hook_provider_name(provider: SessionAgentProvider) -> &'static str {
+    match provider {
+        SessionAgentProvider::Claude => "claude",
+        SessionAgentProvider::Codex => "codex",
+    }
+}
+
 #[derive(Serialize)]
 pub struct AcornIpcStatus {
     /// Filesystem path to the `acorn-ipc` binary that ships next to the
@@ -1260,6 +1303,7 @@ pub async fn pty_spawn<R: Runtime>(
     }
 
     if let Ok(session) = state.sessions.get(&id) {
+        inject_agent_hook_env(&mut effective_env, &session, state.agent_hooks.as_deref());
         if session.kind == SessionKind::Control {
             effective_env
                 .entry("ACORN_SESSION_ID".to_string())
@@ -2476,10 +2520,13 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 mod tests {
     use super::{
         collect_memory_usage_from_roots, create_unique_worktree, font_name_from_path,
-        infer_acornd_root_from_session_pids, memory_root_pids, validate_new_project_name,
-        ProcessMemorySnapshot,
+        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
+        validate_new_project_name, ProcessMemorySnapshot,
     };
+    use acorn_session::{Session, SessionAgentProvider, SessionKind};
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use uuid::Uuid;
 
     #[test]
     fn font_name_from_path_strips_compound_style_suffixes() {
@@ -2536,6 +2583,63 @@ mod tests {
             validate_new_project_name("parent\\fresh-app", false).unwrap(),
             "parent\\fresh-app"
         );
+    }
+
+    #[test]
+    fn inject_agent_hook_env_stamps_known_provider_without_overriding_callers() {
+        let hooks = crate::agent_hooks::AgentHookServer::start().expect("hook server starts");
+        let mut session = Session::new(
+            "Codex".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.id = Uuid::new_v4();
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+
+        let mut env = HashMap::new();
+        env.insert(
+            "ACORN_AGENT_HOOK_TOKEN".to_string(),
+            "caller-token".to_string(),
+        );
+
+        inject_agent_hook_env(&mut env, &session, Some(&hooks));
+
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_URL"),
+            Some(&hooks.hook_url().to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_TOKEN"),
+            Some(&"caller-token".to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_SESSION_ID"),
+            Some(&session.id.to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_PROVIDER"),
+            Some(&"codex".to_string())
+        );
+    }
+
+    #[test]
+    fn inject_agent_hook_env_skips_unknown_provider_or_unavailable_server() {
+        let mut session = Session::new(
+            "Shell".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = None;
+
+        let mut env = HashMap::new();
+        inject_agent_hook_env(&mut env, &session, None);
+        assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
     }
 
     #[test]
