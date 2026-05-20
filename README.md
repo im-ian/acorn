@@ -36,7 +36,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
   <br/>
   <sub>PR 상세 모달 — 체크 상태 + 변경 사항 + 머지 옵션</sub>
   <br/><br/>
-  <video width="1392" controls src="./assets/screenshots/control-session.mp4"></video>
+  <video width="1392" controls src="https://github.com/im-ian/acorn/raw/main/assets/screenshots/control-session.mp4"></video>
   <br/>
   <sub>Control session — `acorn-ipc`로 형제 세션 조작</sub>
 </div>
