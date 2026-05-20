@@ -16,6 +16,13 @@ describe("BUILT_IN_THEMES", () => {
     expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual([
       "acorn-dark",
       "one-dark-pro",
+      "monokai-pro",
+      "kanagawa-wave",
+      "everforest-dark",
+      "github-dark",
+      "solarized-dark",
+      "flexoki-dark",
+      "high-contrast-dark",
       "tokyo-night",
       "dracula",
       "catppuccin-mocha",
@@ -25,16 +32,19 @@ describe("BUILT_IN_THEMES", () => {
       "ayu-dark",
       "acorn-light",
       "github-light",
+      "flexoki-light",
       "solarized-light",
       "catppuccin-latte",
       "one-light",
       "gruvbox-light",
     ]);
-    expect(BUILT_IN_THEMES).toHaveLength(15);
-    expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(9);
+    expect(BUILT_IN_THEMES).toHaveLength(23);
+    expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(
+      16,
+    );
     expect(
       BUILT_IN_THEMES.filter((theme) => theme.mode === "light"),
-    ).toHaveLength(6);
+    ).toHaveLength(7);
   });
 
   it("every built-in css passes validation", () => {

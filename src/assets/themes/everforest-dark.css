@@ -1,0 +1,31 @@
+:root[data-acorn-theme="everforest-dark"] {
+  --color-bg: #2d353b;
+  --color-bg-elevated: #343f44;
+  --color-bg-sidebar: #232a2e;
+  --color-fg: #d3c6aa;
+  --color-fg-muted: #859289;
+  --color-border: #4f585e;
+  --color-accent: #a7c080;
+  --color-accent-hover: #83c092;
+  --color-danger: #e67e80;
+  --color-warning: #dbbc7f;
+  --color-terminal-bg: #2d353b;
+  --color-terminal-fg: #d3c6aa;
+  --color-term-selection: #543a48;
+  --color-term-black: #232a2e;
+  --color-term-red: #e67e80;
+  --color-term-green: #a7c080;
+  --color-term-yellow: #dbbc7f;
+  --color-term-blue: #7fbbb3;
+  --color-term-magenta: #d699b6;
+  --color-term-cyan: #83c092;
+  --color-term-white: #d3c6aa;
+  --color-term-bright-black: #7a8478;
+  --color-term-bright-red: #e67e80;
+  --color-term-bright-green: #a7c080;
+  --color-term-bright-yellow: #dbbc7f;
+  --color-term-bright-blue: #7fbbb3;
+  --color-term-bright-magenta: #d699b6;
+  --color-term-bright-cyan: #83c092;
+  --color-term-bright-white: #fdf6e3;
+}
