@@ -563,6 +563,25 @@ mod tests {
     }
 
     #[test]
+    fn promote_self_command_builds_request() {
+        let req = build_request(&Command::PromoteSelf).expect("build");
+        assert!(matches!(req, Request::PromoteSelf));
+    }
+
+    #[test]
+    fn source_resolution_falls_back_to_resume_token() {
+        let source = resolve_source_id_from(
+            None,
+            None,
+            Some("00000000-0000-0000-0000-000000000123".to_string()),
+        );
+        assert_eq!(
+            source.as_deref(),
+            Some("00000000-0000-0000-0000-000000000123")
+        );
+    }
+
+    #[test]
     fn new_session_owner_user_is_forwarded() {
         let req = build_request(&Command::NewSession {
             name: "worker".to_string(),
