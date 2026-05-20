@@ -699,4 +699,34 @@ mod tests {
         let res = resolve_action_target(&ctl, &target.id.to_string(), &store, true);
         assert!(res.is_ok(), "allow_foreign should bypass owner guard");
     }
+
+    #[test]
+    fn promote_regular_source_session_sets_control_kind() {
+        let store = SessionStore::new();
+        let regular = store.insert(make_session("/tmp/A", "regular", SessionKind::Regular));
+
+        let (promoted, already_control) =
+            promote_source_session(&regular.id.to_string(), &store).expect("promoted");
+
+        assert_eq!(promoted.id, regular.id);
+        assert_eq!(promoted.kind, SessionKind::Control);
+        assert!(!already_control);
+        assert_eq!(
+            store.get(&regular.id).expect("session persisted").kind,
+            SessionKind::Control
+        );
+    }
+
+    #[test]
+    fn promote_control_source_session_is_idempotent() {
+        let store = SessionStore::new();
+        let ctl = store.insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+
+        let (promoted, already_control) =
+            promote_source_session(&ctl.id.to_string(), &store).expect("promoted");
+
+        assert_eq!(promoted.id, ctl.id);
+        assert_eq!(promoted.kind, SessionKind::Control);
+        assert!(already_control);
+    }
 }

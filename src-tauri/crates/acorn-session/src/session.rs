@@ -499,4 +499,20 @@ mod tests {
         let result = store.reconcile_missing_worktree(&Uuid::new_v4());
         assert!(matches!(result, Err(SessionError::NotFound(_))));
     }
+
+    #[test]
+    fn set_kind_promotes_regular_session() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+
+        let promoted = store
+            .set_kind(&session.id, SessionKind::Control)
+            .expect("session exists");
+
+        assert_eq!(promoted.kind, SessionKind::Control);
+        assert_eq!(
+            store.get(&session.id).expect("session persisted").kind,
+            SessionKind::Control
+        );
+    }
 }
