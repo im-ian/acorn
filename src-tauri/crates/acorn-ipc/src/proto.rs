@@ -215,4 +215,18 @@ mod tests {
         let encoded = serde_json::to_string(&env).expect("encode");
         assert!(encoded.contains("\"kind\":\"promote-self\""));
     }
+
+    #[test]
+    fn self_promoted_response_carries_context_text() {
+        let response = Response::SelfPromoted {
+            session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            already_control: false,
+            context: "acorn-ipc list-sessions".to_string(),
+        };
+        let encoded = serde_json::to_string(&response).expect("encode");
+        assert!(encoded.contains("\"kind\":\"self-promoted\""));
+        assert!(encoded.contains("\"context\":\"acorn-ipc list-sessions\""));
+        let decoded: Response = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, response);
+    }
 }
