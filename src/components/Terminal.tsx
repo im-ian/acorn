@@ -13,10 +13,19 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "../lib/api";
+import {
+  api,
+  AGENT_TRANSCRIPT_ADVANCED_EVENT,
+  type AgentTranscriptAdvancedPayload,
+} from "../lib/api";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
+import type { SessionStatus } from "../lib/types";
+import {
+  shouldRepaintTerminalForStatusTransition,
+  shouldRepaintTerminalForTranscriptAdvance,
+} from "../lib/terminalAttentionRepaint";
 import {
   patchTerminalCellMeasurements,
   unpatchTerminalCellMeasurements,
@@ -414,6 +423,24 @@ function encodeStringToBase64(input: string): string {
   return btoa(binary);
 }
 
+function repaintTerminalTail(
+  term: XTerm | null,
+  container: HTMLDivElement | null,
+) {
+  if (!term || !container) return;
+  void container.offsetHeight;
+  try {
+    term.refresh(0, Math.max(0, term.rows - 1));
+  } catch {
+    // Terminal may have been disposed between scheduling and repaint.
+  }
+  try {
+    term.scrollToBottom();
+  } catch {
+    // Best-effort; refresh is the important part.
+  }
+}
+
 export function Terminal({
   sessionId,
   cwd,
@@ -424,6 +451,11 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const previousStatusRef = useRef<SessionStatus | null>(null);
+  const sessionStatus =
+    useAppStore(
+      (s) => s.sessions.find((session) => session.id === sessionId)?.status,
+    ) ?? null;
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
   } | null>(null);
@@ -1891,6 +1923,68 @@ export function Terminal({
     scheduler.schedule();
     return scheduler.dispose;
   }, [isActive]);
+
+  useEffect(() => {
+    const previous = previousStatusRef.current;
+    previousStatusRef.current = sessionStatus;
+    if (
+      !isActive ||
+      !shouldRepaintTerminalForStatusTransition(previous, sessionStatus)
+    ) {
+      return;
+    }
+
+    const refresh = () => {
+      repaintTerminalTail(termRef.current, containerRef.current);
+    };
+
+    const scheduler = createTerminalRepaintScheduler(refresh);
+    scheduler.schedule();
+    return scheduler.dispose;
+  }, [isActive, sessionStatus]);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    const refresh = () => {
+      repaintTerminalTail(termRef.current, containerRef.current);
+    };
+    const scheduler = createTerminalRepaintScheduler(refresh);
+
+    listen<AgentTranscriptAdvancedPayload>(
+      AGENT_TRANSCRIPT_ADVANCED_EVENT,
+      (event) => {
+        if (
+          shouldRepaintTerminalForTranscriptAdvance({
+            activeSessionId: sessionId,
+            eventSessionId: event.payload?.sessionId ?? null,
+            isActive,
+          })
+        ) {
+          scheduler.schedule();
+        }
+      },
+    )
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[Terminal] failed to attach agent-transcript-advanced listener",
+          err,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      scheduler.dispose();
+    };
+  }, [isActive, sessionId]);
 
   // WKWebView can defer paints while the app window is not focused. PTY
   // output still reaches xterm's buffer, but the DOM renderer may return with

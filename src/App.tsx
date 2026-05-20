@@ -29,7 +29,9 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import {
   api,
   AGENT_HOOK_STATUS_EVENT,
+  AGENT_TRANSCRIPT_ADVANCED_EVENT,
   STAGED_REV_MISMATCH_EVENT,
+  type AgentTranscriptAdvancedPayload,
   type AgentKind,
   type ResumeCandidate,
   type StagedRevMismatch,
@@ -814,6 +816,34 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach agent-hook-status listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<AgentTranscriptAdvancedPayload>(
+      AGENT_TRANSCRIPT_ADVANCED_EVENT,
+      () => {
+        useAppStore.getState().refreshSessions();
+      },
+    )
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[App] failed to attach agent-transcript-advanced listener",
+          err,
+        );
       });
     return () => {
       cancelled = true;
