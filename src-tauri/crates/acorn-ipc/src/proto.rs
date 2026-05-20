@@ -118,6 +118,7 @@ pub enum Response {
     SelfPromoted {
         session_id: String,
         already_control: bool,
+        context: String,
     },
     Error {
         code: ErrorCode,

@@ -421,12 +421,15 @@ fn render(response: &Response, json: bool) -> ExitCode {
         Response::SelfPromoted {
             session_id,
             already_control,
+            context,
         } => {
             if *already_control {
                 println!("session {session_id} is already a control session");
             } else {
                 println!("promoted session {session_id} to control session");
             }
+            println!();
+            println!("{context}");
             ExitCode::SUCCESS
         }
         Response::Error { code, message } => {
