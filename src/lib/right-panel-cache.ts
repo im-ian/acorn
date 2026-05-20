@@ -10,7 +10,11 @@ import type {
 } from "./types";
 
 export type CommitsCacheEntry = { commits: CommitInfo[]; hasMore: boolean };
-export type StagedCacheEntry = { files: StagedFile[]; diff: DiffPayload | null };
+export type StagedCacheEntry = {
+  files: StagedFile[];
+  selectedPath: string | null;
+  diffByPath: Record<string, DiffPayload>;
+};
 
 interface FetchOptions {
   force?: boolean;

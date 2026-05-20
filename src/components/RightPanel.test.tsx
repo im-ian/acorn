@@ -20,6 +20,9 @@ vi.mock("../lib/api", () => ({
     fsWatchSetRoot: vi.fn<() => Promise<void>>(),
     githubOriginSlug: vi.fn<() => Promise<string | null>>(),
     isGitRepository: vi.fn<() => Promise<boolean>>(),
+    listCommits: vi.fn<() => Promise<[]>>(),
+    listStaged: vi.fn<() => Promise<[]>>(),
+    stagedFileDiff: vi.fn<() => Promise<{ files: [] }>>(),
     listPullRequests:
       vi.fn<
         (
@@ -123,6 +126,9 @@ describe("RightPanel background tab loading", () => {
     mockApi.githubOriginSlug.mockResolvedValue("im-ian/acorn");
     mockApi.isGitRepository.mockResolvedValue(true);
     mockApi.fsWatchSetRoot.mockResolvedValue();
+    mockApi.listCommits.mockResolvedValue([]);
+    mockApi.listStaged.mockResolvedValue([]);
+    mockApi.stagedFileDiff.mockResolvedValue({ files: [] });
     mockApi.listPullRequests.mockResolvedValue({
       kind: "ok",
       items: [],

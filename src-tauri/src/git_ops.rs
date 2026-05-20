@@ -2,7 +2,7 @@ use git2::{DiffOptions, Repository};
 use serde::Serialize;
 use std::path::Path;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::worktree::ensure_repo;
 
 #[derive(Debug, Clone, Serialize)]
@@ -312,14 +312,51 @@ pub fn diff_for_commit(repo_path: &Path, sha: &str) -> AppResult<DiffPayload> {
 }
 
 pub fn diff_staged(repo_path: &Path) -> AppResult<DiffPayload> {
+    diff_staged_with_pathspec(repo_path, None)
+}
+
+pub fn diff_staged_file(repo_path: &Path, path: &str) -> AppResult<DiffPayload> {
+    validate_relative_git_path(path)?;
+    diff_staged_with_pathspec(repo_path, Some(path))
+}
+
+fn diff_staged_with_pathspec(repo_path: &Path, pathspec: Option<&str>) -> AppResult<DiffPayload> {
     let repo = ensure_repo(repo_path)?;
     let head_tree = repo.head().ok().and_then(|r| r.peel_to_tree().ok());
     let mut opts = DiffOptions::new();
     opts.include_untracked(true)
         .recurse_untracked_dirs(true)
         .show_untracked_content(true);
+    if let Some(path) = pathspec {
+        opts.pathspec(path);
+    }
     let diff = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
     collect_diff(&repo, &diff)
+}
+
+fn validate_relative_git_path(path: &str) -> AppResult<()> {
+    if path.trim().is_empty() {
+        return Err(AppError::InvalidPath("empty git path".into()));
+    }
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return Err(AppError::InvalidPath(
+            "git diff path must be relative".into(),
+        ));
+    }
+    for component in p.components() {
+        if matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        ) {
+            return Err(AppError::InvalidPath(
+                "git diff path must stay inside the repository".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn collect_diff(repo: &Repository, diff: &git2::Diff) -> AppResult<DiffPayload> {
@@ -506,14 +543,52 @@ mod tests {
         drop(first);
         drop(repo);
 
-        let payload = diff_for_commit(&root, &second_oid.to_string())
-            .expect("diff for second commit");
+        let payload =
+            diff_for_commit(&root, &second_oid.to_string()).expect("diff for second commit");
         assert_eq!(payload.files.len(), 1);
         let patch = &payload.files[0].patch;
         assert!(
             patch.lines().any(|l| l.starts_with("@@")),
             "patch should contain at least one hunk header, got: {patch:?}",
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn diff_staged_file_limits_payload_to_requested_path() {
+        let root = unique_temp_dir("staged-file-pathspec");
+        let repo = git2::Repository::init(&root).expect("init repo");
+        let first_oid = commit_file(&repo, "a.txt", "alpha\n", "init a", &[]);
+        let first = repo.find_commit(first_oid).expect("first commit");
+        let second_oid = commit_file(&repo, "b.txt", "bravo\n", "init b", &[&first]);
+        let _second = repo.find_commit(second_oid).expect("second commit");
+        fs::write(root.join("a.txt"), "alpha\nchanged\n").expect("write a");
+        fs::write(root.join("b.txt"), "bravo\nchanged\n").expect("write b");
+        drop(_second);
+        drop(first);
+        drop(repo);
+
+        let payload = diff_staged_file(&root, "a.txt").expect("diff for a.txt");
+        assert_eq!(payload.files.len(), 1);
+        assert_eq!(payload.files[0].new_path.as_deref(), Some("a.txt"));
+        assert!(
+            payload.files[0].patch.contains("+changed"),
+            "expected selected file patch, got {:?}",
+            payload.files[0].patch
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn diff_staged_file_rejects_paths_outside_repo() {
+        let root = unique_temp_dir("staged-file-path-validation");
+        git2::Repository::init(&root).expect("init repo");
+
+        assert!(diff_staged_file(&root, "../outside.txt").is_err());
+        assert!(diff_staged_file(&root, "/tmp/outside.txt").is_err());
+        assert!(diff_staged_file(&root, "").is_err());
 
         std::fs::remove_dir_all(&root).ok();
     }

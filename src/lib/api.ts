@@ -116,6 +116,9 @@ export const api = {
   stagedDiff(repoPath: string): Promise<DiffPayload> {
     return invoke<DiffPayload>("staged_diff", { repoPath });
   },
+  stagedFileDiff(repoPath: string, path: string): Promise<DiffPayload> {
+    return invoke<DiffPayload>("staged_file_diff", { repoPath, path });
+  },
   listPullRequests(
     repoPath: string,
     state: PrStateFilter = "open",

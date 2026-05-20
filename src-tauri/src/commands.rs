@@ -2085,21 +2085,30 @@ pub async fn list_commits(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> AppResult<Vec<CommitInfo>> {
-    git_ops::list_commits(
-        &PathBuf::from(repo_path),
-        offset.unwrap_or(0),
-        limit.unwrap_or(50),
-    )
+    run_blocking("list_commits", move || {
+        git_ops::list_commits(
+            &PathBuf::from(repo_path),
+            offset.unwrap_or(0),
+            limit.unwrap_or(50),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn list_staged(repo_path: String) -> AppResult<Vec<StagedFile>> {
-    git_ops::list_staged(&PathBuf::from(repo_path))
+    run_blocking("list_staged", move || {
+        git_ops::list_staged(&PathBuf::from(repo_path))
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn commit_diff(repo_path: String, sha: String) -> AppResult<DiffPayload> {
-    git_ops::diff_for_commit(&PathBuf::from(repo_path), &sha)
+    run_blocking("commit_diff", move || {
+        git_ops::diff_for_commit(&PathBuf::from(repo_path), &sha)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2154,7 +2163,18 @@ pub async fn open_in_editor(command: String, args: Vec<String>, path: String) ->
 
 #[tauri::command]
 pub async fn staged_diff(repo_path: String) -> AppResult<DiffPayload> {
-    git_ops::diff_staged(&PathBuf::from(repo_path))
+    run_blocking("staged_diff", move || {
+        git_ops::diff_staged(&PathBuf::from(repo_path))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn staged_file_diff(repo_path: String, path: String) -> AppResult<DiffPayload> {
+    run_blocking("staged_file_diff", move || {
+        git_ops::diff_staged_file(&PathBuf::from(repo_path), &path)
+    })
+    .await
 }
 
 #[tauri::command]
