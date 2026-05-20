@@ -545,6 +545,7 @@
     },
     "aria": {
       "worktree": "워크트리",
+      "controlSession": "컨트롤 세션",
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"
     },
