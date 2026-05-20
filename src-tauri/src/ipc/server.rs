@@ -40,9 +40,9 @@ use uuid::Uuid;
 
 use crate::commands::{create_unique_worktree, sanitize_worktree_name};
 use crate::persistence;
-use acorn_session::{Session, SessionKind, SessionOwner, SessionStore};
 use crate::state::AppState;
 use crate::worktree;
+use acorn_session::{Session, SessionKind, SessionOwner, SessionStore};
 
 /// Tauri event the frontend listens for to focus a session requested via
 /// the IPC `select-session` command. Kept in lockstep with the listener
@@ -220,9 +220,10 @@ fn handle_connection<R: Runtime>(
     Ok(())
 }
 
-/// Top-level request dispatch. Resolves the source session and enforces the
-/// "must be Control" gate before invoking command-specific handlers, so
-/// each handler can assume `source` is a live, authorized session.
+/// Top-level request dispatch. Except for `promote-self`, resolves the source
+/// session and enforces the "must be Control" gate before invoking
+/// command-specific handlers, so each handler can assume `source` is a live,
+/// authorized session.
 fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState) -> Response {
     if envelope.protocol_version != PROTOCOL_VERSION {
         return Response::Error {
@@ -232,6 +233,9 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
                 envelope.protocol_version, PROTOCOL_VERSION
             ),
         };
+    }
+    if matches!(&envelope.request, Request::PromoteSelf) {
+        return handle_promote_self(&envelope.source_session_id, app, state);
     }
     let source = match resolve_source(&envelope.source_session_id, &state.sessions) {
         Ok(s) => s,
@@ -244,6 +248,7 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
         "ipc: dispatch",
     );
     match envelope.request {
+        Request::PromoteSelf => handle_promote_self(&source.id.to_string(), app, state),
         Request::Context => handle_context(&source),
         Request::ListSessions => handle_list_sessions(&source, &state.sessions),
         Request::SendKeys {
@@ -274,6 +279,7 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
 
 fn request_label(req: &Request) -> &'static str {
     match req {
+        Request::PromoteSelf => "promote-self",
         Request::Context => "context",
         Request::ListSessions => "list-sessions",
         Request::SendKeys { .. } => "send-keys",
@@ -300,6 +306,57 @@ fn resolve_source(raw_id: &str, sessions: &SessionStore) -> Result<Session, Resp
         });
     }
     Ok(session)
+}
+
+fn promote_source_session(
+    raw_id: &str,
+    sessions: &SessionStore,
+) -> Result<(Session, bool), Response> {
+    let id = Uuid::parse_str(raw_id).map_err(|_| Response::Error {
+        code: ErrorCode::Unauthorized,
+        message: format!("source session id is not a valid uuid: {raw_id}"),
+    })?;
+    let session = sessions.get(&id).map_err(|_| Response::Error {
+        code: ErrorCode::Unauthorized,
+        message: "source session not found; is the Acorn session id still valid?".to_string(),
+    })?;
+    if session.kind == SessionKind::Control {
+        return Ok((session, true));
+    }
+    let promoted = sessions
+        .set_kind(&id, SessionKind::Control)
+        .map_err(|err| Response::Error {
+            code: ErrorCode::Internal,
+            message: format!("promote-self failed: {err}"),
+        })?;
+    Ok((promoted, false))
+}
+
+fn handle_promote_self<R: Runtime>(
+    source_id: &str,
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Response {
+    let (session, already_control) = match promote_source_session(source_id, &state.sessions) {
+        Ok(result) => result,
+        Err(err) => return err,
+    };
+    if !already_control {
+        if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+            tracing::warn!(error = %err, "ipc: persist after promote-self failed");
+        }
+        if let Err(err) = app.emit(SESSIONS_CHANGED_EVENT, session.id.to_string()) {
+            tracing::warn!(
+                error = %err,
+                event = SESSIONS_CHANGED_EVENT,
+                "ipc: sessions-changed emit failed after promote-self",
+            );
+        }
+    }
+    Response::SelfPromoted {
+        session_id: session.id.to_string(),
+        already_control,
+    }
 }
 
 /// Resolve a target session id, enforcing project scope. Returns
