@@ -729,3 +729,12 @@ export interface StagedRevMismatch {
 
 export const STAGED_REV_MISMATCH_EVENT = "acorn:staged-rev-mismatch";
 export const AGENT_HOOK_STATUS_EVENT = "acorn:agent-hook-status";
+export const AGENT_TRANSCRIPT_ADVANCED_EVENT =
+  "acorn:agent-transcript-advanced";
+
+export interface AgentTranscriptAdvancedPayload {
+  sessionId: string;
+  transcriptPath: string;
+  size: number;
+  updatedAt: number;
+}
