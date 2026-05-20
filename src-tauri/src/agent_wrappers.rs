@@ -104,7 +104,7 @@ if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
   ) &
   ACORN_CODEX_WATCHER_PID=$!
 
-  "$REAL_BIN" --enable codex_hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
+  "$REAL_BIN" --enable codex_hooks -c "notify=[\"/bin/sh\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
   ACORN_CODEX_STATUS=$?
 
   if [ -n "${ACORN_CODEX_WATCHER_PID-}" ]; then
@@ -131,7 +131,7 @@ case "$event" in
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     case "$hook_event_name" in
-      Start|UserPromptSubmit) event="start" ;;
+      Start|SessionStart|UserPromptSubmit) event="start" ;;
       Stop) event="stop" ;;
       PermissionRequest) event="needs_input" ;;
       Error) event="error" ;;
@@ -252,7 +252,10 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
 
 fn write_claude_settings(dir: &Path) -> io::Result<()> {
     let notify_path = dir.join(CLAUDE_NOTIFY_NAME);
-    let command = format!("bash {}", shell_quote(&notify_path.display().to_string()));
+    let command = format!(
+        "/bin/sh {}",
+        shell_quote(&notify_path.display().to_string())
+    );
     let escaped = json_escape(&command);
     let body = format!(
         r#"{{
@@ -336,13 +339,15 @@ mod tests {
 
         let wrapper = fs::read_to_string(dir.join("codex")).unwrap();
         assert!(wrapper.contains("--enable codex_hooks"));
-        assert!(wrapper
-            .contains("notify=[\\\"bash\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"));
+        assert!(wrapper.contains(
+            "notify=[\\\"/bin/sh\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"
+        ));
         assert!(wrapper.contains("CODEX_TUI_RECORD_SESSION=1"));
         assert!(wrapper.contains("ACORN_AGENT_HOOK_URL"));
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"codex\""));
+        assert!(notify.contains("Start|SessionStart|UserPromptSubmit"));
         assert!(notify.contains("agent-turn-complete|task_complete"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
@@ -398,7 +403,7 @@ mod tests {
         assert!(
             settings.contains(&format!(
                 "\"command\":\"{}\"",
-                json_escape(&format!("bash {}", shell_quote_for_test(&notify_path)))
+                json_escape(&format!("/bin/sh {}", shell_quote_for_test(&notify_path)))
             )),
             "settings missing absolute notify command: {settings}"
         );
@@ -414,7 +419,7 @@ mod tests {
         assert!(
             settings.contains(&format!(
                 "\"command\":\"{}\"",
-                json_escape(&format!("bash {}", shell_quote_for_test(&notify_path)))
+                json_escape(&format!("/bin/sh {}", shell_quote_for_test(&notify_path)))
             )),
             "settings must shell-quote the notify command path: {settings}"
         );

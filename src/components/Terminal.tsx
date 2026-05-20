@@ -451,6 +451,7 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const forcePtyRedrawRef = useRef<(() => void) | null>(null);
   const previousStatusRef = useRef<SessionStatus | null>(null);
   const sessionStatus =
     useAppStore(
@@ -1247,6 +1248,7 @@ export function Terminal({
       // TUIs launched from an already-open shell observe the current pane size.
       sendPtyResize(true);
     };
+    forcePtyRedrawRef.current = syncViewportAndPtySize;
     const commandSizeSyncScheduler = createTerminalRepaintScheduler(
       syncViewportAndPtySize,
       120,
@@ -1864,6 +1866,9 @@ export function Terminal({
       termRef.current = null;
       fitRef.current = null;
       fitTerminalRef.current = null;
+      if (forcePtyRedrawRef.current === syncViewportAndPtySize) {
+        forcePtyRedrawRef.current = null;
+      }
     };
   }, [sessionId, cwd]);
 
@@ -1947,6 +1952,7 @@ export function Terminal({
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
     const refresh = () => {
+      forcePtyRedrawRef.current?.();
       repaintTerminalTail(termRef.current, containerRef.current);
     };
     const scheduler = createTerminalRepaintScheduler(refresh);
