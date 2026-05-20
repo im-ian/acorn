@@ -356,6 +356,7 @@ fn handle_promote_self<R: Runtime>(
     Response::SelfPromoted {
         session_id: session.id.to_string(),
         already_control,
+        context: control_context_text(&session),
     }
 }
 
@@ -410,16 +411,20 @@ fn resolve_action_target(
 }
 
 fn handle_context(source: &Session) -> Response {
+    Response::Context {
+        text: control_context_text(source),
+    }
+}
+
+fn control_context_text(source: &Session) -> String {
     let socket = socket_path::resolve().unwrap_or_default();
     let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
-    Response::Context {
-        text: primer::primer_for(
-            &source.id.to_string(),
-            &source.repo_path,
-            &socket,
-            daemon_socket.as_deref(),
-        ),
-    }
+    primer::primer_for(
+        &source.id.to_string(),
+        &source.repo_path,
+        &socket,
+        daemon_socket.as_deref(),
+    )
 }
 
 fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {

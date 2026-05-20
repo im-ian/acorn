@@ -28,7 +28,9 @@ Three entry points:
 - Sidebar: hover a project header → click the `Bot` icon.
 - Command palette: `⌘P` → `New control session`.
 - Existing terminal: run `acorn-ipc promote-self` inside any Acorn terminal
-  session to mark that same session as the control session.
+  session to mark that same session as the control session. The command prints
+  the control-session primer so an already-running agent can continue without
+  opening a new tab.
 
 The first time you create one, Acorn shows a one-time guide. You can re-open
 it from Settings → Sessions → "Control sessions" or by clearing
