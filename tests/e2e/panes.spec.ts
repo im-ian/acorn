@@ -137,6 +137,99 @@ test.describe("pane / sidebar shortcuts", () => {
     );
   });
 
+  test("tab close button has a reliable hit area outside the drag handle", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+
+    await page.goto("/");
+
+    await page
+      .locator('[data-panel-id="sidebar"]')
+      .getByRole("button", { name: /^alpha main · Idle/ })
+      .first()
+      .click();
+
+    const closeButton = page.locator('[data-tab-close-button="s-1"]');
+    const dragHandle = page.locator('[data-tab-drag-handle="s-1"]');
+    await expect(closeButton).toBeVisible();
+    await expect(dragHandle).toBeVisible();
+
+    await expect(closeButton).toHaveAttribute("draggable", "false");
+    await expect(dragHandle).toHaveAttribute("draggable", "true");
+
+    const geometry = await page.evaluate(() => {
+      const close = document.querySelector(
+        '[data-tab-close-button="s-1"]',
+      );
+      const handle = document.querySelector(
+        '[data-tab-drag-handle="s-1"]',
+      );
+      if (!close || !handle) return null;
+      const closeRect = close.getBoundingClientRect();
+      const handleRect = handle.getBoundingClientRect();
+      return {
+        closeWidth: closeRect.width,
+        closeHeight: closeRect.height,
+        closeLeft: closeRect.left,
+        handleRight: handleRect.right,
+      };
+    });
+
+    expect(geometry).not.toBeNull();
+    expect(geometry?.closeWidth).toBeGreaterThanOrEqual(24);
+    expect(geometry?.closeHeight).toBeGreaterThanOrEqual(24);
+    expect(geometry?.handleRight).toBeLessThanOrEqual(
+      geometry?.closeLeft ?? 0,
+    );
+
+    await closeButton.click({ position: { x: 1, y: 12 } });
+    await expect(
+      page.getByRole("heading", { name: "Remove session" }),
+    ).toBeVisible();
+  });
+
+  test("tab drag remains available after entering rename mode", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [SESSION]);
+
+    await page.goto("/");
+
+    await page
+      .locator('[data-panel-id="sidebar"]')
+      .getByRole("button", { name: /^alpha main · Idle/ })
+      .first()
+      .click();
+
+    const dragHandle = page.locator('[data-tab-drag-handle="s-1"]');
+    await dragHandle.dblclick();
+
+    const renameInput = page.locator("[data-tab-rename-input]");
+    await expect(renameInput).toBeFocused();
+    await expect(renameInput).toHaveAttribute("draggable", "false");
+    await expect(dragHandle).toHaveAttribute("draggable", "true");
+
+    await page.evaluate(() => {
+      const handle = document.querySelector(
+        '[data-tab-drag-handle="s-1"]',
+      );
+      if (!handle) throw new Error("missing tab drag handle");
+      const event = new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer(),
+      });
+      handle.dispatchEvent(event);
+    });
+
+    await expect(renameInput).toHaveCount(0);
+  });
+
   test("$mod+Alt+E dispatches equalize panes", async ({ page }) => {
     await page.goto("/");
     await page.evaluate(() => {
