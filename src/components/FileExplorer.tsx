@@ -37,6 +37,11 @@ import { setFileDragPayload } from "../lib/dnd";
 import { Tooltip } from "./Tooltip";
 import { IconInput, TextInput } from "./ui";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  applySessionCreateRequest,
+  buildSessionCreateRequestFromScope,
+  resolveActiveSessionScope,
+} from "../lib/sessionCreation";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
@@ -978,8 +983,13 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     try {
       const store = await import("../store");
       const state = store.useAppStore.getState();
-      const project = state.activeProject;
-      if (!project) {
+      const scope = resolveActiveSessionScope({
+        sessions: state.sessions,
+        projects: state.projects,
+        activeSessionId: state.activeSessionId,
+        activeWorkspaceRepoPath: state.activeProject,
+      });
+      if (!scope) {
         setError(fileExplorerText(t, "fileExplorer.errors.noActiveProject"));
         return;
       }
@@ -989,7 +999,14 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       // Spawn a regular session in the current project, then queue a
       // `cd <folder>` to land inside the clicked directory once the PTY
       // is up. Mirrors how CommandRunDialog primes new sessions.
-      const session = await state.createSession(name, project, false);
+      const session = await applySessionCreateRequest(
+        state.createSession,
+        buildSessionCreateRequestFromScope(
+          { sessions: state.sessions, projects: state.projects },
+          scope,
+          { name },
+        ),
+      );
       if (session) {
         state.setPendingTerminalInput(
           session.id,

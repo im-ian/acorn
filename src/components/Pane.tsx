@@ -51,6 +51,12 @@ import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  buildSessionCreateRequestFromScope,
+  resolveProjectScopedForRepoPath,
+  scopeForSession,
+  type SessionCreateScope,
+} from "../lib/sessionCreation";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
@@ -183,6 +189,17 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
   const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
 
+  function scopeForTab(tab: PaneTab): SessionCreateScope {
+    if (tab.kind === "session") return scopeForSession(tab.session);
+    return {
+      repoPath: tab.repoPath,
+      projectScoped: resolveProjectScopedForRepoPath(
+        { sessions, projects },
+        tab.repoPath,
+      ),
+    };
+  }
+
   // Spawn a new session in the given project. Triggered by double-clicking
   // the empty pane body or the tab strip. `setFocusedPane` first so
   // `store.createSession` lands the new tab next to *this* pane's active
@@ -191,10 +208,28 @@ export function Pane({ paneId }: PaneProps) {
   async function spawnSession(
     repoPath: string,
     kind: SessionKind = "regular",
+    scope: SessionCreateScope = {
+      repoPath,
+      projectScoped: resolveProjectScopedForRepoPath(
+        { sessions, projects },
+        repoPath,
+      ),
+    },
   ) {
     setFocusedPane(paneId);
-    const name = suggestSessionName(repoPath, sessions);
-    await createSession(name, repoPath, false, kind);
+    const request = buildSessionCreateRequestFromScope(
+      { sessions, projects },
+      scope,
+      { kind },
+    );
+    await createSession(
+      request.name,
+      request.repoPath,
+      request.isolated,
+      request.kind,
+      request.agentProvider,
+      request.projectScoped,
+    );
   }
 
   // Fork an existing claude/codex conversation into a new Acorn session.
@@ -214,14 +249,19 @@ export function Pane({ paneId }: PaneProps) {
     isolated: boolean,
   ) {
     setFocusedPane(paneId);
-    const name = suggestSessionName(parent.repo_path, sessions);
+    const request = buildSessionCreateRequestFromScope(
+      { sessions, projects },
+      scopeForSession(parent),
+      { isolated, kind: "regular", agentProvider: kind },
+    );
     try {
       const created = await api.createSession(
-        name,
-        parent.repo_path,
-        isolated,
-        "regular",
-        kind,
+        request.name,
+        request.repoPath,
+        request.isolated,
+        request.kind,
+        request.agentProvider,
+        request.projectScoped,
       );
       // Claude resolves `--resume <uuid>` by looking under
       // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
@@ -259,18 +299,30 @@ export function Pane({ paneId }: PaneProps) {
 
   async function handleNewTabFromStrip() {
     if (tabs.length === 0) return;
-    await spawnSession(tabs[0].repoPath);
+    const anchor = active ?? tabs[0];
+    await spawnSession(anchor.repoPath, "regular", scopeForTab(anchor));
   }
 
   async function handleNewTabFromEmpty() {
     // Prefer the pane's project if any tabs exist (shouldn't here), else use
     // the globally active project. With no project at all, do nothing.
+    const anchor = active ?? tabs[0] ?? null;
     const repoPath =
-      tabs[0]?.repoPath ??
-      useAppStore.getState().activeProject ??
-      null;
+      anchor?.repoPath ?? useAppStore.getState().activeProject ?? null;
     if (!repoPath) return;
-    await spawnSession(repoPath);
+    await spawnSession(
+      repoPath,
+      "regular",
+      anchor
+        ? scopeForTab(anchor)
+        : {
+            repoPath,
+            projectScoped: resolveProjectScopedForRepoPath(
+              { sessions, projects },
+              repoPath,
+            ),
+          },
+    );
   }
 
   const hasProjects = projects.length > 0;
@@ -343,8 +395,8 @@ export function Pane({ paneId }: PaneProps) {
               splitSide: "after",
             });
           }}
-          onDuplicate={(repoPath, kind) => {
-            void spawnSession(repoPath, kind);
+          onDuplicate={(repoPath, kind, projectScoped) => {
+            void spawnSession(repoPath, kind, { repoPath, projectScoped });
           }}
           onFork={(parent, kind, parentAgentId, isolated) => {
             void forkSession(parent, kind, parentAgentId, isolated);
@@ -425,16 +477,6 @@ export function Pane({ paneId }: PaneProps) {
   );
 }
 
-function suggestSessionName(repoPath: string, existing: Session[]): string {
-  const base =
-    repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
-  const taken = new Set(existing.map((s) => s.name));
-  if (!taken.has(base)) return base;
-  let n = 2;
-  while (taken.has(`${base}-${n}`)) n += 1;
-  return `${base}-${n}`;
-}
-
 function EmptyPane({
   hasProjects,
   onDoubleClick,
@@ -501,7 +543,11 @@ interface TabStripProps {
   ) => void;
   onNewTab: () => void;
   onSplitTab: (tabId: string, direction: Direction) => void;
-  onDuplicate: (repoPath: string, kind: SessionKind) => void;
+  onDuplicate: (
+    repoPath: string,
+    kind: SessionKind,
+    projectScoped: boolean,
+  ) => void;
   onFork: (
     parent: Session,
     kind: SessionAgentProvider,
@@ -599,7 +645,12 @@ function TabStrip({
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
           onDuplicate={
             tab.kind === "session"
-              ? () => onDuplicate(tab.session.repo_path, tab.session.kind)
+              ? () =>
+                  onDuplicate(
+                    tab.session.repo_path,
+                    tab.session.kind,
+                    tab.session.project_scoped !== false,
+                  )
               : undefined
           }
           onFork={
@@ -626,6 +677,7 @@ function TabStrip({
         and double-click here too).
       */}
       <div
+        data-pane-tab-filler={paneId}
         className="min-w-[2.5rem] flex-1"
         onDoubleClick={(e) => {
           if (e.target !== e.currentTarget) return;

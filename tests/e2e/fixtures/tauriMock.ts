@@ -24,6 +24,7 @@ export const tauriMockSource = `
     if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|destroy') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|close') return Promise.resolve(undefined);
+    if (cmd === 'plugin:path|resolve_directory') return Promise.resolve('/Users/tester');
     return undefined;
   }
 

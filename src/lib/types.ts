@@ -66,6 +66,7 @@ export interface Session {
   worktree_path: string;
   branch: string;
   isolated: boolean;
+  project_scoped?: boolean;
   status: SessionStatus;
   created_at: string;
   updated_at: string;

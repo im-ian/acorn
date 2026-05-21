@@ -503,6 +503,13 @@ fn process_command_line(proc: &sysinfo::Process) -> String {
     parts.join(" ")
 }
 
+fn should_remove_local_project_mirror(removed: &Session, remaining: &[Session]) -> bool {
+    !removed.project_scoped
+        && !remaining
+            .iter()
+            .any(|session| session.project_scoped && session.repo_path == removed.repo_path)
+}
+
 fn process_memory_snapshot(pid: Pid, proc: &sysinfo::Process) -> ProcessMemorySnapshot {
     ProcessMemorySnapshot {
         pid: pid.as_u32(),
@@ -694,6 +701,7 @@ pub async fn create_session(
     isolated: Option<bool>,
     kind: Option<SessionKind>,
     agent_provider: Option<SessionAgentProvider>,
+    project_scoped: Option<bool>,
 ) -> AppResult<Session> {
     let repo = PathBuf::from(&repo_path);
     if !repo.exists() {
@@ -701,6 +709,7 @@ pub async fn create_session(
     }
 
     let isolated = isolated.unwrap_or(false);
+    let project_scoped = project_scoped.unwrap_or(true);
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
         let (_safe_name, path) = create_unique_worktree(&repo, &base)?;
@@ -717,9 +726,12 @@ pub async fn create_session(
         isolated,
         kind.unwrap_or_default(),
     );
+    session.project_scoped = project_scoped;
     session.agent_provider = agent_provider;
     let inserted = state.sessions.insert(session);
-    state.projects.ensure(repo.clone(), project_basename(&repo));
+    if project_scoped {
+        state.projects.ensure(repo.clone(), project_basename(&repo));
+    }
     persist(&state);
     Ok(enrich_session(inserted))
 }
@@ -889,6 +901,9 @@ pub async fn remove_session(
         remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
     }
     state.sessions.remove(&id)?;
+    if should_remove_local_project_mirror(&session, &state.sessions.list()) {
+        state.projects.remove(&session.repo_path);
+    }
     persist(&state);
     Ok(())
 }
@@ -2534,12 +2549,26 @@ mod tests {
     use super::{
         collect_memory_usage_from_roots, create_unique_worktree, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        remove_linked_worktree_at_path, validate_new_project_name, ProcessMemorySnapshot,
+        remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        validate_new_project_name, ProcessMemorySnapshot,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use uuid::Uuid;
+
+    fn scoped_session(id: &str, repo_path: &str, project_scoped: bool) -> Session {
+        let mut session = Session::new(
+            id.to_string(),
+            PathBuf::from(repo_path),
+            PathBuf::from(repo_path),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.project_scoped = project_scoped;
+        session
+    }
 
     #[test]
     fn font_name_from_path_strips_compound_style_suffixes() {
@@ -2596,6 +2625,28 @@ mod tests {
             validate_new_project_name("parent\\fresh-app", false).unwrap(),
             "parent\\fresh-app"
         );
+    }
+
+    #[test]
+    fn local_session_removal_cleans_project_mirror_without_project_sessions() {
+        let removed = scoped_session("local", "/Users/me", false);
+
+        assert!(should_remove_local_project_mirror(&removed, &[]));
+    }
+
+    #[test]
+    fn local_session_removal_keeps_project_when_project_session_remains() {
+        let removed = scoped_session("local", "/Users/me", false);
+        let remaining = [scoped_session("project", "/Users/me", true)];
+
+        assert!(!should_remove_local_project_mirror(&removed, &remaining));
+    }
+
+    #[test]
+    fn project_session_removal_never_cleans_project_mirror() {
+        let removed = scoped_session("project", "/Users/me", true);
+
+        assert!(!should_remove_local_project_mirror(&removed, &[]));
     }
 
     #[test]

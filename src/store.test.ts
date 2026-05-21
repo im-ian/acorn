@@ -169,6 +169,13 @@ describe("refreshAll", () => {
     expect(useAppStore.getState().activeSessionId).toBeNull();
   });
 
+  it("can activate a local session workspace when there are no projects", async () => {
+    const local = session("local", "/Users/me", { project_scoped: false });
+    await seed([], [local]);
+    expect(useAppStore.getState().activeProject).toBe("/Users/me");
+    expect(useAppStore.getState().activeSessionId).toBe("local");
+  });
+
   it("sets error on api failure and leaves loading false", async () => {
     mockApi.listSessions.mockRejectedValueOnce(new Error("boom"));
     mockApi.listProjects.mockResolvedValueOnce([]);
@@ -889,6 +896,23 @@ describe("createSession", () => {
       false,
       "regular",
       "codex",
+    );
+  });
+
+  it("forwards local session scope only when requested", async () => {
+    mockApi.createSession.mockResolvedValueOnce(
+      session("terminal", "/Users/me", { project_scoped: false }),
+    );
+    await useAppStore
+      .getState()
+      .createSession("terminal", "/Users/me", false, "regular", null, false);
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "terminal",
+      "/Users/me",
+      false,
+      "regular",
+      null,
+      false,
     );
   });
 

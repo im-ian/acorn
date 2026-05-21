@@ -311,6 +311,7 @@ pub fn daemon_adopt_session(
         worktree_path,
         branch,
         isolated: false,
+        project_scoped: true,
         status: acorn_session::SessionStatus::Idle,
         created_at: now,
         updated_at: now,
