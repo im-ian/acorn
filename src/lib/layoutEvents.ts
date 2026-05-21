@@ -11,6 +11,9 @@ export const EQUALIZE_PANES_EVENT = "acorn:equalize-panes";
 /** Restore the root sidebar/right panel widths and equalize the workspace. */
 export const RESET_PANEL_SIZES_EVENT = "acorn:reset-panel-sizes";
 
+/** Notify layout-sensitive surfaces that the app-level UI scale changed. */
+export const UI_SCALE_CHANGED_EVENT = "acorn:ui-scale-changed";
+
 /**
  * Request that a specific Panel be expanded to its minSize. Dispatched by
  * `ResizeHandle` on double-click; App.tsx wires it to the matching
@@ -20,4 +23,8 @@ export const EXPAND_PANEL_EVENT = "acorn:expand-panel";
 
 export interface ExpandPanelDetail {
   panelId: string;
+}
+
+export interface UiScaleChangedDetail {
+  uiScalePercent: number;
 }

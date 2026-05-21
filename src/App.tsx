@@ -45,6 +45,8 @@ import {
   EXPAND_PANEL_EVENT,
   type ExpandPanelDetail,
   RESET_PANEL_SIZES_EVENT,
+  UI_SCALE_CHANGED_EVENT,
+  type UiScaleChangedDetail,
 } from "./lib/layoutEvents";
 import {
   startNotificationClickHandler,
@@ -409,6 +411,10 @@ function App() {
       "--acorn-ui-scale",
       String(appearance.uiScalePercent / 100),
     );
+    const detail: UiScaleChangedDetail = {
+      uiScalePercent: appearance.uiScalePercent,
+    };
+    window.dispatchEvent(new CustomEvent(UI_SCALE_CHANGED_EVENT, { detail }));
   }, [appearance.uiScalePercent]);
 
   useEffect(() => {
