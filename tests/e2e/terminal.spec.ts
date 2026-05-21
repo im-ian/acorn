@@ -1,4 +1,93 @@
-import { test, expect } from "./support";
+import { test, expect, type Page } from "./support";
+import type { TauriMock } from "./support";
+
+// Tauri handler callbacks run in the page context and must not close over
+// variables declared in the test body. These helpers only define handlers
+// inline and only close over their own parameters, which keeps the
+// serialization boundary clean.
+async function seedAlphaBetaTerminals(tauri: TauriMock): Promise<void> {
+  await tauri.handle("list_projects", () => [
+    {
+      repo_path: "/tmp/demo",
+      name: "demo",
+      created_at: "2026-01-01T00:00:00Z",
+      position: 0,
+    },
+  ]);
+  await tauri.handle("list_sessions", () => [
+    {
+      id: "s-alpha",
+      name: "alpha",
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    },
+    {
+      id: "s-beta",
+      name: "beta",
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:01Z",
+      updated_at: "2026-01-01T00:00:06Z",
+      last_message: null,
+    },
+  ]);
+  await tauri.handle("pty_spawn", () => null);
+}
+
+async function gotoWithAccent(page: Page): Promise<void> {
+  await page.goto("/");
+  await page.addStyleTag({
+    content: `
+      :root[data-acorn-theme="acorn-dark"] {
+        --color-accent: rgb(12, 34, 56);
+      }
+    `,
+  });
+}
+
+function makePillCursorAssertion(page: Page): () => Promise<void> {
+  const activeCursor = page
+    .locator("[data-pane-body] .acorn-terminal .xterm-cursor")
+    .first();
+  return async () => {
+    const textarea = page
+      .locator("[data-pane-body] .xterm-helper-textarea")
+      .first();
+    await textarea.waitFor({ state: "attached" });
+    await textarea.focus();
+    await textarea.evaluate((el) => el.blur());
+    await expect(activeCursor).toBeAttached();
+    await expect
+      .poll(async () =>
+        activeCursor.evaluate((el) => getComputedStyle(el).backgroundColor),
+      )
+      .toBe("rgb(12, 34, 56)");
+    await expect
+      .poll(async () =>
+        activeCursor.evaluate((el) => getComputedStyle(el).borderRadius),
+      )
+      .toBe("999px");
+    await expect
+      .poll(async () =>
+        activeCursor.evaluate((el) => getComputedStyle(el, "::after").content),
+      )
+      .toBe("none");
+    await expect
+      .poll(async () =>
+        activeCursor.evaluate((el) => getComputedStyle(el).outlineWidth),
+      )
+      .toBe("0px");
+  };
+}
 
 test.describe("terminal: spawn", () => {
   test("default pill cursor uses the active theme accent after the helper textarea blurs", async ({
@@ -77,78 +166,9 @@ test.describe("terminal: spawn", () => {
     page,
     tauri,
   }) => {
-    await tauri.handle("list_projects", () => [
-      {
-        repo_path: "/tmp/demo",
-        name: "demo",
-        created_at: "2026-01-01T00:00:00Z",
-        position: 0,
-      },
-    ]);
-    await tauri.handle("list_sessions", () => [
-      {
-        id: "s-alpha",
-        name: "alpha",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        status: "idle",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:05Z",
-        last_message: null,
-      },
-      {
-        id: "s-beta",
-        name: "beta",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        status: "idle",
-        created_at: "2026-01-01T00:00:01Z",
-        updated_at: "2026-01-01T00:00:06Z",
-        last_message: null,
-      },
-    ]);
-    await tauri.handle("pty_spawn", () => null);
-
-    await page.goto("/");
-    await page.addStyleTag({
-      content: `
-        :root[data-acorn-theme="acorn-dark"] {
-          --color-accent: rgb(12, 34, 56);
-        }
-      `,
-    });
-
-    const activeCursor = page
-      .locator("[data-pane-body] .acorn-terminal .xterm-cursor")
-      .first();
-    const expectPill = async () => {
-      const textarea = page
-        .locator("[data-pane-body] .xterm-helper-textarea")
-        .first();
-      await textarea.waitFor({ state: "attached" });
-      await textarea.focus();
-      await textarea.evaluate((el) => el.blur());
-      await expect(activeCursor).toBeAttached();
-      await expect
-        .poll(async () =>
-          activeCursor.evaluate((el) => getComputedStyle(el).backgroundColor),
-        )
-        .toBe("rgb(12, 34, 56)");
-      await expect
-        .poll(async () =>
-          activeCursor.evaluate((el) => getComputedStyle(el).borderRadius),
-        )
-        .toBe("999px");
-      await expect
-        .poll(async () =>
-          activeCursor.evaluate((el) => getComputedStyle(el, "::after").content),
-        )
-        .toBe("none");
-    };
+    await seedAlphaBetaTerminals(tauri);
+    await gotoWithAccent(page);
+    const expectPill = makePillCursorAssertion(page);
 
     await page
       .getByRole("button", { name: /^alpha main · Idle$/ })
@@ -165,78 +185,9 @@ test.describe("terminal: spawn", () => {
     page,
     tauri,
   }) => {
-    await tauri.handle("list_projects", () => [
-      {
-        repo_path: "/tmp/demo",
-        name: "demo",
-        created_at: "2026-01-01T00:00:00Z",
-        position: 0,
-      },
-    ]);
-    await tauri.handle("list_sessions", () => [
-      {
-        id: "s-alpha",
-        name: "alpha",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        status: "idle",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:05Z",
-        last_message: null,
-      },
-      {
-        id: "s-beta",
-        name: "beta",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        status: "idle",
-        created_at: "2026-01-01T00:00:01Z",
-        updated_at: "2026-01-01T00:00:06Z",
-        last_message: null,
-      },
-    ]);
-    await tauri.handle("pty_spawn", () => null);
-
-    await page.goto("/");
-    await page.addStyleTag({
-      content: `
-        :root[data-acorn-theme="acorn-dark"] {
-          --color-accent: rgb(12, 34, 56);
-        }
-      `,
-    });
-
-    const activeCursor = page
-      .locator("[data-pane-body] .acorn-terminal .xterm-cursor")
-      .first();
-    const expectPill = async () => {
-      const textarea = page
-        .locator("[data-pane-body] .xterm-helper-textarea")
-        .first();
-      await textarea.waitFor({ state: "attached" });
-      await textarea.focus();
-      await textarea.evaluate((el) => el.blur());
-      await expect(activeCursor).toBeAttached();
-      await expect
-        .poll(async () =>
-          activeCursor.evaluate((el) => getComputedStyle(el).backgroundColor),
-        )
-        .toBe("rgb(12, 34, 56)");
-      await expect
-        .poll(async () =>
-          activeCursor.evaluate((el) => getComputedStyle(el).borderRadius),
-        )
-        .toBe("999px");
-      await expect
-        .poll(async () =>
-          activeCursor.evaluate((el) => getComputedStyle(el, "::after").content),
-        )
-        .toBe("none");
-    };
+    await seedAlphaBetaTerminals(tauri);
+    await gotoWithAccent(page);
+    const expectPill = makePillCursorAssertion(page);
 
     // Visit alpha → beta → alpha to catch regressions that only show up when
     // the same terminal is reactivated after another one has been mounted.
