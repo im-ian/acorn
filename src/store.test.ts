@@ -218,6 +218,27 @@ describe("selectSession", () => {
   });
 });
 
+describe("focusLocalSessions", () => {
+  it("activates a local session so project focus is cleared in the UI", async () => {
+    const local = session("local", "/Users/me", { project_scoped: false });
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A), local]);
+
+    useAppStore.getState().focusLocalSessions();
+
+    expect(useAppStore.getState().activeProject).toBe("/Users/me");
+    expect(useAppStore.getState().activeSessionId).toBe("local");
+  });
+
+  it("clears project focus when there are no local sessions", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore.getState().focusLocalSessions();
+
+    expect(useAppStore.getState().activeProject).toBeNull();
+    expect(useAppStore.getState().activeSessionId).toBeNull();
+  });
+});
+
 describe("workspace tabs", () => {
   it("opens a code viewer as a workspace tab without making it the active session", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);

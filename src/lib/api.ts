@@ -270,6 +270,11 @@ export const api = {
       limit,
     });
   },
+  listUnscopedAgentHistory(limit = 100): Promise<AgentHistoryItem[]> {
+    return invoke<AgentHistoryItem[]>("list_unscoped_agent_history", {
+      limit,
+    });
+  },
   trashAgentHistoryTranscript(item: AgentHistoryItem): Promise<void> {
     return invoke<void>("trash_agent_history_transcript", {
       provider: item.provider,

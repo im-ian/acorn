@@ -9,6 +9,8 @@ vi.mock("./api", () => ({
   api: {
     listAgentHistory:
       vi.fn<(repoPath: string, limit: number) => Promise<AgentHistoryItem[]>>(),
+    listUnscopedAgentHistory:
+      vi.fn<(limit: number) => Promise<AgentHistoryItem[]>>(),
     listPullRequests:
       vi.fn<
         (
@@ -91,6 +93,24 @@ describe("rightPanelCache", () => {
     rightPanelCache.retainRepos([OTHER_REPO]);
     expect(rightPanelCache.getAgentHistory(REPO)).toBeNull();
     expect(rightPanelCache.getWorkflowRuns(REPO, 50)).toBeNull();
+  });
+
+  it("dedupes in-flight unscoped history fetches and reuses cached results", async () => {
+    const history: AgentHistoryItem[] = [];
+    const pending = deferred<AgentHistoryItem[]>();
+    mockApi.listUnscopedAgentHistory.mockReturnValueOnce(pending.promise);
+
+    const first = rightPanelCache.fetchUnscopedAgentHistory(100);
+    const second = rightPanelCache.fetchUnscopedAgentHistory(100);
+    expect(first).toBe(second);
+    expect(mockApi.listUnscopedAgentHistory).toHaveBeenCalledTimes(1);
+
+    pending.resolve(history);
+    await expect(first).resolves.toBe(history);
+    await expect(rightPanelCache.fetchUnscopedAgentHistory(100)).resolves.toBe(
+      history,
+    );
+    expect(mockApi.listUnscopedAgentHistory).toHaveBeenCalledTimes(1);
   });
 
   it("does not repopulate a pruned repo from a stale in-flight request", async () => {

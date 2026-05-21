@@ -127,6 +127,7 @@ export function Sidebar() {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeProject = useAppStore((s) => s.activeProject);
   const selectSession = useAppStore((s) => s.selectSession);
+  const focusLocalSessions = useAppStore((s) => s.focusLocalSessions);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
@@ -516,6 +517,7 @@ export function Sidebar() {
             sessions={localSessions}
             activeSessionId={activeSessionId}
             onCreate={onNewLocalSession}
+            onFocusArea={focusLocalSessions}
             onSelectSession={selectSession}
             onRemoveSession={(s) => requestRemoveSession(s.id)}
           />
@@ -1383,6 +1385,7 @@ interface LocalTerminalAreaProps {
   sessions: Session[];
   activeSessionId: string | null;
   onCreate: () => void;
+  onFocusArea: () => void;
   onSelectSession: (id: string) => void;
   onRemoveSession: (session: Session) => void;
 }
@@ -1391,6 +1394,7 @@ function LocalTerminalArea({
   sessions,
   activeSessionId,
   onCreate,
+  onFocusArea,
   onSelectSession,
   onRemoveSession,
 }: LocalTerminalAreaProps) {
@@ -1407,6 +1411,7 @@ function LocalTerminalArea({
       aria-label={sidebarText(t, "sidebar.aria.localTerminalSessions")}
       onMouseDown={(e) => {
         e.currentTarget.focus();
+        onFocusArea();
       }}
       className={cn(
         "mt-4 flex min-h-28 flex-1 flex-col pt-2",

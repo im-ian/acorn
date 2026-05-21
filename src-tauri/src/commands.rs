@@ -159,6 +159,23 @@ pub async fn list_agent_history(
 }
 
 #[tauri::command]
+pub async fn list_unscoped_agent_history(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> AppResult<Vec<AgentHistoryItem>> {
+    let project_paths = state
+        .projects
+        .list()
+        .into_iter()
+        .map(|project| PathBuf::from(project.repo_path))
+        .collect();
+    run_blocking("list_unscoped_agent_history", move || {
+        agent_history::list_unscoped_agent_history(project_paths, limit)
+    })
+    .await
+}
+
+#[tauri::command]
 pub fn trash_agent_history_transcript(
     provider: agent_history::AgentHistoryProvider,
     id: String,

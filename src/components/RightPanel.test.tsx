@@ -36,7 +36,10 @@ vi.mock("../lib/api", () => ({
     getWorkflowRunDetail: vi.fn(),
     listAgentHistory:
       vi.fn<(repoPath: string, limit: number) => Promise<AgentHistoryItem[]>>(),
+    listUnscopedAgentHistory:
+      vi.fn<(limit: number) => Promise<AgentHistoryItem[]>>(),
     readSessionTodos: vi.fn<() => Promise<[]>>(),
+    ptyRepoRoot: vi.fn<() => Promise<string | null>>(),
   },
 }));
 
@@ -65,6 +68,12 @@ const mockApi = vi.mocked(api);
 const mockListen = vi.mocked(listen);
 const REPO = "/tmp/acorn-test-repo";
 const REPO_B = "/tmp/acorn-other-repo";
+
+function exactButtonCount(container: HTMLElement, label: string): number {
+  return Array.from(container.querySelectorAll("button")).filter(
+    (button) => button.textContent?.trim() === label,
+  ).length;
+}
 
 const labeledPullRequest = {
   number: 247,
@@ -140,7 +149,9 @@ describe("RightPanel background tab loading", () => {
       account: "tester",
     });
     mockApi.listAgentHistory.mockResolvedValue([]);
+    mockApi.listUnscopedAgentHistory.mockResolvedValue([]);
     mockApi.readSessionTodos.mockResolvedValue([]);
+    mockApi.ptyRepoRoot.mockResolvedValue(null);
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
     useAppStore.setState({
       sessions: [],
@@ -270,6 +281,61 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
     expect(mockApi.listPullRequests).not.toHaveBeenCalled();
     expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
+  });
+
+  it("hides Code and loads local agent history for local chat sessions", async () => {
+    useAppStore.setState({
+      sessions: [
+        {
+          id: "local-1",
+          name: "codex",
+          repo_path: "/Users/tester",
+          worktree_path: "/Users/tester",
+          branch: "HEAD",
+          isolated: false,
+          project_scoped: false,
+          status: "idle",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+          agent_provider: "codex",
+        },
+      ],
+      activeSessionId: "local-1",
+      activeTabId: "local-1",
+      activeProject: REPO,
+      rightTab: "commits",
+    });
+    mockApi.listUnscopedAgentHistory.mockResolvedValue([
+      {
+        provider: "codex",
+        id: "codex-local",
+        title: "Local Codex session",
+        preview: null,
+        cwd: "/Users/tester",
+        worktree: null,
+        transcript_path: "/Users/tester/.codex/session.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-local",
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(exactButtonCount(container, "Code")).toBe(0);
+    expect(exactButtonCount(container, "GitHub")).toBe(0);
+    expect(exactButtonCount(container, "Agents")).toBe(1);
+    expect(mockApi.isGitRepository).not.toHaveBeenCalled();
+    expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
+    expect(mockApi.listAgentHistory).not.toHaveBeenCalled();
+    expect(mockApi.listUnscopedAgentHistory).toHaveBeenCalledWith(100);
   });
 
   it("reprobes GitHub visibility when git metadata changes", async () => {
