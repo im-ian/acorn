@@ -295,6 +295,40 @@ describe("splitFocusedPane", () => {
     useAppStore.getState().focusAdjacentPane("right");
     expect(useAppStore.getState().focusedPaneId).toBe(rightPaneId);
   });
+
+  it("persists resized split ratios per project across project switches and reload storage", async () => {
+    window.localStorage.clear();
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const split = useAppStore.getState().layout;
+    expect(split.kind).toBe("split");
+
+    useAppStore.getState().setPaneSplitSizes(split.id, [25, 75]);
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setActiveProject(REPO_A);
+
+    const restored = useAppStore.getState().layout;
+    expect(restored.kind).toBe("split");
+    if (restored.kind !== "split") throw new Error("expected split layout");
+    expect(restored.sizes).toEqual([25, 75]);
+
+    const raw = window.localStorage.getItem("acorn-workspaces");
+    expect(raw).not.toBeNull();
+    const persisted = JSON.parse(raw!);
+    expect(persisted.state.workspaces[REPO_A].layout.sizes).toEqual([25, 75]);
+
+    resetStore();
+    window.localStorage.setItem("acorn-workspaces", raw!);
+    await useAppStore.persist.rehydrate();
+
+    const rehydrated = useAppStore.getState().layout;
+    expect(rehydrated.kind).toBe("split");
+    if (rehydrated.kind !== "split") throw new Error("expected split layout");
+    expect(rehydrated.sizes).toEqual([25, 75]);
+  });
 });
 
 describe("moveTab", () => {

@@ -21,10 +21,13 @@ export interface PaneNode {
   id: PaneId;
 }
 
+export type SplitSizes = [number, number];
+
 export interface SplitNode {
   kind: "split";
   id: string;
   direction: Direction;
+  sizes?: SplitSizes;
   a: LayoutNode;
   b: LayoutNode;
 }
@@ -186,6 +189,49 @@ export function splitPaneInLayout(
       splitId,
     ),
   };
+}
+
+export function normalizeSplitSizes(
+  sizes: readonly number[] | null | undefined,
+): SplitSizes | null {
+  if (!Array.isArray(sizes) || sizes.length !== 2) return null;
+  const [a, b] = sizes;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) {
+    return null;
+  }
+  const total = a + b;
+  if (total <= 0) return null;
+  if (Math.abs(total - 100) < 0.001) return [a, b];
+  return [(a / total) * 100, (b / total) * 100];
+}
+
+function sameSplitSizes(a: SplitSizes | undefined, b: SplitSizes): boolean {
+  return (
+    Array.isArray(a) &&
+    a.length === 2 &&
+    Math.abs(a[0] - b[0]) < 0.001 &&
+    Math.abs(a[1] - b[1]) < 0.001
+  );
+}
+
+export function updateSplitSizesInLayout(
+  layout: LayoutNode,
+  splitId: string,
+  sizes: readonly number[],
+): LayoutNode {
+  const normalized = normalizeSplitSizes(sizes);
+  if (!normalized) return layout;
+
+  if (layout.kind === "pane") return layout;
+  if (layout.id === splitId) {
+    if (sameSplitSizes(layout.sizes, normalized)) return layout;
+    return { ...layout, sizes: normalized };
+  }
+
+  const a = updateSplitSizesInLayout(layout.a, splitId, normalized);
+  const b = updateSplitSizesInLayout(layout.b, splitId, normalized);
+  if (a === layout.a && b === layout.b) return layout;
+  return { ...layout, a, b };
 }
 
 /**

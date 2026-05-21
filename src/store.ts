@@ -20,6 +20,7 @@ import {
   makePaneNode,
   removePaneFromLayout,
   splitPaneInLayout,
+  updateSplitSizesInLayout,
 } from "./lib/layout";
 import {
   activeSessionIdFromTabId,
@@ -149,6 +150,7 @@ interface AppStateModel {
   setActiveProject: (repoPath: string) => void;
   setFocusedPane: (paneId: PaneId) => void;
   focusAdjacentPane: (direction: PaneFocusDirection) => void;
+  setPaneSplitSizes: (splitId: string, sizes: readonly number[]) => void;
   splitFocusedPane: (direction: Direction) => void;
   closeFocusedTab: () => void;
   closePane: (paneId: PaneId) => void;
@@ -780,6 +782,17 @@ export const useAppStore = create<AppStateModel>()(
         );
         if (!nextPaneId || !ws.panes[nextPaneId]) return ws;
         return { ...ws, focusedPaneId: nextPaneId };
+      });
+      return patch ?? s;
+    });
+  },
+
+  setPaneSplitSizes(splitId, sizes) {
+    set((s) => {
+      const patch = updateActiveWorkspace(s, (ws) => {
+        const layout = updateSplitSizesInLayout(ws.layout, splitId, sizes);
+        if (layout === ws.layout) return ws;
+        return { ...ws, layout };
       });
       return patch ?? s;
     });
