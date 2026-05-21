@@ -2,6 +2,7 @@ import {
   Download,
   FolderOpen,
   ImagePlus,
+  Keyboard,
   RefreshCcw,
   Settings as SettingsIcon,
   Sparkles,
@@ -16,6 +17,7 @@ import {
 } from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
+import { formatHotkey, Hotkeys, type HotkeyId } from "../lib/hotkeys";
 import {
   LANGUAGE_OPTIONS,
   type Language,
@@ -69,6 +71,7 @@ type Tab =
   | "github"
   | "editor"
   | "notifications"
+  | "shortcuts"
   | "storage"
   | "experiments"
   | "about";
@@ -83,6 +86,7 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "github", labelKey: "settings.tabs.github" },
   { id: "editor", labelKey: "settings.tabs.editor" },
   { id: "notifications", labelKey: "settings.tabs.notifications" },
+  { id: "shortcuts", labelKey: "settings.tabs.shortcuts" },
   { id: "storage", labelKey: "settings.tabs.storage" },
   { id: "experiments", labelKey: "settings.tabs.experiments" },
   { id: "about", labelKey: "settings.tabs.about" },
@@ -90,6 +94,175 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
 
 const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
 type SettingsTranslator = Translator;
+
+type ShortcutItem = {
+  id: HotkeyId;
+  labelKey: TranslationKey;
+  descriptionKey?: TranslationKey;
+};
+
+type ShortcutGroup = {
+  titleKey: TranslationKey;
+  items: ShortcutItem[];
+};
+
+const SHORTCUT_GROUPS: ShortcutGroup[] = [
+  {
+    titleKey: "settings.shortcuts.groups.general",
+    items: [
+      {
+        id: "openPalette",
+        labelKey: "settings.shortcuts.items.openPalette.label",
+      },
+      {
+        id: "openSettings",
+        labelKey: "settings.shortcuts.items.openSettings.label",
+      },
+      {
+        id: "newSession",
+        labelKey: "settings.shortcuts.items.newSession.label",
+      },
+      {
+        id: "newIsolatedSession",
+        labelKey: "settings.shortcuts.items.newIsolatedSession.label",
+      },
+      {
+        id: "newControlSession",
+        labelKey: "settings.shortcuts.items.newControlSession.label",
+      },
+      {
+        id: "addProject",
+        labelKey: "settings.shortcuts.items.addProject.label",
+      },
+    ],
+  },
+  {
+    titleKey: "settings.shortcuts.groups.navigation",
+    items: [
+      {
+        id: "focusSidebar",
+        labelKey: "settings.shortcuts.items.focusSidebar.label",
+      },
+      {
+        id: "focusMain",
+        labelKey: "settings.shortcuts.items.focusMain.label",
+      },
+      {
+        id: "focusRight",
+        labelKey: "settings.shortcuts.items.focusRight.label",
+      },
+      {
+        id: "nextTab",
+        labelKey: "settings.shortcuts.items.nextTab.label",
+      },
+      {
+        id: "prevTab",
+        labelKey: "settings.shortcuts.items.prevTab.label",
+      },
+      {
+        id: "nextProject",
+        labelKey: "settings.shortcuts.items.nextProject.label",
+      },
+      {
+        id: "prevProject",
+        labelKey: "settings.shortcuts.items.prevProject.label",
+      },
+    ],
+  },
+  {
+    titleKey: "settings.shortcuts.groups.layout",
+    items: [
+      {
+        id: "toggleSidebar",
+        labelKey: "settings.shortcuts.items.toggleSidebar.label",
+      },
+      {
+        id: "toggleRightPanel",
+        labelKey: "settings.shortcuts.items.toggleRightPanel.label",
+      },
+      {
+        id: "splitVertical",
+        labelKey: "settings.shortcuts.items.splitVertical.label",
+      },
+      {
+        id: "splitHorizontal",
+        labelKey: "settings.shortcuts.items.splitHorizontal.label",
+      },
+      {
+        id: "equalizePanes",
+        labelKey: "settings.shortcuts.items.equalizePanes.label",
+      },
+      {
+        id: "closeTab",
+        labelKey: "settings.shortcuts.items.closeTab.label",
+      },
+      {
+        id: "closeEmptyPane",
+        labelKey: "settings.shortcuts.items.closeEmptyPane.label",
+        descriptionKey: "settings.shortcuts.items.closeEmptyPane.description",
+      },
+    ],
+  },
+  {
+    titleKey: "settings.shortcuts.groups.rightPanel",
+    items: [
+      {
+        id: "toggleTodos",
+        labelKey: "settings.shortcuts.items.toggleTodos.label",
+      },
+      {
+        id: "toggleCommits",
+        labelKey: "settings.shortcuts.items.toggleCommits.label",
+      },
+      {
+        id: "toggleStaged",
+        labelKey: "settings.shortcuts.items.toggleStaged.label",
+      },
+      {
+        id: "togglePrs",
+        labelKey: "settings.shortcuts.items.togglePrs.label",
+      },
+      {
+        id: "toggleFiles",
+        labelKey: "settings.shortcuts.items.toggleFiles.label",
+      },
+    ],
+  },
+  {
+    titleKey: "settings.shortcuts.groups.terminal",
+    items: [
+      {
+        id: "clearTerminal",
+        labelKey: "settings.shortcuts.items.clearTerminal.label",
+      },
+      {
+        id: "toggleMultiInput",
+        labelKey: "settings.shortcuts.items.toggleMultiInput.label",
+      },
+      {
+        id: "reloadShellEnv",
+        labelKey: "settings.shortcuts.items.reloadShellEnv.label",
+      },
+    ],
+  },
+  {
+    titleKey: "settings.shortcuts.groups.view",
+    items: [
+      {
+        id: "uiScaleDown",
+        labelKey: "settings.shortcuts.items.uiScaleDown.label",
+      },
+      {
+        id: "uiScaleUp",
+        labelKey: "settings.shortcuts.items.uiScaleUp.label",
+      },
+      {
+        id: "uiScaleReset",
+        labelKey: "settings.shortcuts.items.uiScaleReset.label",
+      },
+    ],
+  },
+];
 
 function st(t: SettingsTranslator, key: TranslationKey): string {
   return t(key);
@@ -199,6 +372,8 @@ export function SettingsModal() {
             <EditorSettings />
           ) : tab === "notifications" ? (
             <NotificationSettings />
+          ) : tab === "shortcuts" ? (
+            <ShortcutsSettings />
           ) : tab === "storage" ? (
             <StorageSettings />
           ) : tab === "experiments" ? (
@@ -1692,6 +1867,54 @@ function ExperimentsSettings() {
         label={st(t, "settings.experiments.resumeModal.label")}
         description={st(t, "settings.experiments.resumeModal.description")}
       />
+    </section>
+  );
+}
+
+function ShortcutsSettings() {
+  const t = useTranslation();
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
+        <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
+        {st(t, "settings.shortcuts.editingSoon")}
+      </div>
+      <div className="space-y-3">
+        {SHORTCUT_GROUPS.map((group) => (
+          <section
+            key={group.titleKey}
+            className="rounded-md border border-border bg-bg"
+          >
+            <div className="flex items-center gap-1.5 border-b border-border px-3 py-2 text-[11px] font-medium uppercase text-fg-muted">
+              <Keyboard size={11} />
+              {st(t, group.titleKey)}
+            </div>
+            <div className="divide-y divide-border">
+              {group.items.map((item) => (
+                <div
+                  key={item.id}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-fg">
+                      {st(t, item.labelKey)}
+                    </div>
+                    {item.descriptionKey ? (
+                      <div className="mt-0.5 text-[11px] leading-snug text-fg-muted">
+                        {st(t, item.descriptionKey)}
+                      </div>
+                    ) : null}
+                  </div>
+                  <kbd className="rounded border border-border bg-bg-elevated px-1.5 py-0.5 font-mono text-[11px] leading-5 text-fg">
+                    {formatHotkey(Hotkeys[item.id])}
+                  </kbd>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
     </section>
   );
 }
