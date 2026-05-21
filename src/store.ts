@@ -147,6 +147,7 @@ interface AppStateModel {
   pollSessionStatuses: (ids?: string[]) => Promise<void>;
   selectTab: (id: string | null) => void;
   selectSession: (id: string | null) => void;
+  focusLocalSessions: () => void;
   setActiveProject: (repoPath: string) => void;
   setFocusedPane: (paneId: PaneId) => void;
   focusAdjacentPane: (direction: PaneFocusDirection) => void;
@@ -753,6 +754,31 @@ export const useAppStore = create<AppStateModel>()(
 
   selectSession(id) {
     get().selectTab(id);
+  },
+
+  focusLocalSessions() {
+    const state = get();
+    const currentLocal = state.activeSessionId
+      ? state.sessions.find(
+          (session) =>
+            session.id === state.activeSessionId &&
+            session.project_scoped === false,
+        )
+      : null;
+    const local =
+      currentLocal ??
+      state.sessions.find((session) => session.project_scoped === false);
+    if (local) {
+      get().selectSession(local.id);
+      return;
+    }
+    set((s) => {
+      if (s.activeProject === null && s.activeTabId === null) return s;
+      return {
+        activeProject: null,
+        ...fallbackEmptyMirror(),
+      };
+    });
   },
 
   setActiveProject(repoPath) {

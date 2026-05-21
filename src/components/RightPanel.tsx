@@ -200,10 +200,26 @@ export function RightPanel() {
   const fallbackPath =
     active?.worktree_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? null;
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath);
+  const activeIsLocalChat = active?.project_scoped === false;
+  const agentHistoryScope =
+    activeIsLocalChat || (!active && activeProject === null)
+      ? "unscoped"
+      : "project";
+  const projectPanelRepoPath = activeIsLocalChat ? null : repoPath;
+  const agentHistoryPath = agentHistoryScope === "project" ? repoPath : null;
+  const localSessionHostPath =
+    sessions.find((session) => session.project_scoped === false)?.repo_path ??
+    null;
   const sessionHostRepoPath =
-    active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
+    active?.repo_path ??
+    activeWorkspaceTab?.repoPath ??
+    activeProject ??
+    localSessionHostPath ??
+    repoPath;
   const sessionHostProjectScoped = active
     ? scopeForSession(active).projectScoped
+    : agentHistoryScope === "unscoped"
+      ? false
     : sessionHostRepoPath
       ? resolveProjectScopedForRepoPath(
           { sessions, projects },
@@ -212,12 +228,12 @@ export function RightPanel() {
       : true;
   const [gitRepoProbeVersion, setGitRepoProbeVersion] = useState(0);
   const invalidateGitProbe = useCallback(() => {
-    if (!repoPath) return;
-    invalidateGitRepositoryStatus(repoPath);
+    if (!projectPanelRepoPath) return;
+    invalidateGitRepositoryStatus(projectPanelRepoPath);
     setGitRepoProbeVersion((version) => version + 1);
-  }, [repoPath]);
+  }, [projectPanelRepoPath]);
   const invalidations = useRightPanelInvalidations(
-    repoPath,
+    projectPanelRepoPath,
     invalidateGitProbe,
   );
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
@@ -241,24 +257,34 @@ export function RightPanel() {
     active?.worktree_path ?? null,
   );
   const showTodos = todosState.todos.length > 0;
-  const isGitRepo = useIsGitRepository(repoPath, gitRepoProbeVersion);
-  const isGitHubRepo = useIsGitHubRepo(repoPath, gitRepoProbeVersion);
+  const isGitRepo = useIsGitRepository(
+    projectPanelRepoPath,
+    gitRepoProbeVersion,
+  );
+  const isGitHubRepo = useIsGitHubRepo(
+    projectPanelRepoPath,
+    gitRepoProbeVersion,
+  );
   const githubVisible = isGitHubRepo === true;
-  const gitBackedTabsVisible = isGitRepo !== false;
+  const gitBackedTabsVisible =
+    projectPanelRepoPath !== null && isGitRepo !== false;
 
   const visibleTabsByGroup = useMemo<
     Record<RightGroup, ReadonlyArray<RightTab>>
   >(
     () => ({
-      code: gitBackedTabsVisible
-        ? tabsForGroup("code")
-        : tabsForGroup("code").filter((tab) => tab === "files"),
+      code:
+        projectPanelRepoPath === null
+          ? []
+          : gitBackedTabsVisible
+            ? tabsForGroup("code")
+            : tabsForGroup("code").filter((tab) => tab === "files"),
       github: githubVisible ? tabsForGroup("github") : [],
       agents: showTodos
         ? tabsForGroup("agents")
         : tabsForGroup("agents").filter((tab) => tab !== "todos"),
     }),
-    [gitBackedTabsVisible, githubVisible, showTodos],
+    [gitBackedTabsVisible, githubVisible, projectPanelRepoPath, showTodos],
   );
   const visibleGroups = useMemo(
     () => RIGHT_GROUPS.filter((g) => visibleTabsByGroup[g].length > 0),
@@ -269,7 +295,7 @@ export function RightPanel() {
     : (visibleGroups[0] ?? "code");
   const visibleTabs = visibleTabsByGroup[activeGroup];
   const shouldLoadGitHubTabs =
-    repoPath !== null && isGitHubRepo === true;
+    projectPanelRepoPath !== null && isGitHubRepo === true;
   const projectKey = useMemo(
     () => projects.map((project) => project.repo_path).join("\0"),
     [projects],
@@ -291,19 +317,46 @@ export function RightPanel() {
   // GitHub origin disappeared, etc.), slide them to the nearest visible tab
   // rather than render the panel against a stale selection.
   useEffect(() => {
+    if (
+      projectPanelRepoPath === null &&
+      activeProject === null &&
+      !active &&
+      projects.length === 0 &&
+      sessions.length === 0
+    ) {
+      return;
+    }
     if (visibleTabs.length === 0) return;
     if (!visibleTabs.includes(rightTab)) {
       if (
+        projectPanelRepoPath !== null &&
         isGitRepo === null &&
         groupOfTab(rightTab) === "code" &&
         rightTab !== "files"
       ) {
         return;
       }
-      if (isGitHubRepo === null && groupOfTab(rightTab) === "github") return;
+      if (
+        projectPanelRepoPath !== null &&
+        isGitHubRepo === null &&
+        groupOfTab(rightTab) === "github"
+      ) {
+        return;
+      }
       setRightTab(visibleTabs[0]);
     }
-  }, [isGitHubRepo, isGitRepo, rightTab, visibleTabs, setRightTab]);
+  }, [
+    isGitHubRepo,
+    isGitRepo,
+    active,
+    activeProject,
+    projectPanelRepoPath,
+    projects.length,
+    rightTab,
+    sessions.length,
+    visibleTabs,
+    setRightTab,
+  ]);
 
   useEffect(() => {
     if (projects.length === 0) return;
@@ -378,13 +431,13 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noTodos")} />
           )
         ) : rightTab === "commits" ? (
-          repoPath ? (
+          projectPanelRepoPath ? (
             // `key` forces a full remount on project switch so any in-flight
             // git request from the previous repo cannot land its `setState`
             // into the new repo's component (cross-project data leak).
             <CommitsTab
-              key={repoPath}
-              repoPath={repoPath}
+              key={projectPanelRepoPath}
+              repoPath={projectPanelRepoPath}
               invalidateKey={invalidations.commits}
               onExpand={setExpanded}
             />
@@ -392,10 +445,10 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "staged" ? (
-          repoPath ? (
+          projectPanelRepoPath ? (
             <StagedTab
-              key={repoPath}
-              repoPath={repoPath}
+              key={projectPanelRepoPath}
+              repoPath={projectPanelRepoPath}
               invalidateKey={invalidations.staged}
               onExpand={setExpanded}
             />
@@ -403,38 +456,56 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "files" ? (
-          repoPath ? (
-            <FileExplorer key={repoPath} rootPath={repoPath} />
+          projectPanelRepoPath ? (
+            <FileExplorer
+              key={projectPanelRepoPath}
+              rootPath={projectPanelRepoPath}
+            />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : BACKGROUND_LOADED_TABS.has(rightTab) ? (
-          repoPath ? null : <Empty msg={rt(t, "rightPanel.empty.noProject")} />
+          rightTab === "history" &&
+          (agentHistoryScope === "unscoped" || agentHistoryPath) ? null : (
+            <Empty msg={rt(t, "rightPanel.empty.noProject")} />
+          )
         ) : (
           <Empty msg={rt(t, "rightPanel.empty.noProject")} />
         )}
-        {repoPath && shouldLoadGitHubTabs ? (
+        {projectPanelRepoPath && shouldLoadGitHubTabs ? (
           <>
             <BackgroundLoadedTab active={rightTab === "prs"}>
               <PullRequestsTab
-                key={`prs:${repoPath}`}
-                repoPath={repoPath}
-                onOpenDetail={(number) => setPrDetail({ repoPath, number })}
-                onOpenSearch={() => setPrSearch({ repoPath })}
+                key={`prs:${projectPanelRepoPath}`}
+                repoPath={projectPanelRepoPath}
+                onOpenDetail={(number) =>
+                  setPrDetail({ repoPath: projectPanelRepoPath, number })
+                }
+                onOpenSearch={() =>
+                  setPrSearch({ repoPath: projectPanelRepoPath })
+                }
                 refreshKey={prListVersion}
               />
             </BackgroundLoadedTab>
             <BackgroundLoadedTab active={rightTab === "actions"}>
-              <ActionsTab key={`actions:${repoPath}`} repoPath={repoPath} />
+              <ActionsTab
+                key={`actions:${projectPanelRepoPath}`}
+                repoPath={projectPanelRepoPath}
+              />
             </BackgroundLoadedTab>
           </>
         ) : null}
-        {repoPath ? (
+        {agentHistoryScope === "unscoped" || agentHistoryPath ? (
           <BackgroundLoadedTab active={rightTab === "history"}>
             <AgentHistoryTab
-              key={`history:${repoPath}`}
-              repoPath={repoPath}
-              sessionHostRepoPath={sessionHostRepoPath ?? repoPath}
+              key={
+                agentHistoryScope === "unscoped"
+                  ? "history:unscoped"
+                  : `history:${agentHistoryPath}`
+              }
+              scope={agentHistoryScope}
+              repoPath={agentHistoryPath}
+              sessionHostRepoPath={sessionHostRepoPath}
               sessionHostProjectScoped={sessionHostProjectScoped}
             />
           </BackgroundLoadedTab>
@@ -446,7 +517,7 @@ export function RightPanel() {
         subtitle={expanded?.subtitle}
         headerActions={expanded?.headerActions}
         body={expanded?.body}
-        cwd={repoPath ?? undefined}
+        cwd={projectPanelRepoPath ?? undefined}
         onClose={() => setExpanded(null)}
       />
       <PullRequestSearchModal
@@ -460,7 +531,7 @@ export function RightPanel() {
       />
       <PullRequestDetailModal
         open={prDetail}
-        cwd={repoPath ?? undefined}
+        cwd={projectPanelRepoPath ?? undefined}
         onClose={() => setPrDetail(null)}
         onMutated={() => setPrListVersion((v) => v + 1)}
       />
@@ -1127,12 +1198,14 @@ function countByStatus(todos: TodoItem[]) {
 }
 
 function AgentHistoryTab({
+  scope,
   repoPath,
   sessionHostRepoPath,
   sessionHostProjectScoped,
 }: {
-  repoPath: string;
-  sessionHostRepoPath: string;
+  scope: "project" | "unscoped";
+  repoPath: string | null;
+  sessionHostRepoPath: string | null;
   sessionHostProjectScoped: boolean;
 }) {
   const t = useTranslation();
@@ -1144,11 +1217,15 @@ function AgentHistoryTab({
   const showAgentProviderIcons = useSettings(
     (s) => s.settings.sessionDisplay.icons.agentProvider,
   );
-  // Hydrate from the module-level cache so re-opening a project shows its
-  // list instantly. The accompanying fetch below still runs (SWR-style)
-  // to surface new sessions created since the cached snapshot.
+  const historyLimit = 100;
+  // Hydrate from the module-level cache so re-opening a project or the
+  // unscoped Chats history shows its list instantly.
   const [items, setItems] = useState<AgentHistoryItem[] | null>(() =>
-    rightPanelCache.getAgentHistory(repoPath),
+    scope === "project" && repoPath
+      ? rightPanelCache.getAgentHistory(repoPath)
+      : scope === "unscoped"
+        ? rightPanelCache.getUnscopedAgentHistory(historyLimit)
+      : null,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1176,14 +1253,17 @@ function AgentHistoryTab({
   // latest token is allowed to commit.
   const fetchTokenRef = useRef(0);
 
-  const fetchHistory = useCallback(async () => {
+  const fetchHistory = useCallback(async (options: { force?: boolean } = {}) => {
     const token = ++fetchTokenRef.current;
     setLoading(true);
     setError(null);
     try {
-      const result = await rightPanelCache.fetchAgentHistory(repoPath, {
-        force: true,
-      });
+      const result =
+        scope === "unscoped"
+          ? await rightPanelCache.fetchUnscopedAgentHistory(historyLimit, options)
+          : repoPath
+            ? await rightPanelCache.fetchAgentHistory(repoPath, options)
+            : [];
       if (token !== fetchTokenRef.current) return;
       setItems(result);
     } catch (e) {
@@ -1192,7 +1272,7 @@ function AgentHistoryTab({
     } finally {
       if (token === fetchTokenRef.current) setLoading(false);
     }
-  }, [repoPath]);
+  }, [repoPath, scope]);
 
   useEffect(() => {
     void fetchHistory();
@@ -1219,13 +1299,18 @@ function AgentHistoryTab({
       return;
     }
     try {
+      const targetRepoPath = sessionHostRepoPath ?? item.cwd;
+      if (!targetRepoPath) {
+        setError(rt(t, "rightPanel.history.createFailed"));
+        return;
+      }
       const created = await applySessionCreateRequest(
         createSession,
         buildSessionCreateRequest(
           { sessions, projects },
           {
             name: `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
-            repoPath: sessionHostRepoPath,
+            repoPath: targetRepoPath,
             agentProvider: item.provider,
             projectScoped: sessionHostProjectScoped,
           },
@@ -1269,7 +1354,11 @@ function AgentHistoryTab({
             candidate.id !== item.id ||
             candidate.transcript_path !== item.transcript_path,
         );
-        rightPanelCache.setAgentHistory(repoPath, next);
+        if (scope === "project" && repoPath) {
+          rightPanelCache.setAgentHistory(repoPath, next);
+        } else if (scope === "unscoped") {
+          rightPanelCache.setUnscopedAgentHistory(historyLimit, next);
+        }
         return next;
       });
       setTrashCandidate(null);
@@ -1288,7 +1377,7 @@ function AgentHistoryTab({
             : rt(t, "rightPanel.history.loading")}
         </div>
         <RefreshButton
-          onClick={() => void fetchHistory()}
+          onClick={() => void fetchHistory({ force: true })}
           loading={loading}
           size={12}
         />
@@ -1389,6 +1478,14 @@ function AgentHistoryTab({
                             >
                               {item.worktree.name}
                             </span>
+                          </div>
+                        </Tooltip>
+                      ) : null}
+                      {scope === "unscoped" && item.cwd ? (
+                        <Tooltip label={item.cwd} side="bottom">
+                          <div className="mt-1 flex min-w-0 items-center gap-1 text-[10.5px] font-mono text-fg-muted">
+                            <FolderTree size={11} className="shrink-0" />
+                            <span className="truncate">{item.cwd}</span>
                           </div>
                         </Tooltip>
                       ) : null}

@@ -26,6 +26,11 @@ class RightPanelCacheManager {
   private prefetchedProjectRepos = new Set<string>();
   private agentHistoryCache = new Map<string, AgentHistoryItem[]>();
   private agentHistoryInFlight = new Map<string, Promise<AgentHistoryItem[]>>();
+  private unscopedAgentHistoryCache = new Map<number, AgentHistoryItem[]>();
+  private unscopedAgentHistoryInFlight = new Map<
+    number,
+    Promise<AgentHistoryItem[]>
+  >();
   private commitsCache = new Map<string, CommitsCacheEntry>();
   private stagedCache = new Map<string, StagedCacheEntry>();
   private prListCache = new Map<string, PullRequestListing>();
@@ -100,6 +105,35 @@ class RightPanelCacheManager {
         this.agentHistoryInFlight.delete(repoPath);
       });
     this.agentHistoryInFlight.set(repoPath, promise);
+    return promise;
+  }
+
+  getUnscopedAgentHistory(limit: number): AgentHistoryItem[] | null {
+    return this.unscopedAgentHistoryCache.get(limit) ?? null;
+  }
+
+  setUnscopedAgentHistory(limit: number, items: AgentHistoryItem[]): void {
+    this.unscopedAgentHistoryCache.set(limit, items);
+  }
+
+  fetchUnscopedAgentHistory(
+    limit: number,
+    options: FetchOptions = {},
+  ): Promise<AgentHistoryItem[]> {
+    const cached = this.unscopedAgentHistoryCache.get(limit);
+    if (cached && !options.force) return Promise.resolve(cached);
+    const existing = this.unscopedAgentHistoryInFlight.get(limit);
+    if (existing) return existing;
+    const promise = api
+      .listUnscopedAgentHistory(limit)
+      .then((items) => {
+        this.unscopedAgentHistoryCache.set(limit, items);
+        return items;
+      })
+      .finally(() => {
+        this.unscopedAgentHistoryInFlight.delete(limit);
+      });
+    this.unscopedAgentHistoryInFlight.set(limit, promise);
     return promise;
   }
 
@@ -192,6 +226,8 @@ class RightPanelCacheManager {
     this.prefetchedProjectRepos.clear();
     this.agentHistoryCache.clear();
     this.agentHistoryInFlight.clear();
+    this.unscopedAgentHistoryCache.clear();
+    this.unscopedAgentHistoryInFlight.clear();
     this.commitsCache.clear();
     this.stagedCache.clear();
     this.prListCache.clear();
