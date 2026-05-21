@@ -451,9 +451,7 @@ describe("removeSession", () => {
     expect(after.layout).toEqual(aLayoutBefore);
     // REPO_B still has the split structure (collapse only happens for the
     // active workspace; the empty pane is left for B to clean up next time).
-    expect(Object.keys(after.workspaces[REPO_B].panes).length).toBeGreaterThan(
-      1,
-    );
+    expect(Object.keys(after.workspaces[REPO_B].panes)).toHaveLength(2);
     expect(after.sessions.map((s) => s.id).sort()).toEqual(["a1", "b1"]);
   });
 });
