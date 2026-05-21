@@ -592,7 +592,8 @@ function TabStrip({
   return (
     <div
       ref={stripRef}
-      className="relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
+      data-pane-tab-strip={paneId}
+      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
       onDragEnter={(e) => {
         if (!isAcornDrag(e)) return;
         e.preventDefault();
