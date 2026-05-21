@@ -32,7 +32,12 @@ const HOST_TERMINAL_ENV: &[&str] = &[
     "VTE_VERSION",
 ];
 
-const HOST_COLOR_POLICY_ENV: &[&str] = &["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"];
+const HOST_COLOR_POLICY_ENV: &[&str] = &[
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+];
 
 /// Apply layered env to `cmd`, lowest-to-highest priority:
 ///   * (A) Render capability — TERM / COLORTERM defaults.
@@ -255,6 +260,9 @@ mod tests {
         let mut env = HashMap::new();
         env.insert("NO_COLOR".to_string(), "1".to_string());
         apply_layered_env(&mut cmd, env);
-        assert_eq!(cmd.get_env("NO_COLOR").and_then(|s| s.to_str()), Some("1"),);
+        assert_eq!(
+            cmd.get_env("NO_COLOR").and_then(|s| s.to_str()),
+            Some("1"),
+        );
     }
 }
