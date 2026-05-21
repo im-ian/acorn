@@ -28,6 +28,8 @@ import {
   createTerminalRepaintScheduler,
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
+import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
+import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   prepareScrollbackForSave,
   RESTORE_MARKER_TEXT,
@@ -652,6 +654,7 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
+    const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
     let cursorStyleFrame: number | null = null;
     const applyCurrentCursorStyle = () => {
       syncCursorStyle(container, currentCursorStyle);
@@ -2060,6 +2063,7 @@ export function Terminal({
       invoke("pty_kill", { sessionId }).catch(() => {
         // Backend may not implement pty_kill yet — safe to ignore.
       });
+      unpatchMouseCoordinateScale();
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { webLinksAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
@@ -2127,11 +2131,10 @@ export function Terminal({
     return scheduler.dispose;
   }, [isActive]);
 
-  // WKWebView can defer paints while the app window is not focused. PTY
-  // output still reaches xterm's buffer, but the DOM renderer may return with
-  // stale row elements until another terminal event happens. On focus/visible
-  // return, force the same layout + full-row repaint used for tab activation,
-  // without scrolling the user's viewport.
+  // WKWebView can defer paints while the app window is not focused. App-level
+  // scale changes also adjust the transformed coordinate space around xterm.
+  // Force the same layout + full-row repaint used for tab activation, without
+  // scrolling the user's viewport.
   useEffect(() => {
     if (!isActive) return;
 
@@ -2149,9 +2152,11 @@ export function Terminal({
     };
 
     window.addEventListener("focus", scheduler.schedule);
+    window.addEventListener(UI_SCALE_CHANGED_EVENT, scheduler.schedule);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("focus", scheduler.schedule);
+      window.removeEventListener(UI_SCALE_CHANGED_EVENT, scheduler.schedule);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       scheduler.dispose();
     };
