@@ -4,8 +4,8 @@ import type { Session } from "../lib/types";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
-import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
+import { shouldOfferWorktreeRemoval } from "../lib/worktreeRemoval";
 import { Modal, ModalHeader } from "./ui";
 
 type RemoveChoice = "session_only" | "session_and_worktree" | "cancel";
@@ -22,8 +22,7 @@ interface RemoveSessionDialogProps {
 
 export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogProps) {
   const t = useTranslation();
-  const isolated = session?.isolated ?? false;
-  const recordedWorktree = session ? hasRecordedWorktree(session) : false;
+  const canRemoveWorktree = shouldOfferWorktreeRemoval(session);
   const patchSessions = useSettings((s) => s.patchSessions);
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
@@ -32,14 +31,14 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
     if (session) setDontAskAgain(false);
   }, [session?.id]);
 
-  // Keep Enter conservative for non-isolated linked worktrees, which may be
-  // user-managed outside Acorn even though the session path is a real worktree.
-  const primaryChoice: RemoveChoice = isolated
+  // Enter triggers the same primary action as the rightmost destructive button:
+  // for removable worktrees that means "Delete worktree", otherwise "Remove".
+  const primaryChoice: RemoveChoice = canRemoveWorktree
     ? "session_and_worktree"
     : "session_only";
 
   function commit(choice: RemoveChoice) {
-    if (choice !== "cancel" && dontAskAgain && !recordedWorktree) {
+    if (choice !== "cancel" && dontAskAgain && !canRemoveWorktree) {
       patchSessions({ confirmRemove: false });
     }
     onClose(choice);
@@ -70,12 +69,10 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
               {dt(t, "dialogs.removeSession.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{session.name}</span>?
             </p>
-            {recordedWorktree ? (
+            {canRemoveWorktree ? (
               <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
                 <p className="text-xs text-fg-muted">
-                  {isolated
-                    ? dt(t, "dialogs.removeSession.isolatedWorktree")
-                    : dt(t, "dialogs.removeSession.linkedWorktree")}
+                  {dt(t, "dialogs.removeSession.removableWorktree")}
                 </p>
                 <p className="break-all font-mono text-xs text-fg">
                   {session.worktree_path}
@@ -91,7 +88,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
                 {dt(t, "dialogs.removeSession.willNotBeTouched")}
               </p>
             )}
-            {!recordedWorktree ? (
+            {!canRemoveWorktree ? (
               <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
                 <input
                   type="checkbox"
@@ -111,7 +108,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
             >
               {dt(t, "dialogs.common.cancel")}
             </button>
-            {recordedWorktree ? (
+            {canRemoveWorktree ? (
               <>
                 <button
                   type="button"

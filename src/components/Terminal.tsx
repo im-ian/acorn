@@ -12,9 +12,15 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ArrowDownToLine } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "../lib/api";
+import {
+  api,
+  AGENT_TRANSCRIPT_ADVANCED_EVENT,
+  type AgentTranscriptAdvancedPayload,
+} from "../lib/api";
 import type { BackgroundState } from "../lib/background";
+import type { SessionStatus } from "../lib/types";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { getCurrentFilePayload } from "../lib/dnd";
 import { formatTerminalFileMention } from "../lib/fileMention";
@@ -27,6 +33,10 @@ import {
   createTerminalRepaintScheduler,
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
+import {
+  shouldRepaintTerminalForStatusTransition,
+  shouldRepaintTerminalForTranscriptAdvance,
+} from "../lib/terminalAttentionRepaint";
 import {
   prepareScrollbackForSave,
   RESTORE_MARKER_TEXT,
@@ -45,10 +55,10 @@ import {
   chooseWorktreeToAdoptAfterExit,
   type WorktreeAdoptionIntent,
 } from "../lib/worktreeAdoption";
-import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import { shouldOfferWorktreeRemoval } from "../lib/worktreeRemoval";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
-import { FloatingTooltip, type TooltipAnchorRect } from "./Tooltip";
+import { FloatingTooltip, Tooltip, type TooltipAnchorRect } from "./Tooltip";
 
 interface TerminalProps {
   sessionId: string;
@@ -65,6 +75,44 @@ interface TerminalProps {
 
 interface PtyOutputPayload {
   data: string;
+}
+
+function repaintTerminalTail(
+  term: XTerm | null,
+  container: HTMLDivElement | null,
+) {
+  if (!term || !container) return;
+  void container.offsetHeight;
+  try {
+    term.refresh(0, Math.max(0, term.rows - 1));
+  } catch {
+    // Terminal may have been disposed between scheduling and repaint.
+  }
+  try {
+    term.scrollToBottom();
+  } catch {
+    // Best-effort; refresh is the important part.
+  }
+}
+
+function isTerminalScrolledBack(term: XTerm): boolean {
+  const buffer = term.buffer.active;
+  return (
+    buffer.type === "normal" &&
+    buffer.baseY - buffer.viewportY >= SCROLL_TO_BOTTOM_VISIBLE_ROWS
+  );
+}
+
+function isTerminalViewportScrolledBack(container: HTMLElement): boolean {
+  const viewport = container.querySelector<HTMLElement>(".xterm-viewport");
+  if (!viewport) return false;
+  const remaining =
+    viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+  const rowHeight =
+    container.querySelector<HTMLElement>(".xterm-rows > div")
+      ?.getBoundingClientRect().height ?? 0;
+  const threshold = Math.max(160, rowHeight * SCROLL_TO_BOTTOM_VISIBLE_ROWS);
+  return remaining >= threshold;
 }
 
 function readCssVar(name: string): string | null {
@@ -100,6 +148,7 @@ function makeXtermTheme(useTransparentBackground = false): ITheme {
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
+const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
 
 // Custom event the sticky-prompt banner listens to. Fired whenever the user
 // scrolls the terminal so the banner can swap to the prompt "in scope" at
@@ -427,9 +476,15 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const previousStatusRef = useRef<SessionStatus | null>(null);
+  const sessionStatus =
+    useAppStore(
+      (s) => s.sessions.find((session) => session.id === sessionId)?.status,
+    ) ?? null;
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
   } | null>(null);
+  const [isScrolledBack, setIsScrolledBack] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -815,6 +870,21 @@ export function Terminal({
         writeToPty(targetId, data);
       }
     };
+    const scrollToLiveTail = () => {
+      try {
+        term.scrollToBottom();
+        setIsScrolledBack(false);
+      } catch {
+        // Terminal may have been disposed between the key event and scroll.
+      }
+      term.focus();
+    };
+    const syncScrolledBackState = () => {
+      setIsScrolledBack(
+        isTerminalScrolledBack(term) ||
+          isTerminalViewportScrolledBack(container),
+      );
+    };
 
     // CJK IME path. xterm.js's built-in handler only processes plain
     // `insertText`, so Korean/Japanese/Chinese commits delivered as
@@ -1116,6 +1186,12 @@ export function Terminal({
           ev.stopImmediatePropagation();
           return;
         }
+        if (ev.key === "ArrowDown") {
+          scrollToLiveTail();
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return;
+        }
       }
     };
 
@@ -1312,6 +1388,11 @@ export function Terminal({
       requestAnimationFrame(dispatchContextPrompt);
     };
     const contextScrollDisposable = term.onScroll(scheduleContextDispatch);
+    const scrollbackStateDisposable = term.onScroll(syncScrolledBackState);
+    const viewportElement =
+      container.querySelector<HTMLElement>(".xterm-viewport");
+    viewportElement?.addEventListener("scroll", syncScrolledBackState);
+    syncScrolledBackState();
     // Initial dispatch so the banner reflects whatever was restored from
     // scrollback before the first scroll/output event fires.
     scheduleContextDispatch();
@@ -1598,15 +1679,15 @@ export function Terminal({
               return;
             }
             // User opted into auto-close: drop ordinary sessions immediately,
-            // but route worktree-backed sessions through the same
-            // delete-worktree confirmation as tab close.
+            // but route removable worktrees through the same confirmation
+            // dialog as tab close.
             if (useSettings.getState().settings.sessions.closeOnExit) {
               exited = true;
               const store = useAppStore.getState();
               const session =
                 store.sessions.find((candidate) => candidate.id === sessionId) ??
                 null;
-              if (session && hasRecordedWorktree(session)) {
+              if (shouldOfferWorktreeRemoval(session)) {
                 store.requestRemoveSession(sessionId);
               } else {
                 void store.removeSession(sessionId, false);
@@ -1839,6 +1920,8 @@ export function Terminal({
       scrollDisposable.dispose();
       cursorMoveDisposable.dispose();
       contextScrollDisposable.dispose();
+      scrollbackStateDisposable.dispose();
+      viewportElement?.removeEventListener("scroll", syncScrolledBackState);
       unsubStickyToggle();
       resizeDisposable.dispose();
       if (liveCwdProbeTimer !== null) {
@@ -1950,13 +2033,78 @@ export function Terminal({
     };
   }, [isActive]);
 
+  // Remote-control and agent hooks can update Acorn's session status even when
+  // the terminal DOM renderer missed a final paint. On the first attention
+  // transition, repaint the existing xterm buffer and jump to the live tail
+  // without injecting synthetic transcript text into scrollback.
+  useEffect(() => {
+    const previous = previousStatusRef.current;
+    previousStatusRef.current = sessionStatus;
+    if (
+      !isActive ||
+      !shouldRepaintTerminalForStatusTransition(previous, sessionStatus)
+    ) {
+      return;
+    }
+
+    const refresh = () => {
+      repaintTerminalTail(termRef.current, containerRef.current);
+    };
+
+    const scheduler = createTerminalRepaintScheduler(refresh);
+    scheduler.schedule();
+    return scheduler.dispose;
+  }, [isActive, sessionStatus]);
+
+  // The transcript watcher fires after the JSONL file itself changes, which
+  // avoids racing remote-control status transitions that can arrive before the
+  // assistant's final message is flushed.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    const refresh = () => {
+      repaintTerminalTail(termRef.current, containerRef.current);
+    };
+    const scheduler = createTerminalRepaintScheduler(refresh);
+
+    listen<AgentTranscriptAdvancedPayload>(
+      AGENT_TRANSCRIPT_ADVANCED_EVENT,
+      (event) => {
+        if (
+          shouldRepaintTerminalForTranscriptAdvance({
+            activeSessionId: sessionId,
+            eventSessionId: event.payload?.sessionId ?? null,
+            isActive,
+          })
+        ) {
+          scheduler.schedule();
+        }
+      },
+    )
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          "[Terminal] failed to attach agent-transcript-advanced listener",
+          err,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      scheduler.dispose();
+    };
+  }, [isActive, sessionId]);
+
   // FitAddon subtracts padding from xterm.element, not its parent — keep the
   // gutter on the outer wrapper so xterm's parent stays padding-free and rows
-  // don't overflow past the pane body. The pinned-prompt banner overlays the
-  // top edge as an `absolute` element so it never changes the terminal's
-  // computed dimensions — a flex layout that shrunk the xterm container
-  // mid-render fired SIGWINCH at claude's TUI and shredded its box-drawing
-  // characters into half-rendered lines.
+  // don't overflow past the pane body.
   return (
     <div
       className="acorn-terminal-shell relative h-full w-full"
@@ -1972,6 +2120,28 @@ export function Terminal({
           isFocusedPane ? "" : "acorn-terminal-inactive"
         }`}
       />
+      {isScrolledBack ? (
+        <Tooltip label="Scroll terminal to bottom" side="top" delay={150}>
+          <button
+            type="button"
+            aria-label="Scroll terminal to bottom"
+            onClick={() => {
+              const term = termRef.current;
+              if (!term) return;
+              try {
+                term.scrollToBottom();
+                setIsScrolledBack(false);
+              } catch {
+                // Terminal may have been disposed between render and click.
+              }
+              term.focus();
+            }}
+            className="absolute bottom-5 right-4 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-elevated/95 text-fg-muted shadow-lg backdrop-blur-sm transition hover:bg-bg-sidebar hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/60"
+          >
+            <ArrowDownToLine size={15} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      ) : null}
       <FloatingTooltip
         label={`${MODIFIER_LINK_LABEL} to open link`}
         anchorRect={linkTooltip?.anchorRect ?? null}

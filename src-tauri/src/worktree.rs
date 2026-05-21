@@ -1,4 +1,4 @@
-use git2::Repository;
+use git2::{Repository, WorktreePruneOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -124,7 +124,9 @@ pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppRes
             if worktree_path.exists() {
                 std::fs::remove_dir_all(worktree_path).ok();
             }
-            wt.prune(None)?;
+            let mut opts = WorktreePruneOptions::new();
+            opts.valid(true).working_tree(true);
+            wt.prune(Some(&mut opts))?;
             return Ok(());
         }
     }
@@ -140,6 +142,20 @@ fn same_path(left: &Path, right: &Path) -> bool {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }
+}
+
+pub fn is_named_acorn_worktree_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(rest) = name.strip_prefix("acorn-worktree-") else {
+        return false;
+    };
+    let parts: Vec<_> = rest.split('-').collect();
+    matches!(parts.len(), 1 | 2)
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 /// Returns `true` when `path` is the root of a *linked* git worktree.
@@ -179,6 +195,20 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    fn init_repo_with_commit(path: &Path) -> Repository {
+        let repo = Repository::init(path).expect("init repo");
+        let sig = git2::Signature::now("acorn-test", "test@acorn").expect("sig");
+        let tree_id = {
+            let mut idx = repo.index().expect("index");
+            idx.write_tree().expect("write tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .expect("initial commit");
+        drop(tree);
+        repo
     }
 
     #[test]
@@ -229,6 +259,59 @@ mod tests {
         assert_eq!(
             workdir.canonicalize().unwrap(),
             root.canonicalize().unwrap(),
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn is_named_acorn_worktree_path_accepts_one_or_two_numeric_suffixes() {
+        assert!(is_named_acorn_worktree_path(Path::new(
+            "/tmp/acorn-worktree-1"
+        )));
+        assert!(is_named_acorn_worktree_path(Path::new(
+            "/tmp/acorn-worktree-1-2"
+        )));
+        assert!(!is_named_acorn_worktree_path(Path::new(
+            "/tmp/acorn-worktree-x"
+        )));
+        assert!(!is_named_acorn_worktree_path(Path::new(
+            "/tmp/not-acorn-worktree-1"
+        )));
+    }
+
+    #[test]
+    fn remove_worktree_at_path_removes_the_actual_linked_worktree_path() {
+        let root = unique_temp_dir("remove-path");
+        let repo = init_repo_with_commit(&root);
+        drop(repo);
+
+        let worktree_path = create_worktree(&root, "acorn-worktree-1-2").expect("create worktree");
+        assert!(worktree_path.exists(), "worktree path should exist");
+
+        remove_worktree_at_path(&root, &worktree_path).expect("remove worktree at exact path");
+        assert!(
+            !worktree_path.exists(),
+            "worktree directory should be removed"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn remove_worktree_at_path_handles_repo_path_that_is_the_worktree() {
+        let root = unique_temp_dir("remove-repo-path");
+        let repo = init_repo_with_commit(&root);
+        drop(repo);
+
+        let worktree_path = create_worktree(&root, "acorn-worktree-2").expect("create worktree");
+        assert!(worktree_path.exists(), "worktree path should exist");
+
+        remove_worktree_at_path(&worktree_path, &worktree_path)
+            .expect("remove worktree when session repo path is the worktree");
+        assert!(
+            !worktree_path.exists(),
+            "worktree directory should be removed"
         );
 
         std::fs::remove_dir_all(&root).ok();

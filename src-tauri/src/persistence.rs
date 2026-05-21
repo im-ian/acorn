@@ -293,7 +293,10 @@ mod tests {
     fn legacy_migration_skips_explicit_data_dir_override() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            std::env::set_var(acorn_paths::ENV_DATA_DIR_OVERRIDE, "/tmp/acorn-explicit-data-dir");
+            std::env::set_var(
+                acorn_paths::ENV_DATA_DIR_OVERRIDE,
+                "/tmp/acorn-explicit-data-dir",
+            );
             std::env::remove_var(acorn_paths::ENV_PROFILE);
         }
 

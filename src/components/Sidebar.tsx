@@ -1318,6 +1318,11 @@ function SessionRowLabel({
           {metadataText}
         </span>
       ) : null}
+      {session.last_message ? (
+        <span className="block truncate text-[11px] text-fg-muted/80">
+          {session.last_message}
+        </span>
+      ) : null}
     </span>
   );
 

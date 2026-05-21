@@ -410,10 +410,7 @@ mod tests {
 
     #[test]
     fn detect_returns_idle_when_no_transcript_and_no_hint() {
-        assert_eq!(
-            detect(None, SessionStatus::Idle, None),
-            SessionStatus::Idle
-        );
+        assert_eq!(detect(None, SessionStatus::Idle, None), SessionStatus::Idle);
     }
 
     #[test]
@@ -467,10 +464,8 @@ mod tests {
     }
 
     fn write_status_transcript(body: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "acorn-status-test-{}.jsonl",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("acorn-status-test-{}.jsonl", uuid::Uuid::new_v4()));
         std::fs::write(&path, body).expect("write status transcript");
         path
     }
