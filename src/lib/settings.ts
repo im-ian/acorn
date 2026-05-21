@@ -201,10 +201,16 @@ export interface AcornSettings {
   sessions: {
     /**
      * Show the confirmation dialog before removing a non-isolated session.
-     * Isolated worktrees always prompt because the worktree-deletion choice
-     * matters. Set false to skip the prompt for plain sessions.
+     * Set false to skip the prompt for plain sessions. Worktree-backed
+     * sessions follow `autoDeleteWorktrees`.
      */
     confirmRemove: boolean;
+    /**
+     * Remove worktree-backed sessions without asking whether to keep the
+     * worktree directory. When enabled, the backend receives
+     * `removeWorktree = true` for linked and isolated worktree sessions.
+     */
+    autoDeleteWorktrees: boolean;
     /**
      * When the session's PTY process exits (e.g. user typed `exit`), close
      * the session tab automatically instead of showing the
@@ -356,6 +362,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   sessions: {
     confirmRemove: true,
+    autoDeleteWorktrees: false,
     closeOnExit: false,
   },
   editor: {

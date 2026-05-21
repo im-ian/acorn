@@ -114,6 +114,19 @@ function openTerminalTab() {
   });
 }
 
+function openSessionsTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Sessions" || element.textContent === "세션",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Sessions tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 function openGithubTab() {
   const button = Array.from(document.querySelectorAll("button")).find(
     (element) => element.textContent === "GitHub",
@@ -401,6 +414,45 @@ describe("SettingsModal font controls", () => {
     expect(bodyText).toContain("New control session");
     expect(bodyText).toContain("Right panel");
     expect(bodyText).toMatch(/⌘P|Ctrl\+P/);
+  });
+
+  it("patches the worktree auto-delete session toggle", async () => {
+    const patchSessions = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchSessions,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes("Always delete worktree-backed sessions"),
+    );
+
+    expect(document.body.textContent).toContain(
+      "Delete worktrees without asking",
+    );
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(false);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchSessions).toHaveBeenCalledWith({
+      autoDeleteWorktrees: true,
+    });
   });
 
   it("patches the GitHub PR row display toggles", async () => {

@@ -151,4 +151,78 @@ test.describe("session lifecycle", () => {
     // which the store passes as removeWorktree = false.
     expect(calls[0].removeWorktree).toBe(false);
   });
+
+  test("worktree auto-delete skips the remove confirmation", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: true,
+            autoDeleteWorktrees: true,
+            closeOnExit: false,
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      return w.__sessionRemoved
+        ? []
+        : [
+            {
+              id: "s-1",
+              name: "alpha",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo/.acorn/worktrees/alpha",
+              branch: "main",
+              isolated: false,
+              in_worktree: true,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:05Z",
+              last_message: null,
+            },
+          ];
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __sessionRemoved?: boolean;
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      w.__sessionRemoved = true;
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const row = sidebar
+      .getByRole("button", { name: /^alpha worktree main · Idle/ })
+      .first();
+    await expect(row).toBeVisible();
+
+    await row.hover();
+    await sidebar
+      .getByRole("button", { name: "Remove session", exact: true })
+      .click();
+
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(
+      sidebar.getByRole("button", { name: /^alpha worktree main · Idle/ }),
+    ).toHaveCount(0);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ id: string; removeWorktree: boolean }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ id: "s-1", removeWorktree: true });
+  });
 });
