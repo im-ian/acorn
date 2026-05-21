@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { resolveSessionAgentProvider } from "../lib/agentProvider";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
 import { isSessionInFocusedPane } from "../lib/multiInput";
 import { useAppStore } from "../store";
@@ -97,6 +98,7 @@ function PortaledTerminal({ session }: { session: Session }) {
     <Terminal
       sessionId={session.id}
       cwd={session.worktree_path}
+      agentProvider={resolveSessionAgentProvider(session)}
       isActive={visiblePaneId !== null}
       isFocusedPane={isFocusedPane}
     />,
