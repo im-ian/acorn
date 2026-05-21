@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Code2, Eye } from "lucide-react";
 import {
   api,
   type FsLineDiffEntry,
@@ -13,6 +14,7 @@ import {
   lineTextContentProps,
   VirtualizedLineList,
 } from "./VirtualizedLines";
+import { Markdown } from "./ui/Markdown";
 
 interface CodeViewerProps {
   path: string;
@@ -40,11 +42,17 @@ const DIFF_KIND_CLASS: Record<FsLineDiffEntry["kind"], string> = {
 };
 
 const CODE_LINE_HEIGHT = 18;
+const MARKDOWN_EXT_RE = /\.(md|mdown|markdown|mdx)$/i;
+
+function isMarkdownPath(path: string): boolean {
+  return MARKDOWN_EXT_RE.test(path);
+}
 
 export function CodeViewer({ path, isActive }: CodeViewerProps) {
   const t = useTranslation();
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
+  const [previewMarkdown, setPreviewMarkdown] = useState(false);
 
   const refreshDiff = useCallback(async () => {
     try {
@@ -58,6 +66,7 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   useEffect(() => {
     let cancelled = false;
     setState(EMPTY_STATE);
+    setPreviewMarkdown(false);
     api
       .fsReadFile(path)
       .then(async (data) => {
@@ -144,11 +153,12 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   if (!state.data) return null;
 
   const lines = state.highlightedLines ?? plainHighlightedLines;
+  const canPreviewMarkdown = isMarkdownPath(path);
 
   return (
     <div
       className={cn(
-        "flex h-full w-full flex-col bg-bg",
+        "relative flex h-full w-full flex-col bg-bg",
         isActive ? "" : "pointer-events-none opacity-50",
       )}
     >
@@ -157,24 +167,46 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
           {t("codeViewer.truncated")}
         </div>
       ) : null}
-      <VirtualizedLineList
-        as="pre"
-        count={sourceLines.length}
-        className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent font-mono text-[12px] leading-[1.5] text-fg"
-        estimateSize={() => CODE_LINE_HEIGHT}
-        getLineText={(index) => sourceLines[index] ?? ""}
-        minWidthCh={minWidthCh}
-        renderLine={(index) => (
-          <CodeLine
-            key={index}
-            index={index}
-            rawText={sourceLines[index] ?? ""}
-            tokens={lines[index] ?? null}
-            diff={diffByLine.get(index + 1)}
-            gutterWidth={gutterWidth}
+      {previewMarkdown && canPreviewMarkdown ? (
+        <div className="acorn-selectable min-h-0 flex-1 overflow-auto px-8 py-6 pb-16">
+          <Markdown
+            content={state.data.content}
+            className="mx-auto max-w-3xl text-[13px] leading-6"
           />
-        )}
-      />
+        </div>
+      ) : (
+        <VirtualizedLineList
+          as="pre"
+          count={sourceLines.length}
+          className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent pb-12 font-mono text-[12px] leading-[1.5] text-fg"
+          estimateSize={() => CODE_LINE_HEIGHT}
+          getLineText={(index) => sourceLines[index] ?? ""}
+          minWidthCh={minWidthCh}
+          renderLine={(index) => (
+            <CodeLine
+              key={index}
+              index={index}
+              rawText={sourceLines[index] ?? ""}
+              tokens={lines[index] ?? null}
+              diff={diffByLine.get(index + 1)}
+              gutterWidth={gutterWidth}
+            />
+          )}
+        />
+      )}
+      {canPreviewMarkdown ? (
+        <button
+          type="button"
+          aria-pressed={previewMarkdown}
+          onClick={() => setPreviewMarkdown((v) => !v)}
+          className="absolute bottom-3 right-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-elevated/95 px-2.5 py-1.5 text-[11px] text-fg-muted shadow-lg backdrop-blur transition hover:bg-bg-sidebar hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/60"
+        >
+          {previewMarkdown ? <Code2 size={13} /> : <Eye size={13} />}
+          {previewMarkdown
+            ? t("codeViewer.showSource")
+            : t("codeViewer.showPreview")}
+        </button>
+      ) : null}
     </div>
   );
 }
