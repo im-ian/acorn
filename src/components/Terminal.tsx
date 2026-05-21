@@ -14,13 +14,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowDownToLine } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
-import {
-  api,
-  AGENT_TRANSCRIPT_ADVANCED_EVENT,
-  type AgentTranscriptAdvancedPayload,
-} from "../lib/api";
+import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
-import type { SessionStatus } from "../lib/types";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { getCurrentFilePayload } from "../lib/dnd";
 import { formatTerminalFileMention } from "../lib/fileMention";
@@ -33,10 +28,6 @@ import {
   createTerminalRepaintScheduler,
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
-import {
-  shouldRepaintTerminalForStatusTransition,
-  shouldRepaintTerminalForTranscriptAdvance,
-} from "../lib/terminalAttentionRepaint";
 import {
   prepareScrollbackForSave,
   RESTORE_MARKER_TEXT,
@@ -55,7 +46,7 @@ import {
   chooseWorktreeToAdoptAfterExit,
   type WorktreeAdoptionIntent,
 } from "../lib/worktreeAdoption";
-import { shouldOfferWorktreeRemoval } from "../lib/worktreeRemoval";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
 import { FloatingTooltip, Tooltip, type TooltipAnchorRect } from "./Tooltip";
@@ -75,24 +66,6 @@ interface TerminalProps {
 
 interface PtyOutputPayload {
   data: string;
-}
-
-function repaintTerminalTail(
-  term: XTerm | null,
-  container: HTMLDivElement | null,
-) {
-  if (!term || !container) return;
-  void container.offsetHeight;
-  try {
-    term.refresh(0, Math.max(0, term.rows - 1));
-  } catch {
-    // Terminal may have been disposed between scheduling and repaint.
-  }
-  try {
-    term.scrollToBottom();
-  } catch {
-    // Best-effort; refresh is the important part.
-  }
 }
 
 function isTerminalScrolledBack(term: XTerm): boolean {
@@ -476,11 +449,6 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
-  const previousStatusRef = useRef<SessionStatus | null>(null);
-  const sessionStatus =
-    useAppStore(
-      (s) => s.sessions.find((session) => session.id === sessionId)?.status,
-    ) ?? null;
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
   } | null>(null);
@@ -875,7 +843,7 @@ export function Terminal({
         term.scrollToBottom();
         setIsScrolledBack(false);
       } catch {
-        // Terminal may have been disposed between the key event and scroll.
+        // Terminal may have been disposed between the event and scroll.
       }
       term.focus();
     };
@@ -1679,15 +1647,15 @@ export function Terminal({
               return;
             }
             // User opted into auto-close: drop ordinary sessions immediately,
-            // but route removable worktrees through the same confirmation
-            // dialog as tab close.
+            // but route worktree-backed sessions through the same
+            // delete-worktree confirmation as tab close.
             if (useSettings.getState().settings.sessions.closeOnExit) {
               exited = true;
               const store = useAppStore.getState();
               const session =
                 store.sessions.find((candidate) => candidate.id === sessionId) ??
                 null;
-              if (shouldOfferWorktreeRemoval(session)) {
+              if (session && hasRecordedWorktree(session)) {
                 store.requestRemoveSession(sessionId);
               } else {
                 void store.removeSession(sessionId, false);
@@ -2033,78 +2001,13 @@ export function Terminal({
     };
   }, [isActive]);
 
-  // Remote-control and agent hooks can update Acorn's session status even when
-  // the terminal DOM renderer missed a final paint. On the first attention
-  // transition, repaint the existing xterm buffer and jump to the live tail
-  // without injecting synthetic transcript text into scrollback.
-  useEffect(() => {
-    const previous = previousStatusRef.current;
-    previousStatusRef.current = sessionStatus;
-    if (
-      !isActive ||
-      !shouldRepaintTerminalForStatusTransition(previous, sessionStatus)
-    ) {
-      return;
-    }
-
-    const refresh = () => {
-      repaintTerminalTail(termRef.current, containerRef.current);
-    };
-
-    const scheduler = createTerminalRepaintScheduler(refresh);
-    scheduler.schedule();
-    return scheduler.dispose;
-  }, [isActive, sessionStatus]);
-
-  // The transcript watcher fires after the JSONL file itself changes, which
-  // avoids racing remote-control status transitions that can arrive before the
-  // assistant's final message is flushed.
-  useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-    let cancelled = false;
-    const refresh = () => {
-      repaintTerminalTail(termRef.current, containerRef.current);
-    };
-    const scheduler = createTerminalRepaintScheduler(refresh);
-
-    listen<AgentTranscriptAdvancedPayload>(
-      AGENT_TRANSCRIPT_ADVANCED_EVENT,
-      (event) => {
-        if (
-          shouldRepaintTerminalForTranscriptAdvance({
-            activeSessionId: sessionId,
-            eventSessionId: event.payload?.sessionId ?? null,
-            isActive,
-          })
-        ) {
-          scheduler.schedule();
-        }
-      },
-    )
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      })
-      .catch((err) => {
-        console.error(
-          "[Terminal] failed to attach agent-transcript-advanced listener",
-          err,
-        );
-      });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-      scheduler.dispose();
-    };
-  }, [isActive, sessionId]);
-
   // FitAddon subtracts padding from xterm.element, not its parent — keep the
   // gutter on the outer wrapper so xterm's parent stays padding-free and rows
-  // don't overflow past the pane body.
+  // don't overflow past the pane body. The pinned-prompt banner overlays the
+  // top edge as an `absolute` element so it never changes the terminal's
+  // computed dimensions — a flex layout that shrunk the xterm container
+  // mid-render fired SIGWINCH at claude's TUI and shredded its box-drawing
+  // characters into half-rendered lines.
   return (
     <div
       className="acorn-terminal-shell relative h-full w-full"
