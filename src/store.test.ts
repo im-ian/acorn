@@ -372,6 +372,88 @@ describe("removeSession", () => {
     expect(s.sessions.map((session) => session.id)).toEqual(["a1"]);
     expect(s.activeSessionId).toBe("a1");
   });
+
+  it("collapses an empty split pane before the backend worktree delete finishes", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    // Split, then move a2 to the new pane so each pane holds exactly one tab.
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const focusedAfterSplit = useAppStore.getState().focusedPaneId;
+    const sourcePaneId = Object.keys(useAppStore.getState().panes).find(
+      (pid) => pid !== focusedAfterSplit,
+    )!;
+    useAppStore.getState().moveTab({
+      tabId: "a2",
+      fromPaneId: sourcePaneId,
+      toPaneId: focusedAfterSplit,
+    });
+    expect(useAppStore.getState().layout.kind).toBe("split");
+
+    const pending = deferred<void>();
+    mockApi.removeSession.mockReturnValueOnce(pending.promise);
+    mockApi.listSessions.mockResolvedValue([a1]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const removal = useAppStore.getState().removeSession("a2", true);
+
+    // Backend hasn't resolved yet — but the empty pane should already be gone.
+    const mid = useAppStore.getState();
+    expect(mid.layout.kind).toBe("pane");
+    expect(Object.keys(mid.panes)).toHaveLength(1);
+    expect(mid.panes[mid.focusedPaneId].tabIds).toEqual(["a1"]);
+    expect(mid.activeSessionId).toBe("a1");
+
+    pending.resolve(undefined);
+    await removal;
+
+    const after = useAppStore.getState();
+    expect(after.layout.kind).toBe("pane");
+    expect(after.sessions.map((s) => s.id)).toEqual(["a1"]);
+  });
+
+  it("does not collapse panes in a workspace that is not active", async () => {
+    const a1 = session("a1", REPO_A);
+    const b1 = session("b1", REPO_B);
+    const b2 = session("b2", REPO_B);
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], [a1, b1, b2]);
+
+    // Set up REPO_B with a split where each pane has one tab.
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const bFocused = useAppStore.getState().focusedPaneId;
+    const bSource = Object.keys(useAppStore.getState().panes).find(
+      (pid) => pid !== bFocused,
+    )!;
+    useAppStore.getState().moveTab({
+      tabId: "b2",
+      fromPaneId: bSource,
+      toPaneId: bFocused,
+    });
+    expect(useAppStore.getState().layout.kind).toBe("split");
+
+    // Switch active project to REPO_A before the remove. The pane-collapse
+    // side effect must only run for the *active* workspace.
+    useAppStore.getState().setActiveProject(REPO_A);
+    const aLayoutBefore = useAppStore.getState().layout;
+
+    mockApi.listSessions.mockResolvedValue([a1, b1]);
+    mockApi.listProjects.mockResolvedValue([
+      project(REPO_A, 0),
+      project(REPO_B, 1),
+    ]);
+
+    await useAppStore.getState().removeSession("b2", true);
+
+    const after = useAppStore.getState();
+    // REPO_A workspace was active during the remove — its layout is untouched.
+    expect(after.activeProject).toBe(REPO_A);
+    expect(after.layout).toEqual(aLayoutBefore);
+    // REPO_B still has the split structure (collapse only happens for the
+    // active workspace; the empty pane is left for B to clean up next time).
+    expect(Object.keys(after.workspaces[REPO_B].panes)).toHaveLength(2);
+    expect(after.sessions.map((s) => s.id).sort()).toEqual(["a1", "b1"]);
+  });
 });
 
 describe("splitFocusedPane", () => {
