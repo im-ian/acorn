@@ -98,6 +98,24 @@ export type TerminalFontWeight =
  */
 export type TerminalLinkActivation = "click" | "modifier-click";
 
+export type TerminalCursorStyle =
+  | "block"
+  | "bar"
+  | "underline"
+  | "outline"
+  | "pill";
+
+export const TERMINAL_CURSOR_STYLE_OPTIONS: ReadonlyArray<{
+  value: TerminalCursorStyle;
+  label: string;
+}> = [
+  { value: "block", label: "Block" },
+  { value: "bar", label: "Bar" },
+  { value: "underline", label: "Underline" },
+  { value: "outline", label: "Outline" },
+  { value: "pill", label: "Pill" },
+];
+
 /**
  * Which field acorn shows as the primary line of a sidebar session row.
  * Mirrors Warp's "Pane title as" picker — `name` is the editable session
@@ -161,6 +179,7 @@ export interface AcornSettings {
      * stray click on output containing a URL doesn't steal focus.
      */
     linkActivation: TerminalLinkActivation;
+    cursorStyle: TerminalCursorStyle;
   };
   /**
    * The single AI agent acorn uses everywhere AI features fire (currently
@@ -327,6 +346,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeightBold: 700,
     lineHeight: 1.0,
     linkActivation: "click",
+    cursorStyle: "pill",
   },
   agents: {
     selected: "claude",
@@ -413,6 +433,9 @@ const VALID_AGENTS = new Set<AgentProvider>([
 const VALID_PR_INTERVALS = new Set<number>(
   PR_REFRESH_INTERVAL_OPTIONS.map((o) => o.value),
 );
+const VALID_CURSOR_STYLES = new Set<TerminalCursorStyle>(
+  TERMINAL_CURSOR_STYLE_OPTIONS.map((o) => o.value),
+);
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
 
@@ -473,6 +496,16 @@ function normalizeLinkActivation(
   fallback: TerminalLinkActivation,
 ): TerminalLinkActivation {
   if (v === "click" || v === "modifier-click") return v;
+  return fallback;
+}
+
+function normalizeCursorStyle(
+  v: unknown,
+  fallback: TerminalCursorStyle,
+): TerminalCursorStyle {
+  if (typeof v === "string" && VALID_CURSOR_STYLES.has(v as TerminalCursorStyle)) {
+    return v as TerminalCursorStyle;
+  }
   return fallback;
 }
 
@@ -666,6 +699,10 @@ function loadSettings(): AcornSettings {
         linkActivation: normalizeLinkActivation(
           (terminalRaw as { linkActivation?: unknown }).linkActivation,
           DEFAULT_SETTINGS.terminal.linkActivation,
+        ),
+        cursorStyle: normalizeCursorStyle(
+          (terminalRaw as { cursorStyle?: unknown }).cursorStyle,
+          DEFAULT_SETTINGS.terminal.cursorStyle,
         ),
       },
       agents: {

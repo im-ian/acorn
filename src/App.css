@@ -21,11 +21,121 @@
   background-color: transparent !important;
 }
 
+.acorn-terminal {
+  --acorn-terminal-cursor-pill-color: var(--color-accent, #7dd3fc);
+}
+
+.acorn-terminal.acorn-terminal-composing .xterm-cursor,
+.acorn-terminal.acorn-terminal-composing .xterm-cursor.xterm-cursor-block {
+  opacity: 0 !important;
+}
+
+.acorn-terminal.acorn-terminal-composing .composition-view.active {
+  background: #000;
+  box-sizing: border-box;
+  color: inherit;
+  overflow: hidden;
+  white-space: pre;
+}
+
+.acorn-terminal.acorn-terminal-composing .composition-view.active::after {
+  content: "";
+  display: inline-block;
+  width: var(
+    --acorn-composition-cursor-width,
+    var(--acorn-composition-cell-width, 0.6em)
+  );
+  height: var(
+    --acorn-composition-cursor-height,
+    var(--acorn-composition-cell-height, 1em)
+  );
+  vertical-align: top;
+}
+
+.acorn-terminal.acorn-terminal-cursor-block .composition-view.active::after {
+  background: currentColor;
+}
+
+.acorn-terminal.acorn-terminal-cursor-bar .composition-view.active::after {
+  box-shadow: 1px 0 0 currentColor inset;
+}
+
+.acorn-terminal.acorn-terminal-cursor-underline .composition-view.active::after {
+  border-bottom: 1px solid currentColor;
+}
+
+.acorn-terminal.acorn-terminal-cursor-outline .composition-view.active::after {
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+
+.acorn-terminal.acorn-terminal-cursor-pill .composition-view.active::after {
+  background: var(--acorn-terminal-cursor-pill-color);
+  border-radius: 999px;
+  width: 3px;
+}
+
+.acorn-terminal.acorn-terminal-cursor-outline
+  .xterm-cursor.xterm-cursor-block {
+  background-color: transparent !important;
+  color: inherit !important;
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+
+.acorn-terminal.acorn-terminal-cursor-pill .xterm-cursor.xterm-cursor-bar {
+  background-color: var(--acorn-terminal-cursor-pill-color) !important;
+  border-left: 0 !important;
+  border-radius: 999px;
+  width: 3px !important;
+}
+
+.acorn-terminal.acorn-terminal-cursor-bar .xterm-cursor.xterm-cursor-block {
+  box-shadow: 1px 0 0 currentColor inset;
+}
+
+.acorn-terminal.acorn-terminal-cursor-underline
+  .xterm-cursor.xterm-cursor-block {
+  box-shadow: 0 -1px 0 currentColor inset;
+}
+
+.acorn-terminal.acorn-terminal-cursor-pill .xterm-cursor {
+  position: relative;
+}
+
+.acorn-terminal.acorn-terminal-cursor-pill .xterm-cursor::after {
+  background: var(--acorn-terminal-cursor-pill-color);
+  border-radius: 999px;
+  content: "";
+  display: block;
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 3px;
+}
+
 .acorn-terminal-inactive .xterm-cursor,
 .acorn-terminal-inactive .xterm-cursor.xterm-cursor-block {
   outline: 1px solid color-mix(in oklab, var(--color-fg-muted) 70%, transparent);
   background-color: transparent !important;
   opacity: 0.55;
+}
+
+.acorn-terminal.acorn-terminal-cursor-bar .xterm-cursor,
+.acorn-terminal.acorn-terminal-cursor-underline .xterm-cursor,
+.acorn-terminal.acorn-terminal-cursor-pill .xterm-cursor {
+  outline: 0 !important;
+}
+
+.acorn-terminal.acorn-terminal-inactive.acorn-terminal-cursor-bar
+  .xterm-cursor {
+  box-shadow: 1px 0 0 currentColor inset;
+}
+
+.acorn-terminal.acorn-terminal-inactive.acorn-terminal-cursor-underline
+  .xterm-cursor {
+  box-shadow: 0 -1px 0 currentColor inset;
 }
 
 .acorn-terminal .xterm-scrollable-element > .scrollbar.vertical {

@@ -37,6 +37,7 @@ import {
 import { terminalPasteAction } from "../lib/terminalPaste";
 import {
   useSettings,
+  type TerminalCursorStyle,
   type TerminalLinkActivation,
 } from "../lib/settings";
 import { buildXtermTheme } from "../lib/terminalTheme";
@@ -124,6 +125,30 @@ const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
+const COMPOSING_CLASS = "acorn-terminal-composing";
+const CURSOR_STYLE_CLASS_PREFIX = "acorn-terminal-cursor-";
+
+function xtermCursorStyle(style: TerminalCursorStyle): "block" | "bar" | "underline" {
+  if (style === "outline") return "block";
+  if (style === "pill") return "bar";
+  return style;
+}
+
+function xtermCursorWidth(style: TerminalCursorStyle): number {
+  return style === "pill" ? 3 : 1;
+}
+
+function syncCursorStyleClass(
+  container: HTMLElement,
+  style: TerminalCursorStyle,
+): void {
+  for (const className of Array.from(container.classList)) {
+    if (className.startsWith(CURSOR_STYLE_CLASS_PREFIX)) {
+      container.classList.remove(className);
+    }
+  }
+  container.classList.add(`${CURSOR_STYLE_CLASS_PREFIX}${style}`);
+}
 
 // Custom event the sticky-prompt banner listens to. Fired whenever the user
 // scrolls the terminal so the banner can swap to the prompt "in scope" at
@@ -475,6 +500,8 @@ export function Terminal({
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
       cursorBlink: isFocusedPane,
+      cursorStyle: xtermCursorStyle(initialSettings.terminal.cursorStyle),
+      cursorWidth: xtermCursorWidth(initialSettings.terminal.cursorStyle),
       allowProposedApi: true,
       scrollback: 5000,
       // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
@@ -562,6 +589,7 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
+    syncCursorStyleClass(container, initialSettings.terminal.cursorStyle);
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
@@ -714,6 +742,12 @@ export function Terminal({
         if (next.linkActivation !== "modifier-click") {
           setLinkTooltip(null);
         }
+      }
+      if (next.cursorStyle !== previous.cursorStyle) {
+        term.options.cursorStyle = xtermCursorStyle(next.cursorStyle);
+        term.options.cursorWidth = xtermCursorWidth(next.cursorStyle);
+        syncCursorStyleClass(container, next.cursorStyle);
+        term.refresh(0, term.rows - 1);
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
@@ -875,11 +909,13 @@ export function Terminal({
     const showComposing = (text: string) => {
       if (!compositionView) return;
       if (text.length === 0) {
+        container.classList.remove(COMPOSING_CLASS);
         compositionView.classList.remove("active");
         compositionView.textContent = "";
         return;
       }
       const cell = getCellDims();
+      container.classList.add(COMPOSING_CLASS);
       compositionView.textContent = text;
       if (cell) {
         const buf = term.buffer.active;
@@ -897,8 +933,32 @@ export function Terminal({
         const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
         compositionView.style.left = `${buf.cursorX * cell.width}px`;
         compositionView.style.top = `${cursorViewportY * cell.height}px`;
+        compositionView.style.height = `${cell.height}px`;
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
+        const cursorRect = container
+          .querySelector<HTMLElement>(".xterm-cursor")
+          ?.getBoundingClientRect();
+        const cursorWidth =
+          cursorRect && cursorRect.width > 0 ? cursorRect.width : cell.width;
+        const cursorHeight =
+          cursorRect && cursorRect.height > 0 ? cursorRect.height : cell.height;
+        compositionView.style.setProperty(
+          "--acorn-composition-cell-width",
+          `${cell.width}px`,
+        );
+        compositionView.style.setProperty(
+          "--acorn-composition-cell-height",
+          `${cell.height}px`,
+        );
+        compositionView.style.setProperty(
+          "--acorn-composition-cursor-width",
+          `${cursorWidth}px`,
+        );
+        compositionView.style.setProperty(
+          "--acorn-composition-cursor-height",
+          `${cursorHeight}px`,
+        );
       }
       // Sync font with the current xterm options so the preview uses the
       // user's configured terminal font/size, not the default sans inherited
@@ -919,6 +979,7 @@ export function Terminal({
     };
     const hideComposing = () => {
       if (!compositionView) return;
+      container.classList.remove(COMPOSING_CLASS);
       compositionView.classList.remove("active");
       compositionView.textContent = "";
     };
