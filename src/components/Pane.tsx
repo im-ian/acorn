@@ -940,15 +940,6 @@ function TabItem({
         ref={registerRef}
         role="button"
         tabIndex={0}
-        draggable={!editing}
-        style={
-          !editing
-            ? ({ WebkitUserDrag: "element" } as CSSProperties)
-            : undefined
-        }
-        onDragStart={(e) => {
-          setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
-        }}
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
           e.stopPropagation();
@@ -973,61 +964,72 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex min-w-[80px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
+          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
         )}
       >
-        {agentProvider ? (
-          <Tooltip label={agentProvider} side="bottom">
-            <AgentProviderIcon
-              provider={agentProvider}
+        <div
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch"
+          data-tab-drag-handle={tab.id}
+          draggable
+          style={{ WebkitUserDrag: "element" } as CSSProperties}
+          onDragStart={(e) => {
+            if (editing) setEditing(false);
+            setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
+          }}
+        >
+          {agentProvider ? (
+            <Tooltip label={agentProvider} side="bottom">
+              <AgentProviderIcon
+                provider={agentProvider}
+                className={cn(
+                  "pointer-events-none size-2.5",
+                  session && STATUS_ICON[session.status],
+                )}
+              />
+            </Tooltip>
+          ) : (
+            <span
               className={cn(
-                "pointer-events-none size-2.5",
-                session && STATUS_ICON[session.status],
+                "pointer-events-none size-1.5 shrink-0 rounded-full",
+                session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
               )}
             />
-          </Tooltip>
-        ) : (
-          <span
-            className={cn(
-              "pointer-events-none size-1.5 rounded-full",
-              session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
-            )}
-          />
-        )}
-        {editing ? (
-          <TabRenameInput
-            initial={tab.title}
-            onSubmit={async (next) => {
-              setEditing(false);
-              if (session && next && next !== session.name) {
-                await renameSession(session.id, next);
-              }
-            }}
-            onCancel={() => setEditing(false)}
-          />
-        ) : (
-          <span className="pointer-events-none max-w-[12rem] truncate leading-5">
-            {tab.title}
-          </span>
-        )}
-        {session &&
-        (liveInWorktree ?? hasRecordedWorktree(session)) ? (
-          <GitBranch
-            size={10}
-            className="pointer-events-none text-fg-muted"
-            aria-label={paneT(t, "pane.aria.worktree")}
-          />
-        ) : null}
-        {session?.kind === "control" ? (
-          <Bot
-            size={10}
-            className="pointer-events-none text-accent"
-            aria-label={paneT(t, "pane.aria.controlSession")}
-          />
-        ) : null}
+          )}
+          {editing ? (
+            <TabRenameInput
+              initial={tab.title}
+              onSubmit={async (next) => {
+                setEditing(false);
+                if (session && next && next !== session.name) {
+                  await renameSession(session.id, next);
+                }
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <span className="pointer-events-none max-w-[12rem] truncate leading-5">
+              {tab.title}
+            </span>
+          )}
+          {session &&
+          (liveInWorktree ?? hasRecordedWorktree(session)) ? (
+            <GitBranch
+              size={10}
+              className="pointer-events-none shrink-0 text-fg-muted"
+              aria-label={paneT(t, "pane.aria.worktree")}
+            />
+          ) : null}
+          {session?.kind === "control" ? (
+            <Bot
+              size={10}
+              className="pointer-events-none shrink-0 text-accent"
+              aria-label={paneT(t, "pane.aria.controlSession")}
+            />
+          ) : null}
+        </div>
         <button
           type="button"
           aria-label={
@@ -1035,13 +1037,22 @@ function TabItem({
               ? paneT(t, "pane.aria.closeSession")
               : paneT(t, "pane.aria.closeTab")
           }
+          data-tab-close-button={tab.id}
+          draggable={false}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
+          onDragStart={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
           onClick={(e) => {
             e.stopPropagation();
             onClose();
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
-            "ml-auto mr-1 shrink-0 rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+            "ml-1 mr-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
             active
               ? "opacity-70 hover:opacity-100"
               : "opacity-0 group-hover:opacity-70 hover:opacity-100",
@@ -1082,10 +1093,17 @@ function TabRenameInput({ initial, onSubmit, onCancel }: TabRenameInputProps) {
     <input
       ref={inputRef}
       type="text"
+      data-tab-rename-input
       autoFocus
       value={value}
+      draggable={false}
       onChange={(e) => setValue(e.target.value)}
       onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onDragStart={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
       onKeyDown={(e) => {
         e.stopPropagation();
         if (e.key === "Enter") {
