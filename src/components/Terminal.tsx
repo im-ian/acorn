@@ -45,6 +45,7 @@ import {
   chooseWorktreeToAdoptAfterExit,
   type WorktreeAdoptionIntent,
 } from "../lib/worktreeAdoption";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useAppStore } from "../store";
 import { StickyUserPrompt } from "./StickyUserPrompt";
 import { FloatingTooltip, type TooltipAnchorRect } from "./Tooltip";
@@ -1596,12 +1597,20 @@ export function Terminal({
               // briefly flash on the way out.
               return;
             }
-            // User opted into auto-close: drop the session tab now instead
-            // of writing the press-Enter prompt. The worktree is preserved
-            // (removeSession(id, false)); only the in-app tab disappears.
+            // User opted into auto-close: drop ordinary sessions immediately,
+            // but route worktree-backed sessions through the same
+            // delete-worktree confirmation as tab close.
             if (useSettings.getState().settings.sessions.closeOnExit) {
               exited = true;
-              void useAppStore.getState().removeSession(sessionId, false);
+              const store = useAppStore.getState();
+              const session =
+                store.sessions.find((candidate) => candidate.id === sessionId) ??
+                null;
+              if (session && hasRecordedWorktree(session)) {
+                store.requestRemoveSession(sessionId);
+              } else {
+                void store.removeSession(sessionId, false);
+              }
               return;
             }
             exited = true;

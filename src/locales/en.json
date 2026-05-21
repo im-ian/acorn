@@ -54,12 +54,12 @@
     "sessions": {
       "confirmRemove": {
         "label": "Confirm before removing a session",
-        "hint": "Isolated worktrees always prompt because the delete-worktree choice still matters.",
+        "hint": "Linked worktrees always prompt because the delete-worktree choice still matters.",
         "checkbox": "Show confirmation dialog"
       },
       "closeOnExit": {
         "label": "Close tab when the process exits",
-        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way.",
+        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. Linked worktrees still ask what to do.",
         "checkbox": "Auto-close on exit"
       },
       "background": {
