@@ -154,6 +154,57 @@ function syncCursorStyleClass(
   container.classList.add(`${CURSOR_STYLE_CLASS_PREFIX}${style}`);
 }
 
+function syncCursorPresentation(
+  container: HTMLElement,
+  style: TerminalCursorStyle,
+): void {
+  const cursor = container.querySelector<HTMLElement>(".xterm-cursor");
+  if (!cursor) return;
+  const setImportant = (name: string, value: string) => {
+    if (
+      cursor.style.getPropertyValue(name) === value &&
+      cursor.style.getPropertyPriority(name) === "important"
+    ) {
+      return;
+    }
+    cursor.style.setProperty(name, value, "important");
+  };
+  const removeProperty = (name: string) => {
+    if (!cursor.style.getPropertyValue(name)) return;
+    cursor.style.removeProperty(name);
+  };
+
+  if (style !== "pill") {
+    removeProperty("background-color");
+    removeProperty("border-color");
+    removeProperty("border-left-color");
+    removeProperty("border-left-style");
+    removeProperty("border-left-width");
+    removeProperty("border-radius");
+    removeProperty("outline");
+    removeProperty("width");
+    return;
+  }
+
+  const color =
+    getComputedStyle(container)
+      .getPropertyValue("--acorn-terminal-cursor-pill-color")
+      .trim() || "var(--color-accent, #7dd3fc)";
+  setImportant("background-color", color);
+  setImportant("border-left-width", "0");
+  setImportant("border-radius", "999px");
+  setImportant("outline", "0");
+  setImportant("width", "3px");
+}
+
+function syncCursorStyle(
+  container: HTMLElement,
+  style: TerminalCursorStyle,
+): void {
+  syncCursorStyleClass(container, style);
+  syncCursorPresentation(container, style);
+}
+
 // Custom event the sticky-prompt banner listens to. Fired whenever the user
 // scrolls the terminal so the banner can swap to the prompt "in scope" at
 // the top of the viewport, then revert to the JSONL-latest prompt when the
@@ -500,6 +551,7 @@ export function Terminal({
     // Snapshot terminal font preferences at mount; subsequent setting changes
     // are applied live via the subscription below.
     const initialSettings = useSettings.getState().settings;
+    let currentCursorStyle = initialSettings.terminal.cursorStyle;
     const term = new XTerm({
       theme: makeXtermTheme(
         terminalBackgroundActive(initialSettings.appearance.background),
@@ -600,7 +652,19 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
-    syncCursorStyleClass(container, initialSettings.terminal.cursorStyle);
+    let cursorStyleFrame: number | null = null;
+    const applyCurrentCursorStyle = () => {
+      syncCursorStyle(container, currentCursorStyle);
+    };
+    const scheduleCursorStyleSync = () => {
+      if (cursorStyleFrame !== null) return;
+      cursorStyleFrame = requestAnimationFrame(() => {
+        cursorStyleFrame = null;
+        applyCurrentCursorStyle();
+      });
+    };
+    applyCurrentCursorStyle();
+    scheduleCursorStyleSync();
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
@@ -756,13 +820,16 @@ export function Terminal({
         }
       }
       if (next.cursorStyle !== previous.cursorStyle) {
+        currentCursorStyle = next.cursorStyle;
         term.options.cursorStyle = xtermCursorStyle(next.cursorStyle);
         term.options.cursorWidth = xtermCursorWidth(next.cursorStyle);
-        syncCursorStyleClass(container, next.cursorStyle);
+        applyCurrentCursorStyle();
+        scheduleCursorStyleSync();
         term.refresh(0, term.rows - 1);
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
+        scheduleCursorStyleSync();
       }
       const cjkNow = state.settings.experiments.cjkCellWidthHeuristic;
       const cjkPrev = prev.settings.experiments.cjkCellWidthHeuristic;
@@ -929,6 +996,10 @@ export function Terminal({
       const cell = getCellDims();
       container.classList.add(COMPOSING_CLASS);
       compositionView.textContent = text;
+      compositionView.style.backgroundColor = "#000";
+      compositionView.style.boxSizing = "border-box";
+      compositionView.style.overflow = "visible";
+      compositionView.style.whiteSpace = "pre";
       if (cell) {
         const buf = term.buffer.active;
         // xterm's visible cursor row = `baseY + cursorY - viewportY`
@@ -1384,7 +1455,10 @@ export function Terminal({
       compositionView.style.left = `${buf.cursorX * cell.width}px`;
       compositionView.style.top = `${cursorViewportY * cell.height}px`;
     };
-    const renderDisposable = term.onRender(repositionComposing);
+    const renderDisposable = term.onRender(() => {
+      scheduleCursorStyleSync();
+      repositionComposing();
+    });
     // PTY output that arrives while the user is mid-composition can scroll
     // the viewport or move the prompt to a new row without producing an
     // `onRender` event whose painted region overlaps the cursor cell — the
@@ -1978,6 +2052,10 @@ export function Terminal({
       }
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
+      }
+      if (cursorStyleFrame !== null) {
+        cancelAnimationFrame(cursorStyleFrame);
+        cursorStyleFrame = null;
       }
       invoke("pty_kill", { sessionId }).catch(() => {
         // Backend may not implement pty_kill yet — safe to ignore.

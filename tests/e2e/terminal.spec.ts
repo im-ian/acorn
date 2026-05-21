@@ -50,17 +50,115 @@ test.describe("terminal: spawn", () => {
 
     await expect
       .poll(async () =>
-        cursor.evaluate((el) => getComputedStyle(el, "::after").backgroundColor),
+        cursor.evaluate((el) => getComputedStyle(el).backgroundColor),
       )
       .toBe("rgb(12, 34, 56)");
     await expect
       .poll(async () =>
-        cursor.evaluate((el) => getComputedStyle(el, "::after").width),
+        cursor.evaluate((el) => getComputedStyle(el).width),
       )
       .toBe("3px");
     await expect
+      .poll(async () =>
+        cursor.evaluate((el) => getComputedStyle(el).borderRadius),
+      )
+      .toBe("999px");
+    await expect
+      .poll(async () =>
+        cursor.evaluate((el) => getComputedStyle(el, "::after").content),
+      )
+      .toBe("none");
+    await expect
       .poll(async () => cursor.evaluate((el) => getComputedStyle(el).outlineWidth))
       .toBe("0px");
+  });
+
+  test("pill cursor presentation survives switching terminals", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-alpha",
+        name: "alpha",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+      {
+        id: "s-beta",
+        name: "beta",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:06Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+
+    await page.goto("/");
+    await page.addStyleTag({
+      content: `
+        :root[data-acorn-theme="acorn-dark"] {
+          --color-accent: rgb(12, 34, 56);
+        }
+      `,
+    });
+
+    const activeCursor = page
+      .locator("[data-pane-body] .acorn-terminal .xterm-cursor")
+      .first();
+    const expectPill = async () => {
+      const textarea = page
+        .locator("[data-pane-body] .xterm-helper-textarea")
+        .first();
+      await textarea.waitFor({ state: "attached" });
+      await textarea.focus();
+      await textarea.evaluate((el) => el.blur());
+      await expect(activeCursor).toBeAttached();
+      await expect
+        .poll(async () =>
+          activeCursor.evaluate((el) => getComputedStyle(el).backgroundColor),
+        )
+        .toBe("rgb(12, 34, 56)");
+      await expect
+        .poll(async () =>
+          activeCursor.evaluate((el) => getComputedStyle(el).borderRadius),
+        )
+        .toBe("999px");
+      await expect
+        .poll(async () =>
+          activeCursor.evaluate((el) => getComputedStyle(el, "::after").content),
+        )
+        .toBe("none");
+    };
+
+    await page
+      .getByRole("button", { name: /^alpha main · Idle$/ })
+      .click();
+    await expectPill();
+
+    await page
+      .getByRole("button", { name: /^beta main · Idle$/ })
+      .click();
+    await expectPill();
   });
 
   test("activating a session calls pty_spawn with the session's cwd", async ({
