@@ -41,6 +41,7 @@ import {
 } from "../lib/settings";
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
+import type { SessionAgentProvider } from "../lib/types";
 import { useToasts } from "../lib/toasts";
 import {
   chooseWorktreeToAdoptAfterExit,
@@ -54,6 +55,7 @@ import { FloatingTooltip, Tooltip, type TooltipAnchorRect } from "./Tooltip";
 interface TerminalProps {
   sessionId: string;
   cwd: string;
+  agentProvider?: SessionAgentProvider | null;
   /**
    * When the terminal is hidden behind another tab in the same pane and then
    * made visible again, the DOM renderer can leave the rows blank because it
@@ -442,6 +444,7 @@ function encodeStringToBase64(input: string): string {
 export function Terminal({
   sessionId,
   cwd,
+  agentProvider = null,
   isActive = true,
   isFocusedPane = true,
 }: TerminalProps): ReactElement {
@@ -2053,7 +2056,7 @@ export function Terminal({
         dismissOnScroll={false}
       />
       {/* Pinned-prompt overlay. */}
-      <StickyUserPrompt sessionId={sessionId} />
+      <StickyUserPrompt sessionId={sessionId} agentProvider={agentProvider} />
     </div>
   );
 }

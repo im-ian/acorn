@@ -1,8 +1,10 @@
-import { ChevronDown, MessageSquare } from "lucide-react";
+import { ChevronDown, MessageSquare, Terminal } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
+import type { SessionAgentProvider } from "../lib/types";
 
 interface StickyUserPromptProps {
   sessionId: string;
+  agentProvider?: SessionAgentProvider | null;
 }
 
 // Custom event the Terminal dispatches whenever its buffer changes shape
@@ -22,6 +24,7 @@ const EXPANDED_MAX_HEIGHT_PX = 160;
 
 export function StickyUserPrompt({
   sessionId,
+  agentProvider = null,
 }: StickyUserPromptProps): ReactElement | null {
   const [prompt, setPrompt] = useState<string | null>(null);
   // Compact by default so a freshly-arrived prompt never pushes an
@@ -57,6 +60,7 @@ export function StickyUserPrompt({
   }, [sessionId]);
 
   if (!prompt) return null;
+  const PromptIcon = agentProvider ? MessageSquare : Terminal;
   // Heuristic for "is there anything to expand?" — we collect
   // continuation rows in the scanner and join them with `\n`, so any
   // newline means hidden content under the 1-line clamp. Length-based
@@ -104,7 +108,7 @@ export function StickyUserPrompt({
             className="flex h-[16.5px] shrink-0 items-center text-fg-muted"
             aria-hidden
           >
-            <MessageSquare size={12} />
+            <PromptIcon size={12} />
           </span>
           <div
             className="min-w-0 flex-1 whitespace-pre-wrap break-words"
