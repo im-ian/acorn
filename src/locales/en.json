@@ -54,12 +54,12 @@
     "sessions": {
       "confirmRemove": {
         "label": "Confirm before removing a session",
-        "hint": "Isolated worktrees always prompt because the delete-worktree choice still matters.",
+        "hint": "Linked worktrees always prompt because the delete-worktree choice still matters.",
         "checkbox": "Show confirmation dialog"
       },
       "closeOnExit": {
         "label": "Close tab when the process exits",
-        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. The worktree is preserved either way.",
+        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. Linked worktrees still ask what to do.",
         "checkbox": "Auto-close on exit"
       },
       "background": {
@@ -515,17 +515,20 @@
       "newSessionInProject": "New session in this project",
       "newControlSessionInProject": "New control session in this project",
       "dragToReorderSession": "Drag to reorder session",
+      "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
       "controlSession": "control session"
     },
+    "localTerminals": {
+      "title": "Chats",
+      "newSession": "New chat",
+      "empty": "Double-click to start a chat."
+    },
     "emptyProject": {
-      "prefix": "No sessions. Add one with",
-      "connector": "or",
-      "suffix": ", or double-click here."
+      "createSession": "Double-click to start a session."
     },
     "emptyProjects": {
-      "prefix": "No projects yet. Click",
-      "suffix": "to add one."
+      "openProject": "Click to open a project."
     },
     "metadata": {
       "name": "Name",
@@ -545,6 +548,7 @@
     },
     "aria": {
       "worktree": "worktree",
+      "controlSession": "control session",
       "closeSession": "Close session",
       "closeTab": "Close tab"
     },
@@ -797,6 +801,7 @@
       "title": "Remove session",
       "confirmPrefix": "Remove session",
       "isolatedWorktree": "This is an isolated worktree:",
+      "linkedWorktree": "This session is using a linked git worktree:",
       "deleteWorktreeQuestion": "Also delete the worktree from disk?",
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
@@ -813,6 +818,8 @@
       "willBeRemoved": "will be removed",
       "isolatedWorktreeSingular": "isolated worktree",
       "isolatedWorktreePlural": "isolated worktrees",
+      "linkedWorktreeSingular": "linked worktree",
+      "linkedWorktreePlural": "linked worktrees",
       "closeKeepWorktrees": "Close · keep worktrees",
       "closeDeleteWorktrees": "Close · delete worktrees",
       "closeProject": "Close project"

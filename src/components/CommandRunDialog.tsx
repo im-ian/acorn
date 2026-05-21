@@ -6,6 +6,12 @@ import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader, TextSwap } from "./ui";
+import {
+  applySessionCreateRequest,
+  buildSessionCreateRequestFromScope,
+  resolveActiveSessionScope,
+  resolveProjectScopedForRepoPath,
+} from "../lib/sessionCreation";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -58,13 +64,33 @@ export function CommandRunDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const projects = useAppStore((s) => s.projects);
+  const sessions = useAppStore((s) => s.sessions);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeProject = useAppStore((s) => s.activeProject);
   const createSession = useAppStore((s) => s.createSession);
   const setPendingTerminalInput = useAppStore(
     (s) => s.setPendingTerminalInput,
   );
   const showToast = useToasts((s) => s.show);
 
-  const resolvedRepoPath = repoPath ?? projects[0]?.repo_path ?? null;
+  const resolvedScope = repoPath
+    ? {
+        repoPath,
+        projectScoped: resolveProjectScopedForRepoPath(
+          { sessions, projects },
+          repoPath,
+        ),
+      }
+    : (resolveActiveSessionScope({
+        sessions,
+        projects,
+        activeSessionId,
+        activeWorkspaceRepoPath: activeProject,
+      }) ??
+      (projects[0]
+        ? { repoPath: projects[0].repo_path, projectScoped: true }
+        : null));
+  const resolvedRepoPath = resolvedScope?.repoPath ?? null;
 
   function close() {
     if (busy) return;
@@ -91,16 +117,20 @@ export function CommandRunDialog({
   }
 
   async function handleRun() {
-    if (!resolvedRepoPath) {
+    if (!resolvedScope) {
       setError(dt(t, "dialogs.commandRun.noProjectError"));
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const created = await createSession(
-        deriveSessionName(command),
-        resolvedRepoPath,
+      const created = await applySessionCreateRequest(
+        createSession,
+        buildSessionCreateRequestFromScope(
+          { sessions, projects },
+          resolvedScope,
+          { name: deriveSessionName(command) },
+        ),
       );
       if (!created) {
         const storeError = useAppStore.getState().error;

@@ -4,8 +4,13 @@ import {
   PanelGroup,
   type ImperativePanelGroupHandle,
 } from "react-resizable-panels";
-import type { Direction, LayoutNode } from "../lib/layout";
+import {
+  normalizeSplitSizes,
+  type Direction,
+  type LayoutNode,
+} from "../lib/layout";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
+import { useAppStore } from "../store";
 import { Pane } from "./Pane";
 import { ResizeHandle } from "./ResizeHandle";
 
@@ -40,6 +45,7 @@ interface LayoutRendererProps {
  * a resize handle between the two children.
  */
 export function LayoutRenderer({ node }: LayoutRendererProps) {
+  const setPaneSplitSizes = useAppStore((s) => s.setPaneSplitSizes);
   if (node.kind === "pane") {
     return <Pane paneId={node.id} />;
   }
@@ -53,14 +59,17 @@ export function LayoutRenderer({ node }: LayoutRendererProps) {
   const leftLeaves = coAxialLeafCount(node.a, node.direction);
   const rightLeaves = coAxialLeafCount(node.b, node.direction);
   const total = leftLeaves + rightLeaves;
-  const leftPct = (leftLeaves / total) * 100;
-  const rightPct = 100 - leftPct;
+  const equalizedLeftPct = (leftLeaves / total) * 100;
+  const equalizedRightPct = 100 - equalizedLeftPct;
+  const restoredSizes = normalizeSplitSizes(node.sizes);
+  const leftPct = restoredSizes?.[0] ?? equalizedLeftPct;
+  const rightPct = restoredSizes?.[1] ?? equalizedRightPct;
   return (
     <EqualizablePanelGroup
       direction={node.direction}
       id={node.id}
-      leftPct={leftPct}
-      rightPct={rightPct}
+      equalizedSizes={[equalizedLeftPct, equalizedRightPct]}
+      onLayout={(sizes) => setPaneSplitSizes(node.id, sizes)}
     >
       <Panel id={`${node.id}:a`} order={1} defaultSize={leftPct} minSize={10}>
         <LayoutRenderer node={node.a} />
@@ -76,8 +85,8 @@ export function LayoutRenderer({ node }: LayoutRendererProps) {
 interface EqualizablePanelGroupProps {
   id: string;
   direction: "horizontal" | "vertical";
-  leftPct: number;
-  rightPct: number;
+  equalizedSizes: [number, number];
+  onLayout: (sizes: number[]) => void;
   children: React.ReactNode;
 }
 
@@ -88,25 +97,29 @@ interface EqualizablePanelGroupProps {
 function EqualizablePanelGroup({
   id,
   direction,
-  leftPct,
-  rightPct,
+  equalizedSizes,
+  onLayout,
   children,
 }: EqualizablePanelGroupProps) {
   const ref = useRef<ImperativePanelGroupHandle | null>(null);
-  const target = useMemo(() => [leftPct, rightPct], [leftPct, rightPct]);
+  const equalizedLayout = useMemo(
+    () => equalizedSizes,
+    [equalizedSizes[0], equalizedSizes[1]],
+  );
 
   useEffect(() => {
     const onEqualize = () => {
-      ref.current?.setLayout(target);
+      onLayout(equalizedLayout);
+      ref.current?.setLayout(equalizedLayout);
     };
     window.addEventListener(EQUALIZE_PANES_EVENT, onEqualize);
     return () => {
       window.removeEventListener(EQUALIZE_PANES_EVENT, onEqualize);
     };
-  }, [target]);
+  }, [equalizedLayout, onLayout]);
 
   return (
-    <PanelGroup ref={ref} direction={direction} id={id}>
+    <PanelGroup ref={ref} direction={direction} id={id} onLayout={onLayout}>
       {children}
     </PanelGroup>
   );

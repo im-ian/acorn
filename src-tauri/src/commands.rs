@@ -40,6 +40,13 @@ fn inject_agent_hook_env(
     session: &Session,
     hooks: Option<&crate::agent_hooks::AgentHookServer>,
 ) {
+    let Some(provider) = session.agent_provider else {
+        return;
+    };
+    if !provider.supports_hooks() {
+        return;
+    }
+
     let Some(hooks) = hooks else {
         return;
     };
@@ -54,30 +61,9 @@ fn inject_agent_hook_env(
         .entry("ACORN_AGENT_HOOK_SESSION_ID".to_string())
         .or_insert_with(|| session.id.to_string());
 
-    let Some(provider) = session.agent_provider else {
-        return;
-    };
-    if !hooks_enabled_for(provider) {
-        return;
-    }
-
     effective_env
         .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
-        .or_insert_with(|| agent_hook_provider_name(provider).to_string());
-}
-
-fn hooks_enabled_for(provider: SessionAgentProvider) -> bool {
-    matches!(
-        provider,
-        SessionAgentProvider::Claude | SessionAgentProvider::Codex
-    )
-}
-
-fn agent_hook_provider_name(provider: SessionAgentProvider) -> &'static str {
-    match provider {
-        SessionAgentProvider::Claude => "claude",
-        SessionAgentProvider::Codex => "codex",
-    }
+        .or_insert_with(|| provider.hook_provider_env_value().to_string());
 }
 
 #[derive(Serialize)]
@@ -438,11 +424,12 @@ fn enrich_session(mut s: Session) -> Session {
         s.branch = branch;
     }
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
-    s.agent_provider =
+    let live_provider =
         crate::agent_resume::live_transcript(s.id).map(|transcript| match transcript.kind {
             crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
             crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
         });
+    s.agent_provider = live_provider.or(s.agent_provider);
     s
 }
 
@@ -514,6 +501,13 @@ fn process_command_line(proc: &sysinfo::Process) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .collect();
     parts.join(" ")
+}
+
+fn should_remove_local_project_mirror(removed: &Session, remaining: &[Session]) -> bool {
+    !removed.project_scoped
+        && !remaining
+            .iter()
+            .any(|session| session.project_scoped && session.repo_path == removed.repo_path)
 }
 
 fn process_memory_snapshot(pid: Pid, proc: &sysinfo::Process) -> ProcessMemorySnapshot {
@@ -706,6 +700,8 @@ pub async fn create_session(
     repo_path: String,
     isolated: Option<bool>,
     kind: Option<SessionKind>,
+    agent_provider: Option<SessionAgentProvider>,
+    project_scoped: Option<bool>,
 ) -> AppResult<Session> {
     let repo = PathBuf::from(&repo_path);
     if !repo.exists() {
@@ -713,6 +709,7 @@ pub async fn create_session(
     }
 
     let isolated = isolated.unwrap_or(false);
+    let project_scoped = project_scoped.unwrap_or(true);
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
         let (_safe_name, path) = create_unique_worktree(&repo, &base)?;
@@ -721,7 +718,7 @@ pub async fn create_session(
         repo.clone()
     };
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
-    let session = Session::new(
+    let mut session = Session::new(
         name,
         repo.clone(),
         worktree_path,
@@ -729,8 +726,12 @@ pub async fn create_session(
         isolated,
         kind.unwrap_or_default(),
     );
+    session.project_scoped = project_scoped;
+    session.agent_provider = agent_provider;
     let inserted = state.sessions.insert(session);
-    state.projects.ensure(repo.clone(), project_basename(&repo));
+    if project_scoped {
+        state.projects.ensure(repo.clone(), project_basename(&repo));
+    }
     persist(&state);
     Ok(enrich_session(inserted))
 }
@@ -873,9 +874,8 @@ pub async fn remove_project(
             .collect();
         for session in session_ids {
             state.pty.kill(&session.id).ok();
-            if drop_worktrees && session.isolated {
-                let safe_name = sanitize_worktree_name(&session.name);
-                worktree::remove_worktree(&session.repo_path, &safe_name).ok();
+            if drop_worktrees {
+                remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
             }
             state.sessions.remove(&session.id).ok();
         }
@@ -897,11 +897,13 @@ pub async fn remove_session(
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
-    if session.isolated && remove_worktree.unwrap_or(false) {
-        let safe_name = sanitize_worktree_name(&session.name);
-        worktree::remove_worktree(&session.repo_path, &safe_name).ok();
+    if remove_worktree.unwrap_or(false) {
+        remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
     }
     state.sessions.remove(&id)?;
+    if should_remove_local_project_mirror(&session, &state.sessions.list()) {
+        state.projects.remove(&session.repo_path);
+    }
     persist(&state);
     Ok(())
 }
@@ -2376,6 +2378,13 @@ pub(crate) fn create_unique_worktree(
     }
 }
 
+pub(crate) fn remove_linked_worktree_at_path(
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<()> {
+    worktree::remove_worktree_at_path(repo_path, worktree_path)
+}
+
 /// Surface the "이전 Claude 대화 있음" candidate for a session — used by
 /// the frontend modal that pops on session focus. `None` means there is
 /// nothing the user needs to decide about (no claude has run, or the
@@ -2540,12 +2549,26 @@ mod tests {
     use super::{
         collect_memory_usage_from_roots, create_unique_worktree, font_name_from_path,
         infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
+        remove_linked_worktree_at_path, should_remove_local_project_mirror,
         validate_new_project_name, ProcessMemorySnapshot,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use uuid::Uuid;
+
+    fn scoped_session(id: &str, repo_path: &str, project_scoped: bool) -> Session {
+        let mut session = Session::new(
+            id.to_string(),
+            PathBuf::from(repo_path),
+            PathBuf::from(repo_path),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.project_scoped = project_scoped;
+        session
+    }
 
     #[test]
     fn font_name_from_path_strips_compound_style_suffixes() {
@@ -2602,6 +2625,28 @@ mod tests {
             validate_new_project_name("parent\\fresh-app", false).unwrap(),
             "parent\\fresh-app"
         );
+    }
+
+    #[test]
+    fn local_session_removal_cleans_project_mirror_without_project_sessions() {
+        let removed = scoped_session("local", "/Users/me", false);
+
+        assert!(should_remove_local_project_mirror(&removed, &[]));
+    }
+
+    #[test]
+    fn local_session_removal_keeps_project_when_project_session_remains() {
+        let removed = scoped_session("local", "/Users/me", false);
+        let remaining = [scoped_session("project", "/Users/me", true)];
+
+        assert!(!should_remove_local_project_mirror(&removed, &remaining));
+    }
+
+    #[test]
+    fn project_session_removal_never_cleans_project_mirror() {
+        let removed = scoped_session("project", "/Users/me", true);
+
+        assert!(!should_remove_local_project_mirror(&removed, &[]));
     }
 
     #[test]
@@ -2662,7 +2707,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_agent_hook_env_stamps_base_env_before_provider_is_known() {
+    fn inject_agent_hook_env_skips_until_provider_is_known() {
         let hooks = crate::agent_hooks::AgentHookServer::start().expect("hook server starts");
         let mut session = Session::new(
             "Shell".to_string(),
@@ -2678,18 +2723,9 @@ mod tests {
         let mut env = HashMap::new();
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
-        assert_eq!(
-            env.get("ACORN_AGENT_HOOK_URL"),
-            Some(&hooks.hook_url().to_string())
-        );
-        assert_eq!(
-            env.get("ACORN_AGENT_HOOK_TOKEN"),
-            Some(&hooks.token().to_string())
-        );
-        assert_eq!(
-            env.get("ACORN_AGENT_HOOK_SESSION_ID"),
-            Some(&session.id.to_string())
-        );
+        assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
+        assert!(!env.contains_key("ACORN_AGENT_HOOK_TOKEN"));
+        assert!(!env.contains_key("ACORN_AGENT_HOOK_SESSION_ID"));
         assert!(!env.contains_key("ACORN_AGENT_HOOK_PROVIDER"));
     }
 
@@ -2789,6 +2825,40 @@ mod tests {
         );
         assert!(path.exists(), "worktree path should exist on disk");
 
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn remove_linked_worktree_at_path_uses_actual_path_not_session_name() {
+        let repo_dir = unique_repo_dir("remove-by-path");
+        init_repo_with_commit(&repo_dir);
+        let (_name, path) =
+            create_unique_worktree(&repo_dir, "acorn-2").expect("worktree should be created");
+        assert!(path.exists(), "worktree path should exist before removal");
+
+        remove_linked_worktree_at_path(&repo_dir, &path).expect("remove by path");
+
+        assert!(
+            !path.exists(),
+            "worktree path should be removed even when the session name differs"
+        );
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn remove_linked_worktree_at_path_handles_project_root_that_is_a_worktree() {
+        let repo_dir = unique_repo_dir("remove-project-root-worktree-main");
+        init_repo_with_commit(&repo_dir);
+        let (_name, path) =
+            create_unique_worktree(&repo_dir, "external").expect("worktree should be created");
+        assert!(path.exists(), "linked project root should exist before removal");
+
+        remove_linked_worktree_at_path(&path, &path).expect("remove linked project root by path");
+
+        assert!(
+            !path.exists(),
+            "linked project root should be removed when explicitly requested"
+        );
         std::fs::remove_dir_all(&repo_dir).ok();
     }
 

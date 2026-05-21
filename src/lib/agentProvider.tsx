@@ -1,18 +1,24 @@
 import type { CSSProperties } from "react";
-import claudeIconUrl from "../assets/vendor/lobe-icons/claude.svg";
-import codexIconUrl from "../assets/vendor/lobe-icons/codex.svg";
 import { cn } from "./cn";
+import {
+  AGENT_PROVIDER_ORDER,
+  getAgentProviderDefinition,
+  inferAgentProvider,
+} from "./agentProviderRegistry";
 import type { Session, SessionAgentProvider } from "./types";
 
-const ICON_URL: Record<SessionAgentProvider, string> = {
-  claude: claudeIconUrl,
-  codex: codexIconUrl,
-};
-
-const LABEL: Record<SessionAgentProvider, string> = {
-  claude: "Claude",
-  codex: "Codex",
-};
+export {
+  AGENT_PROVIDER_ORDER,
+  AGENT_PROVIDER_REGISTRY,
+  buildAgentForkCommand,
+  buildAgentResumeCommand,
+  getAgentHookProviderEnvValue,
+  getAgentProviderDefinition,
+  inferAgentProvider,
+  providerRequiresForkTranscriptPrep,
+  providerSupportsHooks,
+  providerSupportsCapability,
+} from "./agentProviderRegistry";
 
 export function resolveSessionAgentProvider(
   session: Pick<Session, "agent_provider" | "name">,
@@ -29,9 +35,7 @@ export function collectSessionAgentProviders(
     const provider = resolveSessionAgentProvider(session);
     if (provider) providers.add(provider);
   }
-  return (["claude", "codex"] as const).filter((provider) =>
-    providers.has(provider),
-  );
+  return AGENT_PROVIDER_ORDER.filter((provider) => providers.has(provider));
 }
 
 export function AgentProviderIcon({
@@ -41,12 +45,13 @@ export function AgentProviderIcon({
   provider: SessionAgentProvider;
   className?: string;
 }) {
+  const definition = getAgentProviderDefinition(provider);
   const iconStyle: CSSProperties = {
-    WebkitMaskImage: `url("${ICON_URL[provider]}")`,
+    WebkitMaskImage: `url("${definition.icon.url}")`,
     WebkitMaskPosition: "center",
     WebkitMaskRepeat: "no-repeat",
     WebkitMaskSize: "contain",
-    maskImage: `url("${ICON_URL[provider]}")`,
+    maskImage: `url("${definition.icon.url}")`,
     maskPosition: "center",
     maskRepeat: "no-repeat",
     maskSize: "contain",
@@ -55,7 +60,7 @@ export function AgentProviderIcon({
   return (
     <span
       role="img"
-      aria-label={LABEL[provider]}
+      aria-label={definition.icon.alt}
       className={cn(
         "inline-flex size-3 shrink-0 items-center justify-center bg-current align-middle",
         className,
@@ -63,11 +68,4 @@ export function AgentProviderIcon({
       style={iconStyle}
     />
   );
-}
-
-function inferAgentProvider(name: string): SessionAgentProvider | null {
-  const normalized = name.toLowerCase();
-  if (/\bclaude\b/.test(normalized)) return "claude";
-  if (/\bcodex\b/.test(normalized)) return "codex";
-  return null;
 }

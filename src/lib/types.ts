@@ -19,6 +19,46 @@ export type SessionOwner =
 
 export type SessionAgentProvider = "claude" | "codex";
 
+export type AgentProviderCapability =
+  | "history"
+  | "resume"
+  | "fork"
+  | "status"
+  | "hooks";
+
+export interface AgentProviderIconMetadata {
+  kind: "mask";
+  url: string;
+  alt: string;
+}
+
+export interface AgentProviderHookMetadata {
+  supportsHooks: boolean;
+  providerEnvValue?: SessionAgentProvider;
+}
+
+export interface AgentProviderSessionMetadata {
+  markerFile?: string;
+  acknowledgedMarkerFile?: string;
+  resumeCommandPrefix?: string;
+  forkCommandPrefix?: string;
+  forkCommandSuffix?: string;
+  supportsSessionResume: boolean;
+  requiresForkTranscriptPrep?: boolean;
+}
+
+export interface AgentProviderDefinition<
+  TProvider extends SessionAgentProvider = SessionAgentProvider,
+> {
+  id: TProvider;
+  label: string;
+  icon: AgentProviderIconMetadata;
+  capabilities: readonly AgentProviderCapability[];
+  hooks: AgentProviderHookMetadata;
+  session: AgentProviderSessionMetadata;
+  inferNamePattern: RegExp;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -26,6 +66,7 @@ export interface Session {
   worktree_path: string;
   branch: string;
   isolated: boolean;
+  project_scoped?: boolean;
   status: SessionStatus;
   created_at: string;
   updated_at: string;

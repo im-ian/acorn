@@ -38,13 +38,25 @@ export const api = {
     repoPath: string,
     isolated = false,
     kind: SessionKind = "regular",
+    agentProvider?: SessionAgentProvider | null,
+    projectScoped?: boolean,
   ): Promise<Session> {
-    return invoke<Session>("create_session", {
+    const args: {
+      name: string;
+      repoPath: string;
+      isolated: boolean;
+      kind: SessionKind;
+      agentProvider?: SessionAgentProvider | null;
+      projectScoped?: boolean;
+    } = {
       name,
       repoPath,
       isolated,
       kind,
-    });
+      agentProvider,
+    };
+    if (projectScoped !== undefined) args.projectScoped = projectScoped;
+    return invoke<Session>("create_session", args);
   },
   removeSession(id: string, removeWorktree = false): Promise<void> {
     return invoke<void>("remove_session", { id, removeWorktree });

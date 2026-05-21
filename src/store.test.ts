@@ -169,6 +169,13 @@ describe("refreshAll", () => {
     expect(useAppStore.getState().activeSessionId).toBeNull();
   });
 
+  it("can activate a local session workspace when there are no projects", async () => {
+    const local = session("local", "/Users/me", { project_scoped: false });
+    await seed([], [local]);
+    expect(useAppStore.getState().activeProject).toBe("/Users/me");
+    expect(useAppStore.getState().activeSessionId).toBe("local");
+  });
+
   it("sets error on api failure and leaves loading false", async () => {
     mockApi.listSessions.mockRejectedValueOnce(new Error("boom"));
     mockApi.listProjects.mockResolvedValueOnce([]);
@@ -294,6 +301,40 @@ describe("splitFocusedPane", () => {
 
     useAppStore.getState().focusAdjacentPane("right");
     expect(useAppStore.getState().focusedPaneId).toBe(rightPaneId);
+  });
+
+  it("persists resized split ratios per project across project switches and reload storage", async () => {
+    window.localStorage.clear();
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const split = useAppStore.getState().layout;
+    expect(split.kind).toBe("split");
+
+    useAppStore.getState().setPaneSplitSizes(split.id, [25, 75]);
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setActiveProject(REPO_A);
+
+    const restored = useAppStore.getState().layout;
+    expect(restored.kind).toBe("split");
+    if (restored.kind !== "split") throw new Error("expected split layout");
+    expect(restored.sizes).toEqual([25, 75]);
+
+    const raw = window.localStorage.getItem("acorn-workspaces");
+    expect(raw).not.toBeNull();
+    const persisted = JSON.parse(raw!);
+    expect(persisted.state.workspaces[REPO_A].layout.sizes).toEqual([25, 75]);
+
+    resetStore();
+    window.localStorage.setItem("acorn-workspaces", raw!);
+    await useAppStore.persist.rehydrate();
+
+    const rehydrated = useAppStore.getState().layout;
+    expect(rehydrated.kind).toBe("split");
+    if (rehydrated.kind !== "split") throw new Error("expected split layout");
+    expect(rehydrated.sizes).toEqual([25, 75]);
   });
 });
 
@@ -822,6 +863,7 @@ describe("createSession", () => {
       REPO_A,
       false,
       "regular",
+      null,
     );
   });
 
@@ -837,6 +879,40 @@ describe("createSession", () => {
       REPO_A,
       false,
       "control",
+      null,
+    );
+  });
+
+  it("forwards an explicit agent provider to the backend", async () => {
+    mockApi.createSession.mockResolvedValueOnce(
+      session("agent", REPO_A, { agent_provider: "codex" }),
+    );
+    await useAppStore
+      .getState()
+      .createSession("agent", REPO_A, false, "regular", "codex");
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "agent",
+      REPO_A,
+      false,
+      "regular",
+      "codex",
+    );
+  });
+
+  it("forwards local session scope only when requested", async () => {
+    mockApi.createSession.mockResolvedValueOnce(
+      session("terminal", "/Users/me", { project_scoped: false }),
+    );
+    await useAppStore
+      .getState()
+      .createSession("terminal", "/Users/me", false, "regular", null, false);
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "terminal",
+      "/Users/me",
+      false,
+      "regular",
+      null,
+      false,
     );
   });
 
@@ -1018,6 +1094,19 @@ describe("pendingTerminalInput", () => {
     expect(consumePendingTerminalInput("sess-1")).toEqual({
       command: "claude --worktree",
       adoptWorktreeOnExit: true,
+    });
+  });
+
+  it("keeps queued provider metadata with pending terminal input", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "codex resume abc", {
+      agentProvider: "codex",
+    });
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "codex resume abc",
+      adoptWorktreeOnExit: false,
+      agentProvider: "codex",
     });
   });
 });

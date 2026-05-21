@@ -104,6 +104,12 @@ import {
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  applySessionCreateRequest,
+  buildSessionCreateRequest,
+  resolveProjectScopedForRepoPath,
+  scopeForSession,
+} from "../lib/sessionCreation";
 
 interface ExpandedDiff {
   payload: DiffPayload;
@@ -196,6 +202,14 @@ export function RightPanel() {
   const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath);
   const sessionHostRepoPath =
     active?.repo_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? repoPath;
+  const sessionHostProjectScoped = active
+    ? scopeForSession(active).projectScoped
+    : sessionHostRepoPath
+      ? resolveProjectScopedForRepoPath(
+          { sessions, projects },
+          sessionHostRepoPath,
+        )
+      : true;
   const [gitRepoProbeVersion, setGitRepoProbeVersion] = useState(0);
   const invalidateGitProbe = useCallback(() => {
     if (!repoPath) return;
@@ -421,6 +435,7 @@ export function RightPanel() {
               key={`history:${repoPath}`}
               repoPath={repoPath}
               sessionHostRepoPath={sessionHostRepoPath ?? repoPath}
+              sessionHostProjectScoped={sessionHostProjectScoped}
             />
           </BackgroundLoadedTab>
         ) : null}
@@ -1114,11 +1129,15 @@ function countByStatus(todos: TodoItem[]) {
 function AgentHistoryTab({
   repoPath,
   sessionHostRepoPath,
+  sessionHostProjectScoped,
 }: {
   repoPath: string;
   sessionHostRepoPath: string;
+  sessionHostProjectScoped: boolean;
 }) {
   const t = useTranslation();
+  const sessions = useAppStore((s) => s.sessions);
+  const projects = useAppStore((s) => s.projects);
   const createSession = useAppStore((s) => s.createSession);
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
@@ -1200,9 +1219,17 @@ function AgentHistoryTab({
       return;
     }
     try {
-      const created = await createSession(
-        `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
-        sessionHostRepoPath,
+      const created = await applySessionCreateRequest(
+        createSession,
+        buildSessionCreateRequest(
+          { sessions, projects },
+          {
+            name: `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
+            repoPath: sessionHostRepoPath,
+            agentProvider: item.provider,
+            projectScoped: sessionHostProjectScoped,
+          },
+        ),
       );
       if (!created) {
         setError(
@@ -1219,7 +1246,9 @@ function AgentHistoryTab({
           return;
         }
       }
-      setPendingTerminalInput(created.id, item.resume_command);
+      setPendingTerminalInput(created.id, item.resume_command, {
+        agentProvider: item.provider,
+      });
       if (shouldUseWorktree && item.worktree) {
         setWorktreeNotice(item.worktree);
       }

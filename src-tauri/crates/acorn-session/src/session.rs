@@ -5,6 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
+fn default_true() -> bool {
+    true
+}
+
 /// Errors produced by `SessionStore` lookups. Kept local so the crate does
 /// not need to share `AppError` with the main `acorn` crate; the main crate
 /// adapts via `From<SessionError>`.
@@ -187,6 +191,19 @@ pub enum SessionAgentProvider {
     Codex,
 }
 
+impl SessionAgentProvider {
+    pub fn supports_hooks(self) -> bool {
+        matches!(self, Self::Claude | Self::Codex)
+    }
+
+    pub fn hook_provider_env_value(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
@@ -196,6 +213,11 @@ pub struct Session {
     pub branch: String,
     #[serde(default)]
     pub isolated: bool,
+    /// Whether this session belongs to a project entry. Older persisted
+    /// sessions predate this field and should keep their project-scoped
+    /// behavior.
+    #[serde(default = "default_true")]
+    pub project_scoped: bool,
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -262,6 +284,7 @@ impl Session {
             worktree_path,
             branch,
             isolated,
+            project_scoped: true,
             status: SessionStatus::Idle,
             created_at: now,
             updated_at: now,
@@ -523,6 +546,20 @@ mod tests {
         assert_eq!(
             store.get(&session.id).expect("session persisted").kind,
             SessionKind::Control
+        );
+    }
+
+    #[test]
+    fn session_agent_provider_reports_hook_env_metadata() {
+        assert!(SessionAgentProvider::Claude.supports_hooks());
+        assert!(SessionAgentProvider::Codex.supports_hooks());
+        assert_eq!(
+            SessionAgentProvider::Claude.hook_provider_env_value(),
+            "claude"
+        );
+        assert_eq!(
+            SessionAgentProvider::Codex.hook_provider_env_value(),
+            "codex"
         );
     }
 }

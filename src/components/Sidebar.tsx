@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { homeDir } from "@tauri-apps/api/path";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -54,14 +55,27 @@ import {
   type AcornSettings,
   type SessionTitleSource,
 } from "../lib/settings";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  buildLocalSessions,
+  buildProjectGroups,
+  type ProjectGroup,
+} from "../lib/sessionGrouping";
+import {
+  applySessionCreateRequest,
+  buildLocalSessionCreateRequest,
+  buildSessionCreateRequest,
+  buildSessionCreateRequestFromScope,
+  resolveActiveSessionScope,
+  type SessionCreateScope,
+} from "../lib/sessionCreation";
 import {
   planChevronClick,
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
-import type { Project, Session, SessionKind, SessionStatus } from "../lib/types";
-import { suggestSessionName } from "../lib/sessionName";
+import type { Session, SessionKind, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { Tooltip } from "./Tooltip";
@@ -86,6 +100,7 @@ const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 
 const PROJECT_DRAG_PREFIX = "project:";
 const SESSION_DRAG_PREFIX = "session:";
+const LOCAL_TERMINAL_AREA_SELECTOR = "[data-local-terminal-area='true']";
 
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 
@@ -97,10 +112,12 @@ function statusLabel(t: Translator, status: SessionStatus): string {
   return sidebarText(t, `sidebar.status.${status}`);
 }
 
-interface ProjectGroup {
-  repoPath: string;
-  name: string;
-  sessions: Session[];
+function isLocalTerminalAreaFocused(): boolean {
+  if (typeof document === "undefined") return false;
+  const active = document.activeElement;
+  return active instanceof HTMLElement
+    ? active.closest(LOCAL_TERMINAL_AREA_SELECTOR) !== null
+    : false;
 }
 
 export function Sidebar() {
@@ -129,6 +146,10 @@ export function Sidebar() {
   const projectGroups = useMemo(
     () => buildProjectGroups(projects, sessions),
     [projects, sessions],
+  );
+  const localSessions = useMemo(
+    () => buildLocalSessions(sessions),
+    [sessions],
   );
 
   const sensors = useSensors(
@@ -190,23 +211,44 @@ export function Sidebar() {
     (
       isolated: boolean,
       kind: SessionKind,
-      repoOverride?: string,
+      scopeOverride?: SessionCreateScope,
     ) => Promise<void>
   >(async () => {});
+  const onNewLocalSessionRef = useRef<() => Promise<void>>(async () => {});
   const onAddProjectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
+    const activeScope = (): SessionCreateScope | null => {
+      const state = useAppStore.getState();
+      return resolveActiveSessionScope({
+        sessions: state.sessions,
+        projects: state.projects,
+        activeSessionId: state.activeSessionId,
+        activeWorkspaceRepoPath: state.activeProject,
+      });
+    };
     const newSession = () => {
-      const project = useAppStore.getState().activeProject;
-      void onNewSessionRef.current(false, "regular", project ?? undefined);
+      if (isLocalTerminalAreaFocused()) {
+        void onNewLocalSessionRef.current();
+        return;
+      }
+      void onNewSessionRef.current(false, "regular", activeScope() ?? undefined);
     };
     const newIsolated = () => {
-      const project = useAppStore.getState().activeProject;
-      void onNewSessionRef.current(true, "regular", project ?? undefined);
+      const scope = activeScope();
+      void onNewSessionRef.current(
+        true,
+        "regular",
+        scope?.projectScoped === false ? undefined : (scope ?? undefined),
+      );
     };
     const newControl = () => {
-      const project = useAppStore.getState().activeProject;
-      void onNewSessionRef.current(false, "control", project ?? undefined);
+      const scope = activeScope();
+      void onNewSessionRef.current(
+        false,
+        "control",
+        scope?.projectScoped === false ? undefined : (scope ?? undefined),
+      );
     };
     const newProject = () => {
       setNewProjectOpen(true);
@@ -231,11 +273,11 @@ export function Sidebar() {
   async function onNewSession(
     isolated: boolean,
     kind: SessionKind,
-    repoOverride?: string,
+    scopeOverride?: SessionCreateScope,
   ) {
     try {
-      const repoPath =
-        repoOverride ??
+      const pickedPath =
+        scopeOverride?.repoPath ??
         (await open({
           directory: true,
           multiple: false,
@@ -245,13 +287,23 @@ export function Sidebar() {
               ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
               : sidebarText(t, "sidebar.dialog.selectDirectory"),
         }));
-      if (!repoPath || typeof repoPath !== "string") return;
-      const name = suggestSessionName(repoPath, sessions, kind, isolated);
-      await createSession(name, repoPath, isolated, kind);
+      if (!pickedPath || typeof pickedPath !== "string") return;
+      const request = buildSessionCreateRequest(
+        { sessions, projects },
+        {
+          repoPath: pickedPath,
+          isolated,
+          kind,
+          projectScoped:
+            scopeOverride?.projectScoped ??
+            (isolated || kind === "control" ? true : undefined),
+        },
+      );
+      await applySessionCreateRequest(createSession, request);
       setCollapsed((prev) => {
-        if (!prev.has(repoPath)) return prev;
+        if (!prev.has(request.repoPath)) return prev;
         const next = new Set(prev);
-        next.delete(repoPath);
+        next.delete(request.repoPath);
         return next;
       });
     } catch (e) {
@@ -259,7 +311,21 @@ export function Sidebar() {
     }
   }
 
+  async function onNewLocalSession() {
+    try {
+      const home = await homeDir();
+      if (!home) return;
+      await applySessionCreateRequest(
+        createSession,
+        buildLocalSessionCreateRequest({ sessions, projects }, home),
+      );
+    } catch (e) {
+      console.error("create local terminal session failed", e);
+    }
+  }
+
   onNewSessionRef.current = onNewSession;
+  onNewLocalSessionRef.current = onNewLocalSession;
   onAddProjectRef.current = onAddExistingProject;
 
   const projectIds = useMemo(
@@ -319,13 +385,21 @@ export function Sidebar() {
       const activeSession = sessions.find((s) => s.id === activeSid);
       const overSession = sessions.find((s) => s.id === overSid);
       if (!activeSession || !overSession) return;
+      if (
+        (activeSession.project_scoped === false) !==
+        (overSession.project_scoped === false)
+      ) {
+        return;
+      }
       // Cross-project drops are not supported yet — silently ignore.
       if (activeSession.repo_path !== overSession.repo_path) return;
-      const group = projectGroups.find(
-        (g) => g.repoPath === activeSession.repo_path,
-      );
-      if (!group) return;
-      const ids = group.sessions.map((s) => s.id);
+      const orderedSessions =
+        activeSession.project_scoped === false
+          ? localSessions
+          : (projectGroups.find((g) => g.repoPath === activeSession.repo_path)
+              ?.sessions ?? []);
+      if (orderedSessions.length === 0) return;
+      const ids = orderedSessions.map((s) => s.id);
       const fromIdx = ids.indexOf(activeSid);
       const toIdx = ids.indexOf(overSid);
       if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
@@ -372,17 +446,17 @@ export function Sidebar() {
           </Tooltip>
         </div>
       </header>
-      <div className="acorn-no-scrollbar flex-1 overflow-y-auto px-1 pb-2">
-        {projectGroups.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={scopedCollision}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
-            onDragCancel={() => setActiveDragId(null)}
-          >
+      <div className="acorn-no-scrollbar flex flex-1 flex-col overflow-y-auto px-1 pb-2">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={scopedCollision}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onDragCancel={() => setActiveDragId(null)}
+        >
+          {projectGroups.length === 0 ? (
+            <EmptyState onOpenProject={onAddExistingProject} />
+          ) : (
             <SortableContext
               items={projectIds}
               strategy={verticalListSortingStrategy}
@@ -425,7 +499,10 @@ export function Sidebar() {
                     onSelectSession={selectSession}
                     onRemoveSession={(s) => requestRemoveSession(s.id)}
                     onAddSession={(isolated, kind) =>
-                      onNewSession(isolated, kind, project.repoPath)
+                      onNewSession(isolated, kind, {
+                        repoPath: project.repoPath,
+                        projectScoped: true,
+                      })
                     }
                     onRemoveProject={() =>
                       requestRemoveProject(project.repoPath)
@@ -434,13 +511,20 @@ export function Sidebar() {
                 ))}
               </ul>
             </SortableContext>
-            <DragOverlay dropAnimation={null}>
-              {activeDragId
-                ? renderDragOverlay(activeDragId, projectGroups, sessions, t)
-                : null}
-            </DragOverlay>
-          </DndContext>
-        )}
+          )}
+          <LocalTerminalArea
+            sessions={localSessions}
+            activeSessionId={activeSessionId}
+            onCreate={onNewLocalSession}
+            onSelectSession={selectSession}
+            onRemoveSession={(s) => requestRemoveSession(s.id)}
+          />
+          <DragOverlay dropAnimation={null}>
+            {activeDragId
+              ? renderDragOverlay(activeDragId, projectGroups, sessions, t)
+              : null}
+          </DragOverlay>
+        </DndContext>
       </div>
       <NewProjectDialog
         open={newProjectOpen}
@@ -547,7 +631,7 @@ function SessionRowPreview({
           <span className="truncate text-[13px] font-medium leading-5 text-fg">
             {session.name}
           </span>
-          {session.isolated || session.in_worktree ? (
+          {hasRecordedWorktree(session) ? (
             <GitBranch size={10} className="shrink-0 text-fg-muted" />
           ) : null}
         </span>
@@ -857,13 +941,9 @@ function ProjectGroupView({
                     onAddSession(false, "regular");
                   }
                 }}
-                className="cursor-pointer rounded px-2 py-1 text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
+                className="flex cursor-pointer items-center justify-center rounded px-3 py-3 text-center text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
               >
-                {sidebarText(t, "sidebar.emptyProject.prefix")}{" "}
-                <Plus size={10} className="inline" />{" "}
-                {sidebarText(t, "sidebar.emptyProject.connector")}{" "}
-                <GitBranch size={10} className="inline" />
-                {sidebarText(t, "sidebar.emptyProject.suffix")}
+                {sidebarText(t, "sidebar.emptyProject.createSession")}
               </li>
             ) : (
               project.sessions.map((session) => (
@@ -946,9 +1026,22 @@ function SessionRow({
       // next to the active tab, auto-select, and auto-focus xterm. Carries
       // the source session's `kind` so a control session stays a control
       // session (preserves its IPC-dispatch role).
-      await useAppStore
-        .getState()
-        .createSession(next, session.repo_path, session.isolated, session.kind);
+      const state = useAppStore.getState();
+      await applySessionCreateRequest(
+        state.createSession,
+        buildSessionCreateRequestFromScope(
+          { sessions: state.sessions, projects: state.projects },
+          {
+            repoPath: session.repo_path,
+            projectScoped: session.project_scoped !== false,
+          },
+          {
+            name: next,
+            isolated: session.isolated,
+            kind: session.kind,
+          },
+        ),
+      );
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);
     }
@@ -1052,9 +1145,8 @@ function SessionRow({
     },
   ];
 
-  return (
-    <li ref={setNodeRef} style={style}>
-      <div
+  const row = (
+    <div
         role="button"
         tabIndex={0}
         onClick={editing ? undefined : onSelect}
@@ -1073,7 +1165,6 @@ function SessionRow({
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        title={hoverDetails ?? undefined}
         className={cn(
           "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
           active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
@@ -1143,7 +1234,18 @@ function SessionRow({
         >
           <Trash2 size={12} />
         </span>
-      </div>
+    </div>
+  );
+
+  return (
+    <li ref={setNodeRef} style={style}>
+      {hoverDetails ? (
+        <Tooltip label={hoverDetails} side="right" multiline className="w-full">
+          {row}
+        </Tooltip>
+      ) : (
+        row
+      )}
       <ContextMenu
         open={menu !== null}
         x={menu?.x ?? 0}
@@ -1181,8 +1283,7 @@ function SessionRowLabel({
   // `in_worktree`) only apply as fallback when the session has no live PTY,
   // in which case `liveInWorktree[id]` is `undefined`.
   const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
-  const inWorktree =
-    liveInWorktree ?? (session.isolated || session.in_worktree);
+  const inWorktree = liveInWorktree ?? hasRecordedWorktree(session);
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex h-5 items-center gap-1">
@@ -1264,56 +1365,325 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ onOpenProject }: { onOpenProject: () => void }) {
   const t = useTranslation();
 
   return (
-    <div className="px-3 py-6 text-xs text-fg-muted">
-      {sidebarText(t, "sidebar.emptyProjects.prefix")}{" "}
-      <span className="text-fg">+</span>
-      {sidebarText(t, "sidebar.emptyProjects.suffix")}
-    </div>
+    <button
+      type="button"
+      onClick={onOpenProject}
+      className="mx-1 flex cursor-pointer items-center justify-center rounded px-2 py-6 text-center text-xs text-fg-muted transition hover:bg-bg-elevated/40 hover:text-fg focus:outline-none"
+    >
+      {sidebarText(t, "sidebar.emptyProjects.openProject")}
+    </button>
   );
 }
 
-function buildProjectGroups(
-  projects: Project[],
-  sessions: Session[],
-): ProjectGroup[] {
-  const map = new Map<string, ProjectGroup>();
-  // Preserve incoming order: backend sorts by user-defined `position`.
-  for (const project of projects) {
-    map.set(project.repo_path, {
-      repoPath: project.repo_path,
-      name: project.name,
-      sessions: [],
-    });
-  }
-  for (const session of sessions) {
-    let group = map.get(session.repo_path);
-    if (!group) {
-      // Backfill: a session with no matching project entry — show it anyway,
-      // appended at the end so user-defined ordering for known projects wins.
-      group = {
-        repoPath: session.repo_path,
-        name: basename(session.repo_path),
-        sessions: [],
-      };
-      map.set(session.repo_path, group);
+interface LocalTerminalAreaProps {
+  sessions: Session[];
+  activeSessionId: string | null;
+  onCreate: () => void;
+  onSelectSession: (id: string) => void;
+  onRemoveSession: (session: Session) => void;
+}
+
+function LocalTerminalArea({
+  sessions,
+  activeSessionId,
+  onCreate,
+  onSelectSession,
+  onRemoveSession,
+}: LocalTerminalAreaProps) {
+  const t = useTranslation();
+  const sessionIds = useMemo(
+    () => sessions.map((s) => sessionDragId(s.id)),
+    [sessions],
+  );
+
+  return (
+    <section
+      tabIndex={-1}
+      data-local-terminal-area="true"
+      aria-label={sidebarText(t, "sidebar.aria.localTerminalSessions")}
+      onMouseDown={(e) => {
+        e.currentTarget.focus();
+      }}
+      className={cn(
+        "mt-4 flex min-h-28 flex-1 flex-col pt-2",
+        "rounded-md focus:outline-none",
+      )}
+    >
+      <div className="mb-1 flex items-center justify-between px-2">
+        <span className="text-xs font-medium text-fg-muted">
+          {sidebarText(t, "sidebar.localTerminals.title")}
+        </span>
+        <Tooltip
+          label={sidebarText(t, "sidebar.localTerminals.newSession")}
+          side="bottom"
+        >
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.localTerminals.newSession")}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCreate();
+            }}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <Plus size={12} />
+          </button>
+        </Tooltip>
+      </div>
+      {sessions.length > 0 ? (
+        <div onDoubleClick={(e) => e.stopPropagation()}>
+          <SortableContext
+            items={sessionIds}
+            strategy={verticalListSortingStrategy}
+          >
+            <ul className="flex flex-col gap-0.5">
+              {sessions.map((session) => (
+                <LocalSessionRow
+                  key={session.id}
+                  session={session}
+                  active={session.id === activeSessionId}
+                  onSelect={() => onSelectSession(session.id)}
+                  onRemove={() => onRemoveSession(session)}
+                />
+              ))}
+            </ul>
+          </SortableContext>
+        </div>
+      ) : null}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={
+          sessions.length > 0
+            ? sidebarText(t, "sidebar.localTerminals.newSession")
+            : undefined
+        }
+        onDoubleClick={onCreate}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onCreate();
+          }
+        }}
+        className="mx-1 mt-1 flex min-h-16 flex-1 cursor-pointer items-center justify-center rounded-md px-2 py-6 text-center text-xs text-fg-muted transition-colors hover:bg-bg-elevated/20 hover:text-fg focus:outline-none"
+      >
+        {sessions.length === 0
+          ? sidebarText(t, "sidebar.localTerminals.empty")
+          : null}
+      </div>
+    </section>
+  );
+}
+
+interface LocalSessionRowProps {
+  session: Session;
+  active: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+}
+
+function LocalSessionRow({
+  session,
+  active,
+  onSelect,
+  onRemove,
+}: LocalSessionRowProps) {
+  const t = useTranslation();
+  const renameSession = useAppStore((s) => s.renameSession);
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const agentProvider = sessionDisplay.icons.agentProvider
+    ? resolveSessionAgentProvider(session)
+    : null;
+  const hoverDetails = sessionDisplay.showDetailsOnHover
+    ? buildSessionHoverDetails(t, session)
+    : null;
+  const [editing, setEditing] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sessionDragId(session.id) });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  async function duplicate() {
+    const base = session.name;
+    const taken = new Set(useAppStore.getState().sessions.map((s) => s.name));
+    let next = `${base}-copy`;
+    let n = 2;
+    while (taken.has(next)) {
+      next = `${base}-copy-${n}`;
+      n += 1;
     }
-    group.sessions.push(session);
+    const state = useAppStore.getState();
+    await applySessionCreateRequest(
+      state.createSession,
+      buildSessionCreateRequestFromScope(
+        { sessions: state.sessions, projects: state.projects },
+        { repoPath: session.repo_path, projectScoped: false },
+        { name: next },
+      ),
+    );
   }
-  for (const group of map.values()) {
-    group.sessions.sort((a, b) => {
-      const ap = a.position ?? Number.POSITIVE_INFINITY;
-      const bp = b.position ?? Number.POSITIVE_INFINITY;
-      if (ap !== bp) return ap - bp;
-      return (
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      );
-    });
-  }
-  return Array.from(map.values());
+
+  const menuItems: ContextMenuItem[] = [
+    {
+      label: sidebarText(t, "sidebar.actions.rename"),
+      icon: <Pencil size={12} />,
+      onClick: () => setEditing(true),
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.duplicateSession"),
+      icon: <Files size={12} />,
+      onClick: () => void duplicate(),
+    },
+    { type: "separator" },
+    {
+      label: sidebarText(t, "sidebar.actions.revealInFinder"),
+      icon: <FolderOpen size={12} />,
+      onClick: () => {
+        void openPath(session.worktree_path).catch((err: unknown) => {
+          console.error("[Sidebar] reveal failed", err);
+        });
+      },
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
+      icon: <Copy size={12} />,
+      onClick: () => void copyToClipboard(session.worktree_path),
+    },
+    { type: "separator" },
+    {
+      label: sidebarText(t, "sidebar.actions.remove"),
+      icon: <Trash2 size={12} />,
+      onClick: onRemove,
+    },
+  ];
+
+  const row = (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={editing ? undefined : onSelect}
+      onKeyDown={(e) => {
+        if (editing) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        } else if (e.key === "F2") {
+          e.preventDefault();
+          setEditing(true);
+        }
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+      className={cn(
+        "group flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sm transition",
+        active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
+        isDragging && "opacity-40",
+      )}
+    >
+      <span
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        onClick={(e) => e.stopPropagation()}
+        aria-label={sidebarText(t, "sidebar.aria.dragToReorderSession")}
+        className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
+      >
+        <GripVertical size={10} />
+      </span>
+      {sessionDisplay.icons.statusDot ? (
+        <span className="flex h-5 w-3 shrink-0 items-center justify-center">
+          {agentProvider ? (
+            <Tooltip label={agentProvider} side="right">
+              <AgentProviderIcon
+                provider={agentProvider}
+                className={cn("size-3", STATUS_ICON[session.status])}
+              />
+            </Tooltip>
+          ) : (
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                STATUS_DOT[session.status],
+              )}
+            />
+          )}
+        </span>
+      ) : null}
+      {editing ? (
+        <RenameInput
+          initial={session.name}
+          onSubmit={async (next) => {
+            setEditing(false);
+            if (next && next !== session.name) {
+              await renameSession(session.id, next);
+            }
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <span className="min-w-0 flex-1 truncate font-medium text-fg">
+          {session.name}
+        </span>
+      )}
+      <span
+        role="button"
+        aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            onRemove();
+          }
+        }}
+        className="invisible rounded p-1 text-fg-muted transition hover:text-danger group-hover:visible"
+      >
+        <Trash2 size={12} />
+      </span>
+    </div>
+  );
+
+  return (
+    <li ref={setNodeRef} style={style}>
+      {hoverDetails ? (
+        <Tooltip label={hoverDetails} side="right" multiline className="w-full">
+          {row}
+        </Tooltip>
+      ) : (
+        row
+      )}
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={menuItems}
+      />
+    </li>
+  );
 }
 
 function basename(path: string): string {

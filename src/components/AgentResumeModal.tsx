@@ -1,10 +1,7 @@
 import { Copy, History, Play } from "lucide-react";
 import { useMemo, type ReactElement } from "react";
-import {
-  api,
-  type AgentKind,
-  type ResumeCandidate,
-} from "../lib/api";
+import { api, type AgentKind, type ResumeCandidate } from "../lib/api";
+import { buildAgentResumeCommand } from "../lib/agentProvider";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -28,7 +25,6 @@ interface AgentResumeModalProps {
 }
 
 interface AgentCopy {
-  resumeCommand: (uuid: string) => string;
   bodyKey: DialogTranslationKey;
   ariaLabelledBy: string;
 }
@@ -41,12 +37,10 @@ function dt(t: Translator, key: DialogTranslationKey): string {
 
 const COPY: Record<AgentKind, AgentCopy> = {
   claude: {
-    resumeCommand: (uuid) => `claude --resume ${uuid}`,
     bodyKey: "dialogs.agentResume.bodyClaude",
     ariaLabelledBy: "acorn-claude-resume-title",
   },
   codex: {
-    resumeCommand: (uuid) => `codex resume ${uuid}`,
     bodyKey: "dialogs.agentResume.bodyCodex",
     ariaLabelledBy: "acorn-codex-resume-title",
   },
@@ -94,7 +88,7 @@ export function AgentResumeModal({
     // PTYs expect a carriage return (`\r`, what xterm sends when the
     // user presses Enter) to commit a line. Using `\n` lands as a
     // literal LF in zsh's line buffer instead of running the command.
-    const cmd = `${copy.resumeCommand(candidate.uuid)}\r`;
+    const cmd = `${buildAgentResumeCommand(agent, candidate.uuid)}\r`;
     void api.ptyWrite(sessionId, cmd).catch((err: unknown) => {
       console.error("[AgentResumeModal] failed to write resume cmd", err);
     });
@@ -130,7 +124,7 @@ export function AgentResumeModal({
     // `#`, and run it. Multi-line hints would need bracketed-paste
     // escapes to keep zle from collapsing the two `\r`s into one
     // input row; a single line dodges that entire problem.
-    const hint = `# ${copy.resumeCommand(candidate.uuid)}\r`;
+    const hint = `# ${buildAgentResumeCommand(agent, candidate.uuid)}\r`;
     void api.ptyWrite(sessionId, hint).catch((err: unknown) => {
       console.error("[AgentResumeModal] failed to write cancel hint", err);
     });

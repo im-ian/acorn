@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "./types";
-import { suggestSessionName } from "./sessionName";
+import { suggestLocalSessionName, suggestSessionName } from "./sessionName";
 
 function session(name: string): Session {
   return {
@@ -69,5 +69,20 @@ describe("suggestSessionName", () => {
     expect(suggestSessionName("/Users/x/acorn/", [], "regular", true)).toBe(
       "acorn-worktree-1",
     );
+  });
+});
+
+describe("suggestLocalSessionName", () => {
+  it("uses a terminal namespace independent of cwd basename", () => {
+    expect(suggestLocalSessionName([])).toBe("terminal");
+  });
+
+  it("bumps numeric suffix on collision", () => {
+    expect(
+      suggestLocalSessionName([
+        session("terminal"),
+        session("terminal-2"),
+      ]),
+    ).toBe("terminal-3");
   });
 });

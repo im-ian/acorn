@@ -54,12 +54,12 @@
     "sessions": {
       "confirmRemove": {
         "label": "세션 제거 전 확인",
-        "hint": "격리된 worktree는 delete-worktree 선택이 여전히 중요하므로 항상 확인합니다.",
+        "hint": "linked worktree는 delete-worktree 선택이 여전히 중요하므로 항상 확인합니다.",
         "checkbox": "확인 대화상자 표시"
       },
       "closeOnExit": {
         "label": "프로세스 종료 시 탭 닫기",
-        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. 어느 쪽이든 worktree는 보존됩니다.",
+        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. linked worktree는 그래도 처리 방식을 묻습니다.",
         "checkbox": "종료 시 자동 닫기"
       },
       "background": {
@@ -515,17 +515,20 @@
       "newSessionInProject": "이 프로젝트에 새 세션 만들기",
       "newControlSessionInProject": "이 프로젝트에 새 컨트롤 세션 만들기",
       "dragToReorderSession": "세션 순서를 바꾸려면 드래그",
+      "localTerminalSessions": "로컬 터미널 세션",
       "worktree": "worktree",
       "controlSession": "컨트롤 세션"
     },
+    "localTerminals": {
+      "title": "채팅",
+      "newSession": "새 채팅",
+      "empty": "더블클릭하면 채팅을 시작할 수 있습니다."
+    },
     "emptyProject": {
-      "prefix": "세션이 없습니다.",
-      "connector": "또는",
-      "suffix": "로 추가하거나 여기를 더블 클릭하세요."
+      "createSession": "더블클릭하면 세션을 시작할 수 있습니다."
     },
     "emptyProjects": {
-      "prefix": "아직 프로젝트가 없습니다.",
-      "suffix": "를 클릭해 추가하세요."
+      "openProject": "클릭하면 프로젝트를 열 수 있습니다."
     },
     "metadata": {
       "name": "이름",
@@ -545,6 +548,7 @@
     },
     "aria": {
       "worktree": "워크트리",
+      "controlSession": "컨트롤 세션",
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"
     },
@@ -797,6 +801,7 @@
       "title": "세션 제거",
       "confirmPrefix": "세션 제거",
       "isolatedWorktree": "격리된 worktree입니다:",
+      "linkedWorktree": "이 세션은 linked git worktree를 사용 중입니다:",
       "deleteWorktreeQuestion": "디스크에서도 worktree를 삭제할까요?",
       "filesIn": "다음 위치의 파일은",
       "willNotBeTouched": "변경되지 않습니다.",
@@ -813,6 +818,8 @@
       "willBeRemoved": "제거됩니다",
       "isolatedWorktreeSingular": "격리된 worktree",
       "isolatedWorktreePlural": "격리된 worktree",
+      "linkedWorktreeSingular": "linked worktree",
+      "linkedWorktreePlural": "linked worktree",
       "closeKeepWorktrees": "닫기 · worktree 유지",
       "closeDeleteWorktrees": "닫기 · worktree 삭제",
       "closeProject": "프로젝트 닫기"

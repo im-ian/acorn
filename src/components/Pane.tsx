@@ -1,4 +1,5 @@
 import {
+  Bot,
   CircleX,
   Columns2,
   Copy,
@@ -28,6 +29,8 @@ import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
+  buildAgentForkCommand,
+  providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
@@ -46,12 +49,24 @@ import {
 import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
+import {
+  buildSessionCreateRequestFromScope,
+  resolveProjectScopedForRepoPath,
+  scopeForSession,
+  type SessionCreateScope,
+} from "../lib/sessionCreation";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import { Tooltip } from "./Tooltip";
-import type { Session, SessionKind, SessionStatus } from "../lib/types";
+import type {
+  Session,
+  SessionAgentProvider,
+  SessionKind,
+  SessionStatus,
+} from "../lib/types";
 import {
   makeSessionWorkspaceTab,
   type CodeWorkspaceTab,
@@ -73,6 +88,8 @@ const STATUS_ICON: Record<SessionStatus, string> = {
   failed: "text-danger",
   completed: "text-accent/60",
 };
+
+const EMPTY_PANE_DOUBLE_SPACE_MS = 500;
 
 type PaneTranslationKey = Extract<TranslationKey, `pane.${string}`>;
 
@@ -170,6 +187,18 @@ export function Pane({ paneId }: PaneProps) {
   }, [pane, tabs]);
 
   const isFocused = focusedPaneId === paneId;
+  const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
+
+  function scopeForTab(tab: PaneTab): SessionCreateScope {
+    if (tab.kind === "session") return scopeForSession(tab.session);
+    return {
+      repoPath: tab.repoPath,
+      projectScoped: resolveProjectScopedForRepoPath(
+        { sessions, projects },
+        tab.repoPath,
+      ),
+    };
+  }
 
   // Spawn a new session in the given project. Triggered by double-clicking
   // the empty pane body or the tab strip. `setFocusedPane` first so
@@ -179,10 +208,28 @@ export function Pane({ paneId }: PaneProps) {
   async function spawnSession(
     repoPath: string,
     kind: SessionKind = "regular",
+    scope: SessionCreateScope = {
+      repoPath,
+      projectScoped: resolveProjectScopedForRepoPath(
+        { sessions, projects },
+        repoPath,
+      ),
+    },
   ) {
     setFocusedPane(paneId);
-    const name = suggestSessionName(repoPath, sessions);
-    await createSession(name, repoPath, false, kind);
+    const request = buildSessionCreateRequestFromScope(
+      { sessions, projects },
+      scope,
+      { kind },
+    );
+    await createSession(
+      request.name,
+      request.repoPath,
+      request.isolated,
+      request.kind,
+      request.agentProvider,
+      request.projectScoped,
+    );
   }
 
   // Fork an existing claude/codex conversation into a new Acorn session.
@@ -197,17 +244,24 @@ export function Pane({ paneId }: PaneProps) {
   // args intact.
   async function forkSession(
     parent: Session,
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) {
     setFocusedPane(paneId);
-    const name = suggestSessionName(parent.repo_path, sessions);
+    const request = buildSessionCreateRequestFromScope(
+      { sessions, projects },
+      scopeForSession(parent),
+      { isolated, kind: "regular", agentProvider: kind },
+    );
     try {
       const created = await api.createSession(
-        name,
-        parent.repo_path,
-        isolated,
+        request.name,
+        request.repoPath,
+        request.isolated,
+        request.kind,
+        request.agentProvider,
+        request.projectScoped,
       );
       // Claude resolves `--resume <uuid>` by looking under
       // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
@@ -225,18 +279,17 @@ export function Pane({ paneId }: PaneProps) {
       // before queuing the resume. Codex stores rollouts cwd-
       // independently under `$CODEX_HOME/sessions/`, so neither branch
       // requires staging for codex.
-      if (kind === "claude" && isolated) {
+      if (providerRequiresForkTranscriptPrep(kind) && isolated) {
         try {
           await api.prepareClaudeFork(parentAgentId, created.worktree_path);
         } catch (err) {
           console.error("[Pane] prepare_claude_fork failed", err);
         }
       }
-      const command =
-        kind === "claude"
-          ? `claude --resume ${parentAgentId} --fork-session`
-          : `codex fork ${parentAgentId}`;
-      useAppStore.getState().setPendingTerminalInput(created.id, command);
+      const command = buildAgentForkCommand(kind, parentAgentId);
+      useAppStore.getState().setPendingTerminalInput(created.id, command, {
+        agentProvider: kind,
+      });
       await useAppStore.getState().refreshAll();
       selectTab(created.id);
     } catch (err) {
@@ -246,21 +299,59 @@ export function Pane({ paneId }: PaneProps) {
 
   async function handleNewTabFromStrip() {
     if (tabs.length === 0) return;
-    await spawnSession(tabs[0].repoPath);
+    const anchor = active ?? tabs[0];
+    await spawnSession(anchor.repoPath, "regular", scopeForTab(anchor));
   }
 
   async function handleNewTabFromEmpty() {
     // Prefer the pane's project if any tabs exist (shouldn't here), else use
     // the globally active project. With no project at all, do nothing.
+    const anchor = active ?? tabs[0] ?? null;
     const repoPath =
-      tabs[0]?.repoPath ??
-      useAppStore.getState().activeProject ??
-      null;
+      anchor?.repoPath ?? useAppStore.getState().activeProject ?? null;
     if (!repoPath) return;
-    await spawnSession(repoPath);
+    await spawnSession(
+      repoPath,
+      "regular",
+      anchor
+        ? scopeForTab(anchor)
+        : {
+            repoPath,
+            projectScoped: resolveProjectScopedForRepoPath(
+              { sessions, projects },
+              repoPath,
+            ),
+          },
+    );
   }
 
   const hasProjects = projects.length > 0;
+
+  useEffect(() => {
+    if (!isFocused || active || !hasProjects) {
+      lastEmptyPaneSpaceKeyDownAtRef.current = null;
+      return;
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (isNonTerminalTextEditingTarget(e.target)) return;
+      if (!isSpaceKeyEvent(e) || e.repeat) {
+        lastEmptyPaneSpaceKeyDownAtRef.current = null;
+        return;
+      }
+      e.preventDefault();
+      const now = e.timeStamp;
+      const previous = lastEmptyPaneSpaceKeyDownAtRef.current;
+      lastEmptyPaneSpaceKeyDownAtRef.current = now;
+      if (previous !== null && now - previous <= EMPTY_PANE_DOUBLE_SPACE_MS) {
+        lastEmptyPaneSpaceKeyDownAtRef.current = null;
+        void handleNewTabFromEmpty();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, handleNewTabFromEmpty, hasProjects, isFocused]);
 
   return (
     <div
@@ -304,8 +395,8 @@ export function Pane({ paneId }: PaneProps) {
               splitSide: "after",
             });
           }}
-          onDuplicate={(repoPath, kind) => {
-            void spawnSession(repoPath, kind);
+          onDuplicate={(repoPath, kind, projectScoped) => {
+            void spawnSession(repoPath, kind, { repoPath, projectScoped });
           }}
           onFork={(parent, kind, parentAgentId, isolated) => {
             void forkSession(parent, kind, parentAgentId, isolated);
@@ -364,7 +455,10 @@ export function Pane({ paneId }: PaneProps) {
             }}
           />
         )}
-        <PaneDropOverlay paneId={paneId} />
+        <PaneDropOverlay
+          paneId={paneId}
+          acceptFileDrops={active?.kind !== "session"}
+        />
       </div>
       <ContextMenu
         open={paneMenu !== null}
@@ -384,16 +478,6 @@ export function Pane({ paneId }: PaneProps) {
       />
     </div>
   );
-}
-
-function suggestSessionName(repoPath: string, existing: Session[]): string {
-  const base =
-    repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
-  const taken = new Set(existing.map((s) => s.name));
-  if (!taken.has(base)) return base;
-  let n = 2;
-  while (taken.has(`${base}-${n}`)) n += 1;
-  return `${base}-${n}`;
 }
 
 function EmptyPane({
@@ -438,6 +522,18 @@ function EmptyPane({
   );
 }
 
+function isSpaceKeyEvent(e: KeyboardEvent): boolean {
+  return e.code === "Space" || e.key === " " || e.key === "Spacebar";
+}
+
+function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(".xterm")) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
+}
+
 interface TabStripProps {
   paneId: PaneId;
   tabs: PaneTab[];
@@ -450,10 +546,14 @@ interface TabStripProps {
   ) => void;
   onNewTab: () => void;
   onSplitTab: (tabId: string, direction: Direction) => void;
-  onDuplicate: (repoPath: string, kind: SessionKind) => void;
+  onDuplicate: (
+    repoPath: string,
+    kind: SessionKind,
+    projectScoped: boolean,
+  ) => void;
   onFork: (
     parent: Session,
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) => void;
@@ -548,7 +648,12 @@ function TabStrip({
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
           onDuplicate={
             tab.kind === "session"
-              ? () => onDuplicate(tab.session.repo_path, tab.session.kind)
+              ? () =>
+                  onDuplicate(
+                    tab.session.repo_path,
+                    tab.session.kind,
+                    tab.session.project_scoped !== false,
+                  )
               : undefined
           }
           onFork={
@@ -575,6 +680,7 @@ function TabStrip({
         and double-click here too).
       */}
       <div
+        data-pane-tab-filler={paneId}
         className="min-w-[2.5rem] flex-1"
         onDoubleClick={(e) => {
           if (e.target !== e.currentTarget) return;
@@ -597,7 +703,7 @@ interface TabItemProps {
   onSplitTab: (direction: Direction) => void;
   onDuplicate?: () => void;
   onFork?: (
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) => void;
@@ -837,15 +943,6 @@ function TabItem({
         ref={registerRef}
         role="button"
         tabIndex={0}
-        draggable={!editing}
-        style={
-          !editing
-            ? ({ WebkitUserDrag: "element" } as CSSProperties)
-            : undefined
-        }
-        onDragStart={(e) => {
-          setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
-        }}
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
           e.stopPropagation();
@@ -870,54 +967,72 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex min-w-[80px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
+          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
         )}
       >
-        {agentProvider ? (
-          <Tooltip label={agentProvider} side="bottom">
-            <AgentProviderIcon
-              provider={agentProvider}
+        <div
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch"
+          data-tab-drag-handle={tab.id}
+          draggable
+          style={{ WebkitUserDrag: "element" } as CSSProperties}
+          onDragStart={(e) => {
+            if (editing) setEditing(false);
+            setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
+          }}
+        >
+          {agentProvider ? (
+            <Tooltip label={agentProvider} side="bottom">
+              <AgentProviderIcon
+                provider={agentProvider}
+                className={cn(
+                  "pointer-events-none size-2.5",
+                  session && STATUS_ICON[session.status],
+                )}
+              />
+            </Tooltip>
+          ) : (
+            <span
               className={cn(
-                "pointer-events-none size-2.5",
-                session && STATUS_ICON[session.status],
+                "pointer-events-none size-1.5 shrink-0 rounded-full",
+                session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
               )}
             />
-          </Tooltip>
-        ) : (
-          <span
-            className={cn(
-              "pointer-events-none size-1.5 rounded-full",
-              session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
-            )}
-          />
-        )}
-        {editing ? (
-          <TabRenameInput
-            initial={tab.title}
-            onSubmit={async (next) => {
-              setEditing(false);
-              if (session && next && next !== session.name) {
-                await renameSession(session.id, next);
-              }
-            }}
-            onCancel={() => setEditing(false)}
-          />
-        ) : (
-          <span className="pointer-events-none max-w-[12rem] truncate leading-5">
-            {tab.title}
-          </span>
-        )}
-        {session &&
-        (liveInWorktree ?? (session.isolated || session.in_worktree)) ? (
-          <GitBranch
-            size={10}
-            className="pointer-events-none text-fg-muted"
-            aria-label={paneT(t, "pane.aria.worktree")}
-          />
-        ) : null}
+          )}
+          {editing ? (
+            <TabRenameInput
+              initial={tab.title}
+              onSubmit={async (next) => {
+                setEditing(false);
+                if (session && next && next !== session.name) {
+                  await renameSession(session.id, next);
+                }
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <span className="pointer-events-none max-w-[12rem] truncate leading-5">
+              {tab.title}
+            </span>
+          )}
+          {session &&
+          (liveInWorktree ?? hasRecordedWorktree(session)) ? (
+            <GitBranch
+              size={10}
+              className="pointer-events-none shrink-0 text-fg-muted"
+              aria-label={paneT(t, "pane.aria.worktree")}
+            />
+          ) : null}
+          {session?.kind === "control" ? (
+            <Bot
+              size={10}
+              className="pointer-events-none shrink-0 text-accent"
+              aria-label={paneT(t, "pane.aria.controlSession")}
+            />
+          ) : null}
+        </div>
         <button
           type="button"
           aria-label={
@@ -925,13 +1040,22 @@ function TabItem({
               ? paneT(t, "pane.aria.closeSession")
               : paneT(t, "pane.aria.closeTab")
           }
+          data-tab-close-button={tab.id}
+          draggable={false}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
+          onDragStart={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
           onClick={(e) => {
             e.stopPropagation();
             onClose();
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
-            "ml-auto mr-1 shrink-0 rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+            "ml-1 mr-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
             active
               ? "opacity-70 hover:opacity-100"
               : "opacity-0 group-hover:opacity-70 hover:opacity-100",
@@ -972,10 +1096,17 @@ function TabRenameInput({ initial, onSubmit, onCancel }: TabRenameInputProps) {
     <input
       ref={inputRef}
       type="text"
+      data-tab-rename-input
       autoFocus
       value={value}
+      draggable={false}
       onChange={(e) => setValue(e.target.value)}
       onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onDragStart={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
       onKeyDown={(e) => {
         e.stopPropagation();
         if (e.key === "Enter") {
