@@ -153,6 +153,13 @@ test.describe("terminal: IME (PR #104 regression)", () => {
   }) => {
     await seed(tauri);
     await activateTerminal(page);
+    await page.addStyleTag({
+      content: `
+        :root[data-acorn-theme="acorn-dark"] {
+          --color-accent: rgb(12, 34, 56);
+        }
+      `,
+    });
 
     await runIme(page, [
       { type: "keydown", key: "Process", keyCode: 229 },
@@ -174,6 +181,18 @@ test.describe("terminal: IME (PR #104 regression)", () => {
         compositionView.evaluate((el) => getComputedStyle(el).backgroundColor),
       )
       .toBe("rgb(0, 0, 0)");
+    await expect
+      .poll(async () =>
+        compositionView.evaluate((el) =>
+          getComputedStyle(el, "::after").backgroundColor,
+        ),
+      )
+      .toBe("rgb(12, 34, 56)");
+    await expect
+      .poll(async () =>
+        compositionView.evaluate((el) => getComputedStyle(el, "::after").width),
+      )
+      .toBe("3px");
 
     await runIme(page, [
       {
