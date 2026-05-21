@@ -37,6 +37,7 @@ import { useAppStore } from "../store";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
 
 const REPO = "/Users/me/repo";
+const HOME = "/Users/me";
 
 function project(repoPath: string): Project {
   return {
@@ -47,12 +48,13 @@ function project(repoPath: string): Project {
   };
 }
 
-function session(id: string): Session {
+function session(id: string, overrides: Partial<Session> = {}): Session {
   return {
     id,
     name: id,
-    repo_path: REPO,
-    worktree_path: `${REPO}/.worktrees/${id}`,
+    repo_path: overrides.repo_path ?? REPO,
+    worktree_path:
+      overrides.worktree_path ?? `${overrides.repo_path ?? REPO}/.worktrees/${id}`,
     branch: `feat/${id}`,
     isolated: false,
     status: "idle",
@@ -63,6 +65,7 @@ function session(id: string): Session {
     owner: { kind: "user" },
     position: null,
     in_worktree: false,
+    ...overrides,
   };
 }
 
@@ -156,6 +159,77 @@ describe("Pane empty state", () => {
       false,
       "regular",
       null,
+    );
+  });
+
+  it("keeps tab-strip double-click creation in local chat scope", async () => {
+    const local = session("local-session", {
+      name: "terminal",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    const created = session("local-session-2", {
+      name: "terminal-2",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([local, created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [local],
+      activeProject: HOME,
+      activeSessionId: local.id,
+      activeTabId: local.id,
+      workspaces: {
+        ...s.workspaces,
+        [HOME]: {
+          layout: { kind: "pane", id: "root" },
+          panes: {
+            root: {
+              id: "root",
+              tabIds: [local.id],
+              activeTabId: local.id,
+            },
+          },
+          focusedPaneId: "root",
+        },
+      },
+      layout: { kind: "pane", id: "root" },
+      panes: {
+        root: {
+          id: "root",
+          tabIds: [local.id],
+          activeTabId: local.id,
+        },
+      },
+      focusedPaneId: "root",
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const filler = container.querySelector('[data-pane-tab-filler="root"]');
+    expect(filler).not.toBeNull();
+
+    await act(async () => {
+      filler?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "terminal-2",
+      HOME,
+      false,
+      "regular",
+      null,
+      false,
     );
   });
 });

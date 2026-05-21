@@ -515,17 +515,20 @@
       "newSessionInProject": "New session in this project",
       "newControlSessionInProject": "New control session in this project",
       "dragToReorderSession": "Drag to reorder session",
+      "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
       "controlSession": "control session"
     },
+    "localTerminals": {
+      "title": "Chats",
+      "newSession": "New chat",
+      "empty": "Double-click to start a chat."
+    },
     "emptyProject": {
-      "prefix": "No sessions. Add one with",
-      "connector": "or",
-      "suffix": ", or double-click here."
+      "createSession": "Double-click to start a session."
     },
     "emptyProjects": {
-      "prefix": "No projects yet. Click",
-      "suffix": "to add one."
+      "openProject": "Click to open a project."
     },
     "metadata": {
       "name": "Name",
