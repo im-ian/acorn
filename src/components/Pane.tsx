@@ -455,7 +455,10 @@ export function Pane({ paneId }: PaneProps) {
             }}
           />
         )}
-        <PaneDropOverlay paneId={paneId} />
+        <PaneDropOverlay
+          paneId={paneId}
+          acceptFileDrops={active?.kind !== "session"}
+        />
       </div>
       <ContextMenu
         open={paneMenu !== null}
