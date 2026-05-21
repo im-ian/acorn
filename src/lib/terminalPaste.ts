@@ -2,8 +2,25 @@ export const CODEX_IMAGE_PASTE_CONTROL = "\x16";
 
 type TerminalPasteInput = {
   text: string;
-  fileCount: number;
+  hasFilePayload: boolean;
   codexActive: boolean;
+};
+
+type ClipboardFilePayloadInput = {
+  files?: { length: number } | null;
+  items?: {
+    length: number;
+    [index: number]: ClipboardItemLike | undefined;
+  } | null;
+  types?:
+    | { length: number; [index: number]: string | undefined }
+    | readonly string[]
+    | null;
+};
+
+type ClipboardItemLike = {
+  kind?: string;
+  type?: string;
 };
 
 export type TerminalPasteAction =
@@ -12,15 +29,42 @@ export type TerminalPasteAction =
   | { kind: "send"; data: string }
   | { kind: "handled" };
 
+export function hasClipboardFilePayload(
+  data: ClipboardFilePayloadInput | null | undefined,
+): boolean {
+  if (!data) return false;
+  if ((data.files?.length ?? 0) > 0) return true;
+
+  const items = data.items;
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item?.kind === "file" || item?.type?.startsWith("image/")) {
+        return true;
+      }
+    }
+  }
+
+  const types = data.types;
+  if (types) {
+    for (let i = 0; i < types.length; i++) {
+      const type = types[i];
+      if (type === "Files" || type?.startsWith("image/")) return true;
+    }
+  }
+
+  return false;
+}
+
 export function terminalPasteAction({
   text,
-  fileCount,
+  hasFilePayload,
   codexActive,
 }: TerminalPasteInput): TerminalPasteAction {
   if (text) {
     return { kind: "pasteText", text };
   }
-  if (fileCount > 0) {
+  if (hasFilePayload) {
     return codexActive
       ? { kind: "send", data: CODEX_IMAGE_PASTE_CONTROL }
       : { kind: "native" };
