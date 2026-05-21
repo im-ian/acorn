@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "./types";
 import { suggestLocalSessionName, suggestSessionName } from "./sessionName";
 
@@ -16,6 +16,18 @@ function session(name: string): Session {
     last_message: null,
   } as Session;
 }
+
+function mockRandomUuid(...uuids: ReturnType<Crypto["randomUUID"]>[]) {
+  const spy = vi.spyOn(crypto, "randomUUID");
+  for (const uuid of uuids) {
+    spy.mockReturnValueOnce(uuid);
+  }
+  return spy;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("suggestSessionName", () => {
   it("uses repo basename for a fresh regular session", () => {
@@ -38,36 +50,42 @@ describe("suggestSessionName", () => {
     );
   });
 
-  // Regression: isolated sessions used to inherit the same naming as regular
-  // ones (`acorn`), which collided with the existing `acorn` branch the
-  // moment libgit2 tried to auto-create a worktree branch — see
-  // `create_unique_worktree` in src-tauri/src/commands.rs.
-  it("uses `{repo}-worktree-{n}` for the first isolated session", () => {
+  it("uses `{repo}-worktree-{random}` for isolated sessions", () => {
+    mockRandomUuid("a3f5527e-9c10-4000-8000-000000000000");
+
     expect(suggestSessionName("/Users/x/acorn", [], "regular", true)).toBe(
-      "acorn-worktree-1",
+      "acorn-worktree-a3f5527e9c10",
     );
   });
 
-  it("bumps the worktree suffix on collision for isolated sessions", () => {
-    const existing = [session("acorn-worktree-1"), session("acorn-worktree-2")];
+  it("retries on random-name collision for isolated sessions", () => {
+    mockRandomUuid(
+      "a3f5527e-9c10-4000-8000-000000000000",
+      "b4c66311-2d21-4000-8000-000000000000",
+    );
+    const existing = [session("acorn-worktree-a3f5527e9c10")];
+
     expect(suggestSessionName("/Users/x/acorn", existing, "regular", true)).toBe(
-      "acorn-worktree-3",
+      "acorn-worktree-b4c663112d21",
     );
   });
 
   it("isolated naming ignores regular-session collisions in the same repo", () => {
-    // A regular session named `acorn` should not consume the
-    // `acorn-worktree-1` slot — the two namespaces are independent.
+    mockRandomUuid("a3f5527e-9c10-4000-8000-000000000000");
+    // A regular session named `acorn` should not consume the isolated
+    // worktree namespace.
     const existing = [session("acorn"), session("acorn-2")];
     expect(suggestSessionName("/Users/x/acorn", existing, "regular", true)).toBe(
-      "acorn-worktree-1",
+      "acorn-worktree-a3f5527e9c10",
     );
   });
 
   it("strips trailing separators when computing basename", () => {
+    mockRandomUuid("a3f5527e-9c10-4000-8000-000000000000");
+
     expect(suggestSessionName("/Users/x/acorn/", [])).toBe("acorn");
     expect(suggestSessionName("/Users/x/acorn/", [], "regular", true)).toBe(
-      "acorn-worktree-1",
+      "acorn-worktree-a3f5527e9c10",
     );
   });
 });
