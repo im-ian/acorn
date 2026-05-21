@@ -386,9 +386,8 @@ function ServicesStatusButton() {
   }, [ipc.busy, refreshIpc]);
 
   const openDaemonSettings = useCallback(() => {
-    // Sessions tab houses the daemon panel as a sub-section.
     window.dispatchEvent(
-      new CustomEvent("acorn:open-settings", { detail: { tab: "sessions" } }),
+      new CustomEvent("acorn:open-settings", { detail: { tab: "services" } }),
     );
     setOpen(false);
   }, []);

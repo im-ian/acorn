@@ -87,6 +87,33 @@ function openAppearanceTab() {
   });
 }
 
+function openInterfaceTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Interface" ||
+      element.textContent === "인터페이스",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Interface tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function openTerminalTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Terminal" || element.textContent === "터미널",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Terminal tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 function openGithubTab() {
   const button = Array.from(document.querySelectorAll("button")).find(
     (element) => element.textContent === "GitHub",
@@ -157,6 +184,10 @@ describe("SettingsModal font controls", () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const fontFamily = document.querySelector<HTMLInputElement>("input");
     const patchTerminal = useSettings.getState().patchTerminal;
@@ -199,12 +230,12 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
-  it("edits Appearance UI scale with presets only", async () => {
+  it("edits Interface UI scale with presets only", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
-    openAppearanceTab();
+    openInterfaceTab();
     await act(async () => {
       await Promise.resolve();
     });
@@ -230,7 +261,7 @@ describe("SettingsModal font controls", () => {
     });
   });
 
-  it("renders the Appearance language selector in Korean and patches changes", async () => {
+  it("renders the Interface language selector in Korean and patches changes", async () => {
     const patchLanguage = vi.fn();
     useSettings.setState({
       settings: {
@@ -244,13 +275,13 @@ describe("SettingsModal font controls", () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
-    openAppearanceTab();
+    openInterfaceTab();
     await act(async () => {
       await Promise.resolve();
     });
 
     expect(document.body.textContent).toContain("설정");
-    expect(document.body.textContent).toContain("모양");
+    expect(document.body.textContent).toContain("인터페이스");
     expect(document.body.textContent).toContain("언어");
 
     const languageSelect = Array.from(
@@ -283,11 +314,13 @@ describe("SettingsModal font controls", () => {
     });
 
     for (const label of [
+      "인터페이스",
+      "모양",
       "터미널",
       "에이전트",
       "세션",
+      "서비스",
       "GitHub",
-      "모양",
       "편집기",
       "알림",
       "저장 공간",
@@ -302,7 +335,7 @@ describe("SettingsModal font controls", () => {
 
     expect(document.body.textContent).toContain("설정");
     expect(document.body.textContent).toContain("기본값으로 재설정");
-    expect(document.body.textContent).toContain("글꼴 패밀리");
+    expect(document.body.textContent).toContain("언어");
   });
 
   it("patches the GitHub PR row display toggles", async () => {

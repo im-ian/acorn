@@ -80,7 +80,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Gemini / Ollama / l
 ### 🛏️ Background sessions
 - Acorn 앱을 종료·재시작해도 **PTY 세션이 그대로 살아 있음** — 다시 열면 화면도 복원
 - 기본 ON. 끄면 기존 동작(앱 종료 시 세션 같이 종료)으로 폴백
-- Settings → Sessions에서 상태 확인, 재시작·종료 제어
+- Settings → Services에서 상태 확인, 재시작·종료 제어
 - 세션별 Kill / Restore / Forget 액션
 - 상태 표시줄 아이콘 → 드롭다운으로 서비스 상태 한눈에 확인
 

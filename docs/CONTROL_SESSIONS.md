@@ -33,7 +33,7 @@ Three entry points:
   opening a new tab.
 
 The first time you create one, Acorn shows a one-time guide. You can re-open
-it from Settings → Sessions → "Control sessions" or by clearing
+it from Settings → Services → "Control sessions" or by clearing
 `localStorage["acorn:control-guide-dismissed-v1"]`.
 
 A control session shows a small `Bot` accessory icon next to its name in the
@@ -149,7 +149,7 @@ out of the box.
 You only need a system-wide install when you want to call `acorn-ipc`
 from **outside** an Acorn terminal (debugging from your own shell, an
 external script, a Makefile, …). In that case use the Settings shortcut
-under Sessions → "Control sessions", which generates a single-line
+under Services → "Control sessions", which generates a single-line
 `ln -sf` command pointing at the bundled binary. The Copy button lands
 the command on your clipboard; paste it into a terminal and run it.
 
@@ -169,7 +169,7 @@ will even start. Plain `cargo build -p acorn-ipc --bin acorn-ipc` skips the stag
 step, so the build fails with
 `resource path 'binaries/acorn-ipc-...' doesn't exist`.
 
-Settings → Sessions → "Control sessions" shows the resolved binary path
+Settings → Services → "Control sessions" shows the resolved binary path
 Acorn currently sees (it looks for `acorn-ipc` next to the running app
 binary; once the release bundle ships the CLI, that lookup will succeed
 out of the box) and a one-click "Copy install command" for whatever shim
