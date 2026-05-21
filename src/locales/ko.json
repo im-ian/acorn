@@ -68,12 +68,17 @@
     "sessions": {
       "confirmRemove": {
         "label": "세션 제거 전 확인",
-        "hint": "linked worktree는 delete-worktree 선택이 여전히 중요하므로 항상 확인합니다.",
+        "hint": "일반 세션에 적용됩니다. worktree가 있는 세션은 아래 worktree 삭제 설정을 따릅니다.",
         "checkbox": "확인 대화상자 표시"
+      },
+      "autoDeleteWorktrees": {
+        "label": "묻지 않고 worktree 삭제",
+        "hint": "격리 또는 linked worktree를 사용하는 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 worktree를 항상 삭제합니다.",
+        "checkbox": "worktree가 있는 세션은 항상 디스크에서도 삭제"
       },
       "closeOnExit": {
         "label": "프로세스 종료 시 탭 닫기",
-        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. linked worktree는 그래도 처리 방식을 묻습니다.",
+        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. worktree가 있는 세션은 위 worktree 삭제 설정을 따릅니다.",
         "checkbox": "종료 시 자동 닫기"
       },
       "background": {

@@ -147,12 +147,24 @@ function App() {
   );
   const removeSession = useAppStore((s) => s.removeSession);
   const removeProject = useAppStore((s) => s.removeProject);
+  const confirmRemoveSession = useSettings(
+    (s) => s.settings.sessions.confirmRemove,
+  );
+  const autoDeleteWorktrees = useSettings(
+    (s) => s.settings.sessions.autoDeleteWorktrees,
+  );
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
   const pendingProjectSessions = pendingProject
     ? sessions.filter((s) => s.repo_path === pendingProject.repo_path)
     : [];
+  const pendingRemoveRecordedWorktree =
+    pendingRemove !== null && hasRecordedWorktree(pendingRemove);
+  const pendingRemoveSkipsDialog =
+    pendingRemove !== null &&
+    ((pendingRemoveRecordedWorktree && autoDeleteWorktrees) ||
+      (!pendingRemoveRecordedWorktree && !confirmRemoveSession));
   const sessionIdsKey = useMemo(
     () => sessions.map((session) => session.id).join("\0"),
     [sessions],
@@ -663,16 +675,27 @@ function App() {
     };
   }, [activeSessionId, sessionIdsKey]);
 
-  // Skip the confirmation dialog for plain sessions when the user has opted
-  // out via Settings. Recorded worktrees still prompt because the
-  // delete-worktree choice matters.
+  // Skip the confirmation dialog when Settings gives a deterministic removal
+  // choice: plain sessions can skip confirmation, and worktree-backed sessions
+  // can opt into always deleting the worktree from disk.
   useEffect(() => {
     if (!pendingRemove) return;
-    const confirm = useSettings.getState().settings.sessions.confirmRemove;
-    if (confirm || hasRecordedWorktree(pendingRemove)) return;
+    const recordedWorktree = hasRecordedWorktree(pendingRemove);
+    if (recordedWorktree && autoDeleteWorktrees) {
+      clearPendingRemove();
+      removeSession(pendingRemove.id, true);
+      return;
+    }
+    if (confirmRemoveSession || recordedWorktree) return;
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
-  }, [pendingRemove, clearPendingRemove, removeSession]);
+  }, [
+    pendingRemove,
+    autoDeleteWorktrees,
+    clearPendingRemove,
+    confirmRemoveSession,
+    removeSession,
+  ]);
 
   // Restore the root layout (sidebar + right panel) and equalize the
   // workspace pane splits when the command palette fires the reset event.
@@ -1193,7 +1216,7 @@ function App() {
         }}
       />
       <RemoveSessionDialog
-        session={pendingRemove}
+        session={pendingRemoveSkipsDialog ? null : pendingRemove}
         onClose={(choice) => {
           const target = pendingRemove;
           clearPendingRemove();
