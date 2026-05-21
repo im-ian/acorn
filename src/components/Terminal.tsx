@@ -34,7 +34,10 @@ import {
   shouldRestoreScrollback,
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
-import { terminalPasteAction } from "../lib/terminalPaste";
+import {
+  hasClipboardFilePayload,
+  terminalPasteAction,
+} from "../lib/terminalPaste";
 import {
   useSettings,
   type TerminalCursorStyle,
@@ -57,6 +60,7 @@ interface TerminalProps {
   sessionId: string;
   cwd: string;
   agentProvider?: SessionAgentProvider | null;
+  pasteAgentProvider?: SessionAgentProvider | null;
   /**
    * When the terminal is hidden behind another tab in the same pane and then
    * made visible again, the DOM renderer can leave the rows blank because it
@@ -470,6 +474,7 @@ export function Terminal({
   sessionId,
   cwd,
   agentProvider = null,
+  pasteAgentProvider = null,
   isActive = true,
   isFocusedPane = true,
 }: TerminalProps): ReactElement {
@@ -477,10 +482,16 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const pasteAgentProviderRef =
+    useRef<SessionAgentProvider | null>(pasteAgentProvider);
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
   } | null>(null);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
+
+  useEffect(() => {
+    pasteAgentProviderRef.current = pasteAgentProvider;
+  }, [pasteAgentProvider]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -632,14 +643,15 @@ export function Terminal({
     let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
     let daemonSessionAliveAtMount = false;
-    let codexImagePasteActive = false;
+    let codexImagePasteActive = pasteAgentProviderRef.current === "codex";
 
     const refreshAgentDetection = () => {
       void api
         .detectSessionAgent(sessionId)
         .then((agent) => {
           if (disposed) return;
-          codexImagePasteActive = Boolean(agent.codex);
+          codexImagePasteActive =
+            pasteAgentProviderRef.current === "codex" || Boolean(agent.codex);
         })
         .catch((err: unknown) => {
           console.debug("[Terminal] agent detection failed", err);
@@ -1254,11 +1266,13 @@ export function Terminal({
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
+      if (!cd) return;
       const text = cd?.getData("text/plain") ?? "";
       const action = terminalPasteAction({
         text,
-        fileCount: cd?.files?.length ?? 0,
-        codexActive: codexImagePasteActive,
+        hasFilePayload: hasClipboardFilePayload(cd),
+        codexActive:
+          codexImagePasteActive || pasteAgentProviderRef.current === "codex",
       });
       if (action.kind === "native") return;
       if (action.kind === "pasteText") term.paste(action.text);

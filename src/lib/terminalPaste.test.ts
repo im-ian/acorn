@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CODEX_IMAGE_PASTE_CONTROL,
+  hasClipboardFilePayload,
   terminalPasteAction,
 } from "./terminalPaste";
 
@@ -9,7 +10,7 @@ describe("terminalPasteAction", () => {
     expect(
       terminalPasteAction({
         text: "",
-        fileCount: 1,
+        hasFilePayload: true,
         codexActive: true,
       }),
     ).toEqual({ kind: "send", data: CODEX_IMAGE_PASTE_CONTROL });
@@ -19,7 +20,7 @@ describe("terminalPasteAction", () => {
     expect(
       terminalPasteAction({
         text: "",
-        fileCount: 1,
+        hasFilePayload: true,
         codexActive: false,
       }),
     ).toEqual({ kind: "native" });
@@ -29,9 +30,44 @@ describe("terminalPasteAction", () => {
     expect(
       terminalPasteAction({
         text: "hello",
-        fileCount: 1,
+        hasFilePayload: true,
         codexActive: true,
       }),
     ).toEqual({ kind: "pasteText", text: "hello" });
+  });
+});
+
+describe("hasClipboardFilePayload", () => {
+  it("accepts file payloads exposed through files", () => {
+    expect(hasClipboardFilePayload({ files: { length: 1 } })).toBe(true);
+  });
+
+  it("accepts image payloads exposed only through clipboard items", () => {
+    expect(
+      hasClipboardFilePayload({
+        files: { length: 0 },
+        items: { length: 1, 0: { kind: "string", type: "image/png" } },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts image payloads exposed only through clipboard types", () => {
+    expect(
+      hasClipboardFilePayload({
+        files: { length: 0 },
+        items: { length: 0 },
+        types: { length: 1, 0: "image/tiff" },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects plain text clipboard payloads", () => {
+    expect(
+      hasClipboardFilePayload({
+        files: { length: 0 },
+        items: { length: 1, 0: { kind: "string", type: "text/plain" } },
+        types: { length: 1, 0: "text/plain" },
+      }),
+    ).toBe(false);
   });
 });

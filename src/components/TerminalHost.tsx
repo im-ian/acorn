@@ -99,6 +99,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       sessionId={session.id}
       cwd={session.worktree_path}
       agentProvider={resolveSessionAgentProvider(session)}
+      pasteAgentProvider={session.agent_provider ?? null}
       isActive={visiblePaneId !== null}
       isFocusedPane={isFocusedPane}
     />,
