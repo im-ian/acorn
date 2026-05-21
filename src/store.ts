@@ -446,6 +446,17 @@ function findPaneContainingTab(
   return null;
 }
 
+function findSessionOwner(
+  state: AppStateModel,
+  id: string,
+): { repoPath: string; paneId: PaneId } | null {
+  for (const [repoPath, ws] of Object.entries(state.workspaces)) {
+    const paneId = findPaneContainingTab(ws.panes, id);
+    if (paneId) return { repoPath, paneId };
+  }
+  return null;
+}
+
 function updateActiveWorkspace(
   s: AppStateModel,
   updater: (ws: ProjectWorkspace) => ProjectWorkspace,
@@ -1140,42 +1151,57 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async removeSession(id, removeWorktree = false) {
-    try {
-      // Track which project + pane held this session so we can collapse the
-      // pane after reconcile if removing the tab leaves it empty. We only
-      // collapse panes that *became* empty as a side effect of this close —
-      // pre-existing empty panes (e.g. a split waiting for a drop target)
-      // stay untouched.
-      const before = get();
-      let owning: { repoPath: string; paneId: PaneId } | null = null;
-      for (const [repoPath, ws] of Object.entries(before.workspaces)) {
-        for (const [pid, p] of Object.entries(ws.panes)) {
-          if (p.tabIds.includes(id)) {
-            owning = { repoPath, paneId: pid as PaneId };
-            break;
-          }
-        }
-        if (owning) break;
-      }
+    const owning = findSessionOwner(get(), id);
+    set((s) => {
+      if (!s.sessions.some((session) => session.id === id)) return s;
 
-      await api.removeSession(id, removeWorktree);
-      await get().refreshAll();
+      const sessions = s.sessions.filter((session) => session.id !== id);
+      const reconciled = reconcileWorkspaces(
+        sessions,
+        s.projects,
+        s.workspaces,
+        s.activeProject,
+        true,
+      );
+      const liveInWorktree = { ...s.liveInWorktree };
+      delete liveInWorktree[id];
+      const pendingTerminalInput = { ...s.pendingTerminalInput };
+      delete pendingTerminalInput[id];
 
-      if (!owning) return;
+      return {
+        sessions,
+        sessionsLoadedCleanly: true,
+        error: null,
+        liveInWorktree,
+        pendingTerminalInput,
+        workspaces: reconciled.workspaces,
+        activeProject: reconciled.activeProject,
+        ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
+      };
+    });
+
+    if (owning) {
       const after = get();
       const ws = after.workspaces[owning.repoPath];
-      if (!ws) return;
-      const pane = ws.panes[owning.paneId];
-      if (!pane) return;
-      if (pane.tabIds.length > 0) return;
-      if (Object.keys(ws.panes).length <= 1) return;
-      // Only auto-collapse for the currently active workspace's panes —
-      // closePane operates on the active workspace, so applying it to a
-      // background project would silently misfire.
-      if (after.activeProject !== owning.repoPath) return;
-      get().closePane(owning.paneId);
+      const pane = ws?.panes[owning.paneId];
+      if (
+        ws &&
+        pane &&
+        pane.tabIds.length === 0 &&
+        Object.keys(ws.panes).length > 1 &&
+        after.activeProject === owning.repoPath
+      ) {
+        get().closePane(owning.paneId);
+      }
+    }
+
+    try {
+      await api.removeSession(id, removeWorktree);
+      await get().refreshAll();
     } catch (e) {
-      set({ error: errorMessage(e) });
+      const message = errorMessage(e);
+      await get().refreshAll();
+      set({ error: message });
     }
   },
 
