@@ -89,5 +89,5 @@ The plugin no-ops in `vite build` and is not loaded by Vitest (it only injects v
 
 ## When in doubt
 
-- Reading: `docs/TESTING.md`, `docs/E2E_TESTING.md`, `docs/PR_LABELS.md`, `docs/COMMENTS.md`.
+- Reading: `docs/TESTING.md`, `docs/E2E_TESTING.md`, `docs/PR_LABELS.md`, `docs/COMMENTS.md`, `docs/CONTROL_SESSIONS.md` (acorn-ipc CLI + control session env table).
 - Patterns: search `src/` first for similar code already in the repo. Match its shape.
