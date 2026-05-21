@@ -5,6 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
+fn default_true() -> bool {
+    true
+}
+
 /// Errors produced by `SessionStore` lookups. Kept local so the crate does
 /// not need to share `AppError` with the main `acorn` crate; the main crate
 /// adapts via `From<SessionError>`.
@@ -209,6 +213,11 @@ pub struct Session {
     pub branch: String,
     #[serde(default)]
     pub isolated: bool,
+    /// Whether this session belongs to a project entry. Older persisted
+    /// sessions predate this field and should keep their project-scoped
+    /// behavior.
+    #[serde(default = "default_true")]
+    pub project_scoped: bool,
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -275,6 +284,7 @@ impl Session {
             worktree_path,
             branch,
             isolated,
+            project_scoped: true,
             status: SessionStatus::Idle,
             created_at: now,
             updated_at: now,

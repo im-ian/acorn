@@ -43,3 +43,14 @@ export function suggestSessionName(
   }
   return candidate;
 }
+
+export function suggestLocalSessionName(existing: Session[]): string {
+  const taken = new Set(existing.map((s) => s.name));
+  const base = "terminal";
+  let candidate = base;
+  let n = 2;
+  while (taken.has(candidate)) {
+    candidate = `${base}-${n++}`;
+  }
+  return candidate;
+}

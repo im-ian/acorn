@@ -161,6 +161,7 @@ interface AppStateModel {
     isolated?: boolean,
     kind?: SessionKind,
     agentProvider?: SessionAgentProvider | null,
+    projectScoped?: boolean,
   ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
@@ -424,7 +425,11 @@ function reconcileWorkspaces(
     const withSession = projects.find(
       (p) => (byProject[p.repo_path]?.length ?? 0) > 0,
     );
-    newActive = withSession?.repo_path ?? projects[0]?.repo_path ?? null;
+    newActive =
+      withSession?.repo_path ??
+      projects[0]?.repo_path ??
+      sessions[0]?.repo_path ??
+      null;
   }
 
   return { workspaces: newWorkspaces, activeProject: newActive };
@@ -993,6 +998,7 @@ export const useAppStore = create<AppStateModel>()(
     isolated = false,
     kind = "regular",
     agentProvider = null,
+    projectScoped = true,
   ) {
     set({ loading: true, error: null });
     try {
@@ -1012,13 +1018,23 @@ export const useAppStore = create<AppStateModel>()(
         return idx >= 0 ? { paneId, idx } : null;
       })();
 
-      const created = await api.createSession(
-        name,
-        repoPath,
-        isolated,
-        kind,
-        agentProvider,
-      );
+      const created =
+        projectScoped === false
+          ? await api.createSession(
+              name,
+              repoPath,
+              isolated,
+              kind,
+              agentProvider,
+              false,
+            )
+          : await api.createSession(
+              name,
+              repoPath,
+              isolated,
+              kind,
+              agentProvider,
+            );
       await get().refreshAll();
 
       // Reorder so the new tab sits immediately after the previously-active

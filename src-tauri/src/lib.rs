@@ -53,6 +53,28 @@ impl Write for NonPanickingStderr {
     }
 }
 
+fn remove_empty_home_project_mirror(state: &AppState) -> bool {
+    let Some(home) = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) else {
+        return false;
+    };
+    if state
+        .sessions
+        .list()
+        .iter()
+        .any(|session| session.project_scoped && session.repo_path == home)
+    {
+        return false;
+    }
+    let removed = state.projects.remove(&home).is_some();
+    if removed {
+        tracing::info!(
+            path = %home.display(),
+            "removed stale local home project mirror"
+        );
+    }
+    removed
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -238,6 +260,9 @@ pub fn run() {
             // that has no project entry (e.g. older versions that did not
             // persist projects).
             for session in state.sessions.list() {
+                if !session.project_scoped {
+                    continue;
+                }
                 let name = session
                     .repo_path
                     .file_name()
@@ -245,6 +270,11 @@ pub fn run() {
                     .unwrap_or("project")
                     .to_string();
                 state.projects.ensure(session.repo_path.clone(), name);
+            }
+            if remove_empty_home_project_mirror(&state) {
+                if let Err(err) = persistence::save_projects(&state.projects.list()) {
+                    tracing::warn!("failed to persist projects after local mirror cleanup: {err}");
+                }
             }
             // Drop scrollback files that no longer have a matching session.
             // Skip when the session load was unclean — otherwise a transient
