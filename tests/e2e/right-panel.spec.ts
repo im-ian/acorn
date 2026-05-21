@@ -101,6 +101,48 @@ test.describe("right panel: tab switching", () => {
     ).toBeVisible();
   });
 
+  test("double-clicking a staged worktree file opens it as a code tab", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveWorktreeSession(tauri);
+    await tauri.respond("list_staged", [
+      {
+        path: "src/components/Terminal.tsx",
+        status: "staged-modified",
+      },
+    ]);
+    await tauri.respond("staged_file_diff", { files: [] });
+    await tauri.handle("fs_read_file", (args) => {
+      const w = window as unknown as { __readFilePaths?: string[] };
+      w.__readFilePaths = w.__readFilePaths ?? [];
+      w.__readFilePaths.push((args as { path: string }).path);
+      return {
+        content: "export function Terminal() {}",
+        size: 29,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Staged" }).click();
+    await page.getByText("src/components/Terminal.tsx").dblclick();
+
+    await expect(
+      page.getByRole("button", { name: /Terminal\.tsx Close tab/ }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __readFilePaths?: string[] })
+              .__readFilePaths ?? [],
+        ),
+      )
+      .toContain("/tmp/demo/.acorn/worktrees/demo-1/src/components/Terminal.tsx");
+  });
+
   test("null read_session_todos does not crash the panel (regression)", async ({
     page,
     tauri,
