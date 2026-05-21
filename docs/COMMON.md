@@ -56,7 +56,7 @@ Two recurring traps in E2E:
 
 ```sh
 pnpm install
-pnpm run build:sidecar  # stage acorn-ipc — required for fresh checkouts / worktrees
+pnpm run build:sidecar  # stage Rust sidecars — required for fresh checkouts / worktrees
 pnpm run tauri dev      # full app (Rust + Vite)
 pnpm run dev            # Vite only — frontend in browser, no Tauri
 pnpm run test           # Vitest
@@ -65,7 +65,15 @@ pnpm run typecheck
 pnpm run build          # tsc + vite build
 ```
 
-`src-tauri/binaries/acorn-ipc-<target-triple>` is `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without it, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `pnpm run build:sidecar` once per worktree (and again after any IPC change); plain `cargo build -p acorn-ipc --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
+`src-tauri/binaries/<name>-<target-triple>` sidecars are `.gitignore`d, so every fresh checkout — including each new `git worktree add` — starts without them, and Tauri's `externalBin` existence check fails the build before anything else runs. Run `pnpm run build:sidecar` once per worktree (and again after any sidecar change); plain `cargo build -p acorn-ipc --bin acorn-ipc` is not enough because it skips the target-tripled staging step. See [`docs/CONTROL_SESSIONS.md`](CONTROL_SESSIONS.md#the-acorn-ipc-cli) for details.
+
+For local Rust work across multiple Acorn worktrees, set `CARGO_TARGET_DIR` to a shared directory outside the worktree so Cargo can reuse dependency artifacts across worktrees:
+
+```sh
+export CARGO_TARGET_DIR=/path/to/acorn/.acorn/cargo-target
+```
+
+`src-tauri/scripts/build-sidecar.sh` honours the same setting when staging Tauri sidecars. Keep this as a local environment setting rather than a committed default so CI and release builds keep their normal per-workspace target layout.
 
 **Launching `tauri dev` from inside a control session.** Acorn injects `ACORN_DATA_DIR` (and `ACORN_AGENT_STATE_DIR`, `ACORN_RESUME_TOKEN`, `ACORN_STAGED_REV`) into every control-session PTY so the bundled CLIs talk to the host profile. `acorn-paths::data_dir` honours `ACORN_DATA_DIR` ahead of the debug/release profile fallback, so a plain `pnpm run tauri dev` from that shell silently runs the debug build against `profiles/prod` — same daemon, same `sessions.json`, same staged shell-init dir as the installed app. Strip the overrides before launching:</p>
 
