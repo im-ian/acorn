@@ -4,9 +4,7 @@ import { extractTabFromEvent } from "./settings-events";
 
 describe("extractTabFromEvent", () => {
   it("returns the string payload when given a non-empty string", () => {
-    expect(extractTabFromEvent("background-sessions")).toBe(
-      "background-sessions",
-    );
+    expect(extractTabFromEvent("services")).toBe("services");
   });
 
   it("returns the tab field from an object payload", () => {

@@ -247,7 +247,7 @@ export const api = {
    * Inspect the runtime environment for the `acorn-ipc` CLI: bundled binary
    * location and presence, the IPC socket path, and which of the common
    * `$PATH` shim locations already have a copy/symlink installed. Used by
-   * the Sessions → Control sessions settings section.
+   * the Services → Control sessions settings section.
    */
   getAcornIpcStatus(): Promise<AcornIpcStatus> {
     return invoke<AcornIpcStatus>("get_acorn_ipc_status");

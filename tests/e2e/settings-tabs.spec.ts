@@ -17,6 +17,22 @@ const TAB_MARKERS: Array<{
   marker: { kind: "text"; pattern: RegExp } | { kind: "heading"; name: string };
 }> = [
   {
+    tab: /^(Interface|인터페이스)$/,
+    label: "Interface",
+    marker: {
+      kind: "text",
+      pattern: /UI scale|UI 배율/i,
+    },
+  },
+  {
+    tab: /^(Appearance|모양)$/,
+    label: "Appearance",
+    marker: {
+      kind: "text",
+      pattern: /Background image|배경 이미지/i,
+    },
+  },
+  {
     tab: /^(Terminal|터미널)$/,
     label: "Terminal",
     marker: {
@@ -35,6 +51,22 @@ const TAB_MARKERS: Array<{
     marker: {
       kind: "text",
       pattern: /Confirm before removing|세션 제거 전 확인/i,
+    },
+  },
+  {
+    tab: /^(Services|서비스)$/,
+    label: "Services",
+    marker: {
+      kind: "text",
+      pattern: /Bundled binary|번들 바이너리/i,
+    },
+  },
+  {
+    tab: /^GitHub$/,
+    label: "GitHub",
+    marker: {
+      kind: "text",
+      pattern: /Refresh interval|새로고침 간격/i,
     },
   },
   {
@@ -101,11 +133,13 @@ test.describe("settings modal: tab content", () => {
     await expect(modal).toBeVisible();
 
     for (const tab of [
+      "인터페이스",
+      "모양",
       "터미널",
       "에이전트",
       "세션",
+      "서비스",
       "GitHub",
-      "모양",
       "편집기",
       "알림",
       "저장 공간",
@@ -117,7 +151,7 @@ test.describe("settings modal: tab content", () => {
       ).toBeVisible();
     }
 
-    await modal.getByRole("button", { name: "모양", exact: true }).click();
+    await modal.getByRole("button", { name: "인터페이스", exact: true }).click();
     await expect(modal.getByText("언어", { exact: true })).toBeVisible();
     await expect(modal.getByRole("combobox", { name: "언어" })).toHaveValue(
       "ko",
@@ -125,6 +159,9 @@ test.describe("settings modal: tab content", () => {
     await expect(
       modal.getByRole("button", { name: "기본값으로 재설정" }),
     ).toBeVisible();
+
+    await modal.getByRole("button", { name: "모양", exact: true }).click();
+    await expect(modal.getByText("테마", { exact: true })).toBeVisible();
 
     await modal.getByRole("button", { name: "터미널", exact: true }).click();
     await expect(modal.getByText("글꼴 패밀리")).toBeVisible();

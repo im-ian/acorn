@@ -19,7 +19,7 @@ test.describe("control session: settings install section", () => {
     await pressHotkey(page, { mod: true, key: "," });
     const modal = page.getByRole("dialog", { name: /Settings/i });
     await expect(modal).toBeVisible();
-    await modal.getByRole("button", { name: "Sessions", exact: true }).click();
+    await modal.getByRole("button", { name: "Services", exact: true }).click();
 
     // The section heading is the visible label of the Field wrapping the
     // install card. Matching on the field label keeps us decoupled from
@@ -70,7 +70,7 @@ test.describe("control session: settings install section", () => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });
     const modal = page.getByRole("dialog", { name: /Settings/i });
-    await modal.getByRole("button", { name: "Sessions", exact: true }).click();
+    await modal.getByRole("button", { name: "Services", exact: true }).click();
 
     // Match the badge text exactly so we don't collide with the
     // "Installed shim" label that lives in the same card.
@@ -96,7 +96,7 @@ test.describe("control session: settings install section", () => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });
     const modal = page.getByRole("dialog", { name: /Settings/i });
-    await modal.getByRole("button", { name: "Sessions", exact: true }).click();
+    await modal.getByRole("button", { name: "Services", exact: true }).click();
 
     await expect(modal.getByText("missing", { exact: true })).toBeVisible();
     // No install command should render when the binary is absent — there

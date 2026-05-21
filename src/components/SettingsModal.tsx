@@ -59,11 +59,13 @@ import {
 } from "./ui";
 
 type Tab =
+  | "interface"
+  | "appearance"
   | "terminal"
   | "agents"
   | "sessions"
+  | "services"
   | "github"
-  | "appearance"
   | "editor"
   | "notifications"
   | "storage"
@@ -71,11 +73,13 @@ type Tab =
   | "about";
 
 const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
+  { id: "interface", labelKey: "settings.tabs.interface" },
+  { id: "appearance", labelKey: "settings.tabs.appearance" },
   { id: "terminal", labelKey: "settings.tabs.terminal" },
   { id: "agents", labelKey: "settings.tabs.agents" },
   { id: "sessions", labelKey: "settings.tabs.sessions" },
+  { id: "services", labelKey: "settings.tabs.services" },
   { id: "github", labelKey: "settings.tabs.github" },
-  { id: "appearance", labelKey: "settings.tabs.appearance" },
   { id: "editor", labelKey: "settings.tabs.editor" },
   { id: "notifications", labelKey: "settings.tabs.notifications" },
   { id: "storage", labelKey: "settings.tabs.storage" },
@@ -108,11 +112,11 @@ export function SettingsModal() {
   const reset = useSettings((s) => s.reset);
   const pendingTab = useSettings((s) => s.pendingTab);
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
-  const [tab, setTab] = useState<Tab>("terminal");
+  const [tab, setTab] = useState<Tab>("interface");
   const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
-  // dispatched `acorn:open-settings` with `tab: "background-sessions"`),
+  // dispatched `acorn:open-settings` with `tab: "services"`),
   // jump there on the next render and clear the flag so subsequent
   // opens restore the user's manual tab choice. Subscribing to
   // `pendingTab` (not just `open`) makes the deep-link work even when
@@ -176,16 +180,20 @@ export function SettingsModal() {
           </div>
         </nav>
         <div className="flex-1 overflow-y-auto p-4">
-          {tab === "terminal" ? (
+          {tab === "interface" ? (
+            <InterfaceSettings t={t} />
+          ) : tab === "appearance" ? (
+            <AppearanceSettings />
+          ) : tab === "terminal" ? (
             <TerminalSettings />
           ) : tab === "agents" ? (
             <AgentSettings />
           ) : tab === "sessions" ? (
             <SessionSettings />
+          ) : tab === "services" ? (
+            <ServicesSettings />
           ) : tab === "github" ? (
             <GithubSettings />
-          ) : tab === "appearance" ? (
-            <AppearanceSettings t={t} />
           ) : tab === "editor" ? (
             <EditorSettings />
           ) : tab === "notifications" ? (
@@ -378,42 +386,47 @@ function SessionSettings() {
   const t = useTranslation();
 
   return (
+    <section className="space-y-4">
+      <Field
+        label={st(t, "settings.sessions.confirmRemove.label")}
+        hint={st(t, "settings.sessions.confirmRemove.hint")}
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={settings.sessions.confirmRemove}
+            onChange={(e) =>
+              patchSessions({ confirmRemove: e.target.checked })
+            }
+            className="accent-[var(--color-accent)]"
+          />
+          {st(t, "settings.sessions.confirmRemove.checkbox")}
+        </label>
+      </Field>
+      <Field
+        label={st(t, "settings.sessions.closeOnExit.label")}
+        hint={st(t, "settings.sessions.closeOnExit.hint")}
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={settings.sessions.closeOnExit}
+            onChange={(e) => patchSessions({ closeOnExit: e.target.checked })}
+            className="accent-[var(--color-accent)]"
+          />
+          {st(t, "settings.sessions.closeOnExit.checkbox")}
+        </label>
+      </Field>
+    </section>
+  );
+}
+
+function ServicesSettings() {
+  const t = useTranslation();
+
+  return (
     <section className="space-y-6">
-      <div className="space-y-4">
-        <Field
-          label={st(t, "settings.sessions.confirmRemove.label")}
-          hint={st(t, "settings.sessions.confirmRemove.hint")}
-        >
-          <label className="flex items-center gap-2 text-xs text-fg">
-            <input
-              type="checkbox"
-              checked={settings.sessions.confirmRemove}
-              onChange={(e) =>
-                patchSessions({ confirmRemove: e.target.checked })
-              }
-              className="accent-[var(--color-accent)]"
-            />
-            {st(t, "settings.sessions.confirmRemove.checkbox")}
-          </label>
-        </Field>
-        <Field
-          label={st(t, "settings.sessions.closeOnExit.label")}
-          hint={st(t, "settings.sessions.closeOnExit.hint")}
-        >
-          <label className="flex items-center gap-2 text-xs text-fg">
-            <input
-              type="checkbox"
-              checked={settings.sessions.closeOnExit}
-              onChange={(e) =>
-                patchSessions({ closeOnExit: e.target.checked })
-              }
-              className="accent-[var(--color-accent)]"
-            />
-            {st(t, "settings.sessions.closeOnExit.checkbox")}
-          </label>
-        </Field>
-        <ControlSessionInstallSection />
-      </div>
+      <ControlSessionInstallSection />
       <SettingsGroup
         title={st(t, "settings.sessions.background.title")}
         description={st(t, "settings.sessions.background.description")}
@@ -626,14 +639,13 @@ function GithubSettings() {
   );
 }
 
-function AppearanceSettings({ t }: { t: SettingsTranslator }) {
+function InterfaceSettings({ t }: { t: SettingsTranslator }) {
   const settings = useSettings((s) => s.settings);
   const patchLanguage = useSettings((s) => s.patchLanguage);
   const patchStatusBar = useSettings((s) => s.patchStatusBar);
   const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
   const patchAppearance = useSettings((s) => s.patchAppearance);
   const sessionDisplay = settings.sessionDisplay;
-  const appearance = settings.appearance;
 
   return (
     <section className="space-y-6">
@@ -642,17 +654,9 @@ function AppearanceSettings({ t }: { t: SettingsTranslator }) {
         onChange={patchLanguage}
         t={t}
       />
-      <ThemeSection
-        themeId={appearance.themeId}
-        onChange={(themeId) => patchAppearance({ themeId })}
-      />
       <UiScaleSection
-        value={appearance.uiScalePercent}
+        value={settings.appearance.uiScalePercent}
         onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
-      />
-      <BackgroundSection
-        state={appearance.background}
-        onChange={(background) => patchAppearance({ background })}
       />
       <SessionDisplaySection
         sessionDisplay={sessionDisplay}
@@ -661,6 +665,24 @@ function AppearanceSettings({ t }: { t: SettingsTranslator }) {
       <StatusBarSection
         statusBar={settings.statusBar}
         patch={patchStatusBar}
+      />
+    </section>
+  );
+}
+
+function AppearanceSettings() {
+  const appearance = useSettings((s) => s.settings.appearance);
+  const patchAppearance = useSettings((s) => s.patchAppearance);
+
+  return (
+    <section className="space-y-6">
+      <ThemeSection
+        themeId={appearance.themeId}
+        onChange={(themeId) => patchAppearance({ themeId })}
+      />
+      <BackgroundSection
+        state={appearance.background}
+        onChange={(background) => patchAppearance({ background })}
       />
     </section>
   );

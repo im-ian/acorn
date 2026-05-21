@@ -8,8 +8,8 @@
 
 /**
  * Pluck a tab id out of an open-settings event payload. Accepts:
- * * A bare string ("background-sessions").
- * * An object with a `tab` string property (`{ tab: "background-sessions" }`).
+ * * A bare string ("services").
+ * * An object with a `tab` string property (`{ tab: "services" }`).
  *
  * Returns `null` when no useable tab id can be extracted so the caller
  * falls back to a default `setOpen(true)` that preserves the user's
