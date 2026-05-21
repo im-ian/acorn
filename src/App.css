@@ -31,10 +31,10 @@
 }
 
 .acorn-terminal.acorn-terminal-composing .composition-view.active {
-  background: #000;
+  background: #000 !important;
   box-sizing: border-box;
   color: inherit;
-  overflow: hidden;
+  overflow: visible !important;
   white-space: pre;
 }
 
@@ -104,15 +104,8 @@
 }
 
 .acorn-terminal.acorn-terminal-cursor-pill .xterm-cursor::after {
-  background: var(--acorn-terminal-cursor-pill-color);
-  border-radius: 999px;
-  content: "";
-  display: block;
-  height: 100%;
-  left: 0;
-  position: absolute;
-  top: 0;
-  width: 3px;
+  content: none;
+  display: none;
 }
 
 .acorn-terminal-inactive .xterm-cursor,
