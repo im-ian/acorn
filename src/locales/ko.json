@@ -557,7 +557,9 @@
     "loading": "불러오는 중...",
     "binaryFile": "바이너리 파일",
     "binaryFileBody": "{bytes}바이트 - 읽기 전용 뷰어에 표시되지 않습니다.",
-    "truncated": "파일이 2 MB로 잘렸습니다. 나머지는 외부에서 열어 확인하세요."
+    "truncated": "파일이 2 MB로 잘렸습니다. 나머지는 외부에서 열어 확인하세요.",
+    "showPreview": "미리보기",
+    "showSource": "소스"
   },
   "diffView": {
     "noChanges": "이 diff에는 변경 사항이 없습니다.",

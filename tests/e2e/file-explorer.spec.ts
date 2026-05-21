@@ -89,4 +89,74 @@ test.describe("file explorer", () => {
       page.getByRole("button", { name: "App.tsx", exact: true }),
     ).toBeVisible();
   });
+
+  test("previews markdown files from a code viewer tab", async ({
+    page,
+    tauri,
+  }) => {
+    const repo = "/tmp/demo";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo") {
+        return { repo_root: "/tmp/demo", entries: [] };
+      }
+      return {
+        repo_root: "/tmp/demo",
+        entries: [
+          {
+            name: "README.md",
+            path: "/tmp/demo/README.md",
+            is_dir: false,
+            is_symlink: false,
+            size: 40,
+            modified_ms: 0,
+            gitignored: false,
+          },
+        ],
+      };
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo/README.md") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      return {
+        content: "# Project notes\n\n- [x] Markdown preview",
+        size: 40,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+
+    await page.getByRole("button", { name: "README.md" }).dblclick();
+
+    await expect(
+      page.getByRole("button", { name: /README\.md Close tab/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Project notes" }),
+    ).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Preview" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Project notes" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Source" })).toBeVisible();
+    await expect(page.getByText("Markdown preview")).toBeVisible();
+  });
 });

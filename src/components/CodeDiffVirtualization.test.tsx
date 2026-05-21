@@ -20,6 +20,10 @@ vi.mock("../lib/api", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(async () => undefined),
+}));
+
 import { api } from "../lib/api";
 import { CodeViewer } from "./CodeViewer";
 import { DiffView } from "./DiffView";
@@ -123,6 +127,40 @@ describe("virtualized code and diff rendering", () => {
     expect(renderedLines.length).toBeGreaterThan(0);
     expect(renderedLines.length).toBeLessThan(lineCount);
     expect(container.textContent).toContain("const line0 = 0;");
+    expect(container.querySelector('button[aria-pressed="false"]')).toBeNull();
+  });
+
+  it("toggles markdown files between source and preview", async () => {
+    const content = "# Title\n\n- [x] shipped";
+    vi.mocked(api.fsReadFile).mockResolvedValueOnce({
+      content,
+      size: content.length,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsGitDiffLines).mockResolvedValueOnce([]);
+
+    await act(async () => {
+      root.render(<CodeViewer path="/repo/README.md" isActive />);
+    });
+    await flushPromises();
+
+    expect(container.querySelector("h1")).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-pressed="false"]',
+    );
+    expect(toggle?.textContent).toContain("Preview");
+
+    await act(async () => {
+      toggle?.click();
+    });
+
+    expect(container.querySelector("h1")?.textContent).toBe("Title");
+    expect(container.querySelector("pre")).toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
+        ?.textContent,
+    ).toContain("Source");
   });
 
   it("copies selected text by source line in virtualized lists", () => {
