@@ -91,6 +91,21 @@ export interface Project {
 
 export type AgentHistoryProvider = "claude" | "codex";
 
+export interface AgentTranscriptEntry {
+  role: "user" | "assistant" | "system" | string;
+  text: string;
+  timestamp: string | null;
+  phase: string | null;
+}
+
+export interface AgentTranscriptSnapshot {
+  provider: AgentHistoryProvider;
+  transcriptPath: string;
+  updatedAt: number;
+  entries: AgentTranscriptEntry[];
+  truncated: boolean;
+}
+
 export interface AgentHistoryWorktree {
   name: string;
   path: string;
