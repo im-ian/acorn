@@ -55,8 +55,29 @@ pub fn list_agent_history(
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
     let mut items = Vec::new();
-    items.extend(scan_codex(&repo));
-    items.extend(scan_claude(&repo));
+    let scope = HistoryScope::Project(&repo);
+    items.extend(scan_codex(scope));
+    items.extend(scan_claude(scope));
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items.truncate(limit);
+    Ok(items)
+}
+
+pub fn list_unscoped_agent_history(
+    project_paths: Vec<PathBuf>,
+    limit: Option<usize>,
+) -> AppResult<Vec<AgentHistoryItem>> {
+    let projects = project_paths
+        .into_iter()
+        .map(|path| normalize_path(&path))
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect::<Vec<_>>();
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+
+    let mut items = Vec::new();
+    let scope = HistoryScope::Unscoped { projects: &projects };
+    items.extend(scan_codex(scope));
+    items.extend(scan_claude(scope));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -124,7 +145,33 @@ pub fn trash_agent_history_transcript(
     Ok(())
 }
 
-fn scan_codex(repo: &Path) -> Vec<AgentHistoryItem> {
+#[derive(Clone, Copy)]
+enum HistoryScope<'a> {
+    Project(&'a Path),
+    Unscoped { projects: &'a [PathBuf] },
+}
+
+impl HistoryScope<'_> {
+    fn accepts_cwd(self, cwd: &str) -> bool {
+        match self {
+            HistoryScope::Project(repo) => path_belongs_to_project(cwd, repo),
+            HistoryScope::Unscoped { projects } => !projects
+                .iter()
+                .any(|project| path_belongs_to_project(cwd, project)),
+        }
+    }
+
+    fn worktree_for_cwd(self, cwd: &str) -> Option<AgentHistoryWorktree> {
+        match self {
+            HistoryScope::Project(repo) => worktree_for_cwd(cwd, repo),
+            HistoryScope::Unscoped { .. } => {
+                discovered_worktree_for_cwd(cwd).or_else(|| managed_worktree_from_path(cwd))
+            }
+        }
+    }
+}
+
+fn scan_codex(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
     let Some(root) = codex_sessions_root() else {
         return Vec::new();
     };
@@ -138,11 +185,11 @@ fn scan_codex(repo: &Path) -> Vec<AgentHistoryItem> {
     });
     files
         .into_iter()
-        .filter_map(|path| parse_codex_file(&path, repo))
+        .filter_map(|path| parse_codex_file(&path, scope))
         .collect()
 }
 
-fn scan_claude(repo: &Path) -> Vec<AgentHistoryItem> {
+fn scan_claude(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
     let Some(root) = home_dir().map(|home| home.join(".claude")) else {
         return Vec::new();
     };
@@ -151,7 +198,7 @@ fn scan_claude(repo: &Path) -> Vec<AgentHistoryItem> {
     });
     files
         .into_iter()
-        .filter_map(|path| parse_claude_file(&path, repo))
+        .filter_map(|path| parse_claude_file(&path, scope))
         .collect()
 }
 
@@ -184,7 +231,7 @@ fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     out
 }
 
-fn parse_codex_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
+fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let mut state = ParsedAgentFile::default();
     for line in sample_lines(path).ok()? {
         let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
@@ -217,10 +264,10 @@ fn parse_codex_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
     }
 
     let cwd = state.cwd.clone()?;
-    if !path_belongs_to_project(&cwd, repo) {
+    if !scope.accepts_cwd(&cwd) {
         return None;
     }
-    let worktree = worktree_for_cwd(&cwd, repo);
+    let worktree = scope.worktree_for_cwd(&cwd);
     let id = state.id.or_else(|| codex_id_from_filename(path))?;
     let title = state
         .title
@@ -242,7 +289,7 @@ fn parse_codex_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
     })
 }
 
-fn parse_claude_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
+fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let mut state = ParsedAgentFile::default();
     for line in sample_lines(path).ok()? {
         let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
@@ -266,10 +313,10 @@ fn parse_claude_file(path: &Path, repo: &Path) -> Option<AgentHistoryItem> {
     }
 
     let cwd = state.cwd.clone()?;
-    if !path_belongs_to_project(&cwd, repo) {
+    if !scope.accepts_cwd(&cwd) {
         return None;
     }
-    let worktree = worktree_for_cwd(&cwd, repo);
+    let worktree = scope.worktree_for_cwd(&cwd);
     let id = state.id.or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
@@ -624,5 +671,50 @@ mod tests {
         .unwrap();
 
         assert!(codex_transcript_matches_id(&path, "payload-id"));
+    }
+
+    #[test]
+    fn unscoped_history_accepts_cwd_inside_unregistered_git_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let nested = repo.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        git2::Repository::init(&repo).unwrap();
+
+        let projects: Vec<PathBuf> = Vec::new();
+        let scope = HistoryScope::Unscoped {
+            projects: &projects,
+        };
+
+        assert!(scope.accepts_cwd(nested.to_str().unwrap()));
+    }
+
+    #[test]
+    fn unscoped_history_rejects_cwd_inside_registered_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let nested = project.join("src");
+        fs::create_dir_all(&nested).unwrap();
+
+        let projects = vec![normalize_path(&project)];
+        let scope = HistoryScope::Unscoped {
+            projects: &projects,
+        };
+
+        assert!(!scope.accepts_cwd(nested.to_str().unwrap()));
+    }
+
+    #[test]
+    fn unscoped_history_accepts_cwd_outside_git_repos_and_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("scratch");
+        fs::create_dir_all(&local).unwrap();
+
+        let projects: Vec<PathBuf> = Vec::new();
+        let scope = HistoryScope::Unscoped {
+            projects: &projects,
+        };
+
+        assert!(scope.accepts_cwd(local.to_str().unwrap()));
     }
 }

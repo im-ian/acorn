@@ -323,6 +323,84 @@ test.describe("right panel: groups", () => {
     await expect(page.getByRole("button", { name: "GitHub" })).toHaveCount(0);
   });
 
+  test("local chat focus hides Code and shows local agent history", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "local-codex",
+        name: "codex",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+        agent_provider: "codex",
+      },
+    ]);
+    await tauri.handle("pty_repo_root", () => null);
+    await tauri.handle("list_unscoped_agent_history", () => {
+      const w = window as unknown as { __unscopedHistoryCalls?: number };
+      w.__unscopedHistoryCalls = (w.__unscopedHistoryCalls ?? 0) + 1;
+      return [
+        {
+          provider: "codex",
+          id: "codex-local",
+          title: "Local Codex session",
+          preview: null,
+          cwd: "/Users/tester",
+          worktree: null,
+          transcript_path: "/Users/tester/.codex/session.jsonl",
+          updated_at: 1770000000,
+          resume_command: "codex resume codex-local",
+        },
+      ];
+    });
+
+    await page.goto("/");
+    const chats = page.getByRole("region", { name: "Local terminal sessions" });
+    await chats.getByRole("button", { name: /codex/i }).click();
+
+    await expect(
+      page.getByRole("button", { name: "Code", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "GitHub", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Agents", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Local Codex session")).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __unscopedHistoryCalls?: number })
+                .__unscopedHistoryCalls ?? 0,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBeGreaterThan(0);
+  });
+
   test("History sub-tab is labeled 'History' (renamed from 'Sessions')", async ({
     page,
     tauri,
