@@ -121,6 +121,20 @@ async function seed(
   await useAppStore.getState().refreshAll();
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   // resetAllMocks clears both call history *and* the queued
   // mockResolvedValueOnce return values; clearAllMocks leaves the queue
@@ -313,6 +327,50 @@ describe("workspace tabs", () => {
     expect(s.activeTabId).toBe("a1");
     expect(s.activeSessionId).toBe("a1");
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
+  });
+});
+
+describe("removeSession", () => {
+  it("removes the tab locally before the backend worktree delete finishes", async () => {
+    const a1 = session("a1", REPO_A, {
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+    });
+    const a2 = session("a2", REPO_A, {
+      worktree_path: `${REPO_A}/.worktrees/a2`,
+    });
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const pending = deferred<void>();
+    mockApi.removeSession.mockReturnValueOnce(pending.promise);
+    mockApi.listSessions.mockResolvedValue([a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const removal = useAppStore.getState().removeSession("a1", true);
+
+    expect(mockApi.removeSession).toHaveBeenCalledWith("a1", true);
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
+    expect(useAppStore.getState().activeSessionId).toBe("a2");
+
+    pending.resolve(undefined);
+    await removal;
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
+  });
+
+  it("refreshes from the backend if optimistic removal fails", async () => {
+    const a1 = session("a1", REPO_A);
+    await seed([project(REPO_A, 0)], [a1]);
+
+    mockApi.removeSession.mockRejectedValueOnce(new Error("delete failed"));
+    mockApi.listSessions.mockResolvedValue([a1]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    await useAppStore.getState().removeSession("a1", true);
+
+    const s = useAppStore.getState();
+    expect(s.error).toBe("delete failed");
+    expect(s.sessions.map((session) => session.id)).toEqual(["a1"]);
+    expect(s.activeSessionId).toBe("a1");
   });
 });
 
