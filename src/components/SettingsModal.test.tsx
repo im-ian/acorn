@@ -126,6 +126,19 @@ function openGithubTab() {
   });
 }
 
+function openShortcutsTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Shortcuts" || element.textContent === "단축키",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Shortcuts tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLInputElement.prototype,
@@ -355,6 +368,7 @@ describe("SettingsModal font controls", () => {
       "GitHub",
       "편집기",
       "알림",
+      "단축키",
       "저장 공간",
       "실험 기능",
       "정보",
@@ -368,6 +382,25 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("설정");
     expect(document.body.textContent).toContain("기본값으로 재설정");
     expect(document.body.textContent).toContain("언어");
+  });
+
+  it("renders shortcut hints with the edit-coming-soon notice", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openShortcutsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const bodyText = document.body.textContent ?? "";
+
+    expect(bodyText).toContain("Shortcut editing is coming soon.");
+    expect(bodyText).toContain("Open command palette");
+    expect(bodyText).toContain("New control session");
+    expect(bodyText).toContain("Right panel");
+    expect(bodyText).toMatch(/⌘P|Ctrl\+P/);
   });
 
   it("patches the GitHub PR row display toggles", async () => {

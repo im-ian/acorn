@@ -12,6 +12,7 @@
       "github": "GitHub",
       "editor": "편집기",
       "notifications": "알림",
+      "shortcuts": "단축키",
       "storage": "저장 공간",
       "experiments": "실험 기능",
       "about": "정보"
@@ -277,6 +278,113 @@
         }
       },
       "permissionHint": "처음 알림이 발생할 때 macOS가 한 번 권한을 요청할 수 있습니다."
+    },
+    "shortcuts": {
+      "editingSoon": "단축키 편집 기능은 준비 중이다.",
+      "groups": {
+        "general": "일반",
+        "navigation": "이동",
+        "layout": "레이아웃",
+        "rightPanel": "오른쪽 패널",
+        "terminal": "터미널",
+        "view": "보기"
+      },
+      "items": {
+        "openPalette": {
+          "label": "명령 팔레트 열기"
+        },
+        "openSettings": {
+          "label": "설정 열기"
+        },
+        "newSession": {
+          "label": "새 세션"
+        },
+        "newIsolatedSession": {
+          "label": "새 격리 세션"
+        },
+        "newControlSession": {
+          "label": "새 컨트롤 세션"
+        },
+        "addProject": {
+          "label": "프로젝트 추가"
+        },
+        "focusSidebar": {
+          "label": "사이드바로 포커스 이동"
+        },
+        "focusMain": {
+          "label": "메인 영역으로 포커스 이동"
+        },
+        "focusRight": {
+          "label": "오른쪽 패널로 포커스 이동"
+        },
+        "nextTab": {
+          "label": "다음 탭"
+        },
+        "prevTab": {
+          "label": "이전 탭"
+        },
+        "nextProject": {
+          "label": "다음 프로젝트"
+        },
+        "prevProject": {
+          "label": "이전 프로젝트"
+        },
+        "toggleSidebar": {
+          "label": "사이드바 열기/닫기"
+        },
+        "toggleRightPanel": {
+          "label": "오른쪽 패널 열기/닫기"
+        },
+        "splitVertical": {
+          "label": "Pane 세로 분할"
+        },
+        "splitHorizontal": {
+          "label": "Pane 가로 분할"
+        },
+        "equalizePanes": {
+          "label": "Pane 크기 균등화"
+        },
+        "closeTab": {
+          "label": "포커스된 탭 닫기"
+        },
+        "closeEmptyPane": {
+          "label": "빈 Pane 닫기",
+          "description": "포커스된 Pane에 탭이 없을 때만 작동합니다."
+        },
+        "toggleTodos": {
+          "label": "Todos 보기"
+        },
+        "toggleCommits": {
+          "label": "Commits 보기"
+        },
+        "toggleStaged": {
+          "label": "Staged 변경 보기"
+        },
+        "togglePrs": {
+          "label": "Pull requests 보기"
+        },
+        "toggleFiles": {
+          "label": "Files 보기"
+        },
+        "clearTerminal": {
+          "label": "터미널 지우기"
+        },
+        "toggleMultiInput": {
+          "label": "다중 입력 켜기/끄기"
+        },
+        "reloadShellEnv": {
+          "label": "셸 환경 다시 불러오기"
+        },
+        "uiScaleDown": {
+          "label": "UI 배율 줄이기"
+        },
+        "uiScaleUp": {
+          "label": "UI 배율 키우기"
+        },
+        "uiScaleReset": {
+          "label": "UI 배율 초기화"
+        }
+      }
     },
     "agents": {
       "intro": {
