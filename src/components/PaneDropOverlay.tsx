@@ -3,25 +3,34 @@ import { cn } from "../lib/cn";
 import {
   classifyDropZone,
   type DropZone,
+  getCurrentDragPayload,
+  getCurrentFilePayload,
   getCurrentTabPayload,
-  isAcornDrag,
-  useTabDragInProgress,
+  useAcornDragInProgress,
 } from "../lib/dnd";
 import { useAppStore } from "../store";
 import type { PaneId } from "../lib/layout";
 
 interface PaneDropOverlayProps {
   paneId: PaneId;
+  acceptFileDrops?: boolean;
 }
 
 /**
- * Edge + center drop overlay for a pane body. Renders only while a tab is
- * being dragged so it doesn't intercept normal pointer interactions. Drops
- * on edge zones split the target pane in that direction; drops on the center
- * append the moved tab into this pane.
+ * Edge + center drop overlay for a pane body. Tab drops can move or split
+ * panes; file drops open a code viewer tab when the pane body is allowed to
+ * handle files. Terminal panes opt out so xterm can keep accepting file
+ * mentions directly.
  */
-export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
-  const dragging = useTabDragInProgress();
+export function PaneDropOverlay({
+  paneId,
+  acceptFileDrops = true,
+}: PaneDropOverlayProps) {
+  const dragging = useAcornDragInProgress();
+  const dragPayload = dragging ? getCurrentDragPayload() : null;
+  const acceptsDrag =
+    dragPayload?.kind === "tab" ||
+    (acceptFileDrops && dragPayload?.kind === "file");
   const moveTab = useAppStore((s) => s.moveTab);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
@@ -33,6 +42,7 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
   }, [dragging, zone]);
 
   function computeZone(e: React.DragEvent): DropZone | null {
+    if (getCurrentFilePayload()) return { kind: "center" };
     const el = containerRef.current;
     if (!el) return null;
     const rect = el.getBoundingClientRect();
@@ -43,23 +53,23 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
   }
 
   // Always mount so the very first dragenter into a pane body is captured;
-  // toggle pointer-events so the overlay only intercepts events while a tab
-  // drag is actually in progress.
+  // toggle pointer-events so the overlay only intercepts drags this pane body
+  // can handle.
   return (
     <div
       ref={containerRef}
       className={
-        dragging
+        acceptsDrag
           ? "absolute inset-0 z-20"
           : "pointer-events-none absolute inset-0 z-20"
       }
       onDragEnter={(e) => {
-        if (!isAcornDrag(e)) return;
+        if (!acceptsDrag) return;
         e.preventDefault();
         setZone(computeZone(e));
       }}
       onDragOver={(e) => {
-        if (!isAcornDrag(e)) return;
+        if (!acceptsDrag) return;
         e.preventDefault();
         e.dataTransfer.dropEffect =
           getCurrentTabPayload() !== null ? "move" : "copy";
@@ -80,10 +90,16 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
         if (e.currentTarget === e.target) setZone(null);
       }}
       onDrop={(e) => {
-        if (!isAcornDrag(e)) return;
+        if (!acceptsDrag) return;
         e.preventDefault();
-        const target = computeZone(e);
         setZone(null);
+        const filePayload = getCurrentFilePayload();
+        if (filePayload) {
+          useAppStore.getState().setFocusedPane(paneId);
+          useAppStore.getState().openCodeViewerTab(filePayload.path);
+          return;
+        }
+        const target = computeZone(e);
         if (!target) return;
         const payload = getCurrentTabPayload();
         if (!payload) return;
