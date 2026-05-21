@@ -23,6 +23,7 @@ cd "$(dirname "$0")/.."
 
 profile="${TAURI_SIDECAR_PROFILE:-release}"
 target_triple="${TAURI_ENV_TARGET_TRIPLE:-$(rustc -vV | sed -n 's|host: ||p')}"
+target_dir="${CARGO_TARGET_DIR:-target}"
 
 if [ -z "$target_triple" ]; then
   echo "error: could not determine target triple (TAURI_ENV_TARGET_TRIPLE unset and \`rustc -vV\` produced no host line)" >&2
@@ -74,7 +75,7 @@ cargo build "${cargo_flags[@]}"
 
 for entry in "${sidecars[@]}"; do
   bin="${entry%%:*}"
-  src="target/$target_triple/$profile/$bin"
+  src="$target_dir/$target_triple/$profile/$bin"
   dest="$dest_dir/$bin-$target_triple"
   if [ ! -f "$src" ]; then
     echo "error: expected built binary at $src" >&2
