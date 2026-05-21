@@ -61,6 +61,12 @@ describe("formatHotkey", () => {
       expect(formatHotkey("Control+Tab")).toBe("⌃⇥");
       expect(formatHotkey("$mod+Alt+ArrowLeft")).toBe("⌥⌘←");
     });
+
+    it("renders `event.code` tokens as the bare letter/digit", () => {
+      expect(formatHotkey("$mod+Alt+KeyT")).toBe("⌥⌘T");
+      expect(formatHotkey("$mod+Alt+Shift+KeyT")).toBe("⌥⇧⌘T");
+      expect(formatHotkey("$mod+Digit3")).toBe("⌘3");
+    });
   });
 
   describe("off macOS", () => {
@@ -72,6 +78,11 @@ describe("formatHotkey", () => {
 
     it("keeps `+` separators and modifier order", () => {
       expect(formatHotkey("$mod+Shift+Alt+t")).toBe("Ctrl+Alt+Shift+T");
+    });
+
+    it("renders `event.code` tokens as the bare letter/digit", () => {
+      expect(formatHotkey("$mod+Alt+KeyT")).toBe("Ctrl+Alt+T");
+      expect(formatHotkey("$mod+Digit3")).toBe("Ctrl+3");
     });
   });
 });

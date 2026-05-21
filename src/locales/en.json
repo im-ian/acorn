@@ -545,6 +545,7 @@
     },
     "aria": {
       "worktree": "worktree",
+      "controlSession": "control session",
       "closeSession": "Close session",
       "closeTab": "Close tab"
     },
@@ -797,6 +798,7 @@
       "title": "Remove session",
       "confirmPrefix": "Remove session",
       "isolatedWorktree": "This is an isolated worktree:",
+      "linkedWorktree": "This session is using a linked git worktree:",
       "deleteWorktreeQuestion": "Also delete the worktree from disk?",
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
@@ -813,6 +815,8 @@
       "willBeRemoved": "will be removed",
       "isolatedWorktreeSingular": "isolated worktree",
       "isolatedWorktreePlural": "isolated worktrees",
+      "linkedWorktreeSingular": "linked worktree",
+      "linkedWorktreePlural": "linked worktrees",
       "closeKeepWorktrees": "Close · keep worktrees",
       "closeDeleteWorktrees": "Close · delete worktrees",
       "closeProject": "Close project"

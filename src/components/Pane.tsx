@@ -1,4 +1,5 @@
 import {
+  Bot,
   CircleX,
   Columns2,
   Copy,
@@ -28,6 +29,8 @@ import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
+  buildAgentForkCommand,
+  providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
@@ -46,12 +49,18 @@ import {
 import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
+import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import { Tooltip } from "./Tooltip";
-import type { Session, SessionKind, SessionStatus } from "../lib/types";
+import type {
+  Session,
+  SessionAgentProvider,
+  SessionKind,
+  SessionStatus,
+} from "../lib/types";
 import {
   makeSessionWorkspaceTab,
   type CodeWorkspaceTab,
@@ -73,6 +82,8 @@ const STATUS_ICON: Record<SessionStatus, string> = {
   failed: "text-danger",
   completed: "text-accent/60",
 };
+
+const EMPTY_PANE_DOUBLE_SPACE_MS = 500;
 
 type PaneTranslationKey = Extract<TranslationKey, `pane.${string}`>;
 
@@ -170,6 +181,7 @@ export function Pane({ paneId }: PaneProps) {
   }, [pane, tabs]);
 
   const isFocused = focusedPaneId === paneId;
+  const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
 
   // Spawn a new session in the given project. Triggered by double-clicking
   // the empty pane body or the tab strip. `setFocusedPane` first so
@@ -197,7 +209,7 @@ export function Pane({ paneId }: PaneProps) {
   // args intact.
   async function forkSession(
     parent: Session,
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) {
@@ -208,6 +220,8 @@ export function Pane({ paneId }: PaneProps) {
         name,
         parent.repo_path,
         isolated,
+        "regular",
+        kind,
       );
       // Claude resolves `--resume <uuid>` by looking under
       // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
@@ -225,18 +239,17 @@ export function Pane({ paneId }: PaneProps) {
       // before queuing the resume. Codex stores rollouts cwd-
       // independently under `$CODEX_HOME/sessions/`, so neither branch
       // requires staging for codex.
-      if (kind === "claude" && isolated) {
+      if (providerRequiresForkTranscriptPrep(kind) && isolated) {
         try {
           await api.prepareClaudeFork(parentAgentId, created.worktree_path);
         } catch (err) {
           console.error("[Pane] prepare_claude_fork failed", err);
         }
       }
-      const command =
-        kind === "claude"
-          ? `claude --resume ${parentAgentId} --fork-session`
-          : `codex fork ${parentAgentId}`;
-      useAppStore.getState().setPendingTerminalInput(created.id, command);
+      const command = buildAgentForkCommand(kind, parentAgentId);
+      useAppStore.getState().setPendingTerminalInput(created.id, command, {
+        agentProvider: kind,
+      });
       await useAppStore.getState().refreshAll();
       selectTab(created.id);
     } catch (err) {
@@ -261,6 +274,32 @@ export function Pane({ paneId }: PaneProps) {
   }
 
   const hasProjects = projects.length > 0;
+
+  useEffect(() => {
+    if (!isFocused || active || !hasProjects) {
+      lastEmptyPaneSpaceKeyDownAtRef.current = null;
+      return;
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (isNonTerminalTextEditingTarget(e.target)) return;
+      if (!isSpaceKeyEvent(e) || e.repeat) {
+        lastEmptyPaneSpaceKeyDownAtRef.current = null;
+        return;
+      }
+      e.preventDefault();
+      const now = e.timeStamp;
+      const previous = lastEmptyPaneSpaceKeyDownAtRef.current;
+      lastEmptyPaneSpaceKeyDownAtRef.current = now;
+      if (previous !== null && now - previous <= EMPTY_PANE_DOUBLE_SPACE_MS) {
+        lastEmptyPaneSpaceKeyDownAtRef.current = null;
+        void handleNewTabFromEmpty();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, handleNewTabFromEmpty, hasProjects, isFocused]);
 
   return (
     <div
@@ -438,6 +477,18 @@ function EmptyPane({
   );
 }
 
+function isSpaceKeyEvent(e: KeyboardEvent): boolean {
+  return e.code === "Space" || e.key === " " || e.key === "Spacebar";
+}
+
+function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(".xterm")) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
+}
+
 interface TabStripProps {
   paneId: PaneId;
   tabs: PaneTab[];
@@ -453,7 +504,7 @@ interface TabStripProps {
   onDuplicate: (repoPath: string, kind: SessionKind) => void;
   onFork: (
     parent: Session,
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) => void;
@@ -597,7 +648,7 @@ interface TabItemProps {
   onSplitTab: (direction: Direction) => void;
   onDuplicate?: () => void;
   onFork?: (
-    kind: "claude" | "codex",
+    kind: SessionAgentProvider,
     parentAgentId: string,
     isolated: boolean,
   ) => void;
@@ -911,11 +962,18 @@ function TabItem({
           </span>
         )}
         {session &&
-        (liveInWorktree ?? (session.isolated || session.in_worktree)) ? (
+        (liveInWorktree ?? hasRecordedWorktree(session)) ? (
           <GitBranch
             size={10}
             className="pointer-events-none text-fg-muted"
             aria-label={paneT(t, "pane.aria.worktree")}
+          />
+        ) : null}
+        {session?.kind === "control" ? (
+          <Bot
+            size={10}
+            className="pointer-events-none text-accent"
+            aria-label={paneT(t, "pane.aria.controlSession")}
           />
         ) : null}
         <button

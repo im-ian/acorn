@@ -1,0 +1,161 @@
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Project, Session, SessionStatus } from "../lib/types";
+
+const mocks = vi.hoisted(() => ({
+  createSession: vi.fn(async () => ({}) as Session),
+  listSessions: vi.fn(async () => [] as Session[]),
+  listProjects: vi.fn(async () => [] as Project[]),
+  detectSessionStatuses: vi.fn(
+    async (_ids: string[]) =>
+      [] as { id: string; status: SessionStatus }[],
+  ),
+  ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
+}));
+
+vi.mock("../lib/api", () => ({
+  api: {
+    loadStatus: vi.fn(async () => ({
+      sessionsClean: true,
+      projectsClean: true,
+    })),
+    createSession: mocks.createSession,
+    listSessions: mocks.listSessions,
+    listProjects: mocks.listProjects,
+    detectSessionStatuses: mocks.detectSessionStatuses,
+    ptyInWorktreeAll: mocks.ptyInWorktreeAll,
+  },
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openPath: vi.fn(async () => undefined),
+}));
+
+import { Pane } from "./Pane";
+import { useAppStore } from "../store";
+import { defaultTabByGroup } from "../lib/rightPanelGroups";
+
+const REPO = "/Users/me/repo";
+
+function project(repoPath: string): Project {
+  return {
+    repo_path: repoPath,
+    name: "repo",
+    created_at: "2026-01-01T00:00:00Z",
+    position: 0,
+  };
+}
+
+function session(id: string): Session {
+  return {
+    id,
+    name: id,
+    repo_path: REPO,
+    worktree_path: `${REPO}/.worktrees/${id}`,
+    branch: `feat/${id}`,
+    isolated: false,
+    status: "idle",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    last_message: null,
+    kind: "regular",
+    owner: { kind: "user" },
+    position: null,
+    in_worktree: false,
+  };
+}
+
+function resetStore(): void {
+  useAppStore.setState(
+    {
+      sessions: [],
+      projects: [project(REPO)],
+      workspaces: {
+        [REPO]: {
+          layout: { kind: "pane", id: "root" },
+          panes: { root: { id: "root", tabIds: [], activeTabId: null } },
+          focusedPaneId: "root",
+        },
+      },
+      activeProject: REPO,
+      layout: { kind: "pane", id: "root" },
+      panes: { root: { id: "root", tabIds: [], activeTabId: null } },
+      focusedPaneId: "root",
+      activeTabId: null,
+      activeSessionId: null,
+      rightTab: "commits",
+      rightTabByGroup: defaultTabByGroup(),
+      workspaceTabs: {},
+      prAccountByRepo: {},
+      pendingTerminalInput: {},
+      multiInputEnabled: false,
+      loading: false,
+      error: null,
+      pendingRemoveId: null,
+      pendingRemoveProject: null,
+      sessionsLoadedCleanly: true,
+      liveInWorktree: {},
+    },
+    false,
+  );
+}
+
+describe("Pane empty state", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("opens a terminal when Space is pressed twice while an empty pane is focused", async () => {
+    const created = session("new-session");
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    expect(document.querySelector('[role="button"]')).not.toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "repo",
+      REPO,
+      false,
+      "regular",
+      null,
+    );
+  });
+});

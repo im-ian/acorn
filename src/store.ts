@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { api } from "./lib/api";
-import type { Project, Session, SessionKind } from "./lib/types";
+import type {
+  Project,
+  Session,
+  SessionAgentProvider,
+  SessionKind,
+} from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
 import {
@@ -153,6 +158,7 @@ interface AppStateModel {
     repoPath: string,
     isolated?: boolean,
     kind?: SessionKind,
+    agentProvider?: SessionAgentProvider | null,
   ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
@@ -194,10 +200,12 @@ interface AppStateModel {
 export interface PendingTerminalInput {
   command: string;
   adoptWorktreeOnExit: boolean;
+  agentProvider?: SessionAgentProvider;
 }
 
 export interface PendingTerminalInputOptions {
   adoptWorktreeOnExit?: boolean;
+  agentProvider?: SessionAgentProvider;
 }
 
 let paneCounter = 0;
@@ -966,7 +974,13 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
-  async createSession(name, repoPath, isolated = false, kind = "regular") {
+  async createSession(
+    name,
+    repoPath,
+    isolated = false,
+    kind = "regular",
+    agentProvider = null,
+  ) {
     set({ loading: true, error: null });
     try {
       // Snapshot the previously-active tab's index in the focused pane so
@@ -985,7 +999,13 @@ export const useAppStore = create<AppStateModel>()(
         return idx >= 0 ? { paneId, idx } : null;
       })();
 
-      const created = await api.createSession(name, repoPath, isolated, kind);
+      const created = await api.createSession(
+        name,
+        repoPath,
+        isolated,
+        kind,
+        agentProvider,
+      );
       await get().refreshAll();
 
       // Reorder so the new tab sits immediately after the previously-active
@@ -1260,6 +1280,9 @@ export const useAppStore = create<AppStateModel>()(
           adoptWorktreeOnExit:
             options?.adoptWorktreeOnExit ??
             commandRequestsWorktreeAdoption(command),
+          ...(options?.agentProvider
+            ? { agentProvider: options.agentProvider }
+            : {}),
         },
       },
     }));

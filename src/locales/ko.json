@@ -545,6 +545,7 @@
     },
     "aria": {
       "worktree": "워크트리",
+      "controlSession": "컨트롤 세션",
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"
     },
@@ -797,6 +798,7 @@
       "title": "세션 제거",
       "confirmPrefix": "세션 제거",
       "isolatedWorktree": "격리된 worktree입니다:",
+      "linkedWorktree": "이 세션은 linked git worktree를 사용 중입니다:",
       "deleteWorktreeQuestion": "디스크에서도 worktree를 삭제할까요?",
       "filesIn": "다음 위치의 파일은",
       "willNotBeTouched": "변경되지 않습니다.",
@@ -813,6 +815,8 @@
       "willBeRemoved": "제거됩니다",
       "isolatedWorktreeSingular": "격리된 worktree",
       "isolatedWorktreePlural": "격리된 worktree",
+      "linkedWorktreeSingular": "linked worktree",
+      "linkedWorktreePlural": "linked worktree",
       "closeKeepWorktrees": "닫기 · worktree 유지",
       "closeDeleteWorktrees": "닫기 · worktree 삭제",
       "closeProject": "프로젝트 닫기"
