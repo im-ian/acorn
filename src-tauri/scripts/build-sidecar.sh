@@ -48,6 +48,8 @@ for entry in "${sidecars[@]}"; do
 done
 if [ "$profile" = "release" ]; then
   cargo_flags+=(--release)
+elif [ "$profile" != "debug" ]; then
+  cargo_flags+=(--profile "$profile")
 fi
 
 # Tauri's build.rs verifies that every `externalBin` path exists at
