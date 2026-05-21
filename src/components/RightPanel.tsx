@@ -39,7 +39,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup } from "react-resizable-panels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
@@ -2117,6 +2117,7 @@ function StagedTab({
   onExpand: (e: ExpandedDiff) => void;
 }) {
   const t = useTranslation();
+  const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
   const cachedStaged = rightPanelCache.getStaged(repoPath);
   const initialSelectedPath =
     cachedStaged?.selectedPath &&
@@ -2267,13 +2268,13 @@ function StagedTab({
     }
   }
 
-  async function openWithDefaultApp(file: StagedFile) {
+  function openInCodeViewer(file: StagedFile) {
     if (isDeleted(file)) {
       setListError(rt(t, "rightPanel.errors.deletedFile"));
       return;
     }
     try {
-      await openPath(joinPath(repoPath, file.path));
+      openCodeViewerTab(joinPath(repoPath, file.path), repoPath);
     } catch (e) {
       setListError(String(e));
     }
@@ -2300,8 +2301,7 @@ function StagedTab({
                 setMenu({ x: e.clientX, y: e.clientY, file: f });
               }}
               onDoubleClick={() => {
-                if (isDeleted(f)) return;
-                void openWithDefaultApp(f);
+                openInCodeViewer(f);
               }}
               className={cn(
                 "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
