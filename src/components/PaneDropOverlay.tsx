@@ -3,10 +3,9 @@ import { cn } from "../lib/cn";
 import {
   classifyDropZone,
   type DropZone,
-  getCurrentFilePayload,
   getCurrentTabPayload,
   isAcornDrag,
-  useAcornDragInProgress,
+  useTabDragInProgress,
 } from "../lib/dnd";
 import { useAppStore } from "../store";
 import type { PaneId } from "../lib/layout";
@@ -22,10 +21,8 @@ interface PaneDropOverlayProps {
  * append the moved tab into this pane.
  */
 export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
-  const dragging = useAcornDragInProgress();
+  const dragging = useTabDragInProgress();
   const moveTab = useAppStore((s) => s.moveTab);
-  const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
-  const setFocusedPane = useAppStore((s) => s.setFocusedPane);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
 
@@ -88,16 +85,6 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
         const target = computeZone(e);
         setZone(null);
         if (!target) return;
-        const filePayload = getCurrentFilePayload();
-        if (filePayload) {
-          // For now ignore edge zones for file drops — code tabs land
-          // inside the target pane regardless of which edge the user hit.
-          // Splitting a pane to host a code tab can be a follow-up if it
-          // turns out to be common.
-          setFocusedPane(paneId);
-          openCodeViewerTab(filePayload.path);
-          return;
-        }
         const payload = getCurrentTabPayload();
         if (!payload) return;
         if (target.kind === "center") {
