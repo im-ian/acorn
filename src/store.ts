@@ -783,11 +783,20 @@ export const useAppStore = create<AppStateModel>()(
 
   setActiveProject(repoPath) {
     set((s) => {
-      if (!s.workspaces[repoPath]) return s;
-      if (s.activeProject === repoPath) return s;
+      const hasWorkspace = s.workspaces[repoPath] !== undefined;
+      const knownRepo =
+        hasWorkspace ||
+        s.projects.some((project) => project.repo_path === repoPath) ||
+        s.sessions.some((session) => session.repo_path === repoPath);
+      if (!knownRepo) return s;
+      if (s.activeProject === repoPath && hasWorkspace) return s;
+      const workspaces = hasWorkspace
+        ? s.workspaces
+        : { ...s.workspaces, [repoPath]: emptyWorkspace() };
       return {
+        workspaces,
         activeProject: repoPath,
-        ...mirrorActive(s.workspaces, repoPath),
+        ...mirrorActive(workspaces, repoPath),
       };
     });
   },

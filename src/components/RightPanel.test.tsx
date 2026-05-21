@@ -200,6 +200,29 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.listWorkflowRuns).toHaveBeenCalledWith(REPO, 50);
   });
 
+  it("loads GitHub tabs after selecting a project whose workspace mirror is missing", async () => {
+    useAppStore.setState({
+      activeProject: null,
+      activeSessionId: null,
+      activeTabId: null,
+      workspaces: {},
+      rightTab: "prs",
+    });
+
+    act(() => {
+      useAppStore.getState().setActiveProject(REPO);
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).not.toContain("No project selected");
+    expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
+    expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO, "open", 50);
+  });
+
   it("prefetches other open projects once after startup", async () => {
     useAppStore.setState({
       projects: [
