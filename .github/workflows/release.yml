@@ -77,8 +77,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -91,8 +89,12 @@ jobs:
           workspaces: src-tauri
           # Per-target shared key (default key already factors in
           # Cargo.lock + rustc version). `cache-on-failure` lets the
-          # next run pick up partial progress when a build dies late.
+          # next run pick up partial progress when a non-tag build dies
+          # late. Release tag refs cannot restore caches created for
+          # sibling tags, so tag pushes restore only and avoid saving
+          # one-off caches that churn the repository's cache quota.
           shared-key: ${{ matrix.target }}
+          save-if: ${{ github.ref_type != 'tag' }}
           cache-on-failure: true
 
       # sccache backed by GitHub Actions cache. Speeds up COLD cargo
@@ -150,7 +152,7 @@ jobs:
           # GHA cache backend is reachable (see "Probe sccache GHA backend").
           CARGO_INCREMENTAL: "0"
         # `--profile release-ci` swaps fat LTO + codegen-units=1 for
-        # thin LTO + codegen-units=16 (defined in src-tauri/Cargo.toml).
+        # no LTO + codegen-units=32 (defined in src-tauri/Cargo.toml).
         # Output lands in target/<arch>/release-ci/ instead of release/.
         #
         # @tauri-apps/cli 2.10+ removed the top-level `--profile` flag and
