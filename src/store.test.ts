@@ -239,6 +239,26 @@ describe("focusLocalSessions", () => {
   });
 });
 
+describe("setActiveProject", () => {
+  it("recreates a missing workspace mirror for a known project", async () => {
+    await seed([project(REPO_A, 0)], []);
+    useAppStore.setState({
+      activeProject: null,
+      activeTabId: null,
+      activeSessionId: null,
+      workspaces: {},
+    });
+
+    useAppStore.getState().setActiveProject(REPO_A);
+
+    const s = useAppStore.getState();
+    expect(s.activeProject).toBe(REPO_A);
+    expect(s.workspaces[REPO_A]).toBeDefined();
+    expect(s.activeTabId).toBeNull();
+    expect(s.activeSessionId).toBeNull();
+  });
+});
+
 describe("workspace tabs", () => {
   it("opens a code viewer as a workspace tab without making it the active session", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);

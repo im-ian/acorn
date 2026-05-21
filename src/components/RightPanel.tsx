@@ -465,8 +465,11 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : BACKGROUND_LOADED_TABS.has(rightTab) ? (
-          rightTab === "history" &&
-          (agentHistoryScope === "unscoped" || agentHistoryPath) ? null : (
+          rightTab === "history" ? (
+            agentHistoryScope === "unscoped" || agentHistoryPath ? null : (
+              <Empty msg={rt(t, "rightPanel.empty.noProject")} />
+            )
+          ) : projectPanelRepoPath ? null : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : (
