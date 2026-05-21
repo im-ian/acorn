@@ -12,6 +12,7 @@
       "github": "GitHub",
       "editor": "Editor",
       "notifications": "Notifications",
+      "shortcuts": "Shortcuts",
       "storage": "Storage",
       "experiments": "Experiments",
       "about": "About"
@@ -277,6 +278,113 @@
         }
       },
       "permissionHint": "macOS may ask once for permission the first time a notification fires."
+    },
+    "shortcuts": {
+      "editingSoon": "Shortcut editing is coming soon.",
+      "groups": {
+        "general": "General",
+        "navigation": "Navigation",
+        "layout": "Layout",
+        "rightPanel": "Right panel",
+        "terminal": "Terminal",
+        "view": "View"
+      },
+      "items": {
+        "openPalette": {
+          "label": "Open command palette"
+        },
+        "openSettings": {
+          "label": "Open settings"
+        },
+        "newSession": {
+          "label": "New session"
+        },
+        "newIsolatedSession": {
+          "label": "New isolated session"
+        },
+        "newControlSession": {
+          "label": "New control session"
+        },
+        "addProject": {
+          "label": "Add project"
+        },
+        "focusSidebar": {
+          "label": "Focus sidebar"
+        },
+        "focusMain": {
+          "label": "Focus main area"
+        },
+        "focusRight": {
+          "label": "Focus right panel"
+        },
+        "nextTab": {
+          "label": "Next tab"
+        },
+        "prevTab": {
+          "label": "Previous tab"
+        },
+        "nextProject": {
+          "label": "Next project"
+        },
+        "prevProject": {
+          "label": "Previous project"
+        },
+        "toggleSidebar": {
+          "label": "Toggle sidebar"
+        },
+        "toggleRightPanel": {
+          "label": "Toggle right panel"
+        },
+        "splitVertical": {
+          "label": "Split pane vertically"
+        },
+        "splitHorizontal": {
+          "label": "Split pane horizontally"
+        },
+        "equalizePanes": {
+          "label": "Equalize pane sizes"
+        },
+        "closeTab": {
+          "label": "Close focused tab"
+        },
+        "closeEmptyPane": {
+          "label": "Close empty pane",
+          "description": "Only works when the focused pane has no tabs."
+        },
+        "toggleTodos": {
+          "label": "Show todos"
+        },
+        "toggleCommits": {
+          "label": "Show commits"
+        },
+        "toggleStaged": {
+          "label": "Show staged changes"
+        },
+        "togglePrs": {
+          "label": "Show pull requests"
+        },
+        "toggleFiles": {
+          "label": "Show files"
+        },
+        "clearTerminal": {
+          "label": "Clear terminal"
+        },
+        "toggleMultiInput": {
+          "label": "Toggle multi-input"
+        },
+        "reloadShellEnv": {
+          "label": "Reload shell environment"
+        },
+        "uiScaleDown": {
+          "label": "Decrease UI scale"
+        },
+        "uiScaleUp": {
+          "label": "Increase UI scale"
+        },
+        "uiScaleReset": {
+          "label": "Reset UI scale"
+        }
+      }
     },
     "agents": {
       "intro": {
