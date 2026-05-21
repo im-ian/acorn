@@ -490,7 +490,10 @@ pub struct GitStatusResult {
 }
 
 #[tauri::command]
-pub fn fs_git_status(repo_root: String, status_limit: Option<u32>) -> AppResult<GitStatusResult> {
+pub fn fs_git_status(
+    repo_root: String,
+    status_limit: Option<u32>,
+) -> AppResult<GitStatusResult> {
     fs_git_status_with_limit(repo_root, status_limit)
 }
 
@@ -618,14 +621,10 @@ pub fn fs_git_diff_stats(
 
     // Untracked / freshly-added: line count of the working-tree file.
     for (abs, path) in added {
-        let additions = std::fs::read(&path).map(|b| count_lines(&b)).unwrap_or(0);
-        out.insert(
-            abs,
-            GitDiffStatsEntry {
-                additions,
-                deletions: 0,
-            },
-        );
+        let additions = std::fs::read(&path)
+            .map(|b| count_lines(&b))
+            .unwrap_or(0);
+        out.insert(abs, GitDiffStatsEntry { additions, deletions: 0 });
     }
 
     // Deleted: line count of the HEAD blob.
@@ -637,13 +636,7 @@ pub fn fs_git_diff_stats(
             .and_then(|e| e.to_object(&repo).ok())
             .and_then(|o| o.as_blob().map(|b| count_lines(b.content())))
             .unwrap_or(0);
-        out.insert(
-            abs,
-            GitDiffStatsEntry {
-                additions: 0,
-                deletions,
-            },
-        );
+        out.insert(abs, GitDiffStatsEntry { additions: 0, deletions });
     }
 
     // Modified / renamed / conflicted: one diff scoped to every diffable
@@ -689,25 +682,13 @@ pub fn fs_git_diff_stats(
                 }
                 for (abs, rel) in diffable {
                     let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
-                    out.insert(
-                        abs,
-                        GitDiffStatsEntry {
-                            additions: a,
-                            deletions: d,
-                        },
-                    );
+                    out.insert(abs, GitDiffStatsEntry { additions: a, deletions: d });
                 }
             }
             Err(err) => {
                 tracing::warn!(error = %err, "diff_tree_to_workdir_with_index failed; diff stats zeroed");
                 for (abs, _rel) in diffable {
-                    out.insert(
-                        abs,
-                        GitDiffStatsEntry {
-                            additions: 0,
-                            deletions: 0,
-                        },
-                    );
+                    out.insert(abs, GitDiffStatsEntry { additions: 0, deletions: 0 });
                 }
             }
         }
@@ -1507,7 +1488,10 @@ mod tests {
 
     #[test]
     fn ignore_matcher_accepts_user_globs() {
-        let m = WatchIgnoreMatcher::with_defaults(&["out/**".to_string(), "**/*.log".to_string()]);
+        let m = WatchIgnoreMatcher::with_defaults(&[
+            "out/**".to_string(),
+            "**/*.log".to_string(),
+        ]);
         let root = Path::new("/proj");
         assert!(m.is_ignored(&root.join("out/bundle.js"), root));
         assert!(m.is_ignored(&root.join("nested/a.log"), root));
@@ -1542,8 +1526,11 @@ mod tests {
             fs::write(repo_path.join(format!("u{i}.txt")), b"x").unwrap();
         }
 
-        let res =
-            fs_git_status_with_limit(repo_path.to_string_lossy().into_owned(), Some(5)).unwrap();
+        let res = fs_git_status_with_limit(
+            repo_path.to_string_lossy().into_owned(),
+            Some(5),
+        )
+        .unwrap();
         assert!(res.huge);
         assert_eq!(res.limit, 5);
         assert_eq!(res.statuses.len(), 5);
@@ -1556,13 +1543,16 @@ mod tests {
         let repo_path = d.path().canonicalize().unwrap();
         git2::Repository::init(&repo_path).unwrap();
         fs::write(repo_path.join("a.txt"), b"hi").unwrap();
-        let res = fs_git_status_with_limit(repo_path.to_string_lossy().into_owned(), Some(10_000))
-            .unwrap();
+        let res = fs_git_status_with_limit(
+            repo_path.to_string_lossy().into_owned(),
+            Some(10_000),
+        )
+        .unwrap();
         assert!(!res.huge);
         assert_eq!(res.limit, 10_000);
-        assert!(res
-            .statuses
-            .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned()));
+        assert!(res.statuses.contains_key(
+            &repo_path.join("a.txt").to_string_lossy().into_owned()
+        ));
     }
 
     #[test]
@@ -1659,10 +1649,7 @@ mod tests {
             state.record_restart();
         }
         // After 5 restarts, give up.
-        assert_eq!(
-            decide(&state, ErrorClass::Unknown),
-            SupervisorAction::GiveUp
-        );
+        assert_eq!(decide(&state, ErrorClass::Unknown), SupervisorAction::GiveUp);
     }
 
     #[test]
@@ -1677,10 +1664,7 @@ mod tests {
     #[test]
     fn supervisor_emits_warn_only_once_for_enospc() {
         let mut state = SupervisorState::default();
-        assert_eq!(
-            decide(&state, ErrorClass::Enospc),
-            SupervisorAction::WarnOnce
-        );
+        assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::WarnOnce);
         state.record_enospc_logged();
         assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::NoOp);
     }
@@ -1799,10 +1783,7 @@ mod tests {
         let root = d.path().canonicalize().unwrap();
         let mut batch = new_batch(&root);
         batch.add_event(create_event(vec![root.join(".git/index.lock")]));
-        assert!(
-            batch.finish().is_none(),
-            "noise-only batch produces no payload"
-        );
+        assert!(batch.finish().is_none(), "noise-only batch produces no payload");
     }
 
     #[test]
@@ -1835,10 +1816,7 @@ mod tests {
         let f = root.join("a.txt");
         batch.add_event(create_event(vec![f.clone()]));
         batch.add_event(remove_event(vec![f]));
-        assert!(
-            batch.finish().is_none(),
-            "create+delete must net to nothing"
-        );
+        assert!(batch.finish().is_none(), "create+delete must net to nothing");
     }
 
     #[test]
@@ -1876,10 +1854,7 @@ mod tests {
         let parent = root.join("dir");
         let other = root.join("untouched.txt");
         batch.add_event(modify_event(vec![other.clone()]));
-        batch.add_event(remove_event(vec![
-            parent.join("inside.txt"),
-            parent.clone(),
-        ]));
+        batch.add_event(remove_event(vec![parent.join("inside.txt"), parent.clone()]));
         let payload = batch.finish().expect("payload");
         let mut got = payload.paths;
         got.sort();
@@ -1910,8 +1885,7 @@ mod tests {
             index.write().unwrap();
             let tree_id = index.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
-                .unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
         }
 
         // Purely additive: insert 3 new lines between "2" and "3".
@@ -1921,7 +1895,11 @@ mod tests {
             path: repo_path.join("a.rs").to_string_lossy().into_owned(),
             kind: "modified".to_string(),
         }];
-        let stats = fs_git_diff_stats(repo_path.to_string_lossy().into_owned(), entries).unwrap();
+        let stats = fs_git_diff_stats(
+            repo_path.to_string_lossy().into_owned(),
+            entries,
+        )
+        .unwrap();
         let entry = stats.values().next().expect("one entry");
         assert_eq!(entry.additions, 3);
         assert_eq!(entry.deletions, 0);
@@ -1944,8 +1922,7 @@ mod tests {
             index.write().unwrap();
             let tree_id = index.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
-                .unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
         }
         // x.rs: +2 lines (purely additive). y.rs: -1 line.
         fs::write(repo_path.join("x.rs"), "a\nb\nc\nNEW1\nNEW2\n").unwrap();
@@ -1961,7 +1938,11 @@ mod tests {
                 kind: "modified".to_string(),
             },
         ];
-        let stats = fs_git_diff_stats(repo_path.to_string_lossy().into_owned(), entries).unwrap();
+        let stats = fs_git_diff_stats(
+            repo_path.to_string_lossy().into_owned(),
+            entries,
+        )
+        .unwrap();
         let x_key = repo_path.join("x.rs").to_string_lossy().into_owned();
         let y_key = repo_path.join("y.rs").to_string_lossy().into_owned();
         assert_eq!(stats[&x_key].additions, 2);

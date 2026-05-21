@@ -50,28 +50,15 @@ describe("RemoveSessionDialog", () => {
     return onClose;
   }
 
-  it("offers worktree deletion for a removable non-isolated linked worktree session", () => {
-    renderDialog(
-      session({
-        in_worktree: true,
-        worktree_path: "/repo/.claude/worktrees/acorn-worktree-1",
-      }),
-    );
+  it("offers worktree deletion for a non-isolated linked worktree session", () => {
+    renderDialog(session({ in_worktree: true }));
 
     expect(document.body.textContent).toContain(
-      "This session is running in a removable worktree:",
+      "This session is using a linked git worktree:",
     );
     expect(document.body.textContent).toContain("Keep worktree");
     expect(document.body.textContent).toContain("Delete worktree");
     expect(document.body.textContent).not.toContain("Don't ask again");
-  });
-
-  it("does not offer deletion for a user-managed linked worktree session", () => {
-    renderDialog(session({ in_worktree: true }));
-
-    expect(document.body.textContent).toContain("will not be touched");
-    expect(document.body.textContent).toContain("Don't ask again");
-    expect(document.body.textContent).not.toContain("Delete worktree");
   });
 
   it("keeps the plain session remove confirmation for non-worktree sessions", () => {

@@ -2,8 +2,6 @@ mod agent_history;
 mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
-mod agent_transcript;
-mod agent_transcript_watcher;
 mod agent_wrappers;
 mod cli_resolver;
 mod commands;
@@ -369,7 +367,6 @@ pub fn run() {
             // `claude.id` / `codex.id` files. The focus-time resume modal
             // reads those files; no shim or PATH injection is required.
             agent_resume_persister::spawn(state.inner().clone());
-            agent_transcript_watcher::spawn(app.handle().clone(), state.inner().clone());
 
             Ok(())
         })
@@ -438,7 +435,6 @@ pub fn run() {
             commands::acknowledge_claude_resume,
             commands::get_codex_resume_candidate,
             commands::acknowledge_codex_resume,
-            commands::read_agent_transcript,
             commands::staged_rev_mismatch_status,
             commands::acknowledge_staged_rev_mismatch,
             daemon_commands::daemon_status,

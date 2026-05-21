@@ -29,9 +29,7 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import {
   api,
   AGENT_HOOK_STATUS_EVENT,
-  AGENT_TRANSCRIPT_ADVANCED_EVENT,
   STAGED_REV_MISMATCH_EVENT,
-  type AgentTranscriptAdvancedPayload,
   type AgentKind,
   type ResumeCandidate,
   type StagedRevMismatch,
@@ -41,6 +39,7 @@ import {
   shouldUseTinykeysToggleMultiInputFallback,
   useHotkeys,
 } from "./lib/hotkeys";
+import { hasRecordedWorktree } from "./lib/sessionWorktree";
 import {
   EQUALIZE_PANES_EVENT,
   EXPAND_PANEL_EVENT,
@@ -73,7 +72,6 @@ import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { SessionStatus } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
-import { shouldOfferWorktreeRemoval } from "./lib/worktreeRemoval";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
@@ -665,13 +663,13 @@ function App() {
     };
   }, [activeSessionId, sessionIdsKey]);
 
-  // Skip the confirmation dialog for sessions without a worktree deletion
-  // choice when the user has opted out via Settings. Removable worktrees
-  // always prompt because the delete-worktree choice still matters.
+  // Skip the confirmation dialog for plain sessions when the user has opted
+  // out via Settings. Recorded worktrees still prompt because the
+  // delete-worktree choice matters.
   useEffect(() => {
     if (!pendingRemove) return;
     const confirm = useSettings.getState().settings.sessions.confirmRemove;
-    if (confirm || shouldOfferWorktreeRemoval(pendingRemove)) return;
+    if (confirm || hasRecordedWorktree(pendingRemove)) return;
     clearPendingRemove();
     removeSession(pendingRemove.id, false);
   }, [pendingRemove, clearPendingRemove, removeSession]);
@@ -816,34 +814,6 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach agent-hook-status listener", err);
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Transcript writes are the reliable "content advanced" signal for
-  // remote-control turns. Refresh the backend-backed session preview/status
-  // when the JSONL file changes, independent of hook status timing.
-  useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-    let cancelled = false;
-    listen<AgentTranscriptAdvancedPayload>(AGENT_TRANSCRIPT_ADVANCED_EVENT, () => {
-      useAppStore.getState().refreshSessions();
-    })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      })
-      .catch((err) => {
-        console.error(
-          "[App] failed to attach agent-transcript-advanced listener",
-          err,
-        );
       });
     return () => {
       cancelled = true;

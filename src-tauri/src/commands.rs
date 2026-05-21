@@ -8,7 +8,6 @@ use uuid::Uuid;
 
 use crate::agent_history::{self, AgentHistoryItem};
 use crate::agent_resume;
-use crate::agent_transcript::{self, AgentTranscriptSnapshot};
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
@@ -425,17 +424,12 @@ fn enrich_session(mut s: Session) -> Session {
         s.branch = branch;
     }
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
-    if let Some(transcript) = crate::agent_resume::live_transcript(s.id) {
-        s.agent_provider = Some(match transcript.kind {
+    let live_provider =
+        crate::agent_resume::live_transcript(s.id).map(|transcript| match transcript.kind {
             crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
             crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
         });
-        s.last_message =
-            crate::agent_transcript::read_snapshot(transcript.kind, &transcript.path, 1)
-                .ok()
-                .and_then(|snapshot| snapshot.entries.into_iter().next())
-                .map(|entry| entry.text);
-    }
+    s.agent_provider = live_provider.or(s.agent_provider);
     s
 }
 
@@ -880,12 +874,8 @@ pub async fn remove_project(
             .collect();
         for session in session_ids {
             state.pty.kill(&session.id).ok();
-            if drop_worktrees
-                && (session.isolated
-                    || (worktree::is_named_acorn_worktree_path(&session.worktree_path)
-                        && worktree::is_linked_worktree_root(&session.worktree_path)))
-            {
-                worktree::remove_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
+            if drop_worktrees {
+                remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
             }
             state.sessions.remove(&session.id).ok();
         }
@@ -907,12 +897,8 @@ pub async fn remove_session(
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
-    if remove_worktree.unwrap_or(false)
-        && (session.isolated
-            || (worktree::is_named_acorn_worktree_path(&session.worktree_path)
-                && worktree::is_linked_worktree_root(&session.worktree_path)))
-    {
-        worktree::remove_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
+    if remove_worktree.unwrap_or(false) {
+        remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
     }
     state.sessions.remove(&id)?;
     if should_remove_local_project_mirror(&session, &state.sessions.list()) {
@@ -2447,22 +2433,6 @@ pub fn acknowledge_claude_resume(session_id: String) -> AppResult<()> {
 pub fn acknowledge_codex_resume(session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     agent_resume::acknowledge_codex_resume(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-#[tauri::command]
-pub async fn read_agent_transcript(
-    session_id: String,
-    limit: Option<usize>,
-) -> AppResult<Option<AgentTranscriptSnapshot>> {
-    let id = parse_id(&session_id)?;
-    run_blocking("read_agent_transcript", move || {
-        let Some(transcript) = agent_resume::live_transcript(id) else {
-            return Ok(None);
-        };
-        agent_transcript::read_snapshot(transcript.kind, &transcript.path, limit.unwrap_or(80))
-            .map(Some)
-    })
-    .await
 }
 
 /// `true` when a process matching `basename` is alive anywhere in the

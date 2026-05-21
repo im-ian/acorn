@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
   AgentHistoryItem,
-  AgentTranscriptSnapshot,
   CommitInfo,
   DiffPayload,
   GeneratedCommitMessage,
@@ -534,15 +533,6 @@ export const api = {
   acknowledgeCodexResume(sessionId: string): Promise<void> {
     return invoke<void>("acknowledge_codex_resume", { sessionId });
   },
-  readAgentTranscript(
-    sessionId: string,
-    limit = 80,
-  ): Promise<AgentTranscriptSnapshot | null> {
-    return invoke<AgentTranscriptSnapshot | null>("read_agent_transcript", {
-      sessionId,
-      limit,
-    });
-  },
   /**
    * Write raw bytes to a session's PTY master (i.e. as if the user
    * typed them). The backend handles routing — daemon-managed sessions
@@ -749,12 +739,3 @@ export interface StagedRevMismatch {
 
 export const STAGED_REV_MISMATCH_EVENT = "acorn:staged-rev-mismatch";
 export const AGENT_HOOK_STATUS_EVENT = "acorn:agent-hook-status";
-export const AGENT_TRANSCRIPT_ADVANCED_EVENT =
-  "acorn:agent-transcript-advanced";
-
-export interface AgentTranscriptAdvancedPayload {
-  sessionId: string;
-  transcriptPath: string;
-  size: number;
-  updatedAt: number;
-}
