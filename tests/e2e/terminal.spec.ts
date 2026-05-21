@@ -1,6 +1,68 @@
 import { test, expect } from "./support";
 
 test.describe("terminal: spawn", () => {
+  test("default pill cursor uses the active theme accent after the helper textarea blurs", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+
+    await page.goto("/");
+    await page.addStyleTag({
+      content: `
+        :root[data-acorn-theme="acorn-dark"] {
+          --color-accent: rgb(12, 34, 56);
+        }
+      `,
+    });
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    const textarea = page.locator(".xterm-helper-textarea");
+    await textarea.waitFor({ state: "attached" });
+    await textarea.focus();
+
+    const cursor = page.locator(".acorn-terminal .xterm-cursor").first();
+    await expect(cursor).toBeAttached();
+    await textarea.evaluate((el) => el.blur());
+
+    await expect
+      .poll(async () =>
+        cursor.evaluate((el) => getComputedStyle(el, "::after").backgroundColor),
+      )
+      .toBe("rgb(12, 34, 56)");
+    await expect
+      .poll(async () =>
+        cursor.evaluate((el) => getComputedStyle(el, "::after").width),
+      )
+      .toBe("3px");
+    await expect
+      .poll(async () => cursor.evaluate((el) => getComputedStyle(el).outlineWidth))
+      .toBe("0px");
+  });
+
   test("activating a session calls pty_spawn with the session's cwd", async ({
     page,
     tauri,

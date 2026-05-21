@@ -40,6 +40,7 @@ import {
   type AcornSettings,
   type TerminalFontWeight,
   type TerminalLinkActivation,
+  TERMINAL_CURSOR_STYLE_OPTIONS,
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
@@ -269,6 +270,26 @@ function TerminalSettings() {
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
         />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.cursorStyle.label")}
+        hint={st(t, "settings.terminal.cursorStyle.hint")}
+      >
+        <Select
+          value={settings.terminal.cursorStyle}
+          onChange={(e) =>
+            patchTerminal({
+              cursorStyle: e.target.value as AcornSettings["terminal"]["cursorStyle"],
+            })
+          }
+          className="w-48"
+        >
+          {TERMINAL_CURSOR_STYLE_OPTIONS.map((style) => (
+            <option key={style.value} value={style.value}>
+              {st(t, `settings.terminal.cursorStyle.options.${style.value}`)}
+            </option>
+          ))}
+        </Select>
       </Field>
       <Field
         label={st(t, "settings.terminal.openLinksOn.label")}
