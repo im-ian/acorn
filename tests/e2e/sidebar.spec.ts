@@ -47,7 +47,7 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
   });
 
-  test("clicking the chats add button creates a local terminal session", async ({
+  test("clicking the instant sessions add button creates a local terminal session", async ({
     page,
     tauri,
   }) => {
@@ -106,11 +106,11 @@ test.describe("sidebar: project lifecycle", () => {
 
     await page.goto("/");
     const chats = page.getByRole("region", { name: "Local terminal sessions" });
-    await chats.getByRole("button", { name: "New chat" }).click();
+    await chats.getByRole("button", { name: "New instant session" }).click();
 
-    await expect(page.getByText("Chats")).toBeVisible();
+    await expect(page.getByText("Instant sessions")).toBeVisible();
     await expect(
-      chats.getByRole("button", { name: "terminal", exact: true }),
+      chats.getByRole("button", { name: /^terminal\b/ }),
     ).toBeVisible();
 
     const calls = (await page.evaluate(
@@ -253,7 +253,7 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
-  test("clicking the chats area makes new-session hotkey create a chat", async ({
+  test("clicking the instant sessions area makes new-session hotkey create a local session", async ({
     page,
     tauri,
   }) => {
