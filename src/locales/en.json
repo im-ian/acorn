@@ -648,9 +648,9 @@
       "controlSession": "control session"
     },
     "localTerminals": {
-      "title": "Chats",
-      "newSession": "New chat",
-      "empty": "Double-click to start a chat."
+      "title": "Instant sessions",
+      "newSession": "New instant session",
+      "empty": "Double-click to start an instant session."
     },
     "emptyProject": {
       "createSession": "Double-click to start a session."

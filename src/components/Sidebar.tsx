@@ -412,7 +412,7 @@ export function Sidebar() {
   return (
     <aside className="flex h-full w-full flex-col bg-bg-sidebar">
       <header className="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
-        <h2 className="text-sm font-medium tracking-tight text-fg-muted">
+        <h2 className="text-xs font-medium text-fg-muted">
           {sidebarText(t, "sidebar.projects.title")}
         </h2>
         <div className="flex items-center gap-1">
@@ -1418,10 +1418,10 @@ function LocalTerminalArea({
         "rounded-md focus:outline-none",
       )}
     >
-      <div className="mb-1 flex items-center justify-between px-2">
-        <span className="text-xs font-medium text-fg-muted">
+      <header className="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
+        <h2 className="text-xs font-medium text-fg-muted">
           {sidebarText(t, "sidebar.localTerminals.title")}
-        </span>
+        </h2>
         <Tooltip
           label={sidebarText(t, "sidebar.localTerminals.newSession")}
           side="bottom"
@@ -1434,12 +1434,12 @@ function LocalTerminalArea({
               onCreate();
             }}
             onDoubleClick={(e) => e.stopPropagation()}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            className="rounded-md p-1.5 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
-            <Plus size={12} />
+            <Plus size={14} />
           </button>
         </Tooltip>
-      </div>
+      </header>
       {sessions.length > 0 ? (
         <div onDoubleClick={(e) => e.stopPropagation()}>
           <SortableContext
@@ -1475,7 +1475,7 @@ function LocalTerminalArea({
             onCreate();
           }
         }}
-        className="mx-1 mt-1 flex min-h-16 flex-1 cursor-pointer items-center justify-center rounded-md px-2 py-6 text-center text-xs text-fg-muted transition-colors hover:bg-bg-elevated/20 hover:text-fg focus:outline-none"
+        className="mx-1 mt-1 flex items-center justify-center rounded px-3 py-3 text-center text-[11px] text-fg-muted select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
       >
         {sessions.length === 0
           ? sidebarText(t, "sidebar.localTerminals.empty")
@@ -1501,6 +1501,12 @@ function LocalSessionRow({
   const t = useTranslation();
   const renameSession = useAppStore((s) => s.renameSession);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const metadataText = composeSessionMetadata(
+    t,
+    session,
+    sessionDisplay.metadata,
+  );
   const agentProvider = sessionDisplay.icons.agentProvider
     ? resolveSessionAgentProvider(session)
     : null;
@@ -1599,7 +1605,7 @@ function LocalSessionRow({
         setMenu({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
-        "group flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sm transition",
+        "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
         active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
         isDragging && "opacity-40",
       )}
@@ -1610,7 +1616,7 @@ function LocalSessionRow({
         {...listeners}
         onClick={(e) => e.stopPropagation()}
         aria-label={sidebarText(t, "sidebar.aria.dragToReorderSession")}
-        className="invisible flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
+        className="invisible mt-1 flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
       >
         <GripVertical size={10} />
       </span>
@@ -1633,22 +1639,21 @@ function LocalSessionRow({
           )}
         </span>
       ) : null}
-      {editing ? (
-        <RenameInput
-          initial={session.name}
-          onSubmit={async (next) => {
-            setEditing(false);
-            if (next && next !== session.name) {
-              await renameSession(session.id, next);
-            }
-          }}
-          onCancel={() => setEditing(false)}
-        />
-      ) : (
-        <span className="min-w-0 flex-1 truncate font-medium text-fg">
-          {session.name}
-        </span>
-      )}
+      <SessionRowLabel
+        editing={editing}
+        session={session}
+        titleText={titleText}
+        metadataText={metadataText}
+        showKindIcons={sessionDisplay.icons.sessionKind}
+        t={t}
+        onSubmitRename={async (next) => {
+          setEditing(false);
+          if (next && next !== session.name) {
+            await renameSession(session.id, next);
+          }
+        }}
+        onCancelRename={() => setEditing(false)}
+      />
       <span
         role="button"
         aria-label={sidebarText(t, "sidebar.actions.removeSession")}
