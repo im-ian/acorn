@@ -241,38 +241,6 @@ describe("SettingsModal font controls", () => {
     });
   });
 
-  it("patches terminal cursor style from presets", async () => {
-    await act(async () => {
-      root = createRoot(container);
-      root.render(<SettingsModal />);
-    });
-    openTerminalTab();
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const patchTerminal = useSettings.getState().patchTerminal;
-    const cursorStyle = Array.from(
-      document.querySelectorAll<HTMLSelectElement>("select"),
-    ).find((element) => element.value === DEFAULT_SETTINGS.terminal.cursorStyle);
-
-    expect(document.body.textContent).toContain("Cursor style");
-    expect(cursorStyle?.textContent).toContain("Block");
-    expect(cursorStyle?.textContent).toContain("Bar");
-    expect(cursorStyle?.textContent).toContain("Underline");
-    expect(cursorStyle?.textContent).toContain("Outline");
-    expect(cursorStyle?.textContent).toContain("Pill");
-    expect(cursorStyle).toBeInstanceOf(HTMLSelectElement);
-
-    act(() => {
-      if (!cursorStyle) throw new Error("Cursor style select not found");
-      cursorStyle.value = "pill";
-      cursorStyle.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    expect(patchTerminal).toHaveBeenCalledWith({ cursorStyle: "pill" });
-  });
-
   it("does not render the Appearance font dropdown controls", async () => {
     await act(async () => {
       root = createRoot(container);

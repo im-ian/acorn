@@ -147,48 +147,6 @@ async function getWrites(page: Page): Promise<string[]> {
 }
 
 test.describe("terminal: IME (PR #104 regression)", () => {
-  test("active IME preview owns the visible caret until commit", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    await runIme(page, [
-      { type: "keydown", key: "Process", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertCompositionText",
-        data: "입",
-        taValue: "입",
-      },
-    ]);
-
-    await expect(page.locator(".acorn-terminal")).toHaveClass(
-      /acorn-terminal-composing/,
-    );
-    const compositionView = page.locator(".composition-view.active");
-    await expect(compositionView).toHaveText("입");
-    await expect
-      .poll(async () =>
-        compositionView.evaluate((el) => getComputedStyle(el).backgroundColor),
-      )
-      .toBe("rgb(0, 0, 0)");
-
-    await runIme(page, [
-      {
-        type: "input",
-        inputType: "insertFromComposition",
-        data: "입",
-        taValue: "",
-      },
-    ]);
-
-    await expect(page.locator(".acorn-terminal")).not.toHaveClass(
-      /acorn-terminal-composing/,
-    );
-  });
-
   test("Korean syllable + spacebar terminator emits the syllable exactly once", async ({
     page,
     tauri,

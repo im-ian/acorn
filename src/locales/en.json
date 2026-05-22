@@ -42,17 +42,6 @@
         "label": "Line height",
         "hint": "Cell-height multiplier. 1.00 packs rows flush; raise for more vertical breathing room. Range 1.00-2.00."
       },
-      "cursorStyle": {
-        "label": "Cursor style",
-        "hint": "Shape used for both the xterm cursor and the IME composition preview cursor.",
-        "options": {
-          "block": "Block",
-          "bar": "Bar",
-          "underline": "Underline",
-          "outline": "Outline",
-          "pill": "Pill"
-        }
-      },
       "openLinksOn": {
         "label": "Open links on",
         "hint": "How to follow URLs that xterm detects in terminal output.",

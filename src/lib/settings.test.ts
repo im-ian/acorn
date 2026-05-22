@@ -103,66 +103,6 @@ describe("session removal settings", () => {
   });
 });
 
-describe("terminal cursor settings", () => {
-  const STORAGE_KEY = "acorn:settings:v1";
-  let storage: Map<string, string>;
-
-  beforeEach(() => {
-    storage = new Map();
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: {
-        get length() {
-          return storage.size;
-        },
-        clear: () => storage.clear(),
-        getItem: (key: string) => storage.get(key) ?? null,
-        key: (index: number) => Array.from(storage.keys())[index] ?? null,
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-        setItem: (key: string, value: string) => {
-          storage.set(key, value);
-        },
-      } satisfies Storage,
-    });
-  });
-
-  it("uses acorn's pill cursor by default", () => {
-    expect(DEFAULT_SETTINGS.terminal.cursorStyle).toBe("pill");
-  });
-
-  it("loads a persisted cursor style from the preset set", async () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ terminal: { cursorStyle: "pill" } }),
-    );
-
-    vi.resetModules();
-    const { useSettings } = await import("./settings");
-
-    expect(useSettings.getState().settings.terminal.cursorStyle).toBe(
-      "pill",
-    );
-  });
-
-  it("falls back for an unsupported cursor style", async () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        terminal: { cursorStyle: "beam" },
-      }),
-    );
-
-    vi.resetModules();
-    const { useSettings, DEFAULT_SETTINGS } = await import("./settings");
-
-    expect(useSettings.getState().settings.terminal.cursorStyle).toBe(
-      DEFAULT_SETTINGS.terminal.cursorStyle,
-    );
-  });
-});
-
 describe("AI commit command resolution", () => {
   it("runs Codex through non-interactive exec mode", () => {
     expect(
