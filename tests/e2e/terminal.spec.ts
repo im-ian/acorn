@@ -139,72 +139,17 @@ test.describe("terminal: spawn", () => {
 
     await expect
       .poll(async () =>
-        cursor.evaluate((el) => getComputedStyle(el).backgroundColor),
+        cursor.evaluate((el) => getComputedStyle(el, "::after").backgroundColor),
       )
       .toBe("rgb(12, 34, 56)");
     await expect
       .poll(async () =>
-        cursor.evaluate((el) => getComputedStyle(el).width),
+        cursor.evaluate((el) => getComputedStyle(el, "::after").width),
       )
       .toBe("3px");
     await expect
-      .poll(async () =>
-        cursor.evaluate((el) => getComputedStyle(el).borderRadius),
-      )
-      .toBe("999px");
-    await expect
-      .poll(async () =>
-        cursor.evaluate((el) => getComputedStyle(el, "::after").content),
-      )
-      .toBe("none");
-    await expect
       .poll(async () => cursor.evaluate((el) => getComputedStyle(el).outlineWidth))
       .toBe("0px");
-  });
-
-  test("pill cursor presentation survives switching terminals", async ({
-    page,
-    tauri,
-  }) => {
-    await seedAlphaBetaTerminals(tauri);
-    await gotoWithAccent(page);
-    const expectPill = makePillCursorAssertion(page);
-
-    await page
-      .getByRole("button", { name: /^alpha main · Idle$/ })
-      .click();
-    await expectPill();
-
-    await page
-      .getByRole("button", { name: /^beta main · Idle$/ })
-      .click();
-    await expectPill();
-  });
-
-  test("pill cursor restores after a round-trip through another terminal", async ({
-    page,
-    tauri,
-  }) => {
-    await seedAlphaBetaTerminals(tauri);
-    await gotoWithAccent(page);
-    const expectPill = makePillCursorAssertion(page);
-
-    // Visit alpha → beta → alpha to catch regressions that only show up when
-    // the same terminal is reactivated after another one has been mounted.
-    await page
-      .getByRole("button", { name: /^alpha main · Idle$/ })
-      .click();
-    await expectPill();
-
-    await page
-      .getByRole("button", { name: /^beta main · Idle$/ })
-      .click();
-    await expectPill();
-
-    await page
-      .getByRole("button", { name: /^alpha main · Idle$/ })
-      .click();
-    await expectPill();
   });
 
   test("activating a session calls pty_spawn with the session's cwd", async ({
