@@ -42,17 +42,6 @@
         "label": "줄 높이",
         "hint": "셀 높이 배율입니다. 1.00은 행을 촘촘히 배치하며, 값을 높이면 세로 여백이 늘어납니다. 범위는 1.00-2.00입니다."
       },
-      "cursorStyle": {
-        "label": "커서 스타일",
-        "hint": "xterm 커서와 IME 조합 미리보기 커서에 사용할 모양입니다.",
-        "options": {
-          "block": "블록",
-          "bar": "세로선",
-          "underline": "밑줄",
-          "outline": "외곽선",
-          "pill": "알약형"
-        }
-      },
       "openLinksOn": {
         "label": "링크 열기 방식",
         "hint": "xterm이 터미널 출력에서 감지한 URL을 여는 방식입니다.",

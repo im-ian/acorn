@@ -42,7 +42,6 @@ import {
 } from "../lib/terminalPaste";
 import {
   useSettings,
-  type TerminalCursorStyle,
   type TerminalLinkActivation,
 } from "../lib/settings";
 import { buildXtermTheme } from "../lib/terminalTheme";
@@ -131,81 +130,6 @@ const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
-const COMPOSING_CLASS = "acorn-terminal-composing";
-const CURSOR_STYLE_CLASS_PREFIX = "acorn-terminal-cursor-";
-
-function xtermCursorStyle(style: TerminalCursorStyle): "block" | "bar" | "underline" {
-  if (style === "outline") return "block";
-  if (style === "pill") return "bar";
-  return style;
-}
-
-function xtermCursorWidth(style: TerminalCursorStyle): number {
-  return style === "pill" ? 3 : 1;
-}
-
-function syncCursorStyleClass(
-  container: HTMLElement,
-  style: TerminalCursorStyle,
-): void {
-  for (const className of Array.from(container.classList)) {
-    if (className.startsWith(CURSOR_STYLE_CLASS_PREFIX)) {
-      container.classList.remove(className);
-    }
-  }
-  container.classList.add(`${CURSOR_STYLE_CLASS_PREFIX}${style}`);
-}
-
-function syncCursorPresentation(
-  container: HTMLElement,
-  style: TerminalCursorStyle,
-): void {
-  const cursor = container.querySelector<HTMLElement>(".xterm-cursor");
-  if (!cursor) return;
-  const setImportant = (name: string, value: string) => {
-    if (
-      cursor.style.getPropertyValue(name) === value &&
-      cursor.style.getPropertyPriority(name) === "important"
-    ) {
-      return;
-    }
-    cursor.style.setProperty(name, value, "important");
-  };
-  const removeProperty = (name: string) => {
-    if (!cursor.style.getPropertyValue(name)) return;
-    cursor.style.removeProperty(name);
-  };
-
-  if (style !== "pill") {
-    removeProperty("background-color");
-    removeProperty("border-color");
-    removeProperty("border-left-color");
-    removeProperty("border-left-style");
-    removeProperty("border-left-width");
-    removeProperty("border-radius");
-    removeProperty("outline");
-    removeProperty("width");
-    return;
-  }
-
-  const color =
-    getComputedStyle(container)
-      .getPropertyValue("--acorn-terminal-cursor-pill-color")
-      .trim() || "var(--color-accent, #7dd3fc)";
-  setImportant("background-color", color);
-  setImportant("border-left-width", "0");
-  setImportant("border-radius", "999px");
-  setImportant("outline", "0");
-  setImportant("width", "3px");
-}
-
-function syncCursorStyle(
-  container: HTMLElement,
-  style: TerminalCursorStyle,
-): void {
-  syncCursorStyleClass(container, style);
-  syncCursorPresentation(container, style);
-}
 
 // Custom event the sticky-prompt banner listens to. Fired whenever the user
 // scrolls the terminal so the banner can swap to the prompt "in scope" at
@@ -553,7 +477,6 @@ export function Terminal({
     // Snapshot terminal font preferences at mount; subsequent setting changes
     // are applied live via the subscription below.
     const initialSettings = useSettings.getState().settings;
-    let currentCursorStyle = initialSettings.terminal.cursorStyle;
     const term = new XTerm({
       theme: makeXtermTheme(
         terminalBackgroundActive(initialSettings.appearance.background),
@@ -565,8 +488,6 @@ export function Terminal({
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
       cursorBlink: isFocusedPane,
-      cursorStyle: xtermCursorStyle(initialSettings.terminal.cursorStyle),
-      cursorWidth: xtermCursorWidth(initialSettings.terminal.cursorStyle),
       allowProposedApi: true,
       scrollback: 5000,
       // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
@@ -655,19 +576,6 @@ export function Terminal({
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
     const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
-    let cursorStyleFrame: number | null = null;
-    const applyCurrentCursorStyle = () => {
-      syncCursorStyle(container, currentCursorStyle);
-    };
-    const scheduleCursorStyleSync = () => {
-      if (cursorStyleFrame !== null) return;
-      cursorStyleFrame = requestAnimationFrame(() => {
-        cursorStyleFrame = null;
-        applyCurrentCursorStyle();
-      });
-    };
-    applyCurrentCursorStyle();
-    scheduleCursorStyleSync();
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
@@ -822,17 +730,8 @@ export function Terminal({
           setLinkTooltip(null);
         }
       }
-      if (next.cursorStyle !== previous.cursorStyle) {
-        currentCursorStyle = next.cursorStyle;
-        term.options.cursorStyle = xtermCursorStyle(next.cursorStyle);
-        term.options.cursorWidth = xtermCursorWidth(next.cursorStyle);
-        applyCurrentCursorStyle();
-        scheduleCursorStyleSync();
-        term.refresh(0, term.rows - 1);
-      }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
-        scheduleCursorStyleSync();
       }
       const cjkNow = state.settings.experiments.cjkCellWidthHeuristic;
       const cjkPrev = prev.settings.experiments.cjkCellWidthHeuristic;
@@ -991,18 +890,12 @@ export function Terminal({
     const showComposing = (text: string) => {
       if (!compositionView) return;
       if (text.length === 0) {
-        container.classList.remove(COMPOSING_CLASS);
         compositionView.classList.remove("active");
         compositionView.textContent = "";
         return;
       }
       const cell = getCellDims();
-      container.classList.add(COMPOSING_CLASS);
       compositionView.textContent = text;
-      compositionView.style.backgroundColor = "#000";
-      compositionView.style.boxSizing = "border-box";
-      compositionView.style.overflow = "visible";
-      compositionView.style.whiteSpace = "pre";
       if (cell) {
         const buf = term.buffer.active;
         // xterm's visible cursor row = `baseY + cursorY - viewportY`
@@ -1019,32 +912,8 @@ export function Terminal({
         const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
         compositionView.style.left = `${buf.cursorX * cell.width}px`;
         compositionView.style.top = `${cursorViewportY * cell.height}px`;
-        compositionView.style.height = `${cell.height}px`;
         compositionView.style.minHeight = `${cell.height}px`;
         compositionView.style.lineHeight = `${cell.height}px`;
-        const cursorRect = container
-          .querySelector<HTMLElement>(".xterm-cursor")
-          ?.getBoundingClientRect();
-        const cursorWidth =
-          cursorRect && cursorRect.width > 0 ? cursorRect.width : cell.width;
-        const cursorHeight =
-          cursorRect && cursorRect.height > 0 ? cursorRect.height : cell.height;
-        compositionView.style.setProperty(
-          "--acorn-composition-cell-width",
-          `${cell.width}px`,
-        );
-        compositionView.style.setProperty(
-          "--acorn-composition-cell-height",
-          `${cell.height}px`,
-        );
-        compositionView.style.setProperty(
-          "--acorn-composition-cursor-width",
-          `${cursorWidth}px`,
-        );
-        compositionView.style.setProperty(
-          "--acorn-composition-cursor-height",
-          `${cursorHeight}px`,
-        );
       }
       // Sync font with the current xterm options so the preview uses the
       // user's configured terminal font/size, not the default sans inherited
@@ -1065,7 +934,6 @@ export function Terminal({
     };
     const hideComposing = () => {
       if (!compositionView) return;
-      container.classList.remove(COMPOSING_CLASS);
       compositionView.classList.remove("active");
       compositionView.textContent = "";
     };
@@ -1458,10 +1326,7 @@ export function Terminal({
       compositionView.style.left = `${buf.cursorX * cell.width}px`;
       compositionView.style.top = `${cursorViewportY * cell.height}px`;
     };
-    const renderDisposable = term.onRender(() => {
-      scheduleCursorStyleSync();
-      repositionComposing();
-    });
+    const renderDisposable = term.onRender(repositionComposing);
     // PTY output that arrives while the user is mid-composition can scroll
     // the viewport or move the prompt to a new row without producing an
     // `onRender` event whose painted region overlaps the cursor cell — the
@@ -2055,10 +1920,6 @@ export function Terminal({
       }
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
-      }
-      if (cursorStyleFrame !== null) {
-        cancelAnimationFrame(cursorStyleFrame);
-        cursorStyleFrame = null;
       }
       invoke("pty_kill", { sessionId }).catch(() => {
         // Backend may not implement pty_kill yet — safe to ignore.
