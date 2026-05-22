@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::worktree;
@@ -75,7 +76,9 @@ pub fn list_unscoped_agent_history(
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
     let mut items = Vec::new();
-    let scope = HistoryScope::Unscoped { projects: &projects };
+    let scope = HistoryScope::Unscoped {
+        projects: &projects,
+    };
     items.extend(scan_codex(scope));
     items.extend(scan_claude(scope));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -109,7 +112,7 @@ pub fn trash_agent_history_transcript(
             let root = codex_sessions_root()
                 .and_then(|p| p.canonicalize().ok())
                 .ok_or_else(|| AppError::InvalidPath("Codex sessions root missing".to_string()))?;
-            if !path.starts_with(&root) {
+            if !is_codex_transcript_path(&path, &root) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Codex sessions: {}",
                     path.display()
@@ -122,13 +125,12 @@ pub fn trash_agent_history_transcript(
             }
         }
         AgentHistoryProvider::Claude => {
-            let root = home_dir()
-                .map(|home| home.join(".claude"))
+            let root = claude_projects_root()
                 .and_then(|p| p.canonicalize().ok())
-                .ok_or_else(|| AppError::InvalidPath("Claude sessions root missing".to_string()))?;
-            if !path.starts_with(&root) {
+                .ok_or_else(|| AppError::InvalidPath("Claude projects root missing".to_string()))?;
+            if !is_claude_transcript_path(&path, &root) {
                 return Err(AppError::InvalidPath(format!(
-                    "transcript is outside Claude sessions: {}",
+                    "transcript is outside Claude projects: {}",
                     path.display()
                 )));
             }
@@ -175,14 +177,7 @@ fn scan_codex(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
     let Some(root) = codex_sessions_root() else {
         return Vec::new();
     };
-    let files = collect_files(&root, |path| {
-        path.extension().and_then(|s| s.to_str()) == Some("jsonl")
-            && path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|name| name.starts_with("rollout-"))
-                .unwrap_or(false)
-    });
+    let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
     files
         .into_iter()
         .filter_map(|path| parse_codex_file(&path, scope))
@@ -190,12 +185,10 @@ fn scan_codex(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
 }
 
 fn scan_claude(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
-    let Some(root) = home_dir().map(|home| home.join(".claude")) else {
+    let Some(root) = claude_projects_root() else {
         return Vec::new();
     };
-    let files = collect_files(&root, |path| {
-        path.extension().and_then(|s| s.to_str()) == Some("jsonl")
-    });
+    let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
     files
         .into_iter()
         .filter_map(|path| parse_claude_file(&path, scope))
@@ -478,7 +471,7 @@ fn string_at(value: Option<&Value>, key: &str) -> Option<String> {
 
 fn codex_id_from_filename(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
-    stem.rsplit('-').next().map(str::to_string)
+    uuid_suffix(stem)
 }
 
 fn codex_id_from_transcript(path: &Path) -> Option<String> {
@@ -500,6 +493,83 @@ fn codex_id_from_transcript(path: &Path) -> Option<String> {
 fn codex_transcript_matches_id(path: &Path, id: &str) -> bool {
     codex_id_from_filename(path).as_deref() == Some(id)
         || codex_id_from_transcript(path).as_deref() == Some(id)
+}
+
+fn is_codex_transcript_path(path: &Path, sessions_root: &Path) -> bool {
+    if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+        return false;
+    }
+    let Some(filename) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    if !filename.starts_with("rollout-") {
+        return false;
+    }
+    if codex_id_from_filename(path).is_none() {
+        return false;
+    }
+    let Ok(relative) = path.strip_prefix(sessions_root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(std::path::Component::Normal(year)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(month)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(day)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(_file)) = components.next() else {
+        return false;
+    };
+    components.next().is_none()
+        && numeric_component(year, 4)
+        && numeric_component(month, 2)
+        && numeric_component(day, 2)
+}
+
+fn is_claude_transcript_path(path: &Path, projects_root: &Path) -> bool {
+    if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+        return false;
+    }
+    if !path_has_uuid_stem(path) {
+        return false;
+    }
+    let Ok(relative) = path.strip_prefix(projects_root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(std::path::Component::Normal(_slug)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(_file)) = components.next() else {
+        return false;
+    };
+    components.next().is_none()
+}
+
+fn path_has_uuid_stem(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .map(|stem| Uuid::parse_str(stem).is_ok())
+        .unwrap_or(false)
+}
+
+fn uuid_suffix(stem: &str) -> Option<String> {
+    if stem.len() < 36 {
+        return None;
+    }
+    let suffix = &stem[stem.len() - 36..];
+    Uuid::parse_str(suffix).ok().map(|_| suffix.to_string())
+}
+
+fn numeric_component(component: &std::ffi::OsStr, len: usize) -> bool {
+    component
+        .to_str()
+        .map(|s| s.len() == len && s.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or(false)
 }
 
 fn collapse_preview(s: &str, max_chars: usize) -> Option<String> {
@@ -648,6 +718,10 @@ fn codex_sessions_root() -> Option<PathBuf> {
         .map(|root| root.join("sessions"))
 }
 
+fn claude_projects_root() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".claude").join("projects"))
+}
+
 fn home_dir() -> Option<PathBuf> {
     directories::UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
@@ -671,6 +745,78 @@ mod tests {
         .unwrap();
 
         assert!(codex_transcript_matches_id(&path, "payload-id"));
+    }
+
+    #[test]
+    fn codex_id_from_filename_extracts_full_uuid_suffix() {
+        let path = Path::new(
+            "/Users/tester/.codex/sessions/2026/05/21/rollout-2026-05-21T10-13-44-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl",
+        );
+
+        assert_eq!(
+            codex_id_from_filename(path).as_deref(),
+            Some("019e4818-7c15-7e60-9b3b-898a1c7803d6")
+        );
+    }
+
+    #[test]
+    fn codex_transcript_path_accepts_date_rollout_uuid_jsonl() {
+        let root = Path::new("/Users/tester/.codex/sessions");
+        let path = root.join(
+            "2026/05/21/rollout-2026-05-21T10-13-44-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl",
+        );
+
+        assert!(is_codex_transcript_path(&path, root));
+    }
+
+    #[test]
+    fn codex_transcript_path_rejects_global_history_jsonl() {
+        let root = Path::new("/Users/tester/.codex/sessions");
+        let path = Path::new("/Users/tester/.codex/history.jsonl");
+
+        assert!(!is_codex_transcript_path(path, root));
+    }
+
+    #[test]
+    fn codex_transcript_path_rejects_archived_sessions_rollout() {
+        let root = Path::new("/Users/tester/.codex/sessions");
+        let path = Path::new(
+            "/Users/tester/.codex/archived_sessions/rollout-2026-05-19T10-46-24-019e3de9-aa25-75f3-b357-48b38137df11.jsonl",
+        );
+
+        assert!(!is_codex_transcript_path(path, root));
+    }
+
+    #[test]
+    fn codex_transcript_path_rejects_non_rollout_session_jsonl() {
+        let root = Path::new("/Users/tester/.codex/sessions");
+        let path = root.join("2026/05/21/history.jsonl");
+
+        assert!(!is_codex_transcript_path(&path, root));
+    }
+
+    #[test]
+    fn claude_transcript_path_accepts_project_uuid_jsonl() {
+        let root = Path::new("/Users/tester/.claude/projects");
+        let path = root.join("-Users-tester-demo/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+
+        assert!(is_claude_transcript_path(&path, root));
+    }
+
+    #[test]
+    fn claude_transcript_path_rejects_global_history_jsonl() {
+        let root = Path::new("/Users/tester/.claude/projects");
+        let path = Path::new("/Users/tester/.claude/history.jsonl");
+
+        assert!(!is_claude_transcript_path(path, root));
+    }
+
+    #[test]
+    fn claude_transcript_path_rejects_non_uuid_project_jsonl() {
+        let root = Path::new("/Users/tester/.claude/projects");
+        let path = root.join("-Users-tester-demo/history.jsonl");
+
+        assert!(!is_claude_transcript_path(&path, root));
     }
 
     #[test]
