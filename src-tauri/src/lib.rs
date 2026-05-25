@@ -27,6 +27,7 @@ mod unified_diff;
 mod worktree;
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
@@ -73,6 +74,97 @@ fn remove_empty_home_project_mirror(state: &AppState) -> bool {
         );
     }
     removed
+}
+
+fn path_basename(path: &Path) -> String {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_else(|| path.to_str().unwrap_or("project"))
+        .to_string()
+}
+
+fn normalize_loaded_project_path(path: &Path) -> PathBuf {
+    worktree::project_root_for_path(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn normalize_loaded_project(mut project: acorn_session::Project) -> (acorn_session::Project, bool) {
+    let repo_path = normalize_loaded_project_path(&project.repo_path);
+    let changed = repo_path != project.repo_path;
+    if changed {
+        project.name = path_basename(&repo_path);
+        project.repo_path = repo_path;
+    }
+    (project, changed)
+}
+
+fn normalize_loaded_session(mut session: acorn_session::Session) -> (acorn_session::Session, bool) {
+    if !session.project_scoped {
+        return (session, false);
+    }
+    let repo_path = normalize_loaded_project_path(&session.repo_path);
+    let changed = repo_path != session.repo_path;
+    if changed {
+        session.repo_path = repo_path;
+    }
+    (session, changed)
+}
+
+#[cfg(test)]
+mod project_path_tests {
+    use super::*;
+    use acorn_session::{Project, Session, SessionKind};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-project-path-test-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn loaded_project_uses_git_root_for_subdirectory_path() {
+        let root = unique_temp_dir("project");
+        git2::Repository::init(&root).expect("init repo");
+        let subdir = root.join("packages").join("web");
+        std::fs::create_dir_all(&subdir).expect("create subdir");
+        let project = Project::new(subdir, "web".to_string(), 0);
+
+        let (normalized, changed) = normalize_loaded_project(project);
+
+        assert!(changed);
+        assert_eq!(normalized.repo_path, root.canonicalize().unwrap());
+        assert_eq!(normalized.name, path_basename(&root));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn loaded_project_session_keeps_cwd_but_groups_by_git_root() {
+        let root = unique_temp_dir("session");
+        git2::Repository::init(&root).expect("init repo");
+        let subdir = root.join("packages").join("web");
+        std::fs::create_dir_all(&subdir).expect("create subdir");
+        let session = Session::new(
+            "web".to_string(),
+            subdir.clone(),
+            subdir.clone(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+
+        let (normalized, changed) = normalize_loaded_session(session);
+
+        assert!(changed);
+        assert_eq!(normalized.repo_path, root.canonicalize().unwrap());
+        assert_eq!(normalized.worktree_path, subdir);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -239,7 +331,10 @@ pub fn run() {
                     tracing::warn!("session path resolution failed at boot: {err}");
                     (Vec::new(), false)
                 });
+            let mut sessions_dirty = false;
             for session in sessions_loaded {
+                let (session, changed) = normalize_loaded_session(session);
+                sessions_dirty |= changed;
                 state.sessions.insert(session);
             }
             let (projects_loaded, projects_clean) = persistence::load_projects_with_status()
@@ -247,7 +342,22 @@ pub fn run() {
                     tracing::warn!("project path resolution failed at boot: {err}");
                     (Vec::new(), false)
                 });
+            let mut projects_dirty = false;
+            let mut projects_loaded = projects_loaded
+                .into_iter()
+                .map(|project| {
+                    let (project, changed) = normalize_loaded_project(project);
+                    projects_dirty |= changed;
+                    project
+                })
+                .collect::<Vec<_>>();
+            projects_loaded.sort_by_key(|project| project.position);
+            let mut seen_projects = std::collections::HashSet::new();
             for project in projects_loaded {
+                if !seen_projects.insert(project.repo_path.clone()) {
+                    projects_dirty = true;
+                    continue;
+                }
                 state.projects.insert(project);
             }
             state
@@ -272,8 +382,16 @@ pub fn run() {
                 state.projects.ensure(session.repo_path.clone(), name);
             }
             if remove_empty_home_project_mirror(&state) {
+                projects_dirty = true;
+            }
+            if sessions_dirty {
+                if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
+                    tracing::warn!("failed to persist sessions after project path cleanup: {err}");
+                }
+            }
+            if projects_dirty {
                 if let Err(err) = persistence::save_projects(&state.projects.list()) {
-                    tracing::warn!("failed to persist projects after local mirror cleanup: {err}");
+                    tracing::warn!("failed to persist projects after project path cleanup: {err}");
                 }
             }
             // Drop scrollback files that no longer have a matching session.

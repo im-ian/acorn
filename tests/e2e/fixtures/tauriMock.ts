@@ -12,7 +12,7 @@ export const tauriMockSource = `
   const handlers = window.__ACORN_MOCK_HANDLERS__ || {};
   let nextCallbackId = 0;
 
-  function pluginDefault(cmd) {
+  function pluginDefault(cmd, args) {
     if (cmd === 'plugin:event|listen') return Promise.resolve(nextCallbackId++);
     if (cmd === 'plugin:event|unlisten') return Promise.resolve(undefined);
     if (cmd === 'plugin:event|emit') return Promise.resolve(undefined);
@@ -25,10 +25,22 @@ export const tauriMockSource = `
     if (cmd === 'plugin:window|destroy') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|close') return Promise.resolve(undefined);
     if (cmd === 'plugin:path|resolve_directory') return Promise.resolve('/Users/tester');
+    if (cmd === 'plugin:path|app_local_data_dir') return Promise.resolve('/tmp/acorn-e2e');
+    if (cmd === 'plugin:path|join') {
+      const paths = Array.isArray(args?.paths) ? args.paths : [];
+      return Promise.resolve(paths.join('/').replace(/\\/+/g, '/'));
+    }
+    if (cmd === 'plugin:fs|exists') return Promise.resolve(false);
+    if (cmd === 'plugin:fs|mkdir') return Promise.resolve(undefined);
+    if (cmd === 'plugin:fs|read_dir') return Promise.resolve([]);
+    if (cmd === 'plugin:fs|read_text_file') return Promise.resolve('');
     return undefined;
   }
 
   function appDefault(cmd, args) {
+    if (cmd === 'load_status') {
+      return Promise.resolve({ sessionsClean: true, projectsClean: true });
+    }
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
     if (cmd === 'create_new_project') {
@@ -191,7 +203,7 @@ export const tauriMockSource = `
           return Promise.reject(err);
         }
       }
-      const plugin = pluginDefault(cmd);
+      const plugin = pluginDefault(cmd, args);
       if (plugin !== undefined) return plugin;
       return appDefault(cmd, args);
     },

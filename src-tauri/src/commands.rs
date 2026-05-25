@@ -720,19 +720,25 @@ pub async fn create_session(
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: Option<bool>,
 ) -> AppResult<Session> {
-    let repo = PathBuf::from(&repo_path);
-    if !repo.exists() {
+    let selected_path = PathBuf::from(&repo_path);
+    if !selected_path.exists() {
         return Err(AppError::InvalidPath(repo_path));
     }
 
     let isolated = isolated.unwrap_or(false);
     let project_scoped = project_scoped.unwrap_or(true);
+    let selected_path = selected_path.canonicalize()?;
+    let repo = if project_scoped || isolated {
+        worktree::project_root_for_path(&selected_path)?
+    } else {
+        selected_path.clone()
+    };
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
         let (_safe_name, path) = create_unique_worktree(&repo, &base)?;
         path
     } else {
-        repo.clone()
+        selected_path
     };
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let mut session = Session::new(
@@ -764,6 +770,7 @@ pub fn add_project(state: State<'_, AppState>, repo_path: String) -> AppResult<P
     if !path.exists() {
         return Err(AppError::InvalidPath(repo_path));
     }
+    let path = worktree::project_root_for_path(&path)?;
     let project = state.projects.ensure(path.clone(), project_basename(&path));
     persist(&state);
     Ok(project)
