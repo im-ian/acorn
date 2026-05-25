@@ -1414,7 +1414,7 @@ function LocalTerminalArea({
         onFocusArea();
       }}
       className={cn(
-        "mt-4 flex min-h-28 flex-1 flex-col pt-2",
+        "mt-4 flex min-h-28 shrink-0 flex-col pt-2",
         "rounded-md focus:outline-none",
       )}
     >

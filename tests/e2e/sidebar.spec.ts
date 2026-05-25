@@ -4,6 +4,7 @@ test.describe("sidebar: project lifecycle", () => {
   test("Korean mode localizes project chrome and empty state", async ({
     page,
   }) => {
+    test.slow();
     await seedSettingsLanguage(page, "ko");
 
     await page.goto("/");
@@ -45,6 +46,60 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(
       page.getByRole("button", { name: "Double-click to start a session." }),
     ).toBeVisible();
+  });
+
+  test("instant sessions area stays compact when projects are present", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => []);
+
+    await page.goto("/");
+
+    const instantSessions = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    await expect(instantSessions).toBeVisible();
+
+    const box = await instantSessions.boundingBox();
+    expect(box?.height).toBeLessThanOrEqual(180);
+  });
+
+  test("projects and instant sessions headers use the same font size", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => []);
+
+    await page.goto("/");
+
+    const projects = page.getByRole("heading", { name: "Projects" });
+    const instantSessions = page.getByText("Instant sessions", { exact: true });
+    await expect(projects).toBeVisible();
+    await expect(instantSessions).toBeVisible();
+
+    const [projectsFontSize, instantSessionsFontSize] = await Promise.all([
+      projects.evaluate((el) => getComputedStyle(el).fontSize),
+      instantSessions.evaluate((el) => getComputedStyle(el).fontSize),
+    ]);
+    expect(instantSessionsFontSize).toBe(projectsFontSize);
+    expect(instantSessionsFontSize).toBe("12px");
   });
 
   test("clicking the instant sessions add button creates a local terminal session", async ({

@@ -32,6 +32,17 @@ pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
     })
 }
 
+pub fn project_root_for_path(path: &Path) -> AppResult<PathBuf> {
+    if let Ok(repo) = Repository::discover(path) {
+        if let Some(workdir) = repo.workdir() {
+            return Ok(workdir
+                .canonicalize()
+                .unwrap_or_else(|_| workdir.to_path_buf()));
+        }
+    }
+    path.canonicalize().map_err(AppError::from)
+}
+
 fn walk_to_existing_ancestor(path: &Path) -> PathBuf {
     let mut probe = path.to_path_buf();
     while !probe.exists() {
@@ -198,6 +209,35 @@ mod tests {
             root.canonicalize().unwrap(),
         );
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn project_root_for_path_returns_repo_workdir_from_subdirectory() {
+        let root = unique_temp_dir("project-root-subdir");
+        Repository::init(&root).expect("init repo");
+        let subdir = root.join("packages").join("web");
+        std::fs::create_dir_all(&subdir).expect("nested dirs");
+
+        let resolved = project_root_for_path(&subdir).expect("project root");
+
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn project_root_for_path_falls_back_to_directory_when_not_git() {
+        let root = unique_temp_dir("project-root-nongit");
+
+        let resolved = project_root_for_path(&root).expect("canonical directory");
+
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
