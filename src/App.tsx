@@ -26,6 +26,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { FolderPermissionWarmupModal } from "./components/FolderPermissionWarmupModal";
 import {
   api,
   AGENT_HOOK_STATUS_EVENT,
@@ -57,6 +58,7 @@ import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
+import { shouldShowPermissionWarmup } from "./lib/permissionWarmup";
 import {
   normalizeUiScalePercent,
   UI_SCALE_PERCENT_STEP,
@@ -173,6 +175,7 @@ function App() {
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
+  const [permissionWarmupOpen, setPermissionWarmupOpen] = useState(false);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const [resumeCandidates, setResumeCandidates] = useState<
     Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
@@ -196,6 +199,7 @@ function App() {
   const themes = useThemes((s) => s.themes);
   const refreshThemes = useThemes((s) => s.refresh);
   const appearance = useSettings((s) => s.settings.appearance);
+  const currentVersion = useUpdater((s) => s.currentVersion);
 
   useEffect(() => {
     void refreshThemes();
@@ -523,6 +527,23 @@ function App() {
     );
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const testWindow = window as typeof window & {
+      __ACORN_TEST_MODE__?: boolean;
+      __ACORN_ENABLE_PERMISSION_WARMUP__?: boolean;
+    };
+    if (
+      testWindow.__ACORN_TEST_MODE__ &&
+      !testWindow.__ACORN_ENABLE_PERMISSION_WARMUP__
+    ) {
+      return;
+    }
+    if (shouldShowPermissionWarmup(currentVersion, navigator.platform)) {
+      setPermissionWarmupOpen(true);
+    }
+  }, [currentVersion]);
 
   useEffect(() => {
     return startSessionNotificationWatcher();
@@ -1200,6 +1221,11 @@ function App() {
             window.localStorage.setItem(CONTROL_GUIDE_DISMISSED_KEY, "1");
           }
         }}
+      />
+      <FolderPermissionWarmupModal
+        open={permissionWarmupOpen}
+        currentVersion={currentVersion}
+        onClose={() => setPermissionWarmupOpen(false)}
       />
       <SettingsModal />
       <StagedRevMismatchModal
