@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activeSessionIdFromTabId,
   isProcessBackedWorkspaceTab,
@@ -8,6 +8,10 @@ import {
   makeCodeWorkspaceTab,
   makeSessionWorkspaceTab,
 } from "./workspaceTabs";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("workspace tab identity", () => {
   it("treats session ids as process-backed tab ids", () => {
@@ -62,5 +66,22 @@ describe("workspace tab lifecycle", () => {
     });
     expect(isRestorableWorkspaceTab(ephemeral)).toBe(false);
     expect(isRestorableWorkspaceTab(restorable)).toBe(true);
+  });
+
+  it("adds one-shot code viewer targets when requested", () => {
+    vi.spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
+
+    const tab = makeCodeWorkspaceTab("/repo/src/App.tsx", "/repo", "ephemeral", {
+      line: 42,
+      column: 7,
+    });
+
+    expect(tab.target).toEqual({
+      line: 42,
+      column: 7,
+      token: "00000000-0000-4000-8000-000000000002",
+    });
   });
 });

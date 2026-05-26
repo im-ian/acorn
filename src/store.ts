@@ -28,6 +28,7 @@ import {
   isRestorableWorkspaceTab,
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
+  makeCodeWorkspaceTabTarget,
   type FrontendWorkspaceTab,
 } from "./lib/workspaceTabs";
 import {
@@ -218,7 +219,11 @@ interface AppStateModel {
   clearReadSessionNotifications: () => void;
   toggleMultiInput: () => boolean;
   /** Open a readonly code viewer tab for `path` in the focused pane. */
-  openCodeViewerTab: (path: string, repoPath?: string) => void;
+  openCodeViewerTab: (
+    path: string,
+    repoPath?: string,
+    target?: { line?: number; column?: number },
+  ) => void;
   /** Close any frontend-owned tab and remove it from panes. */
   closeWorkspaceTab: (id: string) => void;
 }
@@ -1719,7 +1724,7 @@ export const useAppStore = create<AppStateModel>()(
     return enabled;
   },
 
-  openCodeViewerTab(path, repoPath) {
+  openCodeViewerTab(path, repoPath, target) {
     set((s) => {
       if (!s.activeProject) return s;
       const ws = s.workspaces[s.activeProject];
@@ -1740,7 +1745,30 @@ export const useAppStore = create<AppStateModel>()(
           tab.path === path &&
           tab.repoPath === targetRepoPath,
       );
-      const tab = existing ?? makeCodeWorkspaceTab(path, targetRepoPath);
+      const normalizedTarget =
+        target?.line && Number.isSafeInteger(target.line) && target.line > 0
+          ? {
+              line: target.line,
+              ...(target.column &&
+              Number.isSafeInteger(target.column) &&
+              target.column > 0
+                ? { column: target.column }
+                : {}),
+            }
+          : undefined;
+      const tab = existing
+        ? {
+            ...existing,
+            target: normalizedTarget
+              ? makeCodeWorkspaceTabTarget(normalizedTarget)
+              : undefined,
+          }
+        : makeCodeWorkspaceTab(
+            path,
+            targetRepoPath,
+            "ephemeral",
+            normalizedTarget,
+          );
       const alreadyInPane = pane.tabIds.includes(tab.id);
       const newPane: PaneState = alreadyInPane
         ? activatePaneTab(pane, tab.id)
@@ -1758,7 +1786,7 @@ export const useAppStore = create<AppStateModel>()(
       };
       return {
         workspaceTabs: existing
-          ? s.workspaceTabs
+          ? { ...s.workspaceTabs, [existing.id]: tab }
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
         ...mirrorActive(newWorkspaces, s.activeProject),

@@ -17,10 +17,12 @@ import {
   type VirtualizedLineListHandle,
 } from "./VirtualizedLines";
 import { Markdown } from "./ui/Markdown";
+import type { CodeWorkspaceTabTarget } from "../lib/workspaceTabs";
 
 interface CodeViewerProps {
   path: string;
   isActive: boolean;
+  target?: CodeWorkspaceTabTarget;
 }
 
 interface ViewerState {
@@ -70,7 +72,7 @@ function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXT_RE.test(path);
 }
 
-export function CodeViewer({ path, isActive }: CodeViewerProps) {
+export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   const t = useTranslation();
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
@@ -180,6 +182,13 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   const currentMatchCount = previewMode
     ? previewMatchCount
     : searchMatches.length;
+  const targetLineIndex =
+    target &&
+    target.line >= 1 &&
+    target.line <= sourceLines.length &&
+    !previewMode
+      ? target.line - 1
+      : null;
 
   const openSearch = useCallback(() => {
     setSearchOpen(true);
@@ -242,6 +251,11 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
       removePreviewSearchMarks(root);
     };
   }, [activeMatchIndex, effectiveSearchQuery, previewMode]);
+
+  useEffect(() => {
+    if (targetLineIndex === null) return;
+    lineListRef.current?.scrollToIndex(targetLineIndex, "center");
+  }, [target?.token, targetLineIndex]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -322,6 +336,7 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
               diff={diffByLine.get(index + 1)}
               gutterWidth={gutterWidth}
               searchMatches={searchMatchesByLine.get(index) ?? []}
+              focused={targetLineIndex === index}
             />
           )}
         />
@@ -413,6 +428,7 @@ function CodeLine({
   diff,
   gutterWidth,
   searchMatches,
+  focused,
 }: {
   index: number;
   rawText: string;
@@ -420,9 +436,14 @@ function CodeLine({
   diff?: FsLineDiffEntry["kind"];
   gutterWidth: number;
   searchMatches: LineSearchMatch[];
+  focused: boolean;
 }) {
   return (
-    <div className="flex whitespace-pre" {...lineIndexProps(index)}>
+    <div
+      className={cn("flex whitespace-pre", focused ? "bg-accent/10" : "")}
+      data-acorn-target-line={focused ? "true" : undefined}
+      {...lineIndexProps(index)}
+    >
       <span
         aria-hidden
         className={cn(

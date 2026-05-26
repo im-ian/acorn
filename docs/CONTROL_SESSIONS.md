@@ -109,14 +109,16 @@ state, IPC sockets, daemon sockets, and staged shell init files to an
 explicit directory.
 
 > **Gotcha for agents running inside an Acorn terminal.** Acorn injects
-> `ACORN_DATA_DIR` into the PTY env so bundled CLIs talk to the right
+> `ACORN_DATA_DIR`, `ACORN_IPC_SOCKET`, `ACORN_DAEMON_SOCKET`, and related
+> session metadata into the PTY env so bundled CLIs talk to the right
 > profile. `acorn-paths::data_dir` resolves `ACORN_DATA_DIR` **before** the
-> profile fallback (see `src-tauri/crates/acorn-paths/src/lib.rs`), so
-> running `pnpm run tauri dev` from that shell makes the debug build inherit
-> the host's `profiles/prod` directory — it reuses the prod sessions, prod
-> daemon socket, and prod sidecar persistence, even though it is a debug
-> binary. The dev app and the installed app then fight over the same daemon
-> and `sessions.json`.
+> profile fallback (see `src-tauri/crates/acorn-paths/src/lib.rs`), and
+> `acorn-ipc` resolves `ACORN_IPC_SOCKET` **before** computed profile paths.
+> Running `pnpm run tauri dev` from that shell can make the debug build
+> inherit the host's `profiles/prod` directory or prod IPC socket — it reuses
+> the prod sessions, prod daemon socket, and prod sidecar persistence, even
+> though it is a debug binary. The dev app and the installed app then fight
+> over the same daemon and `sessions.json`.
 >
 > When launching `tauri dev` from inside a control session, strip the
 > inherited overrides (and any other prod-only env Acorn injects) and pin
@@ -124,7 +126,11 @@ explicit directory.
 >
 > ```sh
 > env -u ACORN_DATA_DIR \
+>     -u ACORN_IPC_SOCKET \
+>     -u ACORN_DAEMON_SOCKET \
 >     -u ACORN_AGENT_STATE_DIR \
+>     -u ACORN_AGENT_WRAPPER_DIR \
+>     -u ACORN_CLI_DIR \
 >     -u ACORN_RESUME_TOKEN \
 >     -u ACORN_STAGED_REV \
 >     -u ACORN_USER_ZDOTDIR \
