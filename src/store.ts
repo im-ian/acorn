@@ -49,6 +49,18 @@ let pendingStatusPollAll = false;
 let pendingStatusPollIds = new Set<string>();
 let activeStatusPollAll = false;
 let activeStatusPollIds = new Set<string>();
+let refreshSessionsSeq = 0;
+let sessionPlacementSeq = 0;
+
+interface SessionPlacementIntent {
+  repoPath: string;
+  paneId: PaneId;
+  anchorTabId: string | null;
+  sequence: number;
+}
+
+const sessionPlacementById = new Map<string, SessionPlacementIntent>();
+const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
 
 export interface PaneState {
   id: PaneId;
@@ -553,6 +565,171 @@ function updateActiveWorkspace(
   };
 }
 
+function captureSessionPlacementIntent(
+  s: AppStateModel,
+  repoPath: string,
+): SessionPlacementIntent | null {
+  const ws = s.workspaces[repoPath];
+  if (!ws) return null;
+  const pane = ws.panes[ws.focusedPaneId];
+  if (!pane) return null;
+  return {
+    repoPath,
+    paneId: ws.focusedPaneId,
+    anchorTabId: pane.activeTabId,
+    sequence: ++sessionPlacementSeq,
+  };
+}
+
+function samePlacementGroup(
+  a: SessionPlacementIntent,
+  b: SessionPlacementIntent,
+): boolean {
+  return (
+    a.repoPath === b.repoPath &&
+    a.paneId === b.paneId &&
+    a.anchorTabId === b.anchorTabId
+  );
+}
+
+function pruneSessionPlacementGroup(
+  placement: SessionPlacementIntent,
+  sessions: Session[],
+): void {
+  for (const active of activeSessionPlacementIntents) {
+    if (samePlacementGroup(active, placement)) return;
+  }
+  const visibleSessionIds = new Set(sessions.map((session) => session.id));
+  // Keep sibling placement records until every created tab in the group has
+  // appeared in a session refresh; later siblings need earlier sequences.
+  for (const [sessionId, existing] of sessionPlacementById) {
+    if (
+      samePlacementGroup(existing, placement) &&
+      !visibleSessionIds.has(sessionId)
+    ) {
+      return;
+    }
+  }
+  for (const [sessionId, existing] of sessionPlacementById) {
+    if (samePlacementGroup(existing, placement)) {
+      sessionPlacementById.delete(sessionId);
+    }
+  }
+}
+
+function insertionIndexForPlacement(
+  tabIds: string[],
+  placement: SessionPlacementIntent,
+): number {
+  if (!placement.anchorTabId) {
+    const firstLaterSibling = tabIds.findIndex((id) => {
+      const other = sessionPlacementById.get(id);
+      return (
+        other !== undefined &&
+        samePlacementGroup(other, placement) &&
+        other.sequence > placement.sequence
+      );
+    });
+    return firstLaterSibling >= 0 ? firstLaterSibling : tabIds.length;
+  }
+
+  const anchorIndex = tabIds.indexOf(placement.anchorTabId);
+  if (anchorIndex < 0) return tabIds.length;
+
+  let index = anchorIndex + 1;
+  while (index < tabIds.length) {
+    const other = sessionPlacementById.get(tabIds[index]);
+    if (
+      !other ||
+      !samePlacementGroup(other, placement) ||
+      other.sequence > placement.sequence
+    ) {
+      break;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function applySessionPlacementIntent(
+  s: AppStateModel,
+  sessionId: string,
+  placement: SessionPlacementIntent | null,
+): AppStateModel | Partial<AppStateModel> {
+  if (!placement) return s;
+  if (!s.sessions.some((session) => session.id === sessionId)) return s;
+
+  const ws = s.workspaces[placement.repoPath];
+  const targetPane = ws?.panes[placement.paneId];
+  if (!ws || !targetPane) return s;
+
+  let changed = false;
+  const newPanes: Record<PaneId, PaneState> = {};
+  for (const [pid, pane] of Object.entries(ws.panes)) {
+    if (!pane.tabIds.includes(sessionId)) {
+      newPanes[pid as PaneId] = pane;
+      continue;
+    }
+    changed = true;
+    const tabIds = pane.tabIds.filter((id) => id !== sessionId);
+    newPanes[pid as PaneId] = {
+      ...pane,
+      tabIds,
+      activeTabId:
+        pane.activeTabId === sessionId
+          ? tabIds[tabIds.length - 1] ?? null
+          : pane.activeTabId,
+    };
+  }
+
+  const targetAfterRemoval = newPanes[placement.paneId] ?? targetPane;
+  const targetIds = [...targetAfterRemoval.tabIds];
+  const insertAt = insertionIndexForPlacement(targetIds, placement);
+  targetIds.splice(insertAt, 0, sessionId);
+  changed =
+    changed ||
+    targetAfterRemoval.tabIds.length !== targetIds.length ||
+    targetAfterRemoval.tabIds.some((id, index) => id !== targetIds[index]);
+
+  if (!changed) return s;
+
+  const newWs: ProjectWorkspace = {
+    ...ws,
+    panes: {
+      ...newPanes,
+      [placement.paneId]: {
+        ...targetAfterRemoval,
+        tabIds: targetIds,
+      },
+    },
+  };
+  const workspaces = { ...s.workspaces, [placement.repoPath]: newWs };
+  return {
+    workspaces,
+    ...(s.activeProject === placement.repoPath
+      ? mirrorActive(workspaces, placement.repoPath)
+      : {}),
+  };
+}
+
+function applyKnownSessionPlacementIntents(s: AppStateModel): AppStateModel {
+  let next = s;
+  const pruneAfterApply: SessionPlacementIntent[] = [];
+  for (const [sessionId, placement] of Array.from(sessionPlacementById)) {
+    const patch = applySessionPlacementIntent(next, sessionId, placement);
+    if (patch !== next) {
+      next = { ...next, ...patch };
+    }
+    if (next.sessions.some((session) => session.id === sessionId)) {
+      pruneAfterApply.push(placement);
+    }
+  }
+  for (const placement of pruneAfterApply) {
+    pruneSessionPlacementGroup(placement, next.sessions);
+  }
+  return next;
+}
+
 export const useAppStore = create<AppStateModel>()(
   persist(
     (set, get) => ({
@@ -606,9 +783,11 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async refreshSessions() {
+    const seq = ++refreshSessionsSeq;
     set({ loading: true, error: null });
     try {
       const sessions = await api.listSessions();
+      if (seq !== refreshSessionsSeq) return;
       set((s) => {
         const allowEmptyWipe = s.sessionsLoadedCleanly;
         const reconciled = reconcileWorkspaces(
@@ -625,7 +804,8 @@ export const useAppStore = create<AppStateModel>()(
         const sessionIds = new Set(sessions.map((session) => session.id));
         const shouldPruneActivity =
           s.sessionsLoadedCleanly || sessions.length > 0;
-        return {
+        const nextState: AppStateModel = {
+          ...s,
           sessions,
           loading: false,
           error: null,
@@ -639,9 +819,11 @@ export const useAppStore = create<AppStateModel>()(
           activeProject: reconciled.activeProject,
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
         };
+        return applyKnownSessionPlacementIntents(nextState);
       });
       void get().refreshLiveInWorktree();
     } catch (e) {
+      if (seq !== refreshSessionsSeq) return;
       set({ loading: false, error: errorMessage(e) });
     }
   },
@@ -1148,23 +1330,14 @@ export const useAppStore = create<AppStateModel>()(
     projectScoped = true,
   ) {
     set({ loading: true, error: null });
+    // Capture the user's intended insertion point before the backend call.
+    // Multiple creates can be in flight at once, so the intent records the
+    // anchor tab id plus a client-side sequence instead of a numeric index
+    // that may be stale by the time the session is returned.
+    const placement = captureSessionPlacementIntent(get(), repoPath);
+    if (placement) activeSessionPlacementIntents.add(placement);
+    let createdId: string | null = null;
     try {
-      // Snapshot the previously-active tab's index in the focused pane so
-      // we can land the new tab right after it (browser-style). Captured
-      // before `api.createSession` so the post-refresh reorder is anchored
-      // to the user's view at hotkey-press time, not the post-reconcile
-      // append position.
-      const beforeSnap = (() => {
-        const s = get();
-        const ws = s.workspaces[repoPath];
-        if (!ws) return null;
-        const paneId = ws.focusedPaneId;
-        const pane = ws.panes[paneId];
-        if (!pane?.activeTabId) return null;
-        const idx = pane.tabIds.indexOf(pane.activeTabId);
-        return idx >= 0 ? { paneId, idx } : null;
-      })();
-
       const created =
         projectScoped === false
           ? await api.createSession(
@@ -1182,41 +1355,12 @@ export const useAppStore = create<AppStateModel>()(
               kind,
               agentProvider,
             );
+      createdId = created.id;
       await get().refreshAll();
 
-      // Reorder so the new tab sits immediately after the previously-active
-      // tab in the same pane. `reconcileWorkspace` always appends new
-      // sessions at the end of `focusedPaneId.tabIds`; this step
-      // converts that to "next to active" without changing reconcile's
-      // boot-time behavior.
-      if (beforeSnap) {
-        set((s) => {
-          const ws = s.workspaces[repoPath];
-          if (!ws) return s;
-          const pane = ws.panes[beforeSnap.paneId];
-          if (!pane) return s;
-          const currentIdx = pane.tabIds.indexOf(created.id);
-          if (currentIdx < 0) return s;
-          const targetIdx = Math.min(
-            beforeSnap.idx + 1,
-            pane.tabIds.length - 1,
-          );
-          if (currentIdx === targetIdx) return s;
-          const ids = pane.tabIds.filter((id) => id !== created.id);
-          ids.splice(targetIdx, 0, created.id);
-          const newPane = { ...pane, tabIds: ids };
-          const newWs = {
-            ...ws,
-            panes: { ...ws.panes, [beforeSnap.paneId]: newPane },
-          };
-          const workspaces = { ...s.workspaces, [repoPath]: newWs };
-          return {
-            workspaces,
-            ...(s.activeProject === repoPath
-              ? mirrorActive(workspaces, repoPath)
-              : {}),
-          };
-        });
+      if (placement) {
+        sessionPlacementById.set(created.id, placement);
+        set((s) => applySessionPlacementIntent(s, created.id, placement));
       }
 
       // Focus the new session so Cmd+T (and any other entry point that goes
@@ -1248,11 +1392,22 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
       return null;
+    } finally {
+      if (placement) {
+        activeSessionPlacementIntents.delete(placement);
+        if (
+          createdId === null ||
+          get().sessions.some((session) => session.id === createdId)
+        ) {
+          pruneSessionPlacementGroup(placement, get().sessions);
+        }
+      }
     }
   },
 
   async removeSession(id, removeWorktree = false) {
     const owning = findTabOwner(get(), id);
+    sessionPlacementById.delete(id);
     set((s) => {
       if (!s.sessions.some((session) => session.id === id)) return s;
 

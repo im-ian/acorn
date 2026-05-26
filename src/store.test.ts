@@ -996,6 +996,35 @@ describe("reconcile via refreshSessions", () => {
     expect(s.panes[s.focusedPaneId].tabIds.sort()).toEqual(["a1", "a2"]);
   });
 
+  it("ignores stale refresh results that resolve after a newer session list", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1]);
+
+    const stale = deferred<Session[]>();
+    const fresh = deferred<Session[]>();
+    mockApi.listSessions
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise);
+
+    const staleRefresh = useAppStore.getState().refreshSessions();
+    const freshRefresh = useAppStore.getState().refreshSessions();
+
+    fresh.resolve([a1, a2]);
+    await freshRefresh;
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual([
+      "a1",
+      "a2",
+    ]);
+
+    stale.resolve([a1]);
+    await staleRefresh;
+
+    const s = useAppStore.getState();
+    expect(s.sessions.map((session) => session.id)).toEqual(["a1", "a2"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", "a2"]);
+  });
+
   it("does NOT wipe persisted tabIds when load_status reports unclean", async () => {
     // Seed: persisted layout with two sessions in one pane.
     await seed(
@@ -1413,6 +1442,87 @@ describe("createSession", () => {
       "a3",
     ]);
     expect(s.activeSessionId).toBe("a4");
+  });
+
+  it("keeps concurrent new tabs in request order when completions resolve out of order", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const c1 = session("c1", REPO_A);
+    const c2 = session("c2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const firstCreate = deferred<Session>();
+    const secondCreate = deferred<Session>();
+    let backendSessions = [a1, a2];
+    mockApi.createSession
+      .mockImplementationOnce(() => firstCreate.promise)
+      .mockImplementationOnce(() => secondCreate.promise);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+    mockApi.listSessions.mockImplementation(async () => backendSessions);
+
+    const first = useAppStore.getState().createSession("c1", REPO_A);
+    const second = useAppStore.getState().createSession("c2", REPO_A);
+
+    backendSessions = [a1, a2, c2];
+    secondCreate.resolve(c2);
+    await second;
+
+    backendSessions = [a1, a2, c2, c1];
+    firstCreate.resolve(c1);
+    await first;
+
+    const s = useAppStore.getState();
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([
+      "a1",
+      "c1",
+      "c2",
+      "a2",
+    ]);
+  });
+
+  it("keeps placement intents until delayed sibling sessions are visible", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const c1 = session("c1", REPO_A);
+    const c2 = session("c2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const firstCreate = deferred<Session>();
+    const secondCreate = deferred<Session>();
+    let backendSessions = [a1, a2];
+    mockApi.createSession
+      .mockImplementationOnce(() => firstCreate.promise)
+      .mockImplementationOnce(() => secondCreate.promise);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+    mockApi.listSessions.mockImplementation(async () => backendSessions);
+
+    const first = useAppStore.getState().createSession("c1", REPO_A);
+    const second = useAppStore.getState().createSession("c2", REPO_A);
+
+    secondCreate.resolve(c2);
+    await second;
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a1", "a2"]);
+
+    backendSessions = [a1, a2, c1];
+    firstCreate.resolve(c1);
+    await first;
+    expect(useAppStore.getState().panes.root.tabIds).toEqual([
+      "a1",
+      "c1",
+      "a2",
+    ]);
+
+    backendSessions = [a1, a2, c1, c2];
+    await useAppStore.getState().refreshSessions();
+
+    expect(useAppStore.getState().panes.root.tabIds).toEqual([
+      "a1",
+      "c1",
+      "c2",
+      "a2",
+    ]);
   });
 
   it("appends when the focused pane has no active tab yet", async () => {
