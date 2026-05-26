@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  forwardRef,
   useCallback,
+  useImperativeHandle,
   useMemo,
   useRef,
   type ClipboardEvent,
@@ -29,6 +31,10 @@ interface VirtualizedLineListProps {
   threshold?: number;
 }
 
+export interface VirtualizedLineListHandle {
+  scrollToIndex: (index: number, align?: "start" | "center" | "end") => void;
+}
+
 interface SelectionEndpoint {
   index: number;
   offset: number;
@@ -42,18 +48,24 @@ interface RenderedVirtualItem {
   size: number;
 }
 
-export function VirtualizedLineList({
-  as = "div",
-  count,
-  className,
-  innerClassName,
-  estimateSize,
-  getLineText,
-  renderLine,
-  minWidthCh,
-  overscan = DEFAULT_OVERSCAN,
-  threshold = VIRTUALIZED_LINE_THRESHOLD,
-}: VirtualizedLineListProps) {
+export const VirtualizedLineList = forwardRef<
+  VirtualizedLineListHandle,
+  VirtualizedLineListProps
+>(function VirtualizedLineList(
+  {
+    as = "div",
+    count,
+    className,
+    innerClassName,
+    estimateSize,
+    getLineText,
+    renderLine,
+    minWidthCh,
+    overscan = DEFAULT_OVERSCAN,
+    threshold = VIRTUALIZED_LINE_THRESHOLD,
+  },
+  ref,
+) {
   const scrollRef = useRef<HTMLElement | null>(null);
   const virtualized = count > threshold;
   const averageInitialSize = useMemo(() => {
@@ -91,6 +103,24 @@ export function VirtualizedLineList({
   const setScrollRef = useCallback((node: HTMLElement | null) => {
     scrollRef.current = node;
   }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToIndex(index, align = "center") {
+        if (index < 0 || index >= count) return;
+        if (virtualized) {
+          virtualizer.scrollToIndex(index, { align });
+          return;
+        }
+        const line = scrollRef.current?.querySelector<HTMLElement>(
+          `[data-line-index="${index}"]`,
+        );
+        line?.scrollIntoView?.({ block: align, inline: "nearest" });
+      },
+    }),
+    [count, virtualized, virtualizer],
+  );
 
   const onCopy = useVirtualizedCopy({
     enabled: virtualized,
@@ -143,7 +173,7 @@ export function VirtualizedLineList({
   ) : (
     <div {...props}>{content}</div>
   );
-}
+});
 
 function buildFallbackItems(
   count: number,

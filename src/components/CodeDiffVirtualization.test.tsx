@@ -41,6 +41,15 @@ async function flushPromises() {
   });
 }
 
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function makePatch(lineCount: number): string {
   return Array.from({ length: lineCount }, (_, index) => `+line-${index}`).join(
     "\n",
@@ -161,6 +170,30 @@ describe("virtualized code and diff rendering", () => {
       container.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
         ?.textContent,
     ).toContain("Source");
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Find in file"]',
+    );
+    expect(input).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(input!, "shipped");
+    });
+
+    expect(container.querySelectorAll("[data-acorn-preview-search]")).toHaveLength(
+      1,
+    );
+    expect(container.textContent).toContain("1/1");
   });
 
   it("copies selected text by source line in virtualized lists", () => {
@@ -196,6 +229,57 @@ describe("virtualized code and diff rendering", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(clipboard.getData("text/plain")).toBe("line-1\nline-2\nline-3");
+  });
+
+  it("finds and highlights matches inside a code viewer", async () => {
+    const content = "alpha\nbeta alpha\nALPHA";
+    vi.mocked(api.fsReadFile).mockResolvedValueOnce({
+      content,
+      size: content.length,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsGitDiffLines).mockResolvedValueOnce([]);
+
+    await act(async () => {
+      root.render(<CodeViewer path="/repo/src/search.txt" isActive />);
+    });
+    await flushPromises();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Find in file"]',
+    );
+    expect(input).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(input!, "alpha");
+    });
+
+    expect(container.querySelectorAll("mark")).toHaveLength(3);
+    expect(container.textContent).toContain("1/3");
+
+    await act(async () => {
+      input!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(container.textContent).toContain("2/3");
   });
 });
 
