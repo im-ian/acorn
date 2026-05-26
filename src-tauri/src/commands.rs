@@ -94,6 +94,87 @@ pub struct AcornIpcShim {
     pub exists: bool,
 }
 
+#[derive(Serialize)]
+pub struct FolderPermissionWarmupResult {
+    pub id: &'static str,
+    pub path: String,
+    pub status: &'static str,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn warm_macos_folder_permissions() -> AppResult<Vec<FolderPermissionWarmupResult>> {
+    run_blocking("warm_macos_folder_permissions", move || {
+        Ok(warm_macos_folder_permissions_inner())
+    })
+    .await
+}
+
+fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+
+    protected_folder_candidates()
+        .into_iter()
+        .map(|(id, path)| probe_folder_permission(id, path))
+        .collect()
+}
+
+fn protected_folder_candidates() -> Vec<(&'static str, PathBuf)> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    vec![
+        ("desktop", home.join("Desktop")),
+        ("documents", home.join("Documents")),
+        ("downloads", home.join("Downloads")),
+        (
+            "icloud",
+            home.join("Library")
+                .join("Mobile Documents")
+                .join("com~apple~CloudDocs"),
+        ),
+    ]
+}
+
+fn probe_folder_permission(id: &'static str, path: PathBuf) -> FolderPermissionWarmupResult {
+    let rendered = path.display().to_string();
+    if !path.exists() {
+        return FolderPermissionWarmupResult {
+            id,
+            path: rendered,
+            status: "missing",
+            error: None,
+        };
+    }
+
+    match std::fs::read_dir(&path) {
+        Ok(mut entries) => {
+            let _ = entries.next();
+            FolderPermissionWarmupResult {
+                id,
+                path: rendered,
+                status: "ok",
+                error: None,
+            }
+        }
+        Err(err) => {
+            let status = if err.kind() == std::io::ErrorKind::PermissionDenied {
+                "denied"
+            } else {
+                "error"
+            };
+            FolderPermissionWarmupResult {
+                id,
+                path: rendered,
+                status,
+                error: Some(err.to_string()),
+            }
+        }
+    }
+}
+
 /// Inspect the runtime environment for the `acorn-ipc` CLI: where the
 /// app-bundled binary lives, whether it exists yet, and whether the user
 /// has already installed a shim into one of the standard `$PATH` locations.

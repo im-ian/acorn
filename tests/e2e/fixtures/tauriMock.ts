@@ -104,6 +104,7 @@ export const tauriMockSource = `
         shim_paths: [],
       });
     }
+    if (cmd === 'warm_macos_folder_permissions') return Promise.resolve([]);
     if (cmd === 'ipc_restart') return Promise.resolve(undefined);
     if (cmd === 'reorder_projects') return Promise.resolve([]);
     if (cmd === 'reorder_sessions') return Promise.resolve([]);
