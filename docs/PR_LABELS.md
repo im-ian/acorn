@@ -1,6 +1,8 @@
 # PR labels
 
-Acorn's release pipeline reuses GitHub's auto-generated changelog as the body of `latest.json`'s `notes` field. The Tauri updater plugin then surfaces that text inside the app's About tab and the "What's new" banner.
+Acorn's release pipeline reuses GitHub's auto-generated changelog as the body of `latest.json`'s `notes` field.
+Stable patch releases include every release note entry in the current `major.minor` line, so an update from `1.8.0` to `1.8.2` surfaces the `1.8.0`, `1.8.1`, and `1.8.2` sections in the app.
+The Tauri updater plugin then surfaces that text inside the app's About tab and the "What's new" banner.
 
 To keep both the GitHub release page and the in-app changelog tidy, attach **one** of the labels below to every PR you open. The categorisation rules live in [`.github/release.yml`](../.github/release.yml).
 
