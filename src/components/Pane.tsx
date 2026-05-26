@@ -51,6 +51,7 @@ import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
 import { canRenameSession } from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   buildSessionCreateRequestFromScope,
@@ -117,6 +118,7 @@ type PaneTab =
  */
 export function Pane({ paneId }: PaneProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const pane = useAppStore((s) => s.panes[paneId]);
@@ -177,6 +179,7 @@ export function Pane({ paneId }: PaneProps) {
           repoPath: workspaceTab.repoPath,
           lifecycle: workspaceTab.lifecycle,
           path: workspaceTab.path,
+          target: workspaceTab.target,
         });
       }
     }
@@ -232,6 +235,8 @@ export function Pane({ paneId }: PaneProps) {
       request.agentProvider,
       request.projectScoped,
     );
+    const error = useAppStore.getState().consumeError();
+    if (error) showToast(`${t("toasts.session.createFailed")} ${error}`);
   }
 
   // Fork an existing claude/codex conversation into a new Acorn session.
@@ -296,6 +301,7 @@ export function Pane({ paneId }: PaneProps) {
       selectTab(created.id);
     } catch (err) {
       console.error("[Pane] fork session failed", err);
+      showToast(`${t("toasts.session.createFailed")} ${String(err)}`);
     }
   }
 
@@ -358,7 +364,8 @@ export function Pane({ paneId }: PaneProps) {
   return (
     <div
       className="relative flex h-full flex-col bg-bg"
-      onMouseDown={() => {
+      onMouseDown={(e) => {
+        if (e.button === 0 && isTabStripMouseDownTarget(e.target)) return;
         if (!isFocused) setFocusedPane(paneId);
       }}
     >
@@ -439,6 +446,7 @@ export function Pane({ paneId }: PaneProps) {
         {active?.kind === "code" ? (
           <CodeViewer
             path={active.path}
+            target={active.target}
             isActive={isFocused}
           />
         ) : null}
@@ -534,6 +542,12 @@ function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return target.isContentEditable;
+}
+
+function isTabStripMouseDownTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    ? target.closest("[data-pane-tab-strip]") !== null
+    : false;
 }
 
 interface TabStripProps {
@@ -730,6 +744,7 @@ function TabItem({
   registerRef,
 }: TabItemProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const session = tab.kind === "session" ? tab.session : null;
   const isGeneratingTitle = useAppStore((s) =>
@@ -980,14 +995,14 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
+          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pr-1 text-[13px] leading-5 transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
         )}
       >
         <div
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch"
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-3"
           data-tab-drag-handle={tab.id}
           draggable
           style={{ WebkitUserDrag: "element" } as CSSProperties}
@@ -1021,6 +1036,10 @@ function TabItem({
                 setEditing(false);
                 if (session && canRename && next && next !== session.name) {
                   await renameSession(session.id, next);
+                  const error = useAppStore.getState().consumeError();
+                  if (error) {
+                    showToast(`${t("toasts.session.renameFailed")} ${error}`);
+                  }
                 }
               }}
               onCancel={() => setEditing(false)}

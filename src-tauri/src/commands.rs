@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
@@ -96,7 +97,7 @@ pub struct AcornIpcShim {
     pub exists: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Eq, PartialEq, Serialize)]
 pub struct FolderPermissionWarmupResult {
     pub id: &'static str,
     pub path: String,
@@ -112,6 +113,17 @@ pub async fn warm_macos_folder_permissions() -> AppResult<Vec<FolderPermissionWa
     .await
 }
 
+#[tauri::command]
+pub async fn reset_macos_folder_permissions<R: Runtime>(
+    app: AppHandle<R>,
+) -> AppResult<()> {
+    let bundle_id = app.config().identifier.clone();
+    run_blocking("reset_macos_folder_permissions", move || {
+        reset_macos_folder_permissions_inner(&bundle_id)
+    })
+    .await
+}
+
 fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
     if !cfg!(target_os = "macos") {
         return Vec::new();
@@ -123,57 +135,138 @@ fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
         .collect()
 }
 
+fn reset_macos_folder_permissions_inner(bundle_id: &str) -> AppResult<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let failures: Vec<String> = [
+        "SystemPolicyDesktopFolder",
+        "SystemPolicyDocumentsFolder",
+        "SystemPolicyDownloadsFolder",
+    ]
+    .into_iter()
+    .filter_map(|service| {
+        reset_macos_tcc_service(service, bundle_id)
+            .err()
+            .map(|err| format!("{service}: {err}"))
+    })
+    .collect();
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!(
+            "failed to reset macOS folder permissions: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
+fn reset_macos_tcc_service(service: &'static str, bundle_id: &str) -> AppResult<()> {
+    match std::process::Command::new("/usr/bin/tccutil")
+        .args(["reset", service, bundle_id])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let message = if stderr.is_empty() { stdout } else { stderr };
+            Err(AppError::Other(if message.is_empty() {
+                format!("tccutil exited with status {}", output.status)
+            } else {
+                message
+            }))
+        }
+        Err(err) => Err(AppError::Io(err)),
+    }
+}
+
 fn protected_folder_candidates() -> Vec<(&'static str, PathBuf)> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
+    let modern_icloud = home
+        .join("Library")
+        .join("CloudStorage")
+        .join("iCloud Drive");
+    let legacy_icloud = home
+        .join("Library")
+        .join("Mobile Documents")
+        .join("com~apple~CloudDocs");
+    let icloud = match modern_icloud.try_exists() {
+        Ok(true) | Err(_) => modern_icloud,
+        Ok(false) => legacy_icloud,
+    };
+
     vec![
         ("desktop", home.join("Desktop")),
         ("documents", home.join("Documents")),
         ("downloads", home.join("Downloads")),
-        (
-            "icloud",
-            home.join("Library")
-                .join("Mobile Documents")
-                .join("com~apple~CloudDocs"),
-        ),
+        ("icloud", icloud),
     ]
 }
 
 fn probe_folder_permission(id: &'static str, path: PathBuf) -> FolderPermissionWarmupResult {
     let rendered = path.display().to_string();
-    if !path.exists() {
-        return FolderPermissionWarmupResult {
-            id,
-            path: rendered,
-            status: "missing",
-            error: None,
-        };
-    }
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return folder_permission_missing(id, rendered),
+        Err(err) => return folder_permission_error(id, rendered, err),
+    };
 
     match std::fs::read_dir(&path) {
-        Ok(mut entries) => {
-            let _ = entries.next();
-            FolderPermissionWarmupResult {
-                id,
-                path: rendered,
-                status: "ok",
-                error: None,
-            }
+        Ok(entries) => {
+            folder_permission_from_first_entry(id, rendered, entries.map(|entry| entry.map(|_| ())))
         }
-        Err(err) => {
-            let status = if err.kind() == std::io::ErrorKind::PermissionDenied {
-                "denied"
-            } else {
-                "error"
-            };
-            FolderPermissionWarmupResult {
-                id,
-                path: rendered,
-                status,
-                error: Some(err.to_string()),
-            }
-        }
+        Err(err) => folder_permission_error(id, rendered, err),
+    }
+}
+
+fn folder_permission_from_first_entry<I>(
+    id: &'static str,
+    path: String,
+    mut entries: I,
+) -> FolderPermissionWarmupResult
+where
+    I: Iterator<Item = io::Result<()>>,
+{
+    match entries.next() {
+        Some(Err(err)) => folder_permission_error(id, path, err),
+        Some(Ok(())) | None => FolderPermissionWarmupResult {
+            id,
+            path,
+            status: "ok",
+            error: None,
+        },
+    }
+}
+
+fn folder_permission_missing(id: &'static str, path: String) -> FolderPermissionWarmupResult {
+    FolderPermissionWarmupResult {
+        id,
+        path,
+        status: "missing",
+        error: None,
+    }
+}
+
+fn folder_permission_error(
+    id: &'static str,
+    path: String,
+    err: io::Error,
+) -> FolderPermissionWarmupResult {
+    let status = if err.kind() == io::ErrorKind::PermissionDenied {
+        "denied"
+    } else {
+        "error"
+    };
+    FolderPermissionWarmupResult {
+        id,
+        path,
+        status,
+        error: Some(err.to_string()),
     }
 }
 
@@ -2884,6 +2977,48 @@ mod tests {
         assert_eq!(
             validate_new_project_name("parent\\fresh-app", false).unwrap(),
             "parent\\fresh-app"
+        );
+    }
+
+    #[test]
+    fn folder_permission_probe_reports_first_entry_error() {
+        let result = super::folder_permission_from_first_entry(
+            "documents",
+            "/Users/me/Documents".to_string(),
+            [Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "operation not permitted",
+            ))]
+            .into_iter(),
+        );
+
+        assert_eq!(
+            result,
+            super::FolderPermissionWarmupResult {
+                id: "documents",
+                path: "/Users/me/Documents".to_string(),
+                status: "denied",
+                error: Some("operation not permitted".to_string()),
+            },
+        );
+    }
+
+    #[test]
+    fn folder_permission_probe_reports_empty_directory_as_ok() {
+        let result = super::folder_permission_from_first_entry(
+            "downloads",
+            "/Users/me/Downloads".to_string(),
+            std::iter::empty::<std::io::Result<()>>(),
+        );
+
+        assert_eq!(
+            result,
+            super::FolderPermissionWarmupResult {
+                id: "downloads",
+                path: "/Users/me/Downloads".to_string(),
+                status: "ok",
+                error: None,
+            },
         );
     }
 

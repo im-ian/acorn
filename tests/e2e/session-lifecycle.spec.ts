@@ -77,6 +77,43 @@ test.describe("session lifecycle", () => {
     expect(calls[0]).toEqual({ id: "s-1", name: "renamed" });
   });
 
+  test("double-clicking a project session row starts rename", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [BASE_SESSION]);
+    await tauri.handle("rename_session", (args) => {
+      const w = window as unknown as { __renameCalls?: unknown[] };
+      w.__renameCalls = w.__renameCalls ?? [];
+      w.__renameCalls.push(args);
+      const a = args as { id: string; name: string };
+      return { ...BASE_SESSION, id: a.id, name: a.name };
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const row = sidebar
+      .getByRole("button", { name: /^alpha main · Idle/ })
+      .first();
+    await row.dblclick();
+
+    const input = sidebar.locator("input[type='text']");
+    await expect(input).toBeFocused();
+    await input.fill("renamed from double click");
+    await input.press("Enter");
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __renameCalls?: unknown[] }).__renameCalls,
+    )) as Array<{ id: string; name: string }>;
+    expect(calls[0]).toEqual({
+      id: "s-1",
+      name: "renamed from double click",
+    });
+  });
+
   test("Remove session button → confirm → remove_session is invoked", async ({
     page,
     tauri,

@@ -282,6 +282,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
 
       - name: Download all bundles
         uses: actions/download-artifact@v6
@@ -312,33 +319,13 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ steps.meta.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTPUT: release_notes.md
         run: |
           set -euo pipefail
-          # Generate the same auto-notes GitHub would compose from the
-          # tag, ahead of release creation, so they can be embedded into
-          # `latest.json` AND used as the release body. Falls back to a
-          # short "See release page" sentence if the API call fails
-          # (e.g. on the very first tag, before previous_tag_name has
-          # something to diff against).
-          if notes=$(gh api -X POST \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${REPO}/releases/generate-notes" \
-              -f "tag_name=${TAG}" \
-              --jq .body 2>/dev/null); then
-            :
-          else
-            notes="See https://github.com/${REPO}/releases/tag/${TAG}"
-          fi
-          # Strip GitHub's provenance HTML comment
-          # (`<!-- Release notes generated using configuration in
-          # .github/release.yml at vX.Y.Z -->`). It is purely informational
-          # — not parsed back by the regenerate API — and renders as
-          # literal text in Acorn's in-app "What's new" modal.
-          notes=$(printf '%s' "$notes" | sed -E '/^[[:space:]]*<!--.*-->[[:space:]]*$/d')
-          # Persist to a file rather than $GITHUB_OUTPUT so newlines and
-          # markdown survive cleanly through later jq / action-gh-release
-          # consumers.
-          printf '%s' "$notes" > release_notes.md
+          # Stable patch releases carry cumulative notes for the current
+          # major.minor line, so an updater jump such as 1.8.0 -> 1.8.2
+          # shows the 1.8.0, 1.8.1, and 1.8.2 entries in "What's new".
+          node scripts/release-notes.mjs
           echo "Notes preview (first 400 chars):"
           head -c 400 release_notes.md || true
           echo

@@ -88,16 +88,18 @@ describe("buildProjectGroups", () => {
     expect(groups.map((group) => group.repoPath)).toEqual(["/repo/app"]);
   });
 
-  it("sorts sessions by explicit position before updated time", () => {
+  it("sorts sessions by explicit position before created time", () => {
     const groups = buildProjectGroups(
       [project("/repo/app", 0)],
       [
         session("newer", "/repo/app", {
+          created_at: "2026-01-03T00:00:00Z",
           updated_at: "2026-01-03T00:00:00Z",
         }),
         session("pos-1", "/repo/app", { position: 1 }),
         session("pos-0", "/repo/app", { position: 0 }),
         session("older", "/repo/app", {
+          created_at: "2026-01-02T00:00:00Z",
           updated_at: "2026-01-02T00:00:00Z",
         }),
       ],
@@ -110,6 +112,27 @@ describe("buildProjectGroups", () => {
       "older",
     ]);
   });
+
+  it("does not reorder unpositioned sessions when only updated time changes", () => {
+    const groups = buildProjectGroups(
+      [project("/repo/app", 0)],
+      [
+        session("older-created", "/repo/app", {
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-05T00:00:00Z",
+        }),
+        session("newer-created", "/repo/app", {
+          created_at: "2026-01-02T00:00:00Z",
+          updated_at: "2026-01-03T00:00:00Z",
+        }),
+      ],
+    );
+
+    expect(groups[0].sessions.map((s) => s.id)).toEqual([
+      "newer-created",
+      "older-created",
+    ]);
+  });
 });
 
 describe("buildLocalSessions", () => {
@@ -118,6 +141,7 @@ describe("buildLocalSessions", () => {
       session("project", "/repo/app"),
       session("newer", "/Users/me", {
         project_scoped: false,
+        created_at: "2026-01-03T00:00:00Z",
         updated_at: "2026-01-03T00:00:00Z",
       }),
       session("pos-0", "/Users/me", {
@@ -126,6 +150,7 @@ describe("buildLocalSessions", () => {
       }),
       session("older", "/Users/me", {
         project_scoped: false,
+        created_at: "2026-01-02T00:00:00Z",
         updated_at: "2026-01-02T00:00:00Z",
       }),
     ]);

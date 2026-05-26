@@ -106,6 +106,41 @@ function resetStore(): void {
   );
 }
 
+function seedInactivePaneWithTab(tab: Session): void {
+  const layout = {
+    kind: "split" as const,
+    id: "split-test",
+    direction: "horizontal" as const,
+    a: { kind: "pane" as const, id: "root" },
+    b: { kind: "pane" as const, id: "pane-2" },
+  };
+  const panes = {
+    root: { id: "root", tabIds: [], activeTabId: null },
+    "pane-2": {
+      id: "pane-2",
+      tabIds: [tab.id],
+      activeTabId: tab.id,
+    },
+  };
+
+  useAppStore.setState((s) => ({
+    ...s,
+    sessions: [tab],
+    workspaces: {
+      [REPO]: {
+        layout,
+        panes,
+        focusedPaneId: "root",
+      },
+    },
+    layout,
+    panes,
+    focusedPaneId: "root",
+    activeTabId: null,
+    activeSessionId: null,
+  }));
+}
+
 describe("Pane empty state", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -324,5 +359,53 @@ describe("Pane empty state", () => {
     });
 
     expect(container.querySelector("[data-tab-rename-input]")).toBeNull();
+  });
+
+  it("does not focus an inactive pane on primary mousedown in its tab strip", () => {
+    const inactive = session("inactive-session");
+    seedInactivePaneWithTab(inactive);
+
+    act(() => {
+      root.render(<Pane paneId="pane-2" />);
+    });
+
+    const tabStrip = container.querySelector('[data-pane-tab-strip="pane-2"]');
+    expect(tabStrip).not.toBeNull();
+
+    act(() => {
+      tabStrip?.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(useAppStore.getState().focusedPaneId).toBe("root");
+  });
+
+  it("keeps secondary mousedown on a tab strip focusing the pane", () => {
+    const inactive = session("inactive-session");
+    seedInactivePaneWithTab(inactive);
+
+    act(() => {
+      root.render(<Pane paneId="pane-2" />);
+    });
+
+    const tabStrip = container.querySelector('[data-pane-tab-strip="pane-2"]');
+    expect(tabStrip).not.toBeNull();
+
+    act(() => {
+      tabStrip?.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 2,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(useAppStore.getState().focusedPaneId).toBe("pane-2");
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Terminal as XTerm,
   type IBuffer,
+  type IDisposable,
   type ITheme,
   type IViewportRange,
 } from "@xterm/xterm";
@@ -41,13 +42,22 @@ import {
   terminalPasteAction,
 } from "../lib/terminalPaste";
 import {
+  createTerminalFileLinkProvider,
+  resolveTerminalFilePath,
+  type TerminalFileReference,
+} from "../lib/terminalFileLinks";
+import {
   useSettings,
   type TerminalLinkActivation,
 } from "../lib/settings";
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
 import type { SessionAgentProvider } from "../lib/types";
-import { useToasts } from "../lib/toasts";
+import {
+  showStoreResultToast,
+  showTranslatedErrorToast,
+  showTranslatedToast,
+} from "../lib/operationToasts";
 import {
   chooseWorktreeToAdoptAfterExit,
   type WorktreeAdoptionIntent,
@@ -536,6 +546,22 @@ export function Terminal({
       }
       setLinkTooltip(null);
     };
+    const openTerminalFileReference = (reference: TerminalFileReference) => {
+      void (async () => {
+        let baseCwd = cwd;
+        try {
+          baseCwd = (await api.ptyCwd(sessionId)) ?? cwd;
+        } catch (err: unknown) {
+          console.debug("[Terminal] pty_cwd for file link failed", err);
+        }
+        const path = resolveTerminalFilePath(baseCwd, reference.path);
+        const target =
+          reference.line === undefined
+            ? undefined
+            : { line: reference.line, column: reference.column };
+        useAppStore.getState().openCodeViewerTab(path, cwd, target);
+      })();
+    };
     const webLinksAddon = new WebLinksAddon(
       (event, uri) => {
         event.preventDefault();
@@ -554,6 +580,25 @@ export function Terminal({
           hideLinkTooltip();
         },
       },
+    );
+    let fileLinksDisposable: IDisposable | null = term.registerLinkProvider(
+      createTerminalFileLinkProvider(term, {
+        activate: (event, reference) => {
+          event.preventDefault();
+          hideLinkTooltip();
+          if (linkActivation === "modifier-click" && !modifierHeld(event)) {
+            return;
+          }
+          openTerminalFileReference(reference);
+        },
+        hover: (_event, _reference, link) => {
+          if (linkActivation !== "modifier-click") return;
+          showLinkTooltip(link.range);
+        },
+        leave: () => {
+          hideLinkTooltip();
+        },
+      }),
     );
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
@@ -1654,10 +1699,18 @@ export function Terminal({
             worktreeAdoptionIntent = { kind: "none" };
             if (adoptedPath) {
               const name = adoptedPath.split("/").pop() || adoptedPath;
-              useToasts.getState().show(`Adopted new worktree: ${name}`);
               await useAppStore
                 .getState()
                 .adoptSessionWorktree(sessionId, adoptedPath);
+              const error = useAppStore.getState().consumeError();
+              if (error) {
+                showTranslatedErrorToast(
+                  "toasts.session.worktreeAdoptFailed",
+                  error,
+                );
+              } else {
+                showTranslatedToast("toasts.session.worktreeAdopted", { name });
+              }
               // The store now holds the new worktree_path; TerminalHost
               // re-renders with the updated cwd prop, this entire effect
               // tears down via cleanup, and a fresh mount spawns the PTY
@@ -1678,7 +1731,12 @@ export function Terminal({
               if (session && hasRecordedWorktree(session)) {
                 store.requestRemoveSession(sessionId);
               } else {
-                void store.removeSession(sessionId, false);
+                void store.removeSession(sessionId, false).then(() => {
+                  showStoreResultToast(
+                    null,
+                    "toasts.session.removeFailed",
+                  );
+                });
               }
               return;
             }
@@ -1925,6 +1983,8 @@ export function Terminal({
         // Backend may not implement pty_kill yet — safe to ignore.
       });
       unpatchMouseCoordinateScale();
+      try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
+      fileLinksDisposable = null;
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { webLinksAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }

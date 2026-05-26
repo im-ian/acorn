@@ -50,6 +50,7 @@ import {
   type UiScaleChangedDetail,
 } from "./lib/layoutEvents";
 import {
+  startSessionActivityInboxWatcher,
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
@@ -58,7 +59,11 @@ import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
-import { shouldShowPermissionWarmup } from "./lib/permissionWarmup";
+import {
+  hasDeniedFolderPermission,
+  isMacPlatform,
+  type FolderPermissionWarmupResult,
+} from "./lib/permissionWarmup";
 import {
   normalizeUiScalePercent,
   resolveAiOneshotCommand,
@@ -182,6 +187,12 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const [permissionWarmupOpen, setPermissionWarmupOpen] = useState(false);
+  const [permissionWarmupInitialResults, setPermissionWarmupInitialResults] =
+    useState<FolderPermissionWarmupResult[] | null>(null);
+  const permissionWarmupAuditRef = useRef<{
+    key: string;
+    promise: Promise<FolderPermissionWarmupResult[]>;
+  } | null>(null);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const [resumeCandidates, setResumeCandidates] = useState<
     Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
@@ -211,7 +222,19 @@ function App() {
   const themes = useThemes((s) => s.themes);
   const refreshThemes = useThemes((s) => s.refresh);
   const appearance = useSettings((s) => s.settings.appearance);
-  const currentVersion = useUpdater((s) => s.currentVersion);
+  const showToast = useToasts((s) => s.show);
+
+  const showStoreOperationToast = useCallback(
+    (successKey: TranslationKey | null, failureKey: TranslationKey) => {
+      const error = useAppStore.getState().consumeError();
+      if (error) {
+        showToast(`${t(failureKey)} ${error}`);
+      } else if (successKey) {
+        showToast(t(successKey));
+      }
+    },
+    [showToast, t],
+  );
 
   useEffect(() => {
     void refreshThemes();
@@ -552,10 +575,33 @@ function App() {
     ) {
       return;
     }
-    if (shouldShowPermissionWarmup(currentVersion, navigator.platform)) {
-      setPermissionWarmupOpen(true);
+    const platform = navigator.platform;
+    if (!isMacPlatform(platform)) return;
+
+    const auditKey = platform;
+    let audit = permissionWarmupAuditRef.current;
+    if (!audit || audit.key !== auditKey) {
+      audit = {
+        key: auditKey,
+        promise: api.warmMacosFolderPermissions(),
+      };
+      permissionWarmupAuditRef.current = audit;
     }
-  }, [currentVersion]);
+
+    let cancelled = false;
+    void audit.promise
+      .then((results) => {
+        if (cancelled || !hasDeniedFolderPermission(results)) return;
+        setPermissionWarmupInitialResults(results);
+        setPermissionWarmupOpen(true);
+      })
+      .catch((err) => {
+        console.warn("[App] folder permission audit failed", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     return startSessionNotificationWatcher();
@@ -664,6 +710,10 @@ function App() {
       retryTimers.clear();
     };
   }, [sessions, settings, sessionTitleRetryTick]);
+
+  useEffect(() => {
+    return startSessionActivityInboxWatcher();
+  }, []);
 
   useEffect(() => {
     let dispose: (() => void) | null = null;
@@ -826,18 +876,29 @@ function App() {
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
     if (recordedWorktree && autoDeleteWorktrees) {
       clearPendingRemove();
-      removeSession(pendingRemove.id, true);
+      void removeSession(pendingRemove.id, true).then(() =>
+        showStoreOperationToast(
+          "toasts.session.worktreeRemoved",
+          "toasts.session.worktreeRemoveFailed",
+        ),
+      );
       return;
     }
     if (confirmRemoveSession || recordedWorktree) return;
     clearPendingRemove();
-    removeSession(pendingRemove.id, false);
+    void removeSession(pendingRemove.id, false).then(() =>
+      showStoreOperationToast(
+        null,
+        "toasts.session.removeFailed",
+      ),
+    );
   }, [
     pendingRemove,
     autoDeleteWorktrees,
     clearPendingRemove,
     confirmRemoveSession,
     removeSession,
+    showStoreOperationToast,
   ]);
 
   // Restore the root layout (sidebar + right panel) and equalize the
@@ -1340,7 +1401,7 @@ function App() {
       />
       <FolderPermissionWarmupModal
         open={permissionWarmupOpen}
-        currentVersion={currentVersion}
+        initialResults={permissionWarmupInitialResults}
         onClose={() => setPermissionWarmupOpen(false)}
       />
       <SettingsModal />
@@ -1369,7 +1430,17 @@ function App() {
           const target = pendingRemove;
           clearPendingRemove();
           if (!target || choice === "cancel") return;
-          removeSession(target.id, choice === "session_and_worktree");
+          void removeSession(target.id, choice === "session_and_worktree").then(
+            () =>
+              showStoreOperationToast(
+                choice === "session_and_worktree"
+                  ? "toasts.session.worktreeRemoved"
+                  : null,
+                choice === "session_and_worktree"
+                  ? "toasts.session.worktreeRemoveFailed"
+                  : "toasts.session.removeFailed",
+              ),
+          );
         }}
       />
       <RemoveProjectDialog
@@ -1379,7 +1450,19 @@ function App() {
           const target = pendingProject;
           clearPendingRemoveProject();
           if (!target || choice === "cancel") return;
-          removeProject(target.repo_path, choice === "project_and_worktrees");
+          void removeProject(
+            target.repo_path,
+            choice === "project_and_worktrees",
+          ).then(() =>
+            showStoreOperationToast(
+              choice === "project_and_worktrees"
+                ? "toasts.project.worktreesRemoved"
+                : null,
+              choice === "project_and_worktrees"
+                ? "toasts.project.worktreesRemoveFailed"
+                : "toasts.project.removeFailed",
+            ),
+          );
         }}
       />
     </div>

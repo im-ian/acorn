@@ -77,6 +77,9 @@ function sortSessions(sessions: Session[]): Session[] {
     const ap = a.position ?? Number.POSITIVE_INFINITY;
     const bp = b.position ?? Number.POSITIVE_INFINITY;
     if (ap !== bp) return ap - bp;
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    const createdDelta =
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    if (createdDelta !== 0) return createdDelta;
+    return a.id.localeCompare(b.id);
   });
 }

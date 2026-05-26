@@ -1,4 +1,39 @@
 {
+  "toasts": {
+    "session": {
+      "createFailed": "세션을 만들지 못했습니다:",
+      "duplicateFailed": "세션을 복제하지 못했습니다:",
+      "removeFailed": "세션을 제거하지 못했습니다:",
+      "worktreeRemoved": "디스크에서 worktree를 삭제했습니다.",
+      "worktreeRemoveFailed": "worktree를 삭제하지 못했습니다:",
+      "refreshFailed": "세션을 새로고침하지 못했습니다:",
+      "renameFailed": "세션 이름을 변경하지 못했습니다:",
+      "worktreeAdopted": "새 worktree를 가져왔습니다: {name}",
+      "worktreeAdoptFailed": "worktree를 가져오지 못했습니다:"
+    },
+    "project": {
+      "addFailed": "프로젝트를 추가하지 못했습니다:",
+      "createFailed": "프로젝트를 만들지 못했습니다:",
+      "removeFailed": "프로젝트를 제거하지 못했습니다:",
+      "worktreesRemoved": "디스크에서 프로젝트 worktree를 삭제했습니다.",
+      "worktreesRemoveFailed": "프로젝트 worktree를 삭제하지 못했습니다:"
+    },
+    "ipc": {
+      "restarted": "IPC 서버를 다시 시작했습니다.",
+      "restartFailed": "IPC 서버를 다시 시작하지 못했습니다:"
+    },
+    "files": {
+      "renameFailed": "파일 이름을 변경하지 못했습니다:",
+      "trashFailed": "휴지통으로 이동하지 못했습니다:",
+      "pathsCopied": "파일 경로를 복사했습니다.",
+      "copyFailed": "파일 경로를 복사하지 못했습니다."
+    },
+    "pullRequests": {
+      "mergeFailed": "Pull request를 병합하지 못했습니다:",
+      "closeFailed": "Pull request를 닫지 못했습니다:",
+      "bodyUpdateFailed": "Pull request를 업데이트하지 못했습니다:"
+    }
+  },
   "settings": {
     "title": "설정",
     "reset": "기본값으로 재설정",
@@ -128,6 +163,14 @@
         "refresh": "새로고침",
         "revealFolder": "폴더 보기"
       },
+      "toastPosition": {
+        "label": "토스트 위치",
+        "hint": "일시적인 앱 메시지를 표시할 위치를 선택합니다.",
+        "options": {
+          "top": "상단",
+          "bottom": "하단"
+        }
+      },
       "background": {
         "label": "배경 이미지",
         "hint": "이미지 하나를 앱 영역, 터미널 영역 또는 둘 다에 적용할 수 있습니다.",
@@ -147,7 +190,13 @@
           "label": "불투명도",
           "hint": "0은 투명, 100은 불투명입니다."
         },
-        "blur": "흐림"
+        "blur": "흐림",
+        "toasts": {
+          "imported": "배경 이미지를 가져왔습니다.",
+          "importFailed": "배경 이미지를 가져오지 못했습니다:",
+          "removed": "배경 이미지를 제거했습니다.",
+          "removeFailed": "배경 이미지를 제거하지 못했습니다:"
+        }
       },
       "sessionDisplay": {
         "title": {
@@ -209,6 +258,10 @@
       "statusBar": {
         "label": "상태 표시줄",
         "hint": "하단 상태 표시줄에 표시할 선택 배지를 고릅니다.",
+        "sessionActivity": {
+          "label": "세션 활동",
+          "description": "읽지 않은 세션 활동으로 바로 가는 벨 버튼입니다. 숨겨도 Activity 탭은 계속 사용할 수 있습니다."
+        },
         "sessionCount": {
           "label": "세션 수",
           "description": "활성 프로젝트 전체의 총 세션 수입니다(`sessions: N`)."
@@ -483,6 +536,13 @@
       "whatsNewInVersion": "{version}의 새로운 내용",
       "checking": "확인 중...",
       "checkForUpdates": "업데이트 확인",
+      "toasts": {
+        "upToDate": "Acorn이 최신 상태입니다.",
+        "updateAvailable": "Acorn {version}을 사용할 수 있습니다.",
+        "checkFailed": "업데이트 확인에 실패했습니다:",
+        "installFailed": "업데이트 설치에 실패했습니다:",
+        "releaseNotesFailed": "릴리스 노트를 불러오지 못했습니다:"
+      },
       "relative": {
         "never": "확인한 적 없음",
         "justNow": "방금 전",
@@ -516,6 +576,26 @@
       "needsInput": "입력 필요",
       "failed": "실패",
       "completed": "완료"
+    },
+    "notifications": {
+      "ariaLabel": "세션 알림",
+      "tooltipEmpty": "읽지 않은 세션 알림 없음",
+      "tooltipWithCount": "읽지 않은 세션 알림 {count}개",
+      "title": "세션 알림",
+      "unreadCount": "읽지 않음 {count}개",
+      "empty": "아직 세션 상태 변경이 없습니다.",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "입력 필요",
+        "failed": "실패",
+        "completed": "완료",
+        "becameIdle": "유휴"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "dismiss": "닫기"
+      }
     },
     "services": {
       "ariaLabel": "서비스 상태",
@@ -739,6 +819,7 @@
       "commits": "커밋",
       "staged": "스테이징",
       "prs": "PR",
+      "activity": "활동",
       "history": "기록",
       "actions": "작업"
     },
@@ -749,6 +830,23 @@
     "todos": {
       "doneCount": "{completed}/{total} 완료",
       "inProgressCount": "{count}개 진행 중"
+    },
+    "activity": {
+      "unreadCount": "읽지 않음 {count}개",
+      "readCount": "읽음 {count}개",
+      "empty": "아직 세션 활동이 없습니다",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "입력 필요",
+        "failed": "실패",
+        "completed": "완료",
+        "becameIdle": "유휴"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "dismiss": "닫기"
+      }
     },
     "loading": {
       "more": "더 불러오는 중…",
@@ -1020,15 +1118,20 @@
     },
     "folderPermissionWarmup": {
       "title": "폴더 권한을 지금 확인할까요?",
-      "subtitle": "업데이트 후 macOS 폴더 접근을 미리 확인합니다",
+      "subtitle": "업데이트와 재시작 후 macOS 폴더 접근을 미리 확인합니다",
       "question": "작업을 시작하기 전에 Acorn의 폴더 접근 권한을 확인할까요?",
-      "reason": "업데이트 후 macOS가 보호 폴더 접근을 다시 평가하면서 나중에 권한을 다시 물을 수 있습니다. 지금 확인하면 데스크탑, 문서, 다운로드, iCloud Drive 권한 요청을 미리 처리할 수 있습니다.",
+      "complete": "폴더 접근 권한이 준비되었습니다.",
+      "needsAttention": "일부 보호된 폴더에 확인이 필요합니다.",
+      "reason": "업데이트 또는 재시작 후 macOS가 보호 폴더 접근을 다시 평가하면서 나중에 권한을 다시 물을 수 있습니다. 지금 확인하면 데스크탑, 문서, 다운로드, iCloud Drive 권한 요청을 미리 처리할 수 있습니다.",
       "bodyPrompt": "Acorn은 macOS 권한 확인을 위해 이 폴더들을 잠깐 읽기만 합니다. 파일은 변경하지 않습니다.",
       "check": "지금 확인",
       "checking": "확인 중...",
+      "reset": "권한 초기화",
+      "resetting": "초기화 중...",
       "skip": "나중에",
       "done": "완료",
       "genericError": "폴더 접근 권한을 확인하지 못했습니다.",
+      "deniedHint": "macOS에 거절 상태가 이미 저장되어 있으면 권한 창이 다시 뜨지 않을 수 있습니다. 시스템 설정 > 개인정보 보호 및 보안 > 파일 및 폴더에서 Acorn을 다시 허용해 주세요.",
       "folder": {
         "desktop": "데스크탑",
         "documents": "문서",
@@ -1264,6 +1367,19 @@
     },
     "relativeTime": {
       "ago": "전"
+    },
+    "toasts": {
+      "enabled": "백그라운드 세션을 켰습니다.",
+      "disabled": "백그라운드 세션을 껐습니다.",
+      "toggleFailed": "백그라운드 세션 설정을 변경하지 못했습니다:",
+      "restarted": "데몬을 다시 시작했습니다.",
+      "restartFailed": "데몬을 다시 시작하지 못했습니다:",
+      "shutdown": "데몬을 종료했습니다.",
+      "shutdownFailed": "데몬을 종료하지 못했습니다:",
+      "sessionKilled": "PTY를 종료했습니다.",
+      "sessionRestored": "세션을 복원했습니다.",
+      "sessionForgotten": "세션을 잊었습니다.",
+      "sessionActionFailed": "데몬 세션 작업에 실패했습니다:"
     }
   }
 }

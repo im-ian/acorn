@@ -242,8 +242,9 @@ pub struct Session {
     pub owner: SessionOwner,
     /// User-defined display order within the project group. `None` means the
     /// session has never been reordered — the frontend falls back to
-    /// `updated_at DESC` for these. Once any session in a project is dragged,
-    /// every session in that project gets an explicit position.
+    /// `created_at DESC` for these so status/name/path updates do not reshuffle
+    /// the sidebar. Once any session in a project is dragged, every session in
+    /// that project gets an explicit position.
     #[serde(default)]
     pub position: Option<i64>,
     /// Identifier the `acornd` daemon uses for this session's live PTY.

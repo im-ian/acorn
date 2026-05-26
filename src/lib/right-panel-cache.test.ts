@@ -95,6 +95,18 @@ describe("rightPanelCache", () => {
     expect(rightPanelCache.getWorkflowRuns(REPO, 50)).toBeNull();
   });
 
+  it("preserves file explorer expansion by repo until the repo is pruned", () => {
+    const expanded = new Set([`${REPO}/src`, `${REPO}/tests`]);
+
+    rightPanelCache.setFileExplorerExpanded(REPO, expanded);
+
+    expect(rightPanelCache.getFileExplorerExpanded(REPO)).toEqual(expanded);
+    expect(rightPanelCache.getFileExplorerExpanded(REPO)).not.toBe(expanded);
+
+    rightPanelCache.retainRepos([OTHER_REPO]);
+    expect(rightPanelCache.getFileExplorerExpanded(REPO)).toEqual(new Set());
+  });
+
   it("dedupes in-flight unscoped history fetches and reuses cached results", async () => {
     const history: AgentHistoryItem[] = [];
     const pending = deferred<AgentHistoryItem[]>();

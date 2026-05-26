@@ -1,0 +1,151 @@
+#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const STABLE_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/;
+
+export function parseStableSemverTag(tag) {
+  const match = STABLE_TAG_RE.exec(tag);
+  if (!match) return null;
+  return {
+    tag,
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+export function compareStableTags(a, b) {
+  return (
+    a.major - b.major ||
+    a.minor - b.minor ||
+    a.patch - b.patch
+  );
+}
+
+export function selectCumulativeReleaseTags(tags, currentTag) {
+  const current = parseStableSemverTag(currentTag);
+  if (!current) return [currentTag];
+
+  const byTag = new Map();
+  for (const tag of tags) {
+    const parsed = parseStableSemverTag(tag);
+    if (parsed) byTag.set(parsed.tag, parsed);
+  }
+  byTag.set(current.tag, current);
+
+  return [...byTag.values()]
+    .filter(
+      (tag) =>
+        tag.major === current.major &&
+        tag.minor === current.minor &&
+        tag.patch <= current.patch,
+    )
+    .sort(compareStableTags)
+    .map((tag) => tag.tag);
+}
+
+export function previousStableTag(tags, currentTag) {
+  const current = parseStableSemverTag(currentTag);
+  if (!current) return null;
+
+  const sorted = tags
+    .map(parseStableSemverTag)
+    .filter((tag) => tag !== null)
+    .sort(compareStableTags);
+  const index = sorted.findIndex((tag) => tag.tag === current.tag);
+  return index > 0 ? sorted[index - 1].tag : null;
+}
+
+export function stripGithubGeneratedComments(body) {
+  return body
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*<!--.*-->\s*$/.test(line))
+    .join("\n")
+    .trim();
+}
+
+function readGitTags() {
+  const stdout = execFileSync("git", ["tag", "-l", "v*.*.*"], {
+    encoding: "utf8",
+  });
+  return stdout.split(/\r?\n/).filter(Boolean);
+}
+
+function generateNotes(repo, tag, previousTag) {
+  const args = [
+    "api",
+    "-X",
+    "POST",
+    "-H",
+    "Accept: application/vnd.github+json",
+    `repos/${repo}/releases/generate-notes`,
+    "-f",
+    `tag_name=${tag}`,
+    "--jq",
+    ".body",
+  ];
+  if (previousTag) {
+    args.splice(
+      args.indexOf("--jq"),
+      0,
+      "-f",
+      `previous_tag_name=${previousTag}`,
+    );
+  }
+  return stripGithubGeneratedComments(
+    execFileSync("gh", args, { encoding: "utf8" }),
+  );
+}
+
+export function composeReleaseNotes(parts) {
+  const usableParts = parts.filter((part) => part.body.trim().length > 0);
+  if (usableParts.length === 0) return "";
+  if (usableParts.length === 1) return usableParts[0].body.trim();
+
+  return usableParts
+    .map((part) => `## ${part.tag}\n\n${part.body.trim()}`)
+    .join("\n\n");
+}
+
+export function buildReleaseNotes({ repo, currentTag, allTags }) {
+  const selectedTags = selectCumulativeReleaseTags(allTags, currentTag);
+  const allStableTags = [...new Set([...allTags, currentTag])]
+    .filter((tag) => parseStableSemverTag(tag) !== null)
+    .map(parseStableSemverTag)
+    .sort(compareStableTags)
+    .map((tag) => tag.tag);
+
+  const parts = [];
+  for (const tag of selectedTags) {
+    const previousTag = previousStableTag(allStableTags, tag);
+    parts.push({ tag, body: generateNotes(repo, tag, previousTag) });
+  }
+
+  return composeReleaseNotes(parts.reverse());
+}
+
+function main() {
+  const repo = process.env.REPO;
+  const currentTag = process.env.TAG;
+  const output = process.env.OUTPUT ?? "release_notes.md";
+  if (!repo || !currentTag) {
+    throw new Error("REPO and TAG environment variables are required");
+  }
+
+  const notes = buildReleaseNotes({
+    repo,
+    currentTag,
+    allTags: readGitTags(),
+  });
+  writeFileSync(output, notes, "utf8");
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+  main();
+}

@@ -73,6 +73,8 @@ import type {
   PullRequestInfo,
   PullRequestLabel,
   PullRequestListing,
+  SessionNotification,
+  SessionNotificationKind,
   StagedFile,
   TodoItem,
   WorkflowJob,
@@ -103,6 +105,7 @@ import {
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   applySessionCreateRequest,
@@ -190,6 +193,11 @@ export function RightPanel() {
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
   const setRightGroup = useAppStore((s) => s.setRightGroup);
+  const activityUnreadCount = useAppStore(
+    (s) =>
+      s.sessionNotifications.filter((notification) => !notification.readAt)
+        .length,
+  );
   const active = sessions.find((s) => s.id === activeSessionId);
   const activeWorkspaceTab = activeTabId ? workspaceTabs[activeTabId] : undefined;
   // The session's recorded worktree path is what we set at spawn time. The
@@ -416,7 +424,13 @@ export function RightPanel() {
               key={tab}
               icon={tabIcon(tab)}
               label={rt(t, tabLabelKey(tab))}
-              badge={tab === "todos" ? todosState.todos.length : undefined}
+              badge={
+                tab === "activity"
+                  ? activityUnreadCount
+                  : tab === "todos"
+                    ? todosState.todos.length
+                    : undefined
+              }
               active={tab === rightTab}
               onClick={() => setRightTab(tab)}
             />
@@ -424,7 +438,9 @@ export function RightPanel() {
         </nav>
       ) : null}
       <div className="flex-1 overflow-hidden">
-        {rightTab === "todos" ? (
+        {rightTab === "activity" ? (
+          <ActivityTab />
+        ) : rightTab === "todos" ? (
           active && showTodos ? (
             <TodosTab todos={todosState.todos} />
           ) : (
@@ -665,6 +681,8 @@ function tabIcon(tab: RightTab): ReactNode {
       return <GitPullRequest size={12} />;
     case "actions":
       return <Activity size={12} />;
+    case "activity":
+      return <CircleAlert size={12} />;
     case "todos":
       return <ListTodo size={12} />;
     case "history":
@@ -1200,6 +1218,167 @@ function countByStatus(todos: TodoItem[]) {
   return { pending, in_progress, completed };
 }
 
+const ACTIVITY_KIND_KEYS: Record<
+  SessionNotificationKind,
+  RightPanelTranslationKey
+> = {
+  needs_input: "rightPanel.activity.kind.needsInput",
+  failed: "rightPanel.activity.kind.failed",
+  completed: "rightPanel.activity.kind.completed",
+  became_idle: "rightPanel.activity.kind.becameIdle",
+};
+
+function ActivityTab() {
+  const t = useTranslation();
+  const notifications = useAppStore((s) => s.sessionNotifications);
+  const markAllRead = useAppStore((s) => s.markAllSessionNotificationsRead);
+  const clearRead = useAppStore((s) => s.clearReadSessionNotifications);
+  const unreadCount = notifications.filter((notification) => !notification.readAt)
+    .length;
+  const readCount = notifications.length - unreadCount;
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+        <div className="min-w-0 text-[10px] uppercase tracking-wide text-fg-muted">
+          <span className="mr-3">
+            {rtf(t, "rightPanel.activity.unreadCount", {
+              count: unreadCount,
+            })}
+          </span>
+          {readCount > 0 ? (
+            <span>
+              {rtf(t, "rightPanel.activity.readCount", { count: readCount })}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-1">
+          <Tooltip
+            label={rt(t, "rightPanel.activity.actions.markAllRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+              className="rounded border border-border px-2 py-1 text-[10px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              {rt(t, "rightPanel.activity.actions.markAllRead")}
+            </button>
+          </Tooltip>
+          <Tooltip
+            label={rt(t, "rightPanel.activity.actions.clearRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={clearRead}
+              disabled={readCount === 0}
+              className="rounded border border-border px-2 py-1 text-[10px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              {rt(t, "rightPanel.activity.actions.clearRead")}
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+      {notifications.length === 0 ? (
+        <Empty msg={rt(t, "rightPanel.activity.empty")} />
+      ) : (
+        <ul className="acorn-no-scrollbar flex-1 overflow-y-auto p-2 text-xs">
+          {notifications.map((notification) => (
+            <ActivityRow key={notification.id} notification={notification} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ActivityRow({
+  notification,
+}: {
+  notification: SessionNotification;
+}) {
+  const t = useTranslation();
+  const selectSession = useAppStore((s) => s.selectSession);
+  const markRead = useAppStore((s) => s.markSessionNotificationRead);
+  const dismiss = useAppStore((s) => s.dismissSessionNotification);
+  const unread = !notification.readAt;
+
+  const openSession = () => {
+    markRead(notification.id);
+    selectSession(notification.sessionId);
+  };
+
+  return (
+    <li
+      className={cn(
+        "group mb-1 flex items-start gap-2 rounded px-2 py-2 transition",
+        "hover:bg-bg-elevated/60",
+        unread && "bg-warning/5",
+      )}
+    >
+      <button
+        type="button"
+        onClick={openSession}
+        className="flex min-w-0 flex-1 items-start gap-2 text-left"
+      >
+        <span
+          className={cn(
+            "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+            activityDotClass(notification.kind),
+          )}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                "truncate font-mono text-[11px]",
+                unread ? "text-fg" : "text-fg-muted",
+              )}
+            >
+              {rt(t, ACTIVITY_KIND_KEYS[notification.kind])}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-fg-muted/70">
+              {formatActivityTime(notification.createdAt)}
+            </span>
+          </span>
+          <span className="block truncate text-[11px] text-fg">
+            {rtf(t, "rightPanel.activity.itemTitle", {
+              project: notification.projectName,
+              session: notification.sessionName,
+            })}
+          </span>
+          <span className="block truncate text-[10px] text-fg-muted">
+            {notification.repoPath}
+          </span>
+        </span>
+      </button>
+      <Tooltip label={rt(t, "rightPanel.activity.actions.dismiss")} side="top">
+        <button
+          type="button"
+          onClick={() => dismiss(notification.id)}
+          className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-bg-sidebar hover:text-fg group-hover:opacity-100"
+        >
+          <X size={12} />
+        </button>
+      </Tooltip>
+    </li>
+  );
+}
+
+function activityDotClass(kind: SessionNotificationKind): string {
+  if (kind === "failed") return "bg-danger";
+  if (kind === "completed") return "bg-accent";
+  return "bg-warning";
+}
+
+function formatActivityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1212,6 +1391,7 @@ function AgentHistoryTab({
   sessionHostProjectScoped: boolean;
 }) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const createSession = useAppStore((s) => s.createSession);
@@ -1320,17 +1500,25 @@ function AgentHistoryTab({
         ),
       );
       if (!created) {
-        setError(
-          useAppStore.getState().error ??
-            rt(t, "rightPanel.history.createFailed"),
-        );
+        const storeError = useAppStore.getState().consumeError();
+        const message = storeError ?? rt(t, "rightPanel.history.createFailed");
+        setError(message);
+        showToast(`${t("toasts.session.createFailed")} ${message}`);
         return;
       }
       if (shouldUseWorktree && item.worktree) {
         try {
           await adoptSessionWorktree(created.id, item.worktree.path);
+          const error = useAppStore.getState().consumeError();
+          if (error) {
+            setError(error);
+            showToast(`${t("toasts.session.worktreeAdoptFailed")} ${error}`);
+            return;
+          }
         } catch (e) {
-          setError(String(e));
+          const message = String(e);
+          setError(message);
+          showToast(`${t("toasts.session.worktreeAdoptFailed")} ${message}`);
           return;
         }
       }
@@ -1341,7 +1529,9 @@ function AgentHistoryTab({
         setWorktreeNotice(item.worktree);
       }
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      setError(message);
+      showToast(`${t("toasts.session.createFailed")} ${message}`);
     }
   }
 
@@ -1366,8 +1556,10 @@ function AgentHistoryTab({
       });
       setTrashCandidate(null);
     } catch (e) {
+      const message = String(e);
       setTrashCandidate(null);
-      setError(String(e));
+      setError(message);
+      showToast(`${t("toasts.files.trashFailed")} ${message}`);
     }
   }
 

@@ -22,14 +22,14 @@ export function canRenameSession(
   session: Session,
   options: SessionRenameOptions = {},
 ): boolean {
-  return session.owner.kind !== "control" && !options.isGeneratingTitle;
+  return session.owner?.kind !== "control" && !options.isGeneratingTitle;
 }
 
 export function canGenerateSessionTitle(session: Session): boolean {
   return (
-    session.kind === "regular" &&
-    session.owner.kind === "user" &&
-    session.title_source === "default" &&
+    (session.kind ?? "regular") === "regular" &&
+    (session.owner?.kind ?? "user") === "user" &&
+    (session.title_source ?? "manual") === "default" &&
     session.agent_provider != null
   );
 }

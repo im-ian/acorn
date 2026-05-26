@@ -7,6 +7,7 @@ import type {
   SessionAgentProvider,
   SessionKind,
   SessionTitleGenerationStatus,
+  SessionNotification,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
@@ -28,6 +29,7 @@ import {
   isRestorableWorkspaceTab,
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
+  makeCodeWorkspaceTabTarget,
   type FrontendWorkspaceTab,
 } from "./lib/workspaceTabs";
 import {
@@ -50,6 +52,18 @@ let pendingStatusPollAll = false;
 let pendingStatusPollIds = new Set<string>();
 let activeStatusPollAll = false;
 let activeStatusPollIds = new Set<string>();
+let refreshSessionsSeq = 0;
+let sessionPlacementSeq = 0;
+
+interface SessionPlacementIntent {
+  repoPath: string;
+  paneId: PaneId;
+  anchorTabId: string | null;
+  sequence: number;
+}
+
+const sessionPlacementById = new Map<string, SessionPlacementIntent>();
+const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
@@ -59,6 +73,8 @@ export interface PaneState {
   id: PaneId;
   tabIds: string[];
   activeTabId: string | null;
+  /** Oldest -> newest activation order for tabs still known to this pane. */
+  activationHistory?: string[];
 }
 
 export interface ProjectWorkspace {
@@ -90,6 +106,7 @@ interface AppStateModel {
   focusedPaneId: PaneId;
   activeTabId: string | null;
   activeSessionId: string | null;
+  consumeError: () => string | null;
 
   rightTab: RightTab;
   /**
@@ -116,6 +133,7 @@ interface AppStateModel {
    * resolver, so the value is in-memory only and never persisted.
    */
   pendingTerminalInput: Record<string, PendingTerminalInput>;
+  sessionNotifications: SessionNotification[];
   multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
@@ -208,9 +226,18 @@ interface AppStateModel {
   ) => void;
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
+  addSessionNotification: (notification: SessionNotification) => void;
+  markSessionNotificationRead: (id: string) => void;
+  markAllSessionNotificationsRead: () => void;
+  dismissSessionNotification: (id: string) => void;
+  clearReadSessionNotifications: () => void;
   toggleMultiInput: () => boolean;
   /** Open a readonly code viewer tab for `path` in the focused pane. */
-  openCodeViewerTab: (path: string, repoPath?: string) => void;
+  openCodeViewerTab: (
+    path: string,
+    repoPath?: string,
+    target?: { line?: number; column?: number },
+  ) => void;
   /** Close any frontend-owned tab and remove it from panes. */
   closeWorkspaceTab: (id: string) => void;
 }
@@ -238,13 +265,67 @@ function nextSplitId(): string {
 }
 
 function emptyPane(id: PaneId): PaneState {
-  return { id, tabIds: [], activeTabId: null };
+  return { id, tabIds: [], activeTabId: null, activationHistory: [] };
 }
 
 type PersistedPaneState = Partial<PaneState> & {
   sessionIds?: string[];
   activeSessionId?: string | null;
+  lastActiveSessionTabId?: string | null;
 };
+
+function pushActivation(
+  history: readonly string[] | undefined,
+  tabId: string | null,
+): string[] {
+  const existing = Array.isArray(history) ? history : [];
+  if (!tabId) return [...existing];
+  return [...existing.filter((id) => id !== tabId), tabId];
+}
+
+function activationHistoryFor(
+  pane: PersistedPaneState | undefined,
+  tabIds: readonly string[],
+  activeTabId: string | null,
+): string[] {
+  const allowed = new Set(tabIds);
+  const candidates = [
+    ...(Array.isArray(pane?.activationHistory) ? pane.activationHistory : []),
+    ...(typeof pane?.lastActiveSessionTabId === "string"
+      ? [pane.lastActiveSessionTabId]
+      : []),
+    ...(activeTabId ? [activeTabId] : []),
+  ];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of candidates) {
+    if (!allowed.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function preferredTabId(
+  pane: Pick<PaneState, "activationHistory">,
+  ids: readonly string[],
+): string | null {
+  const allowed = new Set(ids);
+  const history = pane.activationHistory ?? [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const id = history[i];
+    if (allowed.has(id)) return id;
+  }
+  return ids[ids.length - 1] ?? null;
+}
+
+function activatePaneTab(pane: PaneState, tabId: string | null): PaneState {
+  return {
+    ...pane,
+    activeTabId: tabId,
+    activationHistory: pushActivation(pane.activationHistory, tabId),
+  };
+}
 
 function normalizePaneState(
   pane: PersistedPaneState | undefined,
@@ -261,7 +342,14 @@ function normalizePaneState(
       : pane?.activeSessionId !== undefined
         ? pane.activeSessionId
         : null;
-  return { id, tabIds, activeTabId };
+  const safeActiveTabId =
+    activeTabId && tabIds.includes(activeTabId) ? activeTabId : null;
+  return {
+    id,
+    tabIds,
+    activeTabId: safeActiveTabId,
+    activationHistory: activationHistoryFor(pane, tabIds, safeActiveTabId),
+  };
 }
 
 function emptyWorkspace(): ProjectWorkspace {
@@ -357,11 +445,12 @@ function reconcileWorkspace(
     const active =
       existing.activeTabId && filtered.includes(existing.activeTabId)
         ? existing.activeTabId
-        : filtered[filtered.length - 1] ?? null;
+        : preferredTabId(existing, filtered);
     newPanes[pid] = {
       id: pid,
       tabIds: filtered,
       activeTabId: active,
+      activationHistory: activationHistoryFor(existing, filtered, active),
     };
   }
 
@@ -381,6 +470,14 @@ function reconcileWorkspace(
         ...pane,
         tabIds: [...pane.tabIds, s.id],
         activeTabId: pane.activeTabId ?? s.id,
+        activationHistory:
+          pane.activeTabId === null
+            ? pushActivation(pane.activationHistory, s.id)
+            : activationHistoryFor(
+                pane,
+                [...pane.tabIds, s.id],
+                pane.activeTabId,
+              ),
       };
       assigned.add(s.id);
     }
@@ -487,6 +584,171 @@ function updateActiveWorkspace(
   };
 }
 
+function captureSessionPlacementIntent(
+  s: AppStateModel,
+  repoPath: string,
+): SessionPlacementIntent | null {
+  const ws = s.workspaces[repoPath];
+  if (!ws) return null;
+  const pane = ws.panes[ws.focusedPaneId];
+  if (!pane) return null;
+  return {
+    repoPath,
+    paneId: ws.focusedPaneId,
+    anchorTabId: pane.activeTabId,
+    sequence: ++sessionPlacementSeq,
+  };
+}
+
+function samePlacementGroup(
+  a: SessionPlacementIntent,
+  b: SessionPlacementIntent,
+): boolean {
+  return (
+    a.repoPath === b.repoPath &&
+    a.paneId === b.paneId &&
+    a.anchorTabId === b.anchorTabId
+  );
+}
+
+function pruneSessionPlacementGroup(
+  placement: SessionPlacementIntent,
+  sessions: Session[],
+): void {
+  for (const active of activeSessionPlacementIntents) {
+    if (samePlacementGroup(active, placement)) return;
+  }
+  const visibleSessionIds = new Set(sessions.map((session) => session.id));
+  // Keep sibling placement records until every created tab in the group has
+  // appeared in a session refresh; later siblings need earlier sequences.
+  for (const [sessionId, existing] of sessionPlacementById) {
+    if (
+      samePlacementGroup(existing, placement) &&
+      !visibleSessionIds.has(sessionId)
+    ) {
+      return;
+    }
+  }
+  for (const [sessionId, existing] of sessionPlacementById) {
+    if (samePlacementGroup(existing, placement)) {
+      sessionPlacementById.delete(sessionId);
+    }
+  }
+}
+
+function insertionIndexForPlacement(
+  tabIds: string[],
+  placement: SessionPlacementIntent,
+): number {
+  if (!placement.anchorTabId) {
+    const firstLaterSibling = tabIds.findIndex((id) => {
+      const other = sessionPlacementById.get(id);
+      return (
+        other !== undefined &&
+        samePlacementGroup(other, placement) &&
+        other.sequence > placement.sequence
+      );
+    });
+    return firstLaterSibling >= 0 ? firstLaterSibling : tabIds.length;
+  }
+
+  const anchorIndex = tabIds.indexOf(placement.anchorTabId);
+  if (anchorIndex < 0) return tabIds.length;
+
+  let index = anchorIndex + 1;
+  while (index < tabIds.length) {
+    const other = sessionPlacementById.get(tabIds[index]);
+    if (
+      !other ||
+      !samePlacementGroup(other, placement) ||
+      other.sequence > placement.sequence
+    ) {
+      break;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function applySessionPlacementIntent(
+  s: AppStateModel,
+  sessionId: string,
+  placement: SessionPlacementIntent | null,
+): AppStateModel | Partial<AppStateModel> {
+  if (!placement) return s;
+  if (!s.sessions.some((session) => session.id === sessionId)) return s;
+
+  const ws = s.workspaces[placement.repoPath];
+  const targetPane = ws?.panes[placement.paneId];
+  if (!ws || !targetPane) return s;
+
+  let changed = false;
+  const newPanes: Record<PaneId, PaneState> = {};
+  for (const [pid, pane] of Object.entries(ws.panes)) {
+    if (!pane.tabIds.includes(sessionId)) {
+      newPanes[pid as PaneId] = pane;
+      continue;
+    }
+    changed = true;
+    const tabIds = pane.tabIds.filter((id) => id !== sessionId);
+    newPanes[pid as PaneId] = {
+      ...pane,
+      tabIds,
+      activeTabId:
+        pane.activeTabId === sessionId
+          ? tabIds[tabIds.length - 1] ?? null
+          : pane.activeTabId,
+    };
+  }
+
+  const targetAfterRemoval = newPanes[placement.paneId] ?? targetPane;
+  const targetIds = [...targetAfterRemoval.tabIds];
+  const insertAt = insertionIndexForPlacement(targetIds, placement);
+  targetIds.splice(insertAt, 0, sessionId);
+  changed =
+    changed ||
+    targetAfterRemoval.tabIds.length !== targetIds.length ||
+    targetAfterRemoval.tabIds.some((id, index) => id !== targetIds[index]);
+
+  if (!changed) return s;
+
+  const newWs: ProjectWorkspace = {
+    ...ws,
+    panes: {
+      ...newPanes,
+      [placement.paneId]: {
+        ...targetAfterRemoval,
+        tabIds: targetIds,
+      },
+    },
+  };
+  const workspaces = { ...s.workspaces, [placement.repoPath]: newWs };
+  return {
+    workspaces,
+    ...(s.activeProject === placement.repoPath
+      ? mirrorActive(workspaces, placement.repoPath)
+      : {}),
+  };
+}
+
+function applyKnownSessionPlacementIntents(s: AppStateModel): AppStateModel {
+  let next = s;
+  const pruneAfterApply: SessionPlacementIntent[] = [];
+  for (const [sessionId, placement] of Array.from(sessionPlacementById)) {
+    const patch = applySessionPlacementIntent(next, sessionId, placement);
+    if (patch !== next) {
+      next = { ...next, ...patch };
+    }
+    if (next.sessions.some((session) => session.id === sessionId)) {
+      pruneAfterApply.push(placement);
+    }
+  }
+  for (const placement of pruneAfterApply) {
+    pruneSessionPlacementGroup(placement, next.sessions);
+  }
+  return next;
+}
+
 export const useAppStore = create<AppStateModel>()(
   persist(
     (set, get) => ({
@@ -507,9 +769,15 @@ export const useAppStore = create<AppStateModel>()(
   workspaceTabs: {},
   prAccountByRepo: {},
   pendingTerminalInput: {},
+  sessionNotifications: [],
   multiInputEnabled: false,
   loading: false,
   error: null,
+  consumeError() {
+    const error = get().error;
+    if (error) set({ error: null });
+    return error;
+  },
   pendingRemoveId: null,
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
@@ -535,9 +803,11 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async refreshSessions() {
+    const seq = ++refreshSessionsSeq;
     set({ loading: true, error: null });
     try {
       const sessions = await api.listSessions();
+      if (seq !== refreshSessionsSeq) return;
       set((s) => {
         const allowEmptyWipe = s.sessionsLoadedCleanly;
         const reconciled = reconcileWorkspaces(
@@ -551,17 +821,29 @@ export const useAppStore = create<AppStateModel>()(
         // results to be intentional (user removed them all). Drop the guard.
         const nextSessionsLoadedCleanly =
           s.sessionsLoadedCleanly || sessions.length > 0;
-        return {
+        const sessionIds = new Set(sessions.map((session) => session.id));
+        const shouldPruneActivity =
+          s.sessionsLoadedCleanly || sessions.length > 0;
+        const nextState: AppStateModel = {
+          ...s,
           sessions,
           loading: false,
+          error: null,
           sessionsLoadedCleanly: nextSessionsLoadedCleanly,
+          sessionNotifications: shouldPruneActivity
+            ? s.sessionNotifications.filter((notification) =>
+                sessionIds.has(notification.sessionId),
+              )
+            : s.sessionNotifications,
           workspaces: reconciled.workspaces,
           activeProject: reconciled.activeProject,
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
         };
+        return applyKnownSessionPlacementIntents(nextState);
       });
       void get().refreshLiveInWorktree();
     } catch (e) {
+      if (seq !== refreshSessionsSeq) return;
       set({ loading: false, error: errorMessage(e) });
     }
   },
@@ -709,7 +991,7 @@ export const useAppStore = create<AppStateModel>()(
             ...ws,
             panes: {
               ...ws.panes,
-              [ws.focusedPaneId]: { ...pane, activeTabId: null },
+              [ws.focusedPaneId]: activatePaneTab(pane, null),
             },
           };
         });
@@ -728,7 +1010,7 @@ export const useAppStore = create<AppStateModel>()(
           ...ws,
           panes: {
             ...ws.panes,
-            [owner.paneId]: { ...pane, activeTabId: id },
+            [owner.paneId]: activatePaneTab(pane, id),
           },
           focusedPaneId: owner.paneId,
         };
@@ -760,9 +1042,8 @@ export const useAppStore = create<AppStateModel>()(
         panes: {
           ...ws.panes,
           [targetPaneId]: {
-            ...pane,
+            ...activatePaneTab(pane, id),
             tabIds,
-            activeTabId: id,
           },
         },
         focusedPaneId: targetPaneId,
@@ -907,7 +1188,7 @@ export const useAppStore = create<AppStateModel>()(
           ...ws,
           panes: {
             ...ws.panes,
-            [ws.focusedPaneId]: { ...pane, activeTabId: nextId },
+            [ws.focusedPaneId]: activatePaneTab(pane, nextId),
           },
         };
       });
@@ -983,9 +1264,14 @@ export const useAppStore = create<AppStateModel>()(
         const srcTabIds = fromPane.tabIds.filter(
           (id) => id !== args.tabId,
         );
+        const srcActivationHistory =
+          fromPane.activationHistory?.filter((id) => id !== args.tabId) ?? [];
         const srcActive =
           fromPane.activeTabId === args.tabId
-            ? srcTabIds[srcTabIds.length - 1] ?? null
+            ? preferredTabId(
+                { activationHistory: srcActivationHistory },
+                srcTabIds,
+              )
             : fromPane.activeTabId;
         let newPanes: Record<PaneId, PaneState> = {
           ...ws.panes,
@@ -993,6 +1279,11 @@ export const useAppStore = create<AppStateModel>()(
             ...fromPane,
             tabIds: srcTabIds,
             activeTabId: srcActive,
+            activationHistory: activationHistoryFor(
+              { ...fromPane, activationHistory: srcActivationHistory },
+              srcTabIds,
+              srcActive,
+            ),
           },
         };
 
@@ -1023,9 +1314,8 @@ export const useAppStore = create<AppStateModel>()(
         const targetIds = [...toPane.tabIds];
         targetIds.splice(safeIndex, 0, args.tabId);
         newPanes[toPaneId] = {
-          ...toPane,
+          ...activatePaneTab(toPane, args.tabId),
           tabIds: targetIds,
-          activeTabId: args.tabId,
         };
 
         const totalPanes = Object.keys(newPanes).length;
@@ -1060,23 +1350,14 @@ export const useAppStore = create<AppStateModel>()(
     projectScoped = true,
   ) {
     set({ loading: true, error: null });
+    // Capture the user's intended insertion point before the backend call.
+    // Multiple creates can be in flight at once, so the intent records the
+    // anchor tab id plus a client-side sequence instead of a numeric index
+    // that may be stale by the time the session is returned.
+    const placement = captureSessionPlacementIntent(get(), repoPath);
+    if (placement) activeSessionPlacementIntents.add(placement);
+    let createdId: string | null = null;
     try {
-      // Snapshot the previously-active tab's index in the focused pane so
-      // we can land the new tab right after it (browser-style). Captured
-      // before `api.createSession` so the post-refresh reorder is anchored
-      // to the user's view at hotkey-press time, not the post-reconcile
-      // append position.
-      const beforeSnap = (() => {
-        const s = get();
-        const ws = s.workspaces[repoPath];
-        if (!ws) return null;
-        const paneId = ws.focusedPaneId;
-        const pane = ws.panes[paneId];
-        if (!pane?.activeTabId) return null;
-        const idx = pane.tabIds.indexOf(pane.activeTabId);
-        return idx >= 0 ? { paneId, idx } : null;
-      })();
-
       const created =
         projectScoped === false
           ? await api.createSession(
@@ -1094,41 +1375,12 @@ export const useAppStore = create<AppStateModel>()(
               kind,
               agentProvider,
             );
+      createdId = created.id;
       await get().refreshAll();
 
-      // Reorder so the new tab sits immediately after the previously-active
-      // tab in the same pane. `reconcileWorkspace` always appends new
-      // sessions at the end of `focusedPaneId.tabIds`; this step
-      // converts that to "next to active" without changing reconcile's
-      // boot-time behavior.
-      if (beforeSnap) {
-        set((s) => {
-          const ws = s.workspaces[repoPath];
-          if (!ws) return s;
-          const pane = ws.panes[beforeSnap.paneId];
-          if (!pane) return s;
-          const currentIdx = pane.tabIds.indexOf(created.id);
-          if (currentIdx < 0) return s;
-          const targetIdx = Math.min(
-            beforeSnap.idx + 1,
-            pane.tabIds.length - 1,
-          );
-          if (currentIdx === targetIdx) return s;
-          const ids = pane.tabIds.filter((id) => id !== created.id);
-          ids.splice(targetIdx, 0, created.id);
-          const newPane = { ...pane, tabIds: ids };
-          const newWs = {
-            ...ws,
-            panes: { ...ws.panes, [beforeSnap.paneId]: newPane },
-          };
-          const workspaces = { ...s.workspaces, [repoPath]: newWs };
-          return {
-            workspaces,
-            ...(s.activeProject === repoPath
-              ? mirrorActive(workspaces, repoPath)
-              : {}),
-          };
-        });
+      if (placement) {
+        sessionPlacementById.set(created.id, placement);
+        set((s) => applySessionPlacementIntent(s, created.id, placement));
       }
 
       // Focus the new session so Cmd+T (and any other entry point that goes
@@ -1160,11 +1412,22 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ loading: false, error: errorMessage(e) });
       return null;
+    } finally {
+      if (placement) {
+        activeSessionPlacementIntents.delete(placement);
+        if (
+          createdId === null ||
+          get().sessions.some((session) => session.id === createdId)
+        ) {
+          pruneSessionPlacementGroup(placement, get().sessions);
+        }
+      }
     }
   },
 
   async removeSession(id, removeWorktree = false) {
     const owning = findTabOwner(get(), id);
+    sessionPlacementById.delete(id);
     set((s) => {
       if (!s.sessions.some((session) => session.id === id)) return s;
 
@@ -1187,6 +1450,9 @@ export const useAppStore = create<AppStateModel>()(
         error: null,
         liveInWorktree,
         pendingTerminalInput,
+        sessionNotifications: s.sessionNotifications.filter(
+          (notification) => notification.sessionId !== id,
+        ),
         workspaces: reconciled.workspaces,
         activeProject: reconciled.activeProject,
         ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
@@ -1211,6 +1477,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.removeSession(id, removeWorktree);
       await get().refreshAll();
+      set({ error: null });
     } catch (e) {
       const message = errorMessage(e);
       await get().refreshAll();
@@ -1224,6 +1491,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.renameSession(id, name);
       await get().refreshSessions();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1272,6 +1540,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.updateSessionWorktree(id, worktreePath);
       await get().refreshSessions();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1289,6 +1558,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.addProject(repoPath);
       await get().refreshProjects();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1327,6 +1597,7 @@ export const useAppStore = create<AppStateModel>()(
         };
       });
       await get().refreshAll();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1448,6 +1719,58 @@ export const useAppStore = create<AppStateModel>()(
     return consumed;
   },
 
+  addSessionNotification(notification) {
+    set((s) => ({
+      sessionNotifications: [
+        notification,
+        ...s.sessionNotifications.filter((n) => n.id !== notification.id),
+      ].slice(0, 100),
+    }));
+  },
+
+  markSessionNotificationRead(id) {
+    set((s) => {
+      const now = new Date().toISOString();
+      let changed = false;
+      const sessionNotifications = s.sessionNotifications.map((notification) => {
+        if (notification.id !== id || notification.readAt) return notification;
+        changed = true;
+        return { ...notification, readAt: now };
+      });
+      return changed ? { sessionNotifications } : s;
+    });
+  },
+
+  markAllSessionNotificationsRead() {
+    set((s) => {
+      if (s.sessionNotifications.every((notification) => notification.readAt)) {
+        return s;
+      }
+      const now = new Date().toISOString();
+      return {
+        sessionNotifications: s.sessionNotifications.map((notification) =>
+          notification.readAt ? notification : { ...notification, readAt: now },
+        ),
+      };
+    });
+  },
+
+  dismissSessionNotification(id) {
+    set((s) => ({
+      sessionNotifications: s.sessionNotifications.filter(
+        (notification) => notification.id !== id,
+      ),
+    }));
+  },
+
+  clearReadSessionNotifications() {
+    set((s) => ({
+      sessionNotifications: s.sessionNotifications.filter(
+        (notification) => !notification.readAt,
+      ),
+    }));
+  },
+
   toggleMultiInput() {
     let enabled = false;
     set((s) => {
@@ -1457,7 +1780,7 @@ export const useAppStore = create<AppStateModel>()(
     return enabled;
   },
 
-  openCodeViewerTab(path, repoPath) {
+  openCodeViewerTab(path, repoPath, target) {
     set((s) => {
       if (!s.activeProject) return s;
       const ws = s.workspaces[s.activeProject];
@@ -1478,14 +1801,36 @@ export const useAppStore = create<AppStateModel>()(
           tab.path === path &&
           tab.repoPath === targetRepoPath,
       );
-      const tab = existing ?? makeCodeWorkspaceTab(path, targetRepoPath);
+      const normalizedTarget =
+        target?.line && Number.isSafeInteger(target.line) && target.line > 0
+          ? {
+              line: target.line,
+              ...(target.column &&
+              Number.isSafeInteger(target.column) &&
+              target.column > 0
+                ? { column: target.column }
+                : {}),
+            }
+          : undefined;
+      const tab = existing
+        ? {
+            ...existing,
+            target: normalizedTarget
+              ? makeCodeWorkspaceTabTarget(normalizedTarget)
+              : undefined,
+          }
+        : makeCodeWorkspaceTab(
+            path,
+            targetRepoPath,
+            "ephemeral",
+            normalizedTarget,
+          );
       const alreadyInPane = pane.tabIds.includes(tab.id);
       const newPane: PaneState = alreadyInPane
-        ? { ...pane, activeTabId: tab.id }
+        ? activatePaneTab(pane, tab.id)
         : {
-            ...pane,
+            ...activatePaneTab(pane, tab.id),
             tabIds: [...pane.tabIds, tab.id],
-            activeTabId: tab.id,
           };
       const newWs: ProjectWorkspace = {
         ...ws,
@@ -1497,7 +1842,7 @@ export const useAppStore = create<AppStateModel>()(
       };
       return {
         workspaceTabs: existing
-          ? s.workspaceTabs
+          ? { ...s.workspaceTabs, [existing.id]: tab }
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
         ...mirrorActive(newWorkspaces, s.activeProject),
@@ -1514,14 +1859,21 @@ export const useAppStore = create<AppStateModel>()(
         const newPanes: Record<PaneId, PaneState> = {};
         for (const [pid, pane] of Object.entries(ws.panes)) {
           const ids = pane.tabIds.filter((sid) => sid !== id);
+          const activationHistory =
+            pane.activationHistory?.filter((sid) => sid !== id) ?? [];
           const nextActive =
             pane.activeTabId === id
-              ? ids[ids.length - 1] ?? null
+              ? preferredTabId({ activationHistory }, ids)
               : pane.activeTabId;
           newPanes[pid as PaneId] = {
             ...pane,
             tabIds: ids,
             activeTabId: nextActive,
+            activationHistory: activationHistoryFor(
+              { ...pane, activationHistory },
+              ids,
+              nextActive,
+            ),
           };
         }
         newWorkspaces[key] = { ...ws, panes: newPanes };
@@ -1544,6 +1896,7 @@ export const useAppStore = create<AppStateModel>()(
         activeProject: state.activeProject,
         rightTab: state.rightTab,
         rightTabByGroup: state.rightTabByGroup,
+        sessionNotifications: state.sessionNotifications,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
@@ -1603,6 +1956,7 @@ export const useAppStore = create<AppStateModel>()(
               ...normalized,
               tabIds: ids,
               activeTabId: active,
+              activationHistory: activationHistoryFor(normalized, ids, active),
             };
           }
           sanitized[key] = { ...ws, panes: newPanes };

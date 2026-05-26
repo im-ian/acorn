@@ -8,7 +8,6 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GripVertical,
   Pencil,
   PencilLine,
   Plus,
@@ -57,6 +56,7 @@ import {
 } from "../lib/settings";
 import { canRenameSession } from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   buildLocalSessions,
@@ -124,6 +124,7 @@ function isLocalTerminalAreaFocused(): boolean {
 
 export function Sidebar() {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -205,8 +206,11 @@ export function Sidebar() {
       });
       if (!repoPath || typeof repoPath !== "string") return;
       await addProject(repoPath);
+      const error = useAppStore.getState().consumeError();
+      if (error) showToast(`${t("toasts.project.addFailed")} ${error}`);
     } catch (e) {
       console.error("add project failed", e);
+      showToast(`${t("toasts.project.addFailed")} ${String(e)}`);
     }
   }
 
@@ -302,7 +306,11 @@ export function Sidebar() {
             (isolated || kind === "control" ? true : undefined),
         },
       );
-      await applySessionCreateRequest(createSession, request);
+      const created = await applySessionCreateRequest(createSession, request);
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+      }
       setCollapsed((prev) => {
         if (!prev.has(request.repoPath)) return prev;
         const next = new Set(prev);
@@ -311,6 +319,7 @@ export function Sidebar() {
       });
     } catch (e) {
       console.error("create session failed", e);
+      showToast(`${t("toasts.session.createFailed")} ${String(e)}`);
     }
   }
 
@@ -318,12 +327,17 @@ export function Sidebar() {
     try {
       const home = await homeDir();
       if (!home) return;
-      await applySessionCreateRequest(
+      const created = await applySessionCreateRequest(
         createSession,
         buildLocalSessionCreateRequest({ sessions, projects }, home),
       );
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+      }
     } catch (e) {
       console.error("create local terminal session failed", e);
+      showToast(`${t("toasts.session.createFailed")} ${String(e)}`);
     }
   }
 
@@ -534,7 +548,12 @@ export function Sidebar() {
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
         onCreate={async (parentPath, name, ignoreSafeName) => {
-          await createNewProject(parentPath, name, ignoreSafeName);
+          try {
+            await createNewProject(parentPath, name, ignoreSafeName);
+          } catch (e) {
+            showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
+            throw e;
+          }
         }}
       />
     </aside>
@@ -576,9 +595,6 @@ function ProjectHeaderPreview({
 }) {
   return (
     <div className="flex min-h-8 items-center gap-1 rounded-md bg-bg-elevated/95 px-1 py-1.5 shadow-lg ring-1 ring-border/60">
-      <span className="flex size-4 shrink-0 items-center justify-center text-fg-muted/60">
-        <GripVertical size={12} />
-      </span>
       <span className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted">
         <ChevronRight size={14} />
       </span>
@@ -601,48 +617,49 @@ function SessionRowPreview({
   session: Session;
   t: Translator;
 }) {
-  const showAgentProviderIcons = useSettings(
-    (s) => s.settings.sessionDisplay.icons.agentProvider,
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const metadataText = composeSessionMetadata(
+    t,
+    session,
+    sessionDisplay.metadata,
   );
-  const agentProvider = showAgentProviderIcons
+  const agentProvider = sessionDisplay.icons.agentProvider
     ? resolveSessionAgentProvider(session)
     : null;
 
   return (
     <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
-      <span className="mt-1 flex shrink-0 items-center text-fg-muted/60">
-        <GripVertical size={10} />
-      </span>
-      <span className="flex h-5 w-3 shrink-0 items-center justify-center">
-        {agentProvider ? (
-          <Tooltip label={agentProvider} side="right">
-            <AgentProviderIcon
-              provider={agentProvider}
-              className={cn("size-3", STATUS_ICON[session.status])}
+      {sessionDisplay.icons.statusDot ? (
+        <span className="flex h-5 w-3 shrink-0 items-center justify-center">
+          {agentProvider ? (
+            <Tooltip label={agentProvider} side="right">
+              <AgentProviderIcon
+                provider={agentProvider}
+                className={cn("size-3", STATUS_ICON[session.status])}
+              />
+            </Tooltip>
+          ) : (
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                STATUS_DOT[session.status],
+              )}
             />
-          </Tooltip>
-        ) : (
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              STATUS_DOT[session.status],
-            )}
-          />
-        )}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex h-5 items-center gap-1">
-          <span className="truncate text-[13px] font-medium leading-5 text-fg">
-            {session.name}
-          </span>
-          {hasRecordedWorktree(session) ? (
-            <GitBranch size={10} className="shrink-0 text-fg-muted" />
-          ) : null}
+          )}
         </span>
-        <span className="block truncate text-[11px] text-fg-muted">
-          {session.branch} · {statusLabel(t, session.status)}
-        </span>
-      </span>
+      ) : null}
+      <SessionRowLabel
+        editing={false}
+        session={session}
+        titleText={titleText}
+        metadataText={metadataText}
+        showKindIcons={sessionDisplay.icons.sessionKind}
+        isGeneratingTitle={false}
+        t={t}
+        onSubmitRename={() => undefined}
+        onCancelRename={() => undefined}
+      />
     </div>
   );
 }
@@ -750,10 +767,17 @@ function ProjectGroupView({
       className={cn("relative", isDragging && "opacity-40")}
     >
       <div
+        ref={setActivatorNodeRef}
+        {...attributes}
         role="button"
         tabIndex={0}
         onClick={onTitleClick}
+        onPointerDown={(e) => {
+          listeners?.onPointerDown?.(e);
+        }}
         onKeyDown={(e) => {
+          listeners?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onTitleClick();
@@ -770,23 +794,9 @@ function ProjectGroupView({
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
-        <Tooltip
-          label={sidebarText(t, "sidebar.actions.dragToReorder")}
-          side="bottom"
-        >
-          <span
-            ref={setActivatorNodeRef}
-            {...attributes}
-            {...listeners}
-            onClick={(e) => e.stopPropagation()}
-            aria-label={sidebarText(t, "sidebar.aria.dragToReorderProject")}
-            className="invisible flex size-4 shrink-0 cursor-grab items-center justify-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
-          >
-            <GripVertical size={12} />
-          </span>
-        </Tooltip>
         <button
           type="button"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onChevronClick();
@@ -818,6 +828,7 @@ function ProjectGroupView({
         >
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onAddSession(false, "regular");
@@ -834,6 +845,7 @@ function ProjectGroupView({
         >
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onAddSession(true, "regular");
@@ -853,6 +865,7 @@ function ProjectGroupView({
         >
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onAddSession(false, "control");
@@ -872,6 +885,7 @@ function ProjectGroupView({
         >
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onRemoveProject();
@@ -984,6 +998,7 @@ function SessionRow({
   onRemove,
 }: SessionRowProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
@@ -1039,7 +1054,7 @@ function SessionRow({
       // the source session's `kind` so a control session stays a control
       // session (preserves its IPC-dispatch role).
       const state = useAppStore.getState();
-      await applySessionCreateRequest(
+      const created = await applySessionCreateRequest(
         state.createSession,
         buildSessionCreateRequestFromScope(
           { sessions: state.sessions, projects: state.projects },
@@ -1054,8 +1069,13 @@ function SessionRow({
           },
         ),
       );
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.duplicateFailed")} ${error ?? ""}`.trim());
+      }
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);
+      showToast(`${t("toasts.session.duplicateFailed")} ${String(err)}`);
     }
   }
 
@@ -1160,94 +1180,99 @@ function SessionRow({
 
   const row = (
     <div
-        role="button"
-        tabIndex={0}
-        onClick={editing ? undefined : onSelect}
-        onKeyDown={(e) => {
-          if (editing) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onSelect();
-          } else if (e.key === "F2") {
-            e.preventDefault();
-            if (canRename) setEditing(true);
+      ref={setActivatorNodeRef}
+      {...attributes}
+      role="button"
+      tabIndex={0}
+      onClick={editing ? undefined : onSelect}
+      onPointerDown={(e) => {
+        if (editing) return;
+        listeners?.onPointerDown?.(e);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        if (canRename) setEditing(true);
+      }}
+      onKeyDown={(e) => {
+        if (editing) return;
+        listeners?.onKeyDown?.(e);
+        if (e.defaultPrevented) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        } else if (e.key === "F2") {
+          e.preventDefault();
+          if (canRename) setEditing(true);
+        }
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+      className={cn(
+        "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
+        active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
+        isDragging && "opacity-40",
+      )}
+    >
+      {sessionDisplay.icons.statusDot ? (
+        <span className="flex h-5 w-3 shrink-0 items-center justify-center">
+          {agentProvider ? (
+            <Tooltip label={agentProvider} side="right">
+              <AgentProviderIcon
+                provider={agentProvider}
+                className={cn("size-3", STATUS_ICON[session.status])}
+              />
+            </Tooltip>
+          ) : (
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                STATUS_DOT[session.status],
+              )}
+            />
+          )}
+        </span>
+      ) : null}
+      <SessionRowLabel
+        editing={editing}
+        session={session}
+        titleText={titleText}
+        metadataText={metadataText}
+        showKindIcons={sessionDisplay.icons.sessionKind}
+        isGeneratingTitle={isGeneratingTitle}
+        t={t}
+        onSubmitRename={async (next) => {
+          setEditing(false);
+          if (canRename && next && next !== session.name) {
+            await renameSession(session.id, next);
+            const error = useAppStore.getState().consumeError();
+            if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
           }
         }}
-        onContextMenu={(e) => {
-          e.preventDefault();
+        onCancelRename={() => setEditing(false)}
+      />
+      <span
+        role="button"
+        aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+        tabIndex={0}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
           e.stopPropagation();
-          setMenu({ x: e.clientX, y: e.clientY });
+          onRemove();
         }}
-        className={cn(
-          "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
-          active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
-          isDragging && "opacity-40",
-        )}
-      >
-        <span
-          ref={setActivatorNodeRef}
-          {...attributes}
-          {...listeners}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={sidebarText(t, "sidebar.aria.dragToReorderSession")}
-          className="invisible mt-1 flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
-        >
-          <GripVertical size={10} />
-        </span>
-        {sessionDisplay.icons.statusDot ? (
-          <span className="flex h-5 w-3 shrink-0 items-center justify-center">
-            {agentProvider ? (
-              <Tooltip label={agentProvider} side="right">
-                <AgentProviderIcon
-                  provider={agentProvider}
-                  className={cn("size-3", STATUS_ICON[session.status])}
-                />
-              </Tooltip>
-            ) : (
-              <span
-                className={cn(
-                  "size-1.5 rounded-full",
-                  STATUS_DOT[session.status],
-                )}
-              />
-            )}
-          </span>
-        ) : null}
-        <SessionRowLabel
-          editing={editing}
-          session={session}
-          titleText={titleText}
-          metadataText={metadataText}
-          showKindIcons={sessionDisplay.icons.sessionKind}
-          isGeneratingTitle={isGeneratingTitle}
-          t={t}
-          onSubmitRename={async (next) => {
-            setEditing(false);
-            if (canRename && next && next !== session.name) {
-              await renameSession(session.id, next);
-            }
-          }}
-          onCancelRename={() => setEditing(false)}
-        />
-        <span
-          role="button"
-          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
-          tabIndex={0}
-          onClick={(e) => {
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
             e.stopPropagation();
             onRemove();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              e.stopPropagation();
-              onRemove();
-            }
-          }}
-          className="invisible rounded p-1 text-fg-muted transition hover:text-danger group-hover:visible"
-        >
-          <Trash2 size={12} />
-        </span>
+          }
+        }}
+        className="invisible rounded p-1 text-fg-muted transition hover:text-danger group-hover:visible"
+      >
+        <Trash2 size={12} />
+      </span>
     </div>
   );
 
@@ -1367,8 +1392,10 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
     <input
       type="text"
       autoFocus
+      draggable={false}
       value={value}
       onChange={(e) => setValue(e.target.value)}
+      onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onFocus={(e) => e.currentTarget.select()}
       onKeyDown={(e) => {
@@ -1519,6 +1546,7 @@ function LocalSessionRow({
   onRemove,
 }: LocalSessionRowProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
@@ -1568,7 +1596,7 @@ function LocalSessionRow({
       n += 1;
     }
     const state = useAppStore.getState();
-    await applySessionCreateRequest(
+    const created = await applySessionCreateRequest(
       state.createSession,
       buildSessionCreateRequestFromScope(
         { sessions: state.sessions, projects: state.projects },
@@ -1576,6 +1604,10 @@ function LocalSessionRow({
         { name: next },
       ),
     );
+    const error = useAppStore.getState().consumeError();
+    if (!created || error) {
+      showToast(`${t("toasts.session.duplicateFailed")} ${error ?? ""}`.trim());
+    }
   }
 
   const menuItems: ContextMenuItem[] = [
@@ -1615,11 +1647,23 @@ function LocalSessionRow({
 
   const row = (
     <div
+      ref={setActivatorNodeRef}
+      {...attributes}
       role="button"
       tabIndex={0}
       onClick={editing ? undefined : onSelect}
+      onPointerDown={(e) => {
+        if (editing) return;
+        listeners?.onPointerDown?.(e);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        if (canRename) setEditing(true);
+      }}
       onKeyDown={(e) => {
         if (editing) return;
+        listeners?.onKeyDown?.(e);
+        if (e.defaultPrevented) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect();
@@ -1639,16 +1683,6 @@ function LocalSessionRow({
         isDragging && "opacity-40",
       )}
     >
-      <span
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
-        onClick={(e) => e.stopPropagation()}
-        aria-label={sidebarText(t, "sidebar.aria.dragToReorderSession")}
-        className="invisible mt-1 flex shrink-0 cursor-grab items-center text-fg-muted/60 active:cursor-grabbing group-hover:visible"
-      >
-        <GripVertical size={10} />
-      </span>
       {sessionDisplay.icons.statusDot ? (
         <span className="flex h-5 w-3 shrink-0 items-center justify-center">
           {agentProvider ? (
@@ -1680,6 +1714,8 @@ function LocalSessionRow({
           setEditing(false);
           if (canRename && next && next !== session.name) {
             await renameSession(session.id, next);
+            const error = useAppStore.getState().consumeError();
+            if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
           }
         }}
         onCancelRename={() => setEditing(false)}
@@ -1688,6 +1724,7 @@ function LocalSessionRow({
         role="button"
         aria-label={sidebarText(t, "sidebar.actions.removeSession")}
         tabIndex={0}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
           onRemove();

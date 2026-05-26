@@ -24,6 +24,13 @@ export interface SessionWorkspaceTab
 export interface CodeWorkspaceTab
   extends WorkspaceTabBase<"code", "ephemeral" | "restorable"> {
   path: string;
+  target?: CodeWorkspaceTabTarget;
+}
+
+export interface CodeWorkspaceTabTarget {
+  line: number;
+  column?: number;
+  token: string;
 }
 
 export type WorkspaceTab = SessionWorkspaceTab | CodeWorkspaceTab;
@@ -74,6 +81,7 @@ export function makeCodeWorkspaceTab(
   path: string,
   repoPath: string,
   lifecycle: CodeWorkspaceTab["lifecycle"] = "ephemeral",
+  target?: Omit<CodeWorkspaceTabTarget, "token">,
 ): CodeWorkspaceTab {
   return {
     id: `${CODE_VIEWER_TAB_PREFIX}${crypto.randomUUID()}`,
@@ -82,6 +90,17 @@ export function makeCodeWorkspaceTab(
     path,
     repoPath,
     title: basename(path),
+    ...(target ? { target: makeCodeWorkspaceTabTarget(target) } : {}),
+  };
+}
+
+export function makeCodeWorkspaceTabTarget(
+  target: Omit<CodeWorkspaceTabTarget, "token">,
+): CodeWorkspaceTabTarget {
+  return {
+    line: target.line,
+    ...(target.column === undefined ? {} : { column: target.column }),
+    token: crypto.randomUUID(),
   };
 }
 

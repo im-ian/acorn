@@ -291,6 +291,9 @@ export const api = {
       "warm_macos_folder_permissions",
     );
   },
+  resetMacosFolderPermissions(): Promise<void> {
+    return invoke<void>("reset_macos_folder_permissions");
+  },
   /**
    * Stop the in-process IPC listener and spawn a fresh one. Used when the
    * socket has gone stale (e.g. file removed under the running app) so the

@@ -154,4 +154,69 @@ test.describe("sessions: list rendering", () => {
       page.locator('aside').getByLabel("worktree", { exact: true }),
     ).toHaveCount(1);
   });
+
+  test("unpositioned sidebar sessions keep created order when updated_at changes", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "older-created",
+        name: "older-created",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-05T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+      {
+        id: "newer-created",
+        name: "newer-created",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-02T00:00:00Z",
+        updated_at: "2026-01-03T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const newer = page.getByRole("button", {
+      name: /^newer-created main · Idle$/,
+    });
+    const older = page.getByRole("button", {
+      name: /^older-created main · Idle$/,
+    });
+    await expect(newer).toBeVisible();
+    await expect(older).toBeVisible();
+
+    const newerBox = await newer.boundingBox();
+    const olderBox = await older.boundingBox();
+    expect(newerBox).not.toBeNull();
+    expect(olderBox).not.toBeNull();
+    expect(newerBox!.y).toBeLessThan(olderBox!.y);
+  });
 });

@@ -32,6 +32,9 @@ function session(overrides: Partial<Session> = {}): Session {
 describe("session title helpers", () => {
   it("allows rename for user-owned sessions only", () => {
     expect(canRenameSession(session())).toBe(true);
+    const legacy = { ...session() } as Partial<Session>;
+    delete legacy.owner;
+    expect(canRenameSession(legacy as Session)).toBe(true);
     expect(
       canRenameSession(
         session({ owner: { kind: "control", session_id: "control-1" } }),
@@ -44,6 +47,9 @@ describe("session title helpers", () => {
 
   it("generates titles only for default user-owned agent sessions", () => {
     expect(canGenerateSessionTitle(session())).toBe(true);
+    const legacy = { ...session() } as Partial<Session>;
+    delete legacy.title_source;
+    expect(canGenerateSessionTitle(legacy as Session)).toBe(false);
     expect(canGenerateSessionTitle(session({ title_source: "manual" }))).toBe(
       false,
     );

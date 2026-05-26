@@ -43,15 +43,18 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
+  TOAST_POSITION_OPTIONS,
   type SelectedAgent,
   type SessionTitleSource,
   type AcornSettings,
   type TerminalFontWeight,
   type TerminalLinkActivation,
+  type ToastPosition,
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   CheckboxRow,
@@ -892,6 +895,10 @@ function AppearanceSettings() {
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
       />
+      <ToastPositionSection
+        value={appearance.toastPosition}
+        onChange={(toastPosition) => patchAppearance({ toastPosition })}
+      />
       <BackgroundSection
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
@@ -1025,6 +1032,39 @@ function ThemeSection({
   );
 }
 
+function ToastPositionSection({
+  value,
+  onChange,
+}: {
+  value: ToastPosition;
+  onChange: (value: ToastPosition) => void;
+}) {
+  const t = useTranslation();
+
+  return (
+    <Field
+      label={st(t, "settings.appearance.toastPosition.label")}
+      hint={st(t, "settings.appearance.toastPosition.hint")}
+    >
+      <div className="grid max-w-md grid-cols-2 gap-2">
+        {TOAST_POSITION_OPTIONS.map((option) => (
+          <RadioCard<ToastPosition>
+            key={option.value}
+            name="toast-position"
+            value={option.value}
+            current={value}
+            label={st(
+              t,
+              `settings.appearance.toastPosition.options.${option.value}`,
+            )}
+            onSelect={onChange}
+          />
+        ))}
+      </div>
+    </Field>
+  );
+}
+
 type BackgroundSettings = AcornSettings["appearance"]["background"];
 
 function BackgroundSection({
@@ -1037,6 +1077,7 @@ function BackgroundSection({
   const [pickError, setPickError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
 
   const handleFileChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -1055,21 +1096,35 @@ function BackgroundSection({
         applyToApp: true,
         applyToTerminal: true,
       });
+      showToast(st(t, "settings.appearance.background.toasts.imported"));
     } catch (err) {
-      setPickError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setPickError(message);
+      showToast(
+        `${st(t, "settings.appearance.background.toasts.importFailed")} ${message}`,
+      );
     }
   };
 
   const remove = async () => {
-    if (state.relativePath) {
-      await removeBackgroundImage(state.relativePath).catch(() => {});
+    try {
+      if (state.relativePath) {
+        await removeBackgroundImage(state.relativePath);
+      }
+      onChange({
+        relativePath: null,
+        fileName: null,
+        applyToApp: false,
+        applyToTerminal: false,
+      });
+      showToast(st(t, "settings.appearance.background.toasts.removed"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setPickError(message);
+      showToast(
+        `${st(t, "settings.appearance.background.toasts.removeFailed")} ${message}`,
+      );
     }
-    onChange({
-      relativePath: null,
-      fileName: null,
-      applyToApp: false,
-      applyToTerminal: false,
-    });
   };
 
   return (
@@ -1336,6 +1391,15 @@ function StatusBarSection({
     >
       <div className="flex flex-col gap-1">
         <CheckboxRow
+          label={st(t, "settings.appearance.statusBar.sessionActivity.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.sessionActivity.description",
+          )}
+          checked={statusBar.showSessionActivity !== false}
+          onChange={(v) => patch({ showSessionActivity: v })}
+        />
+        <CheckboxRow
           label={st(t, "settings.appearance.statusBar.sessionCount.label")}
           description={st(
             t,
@@ -1422,6 +1486,7 @@ function NotificationSettings() {
     | { tone: "success" | "warning" | "danger"; text: string }
     | null
   >(null);
+  const showToast = useToasts((s) => s.show);
 
   async function handleTest() {
     setTesting(true);
@@ -1429,20 +1494,26 @@ function NotificationSettings() {
     try {
       const result = await sendTestNotification();
       if (result === "sent") {
+        const text = st(t, "settings.notifications.test.result.sent");
         setTestResult({
           tone: "success",
-          text: st(t, "settings.notifications.test.result.sent"),
+          text,
         });
+        showToast(text);
       } else if (result === "denied") {
+        const text = st(t, "settings.notifications.test.result.denied");
         setTestResult({
           tone: "warning",
-          text: st(t, "settings.notifications.test.result.denied"),
+          text,
         });
+        showToast(text);
       } else {
+        const text = st(t, "settings.notifications.test.result.failed");
         setTestResult({
           tone: "danger",
-          text: st(t, "settings.notifications.test.result.failed"),
+          text,
         });
+        showToast(text);
       }
     } finally {
       setTesting(false);
@@ -1892,6 +1963,7 @@ function StorageSettings() {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const showToast = useToasts((s) => s.show);
 
   const refreshSizes = useCallback(async () => {
     const results = await Promise.allSettled(
@@ -1927,7 +1999,7 @@ function StorageSettings() {
         (sum, r) => sum + (r.status === "fulfilled" ? r.value : 0),
         0,
       );
-      setStatus(
+      const message =
         totalRemoved > 0
           ? stf(
               t,
@@ -1936,12 +2008,15 @@ function StorageSettings() {
                 : "settings.storage.status.clearedPlural",
               { count: totalRemoved },
             )
-          : st(t, "settings.storage.status.nothingToClear"),
-      );
+          : st(t, "settings.storage.status.nothingToClear");
+      setStatus(message);
+      showToast(message);
       await refreshSizes();
     } catch (err) {
       console.error("[Settings] cache clear failed", err);
-      setStatus(st(t, "settings.storage.status.clearFailed"));
+      const message = st(t, "settings.storage.status.clearFailed");
+      setStatus(message);
+      showToast(message);
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -2169,6 +2244,7 @@ function AboutSettings() {
   const [currentNotes, setCurrentNotes] = useState<ReleaseNotes | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
+  const showToast = useToasts((s) => s.show);
 
   useEffect(() => {
     void init();
@@ -2217,13 +2293,38 @@ function AboutSettings() {
         isFallback: true,
       });
     } catch (err) {
-      setNotesError(
-        err instanceof Error ? err.message : "Failed to fetch release notes",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to fetch release notes";
+      setNotesError(message);
+      showToast(`${st(t, "settings.about.toasts.releaseNotesFailed")} ${message}`);
     } finally {
       setNotesLoading(false);
     }
-  }, [currentVersion, currentNotes]);
+  }, [currentVersion, currentNotes, showToast, t]);
+
+  const handleCheck = useCallback(async () => {
+    await check();
+    const next = useUpdater.getState();
+    if (next.error) {
+      showToast(`${st(t, "settings.about.toasts.checkFailed")} ${next.error}`);
+    } else if (next.available) {
+      showToast(
+        stf(t, "settings.about.toasts.updateAvailable", {
+          version: next.available.version,
+        }),
+      );
+    } else {
+      showToast(st(t, "settings.about.toasts.upToDate"));
+    }
+  }, [check, showToast, t]);
+
+  const handleInstall = useCallback(async () => {
+    await install();
+    const next = useUpdater.getState();
+    if (next.error) {
+      showToast(`${st(t, "settings.about.toasts.installFailed")} ${next.error}`);
+    }
+  }, [install, showToast, t]);
 
   return (
     <section className="space-y-4">
@@ -2283,7 +2384,7 @@ function AboutSettings() {
               ) : null}
               <button
                 type="button"
-                onClick={() => void install()}
+                onClick={() => void handleInstall()}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
               >
@@ -2331,7 +2432,7 @@ function AboutSettings() {
         </button>
         <button
           type="button"
-          onClick={() => void check()}
+          onClick={() => void handleCheck()}
           disabled={busy}
           className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
         >
@@ -2354,7 +2455,9 @@ function AboutSettings() {
         busy={busy}
         error={whatsNewSource?.kind === "update" ? error : null}
         onInstall={
-          whatsNewSource?.kind === "update" ? () => void install() : undefined
+          whatsNewSource?.kind === "update"
+            ? () => void handleInstall()
+            : undefined
         }
         htmlUrl={
           whatsNewSource?.kind === "current" ? whatsNewSource.htmlUrl : undefined
