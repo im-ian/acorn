@@ -1,4 +1,39 @@
 {
+  "toasts": {
+    "session": {
+      "createFailed": "Failed to create session:",
+      "duplicateFailed": "Failed to duplicate session:",
+      "removeFailed": "Failed to remove session:",
+      "worktreeRemoved": "Worktree deleted from disk.",
+      "worktreeRemoveFailed": "Failed to delete worktree:",
+      "refreshFailed": "Failed to refresh sessions:",
+      "renameFailed": "Failed to rename session:",
+      "worktreeAdopted": "Adopted new worktree: {name}",
+      "worktreeAdoptFailed": "Failed to adopt worktree:"
+    },
+    "project": {
+      "addFailed": "Failed to add project:",
+      "createFailed": "Failed to create project:",
+      "removeFailed": "Failed to remove project:",
+      "worktreesRemoved": "Project worktrees deleted from disk.",
+      "worktreesRemoveFailed": "Failed to delete project worktrees:"
+    },
+    "ipc": {
+      "restarted": "IPC server restarted.",
+      "restartFailed": "Failed to restart IPC server:"
+    },
+    "files": {
+      "renameFailed": "Failed to rename file:",
+      "trashFailed": "Failed to move to trash:",
+      "pathsCopied": "File paths copied.",
+      "copyFailed": "Failed to copy file paths."
+    },
+    "pullRequests": {
+      "mergeFailed": "Failed to merge pull request:",
+      "closeFailed": "Failed to close pull request:",
+      "bodyUpdateFailed": "Failed to update pull request:"
+    }
+  },
   "settings": {
     "title": "Settings",
     "reset": "Reset to defaults",
@@ -128,6 +163,14 @@
         "refresh": "Refresh",
         "revealFolder": "Reveal folder"
       },
+      "toastPosition": {
+        "label": "Toast position",
+        "hint": "Choose where transient app messages appear.",
+        "options": {
+          "top": "Top",
+          "bottom": "Bottom"
+        }
+      },
       "background": {
         "label": "Background image",
         "hint": "One image can be applied to the app area, terminal area, or both.",
@@ -147,7 +190,13 @@
           "label": "Opacity",
           "hint": "0 is transparent, 100 is opaque."
         },
-        "blur": "Blur"
+        "blur": "Blur",
+        "toasts": {
+          "imported": "Background image imported.",
+          "importFailed": "Failed to import background image:",
+          "removed": "Background image removed.",
+          "removeFailed": "Failed to remove background image:"
+        }
       },
       "sessionDisplay": {
         "title": {
@@ -462,6 +511,13 @@
       "whatsNewInVersion": "What's new in {version}",
       "checking": "Checking...",
       "checkForUpdates": "Check for updates",
+      "toasts": {
+        "upToDate": "Acorn is up to date.",
+        "updateAvailable": "Acorn {version} is available.",
+        "checkFailed": "Update check failed:",
+        "installFailed": "Update install failed:",
+        "releaseNotesFailed": "Failed to load release notes:"
+      },
       "relative": {
         "never": "never",
         "justNow": "just now",
@@ -1241,6 +1297,19 @@
     },
     "relativeTime": {
       "ago": "ago"
+    },
+    "toasts": {
+      "enabled": "Background sessions enabled.",
+      "disabled": "Background sessions disabled.",
+      "toggleFailed": "Failed to update background sessions:",
+      "restarted": "Daemon restarted.",
+      "restartFailed": "Failed to restart daemon:",
+      "shutdown": "Daemon shut down.",
+      "shutdownFailed": "Failed to quit daemon:",
+      "sessionKilled": "PTY killed.",
+      "sessionRestored": "Session restored.",
+      "sessionForgotten": "Session forgotten.",
+      "sessionActionFailed": "Daemon session action failed:"
     }
   }
 }

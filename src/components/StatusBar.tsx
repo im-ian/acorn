@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
+import { useToasts } from "../lib/toasts";
 import type { MemoryProcess, SessionStatus } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
@@ -327,6 +328,7 @@ function StatusDot({ state }: { state: DotState }) {
 
 function ServicesStatusButton() {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -378,12 +380,14 @@ function ServicesStatusButton() {
       await api.ipcRestart();
       await refreshIpc();
       setIpc((s) => ({ ...s, busy: false }));
+      showToast(t("toasts.ipc.restarted"));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await refreshIpc();
       setIpc((s) => ({ ...s, busy: false, lastError: msg }));
+      showToast(`${t("toasts.ipc.restartFailed")} ${msg}`);
     }
-  }, [ipc.busy, refreshIpc]);
+  }, [ipc.busy, refreshIpc, showToast, t]);
 
   const openDaemonSettings = useCallback(() => {
     window.dispatchEvent(

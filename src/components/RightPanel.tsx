@@ -103,6 +103,7 @@ import {
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   applySessionCreateRequest,
@@ -1212,6 +1213,7 @@ function AgentHistoryTab({
   sessionHostProjectScoped: boolean;
 }) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const createSession = useAppStore((s) => s.createSession);
@@ -1320,17 +1322,25 @@ function AgentHistoryTab({
         ),
       );
       if (!created) {
-        setError(
-          useAppStore.getState().error ??
-            rt(t, "rightPanel.history.createFailed"),
-        );
+        const storeError = useAppStore.getState().consumeError();
+        const message = storeError ?? rt(t, "rightPanel.history.createFailed");
+        setError(message);
+        showToast(`${t("toasts.session.createFailed")} ${message}`);
         return;
       }
       if (shouldUseWorktree && item.worktree) {
         try {
           await adoptSessionWorktree(created.id, item.worktree.path);
+          const error = useAppStore.getState().consumeError();
+          if (error) {
+            setError(error);
+            showToast(`${t("toasts.session.worktreeAdoptFailed")} ${error}`);
+            return;
+          }
         } catch (e) {
-          setError(String(e));
+          const message = String(e);
+          setError(message);
+          showToast(`${t("toasts.session.worktreeAdoptFailed")} ${message}`);
           return;
         }
       }
@@ -1341,7 +1351,9 @@ function AgentHistoryTab({
         setWorktreeNotice(item.worktree);
       }
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      setError(message);
+      showToast(`${t("toasts.session.createFailed")} ${message}`);
     }
   }
 
@@ -1366,8 +1378,10 @@ function AgentHistoryTab({
       });
       setTrashCandidate(null);
     } catch (e) {
+      const message = String(e);
       setTrashCandidate(null);
-      setError(String(e));
+      setError(message);
+      showToast(`${t("toasts.files.trashFailed")} ${message}`);
     }
   }
 

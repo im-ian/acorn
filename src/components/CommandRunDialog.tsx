@@ -133,8 +133,9 @@ export function CommandRunDialog({
         ),
       );
       if (!created) {
-        const storeError = useAppStore.getState().error;
+        const storeError = useAppStore.getState().consumeError();
         setError(storeError ?? dt(t, "dialogs.commandRun.createFailed"));
+        showToast(`${t("toasts.session.createFailed")} ${storeError ?? ""}`.trim());
         setBusy(false);
         return;
       }
@@ -147,6 +148,7 @@ export function CommandRunDialog({
       onClose();
     } catch (e) {
       setError(String(e));
+      showToast(`${t("toasts.session.createFailed")} ${String(e)}`);
       setBusy(false);
     }
   }

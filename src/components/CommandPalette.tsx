@@ -82,8 +82,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   }
 
   async function handleRefresh() {
+    const show = useToasts.getState().show;
     try {
       await useAppStore.getState().refreshSessions();
+      const error = useAppStore.getState().consumeError();
+      if (error) show(`${t("toasts.session.refreshFailed")} ${error}`);
     } finally {
       close();
     }
@@ -95,8 +98,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   }
 
   async function handleRemoveSession(id: string) {
+    const show = useToasts.getState().show;
     try {
       await useAppStore.getState().removeSession(id);
+      const error = useAppStore.getState().consumeError();
+      if (error) show(`${t("toasts.session.removeFailed")} ${error}`);
     } finally {
       close();
     }

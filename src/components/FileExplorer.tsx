@@ -36,6 +36,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { setFileDragPayload } from "../lib/dnd";
 import { Tooltip } from "./Tooltip";
 import { IconInput, TextInput } from "./ui";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   applySessionCreateRequest,
@@ -289,6 +290,7 @@ function setLocalBool(key: string, value: boolean) {
 
 export function FileExplorer({ rootPath }: FileExplorerProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const [cache, setCache] = useState<Cache>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(() =>
@@ -794,9 +796,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       setDraftRename(null);
       await fetchDir(parentOf(path));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      showToast(`${t("toasts.files.renameFailed")} ${message}`);
     }
-  }, [draftRename, fetchDir]);
+  }, [draftRename, fetchDir, showToast, t]);
 
   const handleTrash = useCallback(
     async (entry: FsEntry) => {
@@ -804,10 +808,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         await api.fsTrash(entry.path);
         await fetchDir(parentOf(entry.path));
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        const message = e instanceof Error ? e.message : String(e);
+        setError(message);
+        showToast(`${t("toasts.files.trashFailed")} ${message}`);
       }
     },
-    [fetchDir],
+    [fetchDir, showToast, t],
   );
 
   const dirtyAncestors = useMemo(
@@ -940,7 +946,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       try {
         await api.fsTrash(p);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        const message = e instanceof Error ? e.message : String(e);
+        setError(message);
+        showToast(`${t("toasts.files.trashFailed")} ${message}`);
       }
     }
     setSelection(new Set());
@@ -948,7 +956,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     pendingWorkingTreeRef.current = true;
     scheduleGitStatusRefresh("user");
     scheduleGitDiffStats();
-  }, [selection, scheduleGitStatusRefresh, scheduleGitDiffStats]);
+  }, [selection, scheduleGitStatusRefresh, scheduleGitDiffStats, showToast, t]);
 
   const handleBulkCopyPaths = useCallback(
     async (mode: "relative" | "absolute") => {
@@ -958,11 +966,13 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       );
       try {
         await navigator.clipboard.writeText(lines.join("\n"));
+        showToast(t("toasts.files.pathsCopied"));
       } catch {
         setError(fileExplorerText(t, "fileExplorer.errors.clipboardWriteFailed"));
+        showToast(t("toasts.files.copyFailed"));
       }
     },
-    [selection, rootPath, t],
+    [selection, rootPath, showToast, t],
   );
 
   const handleBulkAttach = useCallback(async () => {

@@ -50,6 +50,7 @@ import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   buildSessionCreateRequestFromScope,
@@ -115,6 +116,7 @@ type PaneTab =
  */
 export function Pane({ paneId }: PaneProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const pane = useAppStore((s) => s.panes[paneId]);
@@ -230,6 +232,8 @@ export function Pane({ paneId }: PaneProps) {
       request.agentProvider,
       request.projectScoped,
     );
+    const error = useAppStore.getState().consumeError();
+    if (error) showToast(`${t("toasts.session.createFailed")} ${error}`);
   }
 
   // Fork an existing claude/codex conversation into a new Acorn session.
@@ -294,6 +298,7 @@ export function Pane({ paneId }: PaneProps) {
       selectTab(created.id);
     } catch (err) {
       console.error("[Pane] fork session failed", err);
+      showToast(`${t("toasts.session.createFailed")} ${String(err)}`);
     }
   }
 
@@ -728,6 +733,7 @@ function TabItem({
   registerRef,
 }: TabItemProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const session = tab.kind === "session" ? tab.session : null;
   const showAgentProviderIcons = useSettings(
@@ -1009,6 +1015,10 @@ function TabItem({
                 setEditing(false);
                 if (session && next && next !== session.name) {
                   await renameSession(session.id, next);
+                  const error = useAppStore.getState().consumeError();
+                  if (error) {
+                    showToast(`${t("toasts.session.renameFailed")} ${error}`);
+                  }
                 }
               }}
               onCancel={() => setEditing(false)}
