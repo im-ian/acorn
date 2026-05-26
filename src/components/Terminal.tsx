@@ -47,7 +47,11 @@ import {
 import { buildXtermTheme } from "../lib/terminalTheme";
 import { useThemes, type ThemeMode } from "../lib/themes";
 import type { SessionAgentProvider } from "../lib/types";
-import { useToasts } from "../lib/toasts";
+import {
+  showStoreResultToast,
+  showTranslatedErrorToast,
+  showTranslatedToast,
+} from "../lib/operationToasts";
 import {
   chooseWorktreeToAdoptAfterExit,
   type WorktreeAdoptionIntent,
@@ -1654,10 +1658,18 @@ export function Terminal({
             worktreeAdoptionIntent = { kind: "none" };
             if (adoptedPath) {
               const name = adoptedPath.split("/").pop() || adoptedPath;
-              useToasts.getState().show(`Adopted new worktree: ${name}`);
               await useAppStore
                 .getState()
                 .adoptSessionWorktree(sessionId, adoptedPath);
+              const error = useAppStore.getState().consumeError();
+              if (error) {
+                showTranslatedErrorToast(
+                  "toasts.session.worktreeAdoptFailed",
+                  error,
+                );
+              } else {
+                showTranslatedToast("toasts.session.worktreeAdopted", { name });
+              }
               // The store now holds the new worktree_path; TerminalHost
               // re-renders with the updated cwd prop, this entire effect
               // tears down via cleanup, and a fresh mount spawns the PTY
@@ -1678,7 +1690,12 @@ export function Terminal({
               if (session && hasRecordedWorktree(session)) {
                 store.requestRemoveSession(sessionId);
               } else {
-                void store.removeSession(sessionId, false);
+                void store.removeSession(sessionId, false).then(() => {
+                  showStoreResultToast(
+                    null,
+                    "toasts.session.removeFailed",
+                  );
+                });
               }
               return;
             }

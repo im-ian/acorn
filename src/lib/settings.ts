@@ -79,6 +79,16 @@ export const UI_SCALE_PERCENT_MIN = 75;
 export const UI_SCALE_PERCENT_MAX = 150;
 export const UI_SCALE_PERCENT_STEP = 5;
 
+export type ToastPosition = "top" | "bottom";
+
+export const TOAST_POSITION_OPTIONS: ReadonlyArray<{
+  value: ToastPosition;
+  label: string;
+}> = [
+  { value: "top", label: "Top" },
+  { value: "bottom", label: "Bottom" },
+];
+
 export type TerminalFontWeight =
   | 100
   | 200
@@ -285,6 +295,7 @@ export interface AcornSettings {
     background: BackgroundState;
     fontSlots: [string, string | null, string | null];
     uiScalePercent: number;
+    toastPosition: ToastPosition;
   };
   /**
    * Opt-in toggles for unfinished features. Anything under here is
@@ -397,6 +408,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
     fontSlots: ["JetBrains Mono", "Fira Code", "Menlo"],
     uiScalePercent: 100,
+    toastPosition: "top",
   },
   experiments: {
     stickyPrompt: false,
@@ -422,6 +434,7 @@ const VALID_PR_INTERVALS = new Set<number>(
 );
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
+const VALID_TOAST_POSITIONS = new Set<ToastPosition>(["top", "bottom"]);
 
 function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
   if (typeof v === "string" && VALID_BG_FITS.has(v as BackgroundFit)) {
@@ -457,6 +470,19 @@ function normalizeThemeId(v: unknown, fallback: string): string {
   // id isn't in the merged registry at apply time.
   if (typeof v === "string" && v.trim().length > 0) {
     return v;
+  }
+  return fallback;
+}
+
+function normalizeToastPosition(
+  v: unknown,
+  fallback: ToastPosition,
+): ToastPosition {
+  if (
+    typeof v === "string" &&
+    VALID_TOAST_POSITIONS.has(v as ToastPosition)
+  ) {
+    return v as ToastPosition;
   }
   return fallback;
 }
@@ -621,6 +647,10 @@ function loadSettings(): AcornSettings {
       uiScalePercent: normalizeUiScalePercent(
         appearanceRaw.uiScalePercent,
         DEFAULT_SETTINGS.appearance.uiScalePercent,
+      ),
+      toastPosition: normalizeToastPosition(
+        appearanceRaw.toastPosition,
+        DEFAULT_SETTINGS.appearance.toastPosition,
       ),
       background: {
         relativePath:

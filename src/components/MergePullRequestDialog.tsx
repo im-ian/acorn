@@ -10,6 +10,7 @@ import {
   resolveAiCommitCommand,
   useSettings,
 } from "../lib/settings";
+import { useToasts } from "../lib/toasts";
 import type {
   MergeMethod,
   PullRequestCheck,
@@ -94,6 +95,7 @@ export function MergePullRequestDialog({
   onMerged,
 }: MergePullRequestDialogProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const settings = useSettings((s) => s.settings);
   const [method, setMethod] = useState<MergeMethod>(() => loadLastMergeMethod());
   const [title, setTitle] = useState("");
@@ -167,7 +169,9 @@ export function MergePullRequestDialog({
       );
       onMerged();
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      setError(message);
+      showToast(`${t("toasts.pullRequests.mergeFailed")} ${message}`);
       setSubmitting(false);
     }
   }

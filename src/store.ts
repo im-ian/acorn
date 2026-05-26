@@ -84,6 +84,7 @@ interface AppStateModel {
   focusedPaneId: PaneId;
   activeTabId: string | null;
   activeSessionId: string | null;
+  consumeError: () => string | null;
 
   rightTab: RightTab;
   /**
@@ -496,6 +497,11 @@ export const useAppStore = create<AppStateModel>()(
   multiInputEnabled: false,
   loading: false,
   error: null,
+  consumeError() {
+    const error = get().error;
+    if (error) set({ error: null });
+    return error;
+  },
   pendingRemoveId: null,
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
@@ -539,6 +545,7 @@ export const useAppStore = create<AppStateModel>()(
         return {
           sessions,
           loading: false,
+          error: null,
           sessionsLoadedCleanly: nextSessionsLoadedCleanly,
           workspaces: reconciled.workspaces,
           activeProject: reconciled.activeProject,
@@ -1196,6 +1203,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.removeSession(id, removeWorktree);
       await get().refreshAll();
+      set({ error: null });
     } catch (e) {
       const message = errorMessage(e);
       await get().refreshAll();
@@ -1207,6 +1215,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.renameSession(id, name);
       await get().refreshSessions();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1216,6 +1225,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.updateSessionWorktree(id, worktreePath);
       await get().refreshSessions();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1233,6 +1243,7 @@ export const useAppStore = create<AppStateModel>()(
     try {
       await api.addProject(repoPath);
       await get().refreshProjects();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }
@@ -1271,6 +1282,7 @@ export const useAppStore = create<AppStateModel>()(
         };
       });
       await get().refreshAll();
+      set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
     }

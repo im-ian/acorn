@@ -226,6 +226,7 @@ describe("appearance settings migration", () => {
     );
     expect(settings.appearance.background.relativePath).toBeNull();
     expect(settings.appearance.uiScalePercent).toBe(100);
+    expect(settings.appearance.toastPosition).toBe("top");
   });
 
   it("keeps terminal.fontFamily as the source of truth on load", async () => {
@@ -385,5 +386,33 @@ describe("appearance settings migration", () => {
     const { useSettings } = await import("./settings");
 
     expect(useSettings.getState().settings.appearance.uiScalePercent).toBe(100);
+  });
+
+  it("normalizes stored toast position", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { toastPosition: "bottom" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.toastPosition).toBe(
+      "bottom",
+    );
+  });
+
+  it("falls back to default toast position when stored value is invalid", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { toastPosition: "left" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.toastPosition).toBe(
+      "top",
+    );
   });
 });
