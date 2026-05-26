@@ -33,6 +33,7 @@ class RightPanelCacheManager {
   >();
   private commitsCache = new Map<string, CommitsCacheEntry>();
   private stagedCache = new Map<string, StagedCacheEntry>();
+  private fileExplorerExpanded = new Map<string, Set<string>>();
   private prListCache = new Map<string, PullRequestListing>();
   private prListInFlight = new Map<string, Promise<PullRequestListing>>();
   private workflowRunsCache = new Map<string, WorkflowRunsListing>();
@@ -56,6 +57,7 @@ class RightPanelCacheManager {
     this.collectRemovedStringKeys(this.agentHistoryInFlight, next, removed);
     this.collectRemovedStringKeys(this.commitsCache, next, removed);
     this.collectRemovedStringKeys(this.stagedCache, next, removed);
+    this.collectRemovedStringKeys(this.fileExplorerExpanded, next, removed);
     this.collectRemovedStringValues(this.prefetchedProjectRepos, next, removed);
     this.collectRemovedJsonKeys(this.prListCache, next, removed);
     this.collectRemovedJsonKeys(this.prListInFlight, next, removed);
@@ -68,6 +70,7 @@ class RightPanelCacheManager {
     this.pruneStringKeyedMap(this.agentHistoryInFlight, next);
     this.pruneStringKeyedMap(this.commitsCache, next);
     this.pruneStringKeyedMap(this.stagedCache, next);
+    this.pruneStringKeyedMap(this.fileExplorerExpanded, next);
     this.pruneStringKeyedSet(this.prefetchedProjectRepos, next);
     this.pruneJsonKeyedMap(this.prListCache, next);
     this.pruneJsonKeyedMap(this.prListInFlight, next);
@@ -155,6 +158,15 @@ class RightPanelCacheManager {
     this.stagedCache.set(repoPath, entry);
   }
 
+  getFileExplorerExpanded(repoPath: string): Set<string> {
+    return new Set(this.fileExplorerExpanded.get(repoPath) ?? []);
+  }
+
+  setFileExplorerExpanded(repoPath: string, expanded: Iterable<string>): void {
+    if (!this.canStore(repoPath)) return;
+    this.fileExplorerExpanded.set(repoPath, new Set(expanded));
+  }
+
   getPullRequests(
     repoPath: string,
     filter: PrStateFilter,
@@ -230,6 +242,7 @@ class RightPanelCacheManager {
     this.unscopedAgentHistoryInFlight.clear();
     this.commitsCache.clear();
     this.stagedCache.clear();
+    this.fileExplorerExpanded.clear();
     this.prListCache.clear();
     this.prListInFlight.clear();
     this.workflowRunsCache.clear();

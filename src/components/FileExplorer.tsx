@@ -32,6 +32,7 @@ import type { FsChangePayload, FsGitStatus, FsGitStatusEntry } from "../lib/api"
 import { cn } from "../lib/cn";
 import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { rightPanelCache } from "../lib/right-panel-cache";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { setFileDragPayload } from "../lib/dnd";
 import { Tooltip } from "./Tooltip";
@@ -292,7 +293,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const [cache, setCache] = useState<Cache>({});
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    rightPanelCache.getFileExplorerExpanded(rootPath),
+  );
   const [showHidden, setShowHidden] = useState(() =>
     getLocalBool(SHOW_HIDDEN_KEY, false),
   );
@@ -663,7 +666,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     if (rootRef.current !== rootPath) {
       rootRef.current = rootPath;
       setCache({});
-      setExpanded(new Set());
+      setExpanded(rightPanelCache.getFileExplorerExpanded(rootPath));
       setDraftRename(null);
       setActivePath(null);
     }
@@ -747,10 +750,11 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
             void fetchDir(path);
           }
         }
+        rightPanelCache.setFileExplorerExpanded(rootPath, next);
         return next;
       });
     },
-    [cache, fetchDir],
+    [cache, fetchDir, rootPath],
   );
 
   const openInEditor = useCallback(async (entry: FsEntry) => {
