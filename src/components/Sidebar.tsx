@@ -56,6 +56,7 @@ import {
   type SessionTitleSource,
 } from "../lib/settings";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   buildLocalSessions,
@@ -122,6 +123,7 @@ function isLocalTerminalAreaFocused(): boolean {
 
 export function Sidebar() {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -203,8 +205,11 @@ export function Sidebar() {
       });
       if (!repoPath || typeof repoPath !== "string") return;
       await addProject(repoPath);
+      const error = useAppStore.getState().consumeError();
+      if (error) showToast(`${t("toasts.project.addFailed")} ${error}`);
     } catch (e) {
       console.error("add project failed", e);
+      showToast(`${t("toasts.project.addFailed")} ${String(e)}`);
     }
   }
 
@@ -300,7 +305,11 @@ export function Sidebar() {
             (isolated || kind === "control" ? true : undefined),
         },
       );
-      await applySessionCreateRequest(createSession, request);
+      const created = await applySessionCreateRequest(createSession, request);
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+      }
       setCollapsed((prev) => {
         if (!prev.has(request.repoPath)) return prev;
         const next = new Set(prev);
@@ -309,6 +318,7 @@ export function Sidebar() {
       });
     } catch (e) {
       console.error("create session failed", e);
+      showToast(`${t("toasts.session.createFailed")} ${String(e)}`);
     }
   }
 
@@ -316,12 +326,17 @@ export function Sidebar() {
     try {
       const home = await homeDir();
       if (!home) return;
-      await applySessionCreateRequest(
+      const created = await applySessionCreateRequest(
         createSession,
         buildLocalSessionCreateRequest({ sessions, projects }, home),
       );
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+      }
     } catch (e) {
       console.error("create local terminal session failed", e);
+      showToast(`${t("toasts.session.createFailed")} ${String(e)}`);
     }
   }
 
@@ -532,7 +547,12 @@ export function Sidebar() {
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
         onCreate={async (parentPath, name, ignoreSafeName) => {
-          await createNewProject(parentPath, name, ignoreSafeName);
+          try {
+            await createNewProject(parentPath, name, ignoreSafeName);
+          } catch (e) {
+            showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
+            throw e;
+          }
         }}
       />
     </aside>
@@ -982,6 +1002,7 @@ function SessionRow({
   onRemove,
 }: SessionRowProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
@@ -1029,7 +1050,7 @@ function SessionRow({
       // the source session's `kind` so a control session stays a control
       // session (preserves its IPC-dispatch role).
       const state = useAppStore.getState();
-      await applySessionCreateRequest(
+      const created = await applySessionCreateRequest(
         state.createSession,
         buildSessionCreateRequestFromScope(
           { sessions: state.sessions, projects: state.projects },
@@ -1044,8 +1065,13 @@ function SessionRow({
           },
         ),
       );
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.duplicateFailed")} ${error ?? ""}`.trim());
+      }
     } catch (err) {
       console.error("[Sidebar] duplicate session failed", err);
+      showToast(`${t("toasts.session.duplicateFailed")} ${String(err)}`);
     }
   }
 
@@ -1213,6 +1239,8 @@ function SessionRow({
             setEditing(false);
             if (next && next !== session.name) {
               await renameSession(session.id, next);
+              const error = useAppStore.getState().consumeError();
+              if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
             }
           }}
           onCancelRename={() => setEditing(false)}
@@ -1499,6 +1527,7 @@ function LocalSessionRow({
   onRemove,
 }: LocalSessionRowProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
@@ -1540,7 +1569,7 @@ function LocalSessionRow({
       n += 1;
     }
     const state = useAppStore.getState();
-    await applySessionCreateRequest(
+    const created = await applySessionCreateRequest(
       state.createSession,
       buildSessionCreateRequestFromScope(
         { sessions: state.sessions, projects: state.projects },
@@ -1548,6 +1577,10 @@ function LocalSessionRow({
         { name: next },
       ),
     );
+    const error = useAppStore.getState().consumeError();
+    if (!created || error) {
+      showToast(`${t("toasts.session.duplicateFailed")} ${error ?? ""}`.trim());
+    }
   }
 
   const menuItems: ContextMenuItem[] = [
@@ -1650,6 +1683,8 @@ function LocalSessionRow({
           setEditing(false);
           if (next && next !== session.name) {
             await renameSession(session.id, next);
+            const error = useAppStore.getState().consumeError();
+            if (error) showToast(`${t("toasts.session.renameFailed")} ${error}`);
           }
         }}
         onCancelRename={() => setEditing(false)}

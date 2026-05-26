@@ -26,6 +26,7 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
+import { useToasts } from "../lib/toasts";
 import { ResizeHandle } from "./ResizeHandle";
 import type {
   DiffPayload,
@@ -92,6 +93,7 @@ export function PullRequestDetailModal({
   onMutated,
 }: PullRequestDetailModalProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const refreshIntervalMs = useSettings(
     (s) => s.settings.github.refreshIntervalMs,
   );
@@ -239,11 +241,13 @@ export function PullRequestDetailModal({
         })
         .catch((e) => {
           if (seq !== bodyWriteSeqRef.current) return;
+          const message = String(e);
           setBodyOverride(null);
-          setBodySaveError(String(e));
+          setBodySaveError(message);
+          showToast(`${t("toasts.pullRequests.bodyUpdateFailed")} ${message}`);
         });
     },
-    [open, detail, prKey, bodyOverride],
+    [open, detail, prKey, bodyOverride, showToast, t],
   );
 
   return (

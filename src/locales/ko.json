@@ -1,4 +1,39 @@
 {
+  "toasts": {
+    "session": {
+      "createFailed": "세션을 만들지 못했습니다:",
+      "duplicateFailed": "세션을 복제하지 못했습니다:",
+      "removeFailed": "세션을 제거하지 못했습니다:",
+      "worktreeRemoved": "디스크에서 worktree를 삭제했습니다.",
+      "worktreeRemoveFailed": "worktree를 삭제하지 못했습니다:",
+      "refreshFailed": "세션을 새로고침하지 못했습니다:",
+      "renameFailed": "세션 이름을 변경하지 못했습니다:",
+      "worktreeAdopted": "새 worktree를 가져왔습니다: {name}",
+      "worktreeAdoptFailed": "worktree를 가져오지 못했습니다:"
+    },
+    "project": {
+      "addFailed": "프로젝트를 추가하지 못했습니다:",
+      "createFailed": "프로젝트를 만들지 못했습니다:",
+      "removeFailed": "프로젝트를 제거하지 못했습니다:",
+      "worktreesRemoved": "디스크에서 프로젝트 worktree를 삭제했습니다.",
+      "worktreesRemoveFailed": "프로젝트 worktree를 삭제하지 못했습니다:"
+    },
+    "ipc": {
+      "restarted": "IPC 서버를 다시 시작했습니다.",
+      "restartFailed": "IPC 서버를 다시 시작하지 못했습니다:"
+    },
+    "files": {
+      "renameFailed": "파일 이름을 변경하지 못했습니다:",
+      "trashFailed": "휴지통으로 이동하지 못했습니다:",
+      "pathsCopied": "파일 경로를 복사했습니다.",
+      "copyFailed": "파일 경로를 복사하지 못했습니다."
+    },
+    "pullRequests": {
+      "mergeFailed": "Pull request를 병합하지 못했습니다:",
+      "closeFailed": "Pull request를 닫지 못했습니다:",
+      "bodyUpdateFailed": "Pull request를 업데이트하지 못했습니다:"
+    }
+  },
   "settings": {
     "title": "설정",
     "reset": "기본값으로 재설정",
@@ -128,6 +163,14 @@
         "refresh": "새로고침",
         "revealFolder": "폴더 보기"
       },
+      "toastPosition": {
+        "label": "토스트 위치",
+        "hint": "일시적인 앱 메시지를 표시할 위치를 선택합니다.",
+        "options": {
+          "top": "상단",
+          "bottom": "하단"
+        }
+      },
       "background": {
         "label": "배경 이미지",
         "hint": "이미지 하나를 앱 영역, 터미널 영역 또는 둘 다에 적용할 수 있습니다.",
@@ -147,7 +190,13 @@
           "label": "불투명도",
           "hint": "0은 투명, 100은 불투명입니다."
         },
-        "blur": "흐림"
+        "blur": "흐림",
+        "toasts": {
+          "imported": "배경 이미지를 가져왔습니다.",
+          "importFailed": "배경 이미지를 가져오지 못했습니다:",
+          "removed": "배경 이미지를 제거했습니다.",
+          "removeFailed": "배경 이미지를 제거하지 못했습니다:"
+        }
       },
       "sessionDisplay": {
         "title": {
@@ -462,6 +511,13 @@
       "whatsNewInVersion": "{version}의 새로운 내용",
       "checking": "확인 중...",
       "checkForUpdates": "업데이트 확인",
+      "toasts": {
+        "upToDate": "Acorn이 최신 상태입니다.",
+        "updateAvailable": "Acorn {version}을 사용할 수 있습니다.",
+        "checkFailed": "업데이트 확인에 실패했습니다:",
+        "installFailed": "업데이트 설치에 실패했습니다:",
+        "releaseNotesFailed": "릴리스 노트를 불러오지 못했습니다:"
+      },
       "relative": {
         "never": "확인한 적 없음",
         "justNow": "방금 전",
@@ -1241,6 +1297,19 @@
     },
     "relativeTime": {
       "ago": "전"
+    },
+    "toasts": {
+      "enabled": "백그라운드 세션을 켰습니다.",
+      "disabled": "백그라운드 세션을 껐습니다.",
+      "toggleFailed": "백그라운드 세션 설정을 변경하지 못했습니다:",
+      "restarted": "데몬을 다시 시작했습니다.",
+      "restartFailed": "데몬을 다시 시작하지 못했습니다:",
+      "shutdown": "데몬을 종료했습니다.",
+      "shutdownFailed": "데몬을 종료하지 못했습니다:",
+      "sessionKilled": "PTY를 종료했습니다.",
+      "sessionRestored": "세션을 복원했습니다.",
+      "sessionForgotten": "세션을 잊었습니다.",
+      "sessionActionFailed": "데몬 세션 작업에 실패했습니다:"
     }
   }
 }

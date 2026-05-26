@@ -3,6 +3,7 @@ import { GitPullRequestClosed } from "lucide-react";
 import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { useToasts } from "../lib/toasts";
 import type { PullRequestDetail } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { Modal, ModalHeader, TextSwap } from "./ui";
@@ -29,6 +30,7 @@ export function ClosePullRequestDialog({
   onClosed,
 }: ClosePullRequestDialogProps) {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +57,9 @@ export function ClosePullRequestDialog({
       await api.closePullRequest(repoPath, detail.number);
       onClosed();
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      setError(message);
+      showToast(`${t("toasts.pullRequests.closeFailed")} ${message}`);
       setSubmitting(false);
     }
   }

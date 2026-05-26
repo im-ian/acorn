@@ -200,6 +200,19 @@ function App() {
   const refreshThemes = useThemes((s) => s.refresh);
   const appearance = useSettings((s) => s.settings.appearance);
   const currentVersion = useUpdater((s) => s.currentVersion);
+  const showToast = useToasts((s) => s.show);
+
+  const showStoreOperationToast = useCallback(
+    (successKey: TranslationKey | null, failureKey: TranslationKey) => {
+      const error = useAppStore.getState().consumeError();
+      if (error) {
+        showToast(`${t(failureKey)} ${error}`);
+      } else if (successKey) {
+        showToast(t(successKey));
+      }
+    },
+    [showToast, t],
+  );
 
   useEffect(() => {
     void refreshThemes();
@@ -710,18 +723,29 @@ function App() {
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
     if (recordedWorktree && autoDeleteWorktrees) {
       clearPendingRemove();
-      removeSession(pendingRemove.id, true);
+      void removeSession(pendingRemove.id, true).then(() =>
+        showStoreOperationToast(
+          "toasts.session.worktreeRemoved",
+          "toasts.session.worktreeRemoveFailed",
+        ),
+      );
       return;
     }
     if (confirmRemoveSession || recordedWorktree) return;
     clearPendingRemove();
-    removeSession(pendingRemove.id, false);
+    void removeSession(pendingRemove.id, false).then(() =>
+      showStoreOperationToast(
+        null,
+        "toasts.session.removeFailed",
+      ),
+    );
   }, [
     pendingRemove,
     autoDeleteWorktrees,
     clearPendingRemove,
     confirmRemoveSession,
     removeSession,
+    showStoreOperationToast,
   ]);
 
   // Restore the root layout (sidebar + right panel) and equalize the
@@ -1253,7 +1277,17 @@ function App() {
           const target = pendingRemove;
           clearPendingRemove();
           if (!target || choice === "cancel") return;
-          removeSession(target.id, choice === "session_and_worktree");
+          void removeSession(target.id, choice === "session_and_worktree").then(
+            () =>
+              showStoreOperationToast(
+                choice === "session_and_worktree"
+                  ? "toasts.session.worktreeRemoved"
+                  : null,
+                choice === "session_and_worktree"
+                  ? "toasts.session.worktreeRemoveFailed"
+                  : "toasts.session.removeFailed",
+              ),
+          );
         }}
       />
       <RemoveProjectDialog
@@ -1263,7 +1297,19 @@ function App() {
           const target = pendingProject;
           clearPendingRemoveProject();
           if (!target || choice === "cancel") return;
-          removeProject(target.repo_path, choice === "project_and_worktrees");
+          void removeProject(
+            target.repo_path,
+            choice === "project_and_worktrees",
+          ).then(() =>
+            showStoreOperationToast(
+              choice === "project_and_worktrees"
+                ? "toasts.project.worktreesRemoved"
+                : null,
+              choice === "project_and_worktrees"
+                ? "toasts.project.worktreesRemoveFailed"
+                : "toasts.project.removeFailed",
+            ),
+          );
         }}
       />
     </div>
