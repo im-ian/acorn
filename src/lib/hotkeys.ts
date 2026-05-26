@@ -9,9 +9,15 @@ import { useEffect } from "react";
 import { tinykeys as tinykeysRaw } from "tinykeys";
 
 type KeyBindingMap = Record<string, (event: KeyboardEvent) => void>;
+interface TinykeysOptions {
+  capture?: boolean;
+  timeout?: number;
+}
+
 type Tinykeys = (
   target: Window | HTMLElement,
   keyBindingMap: KeyBindingMap,
+  options?: TinykeysOptions,
 ) => () => void;
 
 const tinykeys = tinykeysRaw as Tinykeys;
@@ -78,6 +84,18 @@ export type HotkeyId = keyof typeof Hotkeys;
 export type HotkeyHandler = (event: KeyboardEvent) => void;
 
 export type HotkeyBindings = Record<string, HotkeyHandler>;
+
+const MODIFIER_TOKENS = new Set([
+  "$mod",
+  "Meta",
+  "Cmd",
+  "Command",
+  "Control",
+  "Ctrl",
+  "Alt",
+  "Option",
+  "Shift",
+]);
 
 type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
 
@@ -178,6 +196,35 @@ function formatKey(part: string, mac: boolean): string {
   return NON_MAC_KEY_LABEL[normalized] ?? normalized.toUpperCase();
 }
 
+function bindingUsesModifier(binding: string): boolean {
+  return binding
+    .trim()
+    .split(/\s+/)
+    .some((chord) => {
+      const parts = chord.split(/\b\+/);
+      const modifiers = parts.slice(0, -1);
+      return modifiers.some((part) => MODIFIER_TOKENS.has(part));
+    });
+}
+
+function stopPropagationAfterHandling(
+  bindings: HotkeyBindings,
+): HotkeyBindings {
+  return Object.fromEntries(
+    Object.entries(bindings).map(([binding, handler]) => [
+      binding,
+      (event: KeyboardEvent) => {
+        handler(event);
+        // App-level shortcuts that handled the key must own it before focused
+        // surfaces like xterm also interpret the same chord.
+        if (event.defaultPrevented) {
+          event.stopImmediatePropagation();
+        }
+      },
+    ]),
+  );
+}
+
 /**
  * Render a tinykeys binding string (e.g. `$mod+Shift+t`) as a
  * platform-appropriate label suitable for context-menu shortcut hints.
@@ -206,9 +253,33 @@ export function formatHotkey(binding: string): string {
 export function useHotkeys(bindings: HotkeyBindings): void {
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const unsubscribe = tinykeys(window, bindings);
+
+    const captureBindings: HotkeyBindings = {};
+    const bubbleBindings: HotkeyBindings = {};
+    for (const [binding, handler] of Object.entries(bindings)) {
+      if (bindingUsesModifier(binding)) {
+        captureBindings[binding] = handler;
+      } else {
+        bubbleBindings[binding] = handler;
+      }
+    }
+
+    const unsubscribes: Array<() => void> = [];
+    if (Object.keys(captureBindings).length > 0) {
+      unsubscribes.push(
+        tinykeys(window, stopPropagationAfterHandling(captureBindings), {
+          capture: true,
+        }),
+      );
+    }
+    if (Object.keys(bubbleBindings).length > 0) {
+      unsubscribes.push(tinykeys(window, bubbleBindings));
+    }
+
     return () => {
-      unsubscribe();
+      for (const unsubscribe of unsubscribes) {
+        unsubscribe();
+      }
     };
   }, [bindings]);
 }
