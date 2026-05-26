@@ -139,6 +139,32 @@ describe("virtualized code and diff rendering", () => {
     expect(container.querySelector('button[aria-pressed="false"]')).toBeNull();
   });
 
+  it("marks a requested code viewer target line", async () => {
+    const content = "one\ntwo\nthree";
+    vi.mocked(api.fsReadFile).mockResolvedValueOnce({
+      content,
+      size: content.length,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsGitDiffLines).mockResolvedValueOnce([]);
+
+    await act(async () => {
+      root.render(
+        <CodeViewer
+          path="/repo/src/App.tsx"
+          isActive
+          target={{ line: 2, token: "target-1" }}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const target = container.querySelector('[data-acorn-target-line="true"]');
+    expect(target?.textContent).toContain("2");
+    expect(target?.textContent).toContain("two");
+  });
+
   it("toggles markdown files between source and preview", async () => {
     const content = "# Title\n\n- [x] shipped";
     vi.mocked(api.fsReadFile).mockResolvedValueOnce({

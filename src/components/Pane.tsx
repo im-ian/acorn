@@ -177,6 +177,7 @@ export function Pane({ paneId }: PaneProps) {
           repoPath: workspaceTab.repoPath,
           lifecycle: workspaceTab.lifecycle,
           path: workspaceTab.path,
+          target: workspaceTab.target,
         });
       }
     }
@@ -443,6 +444,7 @@ export function Pane({ paneId }: PaneProps) {
         {active?.kind === "code" ? (
           <CodeViewer
             path={active.path}
+            target={active.target}
             isActive={isFocused}
           />
         ) : null}

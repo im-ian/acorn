@@ -75,11 +75,15 @@ export CARGO_TARGET_DIR=/path/to/acorn/.acorn/cargo-target
 
 `src-tauri/scripts/build-sidecar.sh` honours the same setting when staging Tauri sidecars. Keep this as a local environment setting rather than a committed default so CI and release builds keep their normal per-workspace target layout.
 
-**Launching `tauri dev` from inside a control session.** Acorn injects `ACORN_DATA_DIR` (and `ACORN_AGENT_STATE_DIR`, `ACORN_RESUME_TOKEN`, `ACORN_STAGED_REV`) into every control-session PTY so the bundled CLIs talk to the host profile. `acorn-paths::data_dir` honours `ACORN_DATA_DIR` ahead of the debug/release profile fallback, so a plain `pnpm run tauri dev` from that shell silently runs the debug build against `profiles/prod` — same daemon, same `sessions.json`, same staged shell-init dir as the installed app. Strip the overrides before launching:</p>
+**Launching `tauri dev` from inside a control session.** Acorn injects `ACORN_DATA_DIR`, `ACORN_IPC_SOCKET`, `ACORN_DAEMON_SOCKET`, and related session metadata into every control-session PTY so bundled CLIs talk to the host profile. `acorn-paths::data_dir` honours `ACORN_DATA_DIR` ahead of the debug/release profile fallback, and `acorn-ipc` honours `ACORN_IPC_SOCKET` ahead of computed profile paths. A plain `pnpm run tauri dev` from that shell can silently run the debug app against `profiles/prod` — same daemon, same `sessions.json`, same staged shell-init dir as the installed app. Strip the overrides before launching:
 
 ```sh
 env -u ACORN_DATA_DIR \
+    -u ACORN_IPC_SOCKET \
+    -u ACORN_DAEMON_SOCKET \
     -u ACORN_AGENT_STATE_DIR \
+    -u ACORN_AGENT_WRAPPER_DIR \
+    -u ACORN_CLI_DIR \
     -u ACORN_RESUME_TOKEN \
     -u ACORN_STAGED_REV \
     -u ACORN_USER_ZDOTDIR \
