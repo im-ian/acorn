@@ -1,4 +1,4 @@
-import { test, expect } from "./support";
+import { test, expect, pressHotkey } from "./support";
 
 test.describe("file explorer", () => {
   test("keeps expanded worktree folders after opening a file", async ({
@@ -158,5 +158,78 @@ test.describe("file explorer", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Source" })).toBeVisible();
     await expect(page.getByText("Markdown preview")).toBeVisible();
+
+    await pressHotkey(page, { mod: true, key: "f" });
+    await page.getByLabel("Find in file").fill("preview");
+
+    await expect(page.locator("[data-acorn-preview-search]")).toHaveCount(1);
+    await expect(page.getByText("1/1")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Project notes" }),
+    ).toBeVisible();
+  });
+
+  test("finds matches inside a code viewer tab", async ({ page, tauri }) => {
+    const repo = "/tmp/demo";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo") {
+        return { repo_root: "/tmp/demo", entries: [] };
+      }
+      return {
+        repo_root: "/tmp/demo",
+        entries: [
+          {
+            name: "search.txt",
+            path: "/tmp/demo/search.txt",
+            is_dir: false,
+            is_symlink: false,
+            size: 28,
+            modified_ms: 0,
+            gitignored: false,
+          },
+        ],
+      };
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo/search.txt") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      return {
+        content: "alpha\nbeta alpha\nALPHA",
+        size: 22,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+
+    await page.getByRole("button", { name: "search.txt" }).dblclick();
+    await expect(
+      page.getByRole("button", { name: /search\.txt Close tab/ }),
+    ).toBeVisible();
+
+    await pressHotkey(page, { mod: true, key: "f" });
+    await page.getByLabel("Find in file").fill("alpha");
+
+    await expect(page.locator("mark")).toHaveCount(3);
+    await expect(page.getByText("1/3")).toBeVisible();
+
+    await page.getByLabel("Find in file").press("Enter");
+    await expect(page.getByText("2/3")).toBeVisible();
   });
 });

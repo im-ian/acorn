@@ -553,7 +553,14 @@
     "binaryFileBody": "{bytes} bytes - not shown in the readonly viewer.",
     "truncated": "File truncated to 2 MB. Open externally to view the rest.",
     "showPreview": "Preview",
-    "showSource": "Source"
+    "showSource": "Source",
+    "findInFile": "Find in file",
+    "findPrompt": "Find",
+    "noMatches": "No matches",
+    "matchCount": "{current}/{total}",
+    "previousMatch": "Previous match",
+    "nextMatch": "Next match",
+    "closeFind": "Close find"
   },
   "diffView": {
     "noChanges": "No changes in this diff.",
