@@ -235,6 +235,77 @@ test.describe("terminal: spawn", () => {
       .toBeGreaterThanOrEqual(1);
   });
 
+  test("global modifier shortcuts are claimed before terminal key listeners", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+
+    const result = await page.evaluate(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!textarea) throw new Error("xterm helper textarea missing");
+
+      let descendantListenerRan = false;
+      textarea.addEventListener(
+        "keydown",
+        () => {
+          descendantListenerRan = true;
+        },
+        { capture: true, once: true },
+      );
+
+      const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const canceled = !textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "e",
+          code: "KeyE",
+          metaKey: isMac,
+          ctrlKey: !isMac,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      return { canceled, descendantListenerRan };
+    });
+
+    expect(result).toEqual({
+      canceled: true,
+      descendantListenerRan: false,
+    });
+  });
+
   test("reattaching a live daemon session replays daemon scrollback instead of stale disk scrollback", async ({
     page,
     tauri,
