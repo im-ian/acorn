@@ -61,6 +61,7 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
+    title_source: "default",
     kind: "regular",
     owner: { kind: "user" },
     position: null,
@@ -99,6 +100,7 @@ function resetStore(): void {
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       liveInWorktree: {},
+      generatingSessionTitleIds: {},
     },
     false,
   );
@@ -266,6 +268,97 @@ describe("Pane empty state", () => {
       null,
       false,
     );
+  });
+
+  it("shows a session-title generation indicator on the tab", async () => {
+    const active = session("agent-session", { agent_provider: "codex" });
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [active],
+      activeProject: REPO,
+      activeSessionId: active.id,
+      activeTabId: active.id,
+      generatingSessionTitleIds: { [active.id]: true },
+      workspaces: {
+        ...s.workspaces,
+        [REPO]: {
+          layout: { kind: "pane", id: "root" },
+          panes: {
+            root: {
+              id: "root",
+              tabIds: [active.id],
+              activeTabId: active.id,
+            },
+          },
+          focusedPaneId: "root",
+        },
+      },
+      panes: {
+        root: {
+          id: "root",
+          tabIds: [active.id],
+          activeTabId: active.id,
+        },
+      },
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    expect(
+      container.querySelector('[aria-label="Generating session title"]'),
+    ).toBeInstanceOf(HTMLElement);
+  });
+
+  it("does not enter tab rename while title generation is active", async () => {
+    const active = session("agent-session", { agent_provider: "codex" });
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [active],
+      activeProject: REPO,
+      activeSessionId: active.id,
+      activeTabId: active.id,
+      generatingSessionTitleIds: { [active.id]: true },
+      workspaces: {
+        ...s.workspaces,
+        [REPO]: {
+          layout: { kind: "pane", id: "root" },
+          panes: {
+            root: {
+              id: "root",
+              tabIds: [active.id],
+              activeTabId: active.id,
+            },
+          },
+          focusedPaneId: "root",
+        },
+      },
+      panes: {
+        root: {
+          id: "root",
+          tabIds: [active.id],
+          activeTabId: active.id,
+        },
+      },
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const dragHandle = container.querySelector(
+      `[data-tab-drag-handle="${active.id}"]`,
+    );
+    const tab = dragHandle?.closest('[role="button"]');
+
+    await act(async () => {
+      tab?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(container.querySelector("[data-tab-rename-input]")).toBeNull();
   });
 
   it("does not focus an inactive pane on primary mousedown in its tab strip", () => {

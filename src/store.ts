@@ -6,6 +6,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionKind,
+  SessionTitleGenerationStatus,
   SessionNotification,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
@@ -43,6 +44,7 @@ import {
 export type { RightGroup, RightTab };
 
 const ROOT_PANE_ID: PaneId = "root";
+const SESSION_TITLE_GENERATING_MIN_MS = 900;
 
 let statusPollRunning = false;
 let statusPollChain: Promise<void> | null = null;
@@ -62,6 +64,10 @@ interface SessionPlacementIntent {
 
 const sessionPlacementById = new Map<string, SessionPlacementIntent>();
 const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
 
 export interface PaneState {
   id: PaneId;
@@ -153,6 +159,8 @@ interface AppStateModel {
    * never on an interval, so the batched probe stays cheap.
    */
   liveInWorktree: Record<string, boolean>;
+  /** Session ids currently waiting for an AI-generated tab title. Ephemeral. */
+  generatingSessionTitleIds: Record<string, true>;
   loadInitialStatus: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   /** Re-probe every session's live cwd in one batched backend call. */
@@ -184,6 +192,12 @@ interface AppStateModel {
   ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
+  generateSessionTitle: (
+    id: string,
+    command: string,
+    args: string[],
+    prompt: string,
+  ) => Promise<SessionTitleGenerationStatus>;
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
@@ -768,6 +782,7 @@ export const useAppStore = create<AppStateModel>()(
   pendingRemoveProject: null,
   sessionsLoadedCleanly: true,
   liveInWorktree: {},
+  generatingSessionTitleIds: {},
 
   async loadInitialStatus() {
     try {
@@ -1471,6 +1486,8 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async renameSession(id, name) {
+    if (get().generatingSessionTitleIds[id]) return;
+
     try {
       await api.renameSession(id, name);
       await get().refreshSessions();
@@ -1478,6 +1495,45 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ error: errorMessage(e) });
     }
+  },
+
+  async generateSessionTitle(id, command, args, prompt) {
+    const startedAt = Date.now();
+    let resultStatus: SessionTitleGenerationStatus = "skipped";
+    set((s) => ({
+      generatingSessionTitleIds: {
+        ...s.generatingSessionTitleIds,
+        [id]: true,
+      },
+    }));
+    try {
+      const result = await api.generateSessionTitle(id, command, args, prompt);
+      resultStatus = result.status;
+      const updated = result.session;
+      if (result.status === "generated" && updated?.id) {
+        set((s) => ({
+          sessions: s.sessions.map((session) =>
+            session.id === updated.id ? updated : session,
+          ),
+        }));
+      }
+    } catch (e) {
+      console.warn("[acorn] generateSessionTitle failed", e);
+    } finally {
+      const remainingMs =
+        resultStatus === "generated"
+          ? SESSION_TITLE_GENERATING_MIN_MS - (Date.now() - startedAt)
+          : 0;
+      if (remainingMs > 0) {
+        await delay(remainingMs);
+      }
+      set((s) => {
+        if (!s.generatingSessionTitleIds[id]) return s;
+        const { [id]: _, ...rest } = s.generatingSessionTitleIds;
+        return { generatingSessionTitleIds: rest };
+      });
+    }
+    return resultStatus;
   },
 
   async adoptSessionWorktree(id, worktreePath) {

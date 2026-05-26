@@ -225,6 +225,80 @@ fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
 }
 
 fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
+    let state = parse_codex_state(path)?;
+    let cwd = state.cwd.clone()?;
+    if !scope.accepts_cwd(&cwd) {
+        return None;
+    }
+    let worktree = scope.worktree_for_cwd(&cwd);
+    let id = state.id.or_else(|| codex_id_from_filename(path))?;
+    let title = state
+        .title
+        .or_else(|| state.preview.clone())
+        .unwrap_or_else(|| "Codex session".to_string());
+    Some(AgentHistoryItem {
+        provider: AgentHistoryProvider::Codex,
+        resume_command: Some(format!("codex resume {id}")),
+        id,
+        title: collapse_preview(&title, PREVIEW_CHARS)
+            .unwrap_or_else(|| "Codex session".to_string()),
+        preview: state
+            .preview
+            .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
+        cwd: Some(cwd),
+        worktree,
+        transcript_path: path.display().to_string(),
+        updated_at: file_updated_at(path),
+    })
+}
+
+fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
+    let state = parse_claude_state(path)?;
+    let cwd = state.cwd.clone()?;
+    if !scope.accepts_cwd(&cwd) {
+        return None;
+    }
+    let worktree = scope.worktree_for_cwd(&cwd);
+    let id = state.id.or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_string)
+    })?;
+    let title = state
+        .title
+        .or_else(|| state.preview.clone())
+        .unwrap_or_else(|| "Claude session".to_string());
+    Some(AgentHistoryItem {
+        provider: AgentHistoryProvider::Claude,
+        resume_command: Some(format!("claude --resume {id}")),
+        id,
+        title: collapse_preview(&title, PREVIEW_CHARS)
+            .unwrap_or_else(|| "Claude session".to_string()),
+        preview: state
+            .preview
+            .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
+        cwd: Some(cwd),
+        worktree,
+        transcript_path: path.display().to_string(),
+        updated_at: file_updated_at(path),
+    })
+}
+
+pub fn transcript_first_user_message(
+    provider: AgentHistoryProvider,
+    path: &Path,
+    max_chars: usize,
+) -> Option<String> {
+    let state = match provider {
+        AgentHistoryProvider::Codex => parse_codex_state(path)?,
+        AgentHistoryProvider::Claude => parse_claude_state(path)?,
+    };
+    state
+        .title
+        .and_then(|title| collapse_preview(&title, max_chars))
+}
+
+fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
     let mut state = ParsedAgentFile::default();
     for line in sample_lines(path).ok()? {
         let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
@@ -256,33 +330,10 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
         }
     }
 
-    let cwd = state.cwd.clone()?;
-    if !scope.accepts_cwd(&cwd) {
-        return None;
-    }
-    let worktree = scope.worktree_for_cwd(&cwd);
-    let id = state.id.or_else(|| codex_id_from_filename(path))?;
-    let title = state
-        .title
-        .or_else(|| state.preview.clone())
-        .unwrap_or_else(|| "Codex session".to_string());
-    Some(AgentHistoryItem {
-        provider: AgentHistoryProvider::Codex,
-        resume_command: Some(format!("codex resume {id}")),
-        id,
-        title: collapse_preview(&title, PREVIEW_CHARS)
-            .unwrap_or_else(|| "Codex session".to_string()),
-        preview: state
-            .preview
-            .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
-        cwd: Some(cwd),
-        worktree,
-        transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
-    })
+    Some(state)
 }
 
-fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
+fn parse_claude_state(path: &Path) -> Option<ParsedAgentFile> {
     let mut state = ParsedAgentFile::default();
     for line in sample_lines(path).ok()? {
         let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
@@ -308,34 +359,7 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
         }
     }
 
-    let cwd = state.cwd.clone()?;
-    if !scope.accepts_cwd(&cwd) {
-        return None;
-    }
-    let worktree = scope.worktree_for_cwd(&cwd);
-    let id = state.id.or_else(|| {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .map(str::to_string)
-    })?;
-    let title = state
-        .title
-        .or_else(|| state.preview.clone())
-        .unwrap_or_else(|| "Claude session".to_string());
-    Some(AgentHistoryItem {
-        provider: AgentHistoryProvider::Claude,
-        resume_command: Some(format!("claude --resume {id}")),
-        id,
-        title: collapse_preview(&title, PREVIEW_CHARS)
-            .unwrap_or_else(|| "Claude session".to_string()),
-        preview: state
-            .preview
-            .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
-        cwd: Some(cwd),
-        worktree,
-        transcript_path: path.display().to_string(),
-        updated_at: file_updated_at(path),
-    })
+    Some(state)
 }
 
 #[derive(Default)]
@@ -929,6 +953,35 @@ mod tests {
 
         assert_eq!(item.title, "Show me recent sessions");
         assert_eq!(item.preview.as_deref(), Some("Here is the real answer."));
+    }
+
+    #[test]
+    fn transcript_first_user_message_returns_collapsed_first_user_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "cwd": "/tmp/demo",
+                "message": {
+                    "role": "user",
+                    "content": "Please inspect\n\n  the failing release workflow and summarize the fix",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let title =
+            transcript_first_user_message(AgentHistoryProvider::Claude, &transcript, 32).unwrap();
+
+        assert_eq!(title, "Please inspect the failing relea…");
     }
 
     #[test]

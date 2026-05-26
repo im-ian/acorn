@@ -24,6 +24,7 @@ function session(id: string, status: SessionStatus): Session {
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
+    title_source: "default",
     kind: "regular",
     owner: { kind: "user" },
     position: null,

@@ -3,6 +3,7 @@ mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
 mod agent_wrappers;
+mod ai;
 mod cli_resolver;
 mod commands;
 mod daemon_bridge;
@@ -16,6 +17,7 @@ mod persistence;
 pub mod pty_env;
 mod pty_output;
 mod pull_requests;
+mod session_titles;
 mod shell_args;
 mod shell_env;
 mod shell_init;
@@ -495,6 +497,9 @@ pub fn run() {
             commands::remove_session,
             commands::set_session_status,
             commands::rename_session,
+            commands::session_title_readiness,
+            commands::generate_session_title,
+            commands::preview_session_title,
             commands::list_projects,
             commands::add_project,
             commands::create_new_project,

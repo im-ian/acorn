@@ -120,18 +120,30 @@ pub fn spawn_error(name: &str, e: std::io::Error) -> AppError {
     }
 }
 
-/// Run `$SHELL -l -i -c 'command -v <name>'` and parse stdout for the
+/// Run `$SHELL -l -i -c '<path lookup>'` and parse stdout for the
 /// resolved absolute path. The shell sources rc files (so PATH from
-/// Homebrew/npm/asdf/etc. is loaded) before running `command -v`, mirroring
+/// Homebrew/npm/asdf/etc. is loaded) before resolving the binary, mirroring
 /// the rc-loading approach in `commands.rs::pty_spawn`.
 fn shell_resolve(name: &str) -> AppResult<PathBuf> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    // Wrap `command -v` in an exclusive marker so we can pull the path out
-    // even if the user's rc files print banners (p10k, oh-my-zsh, login
-    // greetings) to stdout during shell startup.
+    // `command -v` reports aliases in interactive zsh, which is exactly the
+    // shell mode we need for rc-loaded PATH. Prefer shell-specific external
+    // command lookup first, then fall back to POSIX `command -v`.
     let script = format!(
-        "printf '<<<ACORN_CLI_PATH>>>%s<<<END>>>' \"$(command -v {} 2>/dev/null)\"",
-        shell_quote(name)
+        "\
+_acorn_name={name};
+_acorn_path='';
+if [ -n \"${{ZSH_VERSION-}}\" ]; then
+  _acorn_path=$(whence -p -- \"$_acorn_name\" 2>/dev/null || :);
+fi;
+if [ -z \"$_acorn_path\" ] && [ -n \"${{BASH_VERSION-}}\" ]; then
+  _acorn_path=$(type -P -- \"$_acorn_name\" 2>/dev/null || :);
+fi;
+if [ -z \"$_acorn_path\" ]; then
+  _acorn_path=$(command -v \"$_acorn_name\" 2>/dev/null || :);
+fi;
+printf '<<<ACORN_CLI_PATH>>>%s<<<END>>>' \"$_acorn_path\"",
+        name = shell_quote(name)
     );
     let out = Command::new(&shell)
         .args(["-l", "-i", "-c", &script])

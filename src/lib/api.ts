@@ -4,6 +4,7 @@ import type {
   AgentHistoryItem,
   CommitInfo,
   DiffPayload,
+  GenerateSessionTitleResult,
   GeneratedCommitMessage,
   MemoryUsage,
   MergeMethod,
@@ -15,6 +16,7 @@ import type {
   SessionAgentProvider,
   SessionKind,
   SessionStatus,
+  SessionTitleReadinessResult,
   StagedFile,
   TodoItem,
   WorkflowRunDetailListing,
@@ -67,6 +69,37 @@ export const api = {
   },
   renameSession(id: string, name: string): Promise<Session> {
     return invoke<Session>("rename_session", { id, name });
+  },
+  sessionTitleReadiness(id: string): Promise<SessionTitleReadinessResult> {
+    return invoke<SessionTitleReadinessResult>("session_title_readiness", {
+      id,
+    });
+  },
+  generateSessionTitle(
+    id: string,
+    command: string,
+    args: string[],
+    prompt: string,
+  ): Promise<GenerateSessionTitleResult> {
+    return invoke<GenerateSessionTitleResult>("generate_session_title", {
+      id,
+      command,
+      args,
+      prompt,
+    });
+  },
+  previewSessionTitle(
+    command: string,
+    args: string[],
+    prompt: string,
+    firstUserMessage: string,
+  ): Promise<string> {
+    return invoke<string>("preview_session_title", {
+      command,
+      args,
+      prompt,
+      firstUserMessage,
+    });
   },
   listProjects(): Promise<Project[]> {
     return invoke<Project[]>("list_projects");

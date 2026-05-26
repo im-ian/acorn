@@ -316,6 +316,7 @@ pub fn daemon_adopt_session(
         created_at: now,
         updated_at: now,
         last_message: None,
+        title_source: acorn_session::SessionTitleSource::Manual,
         kind,
         owner: acorn_session::SessionOwner::User,
         position: None,

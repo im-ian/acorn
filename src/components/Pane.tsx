@@ -49,6 +49,7 @@ import {
 import { formatHotkey, Hotkeys } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
+import { canRenameSession } from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -61,6 +62,7 @@ import {
 import type { Direction, PaneId } from "../lib/layout";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
+import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 import type {
   Session,
@@ -745,6 +747,12 @@ function TabItem({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const session = tab.kind === "session" ? tab.session : null;
+  const isGeneratingTitle = useAppStore((s) =>
+    session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
+  );
+  const canRename = session
+    ? canRenameSession(session, { isGeneratingTitle })
+    : false;
   const showAgentProviderIcons = useSettings(
     (s) => s.settings.sessionDisplay.icons.agentProvider,
   );
@@ -793,6 +801,10 @@ function TabItem({
     };
   }, [menu, session]);
 
+  useEffect(() => {
+    if (isGeneratingTitle && editing) setEditing(false);
+  }, [editing, isGeneratingTitle]);
+
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
     const items: ContextMenuItem[] = [];
@@ -839,7 +851,7 @@ function TabItem({
       label: paneT(t, "pane.menu.rename"),
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
-      disabled: !session,
+      disabled: !canRename,
     },
     {
       label: paneT(t, "pane.menu.duplicateSession"),
@@ -962,7 +974,7 @@ function TabItem({
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
           e.stopPropagation();
-          if (session) setEditing(true);
+          if (canRename) setEditing(true);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -979,7 +991,7 @@ function TabItem({
             onSelect();
           } else if (e.key === "F2") {
             e.preventDefault();
-            if (session) setEditing(true);
+            if (canRename) setEditing(true);
           }
         }}
         className={cn(
@@ -1022,7 +1034,7 @@ function TabItem({
               initial={tab.title}
               onSubmit={async (next) => {
                 setEditing(false);
-                if (session && next && next !== session.name) {
+                if (session && canRename && next && next !== session.name) {
                   await renameSession(session.id, next);
                   const error = useAppStore.getState().consumeError();
                   if (error) {
@@ -1033,10 +1045,17 @@ function TabItem({
               onCancel={() => setEditing(false)}
             />
           ) : (
-            <span className="pointer-events-none max-w-[12rem] truncate leading-5">
+            <span
+              className="pointer-events-none max-w-[12rem] truncate leading-5"
+            >
               {tab.title}
             </span>
           )}
+          {isGeneratingTitle && !editing ? (
+            <SessionTitleGeneratingIndicator
+              label={paneT(t, "pane.aria.generatingSessionTitle")}
+            />
+          ) : null}
           {session &&
           (liveInWorktree ?? hasRecordedWorktree(session)) ? (
             <GitBranch

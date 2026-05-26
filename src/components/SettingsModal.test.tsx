@@ -7,10 +7,20 @@ const mocks = vi.hoisted(() => ({
     (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
   >(),
   removeBackgroundImage: vi.fn<() => Promise<void>>(),
+  previewSessionTitle: vi.fn<
+    (
+      command: string,
+      args: string[],
+      prompt: string,
+      firstUserMessage: string,
+    ) => Promise<string>
+  >(),
 }));
 
 vi.mock("../lib/api", () => ({
-  api: {},
+  api: {
+    previewSessionTitle: mocks.previewSessionTitle,
+  },
 }));
 
 vi.mock("../lib/background", () => ({
@@ -67,8 +77,15 @@ vi.mock("../lib/updater-store", () => ({
   }),
 }));
 
-import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
+import { api } from "../lib/api";
+import {
+  DEFAULT_SETTINGS,
+  SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+  useSettings,
+} from "../lib/settings";
 import { SettingsModal } from "./SettingsModal";
+
+const mockApi = vi.mocked(api);
 
 function cloneSettings() {
   return structuredClone(DEFAULT_SETTINGS);
@@ -111,6 +128,35 @@ function openTerminalTab() {
   }
   act(() => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function openAgentsTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Agents" || element.textContent === "에이전트",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Agents tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+async function openSessionTitlePromptDialog() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.getAttribute("aria-label") === "Configure title prompt" ||
+      element.getAttribute("aria-label") === "제목 프롬프트 설정",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Session title prompt settings button not found");
+  }
+  await act(async () => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -421,6 +467,141 @@ describe("SettingsModal font controls", () => {
     expect(patchSessions).toHaveBeenCalledWith({
       autoDeleteWorktrees: true,
     });
+  });
+
+  it("patches the automatic session title agent toggle", async () => {
+    const patchAgents = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchAgents,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAgentsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes("Auto-generate session titles"),
+    );
+
+    expect(document.body.textContent).toContain("Session titles");
+    expect(
+      document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Session title prompt"]',
+      ),
+    ).toBeNull();
+    expect(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.getAttribute("aria-label") === "Configure title prompt",
+      ),
+    ).toBeInstanceOf(HTMLButtonElement);
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(false);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchAgents).toHaveBeenCalledWith({
+      autoGenerateSessionTitles: true,
+    });
+  });
+
+  it("patches and resets the session title prompt", async () => {
+    const patchAgents = vi.fn();
+    useSettings.setState({
+      settings: {
+        ...cloneSettings(),
+        agents: {
+          ...cloneSettings().agents,
+          sessionTitlePrompt: "Custom naming instructions",
+        },
+      },
+      patchAgents,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAgentsTab();
+    await openSessionTitlePromptDialog();
+
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Session title prompt"]',
+    );
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    expect(textarea?.value).toBe("Custom naming instructions");
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(textarea, "Name the tab in Korean.");
+      textarea?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(patchAgents).toHaveBeenCalledWith({
+      sessionTitlePrompt: "Name the tab in Korean.",
+    });
+
+    const reset = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Reset prompt"),
+    );
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      reset?.click();
+    });
+
+    expect(patchAgents).toHaveBeenCalledWith({
+      sessionTitlePrompt: DEFAULT_SETTINGS.agents.sessionTitlePrompt,
+    });
+  });
+
+  it("generates a session title prompt preview", async () => {
+    mockApi.previewSessionTitle.mockResolvedValueOnce("Preview Tab Titles");
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchAgents: vi.fn(),
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAgentsTab();
+    await openSessionTitlePromptDialog();
+
+    const generate = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Generate preview"),
+    );
+    expect(generate).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      generate?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockApi.previewSessionTitle).toHaveBeenCalledWith(
+      "claude",
+      ["-p", "--output-format", "text"],
+      DEFAULT_SETTINGS.agents.sessionTitlePrompt,
+      SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+    );
+    expect(document.body.textContent).toContain("Preview Tab Titles");
   });
 
   it("patches the GitHub PR row display toggles", async () => {
