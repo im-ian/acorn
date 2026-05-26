@@ -5,6 +5,25 @@ export type SessionStatus =
   | "failed"
   | "completed";
 
+export type SessionNotificationKind =
+  | "needs_input"
+  | "failed"
+  | "completed"
+  | "became_idle";
+
+export interface SessionNotification {
+  id: string;
+  sessionId: string;
+  kind: SessionNotificationKind;
+  status: SessionStatus;
+  previousStatus: SessionStatus;
+  sessionName: string;
+  projectName: string;
+  repoPath: string;
+  createdAt: string;
+  readAt?: string;
+}
+
 /**
  * Distinguishes ordinary terminal sessions from "control" sessions. Control
  * sessions are the entry point for the `acorn-ipc` CLI, which lets them

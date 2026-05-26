@@ -103,6 +103,50 @@ describe("session removal settings", () => {
   });
 });
 
+describe("status bar settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("shows the session activity shortcut by default", () => {
+    expect(DEFAULT_SETTINGS.statusBar.showSessionActivity).toBe(true);
+  });
+
+  it("loads a persisted session activity shortcut preference", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ statusBar: { showSessionActivity: false } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.statusBar.showSessionActivity).toBe(
+      false,
+    );
+  });
+});
+
 describe("AI commit command resolution", () => {
   it("runs Codex through non-interactive exec mode", () => {
     expect(

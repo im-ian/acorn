@@ -258,6 +258,10 @@
       "statusBar": {
         "label": "Status bar",
         "hint": "Choose which optional badges show in the bottom status bar.",
+        "sessionActivity": {
+          "label": "Session activity",
+          "description": "Bell shortcut for unread session activity. The Activity tab remains available when hidden."
+        },
         "sessionCount": {
           "label": "Session count",
           "description": "Total number of sessions across the active project (`sessions: N`)."
@@ -552,6 +556,26 @@
       "failed": "failed",
       "completed": "completed"
     },
+    "notifications": {
+      "ariaLabel": "Session notifications",
+      "tooltipEmpty": "No unread session notifications",
+      "tooltipWithCount": "{count} unread session notifications",
+      "title": "Session notifications",
+      "unreadCount": "{count} unread",
+      "empty": "No session status changes yet.",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "Needs input",
+        "failed": "Failed",
+        "completed": "Completed",
+        "becameIdle": "Idle"
+      },
+      "actions": {
+        "markAllRead": "Mark all read",
+        "clearRead": "Clear read",
+        "dismiss": "Dismiss"
+      }
+    },
     "services": {
       "ariaLabel": "Service status",
       "tooltip": {
@@ -772,6 +796,7 @@
       "commits": "Commits",
       "staged": "Staged",
       "prs": "PRs",
+      "activity": "Activity",
       "history": "History",
       "actions": "Actions"
     },
@@ -782,6 +807,23 @@
     "todos": {
       "doneCount": "{completed}/{total} done",
       "inProgressCount": "{count} in progress"
+    },
+    "activity": {
+      "unreadCount": "{count} unread",
+      "readCount": "{count} read",
+      "empty": "No session activity yet",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "Needs input",
+        "failed": "Failed",
+        "completed": "Completed",
+        "becameIdle": "Idle"
+      },
+      "actions": {
+        "markAllRead": "Mark all read",
+        "clearRead": "Clear read",
+        "dismiss": "Dismiss"
+      }
     },
     "loading": {
       "more": "Loading more…",

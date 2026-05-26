@@ -429,6 +429,7 @@ test.describe("right panel: groups", () => {
     await expect(
       page.getByRole("button", { name: "Agents", exact: true }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "History", exact: true }).click();
     await expect(page.getByText("Local Codex session")).toBeVisible();
     await expect
       .poll(

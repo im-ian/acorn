@@ -1370,6 +1370,15 @@ function StatusBarSection({
     >
       <div className="flex flex-col gap-1">
         <CheckboxRow
+          label={st(t, "settings.appearance.statusBar.sessionActivity.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.sessionActivity.description",
+          )}
+          checked={statusBar.showSessionActivity !== false}
+          onChange={(v) => patch({ showSessionActivity: v })}
+        />
+        <CheckboxRow
           label={st(t, "settings.appearance.statusBar.sessionCount.label")}
           description={st(
             t,
