@@ -996,13 +996,14 @@
       "createdSuffix": "CLI는 다음 업데이트에 포함됩니다. 그 전까지 이 터미널은 일반 셸처럼 동작합니다."
     },
     "folderPermissionWarmup": {
-      "title": "폴더 접근 권한 확인",
-      "subtitle": "업데이트 후 macOS 폴더 권한을 미리 준비합니다",
-      "bodyIntro": "Acorn 업데이트 후 macOS가 보호된 폴더 접근 권한을 다시 물어볼 수 있습니다. 작업을 시작하기 전에 지금 확인할 수 있습니다.",
-      "bodyPrompt": "Acorn은 데스크탑, 문서, 다운로드, iCloud Drive를 잠깐 읽습니다. 파일은 변경하지 않습니다.",
-      "check": "폴더 접근 확인",
+      "title": "폴더 권한을 지금 확인할까요?",
+      "subtitle": "업데이트 후 macOS 폴더 접근을 미리 확인합니다",
+      "question": "작업을 시작하기 전에 Acorn의 폴더 접근 권한을 확인할까요?",
+      "reason": "업데이트 후 macOS가 보호 폴더 접근을 다시 평가하면서 나중에 권한을 다시 물을 수 있습니다. 지금 확인하면 데스크탑, 문서, 다운로드, iCloud Drive 권한 요청을 미리 처리할 수 있습니다.",
+      "bodyPrompt": "Acorn은 macOS 권한 확인을 위해 이 폴더들을 잠깐 읽기만 합니다. 파일은 변경하지 않습니다.",
+      "check": "지금 확인",
       "checking": "확인 중...",
-      "skip": "이 버전에서는 건너뛰기",
+      "skip": "나중에",
       "done": "완료",
       "genericError": "폴더 접근 권한을 확인하지 못했습니다.",
       "folder": {

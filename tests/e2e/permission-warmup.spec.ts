@@ -39,10 +39,18 @@ test.describe("folder permission warmup", () => {
     await page.goto("/");
     const dialog = page.getByRole("dialog");
     await expect(
-      dialog.getByRole("heading", { name: "Folder access check" }),
+      dialog.getByRole("heading", { name: "Check folder permissions now?" }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(
+        "Do you want Acorn to check folder access before you start working?",
+      ),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText("macOS can re-evaluate protected-folder access"),
     ).toBeVisible();
 
-    await dialog.getByRole("button", { name: "Check folder access" }).click();
+    await dialog.getByRole("button", { name: "Check now" }).click();
     await expect(dialog.getByText("Desktop", { exact: true })).toBeVisible();
     await expect(dialog.getByText("Ready")).toHaveCount(2);
 
@@ -66,7 +74,7 @@ test.describe("folder permission warmup", () => {
 
     await page.reload();
     await expect(
-      page.getByRole("heading", { name: "Folder access check" }),
+      page.getByRole("heading", { name: "Check folder permissions now?" }),
     ).toHaveCount(0);
   });
 });

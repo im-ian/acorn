@@ -111,12 +111,19 @@ export function FolderPermissionWarmupModal({
         title={dt(t, "dialogs.folderPermissionWarmup.title")}
         subtitle={dt(t, "dialogs.folderPermissionWarmup.subtitle")}
         titleId="acorn-folder-permission-warmup-title"
-        icon={<FolderCheck size={14} className="text-accent" />}
+        icon={
+          <span className="self-start pt-0.5">
+            <FolderCheck size={14} className="text-accent" />
+          </span>
+        }
         variant="dialog"
         onClose={closeForVersion}
       />
       <div className="space-y-3 px-4 py-4 text-xs text-fg-muted">
-        <p>{dt(t, "dialogs.folderPermissionWarmup.bodyIntro")}</p>
+        <p className="text-fg">
+          {dt(t, "dialogs.folderPermissionWarmup.question")}
+        </p>
+        <p>{dt(t, "dialogs.folderPermissionWarmup.reason")}</p>
         <p>{dt(t, "dialogs.folderPermissionWarmup.bodyPrompt")}</p>
         {error ? (
           <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
@@ -166,7 +173,11 @@ export function FolderPermissionWarmupModal({
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
-            {busy ? <Loader2 size={12} className="animate-spin" /> : null}
+            {busy ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <FolderCheck size={12} />
+            )}
             {busy
               ? dt(t, "dialogs.folderPermissionWarmup.checking")
               : dt(t, "dialogs.folderPermissionWarmup.check")}
