@@ -451,6 +451,23 @@ describe("workspace tabs", () => {
     expect(s.activeSessionId).toBe("a2");
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", "a2"]);
   });
+
+  it("uses pane activation history when closing an active code viewer", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const appTabId = useAppStore.getState().activeTabId!;
+    useAppStore.getState().selectSession("a1");
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/README.md`);
+    const readmeTabId = useAppStore.getState().activeTabId!;
+    useAppStore.getState().selectTab(appTabId);
+
+    useAppStore.getState().closeWorkspaceTab(appTabId);
+
+    const s = useAppStore.getState();
+    expect(s.activeTabId).toBe(readmeTabId);
+    expect(s.activeSessionId).toBeNull();
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", readmeTabId]);
+  });
 });
 
 describe("removeSession", () => {
@@ -763,6 +780,41 @@ describe("moveTab", () => {
     expect(s.layout.kind).toBe("split");
     expect(Object.keys(s.panes)).toHaveLength(2);
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
+  });
+
+  it("uses the destination pane history after moving and closing a code viewer", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const sourcePaneId = Object.keys(useAppStore.getState().panes).find(
+      (pid) => useAppStore.getState().panes[pid].tabIds.length === 2,
+    )!;
+    const destinationPaneId = useAppStore.getState().focusedPaneId;
+    useAppStore.getState().moveTab({
+      tabId: "a1",
+      fromPaneId: sourcePaneId,
+      toPaneId: destinationPaneId,
+    });
+    useAppStore.getState().setFocusedPane(sourcePaneId);
+    useAppStore.getState().selectSession("a2");
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const codeTabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().moveTab({
+      tabId: codeTabId,
+      fromPaneId: sourcePaneId,
+      toPaneId: destinationPaneId,
+    });
+    useAppStore.getState().closeWorkspaceTab(codeTabId);
+
+    const s = useAppStore.getState();
+    expect(s.focusedPaneId).toBe(destinationPaneId);
+    expect(s.activeTabId).toBe("a1");
+    expect(s.activeSessionId).toBe("a1");
+    expect(s.panes[destinationPaneId].tabIds).toEqual(["a1"]);
+    expect(s.panes[sourcePaneId].tabIds).toEqual(["a2"]);
   });
 });
 
