@@ -59,7 +59,11 @@ import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
-import { shouldShowPermissionWarmup } from "./lib/permissionWarmup";
+import {
+  hasDeniedFolderPermission,
+  isMacPlatform,
+  type FolderPermissionWarmupResult,
+} from "./lib/permissionWarmup";
 import {
   normalizeUiScalePercent,
   UI_SCALE_PERCENT_STEP,
@@ -177,6 +181,12 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const [permissionWarmupOpen, setPermissionWarmupOpen] = useState(false);
+  const [permissionWarmupInitialResults, setPermissionWarmupInitialResults] =
+    useState<FolderPermissionWarmupResult[] | null>(null);
+  const permissionWarmupAuditRef = useRef<{
+    key: string;
+    promise: Promise<FolderPermissionWarmupResult[]>;
+  } | null>(null);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const [resumeCandidates, setResumeCandidates] = useState<
     Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
@@ -200,7 +210,6 @@ function App() {
   const themes = useThemes((s) => s.themes);
   const refreshThemes = useThemes((s) => s.refresh);
   const appearance = useSettings((s) => s.settings.appearance);
-  const currentVersion = useUpdater((s) => s.currentVersion);
   const showToast = useToasts((s) => s.show);
 
   const showStoreOperationToast = useCallback(
@@ -554,10 +563,33 @@ function App() {
     ) {
       return;
     }
-    if (shouldShowPermissionWarmup(currentVersion, navigator.platform)) {
-      setPermissionWarmupOpen(true);
+    const platform = navigator.platform;
+    if (!isMacPlatform(platform)) return;
+
+    const auditKey = platform;
+    let audit = permissionWarmupAuditRef.current;
+    if (!audit || audit.key !== auditKey) {
+      audit = {
+        key: auditKey,
+        promise: api.warmMacosFolderPermissions(),
+      };
+      permissionWarmupAuditRef.current = audit;
     }
-  }, [currentVersion]);
+
+    let cancelled = false;
+    void audit.promise
+      .then((results) => {
+        if (cancelled || !hasDeniedFolderPermission(results)) return;
+        setPermissionWarmupInitialResults(results);
+        setPermissionWarmupOpen(true);
+      })
+      .catch((err) => {
+        console.warn("[App] folder permission audit failed", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     return startSessionNotificationWatcher();
@@ -1253,7 +1285,7 @@ function App() {
       />
       <FolderPermissionWarmupModal
         open={permissionWarmupOpen}
-        currentVersion={currentVersion}
+        initialResults={permissionWarmupInitialResults}
         onClose={() => setPermissionWarmupOpen(false)}
       />
       <SettingsModal />
