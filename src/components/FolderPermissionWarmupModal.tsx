@@ -75,6 +75,8 @@ export function FolderPermissionWarmupModal({
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const hasDeniedResult =
+    results?.some((result) => result.status === "denied") ?? false;
 
   function closeForVersion() {
     if (currentVersion) markPermissionWarmupHandled(currentVersion);
@@ -153,6 +155,11 @@ export function FolderPermissionWarmupModal({
               </div>
             ))}
           </div>
+        ) : null}
+        {hasDeniedResult ? (
+          <p className="rounded border border-danger/30 bg-danger/10 px-3 py-2 text-danger">
+            {dt(t, "dialogs.folderPermissionWarmup.deniedHint")}
+          </p>
         ) : null}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">

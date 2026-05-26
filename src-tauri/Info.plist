@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Acorn checks Desktop folder access so terminal sessions can continue working with projects stored there after updates.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Acorn checks Documents folder access so terminal sessions can continue working with projects stored there after updates.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Acorn checks Downloads folder access so terminal sessions can continue working with projects stored there after updates.</string>
+  <key>NSFileProviderDomainUsageDescription</key>
+  <string>Acorn checks iCloud Drive access so terminal sessions can continue working with projects stored there after updates.</string>
+</dict>
+</plist>
