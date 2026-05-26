@@ -459,6 +459,27 @@
         "label": "Custom command",
         "hint": "Used for both interactive sessions and one-shot AI generation. Falls back to Claude Code when blank."
       },
+      "sessionTitles": {
+        "label": "Session titles",
+        "hint": "When enabled, acorn sends the first user prompt in a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
+        "checkbox": "Auto-generate session titles"
+      },
+      "sessionTitlePrompt": {
+        "label": "Session title prompt",
+        "hint": "Instructions sent before the first user prompt. Leave blank to use the default prompt.",
+        "open": "Configure title prompt",
+        "shortButton": "Prompt",
+        "editorLabel": "Prompt",
+        "count": "{count} / {max}",
+        "reset": "Reset prompt",
+        "preview": {
+          "sample": "Acorn sample first message",
+          "generate": "Generate preview",
+          "generating": "Generating preview",
+          "result": "Tab",
+          "failed": "Preview failed"
+        }
+      },
       "requirement": "The selected agent's CLI must already be installed and authenticated on this machine. Surfaces a clear error when the binary is missing."
     },
     "storage": {
@@ -721,7 +742,8 @@
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
-      "controlSession": "control session"
+      "controlSession": "control session",
+      "generatingSessionTitle": "Generating session title"
     },
     "localTerminals": {
       "title": "Instant sessions",
@@ -753,6 +775,7 @@
     "aria": {
       "worktree": "worktree",
       "controlSession": "control session",
+      "generatingSessionTitle": "Generating session title",
       "closeSession": "Close session",
       "closeTab": "Close tab"
     },

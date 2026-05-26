@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  GenerateSessionTitleResult,
   Project,
   Session,
   SessionNotification,
@@ -25,6 +26,13 @@ vi.mock("./lib/api", () => {
       createSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => undefined),
       renameSession: vi.fn(async () => ({}) as Session),
+      generateSessionTitle: vi.fn(
+        async () =>
+          ({
+            status: "skipped",
+            session: {} as Session,
+          }) as GenerateSessionTitleResult,
+      ),
       addProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => undefined),
       reorderProjects: vi.fn(async (paths: string[]) =>
@@ -76,6 +84,7 @@ function session(
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
+    title_source: "default",
     kind: "regular",
     owner: { kind: "user" },
     position: null,
@@ -131,6 +140,7 @@ function resetStore(): void {
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       liveInWorktree: {},
+      generatingSessionTitleIds: {},
     },
     false,
   );
@@ -1237,6 +1247,113 @@ describe("pollSessionStatuses", () => {
   it("is a no-op when there are no sessions to poll", async () => {
     await useAppStore.getState().pollSessionStatuses();
     expect(mockApi.detectSessionStatuses).not.toHaveBeenCalled();
+  });
+});
+
+describe("generateSessionTitle", () => {
+  it("does not manually rename a session while title generation is active", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.setState({
+      generatingSessionTitleIds: { a1: true },
+    });
+
+    await useAppStore.getState().renameSession("a1", "Manual title");
+
+    expect(mockApi.renameSession).not.toHaveBeenCalled();
+  });
+
+  it("merges the generated session title without refreshing all sessions", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.generateSessionTitle.mockResolvedValueOnce(
+      {
+        status: "generated",
+        session: session("a1", REPO_A, {
+          name: "Fix Release Workflow",
+          title_source: "generated",
+        }),
+      },
+    );
+
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+
+    expect(status).toBe("generated");
+    expect(mockApi.generateSessionTitle).toHaveBeenCalledWith(
+      "a1",
+      "codex",
+      ["exec"],
+      "Title prompt",
+    );
+    expect(mockApi.listSessions).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().sessions[0]?.name).toBe(
+      "Fix Release Workflow",
+    );
+    expect(useAppStore.getState().sessions[0]?.title_source).toBe("generated");
+  });
+
+  it("returns not_ready without replacing the session title", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.generateSessionTitle.mockResolvedValueOnce({
+      status: "not_ready",
+      session: session("a1", REPO_A, {
+        name: "Backend no-op title",
+        title_source: "default",
+      }),
+    });
+
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+
+    expect(status).toBe("not_ready");
+    expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
+    expect(useAppStore.getState().sessions[0]?.title_source).toBe("default");
+    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
+  });
+
+  it("tracks title generation while the backend request is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+      let resolveTitle!: (value: GenerateSessionTitleResult) => void;
+      mockApi.generateSessionTitle.mockImplementationOnce(
+        () =>
+          new Promise<GenerateSessionTitleResult>((resolve) => {
+            resolveTitle = resolve;
+          }),
+      );
+
+      const request = useAppStore
+        .getState()
+        .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+
+      expect(useAppStore.getState().generatingSessionTitleIds).toEqual({
+        a1: true,
+      });
+
+      resolveTitle(
+        {
+          status: "generated",
+          session: session("a1", REPO_A, {
+            name: "Fix Release Workflow",
+            title_source: "generated",
+          }),
+        },
+      );
+      await Promise.resolve();
+
+      expect(useAppStore.getState().generatingSessionTitleIds).toEqual({
+        a1: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(900);
+      await request;
+
+      expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -3,6 +3,7 @@ import {
   FolderOpen,
   ImagePlus,
   Keyboard,
+  Loader2,
   RefreshCcw,
   Settings as SettingsIcon,
   Sparkles,
@@ -35,7 +36,12 @@ import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
+  DEFAULT_SESSION_TITLE_PROMPT,
   PR_REFRESH_INTERVAL_OPTIONS,
+  resolveAiOneshotCommand,
+  resolveSessionTitlePrompt,
+  SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+  SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
   TOAST_POSITION_OPTIONS,
   type SelectedAgent,
@@ -282,6 +288,12 @@ function stf(
   );
 }
 
+function messageFromUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "Unknown error";
+}
+
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
@@ -289,6 +301,7 @@ export function SettingsModal() {
   const pendingTab = useSettings((s) => s.pendingTab);
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("interface");
+  const [sessionTitlePromptOpen, setSessionTitlePromptOpen] = useState(false);
   const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
@@ -306,9 +319,14 @@ export function SettingsModal() {
     }
   }, [open, pendingTab, consumePendingTab]);
 
+  useEffect(() => {
+    if (!open) setSessionTitlePromptOpen(false);
+  }, [open]);
+
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
-  // change so there is no separate confirm step.
-  useDialogShortcuts(open, {
+  // change so there is no separate confirm step. While a child settings dialog
+  // is open, let that dialog own Escape.
+  useDialogShortcuts(open && !sessionTitlePromptOpen, {
     onCancel: () => setOpen(false),
     onConfirm: () => setOpen(false),
   });
@@ -363,7 +381,10 @@ export function SettingsModal() {
           ) : tab === "terminal" ? (
             <TerminalSettings />
           ) : tab === "agents" ? (
-            <AgentSettings />
+            <AgentSettings
+              sessionTitlePromptOpen={sessionTitlePromptOpen}
+              onSessionTitlePromptOpenChange={setSessionTitlePromptOpen}
+            />
           ) : tab === "sessions" ? (
             <SessionSettings />
           ) : tab === "services" ? (
@@ -1594,7 +1615,15 @@ function NotificationSettings() {
   );
 }
 
-function AgentSettings() {
+interface AgentSettingsProps {
+  sessionTitlePromptOpen: boolean;
+  onSessionTitlePromptOpenChange: (open: boolean) => void;
+}
+
+function AgentSettings({
+  sessionTitlePromptOpen,
+  onSessionTitlePromptOpenChange,
+}: AgentSettingsProps) {
   const settings = useSettings((s) => s.settings);
   const patchAgents = useSettings((s) => s.patchAgents);
   const t = useTranslation();
@@ -1673,10 +1702,220 @@ function AgentSettings() {
           />
         </Field>
       ) : null}
+      <Field
+        label={st(t, "settings.agents.sessionTitles.label")}
+        hint={st(t, "settings.agents.sessionTitles.hint")}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <label className="flex min-w-0 items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.agents.autoGenerateSessionTitles}
+              onChange={(e) =>
+                patchAgents({ autoGenerateSessionTitles: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            <span className="truncate">
+              {st(t, "settings.agents.sessionTitles.checkbox")}
+            </span>
+          </label>
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={sessionTitlePromptOpen}
+            aria-label={st(t, "settings.agents.sessionTitlePrompt.open")}
+            title={st(t, "settings.agents.sessionTitlePrompt.open")}
+            onClick={() => onSessionTitlePromptOpenChange(true)}
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-bg px-2 text-[11px] font-medium text-fg-muted transition hover:border-accent/60 hover:bg-bg-elevated hover:text-fg"
+          >
+            <SettingsIcon size={12} />
+            {st(t, "settings.agents.sessionTitlePrompt.shortButton")}
+          </button>
+        </div>
+      </Field>
+      <SessionTitlePromptModal
+        open={sessionTitlePromptOpen}
+        onClose={() => onSessionTitlePromptOpenChange(false)}
+      />
       <p className="text-[11px] text-fg-muted">
         {st(t, "settings.agents.requirement")}
       </p>
     </section>
+  );
+}
+
+type SessionTitlePreviewState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; title: string }
+  | { status: "error"; message?: string };
+
+interface SessionTitlePromptModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+function SessionTitlePromptModal({
+  open,
+  onClose,
+}: SessionTitlePromptModalProps) {
+  const settings = useSettings((s) => s.settings);
+  const patchAgents = useSettings((s) => s.patchAgents);
+  const t = useTranslation();
+  const sessionTitlePromptLength = Array.from(
+    settings.agents.sessionTitlePrompt,
+  ).length;
+  const [titlePreview, setTitlePreview] = useState<SessionTitlePreviewState>({
+    status: "idle",
+  });
+
+  useDialogShortcuts(open, {
+    onCancel: onClose,
+  });
+
+  useEffect(() => {
+    setTitlePreview({ status: "idle" });
+  }, [
+    open,
+    settings.agents.selected,
+    settings.agents.customCommand,
+    settings.agents.ollama.model,
+    settings.agents.llm.model,
+    settings.agents.sessionTitlePrompt,
+  ]);
+
+  async function handlePreviewSessionTitle() {
+    setTitlePreview({ status: "loading" });
+    const { command, args } = resolveAiOneshotCommand(settings);
+    const prompt = resolveSessionTitlePrompt(settings);
+    try {
+      const title = await api.previewSessionTitle(
+        command,
+        args,
+        prompt,
+        SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+      );
+      setTitlePreview({ status: "success", title });
+    } catch (error) {
+      setTitlePreview({
+        status: "error",
+        message: messageFromUnknownError(error),
+      });
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      variant="dialog"
+      size="xl"
+      ariaLabelledBy="session-title-prompt-title"
+      className="max-h-[calc(100vh-8rem)]"
+    >
+      <ModalHeader
+        title={st(t, "settings.agents.sessionTitlePrompt.label")}
+        subtitle={st(t, "settings.agents.sessionTitlePrompt.hint")}
+        titleId="session-title-prompt-title"
+        icon={<SettingsIcon size={14} className="text-fg-muted" />}
+        variant="dialog"
+        onClose={onClose}
+      />
+      <div className="max-h-[calc(100vh-12rem)] overflow-y-auto p-4">
+        <Field
+          label={st(t, "settings.agents.sessionTitlePrompt.editorLabel")}
+        >
+          <div className="flex flex-col gap-2">
+            <textarea
+              aria-label={st(t, "settings.agents.sessionTitlePrompt.label")}
+              value={settings.agents.sessionTitlePrompt}
+              maxLength={SESSION_TITLE_PROMPT_MAX_CHARS}
+              spellCheck={false}
+              onChange={(e) =>
+                patchAgents({ sessionTitlePrompt: e.target.value })
+              }
+              className="min-h-40 w-full resize-y rounded-md border border-border bg-bg px-2 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus:border-accent"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-fg-muted">
+                {stf(t, "settings.agents.sessionTitlePrompt.count", {
+                  count: sessionTitlePromptLength,
+                  max: SESSION_TITLE_PROMPT_MAX_CHARS,
+                })}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  patchAgents({
+                    sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
+                  })
+                }
+                disabled={
+                  settings.agents.sessionTitlePrompt ===
+                  DEFAULT_SESSION_TITLE_PROMPT
+                }
+                title={st(t, "settings.agents.sessionTitlePrompt.reset")}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <RefreshCcw size={11} />
+                {st(t, "settings.agents.sessionTitlePrompt.reset")}
+              </button>
+            </div>
+            <div className="rounded-md border border-border bg-bg-sidebar/30 p-2">
+              <div className="mb-1 text-[11px] font-medium text-fg-muted">
+                {st(t, "settings.agents.sessionTitlePrompt.preview.sample")}
+              </div>
+              <p className="font-mono text-[11px] leading-relaxed text-fg">
+                {SESSION_TITLE_PROMPT_PREVIEW_MESSAGE}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handlePreviewSessionTitle()}
+                  disabled={titlePreview.status === "loading"}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-bg px-2.5 text-[11px] font-medium text-fg transition hover:border-accent/50 hover:bg-bg-elevated disabled:cursor-wait disabled:bg-bg-sidebar/40 disabled:text-fg-muted"
+                >
+                  {titlePreview.status === "loading" ? (
+                    <Loader2 size={12} className="animate-spin text-fg-muted" />
+                  ) : (
+                    <Sparkles size={12} className="text-accent" />
+                  )}
+                  {titlePreview.status === "loading"
+                    ? st(
+                        t,
+                        "settings.agents.sessionTitlePrompt.preview.generating",
+                      )
+                    : st(
+                        t,
+                        "settings.agents.sessionTitlePrompt.preview.generate",
+                      )}
+                </button>
+                {titlePreview.status === "success" && titlePreview.title ? (
+                  <div className="inline-flex h-7 max-w-full items-center gap-1 rounded-md border border-border bg-bg px-2 text-xs text-fg">
+                    <span className="text-[10px] text-fg-muted">
+                      {st(
+                        t,
+                        "settings.agents.sessionTitlePrompt.preview.result",
+                      )}
+                    </span>
+                    <span className="max-w-48 truncate font-medium">
+                      {titlePreview.title}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+              {titlePreview.status === "error" ? (
+                <p className="mt-2 text-[11px] text-danger">
+                  {st(t, "settings.agents.sessionTitlePrompt.preview.failed")}
+                  {titlePreview.message ? `: ${titlePreview.message}` : ""}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </Field>
+      </div>
+    </Modal>
   );
 }
 

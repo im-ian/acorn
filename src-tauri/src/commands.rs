@@ -22,7 +22,9 @@ use crate::worktree;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::AgentKind as StatusAgentKind;
-use acorn_session::{Project, Session, SessionAgentProvider, SessionKind, SessionStatus};
+use acorn_session::{
+    Project, Session, SessionAgentProvider, SessionKind, SessionOwner, SessionStatus,
+};
 
 use serde::Serialize;
 
@@ -1125,9 +1127,162 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
     if trimmed.is_empty() {
         return Err(AppError::Other("name must not be empty".to_string()));
     }
+    let current = state.sessions.get(&id)?;
+    if matches!(current.owner, SessionOwner::Control { .. }) {
+        return Err(AppError::Other(
+            "control-session owned tabs cannot be renamed".to_string(),
+        ));
+    }
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
     Ok(enrich_session(updated))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum GenerateSessionTitleStatus {
+    Generated,
+    NotReady,
+    Skipped,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateSessionTitleResult {
+    status: GenerateSessionTitleStatus,
+    session: Session,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionTitleReadinessStatus {
+    Ready,
+    NotReady,
+    Skipped,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTitleReadinessResult {
+    status: SessionTitleReadinessStatus,
+    session: Session,
+}
+
+#[tauri::command]
+pub async fn session_title_readiness(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<SessionTitleReadinessResult> {
+    let state = state.inner().clone();
+    run_blocking("session_title_readiness", move || {
+        session_title_readiness_inner(state, id)
+    })
+    .await
+}
+
+fn session_title_readiness_inner(
+    state: AppState,
+    id: String,
+) -> AppResult<SessionTitleReadinessResult> {
+    let id = parse_id(&id)?;
+    let session = state.sessions.get(&id)?;
+    if !crate::session_titles::can_generate_title(&session) {
+        return Ok(SessionTitleReadinessResult {
+            status: SessionTitleReadinessStatus::Skipped,
+            session: enrich_session(session),
+        });
+    }
+    if crate::session_titles::resolve_first_user_message(id).is_none() {
+        return Ok(SessionTitleReadinessResult {
+            status: SessionTitleReadinessStatus::NotReady,
+            session: enrich_session(session),
+        });
+    }
+    Ok(SessionTitleReadinessResult {
+        status: SessionTitleReadinessStatus::Ready,
+        session: enrich_session(session),
+    })
+}
+
+#[tauri::command]
+pub async fn generate_session_title(
+    state: State<'_, AppState>,
+    id: String,
+    command: String,
+    args: Vec<String>,
+    prompt: Option<String>,
+) -> AppResult<GenerateSessionTitleResult> {
+    let state = state.inner().clone();
+    run_blocking("generate_session_title", move || {
+        generate_session_title_inner(state, id, command, args, prompt)
+    })
+    .await
+}
+
+fn generate_session_title_inner(
+    state: AppState,
+    id: String,
+    command: String,
+    args: Vec<String>,
+    prompt: Option<String>,
+) -> AppResult<GenerateSessionTitleResult> {
+    let id = parse_id(&id)?;
+    let session = state.sessions.get(&id)?;
+    if !crate::session_titles::can_generate_title(&session) {
+        return Ok(GenerateSessionTitleResult {
+            status: GenerateSessionTitleStatus::Skipped,
+            session: enrich_session(session),
+        });
+    }
+    let Some(first_user_message) = crate::session_titles::resolve_first_user_message(id) else {
+        return Ok(GenerateSessionTitleResult {
+            status: GenerateSessionTitleStatus::NotReady,
+            session: enrich_session(session),
+        });
+    };
+    let generated = crate::session_titles::generate_title(
+        &command,
+        &args,
+        prompt.as_deref(),
+        &first_user_message,
+    )?;
+    let latest = state.sessions.get(&id)?;
+    if !crate::session_titles::can_generate_title(&latest) {
+        return Ok(GenerateSessionTitleResult {
+            status: GenerateSessionTitleStatus::Skipped,
+            session: enrich_session(latest),
+        });
+    }
+    let updated = state.sessions.set_generated_title(&id, generated)?;
+    persist(&state);
+    Ok(GenerateSessionTitleResult {
+        status: GenerateSessionTitleStatus::Generated,
+        session: enrich_session(updated),
+    })
+}
+
+#[tauri::command]
+pub async fn preview_session_title(
+    command: String,
+    args: Vec<String>,
+    prompt: Option<String>,
+    first_user_message: String,
+) -> AppResult<String> {
+    run_blocking("preview_session_title", move || {
+        let first_user_message = first_user_message.trim().to_string();
+        if first_user_message.is_empty() {
+            return Err(AppError::Other(
+                "first user message must not be empty".to_string(),
+            ));
+        }
+        crate::session_titles::generate_title(
+            &command,
+            &args,
+            prompt.as_deref(),
+            &first_user_message,
+        )
+    })
+    .await
 }
 
 /// Re-point a session at a new worktree directory and persist the change.
@@ -3091,7 +3246,10 @@ mod tests {
         init_repo_with_commit(&repo_dir);
         let (_name, path) =
             create_unique_worktree(&repo_dir, "external").expect("worktree should be created");
-        assert!(path.exists(), "linked project root should exist before removal");
+        assert!(
+            path.exists(),
+            "linked project root should exist before removal"
+        );
 
         remove_linked_worktree_at_path(&path, &path).expect("remove linked project root by path");
 
