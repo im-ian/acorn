@@ -186,6 +186,18 @@ impl SessionOwner {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+pub enum SessionTitleSource {
+    Default,
+    Generated,
+    Manual,
+}
+
+fn default_title_source_for_existing_sessions() -> SessionTitleSource {
+    SessionTitleSource::Manual
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum SessionAgentProvider {
     Claude,
     Codex,
@@ -222,6 +234,8 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_message: Option<String>,
+    #[serde(default = "default_title_source_for_existing_sessions")]
+    pub title_source: SessionTitleSource,
     #[serde(default)]
     pub kind: SessionKind,
     #[serde(default)]
@@ -289,6 +303,7 @@ impl Session {
             created_at: now,
             updated_at: now,
             last_message: None,
+            title_source: SessionTitleSource::Default,
             kind,
             owner: SessionOwner::User,
             position: None,
@@ -405,7 +420,18 @@ impl SessionStore {
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.name = name;
+        entry.title_source = SessionTitleSource::Manual;
         entry.updated_at = Utc::now();
+        Ok(entry.clone())
+    }
+
+    pub fn set_generated_title(&self, id: &Uuid, name: String) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.name = name;
+        entry.title_source = SessionTitleSource::Generated;
         Ok(entry.clone())
     }
 
@@ -508,6 +534,40 @@ mod tests {
     }
 
     #[test]
+    fn new_sessions_start_with_default_title_source() {
+        let session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+
+        assert_eq!(session.title_source, SessionTitleSource::Default);
+    }
+
+    #[test]
+    fn persisted_sessions_without_title_source_load_as_manual() {
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.title_source = SessionTitleSource::Default;
+        let mut json = serde_json::to_value(&session).expect("session serializes");
+        json.as_object_mut()
+            .expect("session json is an object")
+            .remove("title_source");
+
+        let restored: Session = serde_json::from_value(json).expect("session deserializes");
+
+        assert_eq!(restored.title_source, SessionTitleSource::Manual);
+    }
+
+    #[test]
+    fn manual_rename_marks_title_source_as_manual() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+
+        let updated = store
+            .rename(&session.id, "manual title".to_string())
+            .expect("session exists");
+
+        assert_eq!(updated.name, "manual title");
+        assert_eq!(updated.title_source, SessionTitleSource::Manual);
+    }
+
+    #[test]
     fn reconcile_missing_worktree_resets_path_and_isolation() {
         let store = SessionStore::new();
         let session = store.insert(fake_session(
@@ -547,6 +607,21 @@ mod tests {
             store.get(&session.id).expect("session persisted").kind,
             SessionKind::Control
         );
+    }
+
+    #[test]
+    fn set_generated_title_does_not_reorder_session() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        let original_updated_at = session.updated_at;
+
+        let updated = store
+            .set_generated_title(&session.id, "generated title".to_string())
+            .expect("session exists");
+
+        assert_eq!(updated.name, "generated title");
+        assert_eq!(updated.title_source, SessionTitleSource::Generated);
+        assert_eq!(updated.updated_at, original_updated_at);
     }
 
     #[test]

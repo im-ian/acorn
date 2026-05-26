@@ -54,6 +54,12 @@ export const tauriMockSource = `
       });
     }
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
+    if (cmd === 'session_title_readiness') {
+      return Promise.resolve({ status: 'skipped', session: {} });
+    }
+    if (cmd === 'generate_session_title') {
+      return Promise.resolve({ status: 'skipped', session: {} });
+    }
     if (cmd === 'detect_session_agent') {
       return Promise.resolve({ claude: null, codex: null });
     }

@@ -17,7 +17,26 @@ export type SessionOwner =
   | { kind: "user" }
   | { kind: "control"; session_id: string };
 
+export type SessionTitleSource = "default" | "generated" | "manual";
+
 export type SessionAgentProvider = "claude" | "codex";
+
+export type SessionTitleGenerationStatus =
+  | "generated"
+  | "not_ready"
+  | "skipped";
+
+export type SessionTitleReadinessStatus = "ready" | "not_ready" | "skipped";
+
+export interface GenerateSessionTitleResult {
+  status: SessionTitleGenerationStatus;
+  session: Session;
+}
+
+export interface SessionTitleReadinessResult {
+  status: SessionTitleReadinessStatus;
+  session: Session;
+}
 
 export type AgentProviderCapability =
   | "history"
@@ -71,6 +90,7 @@ export interface Session {
   created_at: string;
   updated_at: string;
   last_message: string | null;
+  title_source: SessionTitleSource;
   kind: SessionKind;
   owner: SessionOwner;
   position: number | null;

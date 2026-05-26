@@ -55,6 +55,7 @@ import {
   type AcornSettings,
   type SessionTitleSource,
 } from "../lib/settings";
+import { canRenameSession } from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
 import {
@@ -78,6 +79,7 @@ import {
 import type { Session, SessionKind, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
+import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
@@ -996,6 +998,10 @@ function SessionRow({
   const hoverDetails = sessionDisplay.showDetailsOnHover
     ? buildSessionHoverDetails(t, session)
     : null;
+  const isGeneratingTitle = useAppStore((s) =>
+    Boolean(s.generatingSessionTitleIds[session.id]),
+  );
+  const canRename = canRenameSession(session, { isGeneratingTitle });
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -1012,6 +1018,10 @@ function SessionRow({
     transform: CSS.Transform.toString(transform),
     transition,
   };
+
+  useEffect(() => {
+    if (isGeneratingTitle && editing) setEditing(false);
+  }, [editing, isGeneratingTitle]);
 
   async function duplicate() {
     const base = session.name;
@@ -1062,6 +1072,7 @@ function SessionRow({
       label: sidebarText(t, "sidebar.actions.rename"),
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
+      disabled: !canRename,
     },
     {
       label: sidebarText(t, "sidebar.actions.duplicateSession"),
@@ -1159,7 +1170,7 @@ function SessionRow({
             onSelect();
           } else if (e.key === "F2") {
             e.preventDefault();
-            setEditing(true);
+            if (canRename) setEditing(true);
           }
         }}
         onContextMenu={(e) => {
@@ -1208,10 +1219,11 @@ function SessionRow({
           titleText={titleText}
           metadataText={metadataText}
           showKindIcons={sessionDisplay.icons.sessionKind}
+          isGeneratingTitle={isGeneratingTitle}
           t={t}
           onSubmitRename={async (next) => {
             setEditing(false);
-            if (next && next !== session.name) {
+            if (canRename && next && next !== session.name) {
               await renameSession(session.id, next);
             }
           }}
@@ -1265,6 +1277,7 @@ interface SessionRowLabelProps {
   titleText: string;
   metadataText: string;
   showKindIcons: boolean;
+  isGeneratingTitle: boolean;
   t: Translator;
   onSubmitRename: (value: string) => void | Promise<void>;
   onCancelRename: () => void;
@@ -1276,6 +1289,7 @@ function SessionRowLabel({
   titleText,
   metadataText,
   showKindIcons,
+  isGeneratingTitle,
   t,
   onSubmitRename,
   onCancelRename,
@@ -1300,6 +1314,12 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
+        {isGeneratingTitle && !editing ? (
+          <SessionTitleGeneratingIndicator
+            label={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+            side="right"
+          />
+        ) : null}
         {showKindIcons && inWorktree ? (
           <GitBranch
             size={10}
@@ -1513,6 +1533,10 @@ function LocalSessionRow({
   const hoverDetails = sessionDisplay.showDetailsOnHover
     ? buildSessionHoverDetails(t, session)
     : null;
+  const isGeneratingTitle = useAppStore((s) =>
+    Boolean(s.generatingSessionTitleIds[session.id]),
+  );
+  const canRename = canRenameSession(session, { isGeneratingTitle });
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -1529,6 +1553,10 @@ function LocalSessionRow({
     transform: CSS.Transform.toString(transform),
     transition,
   };
+
+  useEffect(() => {
+    if (isGeneratingTitle && editing) setEditing(false);
+  }, [editing, isGeneratingTitle]);
 
   async function duplicate() {
     const base = session.name;
@@ -1555,6 +1583,7 @@ function LocalSessionRow({
       label: sidebarText(t, "sidebar.actions.rename"),
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
+      disabled: !canRename,
     },
     {
       label: sidebarText(t, "sidebar.actions.duplicateSession"),
@@ -1596,7 +1625,7 @@ function LocalSessionRow({
           onSelect();
         } else if (e.key === "F2") {
           e.preventDefault();
-          setEditing(true);
+          if (canRename) setEditing(true);
         }
       }}
       onContextMenu={(e) => {
@@ -1645,10 +1674,11 @@ function LocalSessionRow({
         titleText={titleText}
         metadataText={metadataText}
         showKindIcons={sessionDisplay.icons.sessionKind}
+        isGeneratingTitle={isGeneratingTitle}
         t={t}
         onSubmitRename={async (next) => {
           setEditing(false);
-          if (next && next !== session.name) {
+          if (canRename && next && next !== session.name) {
             await renameSession(session.id, next);
           }
         }}
