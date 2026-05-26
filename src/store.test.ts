@@ -358,6 +358,24 @@ describe("workspace tabs", () => {
     expect(s.activeSessionId).toBe("a1");
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
+
+  it("returns to the last focused session when closing an active code viewer", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().selectSession("a2");
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const tabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().closeWorkspaceTab(tabId);
+
+    const s = useAppStore.getState();
+    expect(s.workspaceTabs[tabId]).toBeUndefined();
+    expect(s.activeTabId).toBe("a2");
+    expect(s.activeSessionId).toBe("a2");
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", "a2"]);
+  });
 });
 
 describe("removeSession", () => {

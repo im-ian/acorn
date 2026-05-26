@@ -1,14 +1,12 @@
 import { test, expect, pressHotkey } from "./support";
 
 test.describe("file explorer", () => {
-  test("keeps expanded worktree folders after opening a file", async ({
+  test("keeps expanded worktree folders after opening and closing a file", async ({
     page,
     tauri,
   }) => {
     const repo = "/tmp/demo";
     const worktree = "/tmp/demo-worktree";
-    const src = `${worktree}/src`;
-    const file = `${src}/App.tsx`;
 
     await tauri.respond("list_projects", [
       {
@@ -36,6 +34,7 @@ test.describe("file explorer", () => {
     await tauri.handle("fs_list_dir", (args) => {
       const worktree = "/tmp/demo-worktree";
       const src = `${worktree}/src`;
+      const docs = `${worktree}/docs`;
       const file = `${src}/App.tsx`;
       const { path } = args as { path: string };
       if (path === worktree) {
@@ -45,6 +44,15 @@ test.describe("file explorer", () => {
             {
               name: "src",
               path: src,
+              is_dir: true,
+              is_symlink: false,
+              size: 0,
+              modified_ms: 0,
+              gitignored: false,
+            },
+            {
+              name: "docs",
+              path: docs,
               is_dir: true,
               is_symlink: false,
               size: 0,
@@ -70,6 +78,22 @@ test.describe("file explorer", () => {
           ],
         };
       }
+      if (path === docs) {
+        return {
+          repo_root: worktree,
+          entries: [
+            {
+              name: "Guide.md",
+              path: `${docs}/Guide.md`,
+              is_dir: false,
+              is_symlink: false,
+              size: 24,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
       return { repo_root: path, entries: [] };
     });
 
@@ -79,6 +103,8 @@ test.describe("file explorer", () => {
 
     await page.getByRole("button", { name: "src" }).click();
     await expect(page.getByRole("button", { name: "App.tsx" })).toBeVisible();
+    await page.getByRole("button", { name: "docs" }).click();
+    await expect(page.getByRole("button", { name: "Guide.md" })).toBeVisible();
 
     await page.getByRole("button", { name: "App.tsx" }).dblclick();
 
@@ -87,6 +113,15 @@ test.describe("file explorer", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "App.tsx", exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: /App\.tsx Close tab/ }).click();
+
+    await expect(
+      page.getByRole("button", { name: "App.tsx", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Guide.md", exact: true }),
     ).toBeVisible();
   });
 
