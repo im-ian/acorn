@@ -159,4 +159,102 @@ test.describe("file explorer", () => {
     await expect(page.getByRole("button", { name: "Source" })).toBeVisible();
     await expect(page.getByText("Markdown preview")).toBeVisible();
   });
+
+  test("reopens a worktree file tab after switching away and back to its project", async ({
+    page,
+    tauri,
+  }) => {
+    const repoA = "/tmp/alpha";
+    const repoB = "/tmp/beta";
+    const worktreeA = "/tmp/alpha/.worktrees/a-session";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repoA,
+        name: "alpha",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+      {
+        repo_path: repoB,
+        name: "beta",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 1,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "a-session",
+        name: "a-session",
+        repo_path: repoA,
+        worktree_path: worktreeA,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+      {
+        id: "b-session",
+        name: "b-session",
+        repo_path: repoB,
+        worktree_path: "/tmp/beta/.worktrees/b-session",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/alpha/.worktrees/a-session") {
+        return { repo_root: path, entries: [] };
+      }
+      return {
+        repo_root: "/tmp/alpha/.worktrees/a-session",
+        entries: [
+          {
+            name: "README.md",
+            path: "/tmp/alpha/.worktrees/a-session/README.md",
+            is_dir: false,
+            is_symlink: false,
+            size: 28,
+            modified_ms: 0,
+            gitignored: false,
+          },
+        ],
+      };
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/alpha/.worktrees/a-session/README.md") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      return {
+        content: "# Alpha README\n\nProject A notes",
+        size: 28,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+
+    await page.getByRole("button", { name: "README.md" }).dblclick();
+    await expect(
+      page.getByRole("button", { name: /README\.md Close tab/ }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: /a-session Close session/ }).click();
+    await page.getByRole("button", { name: "Project beta" }).click();
+    await page.getByRole("button", { name: "Project alpha" }).click();
+    await page.getByRole("button", { name: /README\.md Close tab/ }).click();
+
+    await expect(page.getByRole("button", { name: "Preview" })).toBeVisible();
+  });
 });

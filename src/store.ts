@@ -446,7 +446,7 @@ function findPaneContainingTab(
   return null;
 }
 
-function findSessionOwner(
+function findTabOwner(
   state: AppStateModel,
   id: string,
 ): { repoPath: string; paneId: PaneId } | null {
@@ -703,27 +703,25 @@ export const useAppStore = create<AppStateModel>()(
 
       if (isWorkspaceTabId(id)) {
         const tab = s.workspaceTabs[id];
-        const targetProject = tab?.repoPath ?? s.activeProject;
-        if (!targetProject) return s;
-        const ws = s.workspaces[targetProject];
+        const owner = findTabOwner(s, id);
+        if (!tab || !owner) return s;
+        const ws = s.workspaces[owner.repoPath];
         if (!ws) return s;
-        const containing = findPaneContainingTab(ws.panes, id);
-        if (!containing) return s;
-        const pane = ws.panes[containing];
+        const pane = ws.panes[owner.paneId];
         if (!pane) return s;
         const nextWs: ProjectWorkspace = {
           ...ws,
           panes: {
             ...ws.panes,
-            [containing]: { ...pane, activeTabId: id },
+            [owner.paneId]: { ...pane, activeTabId: id },
           },
-          focusedPaneId: containing,
+          focusedPaneId: owner.paneId,
         };
-        const workspaces = { ...s.workspaces, [targetProject]: nextWs };
+        const workspaces = { ...s.workspaces, [owner.repoPath]: nextWs };
         return {
           workspaces,
-          activeProject: targetProject,
-          ...mirrorActive(workspaces, targetProject),
+          activeProject: owner.repoPath,
+          ...mirrorActive(workspaces, owner.repoPath),
         };
       }
 
@@ -1151,7 +1149,7 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async removeSession(id, removeWorktree = false) {
-    const owning = findSessionOwner(get(), id);
+    const owning = findTabOwner(get(), id);
     set((s) => {
       if (!s.sessions.some((session) => session.id === id)) return s;
 
