@@ -314,6 +314,36 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("reselects a worktree-scoped code tab after switching projects", async () => {
+    const a1 = session("a1", REPO_A, {
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+    });
+    const b1 = session("b1", REPO_B);
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [a1, b1],
+    );
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${a1.worktree_path}/README.md`, a1.worktree_path);
+    const tabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().selectSession("a1");
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setActiveProject(REPO_A);
+    useAppStore.getState().selectTab(tabId);
+
+    const s = useAppStore.getState();
+    expect(s.activeProject).toBe(REPO_A);
+    expect(s.activeTabId).toBe(tabId);
+    expect(s.activeSessionId).toBeNull();
+    expect(s.workspaceTabs[tabId]).toMatchObject({
+      path: `${a1.worktree_path}/README.md`,
+      repoPath: a1.worktree_path,
+    });
+  });
+
   it("closes the active code viewer instead of requesting session removal", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
     useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
