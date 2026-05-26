@@ -545,6 +545,7 @@ pub fn run() {
             commands::prepare_claude_fork,
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
+            commands::warm_macos_folder_permissions,
             commands::ipc_restart,
             commands::list_system_fonts,
             commands::list_agent_history,

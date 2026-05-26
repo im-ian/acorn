@@ -995,6 +995,29 @@
       "createdPrefix": "You just created a control session. The",
       "createdSuffix": "CLI that drives it ships in the next update; this terminal will start behaving like a regular shell until then."
     },
+    "folderPermissionWarmup": {
+      "title": "Folder access check",
+      "subtitle": "Prepare macOS folder permissions after an update",
+      "bodyIntro": "macOS may ask again for access to protected folders after Acorn updates. You can check now so prompts happen before you start working.",
+      "bodyPrompt": "Acorn will briefly read Desktop, Documents, Downloads, and iCloud Drive. No files are changed.",
+      "check": "Check folder access",
+      "checking": "Checking...",
+      "skip": "Skip for this version",
+      "done": "Done",
+      "genericError": "Could not check folder access.",
+      "folder": {
+        "desktop": "Desktop",
+        "documents": "Documents",
+        "downloads": "Downloads",
+        "icloud": "iCloud Drive"
+      },
+      "status": {
+        "ok": "Ready",
+        "missing": "Not found",
+        "denied": "Denied",
+        "error": "Error"
+      }
+    },
     "commandRun": {
       "title": "Run this command?",
       "ariaLabel": "Run command",

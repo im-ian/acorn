@@ -20,6 +20,7 @@ import type {
   WorkflowRunDetailListing,
   WorkflowRunsListing,
 } from "./types";
+import type { FolderPermissionWarmupResult } from "./permissionWarmup";
 
 export interface LoadStatus {
   sessionsClean: boolean;
@@ -251,6 +252,11 @@ export const api = {
    */
   getAcornIpcStatus(): Promise<AcornIpcStatus> {
     return invoke<AcornIpcStatus>("get_acorn_ipc_status");
+  },
+  warmMacosFolderPermissions(): Promise<FolderPermissionWarmupResult[]> {
+    return invoke<FolderPermissionWarmupResult[]>(
+      "warm_macos_folder_permissions",
+    );
   },
   /**
    * Stop the in-process IPC listener and spawn a fresh one. Used when the
