@@ -26,7 +26,6 @@ import {
 import {
   activeSessionIdFromTabId,
   isRestorableWorkspaceTab,
-  isSessionTabId,
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
   type FrontendWorkspaceTab,
@@ -55,7 +54,8 @@ export interface PaneState {
   id: PaneId;
   tabIds: string[];
   activeTabId: string | null;
-  lastActiveSessionTabId?: string | null;
+  /** Oldest -> newest activation order for tabs still known to this pane. */
+  activationHistory?: string[];
 }
 
 export interface ProjectWorkspace {
@@ -234,28 +234,66 @@ function nextSplitId(): string {
 }
 
 function emptyPane(id: PaneId): PaneState {
-  return { id, tabIds: [], activeTabId: null, lastActiveSessionTabId: null };
+  return { id, tabIds: [], activeTabId: null, activationHistory: [] };
 }
 
 type PersistedPaneState = Partial<PaneState> & {
   sessionIds?: string[];
   activeSessionId?: string | null;
+  lastActiveSessionTabId?: string | null;
 };
 
-function lastSessionTabId(ids: readonly string[]): string | null {
-  for (let i = ids.length - 1; i >= 0; i -= 1) {
-    if (isSessionTabId(ids[i])) return ids[i];
-  }
-  return null;
+function pushActivation(
+  history: readonly string[] | undefined,
+  tabId: string | null,
+): string[] {
+  const existing = Array.isArray(history) ? history : [];
+  if (!tabId) return [...existing];
+  return [...existing.filter((id) => id !== tabId), tabId];
 }
 
-function preferredSessionTabId(
-  pane: Pick<PaneState, "lastActiveSessionTabId">,
+function activationHistoryFor(
+  pane: PersistedPaneState | undefined,
+  tabIds: readonly string[],
+  activeTabId: string | null,
+): string[] {
+  const allowed = new Set(tabIds);
+  const candidates = [
+    ...(Array.isArray(pane?.activationHistory) ? pane.activationHistory : []),
+    ...(typeof pane?.lastActiveSessionTabId === "string"
+      ? [pane.lastActiveSessionTabId]
+      : []),
+    ...(activeTabId ? [activeTabId] : []),
+  ];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of candidates) {
+    if (!allowed.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function preferredTabId(
+  pane: Pick<PaneState, "activationHistory">,
   ids: readonly string[],
 ): string | null {
-  const last = pane.lastActiveSessionTabId;
-  if (last && ids.includes(last) && isSessionTabId(last)) return last;
-  return lastSessionTabId(ids);
+  const allowed = new Set(ids);
+  const history = pane.activationHistory ?? [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const id = history[i];
+    if (allowed.has(id)) return id;
+  }
+  return ids[ids.length - 1] ?? null;
+}
+
+function activatePaneTab(pane: PaneState, tabId: string | null): PaneState {
+  return {
+    ...pane,
+    activeTabId: tabId,
+    activationHistory: pushActivation(pane.activationHistory, tabId),
+  };
 }
 
 function normalizePaneState(
@@ -273,15 +311,14 @@ function normalizePaneState(
       : pane?.activeSessionId !== undefined
         ? pane.activeSessionId
         : null;
-  const lastActiveSessionTabId =
-    typeof pane?.lastActiveSessionTabId === "string" &&
-    tabIds.includes(pane.lastActiveSessionTabId) &&
-    isSessionTabId(pane.lastActiveSessionTabId)
-      ? pane.lastActiveSessionTabId
-      : activeTabId && isSessionTabId(activeTabId)
-        ? activeTabId
-        : lastSessionTabId(tabIds);
-  return { id, tabIds, activeTabId, lastActiveSessionTabId };
+  const safeActiveTabId =
+    activeTabId && tabIds.includes(activeTabId) ? activeTabId : null;
+  return {
+    id,
+    tabIds,
+    activeTabId: safeActiveTabId,
+    activationHistory: activationHistoryFor(pane, tabIds, safeActiveTabId),
+  };
 }
 
 function emptyWorkspace(): ProjectWorkspace {
@@ -377,13 +414,12 @@ function reconcileWorkspace(
     const active =
       existing.activeTabId && filtered.includes(existing.activeTabId)
         ? existing.activeTabId
-        : filtered[filtered.length - 1] ?? null;
-    const lastActiveSessionTabId = preferredSessionTabId(existing, filtered);
+        : preferredTabId(existing, filtered);
     newPanes[pid] = {
       id: pid,
       tabIds: filtered,
       activeTabId: active,
-      lastActiveSessionTabId,
+      activationHistory: activationHistoryFor(existing, filtered, active),
     };
   }
 
@@ -403,7 +439,14 @@ function reconcileWorkspace(
         ...pane,
         tabIds: [...pane.tabIds, s.id],
         activeTabId: pane.activeTabId ?? s.id,
-        lastActiveSessionTabId: pane.lastActiveSessionTabId ?? s.id,
+        activationHistory:
+          pane.activeTabId === null
+            ? pushActivation(pane.activationHistory, s.id)
+            : activationHistoryFor(
+                pane,
+                [...pane.tabIds, s.id],
+                pane.activeTabId,
+              ),
       };
       assigned.add(s.id);
     }
@@ -746,7 +789,7 @@ export const useAppStore = create<AppStateModel>()(
             ...ws,
             panes: {
               ...ws.panes,
-              [ws.focusedPaneId]: { ...pane, activeTabId: null },
+              [ws.focusedPaneId]: activatePaneTab(pane, null),
             },
           };
         });
@@ -765,7 +808,7 @@ export const useAppStore = create<AppStateModel>()(
           ...ws,
           panes: {
             ...ws.panes,
-            [owner.paneId]: { ...pane, activeTabId: id },
+            [owner.paneId]: activatePaneTab(pane, id),
           },
           focusedPaneId: owner.paneId,
         };
@@ -797,10 +840,8 @@ export const useAppStore = create<AppStateModel>()(
         panes: {
           ...ws.panes,
           [targetPaneId]: {
-            ...pane,
+            ...activatePaneTab(pane, id),
             tabIds,
-            activeTabId: id,
-            lastActiveSessionTabId: id,
           },
         },
         focusedPaneId: targetPaneId,
@@ -868,21 +909,7 @@ export const useAppStore = create<AppStateModel>()(
       const patch = updateActiveWorkspace(s, (ws) => {
         if (!ws.panes[paneId]) return ws;
         if (ws.focusedPaneId === paneId) return ws;
-        const pane = ws.panes[paneId];
-        return {
-          ...ws,
-          panes: {
-            ...ws.panes,
-            [paneId]: {
-              ...pane,
-              lastActiveSessionTabId:
-                pane.activeTabId && isSessionTabId(pane.activeTabId)
-                  ? pane.activeTabId
-                  : pane.lastActiveSessionTabId,
-            },
-          },
-          focusedPaneId: paneId,
-        };
+        return { ...ws, focusedPaneId: paneId };
       });
       return patch ?? s;
     });
@@ -897,21 +924,7 @@ export const useAppStore = create<AppStateModel>()(
           direction,
         );
         if (!nextPaneId || !ws.panes[nextPaneId]) return ws;
-        const pane = ws.panes[nextPaneId];
-        return {
-          ...ws,
-          panes: {
-            ...ws.panes,
-            [nextPaneId]: {
-              ...pane,
-              lastActiveSessionTabId:
-                pane.activeTabId && isSessionTabId(pane.activeTabId)
-                  ? pane.activeTabId
-                  : pane.lastActiveSessionTabId,
-            },
-          },
-          focusedPaneId: nextPaneId,
-        };
+        return { ...ws, focusedPaneId: nextPaneId };
       });
       return patch ?? s;
     });
@@ -973,13 +986,7 @@ export const useAppStore = create<AppStateModel>()(
           ...ws,
           panes: {
             ...ws.panes,
-            [ws.focusedPaneId]: {
-              ...pane,
-              activeTabId: nextId,
-              lastActiveSessionTabId: isSessionTabId(nextId)
-                ? nextId
-                : pane.lastActiveSessionTabId,
-            },
+            [ws.focusedPaneId]: activatePaneTab(pane, nextId),
           },
         };
       });
@@ -1055,23 +1062,26 @@ export const useAppStore = create<AppStateModel>()(
         const srcTabIds = fromPane.tabIds.filter(
           (id) => id !== args.tabId,
         );
+        const srcActivationHistory =
+          fromPane.activationHistory?.filter((id) => id !== args.tabId) ?? [];
         const srcActive =
           fromPane.activeTabId === args.tabId
-            ? (preferredSessionTabId(fromPane, srcTabIds) ??
-              srcTabIds[srcTabIds.length - 1] ??
-              null)
+            ? preferredTabId(
+                { activationHistory: srcActivationHistory },
+                srcTabIds,
+              )
             : fromPane.activeTabId;
-        const srcLastActiveSessionTabId =
-          fromPane.lastActiveSessionTabId === args.tabId
-            ? lastSessionTabId(srcTabIds)
-            : fromPane.lastActiveSessionTabId;
         let newPanes: Record<PaneId, PaneState> = {
           ...ws.panes,
           [args.fromPaneId]: {
             ...fromPane,
             tabIds: srcTabIds,
             activeTabId: srcActive,
-            lastActiveSessionTabId: srcLastActiveSessionTabId,
+            activationHistory: activationHistoryFor(
+              { ...fromPane, activationHistory: srcActivationHistory },
+              srcTabIds,
+              srcActive,
+            ),
           },
         };
 
@@ -1102,12 +1112,8 @@ export const useAppStore = create<AppStateModel>()(
         const targetIds = [...toPane.tabIds];
         targetIds.splice(safeIndex, 0, args.tabId);
         newPanes[toPaneId] = {
-          ...toPane,
+          ...activatePaneTab(toPane, args.tabId),
           tabIds: targetIds,
-          activeTabId: args.tabId,
-          lastActiveSessionTabId: isSessionTabId(args.tabId)
-            ? args.tabId
-            : toPane.lastActiveSessionTabId,
         };
 
         const totalPanes = Object.keys(newPanes).length;
@@ -1582,11 +1588,10 @@ export const useAppStore = create<AppStateModel>()(
       const tab = existing ?? makeCodeWorkspaceTab(path, targetRepoPath);
       const alreadyInPane = pane.tabIds.includes(tab.id);
       const newPane: PaneState = alreadyInPane
-        ? { ...pane, activeTabId: tab.id }
+        ? activatePaneTab(pane, tab.id)
         : {
-            ...pane,
+            ...activatePaneTab(pane, tab.id),
             tabIds: [...pane.tabIds, tab.id],
-            activeTabId: tab.id,
           };
       const newWs: ProjectWorkspace = {
         ...ws,
@@ -1615,17 +1620,21 @@ export const useAppStore = create<AppStateModel>()(
         const newPanes: Record<PaneId, PaneState> = {};
         for (const [pid, pane] of Object.entries(ws.panes)) {
           const ids = pane.tabIds.filter((sid) => sid !== id);
+          const activationHistory =
+            pane.activationHistory?.filter((sid) => sid !== id) ?? [];
           const nextActive =
             pane.activeTabId === id
-              ? (preferredSessionTabId(pane, ids) ??
-                ids[ids.length - 1] ??
-                null)
+              ? preferredTabId({ activationHistory }, ids)
               : pane.activeTabId;
           newPanes[pid as PaneId] = {
             ...pane,
             tabIds: ids,
             activeTabId: nextActive,
-            lastActiveSessionTabId: preferredSessionTabId(pane, ids),
+            activationHistory: activationHistoryFor(
+              { ...pane, activationHistory },
+              ids,
+              nextActive,
+            ),
           };
         }
         newWorkspaces[key] = { ...ws, panes: newPanes };
@@ -1708,7 +1717,7 @@ export const useAppStore = create<AppStateModel>()(
               ...normalized,
               tabIds: ids,
               activeTabId: active,
-              lastActiveSessionTabId: preferredSessionTabId(normalized, ids),
+              activationHistory: activationHistoryFor(normalized, ids, active),
             };
           }
           sanitized[key] = { ...ws, panes: newPanes };
