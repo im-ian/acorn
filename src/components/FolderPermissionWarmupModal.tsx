@@ -1,8 +1,8 @@
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { FolderCheck, Loader2 } from "lucide-react";
 import { api } from "../lib/api";
 import {
-  markPermissionWarmupHandled,
+  hasDeniedFolderPermission,
   type FolderPermissionWarmupResult,
   type FolderPermissionWarmupStatus,
 } from "../lib/permissionWarmup";
@@ -19,7 +19,7 @@ function dt(t: Translator, key: DialogTranslationKey): string {
 
 interface FolderPermissionWarmupModalProps {
   open: boolean;
-  currentVersion: string | null;
+  initialResults?: FolderPermissionWarmupResult[] | null;
   onClose: () => void;
 }
 
@@ -64,9 +64,15 @@ function statusClass(status: FolderPermissionWarmupStatus): string {
   }
 }
 
+function errorMessage(t: Translator, err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return dt(t, "dialogs.folderPermissionWarmup.genericError");
+}
+
 export function FolderPermissionWarmupModal({
   open,
-  currentVersion,
+  initialResults = null,
   onClose,
 }: FolderPermissionWarmupModalProps): ReactElement | null {
   const t = useTranslation();
@@ -75,13 +81,21 @@ export function FolderPermissionWarmupModal({
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  const hasDeniedResult =
-    results?.some((result) => result.status === "denied") ?? false;
+  const [resetting, setResetting] = useState(false);
+  const resultSummary = results
+    ? hasDeniedFolderPermission(results)
+      ? dt(t, "dialogs.folderPermissionWarmup.needsAttention")
+      : dt(t, "dialogs.folderPermissionWarmup.complete")
+    : dt(t, "dialogs.folderPermissionWarmup.question");
 
-  function closeForVersion() {
-    if (currentVersion) markPermissionWarmupHandled(currentVersion);
-    onClose();
-  }
+  useEffect(() => {
+    if (!open) return;
+    setBusy(false);
+    setResetting(false);
+    setError(null);
+    setResults(initialResults);
+  }, [initialResults, open]);
+  const hasDeniedResult = results ? hasDeniedFolderPermission(results) : false;
 
   async function runWarmup() {
     setBusy(true);
@@ -91,20 +105,31 @@ export function FolderPermissionWarmupModal({
       setResults(next);
     } catch (err) {
       console.error("[FolderPermissionWarmupModal] warmup failed", err);
-      setError(
-        err instanceof Error
-          ? err.message
-          : dt(t, "dialogs.folderPermissionWarmup.genericError"),
-      );
+      setError(errorMessage(t, err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function resetAndRunWarmup() {
+    setResetting(true);
+    setError(null);
+    try {
+      await api.resetMacosFolderPermissions();
+      const next = await api.warmMacosFolderPermissions();
+      setResults(next);
+    } catch (err) {
+      console.error("[FolderPermissionWarmupModal] reset failed", err);
+      setError(errorMessage(t, err));
+    } finally {
+      setResetting(false);
     }
   }
 
   return (
     <Modal
       open={open}
-      onClose={closeForVersion}
+      onClose={onClose}
       variant="dialog"
       size="lg"
       ariaLabelledBy="acorn-folder-permission-warmup-title"
@@ -119,12 +144,10 @@ export function FolderPermissionWarmupModal({
           </span>
         }
         variant="dialog"
-        onClose={closeForVersion}
+        onClose={onClose}
       />
       <div className="space-y-3 px-4 py-4 text-xs text-fg-muted">
-        <p className="text-fg">
-          {dt(t, "dialogs.folderPermissionWarmup.question")}
-        </p>
+        <p className="text-fg">{resultSummary}</p>
         <p>{dt(t, "dialogs.folderPermissionWarmup.reason")}</p>
         <p>{dt(t, "dialogs.folderPermissionWarmup.bodyPrompt")}</p>
         {error ? (
@@ -157,16 +180,29 @@ export function FolderPermissionWarmupModal({
           </div>
         ) : null}
         {hasDeniedResult ? (
-          <p className="rounded border border-danger/30 bg-danger/10 px-3 py-2 text-danger">
+          <p className="rounded border border-border bg-bg-elevated/40 px-3 py-2 text-fg-muted">
             {dt(t, "dialogs.folderPermissionWarmup.deniedHint")}
           </p>
         ) : null}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+        {hasDeniedResult ? (
+          <button
+            type="button"
+            onClick={() => void resetAndRunWarmup()}
+            disabled={busy || resetting}
+            className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+          >
+            {resetting ? <Loader2 size={12} className="animate-spin" /> : null}
+            {resetting
+              ? dt(t, "dialogs.folderPermissionWarmup.resetting")
+              : dt(t, "dialogs.folderPermissionWarmup.reset")}
+          </button>
+        ) : null}
         <button
           type="button"
-          onClick={closeForVersion}
-          disabled={busy}
+          onClick={onClose}
+          disabled={busy || resetting}
           className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
         >
           {results || error
@@ -177,7 +213,7 @@ export function FolderPermissionWarmupModal({
           <button
             type="button"
             onClick={() => void runWarmup()}
-            disabled={busy}
+            disabled={busy || resetting}
             className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
             {busy ? (

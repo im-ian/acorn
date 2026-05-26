@@ -111,6 +111,17 @@ pub async fn warm_macos_folder_permissions() -> AppResult<Vec<FolderPermissionWa
     .await
 }
 
+#[tauri::command]
+pub async fn reset_macos_folder_permissions<R: Runtime>(
+    app: AppHandle<R>,
+) -> AppResult<()> {
+    let bundle_id = app.config().identifier.clone();
+    run_blocking("reset_macos_folder_permissions", move || {
+        reset_macos_folder_permissions_inner(&bundle_id)
+    })
+    .await
+}
+
 fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
     if !cfg!(target_os = "macos") {
         return Vec::new();
@@ -120,6 +131,54 @@ fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
         .into_iter()
         .map(|(id, path)| probe_folder_permission(id, path))
         .collect()
+}
+
+fn reset_macos_folder_permissions_inner(bundle_id: &str) -> AppResult<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let failures: Vec<String> = [
+        "SystemPolicyDesktopFolder",
+        "SystemPolicyDocumentsFolder",
+        "SystemPolicyDownloadsFolder",
+    ]
+    .into_iter()
+    .filter_map(|service| {
+        reset_macos_tcc_service(service, bundle_id)
+            .err()
+            .map(|err| format!("{service}: {err}"))
+    })
+    .collect();
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!(
+            "failed to reset macOS folder permissions: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
+fn reset_macos_tcc_service(service: &'static str, bundle_id: &str) -> AppResult<()> {
+    match std::process::Command::new("/usr/bin/tccutil")
+        .args(["reset", service, bundle_id])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let message = if stderr.is_empty() { stdout } else { stderr };
+            Err(AppError::Other(if message.is_empty() {
+                format!("tccutil exited with status {}", output.status)
+            } else {
+                message
+            }))
+        }
+        Err(err) => Err(AppError::Io(err)),
+    }
 }
 
 fn protected_folder_candidates() -> Vec<(&'static str, PathBuf)> {
