@@ -1104,6 +1104,7 @@
       "skip": "Not now",
       "done": "Done",
       "genericError": "Could not check folder access.",
+      "deniedHint": "If macOS has already saved a denial, it may not show the prompt again. Re-enable Acorn in System Settings > Privacy & Security > Files and Folders.",
       "folder": {
         "desktop": "Desktop",
         "documents": "Documents",
