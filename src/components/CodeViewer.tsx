@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Code2, Eye } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { ChevronDown, ChevronUp, Code2, Eye, Search, X } from "lucide-react";
 import {
   api,
   type FsLineDiffEntry,
@@ -13,6 +14,7 @@ import {
   lineIndexProps,
   lineTextContentProps,
   VirtualizedLineList,
+  type VirtualizedLineListHandle,
 } from "./VirtualizedLines";
 import { Markdown } from "./ui/Markdown";
 
@@ -43,6 +45,26 @@ const DIFF_KIND_CLASS: Record<FsLineDiffEntry["kind"], string> = {
 
 const CODE_LINE_HEIGHT = 18;
 const MARKDOWN_EXT_RE = /\.(md|mdown|markdown|mdx)$/i;
+const SEARCH_MARK_CLASS = "rounded-[2px] px-0.5 text-fg";
+const SEARCH_MARK_ACTIVE_CLASS = `${SEARCH_MARK_CLASS} bg-accent/75`;
+const SEARCH_MARK_INACTIVE_CLASS = `${SEARCH_MARK_CLASS} bg-warning/60`;
+const PREVIEW_SEARCH_MARK_SELECTOR = "mark[data-acorn-preview-search]";
+const SHOW_TEXT_NODE = 4;
+const FILTER_ACCEPT = 1;
+const FILTER_REJECT = 2;
+
+interface SearchMatch {
+  line: number;
+  start: number;
+  end: number;
+  index: number;
+}
+
+interface LineSearchMatch {
+  start: number;
+  end: number;
+  active: boolean;
+}
 
 function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXT_RE.test(path);
@@ -53,6 +75,13 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
   const [previewMarkdown, setPreviewMarkdown] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  const [previewMatchCount, setPreviewMatchCount] = useState(0);
+  const lineListRef = useRef<VirtualizedLineListHandle | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshDiff = useCallback(async () => {
     try {
@@ -67,6 +96,10 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
     let cancelled = false;
     setState(EMPTY_STATE);
     setPreviewMarkdown(false);
+    setSearchOpen(false);
+    setSearchQuery("");
+    setActiveMatchIndex(0);
+    setPreviewMatchCount(0);
     api
       .fsReadFile(path)
       .then(async (data) => {
@@ -124,6 +157,102 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
     () => estimateMaxLineWidthCh(sourceLines, gutterWidth + 7),
     [gutterWidth, sourceLines],
   );
+  const canPreviewMarkdown = isMarkdownPath(path);
+  const previewMode = previewMarkdown && canPreviewMarkdown;
+  const effectiveSearchQuery = searchOpen ? searchQuery : "";
+  const searchMatches = useMemo(
+    () => findLineMatches(sourceLines, effectiveSearchQuery),
+    [effectiveSearchQuery, sourceLines],
+  );
+  const searchMatchesByLine = useMemo(() => {
+    const map = new Map<number, LineSearchMatch[]>();
+    for (const match of searchMatches) {
+      const lineMatches = map.get(match.line) ?? [];
+      lineMatches.push({
+        start: match.start,
+        end: match.end,
+        active: match.index === activeMatchIndex,
+      });
+      map.set(match.line, lineMatches);
+    }
+    return map;
+  }, [activeMatchIndex, searchMatches]);
+  const currentMatchCount = previewMode
+    ? previewMatchCount
+    : searchMatches.length;
+
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+  }, []);
+
+  const stepMatch = useCallback(
+    (direction: 1 | -1) => {
+      if (currentMatchCount === 0) return;
+      setActiveMatchIndex(
+        (current) =>
+          (current + direction + currentMatchCount) % currentMatchCount,
+      );
+    },
+    [currentMatchCount],
+  );
+
+  useEffect(() => {
+    if (previewMode) return;
+    if (!searchOpen || searchQuery === "") return;
+    if (searchMatches.length === 0) {
+      setActiveMatchIndex(0);
+      return;
+    }
+    if (activeMatchIndex >= searchMatches.length) {
+      setActiveMatchIndex(searchMatches.length - 1);
+      return;
+    }
+    lineListRef.current?.scrollToIndex(searchMatches[activeMatchIndex].line);
+  }, [activeMatchIndex, previewMode, searchMatches, searchOpen, searchQuery]);
+
+  useEffect(() => {
+    if (!previewMode) {
+      setPreviewMatchCount(0);
+      return;
+    }
+    const root = previewRef.current;
+    if (!root) return;
+    const { count, activeElement } = highlightPreviewMatches(
+      root,
+      effectiveSearchQuery,
+      activeMatchIndex,
+    );
+    setPreviewMatchCount(count);
+    if (count === 0) {
+      setActiveMatchIndex(0);
+    } else if (activeMatchIndex >= count) {
+      setActiveMatchIndex(count - 1);
+    } else {
+      activeElement?.scrollIntoView?.({ block: "center", inline: "nearest" });
+    }
+    return () => {
+      removePreviewSearchMarks(root);
+    };
+  }, [activeMatchIndex, effectiveSearchQuery, previewMode]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isFindShortcut(event)) return;
+      event.preventDefault();
+      openSearch();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isActive, openSearch]);
 
   if (state.loading) {
     return (
@@ -153,8 +282,6 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
   if (!state.data) return null;
 
   const lines = state.highlightedLines ?? plainHighlightedLines;
-  const canPreviewMarkdown = isMarkdownPath(path);
-
   return (
     <div
       className={cn(
@@ -168,7 +295,10 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
         </div>
       ) : null}
       {previewMarkdown && canPreviewMarkdown ? (
-        <div className="acorn-selectable min-h-0 flex-1 overflow-auto px-8 py-6 pb-16">
+        <div
+          ref={previewRef}
+          className="acorn-selectable min-h-0 flex-1 overflow-auto px-8 py-6 pb-16"
+        >
           <Markdown
             content={state.data.content}
             className="mx-auto max-w-3xl text-[13px] leading-6"
@@ -176,6 +306,7 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
         </div>
       ) : (
         <VirtualizedLineList
+          ref={lineListRef}
           as="pre"
           count={sourceLines.length}
           className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent pb-12 font-mono text-[12px] leading-[1.5] text-fg"
@@ -190,10 +321,74 @@ export function CodeViewer({ path, isActive }: CodeViewerProps) {
               tokens={lines[index] ?? null}
               diff={diffByLine.get(index + 1)}
               gutterWidth={gutterWidth}
+              searchMatches={searchMatchesByLine.get(index) ?? []}
             />
           )}
         />
       )}
+      {searchOpen ? (
+        <div className="absolute right-3 top-3 z-30 flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-md border border-border bg-bg-elevated/95 p-1 shadow-lg backdrop-blur">
+          <Search size={13} className="ml-1 text-fg-muted" />
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setActiveMatchIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                stepMatch(event.shiftKey ? -1 : 1);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                closeSearch();
+              }
+            }}
+            aria-label={t("codeViewer.findInFile")}
+            placeholder={t("codeViewer.findInFile")}
+            className="h-7 w-52 min-w-0 bg-transparent px-1 text-xs text-fg outline-none placeholder:text-fg-muted"
+          />
+          <span className="min-w-[4.5rem] text-center text-[11px] tabular-nums text-fg-muted">
+            {searchQuery === ""
+              ? t("codeViewer.findPrompt")
+              : currentMatchCount === 0
+                ? t("codeViewer.noMatches")
+                : t("codeViewer.matchCount")
+                    .replace("{current}", String(activeMatchIndex + 1))
+                    .replace("{total}", String(currentMatchCount))}
+          </span>
+          <button
+            type="button"
+            onClick={() => stepMatch(-1)}
+            disabled={currentMatchCount === 0}
+            aria-label={t("codeViewer.previousMatch")}
+            title={t("codeViewer.previousMatch")}
+            className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+          >
+            <ChevronUp size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => stepMatch(1)}
+            disabled={currentMatchCount === 0}
+            aria-label={t("codeViewer.nextMatch")}
+            title={t("codeViewer.nextMatch")}
+            className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+          >
+            <ChevronDown size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={closeSearch}
+            aria-label={t("codeViewer.closeFind")}
+            title={t("codeViewer.closeFind")}
+            className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : null}
       {canPreviewMarkdown ? (
         <button
           type="button"
@@ -217,12 +412,14 @@ function CodeLine({
   tokens,
   diff,
   gutterWidth,
+  searchMatches,
 }: {
   index: number;
   rawText: string;
   tokens: string | null;
   diff?: FsLineDiffEntry["kind"];
   gutterWidth: number;
+  searchMatches: LineSearchMatch[];
 }) {
   return (
     <div className="flex whitespace-pre" {...lineIndexProps(index)}>
@@ -244,11 +441,157 @@ function CodeLine({
       <span
         {...lineTextContentProps()}
         className="grow"
-        {...(tokens
-          ? { dangerouslySetInnerHTML: { __html: tokens } }
-          : { children: rawText })}
+        {...(searchMatches.length > 0
+          ? { children: renderSearchLine(rawText, searchMatches) }
+          : tokens
+            ? { dangerouslySetInnerHTML: { __html: tokens } }
+            : { children: rawText })}
       />
     </div>
+  );
+}
+
+function findLineMatches(
+  lines: readonly string[],
+  query: string,
+): SearchMatch[] {
+  const matches: SearchMatch[] = [];
+  lines.forEach((line, lineIndex) => {
+    for (const range of findTextRanges(line, query)) {
+      matches.push({
+        line: lineIndex,
+        start: range.start,
+        end: range.end,
+        index: matches.length,
+      });
+    }
+  });
+  return matches;
+}
+
+function renderSearchLine(rawText: string, matches: readonly LineSearchMatch[]) {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    if (match.start > cursor) {
+      nodes.push(rawText.slice(cursor, match.start));
+    }
+    nodes.push(
+      <mark
+        key={`${match.start}-${index}`}
+        className={
+          match.active ? SEARCH_MARK_ACTIVE_CLASS : SEARCH_MARK_INACTIVE_CLASS
+        }
+      >
+        {rawText.slice(match.start, match.end)}
+      </mark>,
+    );
+    cursor = match.end;
+  });
+  if (cursor < rawText.length) {
+    nodes.push(rawText.slice(cursor));
+  }
+  return nodes;
+}
+
+function highlightPreviewMatches(
+  root: HTMLElement,
+  query: string,
+  activeMatchIndex: number,
+): { count: number; activeElement: HTMLElement | null } {
+  removePreviewSearchMarks(root);
+  if (query === "") return { count: 0, activeElement: null };
+
+  const doc = root.ownerDocument;
+  const textNodes: Text[] = [];
+  const walker = doc.createTreeWalker(root, SHOW_TEXT_NODE, {
+    acceptNode(node) {
+      const text = node.nodeValue ?? "";
+      const parent = node.parentElement;
+      if (!parent || text === "") return FILTER_REJECT;
+      if (parent.closest(PREVIEW_SEARCH_MARK_SELECTOR)) {
+        return FILTER_REJECT;
+      }
+      if (parent.closest("script,style")) return FILTER_REJECT;
+      return findTextRanges(text, query).length > 0
+        ? FILTER_ACCEPT
+        : FILTER_REJECT;
+    },
+  });
+
+  let current = walker.nextNode();
+  while (current) {
+    textNodes.push(current as Text);
+    current = walker.nextNode();
+  }
+
+  let count = 0;
+  let activeElement: HTMLElement | null = null;
+  for (const node of textNodes) {
+    const text = node.data;
+    const ranges = findTextRanges(text, query);
+    const fragment = doc.createDocumentFragment();
+    let cursor = 0;
+    for (const range of ranges) {
+      if (range.start > cursor) {
+        fragment.append(text.slice(cursor, range.start));
+      }
+      const mark = doc.createElement("mark");
+      mark.dataset.acornPreviewSearch = "true";
+      mark.className =
+        count === activeMatchIndex
+          ? SEARCH_MARK_ACTIVE_CLASS
+          : SEARCH_MARK_INACTIVE_CLASS;
+      mark.textContent = text.slice(range.start, range.end);
+      if (count === activeMatchIndex) activeElement = mark;
+      fragment.append(mark);
+      count += 1;
+      cursor = range.end;
+    }
+    if (cursor < text.length) {
+      fragment.append(text.slice(cursor));
+    }
+    node.replaceWith(fragment);
+  }
+
+  return { count, activeElement };
+}
+
+function removePreviewSearchMarks(root: HTMLElement) {
+  const marks = Array.from(
+    root.querySelectorAll<HTMLElement>(PREVIEW_SEARCH_MARK_SELECTOR),
+  );
+  for (const mark of marks) {
+    const parent = mark.parentNode;
+    mark.replaceWith(root.ownerDocument.createTextNode(mark.textContent ?? ""));
+    parent?.normalize();
+  }
+}
+
+function findTextRanges(text: string, query: string): { start: number; end: number }[] {
+  if (query === "") return [];
+  const re = new RegExp(escapeRegExp(query), "giu");
+  const ranges: { start: number; end: number }[] = [];
+  for (const match of text.matchAll(re)) {
+    const start = match.index;
+    const value = match[0];
+    if (start === undefined || value === "") continue;
+    ranges.push({ start, end: start + value.length });
+  }
+  return ranges;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isFindShortcut(event: KeyboardEvent): boolean {
+  const primary = event.metaKey || event.ctrlKey;
+  return (
+    primary &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLocaleLowerCase() === "f"
   );
 }
 
