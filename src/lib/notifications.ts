@@ -7,7 +7,12 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { useSettings } from "./settings";
-import type { Session, SessionStatus } from "./types";
+import type {
+  Session,
+  SessionNotification,
+  SessionNotificationKind,
+  SessionStatus,
+} from "./types";
 
 // Notification body copy keyed by the status the session transitioned *into*.
 // The watcher only fires on transitions to `needs_input` / `failed` /
@@ -29,6 +34,7 @@ const STATUS_SENTENCE: Record<SessionStatus, string> = {
 // in System Settings since boot) gets corrected the moment the user asks
 // "does this actually work?".
 let cachedPermission: boolean | null = null;
+let inboxNotificationCounter = 0;
 
 async function checkPermission(): Promise<boolean> {
   try {
@@ -64,6 +70,18 @@ function shouldNotifyTransition(prev: SessionStatus, next: SessionStatus): {
   if (next === "failed") return { notify: true, key: "failed" };
   if (next === "completed") return { notify: true, key: "completed" };
   return { notify: false, key: null };
+}
+
+function notificationKindForTransition(
+  prev: SessionStatus,
+  next: SessionStatus,
+): SessionNotificationKind | null {
+  if (prev === next) return null;
+  if (next === "needs_input") return "needs_input";
+  if (next === "failed") return "failed";
+  if (next === "completed") return "completed";
+  if (next === "idle") return "became_idle";
+  return null;
 }
 
 /**
@@ -105,11 +123,63 @@ export function startSessionNotificationWatcher(): () => void {
   });
 }
 
+/**
+ * Watches session status transitions and records an in-app activity item for
+ * changes that need review. This is intentionally independent from the
+ * system-notification setting: the inbox is Acorn's local status history.
+ */
+export function startSessionActivityInboxWatcher(): () => void {
+  const lastStatus = new Map<string, SessionStatus>();
+  for (const s of useAppStore.getState().sessions) {
+    lastStatus.set(s.id, s.status);
+  }
+
+  return useAppStore.subscribe((state) => {
+    const sessions: Session[] = state.sessions;
+    const store = useAppStore.getState();
+
+    for (const s of sessions) {
+      const prev = lastStatus.get(s.id);
+      lastStatus.set(s.id, s.status);
+      if (prev === undefined) continue;
+
+      const kind = notificationKindForTransition(prev, s.status);
+      if (!kind) continue;
+      store.addSessionNotification(buildInboxNotification(s, prev, kind));
+    }
+
+    const known = new Set(sessions.map((s) => s.id));
+    for (const id of lastStatus.keys()) {
+      if (!known.has(id)) lastStatus.delete(id);
+    }
+  });
+}
+
 function projectNameFor(session: Session): string {
   const projects = useAppStore.getState().projects;
   const match = projects.find((p) => p.repo_path === session.repo_path);
   if (match) return match.name;
   return session.repo_path.split("/").pop() || session.repo_path;
+}
+
+function buildInboxNotification(
+  session: Session,
+  previousStatus: SessionStatus,
+  kind: SessionNotificationKind,
+): SessionNotification {
+  const createdAt = new Date().toISOString();
+  inboxNotificationCounter += 1;
+  return {
+    id: `${createdAt}:${inboxNotificationCounter}:${session.id}:${kind}`,
+    sessionId: session.id,
+    kind,
+    status: session.status,
+    previousStatus,
+    sessionName: session.name,
+    projectName: projectNameFor(session),
+    repoPath: session.repo_path,
+    createdAt,
+  };
 }
 
 async function fire(

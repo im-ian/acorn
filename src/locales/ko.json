@@ -258,6 +258,10 @@
       "statusBar": {
         "label": "상태 표시줄",
         "hint": "하단 상태 표시줄에 표시할 선택 배지를 고릅니다.",
+        "sessionActivity": {
+          "label": "세션 활동",
+          "description": "읽지 않은 세션 활동으로 바로 가는 벨 버튼입니다. 숨겨도 Activity 탭은 계속 사용할 수 있습니다."
+        },
         "sessionCount": {
           "label": "세션 수",
           "description": "활성 프로젝트 전체의 총 세션 수입니다(`sessions: N`)."
@@ -552,6 +556,26 @@
       "failed": "실패",
       "completed": "완료"
     },
+    "notifications": {
+      "ariaLabel": "세션 알림",
+      "tooltipEmpty": "읽지 않은 세션 알림 없음",
+      "tooltipWithCount": "읽지 않은 세션 알림 {count}개",
+      "title": "세션 알림",
+      "unreadCount": "읽지 않음 {count}개",
+      "empty": "아직 세션 상태 변경이 없습니다.",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "입력 필요",
+        "failed": "실패",
+        "completed": "완료",
+        "becameIdle": "유휴"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "dismiss": "닫기"
+      }
+    },
     "services": {
       "ariaLabel": "서비스 상태",
       "tooltip": {
@@ -772,6 +796,7 @@
       "commits": "커밋",
       "staged": "스테이징",
       "prs": "PR",
+      "activity": "활동",
       "history": "기록",
       "actions": "작업"
     },
@@ -782,6 +807,23 @@
     "todos": {
       "doneCount": "{completed}/{total} 완료",
       "inProgressCount": "{count}개 진행 중"
+    },
+    "activity": {
+      "unreadCount": "읽지 않음 {count}개",
+      "readCount": "읽음 {count}개",
+      "empty": "아직 세션 활동이 없습니다",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "입력 필요",
+        "failed": "실패",
+        "completed": "완료",
+        "becameIdle": "유휴"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "dismiss": "닫기"
+      }
     },
     "loading": {
       "more": "더 불러오는 중…",
