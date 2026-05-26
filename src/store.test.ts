@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project, Session, SessionStatus } from "./lib/types";
+import type {
+  Project,
+  Session,
+  SessionNotification,
+  SessionStatus,
+} from "./lib/types";
 
 // Mock the Tauri-backed API surface used by the store.
 // Each method is a vi.fn so individual tests can stub return values.
@@ -79,6 +84,24 @@ function session(
   };
 }
 
+function notification(
+  id: string,
+  overrides: Partial<SessionNotification> = {},
+): SessionNotification {
+  return {
+    id,
+    sessionId: "s1",
+    kind: "needs_input",
+    status: "needs_input",
+    previousStatus: "running",
+    sessionName: "s1",
+    projectName: "repo-a",
+    repoPath: REPO_A,
+    createdAt: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 /**
  * Reset the zustand store to a clean slate. We re-import the initial-shape
  * fields directly since zustand has no built-in reset.
@@ -100,6 +123,7 @@ function resetStore(): void {
       workspaceTabs: {},
       prAccountByRepo: {},
       pendingTerminalInput: {},
+      sessionNotifications: [],
       multiInputEnabled: false,
       loading: false,
       error: null,
@@ -160,6 +184,57 @@ describe("multi-input", () => {
     expect(useAppStore.getState().multiInputEnabled).toBe(true);
     expect(useAppStore.getState().toggleMultiInput()).toBe(false);
     expect(useAppStore.getState().multiInputEnabled).toBe(false);
+  });
+});
+
+describe("sessionNotifications", () => {
+  it("adds newest notifications first and caps the in-memory list", () => {
+    for (let i = 0; i < 105; i += 1) {
+      useAppStore.getState().addSessionNotification(notification(`n${i}`));
+    }
+
+    const items = useAppStore.getState().sessionNotifications;
+    expect(items).toHaveLength(100);
+    expect(items[0]?.id).toBe("n104");
+    expect(items[items.length - 1]?.id).toBe("n5");
+  });
+
+  it("marks individual and all notifications read, then clears read items", () => {
+    useAppStore.getState().addSessionNotification(notification("n1"));
+    useAppStore.getState().addSessionNotification(notification("n2"));
+
+    useAppStore.getState().markSessionNotificationRead("n1");
+    expect(
+      useAppStore
+        .getState()
+        .sessionNotifications.find((item) => item.id === "n1")?.readAt,
+    ).toBeTruthy();
+    expect(
+      useAppStore
+        .getState()
+        .sessionNotifications.find((item) => item.id === "n2")?.readAt,
+    ).toBeFalsy();
+
+    useAppStore.getState().markAllSessionNotificationsRead();
+    expect(
+      useAppStore
+        .getState()
+        .sessionNotifications.every((item) => item.readAt),
+    ).toBe(true);
+
+    useAppStore.getState().clearReadSessionNotifications();
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
+  });
+
+  it("dismisses one notification without touching others", () => {
+    useAppStore.getState().addSessionNotification(notification("n1"));
+    useAppStore.getState().addSessionNotification(notification("n2"));
+
+    useAppStore.getState().dismissSessionNotification("n1");
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n2"]);
   });
 });
 
@@ -387,6 +462,32 @@ describe("removeSession", () => {
     expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
   });
 
+  it("removes session activity locally before the backend delete finishes", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().addSessionNotification(
+      notification("n1", { sessionId: "a1" }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n2", { sessionId: "a2" }),
+    );
+
+    const pending = deferred<void>();
+    mockApi.removeSession.mockReturnValueOnce(pending.promise);
+    mockApi.listSessions.mockResolvedValue([a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const removal = useAppStore.getState().removeSession("a1", true);
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n2"]);
+
+    pending.resolve(undefined);
+    await removal;
+  });
+
   it("refreshes from the backend if optimistic removal fails", async () => {
     const a1 = session("a1", REPO_A);
     await seed([project(REPO_A, 0)], [a1]);
@@ -527,6 +628,9 @@ describe("splitFocusedPane", () => {
     useAppStore.getState().setPaneSplitSizes(split.id, [25, 75]);
     useAppStore.getState().setActiveProject(REPO_B);
     useAppStore.getState().setActiveProject(REPO_A);
+    useAppStore.getState().addSessionNotification(
+      notification("n-persist", { sessionId: "a1" }),
+    );
 
     const restored = useAppStore.getState().layout;
     expect(restored.kind).toBe("split");
@@ -537,6 +641,9 @@ describe("splitFocusedPane", () => {
     expect(raw).not.toBeNull();
     const persisted = JSON.parse(raw!);
     expect(persisted.state.workspaces[REPO_A].layout.sizes).toEqual([25, 75]);
+    expect(persisted.state.sessionNotifications).toEqual([
+      notification("n-persist", { sessionId: "a1" }),
+    ]);
 
     resetStore();
     window.localStorage.setItem("acorn-workspaces", raw!);
@@ -546,6 +653,9 @@ describe("splitFocusedPane", () => {
     expect(rehydrated.kind).toBe("split");
     if (rehydrated.kind !== "split") throw new Error("expected split layout");
     expect(rehydrated.sizes).toEqual([25, 75]);
+    expect(useAppStore.getState().sessionNotifications).toEqual([
+      notification("n-persist", { sessionId: "a1" }),
+    ]);
   });
 });
 
@@ -740,6 +850,40 @@ describe("reconcile via refreshSessions", () => {
     const s = useAppStore.getState();
     expect(s.sessions.map((x) => x.id)).toEqual(["a1"]);
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
+  });
+
+  it("drops activity for sessions removed by backend refresh", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n1", { sessionId: "a1" }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n2", { sessionId: "a2" }),
+    );
+
+    mockApi.listSessions.mockResolvedValueOnce([session("a1", REPO_A)]);
+    await useAppStore.getState().refreshSessions();
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n1"]);
+  });
+
+  it("keeps activity when an unclean empty session load may be transient", async () => {
+    useAppStore.setState({ sessionsLoadedCleanly: false });
+    useAppStore.getState().addSessionNotification(
+      notification("n1", { sessionId: "a1" }),
+    );
+
+    mockApi.listSessions.mockResolvedValueOnce([]);
+    await useAppStore.getState().refreshSessions();
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n1"]);
   });
 
   // TODO(acorn-tests): cross-pane collapse on session removal reproduces
@@ -1358,7 +1502,7 @@ describe("right panel groups", () => {
     expect(s.rightTabByGroup.github).toBe("actions");
     // Other groups untouched.
     expect(s.rightTabByGroup.code).toBe("files");
-    expect(s.rightTabByGroup.agents).toBe("todos");
+    expect(s.rightTabByGroup.agents).toBe("activity");
   });
 
   it("setRightGroup restores the group's last sub-tab", () => {

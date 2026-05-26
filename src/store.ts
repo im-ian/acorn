@@ -6,6 +6,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionKind,
+  SessionNotification,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
@@ -111,6 +112,7 @@ interface AppStateModel {
    * resolver, so the value is in-memory only and never persisted.
    */
   pendingTerminalInput: Record<string, PendingTerminalInput>;
+  sessionNotifications: SessionNotification[];
   multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
@@ -195,6 +197,11 @@ interface AppStateModel {
   ) => void;
   /** Atomically read and remove the queued command for `sessionId`. */
   consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
+  addSessionNotification: (notification: SessionNotification) => void;
+  markSessionNotificationRead: (id: string) => void;
+  markAllSessionNotificationsRead: () => void;
+  dismissSessionNotification: (id: string) => void;
+  clearReadSessionNotifications: () => void;
   toggleMultiInput: () => boolean;
   /** Open a readonly code viewer tab for `path` in the focused pane. */
   openCodeViewerTab: (path: string, repoPath?: string) => void;
@@ -494,6 +501,7 @@ export const useAppStore = create<AppStateModel>()(
   workspaceTabs: {},
   prAccountByRepo: {},
   pendingTerminalInput: {},
+  sessionNotifications: [],
   multiInputEnabled: false,
   loading: false,
   error: null,
@@ -542,11 +550,19 @@ export const useAppStore = create<AppStateModel>()(
         // results to be intentional (user removed them all). Drop the guard.
         const nextSessionsLoadedCleanly =
           s.sessionsLoadedCleanly || sessions.length > 0;
+        const sessionIds = new Set(sessions.map((session) => session.id));
+        const shouldPruneActivity =
+          s.sessionsLoadedCleanly || sessions.length > 0;
         return {
           sessions,
           loading: false,
           error: null,
           sessionsLoadedCleanly: nextSessionsLoadedCleanly,
+          sessionNotifications: shouldPruneActivity
+            ? s.sessionNotifications.filter((notification) =>
+                sessionIds.has(notification.sessionId),
+              )
+            : s.sessionNotifications,
           workspaces: reconciled.workspaces,
           activeProject: reconciled.activeProject,
           ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
@@ -1179,6 +1195,9 @@ export const useAppStore = create<AppStateModel>()(
         error: null,
         liveInWorktree,
         pendingTerminalInput,
+        sessionNotifications: s.sessionNotifications.filter(
+          (notification) => notification.sessionId !== id,
+        ),
         workspaces: reconciled.workspaces,
         activeProject: reconciled.activeProject,
         ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
@@ -1404,6 +1423,58 @@ export const useAppStore = create<AppStateModel>()(
     return consumed;
   },
 
+  addSessionNotification(notification) {
+    set((s) => ({
+      sessionNotifications: [
+        notification,
+        ...s.sessionNotifications.filter((n) => n.id !== notification.id),
+      ].slice(0, 100),
+    }));
+  },
+
+  markSessionNotificationRead(id) {
+    set((s) => {
+      const now = new Date().toISOString();
+      let changed = false;
+      const sessionNotifications = s.sessionNotifications.map((notification) => {
+        if (notification.id !== id || notification.readAt) return notification;
+        changed = true;
+        return { ...notification, readAt: now };
+      });
+      return changed ? { sessionNotifications } : s;
+    });
+  },
+
+  markAllSessionNotificationsRead() {
+    set((s) => {
+      if (s.sessionNotifications.every((notification) => notification.readAt)) {
+        return s;
+      }
+      const now = new Date().toISOString();
+      return {
+        sessionNotifications: s.sessionNotifications.map((notification) =>
+          notification.readAt ? notification : { ...notification, readAt: now },
+        ),
+      };
+    });
+  },
+
+  dismissSessionNotification(id) {
+    set((s) => ({
+      sessionNotifications: s.sessionNotifications.filter(
+        (notification) => notification.id !== id,
+      ),
+    }));
+  },
+
+  clearReadSessionNotifications() {
+    set((s) => ({
+      sessionNotifications: s.sessionNotifications.filter(
+        (notification) => !notification.readAt,
+      ),
+    }));
+  },
+
   toggleMultiInput() {
     let enabled = false;
     set((s) => {
@@ -1500,6 +1571,7 @@ export const useAppStore = create<AppStateModel>()(
         activeProject: state.activeProject,
         rightTab: state.rightTab,
         rightTabByGroup: state.rightTabByGroup,
+        sessionNotifications: state.sessionNotifications,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
