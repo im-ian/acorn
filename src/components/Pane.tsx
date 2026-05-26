@@ -356,7 +356,8 @@ export function Pane({ paneId }: PaneProps) {
   return (
     <div
       className="relative flex h-full flex-col bg-bg"
-      onMouseDown={() => {
+      onMouseDown={(e) => {
+        if (e.button === 0 && isTabStripMouseDownTarget(e.target)) return;
         if (!isFocused) setFocusedPane(paneId);
       }}
     >
@@ -532,6 +533,12 @@ function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return target.isContentEditable;
+}
+
+function isTabStripMouseDownTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    ? target.closest("[data-pane-tab-strip]") !== null
+    : false;
 }
 
 interface TabStripProps {
@@ -968,14 +975,14 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pl-3 pr-1 text-[13px] leading-5 transition",
+          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pr-1 text-[13px] leading-5 transition",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
         )}
       >
         <div
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch"
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-3"
           data-tab-drag-handle={tab.id}
           draggable
           style={{ WebkitUserDrag: "element" } as CSSProperties}
