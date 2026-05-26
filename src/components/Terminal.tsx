@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Terminal as XTerm,
   type IBuffer,
+  type IDisposable,
   type ITheme,
   type IViewportRange,
 } from "@xterm/xterm";
@@ -40,6 +41,11 @@ import {
   hasClipboardFilePayload,
   terminalPasteAction,
 } from "../lib/terminalPaste";
+import {
+  createTerminalFileLinkProvider,
+  resolveTerminalFilePath,
+  type TerminalFileReference,
+} from "../lib/terminalFileLinks";
 import {
   useSettings,
   type TerminalLinkActivation,
@@ -536,6 +542,22 @@ export function Terminal({
       }
       setLinkTooltip(null);
     };
+    const openTerminalFileReference = (reference: TerminalFileReference) => {
+      void (async () => {
+        let baseCwd = cwd;
+        try {
+          baseCwd = (await api.ptyCwd(sessionId)) ?? cwd;
+        } catch (err: unknown) {
+          console.debug("[Terminal] pty_cwd for file link failed", err);
+        }
+        const path = resolveTerminalFilePath(baseCwd, reference.path);
+        const target =
+          reference.line === undefined
+            ? undefined
+            : { line: reference.line, column: reference.column };
+        useAppStore.getState().openCodeViewerTab(path, cwd, target);
+      })();
+    };
     const webLinksAddon = new WebLinksAddon(
       (event, uri) => {
         event.preventDefault();
@@ -554,6 +576,25 @@ export function Terminal({
           hideLinkTooltip();
         },
       },
+    );
+    let fileLinksDisposable: IDisposable | null = term.registerLinkProvider(
+      createTerminalFileLinkProvider(term, {
+        activate: (event, reference) => {
+          event.preventDefault();
+          hideLinkTooltip();
+          if (linkActivation === "modifier-click" && !modifierHeld(event)) {
+            return;
+          }
+          openTerminalFileReference(reference);
+        },
+        hover: (_event, _reference, link) => {
+          if (linkActivation !== "modifier-click") return;
+          showLinkTooltip(link.range);
+        },
+        leave: () => {
+          hideLinkTooltip();
+        },
+      }),
     );
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
@@ -1925,6 +1966,8 @@ export function Terminal({
         // Backend may not implement pty_kill yet — safe to ignore.
       });
       unpatchMouseCoordinateScale();
+      try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
+      fileLinksDisposable = null;
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { webLinksAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }

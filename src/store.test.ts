@@ -314,6 +314,26 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("updates an existing code viewer tab with a line target", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A, { line: 78 });
+    const tabId = useAppStore.getState().activeTabId!;
+    const firstTarget = useAppStore.getState().workspaceTabs[tabId].target;
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A, { line: 12 });
+
+    const s = useAppStore.getState();
+    expect(s.activeTabId).toBe(tabId);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", tabId]);
+    expect(s.workspaceTabs[tabId].target).toMatchObject({ line: 12 });
+    expect(s.workspaceTabs[tabId].target?.token).not.toBe(firstTarget?.token);
+  });
+
   it("reselects a worktree-scoped code tab after switching projects", async () => {
     const a1 = session("a1", REPO_A, {
       worktree_path: `${REPO_A}/.worktrees/a1`,
