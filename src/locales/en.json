@@ -996,13 +996,14 @@
       "createdSuffix": "CLI that drives it ships in the next update; this terminal will start behaving like a regular shell until then."
     },
     "folderPermissionWarmup": {
-      "title": "Folder access check",
-      "subtitle": "Prepare macOS folder permissions after an update",
-      "bodyIntro": "macOS may ask again for access to protected folders after Acorn updates. You can check now so prompts happen before you start working.",
-      "bodyPrompt": "Acorn will briefly read Desktop, Documents, Downloads, and iCloud Drive. No files are changed.",
-      "check": "Check folder access",
+      "title": "Check folder permissions now?",
+      "subtitle": "Prepare macOS folder access after an update",
+      "question": "Do you want Acorn to check folder access before you start working?",
+      "reason": "After an update, macOS can re-evaluate protected-folder access and ask again later. This check opens those prompts up front for Desktop, Documents, Downloads, and iCloud Drive.",
+      "bodyPrompt": "Acorn briefly reads these folders only to trigger macOS permission checks. No files are changed.",
+      "check": "Check now",
       "checking": "Checking...",
-      "skip": "Skip for this version",
+      "skip": "Not now",
       "done": "Done",
       "genericError": "Could not check folder access.",
       "folder": {
