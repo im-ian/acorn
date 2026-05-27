@@ -43,6 +43,102 @@ async function seedAlphaBetaTerminals(tauri: TauriMock): Promise<void> {
   await tauri.handle("pty_spawn", () => null);
 }
 
+async function emitSubscribedPtyOutput(
+  page: Page,
+  channelIdKey: string,
+  text: string,
+): Promise<void> {
+  await page.evaluate(
+    ({ channelIdKey, text }) => {
+      const w = window as unknown as {
+        [key: string]: unknown;
+      };
+      const id = w[channelIdKey];
+      if (typeof id !== "number") {
+        throw new Error(`missing terminal output channel: ${channelIdKey}`);
+      }
+      const callback = w[`_${id}`] as
+        | ((payload: { index: number; message: number[] }) => void)
+        | undefined;
+      if (!callback) throw new Error("missing terminal output callback");
+      callback({
+        index: 0,
+        message: Array.from(new TextEncoder().encode(text)),
+      });
+    },
+    { channelIdKey, text },
+  );
+}
+
+async function terminalTextAndUnderlineRects(
+  page: Page,
+  text: string,
+): Promise<{
+  text: { top: number; bottom: number; left: number; width: number };
+  underline: { top: number; bottom: number; left: number; width: number };
+} | null> {
+  return page.evaluate((target) => {
+    const toPlainRect = (rect: DOMRect) => ({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      width: rect.width,
+    });
+    const underline = document.querySelector<HTMLElement>(
+      '[data-acorn-terminal-link-underline="true"]',
+    );
+    if (!underline) return null;
+
+    for (const row of Array.from(
+      document.querySelectorAll<HTMLElement>(".xterm-rows > div"),
+    )) {
+      const rowText = row.textContent ?? "";
+      const start = rowText.indexOf(target);
+      if (start < 0) continue;
+
+      const end = start + target.length;
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let offset = 0;
+      let startSet = false;
+      let endSet = false;
+
+      for (
+        let node = walker.nextNode() as Text | null;
+        node;
+        node = walker.nextNode() as Text | null
+      ) {
+        const textLength = node.textContent?.length ?? 0;
+        const nextOffset = offset + textLength;
+        if (!startSet && start <= nextOffset) {
+          range.setStart(node, Math.max(0, start - offset));
+          startSet = true;
+        }
+        if (startSet && end <= nextOffset) {
+          range.setEnd(node, Math.max(0, end - offset));
+          endSet = true;
+          break;
+        }
+        offset = nextOffset;
+      }
+
+      if (!startSet || !endSet) {
+        range.detach();
+        return null;
+      }
+
+      const textRect = range.getBoundingClientRect();
+      range.detach();
+      return {
+        text: toPlainRect(textRect),
+        underline: toPlainRect(underline.getBoundingClientRect()),
+      };
+    }
+
+    return null;
+  }, text);
+}
+
 async function gotoWithAccent(page: Page): Promise<void> {
   await page.goto("/");
   await page.addStyleTag({
@@ -373,6 +469,357 @@ test.describe("terminal: spawn", () => {
     await expect(page.locator('[data-acorn-target-line="true"]')).toHaveCount(
       0,
     );
+  });
+
+  test("keeps modifier-click link tooltip mounted while output streams", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { linkActivation: "modifier-click" } }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __linkTooltipChannelId?: number;
+      };
+      w.__linkTooltipChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __linkTooltipChannelId?: number })
+              .__linkTooltipChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const url = "https://example.test/docs";
+    await emitSubscribedPtyOutput(
+      page,
+      "__linkTooltipChannelId",
+      `${url}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(url);
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+
+    const tooltip = page.getByRole("tooltip", { name: /to open link/ });
+    await expect(tooltip).toBeVisible();
+    const underline = page.locator(
+      '[data-acorn-terminal-link-underline="true"]',
+    );
+    await expect(underline).toHaveCount(1);
+    await expect(underline.first()).toBeVisible();
+    const countXtermUnderlines = () =>
+      page.evaluate(
+        () =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>(".xterm-rows span"),
+          ).filter((el) =>
+            getComputedStyle(el).textDecorationLine.includes("underline"),
+          ).length,
+      );
+    await expect.poll(countXtermUnderlines).toBe(0);
+    const initialTooltipPosition = await tooltip.evaluate((el) => ({
+      top: (el as HTMLElement).style.top,
+      left: (el as HTMLElement).style.left,
+    }));
+    const initialUnderlinePosition = await underline.first().evaluate((el) => ({
+      top: (el as HTMLElement).style.top,
+      left: (el as HTMLElement).style.left,
+      width: (el as HTMLElement).style.width,
+    }));
+
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __tooltipRemovalCount?: number;
+        __tooltipObserver?: MutationObserver;
+      };
+      w.__tooltipRemovalCount = 0;
+      w.__tooltipObserver?.disconnect();
+      w.__tooltipObserver = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of Array.from(record.removedNodes)) {
+            if (
+              node instanceof HTMLElement &&
+              node.getAttribute("role") === "tooltip"
+            ) {
+              w.__tooltipRemovalCount = (w.__tooltipRemovalCount ?? 0) + 1;
+            }
+          }
+        }
+      });
+      w.__tooltipObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      await emitSubscribedPtyOutput(page, "__linkTooltipChannelId", ".");
+      await page.waitForTimeout(30);
+      await expect(tooltip).toBeVisible();
+      await expect(underline).toHaveCount(1);
+      await expect(underline.first()).toBeVisible();
+      await expect
+        .poll(() =>
+          tooltip.evaluate((el) => ({
+            top: (el as HTMLElement).style.top,
+            left: (el as HTMLElement).style.left,
+          })),
+        )
+        .toEqual(initialTooltipPosition);
+      await expect
+        .poll(() =>
+          underline.first().evaluate((el) => ({
+            top: (el as HTMLElement).style.top,
+            left: (el as HTMLElement).style.left,
+            width: (el as HTMLElement).style.width,
+          })),
+        )
+        .toEqual(initialUnderlinePosition);
+      await expect.poll(countXtermUnderlines).toBe(0);
+    }
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __tooltipRemovalCount?: number })
+              .__tooltipRemovalCount ?? 0,
+        ),
+      )
+      .toBe(0);
+    await page.evaluate(() => {
+      (window as unknown as { __tooltipObserver?: MutationObserver })
+        .__tooltipObserver?.disconnect();
+    });
+  });
+
+  test("shows stable hover underline for OSC URI terminal links", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { linkActivation: "modifier-click" } }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __oscLinkChannelId?: number;
+      };
+      w.__oscLinkChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __oscLinkChannelId?: number })
+              .__oscLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const label = "OSC URI";
+    await emitSubscribedPtyOutput(
+      page,
+      "__oscLinkChannelId",
+      `\x1b]8;;https://example.test/osc\x1b\\${label}\x1b]8;;\x1b\\\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(label);
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect(
+      page.getByRole("tooltip", { name: /to open link/ }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-acorn-terminal-link-underline="true"]'),
+    ).toHaveCount(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            Array.from(
+              document.querySelectorAll<HTMLElement>(".xterm-rows span"),
+            ).filter((el) =>
+              getComputedStyle(el).textDecorationLine.includes("underline"),
+            ).length,
+        ),
+      )
+      .toBeGreaterThanOrEqual(1);
+  });
+
+  test("positions link hover underline with app UI scale", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          appearance: { uiScalePercent: 125 },
+          terminal: { linkActivation: "modifier-click" },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __scaledLinkChannelId?: number;
+      };
+      w.__scaledLinkChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          document.documentElement.style.getPropertyValue("--acorn-ui-scale"),
+        ),
+      )
+      .toBe("1.25");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __scaledLinkChannelId?: number })
+              .__scaledLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const url = "https://example.test/scaled";
+    await emitSubscribedPtyOutput(
+      page,
+      "__scaledLinkChannelId",
+      `${url}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(url);
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+
+    const underline = page.locator(
+      '[data-acorn-terminal-link-underline="true"]',
+    );
+    await expect(underline).toHaveCount(1);
+    await expect(underline.first()).toBeVisible();
+    await expect
+      .poll(() =>
+        underline.first().evaluate((el) => el.parentElement === document.body),
+      )
+      .toBe(true);
+
+    const rects = await terminalTextAndUnderlineRects(page, url);
+    expect(rects).not.toBeNull();
+    expect(Math.abs(rects!.underline.left - rects!.text.left)).toBeLessThan(2);
+    expect(Math.abs(rects!.underline.width - rects!.text.width)).toBeLessThan(
+      2,
+    );
+    expect(
+      Math.abs(rects!.underline.top - (rects!.text.bottom - 1)),
+    ).toBeLessThan(2);
   });
 
   test("submitting a command resyncs the PTY size for agent TUIs", async ({

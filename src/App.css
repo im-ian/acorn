@@ -94,6 +94,13 @@
   background: var(--color-terminal-bg, #1f2326);
 }
 
+.acorn-terminal-shell[data-acorn-link-hover="true"]
+  .xterm-rows
+  span[style*="underline"] {
+  text-decoration: none !important;
+  text-decoration-line: none !important;
+}
+
 .acorn-session-title-indicator {
   position: relative;
   display: inline-flex;
