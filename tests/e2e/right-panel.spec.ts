@@ -498,6 +498,54 @@ test.describe("right panel: groups", () => {
     ).toHaveCount(0);
   });
 
+  test("History provider filter scopes visible rows", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_agent_history", [
+      {
+        provider: "codex",
+        id: "codex-filter",
+        title: "Codex refactor",
+        preview: null,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/codex-filter.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-filter",
+      },
+      {
+        provider: "claude",
+        id: "claude-filter",
+        title: "Claude outline",
+        preview: null,
+        cwd: "/tmp/demo",
+        worktree: null,
+        transcript_path: "/tmp/claude-filter.jsonl",
+        updated_at: 1770000001,
+        resume_command: "claude --resume claude-filter",
+      },
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "History" }).click();
+
+    const filter = page.getByLabel("Filter by agent");
+    await expect(filter).toHaveValue("__all__");
+    await expect(page.getByText("Codex refactor")).toBeVisible();
+    await expect(page.getByText("Claude outline")).toBeVisible();
+
+    await filter.selectOption("codex");
+    await expect(page.getByText("Codex refactor")).toBeVisible();
+    await expect(page.getByText("Claude outline")).toHaveCount(0);
+
+    await filter.selectOption("claude");
+    await expect(page.getByText("Codex refactor")).toHaveCount(0);
+    await expect(page.getByText("Claude outline")).toBeVisible();
+  });
+
   test("History resume adopts the source worktree for the new terminal", async ({
     page,
     tauri,

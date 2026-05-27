@@ -95,6 +95,14 @@ function buttonContaining(container: HTMLElement, text: string): HTMLButtonEleme
   return button;
 }
 
+function selectWithAria(container: HTMLElement, label: string): HTMLSelectElement {
+  const select = container.querySelector(`select[aria-label="${label}"]`);
+  if (!(select instanceof HTMLSelectElement)) {
+    throw new Error(`select labelled "${label}" not found`);
+  }
+  return select;
+}
+
 const labeledPullRequest = {
   number: 247,
   title: "Hide git tabs outside repositories",
@@ -380,6 +388,59 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
     expect(mockApi.listAgentHistory).not.toHaveBeenCalled();
     expect(mockApi.listUnscopedAgentHistory).toHaveBeenCalledWith(100);
+  });
+
+  it("filters agent history by provider", async () => {
+    useAppStore.setState({ rightTab: "history" });
+    mockApi.listAgentHistory.mockResolvedValue([
+      {
+        provider: "codex",
+        id: "codex-session",
+        title: "Codex patch",
+        preview: null,
+        cwd: REPO,
+        worktree: null,
+        transcript_path: "/tmp/codex-session.jsonl",
+        updated_at: 1770000000,
+        resume_command: "codex resume codex-session",
+      },
+      {
+        provider: "claude",
+        id: "claude-session",
+        title: "Claude plan",
+        preview: null,
+        cwd: REPO,
+        worktree: null,
+        transcript_path: "/tmp/claude-session.jsonl",
+        updated_at: 1770000001,
+        resume_command: "claude --resume claude-session",
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Codex patch");
+    expect(container.textContent).toContain("Claude plan");
+
+    const select = selectWithAria(container, "Filter by agent");
+    await act(async () => {
+      select.value = "codex";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("Codex patch");
+    expect(container.textContent).not.toContain("Claude plan");
+
+    await act(async () => {
+      select.value = "claude";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.textContent).not.toContain("Codex patch");
+    expect(container.textContent).toContain("Claude plan");
   });
 
   it("reprobes GitHub visibility when git metadata changes", async () => {
