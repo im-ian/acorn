@@ -1,16 +1,28 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { homeDir } from "@tauri-apps/api/path";
 import {
   Activity,
   Bell,
   CheckCheck,
+  Gauge,
   Loader2,
   Settings,
   Trash2,
   X,
 } from "lucide-react";
 import { api } from "../lib/api";
+import {
+  AgentProviderIcon,
+  resolveSessionAgentProvider,
+} from "../lib/agentProvider";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
@@ -20,6 +32,10 @@ import type {
   SessionNotification,
   SessionNotificationKind,
   SessionStatus,
+  AgentTokenProvider,
+  AgentTokenUsageMetric,
+  AgentTokenUsageSnapshot,
+  AgentTokenWindow,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
@@ -27,6 +43,7 @@ import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
 import { Tooltip } from "./Tooltip";
 
 const MEMORY_POLL_MS = 2000;
+const TOKEN_USAGE_POLL_MS = 60_000;
 
 type StatusBarTranslationKey = Extract<TranslationKey, `statusBar.${string}`>;
 
@@ -128,6 +145,37 @@ function useMemoryUsage(
   return snapshot;
 }
 
+function useAgentTokenUsage(
+  intervalMs: number,
+  enabled: boolean,
+): AgentTokenUsageSnapshot | null {
+  const [snapshot, setSnapshot] = useState<AgentTokenUsageSnapshot | null>(null);
+
+  useEffect(() => {
+    if (!enabled) {
+      setSnapshot(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const usage = await api.getAgentTokenUsage();
+        if (!cancelled) setSnapshot(usage);
+      } catch {
+        if (!cancelled) setSnapshot(null);
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, intervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [intervalMs, enabled]);
+
+  return snapshot;
+}
+
 // GitHub octocat mark — lucide-react has no brand glyphs, so inline the
 // official Mark path. `currentColor` lets the surrounding text style it.
 function GitHubMark() {
@@ -165,9 +213,24 @@ export function StatusBar() {
   const showWorkingDirectory = useSettings(
     (s) => s.settings.statusBar.showWorkingDirectory,
   );
+  const showAgentTokenUsage = useSettings(
+    (s) => s.settings.statusBar.showAgentTokenUsage,
+  );
+  const showAgentProviderIcons = useSettings(
+    (s) => s.settings.sessionDisplay.icons.agentProvider,
+  );
   const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
+  const activeTokenProvider: AgentTokenProvider | null = active
+    ? resolveSessionAgentProvider(active)
+    : null;
+  const showActiveAgentTokenUsage =
+    showAgentTokenUsage && activeTokenProvider !== null;
   const memory = useMemoryUsage(MEMORY_POLL_MS, showMemory);
+  const tokenUsage = useAgentTokenUsage(
+    TOKEN_USAGE_POLL_MS,
+    showActiveAgentTokenUsage,
+  );
   const home = useHomeDir();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const displayPath = active ? tildify(active.worktree_path, home) : null;
@@ -274,6 +337,16 @@ export function StatusBar() {
               </Tooltip>
             </>
           ) : null}
+          {showActiveAgentTokenUsage ? (
+            <>
+              <span className="text-fg-muted/50">|</span>
+              <AgentTokenUsageBadge
+                provider={activeTokenProvider}
+                showProviderIcon={showAgentProviderIcons}
+                snapshot={tokenUsage}
+              />
+            </>
+          ) : null}
           {showMemory ? (
             <>
               <span className="text-fg-muted/50">|</span>
@@ -305,6 +378,204 @@ export function StatusBar() {
       />
     </>
   );
+}
+
+const TOKEN_WINDOWS: AgentTokenWindow[] = ["five_hour", "weekly"];
+
+function AgentTokenUsageBadge({
+  provider,
+  showProviderIcon,
+  snapshot,
+}: {
+  provider: AgentTokenProvider;
+  showProviderIcon: boolean;
+  snapshot: AgentTokenUsageSnapshot | null;
+}) {
+  const t = useTranslation();
+  const summary = renderAgentTokenSummary(snapshot, provider, t);
+  const tooltip = formatAgentTokenTooltip(snapshot, provider, t);
+
+  return (
+    <Tooltip label={tooltip} side="top" multiline>
+      <span
+        data-testid="agent-token-usage"
+        className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1 text-fg-muted"
+      >
+        {showProviderIcon ? (
+          <AgentProviderIcon provider={provider} />
+        ) : (
+          <Gauge size={12} />
+        )}
+        {summary}
+      </span>
+    </Tooltip>
+  );
+}
+
+function renderAgentTokenSummary(
+  snapshot: AgentTokenUsageSnapshot | null,
+  provider: AgentTokenProvider,
+  t: Translator,
+): ReactNode {
+  if (!snapshot) {
+    return statusBarFormat(t, "statusBar.agentTokens", {
+      summary: statusBarText(t, "statusBar.agentTokensUnavailable"),
+    });
+  }
+
+  const fiveHour = tokenMetric(snapshot, provider, "five_hour");
+  const weekly = tokenMetric(snapshot, provider, "weekly");
+  const fiveHourText = formatRemainingPercent(fiveHour);
+  const weeklyText = formatRemainingPercent(weekly);
+  if (!fiveHourText && !weeklyText) {
+    return statusBarFormat(t, "statusBar.agentTokens", {
+      summary: statusBarText(t, "statusBar.agentTokensNoData"),
+    });
+  }
+  return (
+    <>
+      <span>{agentTokensPrefix(t)}</span>
+      <span className="inline-flex items-center gap-2">
+        <TokenWindowReadout label="5h" value={fiveHourText ?? "-"} />
+        <TokenWindowReadout label="w" value={weeklyText ?? "-"} />
+      </span>
+    </>
+  );
+}
+
+function agentTokensPrefix(t: Translator): string {
+  const template = statusBarText(t, "statusBar.agentTokens");
+  const prefix = template.replace(/\s*\{summary\}\s*/g, "").trim();
+  return prefix || "tokens:";
+}
+
+function TokenWindowReadout({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="rounded border border-fg-muted/25 bg-fg-muted/10 px-1 py-px text-[9px] font-semibold leading-none text-fg-muted">
+        {label}
+      </span>
+      <span>{value}</span>
+    </span>
+  );
+}
+
+function formatAgentTokenTooltip(
+  snapshot: AgentTokenUsageSnapshot | null,
+  provider: AgentTokenProvider,
+  t: Translator,
+): string {
+  if (!snapshot) return statusBarText(t, "statusBar.agentTokensUnavailable");
+
+  const lines = TOKEN_WINDOWS.map((window) => {
+    const metric = tokenMetric(snapshot, provider, window);
+    const windowName = windowDisplayName(window, t);
+    if (!metric || metric.error) {
+      return statusBarFormat(t, "statusBar.agentTokensTooltipError", {
+        window: windowName,
+        error:
+          metric?.error ?? statusBarText(t, "statusBar.agentTokensUnavailable"),
+      });
+    }
+    return statusBarFormat(t, "statusBar.agentTokensTooltipLine", {
+      window: windowName,
+      remaining: formatRemainingPercent(metric) ?? "-",
+      reset: formatResetRemaining(metric.reset_at, snapshot.updated_at, t),
+    });
+  });
+
+  lines.push(
+    statusBarFormat(t, "statusBar.agentTokensUpdated", {
+      time: formatUnixTime(snapshot.updated_at),
+    }),
+  );
+  return lines.join("\n");
+}
+
+function tokenMetric(
+  snapshot: AgentTokenUsageSnapshot,
+  provider: AgentTokenProvider,
+  window: AgentTokenWindow,
+): AgentTokenUsageMetric | null {
+  return (
+    snapshot.metrics.find(
+      (metric) => metric.provider === provider && metric.window === window,
+    ) ?? null
+  );
+}
+
+function windowDisplayName(window: AgentTokenWindow, t: Translator): string {
+  return window === "five_hour"
+    ? statusBarText(t, "statusBar.agentTokensWindowFiveHour")
+    : statusBarText(t, "statusBar.agentTokensWindowWeekly");
+}
+
+function formatRemainingPercent(metric: AgentTokenUsageMetric | null): string | null {
+  return metric?.remaining_percent === null || metric?.remaining_percent === undefined
+    ? null
+    : formatPercentValue(metric.remaining_percent);
+}
+
+function formatPercentValue(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  const clamped = Math.max(0, Math.min(100, value));
+  return Number.isInteger(clamped) ? `${clamped}%` : `${clamped.toFixed(1)}%`;
+}
+
+function formatResetRemaining(
+  resetAt: number | null,
+  observedAt: number,
+  t: Translator,
+): string {
+  if (
+    !resetAt ||
+    !Number.isFinite(resetAt) ||
+    !Number.isFinite(observedAt)
+  ) {
+    return statusBarText(t, "statusBar.agentTokensResetUnknown");
+  }
+  const remainingSeconds = Math.max(0, resetAt - observedAt);
+  return formatDuration(remainingSeconds);
+}
+
+function formatDuration(seconds: number): string {
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes <= 0) return "0m";
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) {
+    return remainingMinutes > 0
+      ? `${hours}h ${remainingMinutes}m`
+      : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
+function formatUnixTime(value: number): string {
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) return "-";
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return date.toLocaleString([], {
+    month: sameDay ? undefined : "numeric",
+    day: sameDay ? undefined : "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 // Combined indicator for the in-process IPC server + the out-of-process

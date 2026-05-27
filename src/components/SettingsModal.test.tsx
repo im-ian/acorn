@@ -333,6 +333,40 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches the status bar agent token usage toggle", async () => {
+    const patchStatusBar = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchStatusBar,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openInterfaceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const input = Array.from(
+      document.querySelectorAll<HTMLInputElement>("input[type='checkbox']"),
+    ).find((element) => {
+      const label = element.closest("label");
+      return label?.textContent?.includes("Agent token usage");
+    });
+
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(input?.checked).toBe(false);
+
+    act(() => {
+      if (!input) throw new Error("Agent token usage checkbox not found");
+      input.click();
+    });
+
+    expect(patchStatusBar).toHaveBeenCalledWith({ showAgentTokenUsage: true });
+  });
+
   it("renders the Interface language selector in Korean and patches changes", async () => {
     const patchLanguage = vi.fn();
     useSettings.setState({
