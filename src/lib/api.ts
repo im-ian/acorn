@@ -657,6 +657,9 @@ export const api = {
   fsGitBranch(repoRoot: string): Promise<string> {
     return invoke<string>("fs_git_branch", { repoRoot });
   },
+  fsFileExists(path: string): Promise<boolean> {
+    return invoke<boolean>("fs_file_exists", { path });
+  },
   fsReadFile(path: string): Promise<FsReadFileResult> {
     return invoke<FsReadFileResult>("fs_read_file", { path });
   },

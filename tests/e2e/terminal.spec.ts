@@ -308,6 +308,12 @@ test.describe("terminal: spawn", () => {
       w.__fileLinkChannelId = channel.id;
       return 1;
     });
+    await tauri.handle("fs_file_exists", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fsFileExistsCalls?: string[] };
+      w.__fsFileExistsCalls = [...(w.__fsFileExistsCalls ?? []), path];
+      return path === "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx";
+    });
     await tauri.handle("fs_read_file", (args) => {
       const { path } = args as { path: string };
       if (path !== "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx") {
@@ -361,6 +367,17 @@ test.describe("terminal: spawn", () => {
     const screenBox = await page.locator(".xterm-screen").boundingBox();
     expect(screenBox).not.toBeNull();
     await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __fsFileExistsCalls?: string[] })
+              .__fsFileExistsCalls ?? []
+          ).includes("/tmp/demo/src/components/FolderPermissionWarmupModal.tsx"),
+        ),
+      )
+      .toBe(true);
+    await page.waitForTimeout(30);
     await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
 
     await expect(
@@ -410,6 +427,12 @@ test.describe("terminal: spawn", () => {
       w.__fileLinkChannelId = channel.id;
       return 1;
     });
+    await tauri.handle("fs_file_exists", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fsFileExistsCalls?: string[] };
+      w.__fsFileExistsCalls = [...(w.__fsFileExistsCalls ?? []), path];
+      return path === "/tmp/demo/.claude/rules/typescript/coding-style.md";
+    });
     await tauri.handle("fs_read_file", (args) => {
       const { path } = args as { path: string };
       if (path !== "/tmp/demo/.claude/rules/typescript/coding-style.md") {
@@ -458,6 +481,17 @@ test.describe("terminal: spawn", () => {
     const screenBox = await page.locator(".xterm-screen").boundingBox();
     expect(screenBox).not.toBeNull();
     await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __fsFileExistsCalls?: string[] })
+              .__fsFileExistsCalls ?? []
+          ).includes("/tmp/demo/.claude/rules/typescript/coding-style.md"),
+        ),
+      )
+      .toBe(true);
+    await page.waitForTimeout(30);
     await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
 
     await expect(
@@ -469,6 +503,115 @@ test.describe("terminal: spawn", () => {
     await expect(page.locator('[data-acorn-target-line="true"]')).toHaveCount(
       0,
     );
+  });
+
+  test("does not underline or open missing file terminal links", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { linkActivation: "modifier-click" } }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __missingFileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      w.__missingFileLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_file_exists", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fsFileExistsCalls?: string[] };
+      w.__fsFileExistsCalls = [...(w.__fsFileExistsCalls ?? []), path];
+      return false;
+    });
+    await tauri.handle("fs_read_file", () => {
+      throw new Error("missing file link should not be opened");
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __missingFileLinkChannelId?: number })
+              .__missingFileLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "src/missing-file.tsx:10";
+    await emitSubscribedPtyOutput(
+      page,
+      "__missingFileLinkChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __fsFileExistsCalls?: string[] })
+              .__fsFileExistsCalls ?? []
+          ).includes("/tmp/demo/src/missing-file.tsx"),
+        ),
+      )
+      .toBe(true);
+    await expect(
+      page.locator('[data-acorn-terminal-link-underline="true"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("tooltip", { name: /to open link/ }),
+    ).toHaveCount(0);
+
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    await page.keyboard.down(modifier);
+    await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+    await page.keyboard.up(modifier);
+    await page.waitForTimeout(150);
+
+    await expect(
+      page.getByRole("button", {
+        name: /missing-file\.tsx Close tab/,
+      }),
+    ).toHaveCount(0);
   });
 
   test("keeps modifier-click link tooltip mounted while output streams", async ({
