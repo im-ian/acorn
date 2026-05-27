@@ -193,6 +193,7 @@ export const tauriMockSource = `
     if (cmd === 'fs_shell_editor') return Promise.resolve('');
     if (cmd === 'fs_git_status') return Promise.resolve({ statuses: {}, huge: false, limit: 10000 });
     if (cmd === 'fs_git_branch') return Promise.resolve('');
+    if (cmd === 'fs_file_exists') return Promise.resolve(false);
     if (cmd === 'fs_read_file') {
       return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
     }

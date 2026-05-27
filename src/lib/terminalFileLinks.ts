@@ -11,10 +11,14 @@ export interface TerminalFileReference {
   column?: number;
   text: string;
   startIndex: number;
+  absolutePath?: string;
 }
 
 export interface TerminalFileLinkProviderOptions {
   activate: (event: MouseEvent, reference: TerminalFileReference) => void;
+  resolveReferences?: (
+    references: TerminalFileReference[],
+  ) => TerminalFileReference[] | Promise<TerminalFileReference[]>;
   hover?: (
     event: MouseEvent,
     reference: TerminalFileReference,
@@ -24,9 +28,9 @@ export interface TerminalFileLinkProviderOptions {
 }
 
 const FILE_REF_RE =
-  /(^|[\s([{"'`<])((?:\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z0-9._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,.;!?:])/g;
+  /(^|[\s([{"'`<])((?:\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z0-9._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))/g;
 const FILE_PATH_RE =
-  /(^|[\s([{"'`<])((?:\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+))(?=$|[\s)\]}>,.;!?])/g;
+  /(^|[\s([{"'`<])((?:\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+))(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))/g;
 
 export function createTerminalFileLinkProvider(
   terminal: XTerm,
@@ -45,45 +49,69 @@ export function createTerminalFileLinkProvider(
         callback(undefined);
         return;
       }
-      callback(
-        references.map((reference) => {
-          const startColumn = stringIndexToBufferColumn(
-            line,
-            reference.startIndex,
-          );
-          const endColumn = stringIndexToBufferColumn(
-            line,
-            reference.startIndex + reference.text.length,
-          );
-          const link: ILink = {
-            range: {
-              start: {
-                x: startColumn + 1,
-                y: bufferLineNumber,
-              },
-              end: {
-                x: endColumn,
-                y: bufferLineNumber,
-              },
-            },
-            text: reference.text,
-            decorations: {
-              pointerCursor: true,
-              underline: false,
-            },
-            activate: (event) => options.activate(event, reference),
-          };
-          if (options.hover) {
-            link.hover = (event) => options.hover?.(event, reference, link);
-          }
-          if (options.leave) {
-            link.leave = (event) => options.leave?.(event, reference);
-          }
-          return link;
-        }),
-      );
+      const provide = (resolvedReferences: TerminalFileReference[]) => {
+        if (resolvedReferences.length === 0) {
+          callback(undefined);
+          return;
+        }
+        callback(
+          resolvedReferences.map((reference) =>
+            createTerminalFileLink(
+              line,
+              bufferLineNumber,
+              reference,
+              options,
+            ),
+          ),
+        );
+      };
+      if (!options.resolveReferences) {
+        provide(references);
+        return;
+      }
+      void Promise.resolve(options.resolveReferences(references))
+        .then(provide)
+        .catch(() => callback(undefined));
     },
   };
+}
+
+function createTerminalFileLink(
+  line: IBufferLine,
+  bufferLineNumber: number,
+  reference: TerminalFileReference,
+  options: TerminalFileLinkProviderOptions,
+): ILink {
+  const startColumn = stringIndexToBufferColumn(line, reference.startIndex);
+  const endColumn = stringIndexToBufferColumn(
+    line,
+    reference.startIndex + reference.text.length,
+  );
+  const link: ILink = {
+    range: {
+      start: {
+        x: startColumn + 1,
+        y: bufferLineNumber,
+      },
+      end: {
+        x: endColumn,
+        y: bufferLineNumber,
+      },
+    },
+    text: reference.text,
+    decorations: {
+      pointerCursor: true,
+      underline: false,
+    },
+    activate: (event) => options.activate(event, reference),
+  };
+  if (options.hover) {
+    link.hover = (event) => options.hover?.(event, reference, link);
+  }
+  if (options.leave) {
+    link.leave = (event) => options.leave?.(event, reference);
+  }
+  return link;
 }
 
 export function findTerminalFileReferences(
