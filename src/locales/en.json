@@ -260,6 +260,15 @@
           "description": "Session reached the completed state."
         }
       },
+      "history": {
+        "label": "Notification history",
+        "hint": "Controls Acorn's in-app notification log. Delivered system notifications are not cleared by these settings.",
+        "maxCount": "Maximum records",
+        "autoDeleteRead": {
+          "label": "Auto-delete read notifications",
+          "description": "Remove notifications from Acorn's history when their session tab is focused and they are marked read."
+        }
+      },
       "test": {
         "label": "Test",
         "hint": "Verifies the OS permission and that a notification can actually appear, independent of the Enable / Trigger settings above.",

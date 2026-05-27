@@ -78,6 +78,9 @@ export const PR_REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
 export const UI_SCALE_PERCENT_MIN = 75;
 export const UI_SCALE_PERCENT_MAX = 150;
 export const UI_SCALE_PERCENT_STEP = 5;
+export const NOTIFICATION_HISTORY_LIMIT_MIN = 1;
+export const NOTIFICATION_HISTORY_LIMIT_DEFAULT = 50;
+export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
 
 export type TerminalFontWeight =
   | 100
@@ -210,6 +213,8 @@ export interface AcornSettings {
   };
   notifications: {
     enabled: boolean;
+    maxHistory: number;
+    autoDeleteRead: boolean;
     events: {
       needsInput: boolean;
       failed: boolean;
@@ -350,6 +355,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   notifications: {
     enabled: true,
+    maxHistory: NOTIFICATION_HISTORY_LIMIT_DEFAULT,
+    autoDeleteRead: false,
     events: {
       needsInput: true,
       failed: true,
@@ -493,6 +500,17 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
 function normalizePrInterval(v: unknown, fallback: number): number {
   if (typeof v === "number" && VALID_PR_INTERVALS.has(v)) return v;
   return fallback;
+}
+
+export function normalizeNotificationHistoryLimit(
+  v: unknown,
+  fallback: number,
+): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.max(
+    NOTIFICATION_HISTORY_LIMIT_MIN,
+    Math.min(NOTIFICATION_HISTORY_LIMIT_MAX, Math.round(v)),
+  );
 }
 
 const VALID_SESSION_TITLE_SOURCES = new Set<SessionTitleSource>([
@@ -692,6 +710,14 @@ function loadSettings(): AcornSettings {
       notifications: {
         ...DEFAULT_SETTINGS.notifications,
         ...(parsed.notifications ?? {}),
+        maxHistory: normalizeNotificationHistoryLimit(
+          parsed.notifications?.maxHistory,
+          DEFAULT_SETTINGS.notifications.maxHistory,
+        ),
+        autoDeleteRead:
+          typeof parsed.notifications?.autoDeleteRead === "boolean"
+            ? parsed.notifications.autoDeleteRead
+            : DEFAULT_SETTINGS.notifications.autoDeleteRead,
         events: {
           ...DEFAULT_SETTINGS.notifications.events,
           ...(parsed.notifications?.events ?? {}),
@@ -906,6 +932,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
         notifications: {
           ...s.settings.notifications,
           ...rest,
+          maxHistory:
+            rest.maxHistory === undefined
+              ? s.settings.notifications.maxHistory
+              : normalizeNotificationHistoryLimit(
+                  rest.maxHistory,
+                  s.settings.notifications.maxHistory,
+                ),
           events,
         },
       };

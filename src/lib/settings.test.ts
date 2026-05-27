@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_OPTIONS,
   DEFAULT_SETTINGS,
+  NOTIFICATION_HISTORY_LIMIT_MAX,
   resolveAiCommitCommand,
 } from "./settings";
 
@@ -98,6 +99,56 @@ describe("session removal settings", () => {
     const { useSettings } = await import("./settings");
 
     expect(useSettings.getState().settings.sessions.autoDeleteWorktrees).toBe(
+      true,
+    );
+  });
+});
+
+describe("notification settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults notification history to 50 records", () => {
+    expect(DEFAULT_SETTINGS.notifications.maxHistory).toBe(50);
+    expect(DEFAULT_SETTINGS.notifications.autoDeleteRead).toBe(false);
+  });
+
+  it("loads persisted notification history settings and clamps the limit", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        notifications: { maxHistory: 200, autoDeleteRead: true },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.notifications.maxHistory).toBe(
+      NOTIFICATION_HISTORY_LIMIT_MAX,
+    );
+    expect(useSettings.getState().settings.notifications.autoDeleteRead).toBe(
       true,
     );
   });

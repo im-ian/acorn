@@ -35,6 +35,8 @@ import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
+  NOTIFICATION_HISTORY_LIMIT_MAX,
+  NOTIFICATION_HISTORY_LIMIT_MIN,
   PR_REFRESH_INTERVAL_OPTIONS,
   SESSION_TITLE_OPTIONS,
   type SelectedAgent,
@@ -1480,6 +1482,36 @@ function NotificationSettings() {
             disabled={!enabled}
             onChange={(v) =>
               patchNotifications({ events: { completed: v } })
+            }
+          />
+        </div>
+      </Field>
+      <Field
+        label={st(t, "settings.notifications.history.label")}
+        hint={st(t, "settings.notifications.history.hint")}
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-fg">
+              {st(t, "settings.notifications.history.maxCount")}
+            </span>
+            <Stepper
+              value={settings.notifications.maxHistory}
+              min={NOTIFICATION_HISTORY_LIMIT_MIN}
+              max={NOTIFICATION_HISTORY_LIMIT_MAX}
+              step={5}
+              onChange={(maxHistory) => patchNotifications({ maxHistory })}
+            />
+          </div>
+          <CheckboxRow
+            label={st(t, "settings.notifications.history.autoDeleteRead.label")}
+            description={st(
+              t,
+              "settings.notifications.history.autoDeleteRead.description",
+            )}
+            checked={settings.notifications.autoDeleteRead}
+            onChange={(autoDeleteRead) =>
+              patchNotifications({ autoDeleteRead })
             }
           />
         </div>
