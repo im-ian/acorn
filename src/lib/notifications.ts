@@ -84,6 +84,66 @@ function notificationKindForTransition(
   return null;
 }
 
+function isSessionFocused(sessionId: string, activeSessionId: string | null): boolean {
+  return (
+    activeSessionId === sessionId &&
+    (typeof document === "undefined" || document.hasFocus())
+  );
+}
+
+/**
+ * Treat the currently visible session tab as having consumed its outstanding
+ * in-app notifications. This intentionally does not clear delivered OS
+ * notifications.
+ */
+export function markSessionNotificationsRead(sessionId: string | null): void {
+  if (!sessionId) return;
+  useAppStore.getState().markSessionNotificationsReadForSession(sessionId);
+}
+
+export function resetNotificationsForTests(): void {
+  cachedPermission = null;
+  inboxNotificationCounter = 0;
+}
+
+export function startFocusedSessionNotificationReadWatcher(): () => void {
+  const markFocused = () => {
+    if (typeof document !== "undefined" && !document.hasFocus()) return;
+    markSessionNotificationsRead(useAppStore.getState().activeSessionId);
+  };
+
+  const unsubscribeStore = useAppStore.subscribe((state, previous) => {
+    if (state.activeSessionId !== previous.activeSessionId) {
+      markFocused();
+    }
+  });
+  const unsubscribeSettings = useSettings.subscribe((state, previous) => {
+    if (
+      state.settings.notifications.maxHistory ===
+        previous.settings.notifications.maxHistory &&
+      state.settings.notifications.autoDeleteRead ===
+        previous.settings.notifications.autoDeleteRead
+    ) {
+      return;
+    }
+    const { maxHistory, autoDeleteRead } = state.settings.notifications;
+    useAppStore.setState((store) => {
+      const filtered = autoDeleteRead
+        ? store.sessionNotifications.filter((notification) => !notification.readAt)
+        : store.sessionNotifications;
+      return { sessionNotifications: filtered.slice(0, maxHistory) };
+    });
+  });
+  window.addEventListener("focus", markFocused);
+  markFocused();
+
+  return () => {
+    unsubscribeStore();
+    unsubscribeSettings();
+    window.removeEventListener("focus", markFocused);
+  };
+}
+
 /**
  * Watches the session list for status transitions and fires a system
  * notification when one matches the user's enabled events. Returns an
@@ -112,6 +172,10 @@ export function startSessionNotificationWatcher(): () => void {
       if (prev === undefined) continue;
       const { notify, key } = shouldNotifyTransition(prev, s.status);
       if (!notify || !key || !settings.events[key]) continue;
+      if (isSessionFocused(s.id, state.activeSessionId)) {
+        markSessionNotificationsRead(s.id);
+        continue;
+      }
       void fire(s, s.status);
     }
 
@@ -224,6 +288,7 @@ export async function startNotificationClickHandler(): Promise<() => void> {
     void win.unminimize();
     void win.setFocus();
     useAppStore.getState().selectSession(sessionId);
+    markSessionNotificationsRead(sessionId);
   });
   return () => {
     disposed = true;
