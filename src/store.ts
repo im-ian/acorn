@@ -209,7 +209,11 @@ interface AppStateModel {
     name: string,
     ignoreSafeName?: boolean,
   ) => Promise<Project>;
-  removeProject: (repoPath: string, removeWorktrees?: boolean) => Promise<void>;
+  removeProject: (
+    repoPath: string,
+    removeWorktrees?: boolean,
+    removeSettings?: boolean,
+  ) => Promise<void>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
   reorderSessions: (repoPath: string, orderedIds: string[]) => Promise<void>;
   requestRemoveProject: (repoPath: string) => void;
@@ -1581,9 +1585,9 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
-  async removeProject(repoPath, removeWorktrees = false) {
+  async removeProject(repoPath, removeWorktrees = false, removeSettings = false) {
     try {
-      await api.removeProject(repoPath, true, removeWorktrees);
+      await api.removeProject(repoPath, true, removeWorktrees, removeSettings);
       // Drop the project's workspace from local state explicitly — refreshAll
       // also reconciles, but pre-clearing avoids a flash of stale state.
       set((s) => {

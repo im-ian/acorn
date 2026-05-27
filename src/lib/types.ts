@@ -128,6 +128,20 @@ export interface Project {
   position: number;
 }
 
+export interface ProjectPullRequestSettings {
+  generation_prompt: string | null;
+}
+
+export interface ProjectSettings {
+  remember_after_close: boolean;
+  pull_requests: ProjectPullRequestSettings;
+}
+
+export interface ProjectSettingsRecord {
+  key: string;
+  settings: ProjectSettings;
+}
+
 export type AgentHistoryProvider = "claude" | "codex";
 
 export interface AgentHistoryWorktree {

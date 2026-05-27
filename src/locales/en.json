@@ -718,6 +718,7 @@
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New isolated session (worktree)",
       "newControlSession": "New control session",
+      "projectSettings": "Project Settings",
       "closeProject": "Close project",
       "revealInFinder": "Reveal in Finder",
       "copyPath": "Copy path",
@@ -1069,6 +1070,19 @@
       "closeDeleteWorktrees": "Close · delete worktrees",
       "closeProject": "Close project"
     },
+    "projectSettings": {
+      "title": "Project Settings",
+      "pullRequests": "Pull requests",
+      "pullRequestsHint": "Project-specific defaults for pull request workflows.",
+      "generationPrompt": "Prompt for generated PR titles, comments, and merge messages",
+      "generationPromptHint": "Used when Acorn asks the selected AI CLI to generate this project's pull request title, review comment, or merge message.",
+      "generationPromptPlaceholder": "Example: Use a standard GitHub-style pull request merge message with a Conventional Commit subject and a concise impact-focused body.",
+      "promptCount": "{count} / {max}",
+      "rememberAfterClose": "Keep project settings after closing this project",
+      "rememberAfterCloseHint": "When disabled, Acorn deletes this project's saved settings when you close the project.",
+      "saving": "Saving...",
+      "save": "Save"
+    },
     "newProject": {
       "title": "New project",
       "subtitle": "Create a git repository and add it to Acorn",
@@ -1179,6 +1193,7 @@
       "generating": "Generating...",
       "generateVia": "Generate via",
       "generateWithAi": "Generate with AI",
+      "goToProjectSettings": "Go to project settings",
       "subjectPlaceholder": "Subject",
       "bodyPlaceholder": "Body (optional)",
       "rebaseMessageLocked": "Rebase replays the original commits onto the base branch - the commit messages are not customizable here.",
