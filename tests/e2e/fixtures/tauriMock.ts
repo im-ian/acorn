@@ -118,6 +118,12 @@ export const tauriMockSource = `
         scrollback_disk_bytes: 0,
       });
     }
+    if (cmd === 'get_agent_token_usage') {
+      return Promise.resolve({
+        metrics: [],
+        updated_at: 0,
+      });
+    }
     if (cmd === 'scrollback_orphan_size') return Promise.resolve(0);
     if (cmd === 'scrollback_orphan_clear') return Promise.resolve(0);
     if (cmd === 'get_acorn_ipc_status') {

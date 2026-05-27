@@ -1440,6 +1440,15 @@ function StatusBarSection({
           onChange={(v) => patch({ showWorkingDirectory: v })}
         />
         <CheckboxRow
+          label={st(t, "settings.appearance.statusBar.agentTokenUsage.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.agentTokenUsage.description",
+          )}
+          checked={statusBar.showAgentTokenUsage}
+          onChange={(v) => patch({ showAgentTokenUsage: v })}
+        />
+        <CheckboxRow
           label={st(t, "settings.appearance.statusBar.memoryUsage.label")}
           description={st(
             t,

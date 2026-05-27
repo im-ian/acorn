@@ -187,6 +187,10 @@ describe("status bar settings", () => {
     expect(DEFAULT_SETTINGS.statusBar.showSessionActivity).toBe(true);
   });
 
+  it("keeps agent token usage hidden by default", () => {
+    expect(DEFAULT_SETTINGS.statusBar.showAgentTokenUsage).toBe(false);
+  });
+
   it("loads a persisted session activity shortcut preference", async () => {
     localStorage.setItem(
       STORAGE_KEY,
@@ -198,6 +202,20 @@ describe("status bar settings", () => {
 
     expect(useSettings.getState().settings.statusBar.showSessionActivity).toBe(
       false,
+    );
+  });
+
+  it("loads a persisted agent token usage preference", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ statusBar: { showAgentTokenUsage: true } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.statusBar.showAgentTokenUsage).toBe(
+      true,
     );
   });
 });
