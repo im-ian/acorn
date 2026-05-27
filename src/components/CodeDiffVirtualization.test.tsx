@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FsLineDiffEntry, FsReadFileResult } from "../lib/api";
 import type { ParsedLine } from "../lib/diff";
+import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 import type { DiffPayload } from "../lib/types";
 
 vi.mock("../lib/highlight", () => ({
@@ -25,6 +26,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import { api } from "../lib/api";
+import { highlightCode, langFromPath } from "../lib/highlight";
 import { CodeViewer } from "./CodeViewer";
 import { DiffView } from "./DiffView";
 import {
@@ -79,6 +81,9 @@ describe("virtualized code and diff rendering", () => {
     root = createRoot(container);
     vi.mocked(api.fsReadFile).mockReset();
     vi.mocked(api.fsGitDiffLines).mockReset();
+    vi.mocked(highlightCode).mockClear();
+    vi.mocked(langFromPath).mockReturnValue(null);
+    useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });
 
   afterEach(() => {
@@ -137,6 +142,28 @@ describe("virtualized code and diff rendering", () => {
     expect(renderedLines.length).toBeLessThan(lineCount);
     expect(container.textContent).toContain("const line0 = 0;");
     expect(container.querySelector('button[aria-pressed="false"]')).toBeNull();
+  });
+
+  it("passes the current light theme mode to the code highlighter", async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.appearance.themeId = "acorn-light";
+    useSettings.setState({ settings });
+    vi.mocked(langFromPath).mockReturnValue("rust");
+    const content = "let limits = parse_limits(&h);";
+    vi.mocked(api.fsReadFile).mockResolvedValueOnce({
+      content,
+      size: content.length,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsGitDiffLines).mockResolvedValueOnce([]);
+
+    await act(async () => {
+      root.render(<CodeViewer path="/repo/src/rate_limits_test.rs" isActive />);
+    });
+    await flushPromises();
+
+    expect(highlightCode).toHaveBeenCalledWith(content, "rust", "light");
   });
 
   it("marks a requested code viewer target line", async () => {

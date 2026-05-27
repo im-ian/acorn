@@ -5,8 +5,11 @@ import {
   type Highlighter,
 } from "shiki";
 import type { ParsedLine } from "./diff";
+import type { ThemeMode } from "./themes";
 
-const THEME: BundledTheme = "github-dark";
+const DARK_THEME: BundledTheme = "github-dark";
+const LIGHT_THEME: BundledTheme = "github-light-high-contrast";
+const THEMES: BundledTheme[] = [DARK_THEME, LIGHT_THEME];
 
 const EXT_LANG: Record<string, BundledLanguage> = {
   ts: "typescript",
@@ -74,11 +77,15 @@ const loadingLang = new Map<BundledLanguage, Promise<void>>();
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: [THEME],
+      themes: THEMES,
       langs: [],
     });
   }
   return highlighterPromise;
+}
+
+export function highlightThemeForMode(mode: ThemeMode): BundledTheme {
+  return mode === "light" ? LIGHT_THEME : DARK_THEME;
 }
 
 async function ensureLang(h: Highlighter, lang: BundledLanguage): Promise<boolean> {
@@ -123,13 +130,17 @@ function escapeHtml(s: string): string {
 async function renderLines(
   src: string[],
   lang: BundledLanguage,
+  mode: ThemeMode,
 ): Promise<string[]> {
   if (src.length === 0) return [];
   const h = await getHighlighter();
   const ok = await ensureLang(h, lang);
   if (!ok) return src.map(escapeHtml);
   const code = src.join("\n");
-  const result = h.codeToTokens(code, { lang, theme: THEME });
+  const result = h.codeToTokens(code, {
+    lang,
+    theme: highlightThemeForMode(mode),
+  });
   return result.tokens.map((line) =>
     line
       .map(
@@ -148,10 +159,11 @@ async function renderLines(
 export async function highlightCode(
   content: string,
   lang: BundledLanguage | null,
+  mode: ThemeMode = "dark",
 ): Promise<(string | null)[]> {
   const lines = content.split("\n");
   if (!lang) return lines.map(() => null);
-  const out = await renderLines(lines, lang);
+  const out = await renderLines(lines, lang, mode);
   return out;
 }
 
@@ -166,6 +178,7 @@ export async function highlightCode(
 export async function highlightDiff(
   lines: ParsedLine[],
   lang: BundledLanguage,
+  mode: ThemeMode = "dark",
 ): Promise<(string | null)[]> {
   const newLines: string[] = [];
   const oldLines: string[] = [];
@@ -187,8 +200,8 @@ export async function highlightDiff(
   });
 
   const [newHtml, oldHtml] = await Promise.all([
-    renderLines(newLines, lang),
-    renderLines(oldLines, lang),
+    renderLines(newLines, lang, mode),
+    renderLines(oldLines, lang, mode),
   ]);
 
   return map.map((m) => {
