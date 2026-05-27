@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, GitMerge, ShieldAlert, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  GitMerge,
+  MessageSquareText,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
+import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import {
   aiCommitProviderLabel,
   resolveAiCommitCommand,
@@ -17,6 +24,7 @@ import type {
   PullRequestDetail,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
+import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { Tooltip } from "./Tooltip";
 import { Modal, ModalHeader, TextSwap } from "./ui";
 
@@ -25,27 +33,41 @@ const METHOD_OPTIONS: ReadonlyArray<{
   labelKey: DialogTranslationKey;
   hintKey: DialogTranslationKey;
 }> = [
-    {
-      value: "squash",
-      labelKey: "dialogs.mergePullRequest.methodSquash",
-      hintKey: "dialogs.mergePullRequest.methodSquashHint",
-    },
-    {
-      value: "merge",
-      labelKey: "dialogs.mergePullRequest.methodMerge",
-      hintKey: "dialogs.mergePullRequest.methodMergeHint",
-    },
-    {
-      value: "rebase",
-      labelKey: "dialogs.mergePullRequest.methodRebase",
-      hintKey: "dialogs.mergePullRequest.methodRebaseHint",
-    },
-  ];
+  {
+    value: "squash",
+    labelKey: "dialogs.mergePullRequest.methodSquash",
+    hintKey: "dialogs.mergePullRequest.methodSquashHint",
+  },
+  {
+    value: "merge",
+    labelKey: "dialogs.mergePullRequest.methodMerge",
+    hintKey: "dialogs.mergePullRequest.methodMergeHint",
+  },
+  {
+    value: "rebase",
+    labelKey: "dialogs.mergePullRequest.methodRebase",
+    hintKey: "dialogs.mergePullRequest.methodRebaseHint",
+  },
+];
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
 function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
+}
+
+function defaultPromptForMethod(method: MergeMethod): string {
+  switch (method) {
+    case "squash":
+    case "merge":
+    case "rebase":
+      return STANDARD_PR_GENERATION_PROMPT;
+  }
+}
+
+function projectNameFromRepoPath(repoPath: string): string {
+  const trimmed = repoPath.replace(/[\\/]+$/, "");
+  return trimmed.split(/[\\/]/).pop() || repoPath;
 }
 
 interface ChecksBlock {
@@ -100,6 +122,8 @@ export function MergePullRequestDialog({
   const [method, setMethod] = useState<MergeMethod>(() => loadLastMergeMethod());
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [prompt, setPrompt] = useState(() => defaultPromptForMethod(method));
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,15 +146,34 @@ export function MergePullRequestDialog({
   // method is loaded from prefs so the user's last choice persists across PRs.
   useEffect(() => {
     if (!open || !detail) return;
+    let cancelled = false;
     epochRef.current += 1;
-    setMethod(loadLastMergeMethod());
+    const nextMethod = loadLastMergeMethod();
+    setMethod(nextMethod);
     setTitle(detail.title);
     setBody(detail.body);
+    setPrompt(defaultPromptForMethod(nextMethod));
+    setProjectSettingsOpen(false);
     setError(null);
     setSubmitting(false);
     setGenerating(false);
     setAdminMerge(false);
-  }, [open, detail]);
+    void api
+      .getProjectSettings(repoPath)
+      .then((record) => {
+        if (cancelled) return;
+        const savedPrompt = record.settings.pull_requests.generation_prompt;
+        if (savedPrompt) {
+          setPrompt(savedPrompt);
+        }
+      })
+      .catch(() => {
+        // Project settings are optional; generation still works with defaults.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, detail, repoPath]);
 
   // Close also bumps the epoch — a generate kicked off right before the
   // user dismissed the dialog must be invalidated even if they never
@@ -139,6 +182,7 @@ export function MergePullRequestDialog({
   useEffect(() => {
     if (!open) {
       epochRef.current += 1;
+      setProjectSettingsOpen(false);
     }
   }, [open]);
 
@@ -148,7 +192,7 @@ export function MergePullRequestDialog({
     },
     // Avoid Enter committing a destructive action when the user is composing
     // in the textarea — confirm only via the explicit button.
-    onConfirm: () => { },
+    onConfirm: () => {},
   });
 
   const acceptsMessage = method === "squash" || method === "merge";
@@ -189,6 +233,7 @@ export function MergePullRequestDialog({
         method,
         command,
         args,
+        prompt,
       );
       // Dialog was closed (or reopened against another PR) while the
       // CLI was running — drop the result so it doesn't clobber whatever
@@ -208,18 +253,35 @@ export function MergePullRequestDialog({
   const busy = submitting || generating;
   const mergeBlocked = checksBlock.blocked && !adminMerge;
 
+  function handleMethodSelect(nextMethod: MergeMethod) {
+    setMethod(nextMethod);
+  }
+
+  async function reloadProjectPrompt() {
+    try {
+      const record = await api.getProjectSettings(repoPath);
+      setPrompt(
+        record.settings.pull_requests.generation_prompt ??
+          defaultPromptForMethod(method),
+      );
+    } catch {
+      // Project settings are optional; keep the current prompt fallback.
+    }
+  }
+
   return (
-    <Modal open={open} onClose={onClose} variant="dialog" size="lg">
-      {detail ? (
-        <>
-          <ModalHeader
-            title={`${dt(t, "dialogs.mergePullRequest.titlePrefix")} #${detail.number}`}
-            icon={<GitMerge size={16} className="text-emerald-400" />}
-            variant="dialog"
-            onClose={() => {
-              if (!submitting) onClose();
-            }}
-          />
+    <>
+      <Modal open={open} onClose={onClose} variant="dialog" size="lg">
+        {detail ? (
+          <>
+            <ModalHeader
+              title={`${dt(t, "dialogs.mergePullRequest.titlePrefix")} #${detail.number}`}
+              icon={<GitMerge size={16} className="text-emerald-400" />}
+              variant="dialog"
+              onClose={() => {
+                if (!submitting) onClose();
+              }}
+            />
 
           <div className="space-y-4 px-4 py-3 text-xs text-fg">
             <div>
@@ -231,7 +293,7 @@ export function MergePullRequestDialog({
                   <button
                     key={opt.value}
                     type="button"
-                    onClick={() => setMethod(opt.value)}
+                    onClick={() => handleMethodSelect(opt.value)}
                     className={cn(
                       "rounded-md border px-2.5 py-2 text-left transition",
                       method === opt.value
@@ -257,32 +319,54 @@ export function MergePullRequestDialog({
                   <p className="text-fg-muted">
                     {dt(t, "dialogs.mergePullRequest.commitMessage")}
                   </p>
-                  {generating ? (
-                    <button
-                      key="gen-button-loading"
-                      type="button"
-                      disabled
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted opacity-60"
-                    >
-                      <Sparkles size={11} />
-                      {dt(t, "dialogs.mergePullRequest.generating")}
-                    </button>
-                  ) : (
+                  <div className="flex items-center gap-1">
+                    {generating ? (
+                      <button
+                        key="gen-button-loading"
+                        type="button"
+                        disabled
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted opacity-60"
+                      >
+                        <Sparkles size={11} />
+                        {dt(t, "dialogs.mergePullRequest.generating")}
+                      </button>
+                    ) : (
+                      <Tooltip
+                        label={`${dt(t, "dialogs.mergePullRequest.generateVia")} ${providerLabel}`}
+                        side="top"
+                      >
+                        <button
+                          key="gen-button-idle"
+                          type="button"
+                          onClick={() => void handleGenerate()}
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                        >
+                          <Sparkles size={11} />
+                          {dt(t, "dialogs.mergePullRequest.generateWithAi")}
+                        </button>
+                      </Tooltip>
+                    )}
                     <Tooltip
-                      label={`${dt(t, "dialogs.mergePullRequest.generateVia")} ${providerLabel}`}
+                      label={dt(
+                        t,
+                        "dialogs.mergePullRequest.goToProjectSettings",
+                      )}
                       side="top"
                     >
                       <button
-                        key="gen-button-idle"
                         type="button"
-                        onClick={() => void handleGenerate()}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                        aria-label={dt(
+                          t,
+                          "dialogs.mergePullRequest.goToProjectSettings",
+                        )}
+                        onClick={() => setProjectSettingsOpen(true)}
+                        disabled={busy}
+                        className="flex size-6 items-center justify-center rounded-md border border-border bg-bg-sidebar/60 text-fg-muted transition hover:border-accent/50 hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        <Sparkles size={11} />
-                        {dt(t, "dialogs.mergePullRequest.generateWithAi")}
+                        <MessageSquareText size={13} />
                       </button>
                     </Tooltip>
-                  )}
+                  </div>
                 </div>
                 <input
                   type="text"
@@ -308,9 +392,12 @@ export function MergePullRequestDialog({
             )}
 
             {checksBlock.blocked ? (
-              <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+              <div className="space-y-2 rounded-md border border-warning/45 bg-warning/10 px-3 py-2 text-[11px] text-fg">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                  <AlertTriangle
+                    size={12}
+                    className="mt-0.5 shrink-0 text-warning"
+                  />
                   <div className="space-y-0.5">
                     {checksBlock.failed > 0 ? (
                       <p>
@@ -328,25 +415,25 @@ export function MergePullRequestDialog({
                         )}
                       </p>
                     ) : null}
-                    <p className="text-amber-200/80">
+                    <p className="text-fg-muted">
                       {dt(t, "dialogs.mergePullRequest.checksBlocking")}
                     </p>
                   </div>
                 </div>
-                <label className="flex cursor-pointer items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-amber-100 transition hover:bg-amber-500/15">
+                <label className="flex cursor-pointer items-start gap-2 rounded border border-warning/40 bg-bg-sidebar/70 px-2 py-1.5 text-fg transition hover:bg-warning/15">
                   <input
                     type="checkbox"
                     checked={adminMerge}
                     onChange={(e) => setAdminMerge(e.target.checked)}
                     disabled={busy}
-                    className="mt-0.5 h-3 w-3 cursor-pointer accent-amber-400"
+                    className="mt-0.5 h-3 w-3 cursor-pointer accent-warning"
                   />
                   <span className="flex flex-col gap-0.5">
                     <span className="flex items-center gap-1 font-medium">
-                      <ShieldAlert size={11} />
+                      <ShieldAlert size={11} className="text-warning" />
                       {dt(t, "dialogs.mergePullRequest.adminMerge")}
                     </span>
-                    <span className="text-[10px] leading-snug text-amber-200/80">
+                    <span className="text-[10px] leading-snug text-fg-muted">
                       {dt(t, "dialogs.mergePullRequest.adminMergeHint")}
                     </span>
                   </span>
@@ -388,8 +475,20 @@ export function MergePullRequestDialog({
               </TextSwap>
             </button>
           </footer>
-        </>
-      ) : null}
-    </Modal>
+          </>
+        ) : null}
+      </Modal>
+      <ProjectSettingsModal
+        project={
+          projectSettingsOpen
+            ? { name: projectNameFromRepoPath(repoPath), repoPath }
+            : null
+        }
+        onClose={() => {
+          setProjectSettingsOpen(false);
+          void reloadProjectPrompt();
+        }}
+      />
+    </>
   );
 }

@@ -718,6 +718,7 @@
       "newIsolatedSession": "새 격리 세션",
       "newIsolatedSessionWorktree": "새 격리 세션 (worktree)",
       "newControlSession": "새 컨트롤 세션",
+      "projectSettings": "프로젝트 설정",
       "closeProject": "프로젝트 닫기",
       "revealInFinder": "Finder에서 보기",
       "copyPath": "경로 복사",
@@ -1069,6 +1070,19 @@
       "closeDeleteWorktrees": "닫기 · worktree 삭제",
       "closeProject": "프로젝트 닫기"
     },
+    "projectSettings": {
+      "title": "프로젝트 설정",
+      "pullRequests": "Pull request",
+      "pullRequestsHint": "이 프로젝트의 pull request 작업에만 적용되는 기본값입니다.",
+      "generationPrompt": "PR 제목, 코멘트, 머지 메시지 생성 프롬프트",
+      "generationPromptHint": "Acorn이 선택된 AI CLI로 이 프로젝트의 pull request 제목, 리뷰 코멘트, 머지 메시지를 생성할 때 사용합니다.",
+      "generationPromptPlaceholder": "예: Conventional Commit 제목과 영향 중심 본문을 사용하는 표준 GitHub 스타일 pull request merge message로 작성하세요.",
+      "promptCount": "{count} / {max}",
+      "rememberAfterClose": "프로젝트를 닫은 뒤에도 설정 유지",
+      "rememberAfterCloseHint": "끄면 이 프로젝트를 닫을 때 저장된 프로젝트 설정을 삭제합니다.",
+      "saving": "저장 중...",
+      "save": "저장"
+    },
     "newProject": {
       "title": "새 프로젝트",
       "subtitle": "Git 저장소를 만들고 Acorn에 추가합니다",
@@ -1179,6 +1193,7 @@
       "generating": "생성 중...",
       "generateVia": "다음으로 생성:",
       "generateWithAi": "AI로 생성",
+      "goToProjectSettings": "프로젝트 설정으로 이동",
       "subjectPlaceholder": "제목",
       "bodyPlaceholder": "본문(선택 사항)",
       "rebaseMessageLocked": "Rebase는 원래 커밋을 기본 브랜치 위에 다시 적용하므로 여기서 커밋 메시지를 변경할 수 없습니다.",
