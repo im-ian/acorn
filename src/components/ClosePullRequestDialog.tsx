@@ -6,7 +6,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import type { PullRequestDetail } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader, TextSwap } from "./ui";
+import { Modal, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -111,11 +111,9 @@ export function ClosePullRequestDialog({
               disabled={submitting}
               className="rounded-md bg-rose-500/20 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <TextSwap>
-                {submitting
-                  ? dt(t, "dialogs.closePullRequest.closing")
-                  : dt(t, "dialogs.closePullRequest.closePr")}
-              </TextSwap>
+              {submitting
+                ? dt(t, "dialogs.closePullRequest.closing")
+                : dt(t, "dialogs.closePullRequest.closePr")}
             </button>
           </footer>
         </>

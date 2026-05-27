@@ -2,7 +2,6 @@ import { Download, X } from "lucide-react";
 import { useState, type ReactElement } from "react";
 import { selectShouldNotify, useUpdater } from "../lib/updater-store";
 import { useTranslation } from "../lib/useTranslation";
-import { TextSwap } from "./ui/TextSwap";
 import { WhatsNewModal } from "./WhatsNewModal";
 
 /**
@@ -55,11 +54,9 @@ export function UpdateBanner(): ReactElement | null {
             disabled={busy}
             className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
-            <TextSwap>
-              {busy
-                ? t("updateBanner.installing")
-                : t("updateBanner.installRelaunch")}
-            </TextSwap>
+            {busy
+              ? t("updateBanner.installing")
+              : t("updateBanner.installRelaunch")}
           </button>
           <button
             type="button"
