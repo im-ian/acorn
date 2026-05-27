@@ -75,6 +75,26 @@ function exactButtonCount(container: HTMLElement, label: string): number {
   ).length;
 }
 
+function buttonWithTitle(container: HTMLElement, title: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.getAttribute("title") === title,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`button titled "${title}" not found`);
+  }
+  return button;
+}
+
+function buttonContaining(container: HTMLElement, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent?.includes(text),
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`button containing "${text}" not found`);
+  }
+  return button;
+}
+
 const labeledPullRequest = {
   number: 247,
   title: "Hide git tabs outside repositories",
@@ -540,5 +560,95 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("6s");
     expect(mockApi.listWorkflowRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores GitHub zero completedAt sentinels for running Actions jobs", async () => {
+    vi.setSystemTime(new Date("2026-05-19T12:00:05Z"));
+    useAppStore.setState({ rightTab: "actions" });
+    mockApi.listWorkflowRuns.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      items: [
+        {
+          id: 42,
+          display_title: "Run CI",
+          workflow_name: "CI",
+          status: "in_progress",
+          conclusion: null,
+          event: "push",
+          head_branch: "main",
+          head_sha: "abc1234",
+          url: "https://github.com/im-ian/acorn/actions/runs/42",
+          created_at: "2026-05-19T11:59:50Z",
+          updated_at: "2026-05-19T12:00:05Z",
+          started_at: "2026-05-19T12:00:00Z",
+          attempt: 1,
+        },
+      ],
+    });
+    mockApi.getWorkflowRunDetail.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      detail: {
+        id: 42,
+        display_title: "Run CI",
+        workflow_name: "CI",
+        status: "in_progress",
+        conclusion: null,
+        event: "push",
+        head_branch: "main",
+        head_sha: "abc1234",
+        url: "https://github.com/im-ian/acorn/actions/runs/42",
+        created_at: "2026-05-19T11:59:50Z",
+        updated_at: "2026-05-19T12:00:05Z",
+        started_at: "2026-05-19T12:00:00Z",
+        attempt: 1,
+        jobs: [
+          {
+            id: 99,
+            name: "macOS bundle",
+            status: "in_progress",
+            conclusion: null,
+            started_at: "2026-05-19T12:00:00Z",
+            completed_at: "0001-01-01T00:00:00Z",
+            url: "",
+            steps: [],
+          },
+        ],
+      },
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    const runButton = buttonWithTitle(container, "Double-click to view details");
+    expect(runButton.textContent).toContain("Run CI");
+    await act(async () => {
+      runButton.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          detail: 2,
+        }),
+      );
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(mockApi.getWorkflowRunDetail).toHaveBeenCalledWith(REPO, 42);
+    expect(buttonContaining(document.body, "macOS bundle").textContent).toContain(
+      "5s",
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    await flushPromises();
+
+    expect(buttonContaining(document.body, "macOS bundle").textContent).toContain(
+      "6s",
+    );
   });
 });

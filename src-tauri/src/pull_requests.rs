@@ -856,11 +856,11 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         .map(|c| PullRequestCheck {
             name: c.name.unwrap_or_else(|| c.context.unwrap_or_default()),
             status: c.status.unwrap_or_default(),
-            conclusion: c.conclusion,
-            started_at: c.started_at,
-            completed_at: c.completed_at,
+            conclusion: normalize_optional_string(c.conclusion),
+            started_at: normalize_github_timestamp(c.started_at),
+            completed_at: normalize_github_timestamp(c.completed_at),
             url: c.details_url.or(c.target_url),
-            workflow_name: c.workflow_name,
+            workflow_name: normalize_optional_string(c.workflow_name),
         })
         .collect();
 
@@ -1794,6 +1794,27 @@ fn default_attempt() -> u32 {
     1
 }
 
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn normalize_github_timestamp(value: Option<String>) -> Option<String> {
+    normalize_optional_string(value).and_then(|value| {
+        if value.starts_with("0001-01-01T00:00:00") {
+            None
+        } else {
+            Some(value)
+        }
+    })
+}
+
 pub fn list_workflow_runs(repo_path: &Path, limit: u32) -> AppResult<WorkflowRunsListing> {
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Ok(WorkflowRunsListing::NotGithub);
@@ -1855,14 +1876,14 @@ fn run_workflow_list(slug: &str, token: &str, limit: u32) -> AppResult<Vec<Workf
                 display_title: r.display_title,
                 workflow_name,
                 status: r.status,
-                conclusion: r.conclusion,
+                conclusion: normalize_optional_string(r.conclusion),
                 event: r.event,
                 head_branch: r.head_branch.filter(|s| !s.is_empty()),
                 head_sha: r.head_sha,
                 url: r.url,
                 created_at: r.created_at,
                 updated_at: r.updated_at,
-                started_at: r.started_at,
+                started_at: normalize_github_timestamp(r.started_at),
                 attempt: r.attempt,
             }
         })
@@ -2048,9 +2069,9 @@ fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<Workflow
             id: j.database_id,
             name: j.name,
             status: j.status,
-            conclusion: j.conclusion,
-            started_at: j.started_at,
-            completed_at: j.completed_at,
+            conclusion: normalize_optional_string(j.conclusion),
+            started_at: normalize_github_timestamp(j.started_at),
+            completed_at: normalize_github_timestamp(j.completed_at),
             url: j.url,
             steps: j
                 .steps
@@ -2059,7 +2080,7 @@ fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<Workflow
                     name: s.name,
                     number: s.number,
                     status: s.status,
-                    conclusion: s.conclusion,
+                    conclusion: normalize_optional_string(s.conclusion),
                 })
                 .collect(),
         })
@@ -2070,14 +2091,14 @@ fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<Workflow
         display_title: raw.display_title,
         workflow_name,
         status: raw.status,
-        conclusion: raw.conclusion,
+        conclusion: normalize_optional_string(raw.conclusion),
         event: raw.event,
         head_branch: raw.head_branch.filter(|s| !s.is_empty()),
         head_sha: raw.head_sha,
         url: raw.url,
         created_at: raw.created_at,
         updated_at: raw.updated_at,
-        started_at: raw.started_at,
+        started_at: normalize_github_timestamp(raw.started_at),
         attempt: raw.attempt,
         jobs,
     })
@@ -2123,5 +2144,19 @@ mod tests {
         );
 
         assert!(prompt.contains("Write a merge commit message."));
+    }
+
+    #[test]
+    fn github_zero_timestamps_are_treated_as_absent() {
+        assert_eq!(normalize_github_timestamp(None), None);
+        assert_eq!(normalize_github_timestamp(Some("".to_string())), None);
+        assert_eq!(
+            normalize_github_timestamp(Some("0001-01-01T00:00:00Z".to_string())),
+            None
+        );
+        assert_eq!(
+            normalize_github_timestamp(Some("2026-05-27T02:42:28Z".to_string())),
+            Some("2026-05-27T02:42:28Z".to_string())
+        );
     }
 }
