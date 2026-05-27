@@ -2297,6 +2297,23 @@ pub async fn detect_session_statuses(
         ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
     );
     let children = build_children_map(&sys);
+    let daemon_session_pids = std::sync::OnceLock::<HashMap<Uuid, u32>>::new();
+    let daemon_pid_for = |uuid: Uuid| {
+        daemon_session_pids
+            .get_or_init(|| {
+                state
+                    .daemon_bridge
+                    .list_sessions()
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| s.alive)
+                    .filter_map(|s| s.pid.map(|pid| (s.id, pid)))
+                    .collect()
+            })
+            .get(&uuid)
+            .copied()
+    };
 
     Ok(ids
         .into_iter()
@@ -2317,21 +2334,28 @@ pub async fn detect_session_statuses(
             // live in `state.pty`. Each side drives its own shell-state
             // machine because the sticky NeedsInput deadline is
             // per-attachment, not global.
-            let root_pid = parsed_id.and_then(|uuid| {
-                state
-                    .stream_registry
-                    .pid(&uuid)
-                    .or_else(|| state.pty.child_pid(&uuid))
-            });
+            let daemon_pid = session
+                .as_ref()
+                .and_then(|s| s.daemon_session_id)
+                .and_then(daemon_pid_for);
+            let root_pid = parsed_id
+                .and_then(|uuid| status_poll_root_pid_source(&state, uuid, daemon_pid));
             let shell_hint = parsed_id.and_then(|uuid| {
-                let root = root_pid?;
+                let (root, source) = root_pid?;
                 let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
-                if state.stream_registry.contains(&uuid) {
-                    state
+                match source {
+                    StatusPollRootPidSource::AttachedDaemon => state
                         .stream_registry
                         .update_shell_state(&uuid, has_child_now)
-                } else {
-                    state.pty.update_shell_state(&uuid, has_child_now)
+                        .or_else(|| {
+                            Some(shell_hint_for_unattached_daemon_status_poll(has_child_now))
+                        }),
+                    StatusPollRootPidSource::InProcess => {
+                        state.pty.update_shell_state(&uuid, has_child_now)
+                    }
+                    StatusPollRootPidSource::UnattachedDaemon => {
+                        Some(shell_hint_for_unattached_daemon_status_poll(has_child_now))
+                    }
                 }
             });
             // Resolve the live transcript via the persister's resume markers
@@ -2353,7 +2377,8 @@ pub async fn detect_session_statuses(
                     .flatten()
                     .map(|p| (p, acorn_session::status::AgentKind::Claude)),
             };
-            let live_agent_kind = root_pid.and_then(|pid| {
+            let root_pid_value = root_pid.map(|(pid, _)| pid);
+            let live_agent_kind = root_pid_value.and_then(|pid| {
                 live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
             });
             let shell_hint = refine_shell_hint_for_unpaired_agent(
@@ -2370,13 +2395,7 @@ pub async fn detect_session_statuses(
             //     performed inside the terminal (and `claude -w` worktrees)
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
-            let live_cwd_branch = parsed_id
-                .and_then(|uuid| {
-                    state
-                        .stream_registry
-                        .pid(&uuid)
-                        .or_else(|| state.pty.child_pid(&uuid))
-                })
+            let live_cwd_branch = root_pid_value
                 .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
                 .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
             let branch = live_cwd_branch.or_else(|| {
@@ -2398,6 +2417,43 @@ pub async fn detect_session_statuses(
             }
         })
         .collect())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusPollRootPidSource {
+    AttachedDaemon,
+    InProcess,
+    UnattachedDaemon,
+}
+
+fn status_poll_root_pid_source(
+    state: &AppState,
+    uuid: Uuid,
+    daemon_pid: Option<u32>,
+) -> Option<(u32, StatusPollRootPidSource)> {
+    let stream_attached = state.stream_registry.contains(&uuid);
+    state
+        .stream_registry
+        .pid(&uuid)
+        .or_else(|| stream_attached.then_some(daemon_pid).flatten())
+        .map(|pid| (pid, StatusPollRootPidSource::AttachedDaemon))
+        .or_else(|| {
+            state
+                .pty
+                .child_pid(&uuid)
+                .map(|pid| (pid, StatusPollRootPidSource::InProcess))
+        })
+        .or_else(|| daemon_pid.map(|pid| (pid, StatusPollRootPidSource::UnattachedDaemon)))
+}
+
+fn shell_hint_for_unattached_daemon_status_poll(
+    has_live_descendant: bool,
+) -> acorn_pty::ShellHint {
+    if has_live_descendant {
+        acorn_pty::ShellHint::Running
+    } else {
+        acorn_pty::ShellHint::Idle
+    }
 }
 
 fn status_agent_kind_to_provider(kind: StatusAgentKind) -> SessionAgentProvider {
@@ -3146,6 +3202,18 @@ mod tests {
         assert!(!env.contains_key("ACORN_AGENT_HOOK_TOKEN"));
         assert!(!env.contains_key("ACORN_AGENT_HOOK_SESSION_ID"));
         assert!(!env.contains_key("ACORN_AGENT_HOOK_PROVIDER"));
+    }
+
+    #[test]
+    fn unattached_daemon_session_shell_hint_uses_live_descendants() {
+        assert_eq!(
+            super::shell_hint_for_unattached_daemon_status_poll(true),
+            acorn_pty::ShellHint::Running
+        );
+        assert_eq!(
+            super::shell_hint_for_unattached_daemon_status_poll(false),
+            acorn_pty::ShellHint::Idle
+        );
     }
 
     #[test]
