@@ -251,6 +251,15 @@ export function applyTheme(id: string, css: string): void {
   document.documentElement.setAttribute("data-acorn-theme", id);
 }
 
+export function resolveThemeMode(
+  themeId: string | null | undefined,
+  themes: ReadonlyArray<AcornTheme>,
+): ThemeMode {
+  return (
+    (themes.find((theme) => theme.id === themeId) ?? themes[0])?.mode ?? "dark"
+  );
+}
+
 async function ensureThemesDir(): Promise<string> {
   const root = await appLocalDataDir();
   const dir = await join(root, USER_THEMES_DIR);

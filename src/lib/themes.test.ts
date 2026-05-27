@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BUILT_IN_THEMES,
   applyTheme,
+  resolveThemeMode,
   validateThemeCss,
   THEME_CSS_VARS,
 } from "./themes";
@@ -72,6 +73,17 @@ describe("validateThemeCss", () => {
     if (!result.ok) {
       expect(result.missing).toContain("--color-fg");
     }
+  });
+});
+
+describe("resolveThemeMode", () => {
+  it("returns the matching theme mode", () => {
+    expect(resolveThemeMode("acorn-light", BUILT_IN_THEMES)).toBe("light");
+    expect(resolveThemeMode("acorn-dark", BUILT_IN_THEMES)).toBe("dark");
+  });
+
+  it("falls back to the first theme mode when the id is unknown", () => {
+    expect(resolveThemeMode("custom-missing", BUILT_IN_THEMES)).toBe("dark");
   });
 });
 

@@ -8,6 +8,8 @@ import {
   type ParsedLine,
 } from "../lib/diff";
 import { highlightDiff, langFromPath } from "../lib/highlight";
+import { useSettings } from "../lib/settings";
+import { resolveThemeMode, useThemes } from "../lib/themes";
 import type { DiffFile, DiffPayload } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
@@ -268,6 +270,12 @@ export function useHighlightedDiff(
   lines: ParsedLine[],
   path: string | null,
 ): (string | null)[] {
+  const themeId = useSettings((s) => s.settings.appearance.themeId);
+  const themes = useThemes((s) => s.themes);
+  const themeMode = useMemo(
+    () => resolveThemeMode(themeId, themes),
+    [themeId, themes],
+  );
   const [html, setHtml] = useState<(string | null)[]>(() =>
     new Array(lines.length).fill(null),
   );
@@ -280,7 +288,7 @@ export function useHighlightedDiff(
     }
     let cancelled = false;
     setHtml(new Array(lines.length).fill(null));
-    highlightDiff(lines, lang)
+    highlightDiff(lines, lang, themeMode)
       .then((result) => {
         if (!cancelled) setHtml(result);
       })
@@ -291,7 +299,7 @@ export function useHighlightedDiff(
     return () => {
       cancelled = true;
     };
-  }, [lines, path]);
+  }, [lines, path, themeMode]);
 
   return html;
 }

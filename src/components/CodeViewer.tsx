@@ -8,6 +8,8 @@ import {
 } from "../lib/api";
 import { highlightCode, langFromPath } from "../lib/highlight";
 import { cn } from "../lib/cn";
+import { useSettings } from "../lib/settings";
+import { resolveThemeMode, useThemes } from "../lib/themes";
 import { useTranslation } from "../lib/useTranslation";
 import {
   estimateMaxLineWidthCh,
@@ -74,6 +76,8 @@ function isMarkdownPath(path: string): boolean {
 
 export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   const t = useTranslation();
+  const themeId = useSettings((s) => s.settings.appearance.themeId);
+  const themes = useThemes((s) => s.themes);
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
   const [previewMarkdown, setPreviewMarkdown] = useState(false);
@@ -84,6 +88,10 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   const lineListRef = useRef<VirtualizedLineListHandle | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const themeMode = useMemo(
+    () => resolveThemeMode(themeId, themes),
+    [themeId, themes],
+  );
 
   const refreshDiff = useCallback(async () => {
     try {
@@ -104,23 +112,11 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
     setPreviewMatchCount(0);
     api
       .fsReadFile(path)
-      .then(async (data) => {
-        if (cancelled) return;
-        if (data.binary) {
-          setState({
-            data,
-            highlightedLines: null,
-            error: null,
-            loading: false,
-          });
-          return;
-        }
-        const lang = langFromPath(path);
-        const lines = await highlightCode(data.content, lang);
+      .then((data) => {
         if (cancelled) return;
         setState({
           data,
-          highlightedLines: lines,
+          highlightedLines: null,
           error: null,
           loading: false,
         });
@@ -134,11 +130,45 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
           loading: false,
         });
       });
-    void refreshDiff();
     return () => {
       cancelled = true;
     };
-  }, [path, refreshDiff]);
+  }, [path]);
+
+  useEffect(() => {
+    const data = state.data;
+    if (!data || data.binary) return;
+    let cancelled = false;
+    setState((current) =>
+      current.data === data ? { ...current, highlightedLines: null } : current,
+    );
+    const lang = langFromPath(path);
+    highlightCode(data.content, lang, themeMode)
+      .then((lines) => {
+        if (cancelled) return;
+        setState((current) =>
+          current.data === data
+            ? { ...current, highlightedLines: lines }
+            : current,
+        );
+      })
+      .catch((err) => {
+        console.warn("[CodeViewer] highlight failed", err);
+        if (cancelled) return;
+        setState((current) =>
+          current.data === data
+            ? { ...current, highlightedLines: null }
+            : current,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, state.data, themeMode]);
+
+  useEffect(() => {
+    void refreshDiff();
+  }, [refreshDiff]);
 
   const diffByLine = useMemo(() => {
     const map = new Map<number, FsLineDiffEntry["kind"]>();
@@ -300,7 +330,7 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
     <div
       className={cn(
         "relative flex h-full w-full flex-col bg-bg",
-        isActive ? "" : "pointer-events-none opacity-50",
+        isActive ? "" : "pointer-events-none",
       )}
     >
       {state.data.truncated ? (
