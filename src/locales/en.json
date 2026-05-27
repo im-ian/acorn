@@ -315,7 +315,7 @@
       },
       "history": {
         "label": "Notification history",
-        "hint": "Controls Acorn's in-app notification log. Delivered system notifications are not cleared by these settings.",
+        "hint": "Controls Acorn's in-app notification log. OS-delivered alerts are not cleared by these settings.",
         "maxCount": "Maximum records",
         "autoDeleteRead": {
           "label": "Auto-delete read notifications",

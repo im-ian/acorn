@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import {
   resetNotificationsForTests,
+  startFocusedSessionNotificationReadWatcher,
   startSessionActivityInboxWatcher,
   startSessionNotificationWatcher,
 } from "./notifications";
@@ -155,9 +156,9 @@ describe("notifications", () => {
     dispose();
   });
 
-  it("marks focused in-app activity read without clearing it", async () => {
-    useAppStore.setState({ activeSessionId: "session-1" });
-    const dispose = startSessionActivityInboxWatcher();
+  it("marks in-app activity read when its session tab is focused", async () => {
+    const disposeActivity = startSessionActivityInboxWatcher();
+    const disposeFocusedRead = startFocusedSessionNotificationReadWatcher();
 
     useAppStore.setState({
       sessions: [
@@ -167,6 +168,7 @@ describe("notifications", () => {
         }),
       ],
     });
+    useAppStore.setState({ activeSessionId: "session-1" });
 
     const [notification] = useAppStore.getState().sessionNotifications;
     expect(notification).toMatchObject({
@@ -174,7 +176,8 @@ describe("notifications", () => {
       status: "needs_input",
     });
     expect(notification?.readAt).toEqual(expect.any(String));
-    dispose();
+    disposeActivity();
+    disposeFocusedRead();
   });
 
   it("trims in-app activity to the configured maximum", () => {
@@ -206,8 +209,8 @@ describe("notifications", () => {
 
   it("deletes read in-app activity when auto-delete read notifications is enabled", () => {
     useSettings.getState().patchNotifications({ autoDeleteRead: true });
-    useAppStore.setState({ activeSessionId: "session-1" });
-    const dispose = startSessionActivityInboxWatcher();
+    const disposeActivity = startSessionActivityInboxWatcher();
+    const disposeFocusedRead = startFocusedSessionNotificationReadWatcher();
 
     useAppStore.setState({
       sessions: [
@@ -217,9 +220,11 @@ describe("notifications", () => {
         }),
       ],
     });
+    useAppStore.setState({ activeSessionId: "session-1" });
 
     expect(useAppStore.getState().sessionNotifications).toHaveLength(0);
     expect(mocks.sendNotification).not.toHaveBeenCalled();
-    dispose();
+    disposeActivity();
+    disposeFocusedRead();
   });
 });

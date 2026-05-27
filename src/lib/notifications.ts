@@ -115,10 +115,7 @@ export function startFocusedSessionNotificationReadWatcher(): () => void {
   const unsubscribeStore = useAppStore.subscribe((state, previous) => {
     if (state.activeSessionId !== previous.activeSessionId) {
       markFocused();
-      return;
     }
-    if (state.sessionNotifications === previous.sessionNotifications) return;
-    markFocused();
   });
   const unsubscribeSettings = useSettings.subscribe((state, previous) => {
     if (
@@ -213,9 +210,6 @@ export function startSessionActivityInboxWatcher(): () => void {
       const kind = notificationKindForTransition(prev, s.status);
       if (!kind) continue;
       store.addSessionNotification(buildInboxNotification(s, prev, kind));
-      if (isSessionFocused(s.id, state.activeSessionId)) {
-        store.markSessionNotificationsReadForSession(s.id);
-      }
     }
 
     const known = new Set(sessions.map((s) => s.id));
