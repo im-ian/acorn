@@ -888,7 +888,12 @@
     "history": {
       "loading": "agent 세션을 스캔하는 중…",
       "count": "agent 세션 {count}개",
+      "filterByAgent": "에이전트로 필터링",
+      "allAgents": "모든 에이전트",
+      "codex": "Codex",
+      "claude": "Claude",
       "empty": "이 프로젝트의 Claude 또는 Codex 세션을 찾지 못했습니다",
+      "emptyForFilter": "이 필터와 일치하는 세션이 없습니다.",
       "runSession": "새 터미널에서 실행",
       "runInWorktree": "워크트리에서 실행",
       "copyResume": "resume 명령 복사",

@@ -888,7 +888,12 @@
     "history": {
       "loading": "Scanning agent sessions…",
       "count": "{count} agent sessions",
+      "filterByAgent": "Filter by agent",
+      "allAgents": "All agents",
+      "codex": "Codex",
+      "claude": "Claude",
       "empty": "No Claude or Codex sessions found for this project",
+      "emptyForFilter": "No sessions match this filter.",
       "runSession": "Run in new terminal",
       "runInWorktree": "Run in worktree",
       "copyResume": "Copy resume command",
