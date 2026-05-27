@@ -747,6 +747,13 @@ pub struct ReadFileResult {
 const VIEWER_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[tauri::command]
+pub fn fs_file_exists(path: String) -> AppResult<bool> {
+    let p = PathBuf::from(&path);
+    reject_dangerous(&p)?;
+    Ok(p.is_file())
+}
+
+#[tauri::command]
 pub fn fs_read_file(path: String) -> AppResult<ReadFileResult> {
     let p = PathBuf::from(&path);
     reject_dangerous(&p)?;
@@ -1559,6 +1566,21 @@ mod tests {
     fn rename_rejects_traversal_segments() {
         let res = fs_rename("/tmp/../etc/evil".to_string(), "/tmp/x".to_string());
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn fs_file_exists_only_accepts_files() {
+        let d = tmpdir();
+        let file = d.path().join("a.txt");
+        let dir = d.path().join("folder");
+        fs::write(&file, b"hi").unwrap();
+        fs::create_dir(&dir).unwrap();
+
+        assert!(fs_file_exists(file.to_string_lossy().into_owned()).unwrap());
+        assert!(!fs_file_exists(dir.to_string_lossy().into_owned()).unwrap());
+        assert!(
+            !fs_file_exists(d.path().join("missing.txt").to_string_lossy().into_owned()).unwrap()
+        );
     }
 
     #[test]

@@ -585,6 +585,7 @@ pub fn run() {
             fs_explorer::fs_shell_editor,
             fs_explorer::fs_git_status,
             fs_explorer::fs_git_branch,
+            fs_explorer::fs_file_exists,
             fs_explorer::fs_read_file,
             fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,

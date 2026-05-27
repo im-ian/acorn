@@ -4,7 +4,12 @@ import {
   findTerminalFileReferences,
   resolveTerminalFilePath,
 } from "./terminalFileLinks";
-import type { IBufferCell, IBufferLine, Terminal as XTerm } from "@xterm/xterm";
+import type {
+  IBufferCell,
+  IBufferLine,
+  ILink,
+  Terminal as XTerm,
+} from "@xterm/xterm";
 
 function makeBufferCell(chars: string, width = 1): IBufferCell {
   return {
@@ -135,6 +140,24 @@ describe("terminal file links", () => {
     expect(findTerminalFileReferences("for example, e.g. this")).toEqual([]);
   });
 
+  it("does not treat property chains as file references", () => {
+    expect(
+      findTerminalFileReferences(
+        "assert_eq!(limits.requests.unwrap().reset_at, Some(1779930000.0));",
+      ),
+    ).toEqual([]);
+  });
+
+  it("accepts sentence-ending periods after file paths", () => {
+    expect(findTerminalFileReferences("Loaded README.md.")).toEqual([
+      {
+        path: "README.md",
+        text: "README.md",
+        startIndex: 7,
+      },
+    ]);
+  });
+
   it("resolves relative paths from the terminal cwd", () => {
     expect(resolveTerminalFilePath("/repo/app", "src/App.tsx")).toBe(
       "/repo/app/src/App.tsx",
@@ -159,6 +182,28 @@ describe("terminal file links", () => {
         underline: false,
       });
     });
+  });
+
+  it("filters links through the reference resolver", async () => {
+    const provider = createTerminalFileLinkProvider(
+      makeTerminalWithLine(makeBufferLine("src/App.tsx missing.tsx")),
+      {
+        activate: () => undefined,
+        resolveReferences: async (references) =>
+          references
+            .filter((reference) => reference.path === "src/App.tsx")
+            .map((reference) => ({
+              ...reference,
+              absolutePath: `/repo/${reference.path}`,
+            })),
+      },
+    );
+
+    const links = await new Promise<ILink[] | undefined>((resolve) => {
+      provider.provideLinks(1, resolve);
+    });
+
+    expect(links?.map((link) => link.text)).toEqual(["src/App.tsx"]);
   });
 
   it("maps file link ranges using terminal cell columns", () => {

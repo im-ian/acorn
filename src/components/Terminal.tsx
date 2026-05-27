@@ -653,15 +653,53 @@ export function Terminal({
         hideLinkTooltip();
       },
     };
+    const resolveTerminalFileBaseCwd = async (): Promise<string> => {
+      let baseCwd = cwd;
+      try {
+        baseCwd = (await api.ptyCwd(sessionId)) ?? cwd;
+      } catch (err: unknown) {
+        console.debug("[Terminal] pty_cwd for file link failed", err);
+      }
+      return baseCwd;
+    };
+    const resolveOpenableTerminalFileReferences = async (
+      references: TerminalFileReference[],
+    ): Promise<TerminalFileReference[]> => {
+      const baseCwd = await resolveTerminalFileBaseCwd();
+      const resolved: Array<TerminalFileReference | null> = await Promise.all(
+        references.map(async (reference) => {
+          const absolutePath = resolveTerminalFilePath(baseCwd, reference.path);
+          try {
+            if (!(await api.fsFileExists(absolutePath))) {
+              return null;
+            }
+          } catch (err: unknown) {
+            console.debug("[Terminal] fs_file_exists for file link failed", err);
+            return null;
+          }
+          return { ...reference, absolutePath };
+        }),
+      );
+      return resolved.filter(
+        (reference): reference is TerminalFileReference => reference !== null,
+      );
+    };
     const openTerminalFileReference = (reference: TerminalFileReference) => {
       void (async () => {
-        let baseCwd = cwd;
+        const path =
+          reference.absolutePath ??
+          resolveTerminalFilePath(
+            await resolveTerminalFileBaseCwd(),
+            reference.path,
+          );
         try {
-          baseCwd = (await api.ptyCwd(sessionId)) ?? cwd;
+          if (!(await api.fsFileExists(path))) {
+            return;
+          }
         } catch (err: unknown) {
-          console.debug("[Terminal] pty_cwd for file link failed", err);
+          console.debug("[Terminal] fs_file_exists before open failed", err);
+          return;
         }
-        const path = resolveTerminalFilePath(baseCwd, reference.path);
         const target =
           reference.line === undefined
             ? undefined
@@ -682,6 +720,7 @@ export function Terminal({
     );
     let fileLinksDisposable: IDisposable | null = term.registerLinkProvider(
       createTerminalFileLinkProvider(term, {
+        resolveReferences: resolveOpenableTerminalFileReferences,
         activate: (event, reference) => {
           event.preventDefault();
           hideLinkTooltip(true);
