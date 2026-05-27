@@ -1615,6 +1615,7 @@ pub fn generate_pr_commit_message(
     method: MergeMethod,
     command: String,
     args: Vec<String>,
+    prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
     if command.trim().is_empty() {
         return Err(AppError::Other(
@@ -1643,17 +1644,18 @@ pub fn generate_pr_commit_message(
     };
 
     let (view, diff) = context;
-    let prompt = build_commit_message_prompt(method, &view, &diff);
+    let prompt = build_commit_message_prompt(method, &prompt, &view, &diff);
     let raw = crate::ai::run_oneshot(&command, &args, &prompt, "Settings → Agents")?;
     Ok(parse_commit_message_response(&raw))
 }
 
 fn build_commit_message_prompt(
     method: MergeMethod,
+    user_prompt: &str,
     view: &GhPullRequestView,
     diff: &str,
 ) -> String {
-    let style = match method {
+    let fallback_prompt = match method {
         MergeMethod::Squash => {
             "Write a single squash commit message. The first line is a short imperative subject (≤72 chars). \
              Leave one blank line, then a concise body explaining the WHY (not the what)."
@@ -1668,6 +1670,12 @@ fn build_commit_message_prompt(
             "Summarize the change as a single subject line (≤72 chars), no body."
         }
     };
+    let user_prompt = user_prompt.trim();
+    let instructions = if user_prompt.is_empty() {
+        fallback_prompt
+    } else {
+        user_prompt
+    };
 
     // Cap diff size — claude has a context budget and the user can refine
     // afterwards if details are missing.
@@ -1679,15 +1687,20 @@ fn build_commit_message_prompt(
     };
 
     format!(
-        "You are generating a git commit message for merging a pull request.\n\n\
-         {style}\n\n\
-         Output format (strict): the subject line ALONE on the first line, then a blank line, \
-         then the body. Do not wrap the message in code fences or backticks. Do not add \
-         commentary before or after.\n\n\
+        "You are generating the exact git commit message text that Acorn will put into \
+         the pull request merge dialog.\n\n\
+         Style and content instructions:\n{instructions}\n\n\
+         Hard output contract:\n\
+         - Return only the generated commit message text.\n\
+         - First line: subject only, no label, prefix, or heading.\n\
+         - Then one blank line, then the body text. For rebase, leave the body empty.\n\
+         - Do not mention or summarize the prompt, rules, PR, diff, or your reasoning.\n\
+         - Do not include explanations, markdown headings, code fences, quotes, or \
+         labels such as \"Title:\" / \"Comment:\".\n\n\
          PR title: {title}\n\
          PR description:\n{body}\n\n\
          Diff:\n{diff}\n",
-        style = style,
+        instructions = instructions,
         title = view.title.as_deref().unwrap_or(""),
         body = view.body.as_deref().unwrap_or(""),
         diff = trimmed_diff,
@@ -2068,4 +2081,47 @@ fn run_workflow_view(slug: &str, token: &str, run_id: u64) -> AppResult<Workflow
         attempt: raw.attempt,
         jobs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_view() -> GhPullRequestView {
+        GhPullRequestView {
+            title: Some("Add prompt editing".to_string()),
+            body: Some("Let users steer generated merge messages.".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn commit_message_prompt_uses_custom_user_prompt() {
+        let prompt = build_commit_message_prompt(
+            MergeMethod::Squash,
+            "Write the title and comment in Korean.",
+            &fake_view(),
+            "diff --git a/src/app.tsx b/src/app.tsx",
+        );
+
+        assert!(prompt
+            .contains("Style and content instructions:\nWrite the title and comment in Korean."));
+        assert!(prompt.contains("Return only the generated commit message text."));
+        assert!(prompt.contains("Do not mention or summarize the prompt"));
+        assert!(prompt.contains("labels such as \"Title:\" / \"Comment:\""));
+        assert!(prompt.contains("PR title: Add prompt editing"));
+        assert!(prompt.contains("Diff:\ndiff --git"));
+    }
+
+    #[test]
+    fn commit_message_prompt_falls_back_when_custom_prompt_is_blank() {
+        let prompt = build_commit_message_prompt(
+            MergeMethod::Merge,
+            "  ",
+            &fake_view(),
+            "diff --git a/src/app.tsx b/src/app.tsx",
+        );
+
+        assert!(prompt.contains("Write a merge commit message."));
+    }
 }

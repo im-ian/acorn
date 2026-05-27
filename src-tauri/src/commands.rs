@@ -12,6 +12,7 @@ use crate::agent_resume;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
+use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::pull_requests::{
     self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
     PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
@@ -986,6 +987,19 @@ pub fn create_new_project(
     Ok(project)
 }
 
+#[tauri::command]
+pub fn get_project_settings(repo_path: String) -> AppResult<ProjectSettingsRecord> {
+    project_settings::get(&PathBuf::from(repo_path))
+}
+
+#[tauri::command]
+pub fn update_project_settings(
+    repo_path: String,
+    settings: ProjectSettings,
+) -> AppResult<ProjectSettingsRecord> {
+    project_settings::update(&PathBuf::from(repo_path), settings)
+}
+
 fn validate_new_project_name(name: &str, ignore_safe_name: bool) -> AppResult<&str> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -1061,6 +1075,7 @@ pub async fn remove_project(
     repo_path: String,
     remove_sessions: Option<bool>,
     remove_worktrees: Option<bool>,
+    remove_settings: Option<bool>,
 ) -> AppResult<()> {
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
@@ -1081,6 +1096,13 @@ pub async fn remove_project(
         }
     }
     state.projects.remove(&path);
+    let drop_settings = remove_settings.unwrap_or(false)
+        || project_settings::should_remove_on_project_close(&path).unwrap_or(false);
+    if drop_settings {
+        if let Err(err) = project_settings::remove(&path) {
+            tracing::warn!(error = %err, path = %path.display(), "failed to remove project settings");
+        }
+    }
     persist(&state);
     Ok(())
 }
@@ -2689,6 +2711,7 @@ pub async fn generate_pr_commit_message(
     method: MergeMethod,
     command: String,
     args: Vec<String>,
+    prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
     pull_requests::generate_pr_commit_message(
         &PathBuf::from(repo_path),
@@ -2696,6 +2719,7 @@ pub async fn generate_pr_commit_message(
         method,
         command,
         args,
+        prompt,
     )
 }
 

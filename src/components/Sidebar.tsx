@@ -11,6 +11,7 @@ import {
   Pencil,
   PencilLine,
   Plus,
+  Settings as SettingsIcon,
   SquareX,
   Trash2,
   X,
@@ -79,6 +80,7 @@ import {
 import type { Session, SessionKind, SessionStatus } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
+import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 
@@ -142,6 +144,9 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [settingsProject, setSettingsProject] = useState<ProjectGroup | null>(
+    null,
+  );
 
   useEffect(() => {
     saveCollapsed(collapsed);
@@ -524,6 +529,7 @@ export function Sidebar() {
                     onRemoveProject={() =>
                       requestRemoveProject(project.repoPath)
                     }
+                    onOpenSettings={() => setSettingsProject(project)}
                   />
                 ))}
               </ul>
@@ -555,6 +561,17 @@ export function Sidebar() {
             throw e;
           }
         }}
+      />
+      <ProjectSettingsModal
+        project={
+          settingsProject
+            ? {
+                name: settingsProject.name,
+                repoPath: settingsProject.repoPath,
+              }
+            : null
+        }
+        onClose={() => setSettingsProject(null)}
       />
     </aside>
   );
@@ -707,6 +724,7 @@ interface ProjectGroupViewProps {
   onRemoveSession: (s: Session) => void;
   onAddSession: (isolated: boolean, kind: SessionKind) => void;
   onRemoveProject: () => void;
+  onOpenSettings: () => void;
 }
 
 function ProjectGroupView({
@@ -721,6 +739,7 @@ function ProjectGroupView({
   onRemoveSession,
   onAddSession,
   onRemoveProject,
+  onOpenSettings,
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -919,6 +938,11 @@ function ProjectGroupView({
             onClick: () => onAddSession(false, "control"),
           },
           { type: "separator" },
+          {
+            label: sidebarText(t, "sidebar.actions.projectSettings"),
+            icon: <SettingsIcon size={12} />,
+            onClick: onOpenSettings,
+          },
           {
             label: sidebarText(t, "sidebar.actions.revealInFinder"),
             icon: <FolderOpen size={12} />,

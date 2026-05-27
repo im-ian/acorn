@@ -22,6 +22,11 @@ vi.mock("../lib/api", () => {
       updatePullRequestBody: vi.fn<
         (repoPath: string, n: number, body: string) => Promise<void>
       >(),
+      mergePullRequest: vi.fn(),
+      closePullRequest: vi.fn(),
+      generatePrCommitMessage: vi.fn(),
+      getProjectSettings: vi.fn(),
+      updateProjectSettings: vi.fn(),
     },
   };
 });
@@ -78,6 +83,19 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     root = createRoot(container);
     mockApi.getPullRequestDetail.mockReset();
     mockApi.updatePullRequestBody.mockReset();
+    mockApi.mergePullRequest.mockReset();
+    mockApi.closePullRequest.mockReset();
+    mockApi.generatePrCommitMessage.mockReset();
+    mockApi.getProjectSettings.mockReset();
+    mockApi.updateProjectSettings.mockReset();
+    mockApi.getProjectSettings.mockResolvedValue({
+      key: "path:/r",
+      settings: {
+        remember_after_close: true,
+        pull_requests: { generation_prompt: null },
+      },
+    });
+    window.localStorage.clear();
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });
 
@@ -344,5 +362,133 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
 
     expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(2);
     expect(document.body.textContent).toContain("6s");
+  });
+
+  it("opens project settings from the hidden GEN prompt button", async () => {
+    mockApi.getPullRequestDetail.mockResolvedValueOnce({
+      kind: "ok",
+      account: "tester",
+      detail: fakeDetail("Describe the change"),
+    });
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const mergeButton = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Merge");
+    expect(mergeButton).toBeDefined();
+
+    await act(async () => {
+      mergeButton!.click();
+    });
+    await flushPromises();
+
+    const promptBox = document.body.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="GEN prompt"]',
+    );
+    expect(promptBox).toBeNull();
+
+    const settingsButton = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Go to project settings"]',
+    );
+    expect(settingsButton).toBeTruthy();
+    await act(async () => {
+      settingsButton!.click();
+    });
+    await flushPromises();
+
+    expect(document.body.textContent).toContain("Project Settings");
+    expect(document.body.textContent).toContain(
+      "Prompt for generated PR titles, comments, and merge messages",
+    );
+  });
+
+  it("uses the project GEN prompt and applies the generated PR comment", async () => {
+    mockApi.getProjectSettings.mockResolvedValueOnce({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: {
+          generation_prompt:
+            "프로젝트 규칙대로 PR title과 comment를 한국어 릴리즈 노트 스타일로 작성해.",
+        },
+      },
+    });
+    mockApi.getPullRequestDetail.mockResolvedValueOnce({
+      kind: "ok",
+      account: "tester",
+      detail: fakeDetail("Describe the change"),
+    });
+    mockApi.generatePrCommitMessage.mockResolvedValueOnce({
+      title: "feat(pr): 프로젝트 설정 기반 생성",
+      body: "프로젝트 설정 프롬프트를 반영한 PR 코멘트입니다.",
+    });
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const mergeButton = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Merge");
+    expect(mergeButton).toBeDefined();
+
+    await act(async () => {
+      mergeButton!.click();
+    });
+    await flushPromises();
+
+    const promptBox = document.body.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="GEN prompt"]',
+    );
+    expect(promptBox).toBeNull();
+
+    const generateButton = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("Generate with AI"));
+    expect(generateButton).toBeDefined();
+
+    await act(async () => {
+      generateButton!.click();
+    });
+    await flushPromises();
+
+    expect(mockApi.generatePrCommitMessage).toHaveBeenCalledWith(
+      "/r",
+      999,
+      "squash",
+      "claude",
+      ["-p", "--output-format", "text"],
+      "프로젝트 규칙대로 PR title과 comment를 한국어 릴리즈 노트 스타일로 작성해.",
+    );
+
+    const generatedTitle = Array.from(
+      document.body.querySelectorAll<HTMLInputElement>('input[type="text"]'),
+    ).find(
+      (input) => input.value === "feat(pr): 프로젝트 설정 기반 생성",
+    );
+    expect(generatedTitle).toBeDefined();
+
+    const generatedComment = Array.from(
+      document.body.querySelectorAll<HTMLTextAreaElement>("textarea"),
+    ).find(
+      (textarea) =>
+        textarea.value === "프로젝트 설정 프롬프트를 반영한 PR 코멘트입니다.",
+    );
+    expect(generatedComment).toBeDefined();
   });
 });

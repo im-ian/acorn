@@ -1402,7 +1402,12 @@ describe("requestRemoveProject", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(useAppStore.getState().pendingRemoveProject).toBeNull();
-    expect(mockApi.removeProject).toHaveBeenCalledWith(REPO_B, true, false);
+    expect(mockApi.removeProject).toHaveBeenCalledWith(
+      REPO_B,
+      true,
+      false,
+      false,
+    );
     expect(useAppStore.getState().workspaces[REPO_B]).toBeUndefined();
   });
 });

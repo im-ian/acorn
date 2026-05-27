@@ -9,6 +9,8 @@ import type {
   MemoryUsage,
   MergeMethod,
   Project,
+  ProjectSettings,
+  ProjectSettingsRecord,
   PrStateFilter,
   PullRequestDetailListing,
   PullRequestListing,
@@ -122,11 +124,25 @@ export const api = {
     repoPath: string,
     removeSessions = true,
     removeWorktrees = false,
+    removeSettings = false,
   ): Promise<void> {
     return invoke<void>("remove_project", {
       repoPath,
       removeSessions,
       removeWorktrees,
+      removeSettings,
+    });
+  },
+  getProjectSettings(repoPath: string): Promise<ProjectSettingsRecord> {
+    return invoke<ProjectSettingsRecord>("get_project_settings", { repoPath });
+  },
+  updateProjectSettings(
+    repoPath: string,
+    settings: ProjectSettings,
+  ): Promise<ProjectSettingsRecord> {
+    return invoke<ProjectSettingsRecord>("update_project_settings", {
+      repoPath,
+      settings,
     });
   },
   reorderProjects(order: string[]): Promise<Project[]> {
@@ -247,6 +263,7 @@ export const api = {
     method: MergeMethod,
     command: string,
     args: string[],
+    prompt: string,
   ): Promise<GeneratedCommitMessage> {
     return invoke<GeneratedCommitMessage>("generate_pr_commit_message", {
       repoPath,
@@ -254,6 +271,7 @@ export const api = {
       method,
       command,
       args,
+      prompt,
     });
   },
   listWorkflowRuns(

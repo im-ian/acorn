@@ -14,6 +14,7 @@ mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
+mod project_settings;
 pub mod pty_env;
 mod pty_output;
 mod pull_requests;
@@ -504,6 +505,8 @@ pub fn run() {
             commands::add_project,
             commands::create_new_project,
             commands::remove_project,
+            commands::get_project_settings,
+            commands::update_project_settings,
             commands::reorder_projects,
             commands::reorder_sessions,
             commands::list_commits,
