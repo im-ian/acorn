@@ -34,6 +34,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { Pane } from "./Pane";
 import { useAppStore } from "../store";
+import { clearTabDragPayload, getCurrentTabPayload } from "../lib/dnd";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
 
 const REPO = "/Users/me/repo";
@@ -141,12 +142,60 @@ function seedInactivePaneWithTab(tab: Session): void {
   }));
 }
 
+function seedActivePaneWithTab(tab: Session): void {
+  const pane = {
+    id: "root",
+    tabIds: [tab.id],
+    activeTabId: tab.id,
+  };
+
+  useAppStore.setState((s) => ({
+    ...s,
+    sessions: [tab],
+    activeProject: REPO,
+    activeSessionId: tab.id,
+    activeTabId: tab.id,
+    workspaces: {
+      ...s.workspaces,
+      [REPO]: {
+        layout: { kind: "pane", id: "root" },
+        panes: { root: pane },
+        focusedPaneId: "root",
+      },
+    },
+    panes: { root: pane },
+    focusedPaneId: "root",
+  }));
+}
+
+function makeDataTransfer(): DataTransfer {
+  return {
+    dropEffect: "none",
+    effectAllowed: "all",
+    setData: vi.fn(),
+    getData: vi.fn(() => ""),
+    clearData: vi.fn(),
+    files: [] as unknown as FileList,
+    items: [] as unknown as DataTransferItemList,
+    types: [],
+    setDragImage: vi.fn(),
+  };
+}
+
+function dispatchDragStart(target: Element, dataTransfer: DataTransfer): Event {
+  const event = new Event("dragstart", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  target.dispatchEvent(event);
+  return event;
+}
+
 describe("Pane empty state", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     resetStore();
+    clearTabDragPayload();
     vi.clearAllMocks();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -156,6 +205,7 @@ describe("Pane empty state", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    clearTabDragPayload();
   });
 
   it("opens a terminal when Space is pressed twice while an empty pane is focused", async () => {
@@ -407,5 +457,67 @@ describe("Pane empty state", () => {
     });
 
     expect(useAppStore.getState().focusedPaneId).toBe("pane-2");
+  });
+
+  it("starts tab drag from active tab chrome outside the inner handle", () => {
+    const active = session("active-session");
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const dragHandle = container.querySelector(
+      `[data-tab-drag-handle="${active.id}"]`,
+    );
+    const tab = dragHandle?.closest('[role="button"]');
+    expect(tab).toBeInstanceOf(HTMLElement);
+    expect((tab as HTMLElement).getAttribute("draggable")).toBe("true");
+
+    const dataTransfer = makeDataTransfer();
+    act(() => {
+      dispatchDragStart(tab!, dataTransfer);
+    });
+
+    expect(dataTransfer.setDragImage).toHaveBeenCalled();
+    expect(getCurrentTabPayload()).toMatchObject({
+      kind: "tab",
+      tabId: active.id,
+      fromPaneId: "root",
+    });
+  });
+
+  it("does not start tab drag from the close button", () => {
+    const active = session("active-session");
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const closeButton = container.querySelector(
+      `[data-tab-close-button="${active.id}"]`,
+    );
+    const tab = closeButton?.closest('[role="button"]');
+    expect(closeButton).toBeInstanceOf(HTMLElement);
+    expect(tab).toBeInstanceOf(HTMLElement);
+
+    let dragStartDefaultPrevented = false;
+    act(() => {
+      closeButton!.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+        }),
+      );
+      dragStartDefaultPrevented = dispatchDragStart(
+        tab!,
+        makeDataTransfer(),
+      ).defaultPrevented;
+    });
+
+    expect(dragStartDefaultPrevented).toBe(true);
+    expect(getCurrentTabPayload()).toBeNull();
   });
 });
