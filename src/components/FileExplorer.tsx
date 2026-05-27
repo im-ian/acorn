@@ -34,7 +34,7 @@ import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { setFileDragPayload } from "../lib/dnd";
+import { beginFileDrag, endAcornDrag } from "../lib/dnd";
 import { Tooltip } from "./Tooltip";
 import { IconInput, TextInput } from "./ui";
 import { useToasts } from "../lib/toasts";
@@ -1745,7 +1745,9 @@ function EntryRow({
           // apps paste the quoted path) and the in-process Acorn drag
           // mirror used by Pane/TabStrip drop targets.
           if (!entry.is_dir) {
-            setFileDragPayload(e, { path: entry.path });
+            beginFileDrag(e, { path: entry.path });
+          } else {
+            endAcornDrag();
           }
           const quoted = shellQuote(entry.path);
           try {
@@ -1756,6 +1758,7 @@ function EntryRow({
           }
           e.dataTransfer.effectAllowed = "copy";
         }}
+        onDragEnd={endAcornDrag}
         onClick={(e) => onEntryClick(entry, e)}
         onDoubleClick={(e) => {
           e.preventDefault();

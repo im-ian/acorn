@@ -36,11 +36,12 @@ import {
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import {
+  beginTabDrag,
+  endAcornDrag,
   getCurrentFilePayload,
   getCurrentTabPayload,
   isAcornDrag,
   isTabDrag,
-  setTabDragPayload,
 } from "../lib/dnd";
 import {
   hasConfiguredEditor,
@@ -660,22 +661,26 @@ function TabStrip({
       onDrop={(e) => {
         if (!isAcornDrag(e)) return;
         e.preventDefault();
-        const idx = computeInsertIndex(e.clientX);
-        setInsertIndex(null);
-        const filePayload = getCurrentFilePayload();
-        if (filePayload) {
-          useAppStore.getState().setFocusedPane(paneId);
-          useAppStore.getState().openCodeViewerTab(filePayload.path);
-          return;
+        try {
+          const idx = computeInsertIndex(e.clientX);
+          setInsertIndex(null);
+          const filePayload = getCurrentFilePayload();
+          if (filePayload) {
+            useAppStore.getState().setFocusedPane(paneId);
+            useAppStore.getState().openCodeViewerTab(filePayload.path);
+            return;
+          }
+          const payload = getCurrentTabPayload();
+          if (!payload) return;
+          // No-op: dropping onto the same pane at the same position.
+          if (payload.fromPaneId === paneId) {
+            const currentIdx = tabs.findIndex((t) => t.id === payload.tabId);
+            if (currentIdx === idx || currentIdx + 1 === idx) return;
+          }
+          onDropReorder(payload, idx);
+        } finally {
+          endAcornDrag();
         }
-        const payload = getCurrentTabPayload();
-        if (!payload) return;
-        // No-op: dropping onto the same pane at the same position.
-        if (payload.fromPaneId === paneId) {
-          const currentIdx = tabs.findIndex((t) => t.id === payload.tabId);
-          if (currentIdx === idx || currentIdx + 1 === idx) return;
-        }
-        onDropReorder(payload, idx);
       }}
     >
       {tabs.map((tab, i) => (
@@ -1018,14 +1023,16 @@ function TabItem({
             e.preventDefault();
             e.stopPropagation();
             suppressNextDragStartRef.current = false;
+            endAcornDrag();
             return;
           }
           if (editing) setEditing(false);
           setTabDragImage(e);
-          setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
+          beginTabDrag(e, { tabId: tab.id, fromPaneId: paneId });
         }}
         onDragEnd={() => {
           suppressNextDragStartRef.current = false;
+          endAcornDrag();
         }}
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
