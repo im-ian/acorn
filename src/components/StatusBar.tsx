@@ -163,11 +163,12 @@ export function StatusBar() {
   return (
     <>
       {/* `overflow-hidden` + `whitespace-nowrap` on inline children keeps
-          the bar at a strict h-7 even at narrow widths. Without it, the
-          branch text wraps inside its span, the row grows to two lines,
-          and Terminal's ResizeObserver fires SIGWINCH mid-claude-launch —
-          which leaves cursor/cells offset until a tab-switch refit. */}
-      <footer className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
+          the bar at the configured status-bar height even at narrow widths.
+          Without it, the branch text wraps inside its span, the row grows
+          to two lines, and Terminal's ResizeObserver fires SIGWINCH
+          mid-claude-launch — which leaves cursor/cells offset until a
+          tab-switch refit. */}
+      <footer className="flex h-[var(--acorn-status-bar-height)] shrink-0 items-center gap-3 overflow-hidden border-t border-border bg-bg-sidebar px-3 font-mono text-xs text-fg-muted">
         {/* Left: aggregate counters about acorn itself — total sessions and
             the active session's lifecycle status. The IPC and daemon
             buttons sit first so the user can recover from a dead
