@@ -1374,6 +1374,7 @@
     },
     "actions": {
       "killPty": "PTY 종료",
+      "openTooltip": "이 세션을 원래 프로젝트 탭에서 열기",
       "restoreTooltip": "이 세션을 Acorn 사이드바로 다시 가져오기",
       "restore": "세션 복원",
       "forgetDisabledTooltip": "먼저 종료한 뒤 잊기",
