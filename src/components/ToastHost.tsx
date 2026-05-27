@@ -9,7 +9,7 @@ const TOAST_EXIT_MS = 180;
 type RenderedToast = ToastItem & { exiting: boolean };
 
 /**
- * Renders the active toast (if any) at the top-center of the viewport.
+ * Renders the active toast stack at the configured viewport edge.
  * The viewport overlay ignores pointer events; the toast itself accepts
  * hover and click so users can pause the TTL or dismiss/activate it.
  */
@@ -102,7 +102,7 @@ export function ToastHost(): ReactElement | null {
         "pointer-events-none fixed inset-x-0 z-[120] flex justify-center gap-2",
         position === "top"
           ? "top-6 flex-col items-center"
-          : "bottom-6 flex-col-reverse items-center",
+          : "bottom-[calc(1.5rem+var(--acorn-status-bar-height))] flex-col-reverse items-center",
       )}
     >
       <div

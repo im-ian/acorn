@@ -17,6 +17,10 @@
   --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
 }
 
+:root {
+  --acorn-status-bar-height: 1.75rem;
+}
+
 .acorn-terminal .xterm-viewport {
   background-color: transparent !important;
 }
