@@ -40,6 +40,7 @@ import {
   type RightGroup,
   type RightTab,
 } from "./lib/rightPanelGroups";
+import { useSettings } from "./lib/settings";
 
 export type { RightGroup, RightTab };
 
@@ -232,6 +233,7 @@ interface AppStateModel {
   consumePendingTerminalInput: (sessionId: string) => PendingTerminalInput | null;
   addSessionNotification: (notification: SessionNotification) => void;
   markSessionNotificationRead: (id: string) => void;
+  markSessionNotificationsReadForSession: (sessionId: string) => void;
   markAllSessionNotificationsRead: () => void;
   dismissSessionNotification: (id: string) => void;
   clearReadSessionNotifications: () => void;
@@ -1724,16 +1726,30 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   addSessionNotification(notification) {
+    const maxHistory = useSettings.getState().settings.notifications.maxHistory;
     set((s) => ({
       sessionNotifications: [
         notification,
         ...s.sessionNotifications.filter((n) => n.id !== notification.id),
-      ].slice(0, 100),
+      ].slice(0, maxHistory),
     }));
   },
 
   markSessionNotificationRead(id) {
     set((s) => {
+      const autoDeleteRead =
+        useSettings.getState().settings.notifications.autoDeleteRead;
+      if (autoDeleteRead) {
+        const sessionNotifications = s.sessionNotifications.filter(
+          (notification) => notification.id !== id,
+        );
+        if (sessionNotifications.length === s.sessionNotifications.length) {
+          return s;
+        }
+        return {
+          sessionNotifications,
+        };
+      }
       const now = new Date().toISOString();
       let changed = false;
       const sessionNotifications = s.sessionNotifications.map((notification) => {
@@ -1745,8 +1761,42 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
+  markSessionNotificationsReadForSession(sessionId) {
+    set((s) => {
+      const autoDeleteRead =
+        useSettings.getState().settings.notifications.autoDeleteRead;
+      if (autoDeleteRead) {
+        const sessionNotifications = s.sessionNotifications.filter(
+          (notification) => notification.sessionId !== sessionId,
+        );
+        if (sessionNotifications.length === s.sessionNotifications.length) {
+          return s;
+        }
+        return {
+          sessionNotifications,
+        };
+      }
+      const now = new Date().toISOString();
+      let changed = false;
+      const sessionNotifications = s.sessionNotifications.map((notification) => {
+        if (notification.sessionId !== sessionId || notification.readAt) {
+          return notification;
+        }
+        changed = true;
+        return { ...notification, readAt: now };
+      });
+      return changed ? { sessionNotifications } : s;
+    });
+  },
+
   markAllSessionNotificationsRead() {
     set((s) => {
+      const autoDeleteRead =
+        useSettings.getState().settings.notifications.autoDeleteRead;
+      if (autoDeleteRead) {
+        if (s.sessionNotifications.length === 0) return s;
+        return { sessionNotifications: [] };
+      }
       if (s.sessionNotifications.every((notification) => notification.readAt)) {
         return s;
       }

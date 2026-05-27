@@ -53,6 +53,7 @@ vi.mock("./lib/api", () => {
 import { api } from "./lib/api";
 import { useAppStore } from "./store";
 import { defaultTabByGroup } from "./lib/rightPanelGroups";
+import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
 
 const mockApi = vi.mocked(api);
 
@@ -184,6 +185,11 @@ beforeEach(() => {
   mockApi.detectSessionStatuses.mockResolvedValue([]);
   mockApi.removeSession.mockResolvedValue(undefined);
   mockApi.removeProject.mockResolvedValue(undefined);
+  useSettings.setState({
+    settings: structuredClone(DEFAULT_SETTINGS),
+    open: false,
+    pendingTab: null,
+  });
   resetStore();
 });
 
@@ -204,9 +210,9 @@ describe("sessionNotifications", () => {
     }
 
     const items = useAppStore.getState().sessionNotifications;
-    expect(items).toHaveLength(100);
+    expect(items).toHaveLength(50);
     expect(items[0]?.id).toBe("n104");
-    expect(items[items.length - 1]?.id).toBe("n5");
+    expect(items[items.length - 1]?.id).toBe("n55");
   });
 
   it("marks individual and all notifications read, then clears read items", () => {

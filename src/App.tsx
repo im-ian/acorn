@@ -50,6 +50,7 @@ import {
   type UiScaleChangedDetail,
 } from "./lib/layoutEvents";
 import {
+  startFocusedSessionNotificationReadWatcher,
   startSessionActivityInboxWatcher,
   startNotificationClickHandler,
   startSessionNotificationWatcher,
@@ -605,6 +606,10 @@ function App() {
 
   useEffect(() => {
     return startSessionNotificationWatcher();
+  }, []);
+
+  useEffect(() => {
+    return startFocusedSessionNotificationReadWatcher();
   }, []);
 
   useEffect(() => {
