@@ -550,6 +550,39 @@ function isTabStripMouseDownTarget(target: EventTarget | null): boolean {
     : false;
 }
 
+function isTabDragSuppressedTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    ? target.closest("[data-tab-close-button], [data-tab-rename-input]") !== null
+    : false;
+}
+
+function setTabDragImage(e: React.DragEvent<HTMLElement>): void {
+  const source = e.currentTarget;
+  const rect = source.getBoundingClientRect();
+  const clone = source.cloneNode(true) as HTMLElement;
+  clone.setAttribute("aria-hidden", "true");
+  clone.style.position = "fixed";
+  clone.style.top = "-1000px";
+  clone.style.left = "-1000px";
+  clone.style.width = `${rect.width}px`;
+  clone.style.height = `${rect.height}px`;
+  clone.style.pointerEvents = "none";
+  clone.style.zIndex = "9999";
+  clone.style.transform = "none";
+  clone.style.opacity = "0.95";
+  clone.style.boxShadow = "0 8px 20px rgba(0, 0, 0, 0.32)";
+  document.body.appendChild(clone);
+
+  const offsetX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+  const offsetY = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+  try {
+    e.dataTransfer.setDragImage(clone, offsetX, offsetY);
+  } catch {
+    // Keep drag startup working when a webview rejects a custom drag image.
+  }
+  window.setTimeout(() => clone.remove(), 0);
+}
+
 interface TabStripProps {
   paneId: PaneId;
   tabs: PaneTab[];
@@ -772,6 +805,7 @@ function TabItem({
   const editorConfigured = editorCommand.trim().length > 0;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
+  const suppressNextDragStartRef = useRef(false);
   // Per-session agent detection result, refreshed each time the context
   // menu opens. Null while loading; the menu rebuilds when this resolves
   // so the Fork item gets the right label / enabled state.
@@ -971,6 +1005,28 @@ function TabItem({
         ref={registerRef}
         role="button"
         tabIndex={0}
+        draggable
+        style={{ WebkitUserDrag: "element" } as CSSProperties}
+        onMouseDownCapture={(e) => {
+          suppressNextDragStartRef.current = isTabDragSuppressedTarget(e.target);
+        }}
+        onDragStart={(e) => {
+          if (
+            suppressNextDragStartRef.current ||
+            isTabDragSuppressedTarget(e.target)
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            suppressNextDragStartRef.current = false;
+            return;
+          }
+          if (editing) setEditing(false);
+          setTabDragImage(e);
+          setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
+        }}
+        onDragEnd={() => {
+          suppressNextDragStartRef.current = false;
+        }}
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
           e.stopPropagation();
@@ -1006,13 +1062,9 @@ function TabItem({
           data-tab-drag-handle={tab.id}
           draggable
           style={{ WebkitUserDrag: "element" } as CSSProperties}
-          onDragStart={(e) => {
-            if (editing) setEditing(false);
-            setTabDragPayload(e, { tabId: tab.id, fromPaneId: paneId });
-          }}
         >
           {agentProvider ? (
-            <Tooltip label={agentProvider} side="bottom">
+            <Tooltip label={agentProvider} side="bottom" draggable>
               <AgentProviderIcon
                 provider={agentProvider}
                 className={cn(
@@ -1054,6 +1106,7 @@ function TabItem({
           {isGeneratingTitle && !editing ? (
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
+              draggable
             />
           ) : null}
           {session &&
@@ -1103,7 +1156,7 @@ function TabItem({
           <X size={11} />
         </button>
         {active ? (
-          <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent/30" />
+          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent/30" />
         ) : null}
       </div>
       <ContextMenu

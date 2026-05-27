@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -28,6 +29,7 @@ interface TooltipProps {
   multiline?: boolean;
   children: ReactNode;
   className?: string;
+  draggable?: boolean;
 }
 
 export interface TooltipAnchorRect {
@@ -198,6 +200,7 @@ export function Tooltip({
   multiline = false,
   children,
   className,
+  draggable = false,
 }: TooltipProps) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const showTimer = useRef<number | null>(null);
@@ -239,6 +242,12 @@ export function Tooltip({
         onFocus={show}
         onBlur={hide}
         onClick={hide}
+        draggable={draggable || undefined}
+        style={
+          draggable
+            ? ({ WebkitUserDrag: "element" } as CSSProperties)
+            : undefined
+        }
         className={`inline-flex ${className ?? ""}`}
       >
         {children}

@@ -6,19 +6,24 @@ interface SessionTitleGeneratingIndicatorProps {
   label: string;
   side?: "top" | "bottom" | "left" | "right";
   className?: string;
+  draggable?: boolean;
 }
 
 export function SessionTitleGeneratingIndicator({
   label,
   side = "bottom",
   className,
+  draggable = false,
 }: SessionTitleGeneratingIndicatorProps) {
   return (
-    <Tooltip label={label} side={side}>
+    <Tooltip label={label} side={side} draggable={draggable}>
       <span
         role="img"
         aria-label={label}
-        className={cn("acorn-session-title-indicator", className)}
+        className={cn(
+          "pointer-events-none acorn-session-title-indicator",
+          className,
+        )}
       >
         <Sparkles
           size={9}
