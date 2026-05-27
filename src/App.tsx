@@ -76,6 +76,7 @@ import { planAutoGenerateSessionTitles } from "./lib/sessionTitle";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
+import { useAcornDragGlobalCleanup } from "./lib/dnd";
 import {
   nextSessionStatusPollDelayMs,
   selectDueSessionStatusPollIds,
@@ -150,6 +151,7 @@ function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
 
 function App() {
   const t = useTranslation();
+  useAcornDragGlobalCleanup();
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);

@@ -18,7 +18,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
-import { getCurrentFilePayload } from "../lib/dnd";
+import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
 import { formatTerminalFileMention } from "../lib/fileMention";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
@@ -1415,8 +1415,12 @@ export function Terminal({
       const payload = getCurrentFilePayload();
       if (!payload) return;
       e.preventDefault();
-      sendUserInputToPty(formatTerminalFileMention(payload.path, cwd));
-      term.focus();
+      try {
+        sendUserInputToPty(formatTerminalFileMention(payload.path, cwd));
+        term.focus();
+      } finally {
+        endAcornDrag();
+      }
     };
     container.addEventListener("dragover", onDragOver);
     container.addEventListener("drop", onDrop);
