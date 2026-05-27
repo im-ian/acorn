@@ -9,11 +9,11 @@ import {
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowDownToLine } from "lucide-react";
+import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
@@ -46,6 +46,7 @@ import {
   resolveTerminalFilePath,
   type TerminalFileReference,
 } from "../lib/terminalFileLinks";
+import { createTerminalWebLinkProvider } from "../lib/terminalWebLinks";
 import {
   useSettings,
   type TerminalLinkActivation,
@@ -140,6 +141,8 @@ const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
 const SCROLL_TO_BOTTOM_VISIBLE_ROWS = 10;
+// xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
+const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
 // Custom event the sticky-prompt banner listens to. Fired whenever the user
 // scrolls the terminal so the banner can swap to the prompt "in scope" at
@@ -252,6 +255,15 @@ const MODIFIER_LINK_LABEL = IS_MAC ? "Command-click" : "Ctrl-click";
 
 interface TerminalRenderInternals {
   _core?: {
+    linkifier?: {
+      currentLink?: {
+        link?: {
+          decorations?: {
+            underline?: boolean;
+          };
+        };
+      };
+    };
     _renderService?: {
       dimensions?: {
         css?: {
@@ -273,6 +285,14 @@ function terminalCellDims(term: XTerm): { width: number; height: number } | null
   const core = (term as unknown as TerminalRenderInternals)._core;
   const cell = core?._renderService?.dimensions?.css?.cell;
   return cell ? { width: cell.width, height: cell.height } : null;
+}
+
+function suppressCurrentXtermLinkUnderline(term: XTerm): void {
+  const link = (term as unknown as TerminalRenderInternals)._core?.linkifier
+    ?.currentLink?.link;
+  if (link?.decorations && link.decorations.underline !== false) {
+    link.decorations.underline = false;
+  }
 }
 
 function textRangeRectForColumns(
@@ -317,7 +337,18 @@ function textRangeRectForColumns(
   return rect;
 }
 
-function unionRects(rects: DOMRect[]): TooltipAnchorRect | null {
+function rectToTooltipAnchorRect(rect: DOMRect): TooltipAnchorRect {
+  return {
+    top: rect.top,
+    bottom: rect.bottom,
+    left: rect.left,
+    right: rect.right,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function unionRects(rects: TooltipAnchorRect[]): TooltipAnchorRect | null {
   if (rects.length === 0) return null;
   const left = Math.min(...rects.map((r) => r.left));
   const top = Math.min(...rects.map((r) => r.top));
@@ -333,76 +364,99 @@ function unionRects(rects: DOMRect[]): TooltipAnchorRect | null {
   };
 }
 
-function hoveredLinkAnchorRect(container: HTMLElement): TooltipAnchorRect | null {
-  const rects = Array.from(
-    container.querySelectorAll<HTMLElement>(".xterm-rows span"),
-  )
-    .filter((el) => {
-      const style = getComputedStyle(el);
-      return style.textDecorationLine.includes("underline");
-    })
-    .map((el) => el.getBoundingClientRect())
-    .filter((rect) => rect.width > 0 && rect.height > 0);
-  return unionRects(rects);
+function terminalLinkTooltipKey(text: string, range: IViewportRange): string {
+  return [
+    text,
+    range.start.x,
+    range.start.y,
+    range.end.x,
+    range.end.y,
+  ].join("\u0000");
 }
 
-function linkRangeAnchorRect(
+function FloatingTerminalLinkUnderlines({
+  linkKey,
+  rects,
+}: {
+  linkKey: string;
+  rects: TooltipAnchorRect[];
+}): ReactElement | null {
+  if (rects.length === 0) return null;
+
+  return createPortal(
+    <>
+      {rects.map((rect, index) => (
+        <span
+          key={`${linkKey}:${index}`}
+          aria-hidden="true"
+          data-acorn-terminal-link-underline="true"
+          className="xterm-hover pointer-events-none fixed bg-fg"
+          style={{
+            top: rect.bottom - 1,
+            left: rect.left,
+            width: rect.width,
+            height: 1,
+            zIndex: 9998,
+          }}
+        />
+      ))}
+    </>,
+    document.body,
+  );
+}
+
+function linkRangeAnchorRects(
   container: HTMLElement,
   term: XTerm,
   range: IViewportRange,
-): TooltipAnchorRect | null {
+): TooltipAnchorRect[] {
   const cell = terminalCellDims(term);
-  if (!cell) return null;
+  if (!cell) return [];
   const viewportY = term.buffer.active.viewportY;
 
   const startViewportY = range.start.y - viewportY - 1;
   const endViewportY = range.end.y - viewportY - 1;
-  if (endViewportY < 0 || startViewportY >= term.rows) return null;
+  if (endViewportY < 0 || startViewportY >= term.rows) return [];
 
-  const row = Math.max(0, Math.min(term.rows - 1, startViewportY));
   const rowElements = Array.from(
     container.querySelectorAll<HTMLElement>(".xterm-rows > div"),
   );
-  const textRects: DOMRect[] = [];
+  const rects: TooltipAnchorRect[] = [];
   const firstVisibleRow = Math.max(0, startViewportY);
   const lastVisibleRow = Math.min(term.rows - 1, endViewportY);
   for (let y = firstVisibleRow; y <= lastVisibleRow; y++) {
     const rowElement = rowElements[y];
-    if (!rowElement) continue;
+    const rowRect =
+      rowElement?.getBoundingClientRect() ??
+      (
+        container.querySelector<HTMLElement>(".xterm-screen") ?? container
+      ).getBoundingClientRect();
     const startCol = y === startViewportY ? Math.max(0, range.start.x - 1) : 0;
     const endCol =
       y === endViewportY
         ? Math.max(startCol + 1, Math.min(term.cols, range.end.x))
         : term.cols;
-    const rect = textRangeRectForColumns(rowElement, startCol, endCol);
-    if (rect) textRects.push(rect);
+    const textRect = rowElement
+      ? textRangeRectForColumns(rowElement, startCol, endCol)
+      : null;
+    if (textRect) {
+      rects.push(rectToTooltipAnchorRect(textRect));
+      continue;
+    }
+    const left = rowRect.left + startCol * cell.width;
+    const top = rowElement ? rowRect.top : rowRect.top + y * cell.height;
+    const right = rowRect.left + endCol * cell.width;
+    const bottom = rowElement ? rowRect.bottom : top + cell.height;
+    rects.push({
+      top,
+      bottom,
+      left,
+      right,
+      width: right - left,
+      height: bottom - top,
+    });
   }
-  const textRect = unionRects(textRects);
-  if (textRect) return textRect;
-
-  const rowElement = rowElements[row];
-  const rowRect =
-    rowElement?.getBoundingClientRect() ??
-    (
-      container.querySelector<HTMLElement>(".xterm-screen") ?? container
-    ).getBoundingClientRect();
-  const startX = startViewportY < 0 ? 0 : Math.max(0, range.start.x - 1);
-  const endX =
-    row === endViewportY
-      ? Math.max(startX + 1, Math.min(term.cols, range.end.x))
-      : term.cols;
-  const left = rowRect.left + startX * cell.width;
-  const top = rowElement ? rowRect.top : rowRect.top + row * cell.height;
-  const right = rowRect.left + endX * cell.width;
-  const bottom = rowElement ? rowRect.bottom : top + cell.height;
-  return {
-    top,
-    bottom,
-    left,
-    right,
-    width: right - left,
-    height: bottom - top,
-  };
+  return rects.filter((rect) => rect.width > 0 && rect.height > 0);
 }
 
 function decodeBase64ToBytes(b64: string): Uint8Array {
@@ -473,6 +527,8 @@ export function Terminal({
     useRef<SessionAgentProvider | null>(pasteAgentProvider);
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
+    underlineRects: TooltipAnchorRect[];
+    linkKey: string;
   } | null>(null);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
 
@@ -525,26 +581,77 @@ export function Terminal({
     // opts into modifier-click activation, plain clicks are swallowed so a
     // stray click on a URL in shell output doesn't steal focus.
     let linkTooltipFrame: number | null = null;
-    const showLinkTooltip = (range: IViewportRange) => {
+    let linkTooltipHideTimer: number | null = null;
+    const cancelLinkTooltipHide = () => {
+      if (linkTooltipHideTimer !== null) {
+        window.clearTimeout(linkTooltipHideTimer);
+        linkTooltipHideTimer = null;
+      }
+    };
+    const showLinkTooltip = (text: string, range: IViewportRange) => {
+      cancelLinkTooltipHide();
       if (linkTooltipFrame !== null) {
         cancelAnimationFrame(linkTooltipFrame);
       }
+      const linkKey = terminalLinkTooltipKey(text, range);
       linkTooltipFrame = requestAnimationFrame(() => {
         linkTooltipFrame = null;
         if (linkActivation !== "modifier-click") return;
-        const anchorRect =
-          hoveredLinkAnchorRect(container) ??
-          linkRangeAnchorRect(container, term, range);
+        const underlineRects = linkRangeAnchorRects(container, term, range);
+        const anchorRect = unionRects(underlineRects);
         if (!anchorRect) return;
-        setLinkTooltip({ anchorRect });
+        setLinkTooltip((current) => {
+          if (current?.linkKey === linkKey) {
+            return current;
+          }
+          return { anchorRect, underlineRects, linkKey };
+        });
       });
     };
-    const hideLinkTooltip = () => {
+    const hideLinkTooltip = (immediate = false) => {
       if (linkTooltipFrame !== null) {
         cancelAnimationFrame(linkTooltipFrame);
         linkTooltipFrame = null;
       }
-      setLinkTooltip(null);
+      cancelLinkTooltipHide();
+      if (immediate) {
+        setLinkTooltip(null);
+        return;
+      }
+      linkTooltipHideTimer = window.setTimeout(() => {
+        linkTooltipHideTimer = null;
+        setLinkTooltip(null);
+      }, LINK_TOOLTIP_HIDE_GRACE_MS);
+    };
+    const activateExternalLink = (event: MouseEvent, uri: string) => {
+      event.preventDefault();
+      hideLinkTooltip(true);
+      if (linkActivation === "modifier-click" && !modifierHeld(event)) {
+        return;
+      }
+      void openUrl(uri).catch((err: unknown) => {
+        console.error("failed to open terminal link", uri, err);
+      });
+    };
+    const hoverExternalLink = (uri: string, range: IViewportRange) => {
+      if (linkActivation !== "modifier-click") return;
+      suppressCurrentXtermLinkUnderline(term);
+      queueMicrotask(() => {
+        try { suppressCurrentXtermLinkUnderline(term); } catch { /* ignore */ }
+      });
+      requestAnimationFrame(() => {
+        try { suppressCurrentXtermLinkUnderline(term); } catch { /* ignore */ }
+      });
+      showLinkTooltip(uri, range);
+    };
+    term.options.linkHandler = {
+      activate: activateExternalLink,
+      hover: (_event, uri, range) => {
+        hoverExternalLink(uri, range as IViewportRange);
+      },
+      leave: () => {
+        hideLinkTooltip();
+      },
     };
     const openTerminalFileReference = (reference: TerminalFileReference) => {
       void (async () => {
@@ -562,30 +669,22 @@ export function Terminal({
         useAppStore.getState().openCodeViewerTab(path, cwd, target);
       })();
     };
-    const webLinksAddon = new WebLinksAddon(
-      (event, uri) => {
-        event.preventDefault();
-        hideLinkTooltip();
-        if (linkActivation === "modifier-click" && !modifierHeld(event)) return;
-        void openUrl(uri).catch((err: unknown) => {
-          console.error("failed to open terminal link", uri, err);
-        });
-      },
-      {
-        hover: (_event, _uri, range) => {
-          if (linkActivation !== "modifier-click") return;
-          showLinkTooltip(range);
+    let webLinksDisposable: IDisposable | null = term.registerLinkProvider(
+      createTerminalWebLinkProvider(term, {
+        activate: activateExternalLink,
+        hover: (_event, uri, link) => {
+          hoverExternalLink(uri, link.range);
         },
         leave: () => {
           hideLinkTooltip();
         },
-      },
+      }),
     );
     let fileLinksDisposable: IDisposable | null = term.registerLinkProvider(
       createTerminalFileLinkProvider(term, {
         activate: (event, reference) => {
           event.preventDefault();
-          hideLinkTooltip();
+          hideLinkTooltip(true);
           if (linkActivation === "modifier-click" && !modifierHeld(event)) {
             return;
           }
@@ -593,7 +692,7 @@ export function Terminal({
         },
         hover: (_event, _reference, link) => {
           if (linkActivation !== "modifier-click") return;
-          showLinkTooltip(link.range);
+          showLinkTooltip(link.text, link.range);
         },
         leave: () => {
           hideLinkTooltip();
@@ -603,7 +702,6 @@ export function Terminal({
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
     term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
     term.loadAddon(serializeAddon);
     term.loadAddon(unicode11Addon);
     // xterm.js defaults to Unicode 6 width tables that treat most emoji as
@@ -772,7 +870,7 @@ export function Terminal({
       if (next.linkActivation !== previous.linkActivation) {
         linkActivation = next.linkActivation;
         if (next.linkActivation !== "modifier-click") {
-          setLinkTooltip(null);
+          hideLinkTooltip(true);
         }
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
@@ -1920,7 +2018,7 @@ export function Terminal({
     return () => {
       disposed = true;
       unsubSettings();
-      hideLinkTooltip();
+      hideLinkTooltip(true);
       if (themeFrame !== null) {
         cancelAnimationFrame(themeFrame);
         themeFrame = null;
@@ -1938,6 +2036,7 @@ export function Terminal({
         cancelAnimationFrame(viewportRepaintFrame);
         viewportRepaintFrame = null;
       }
+      cancelLinkTooltipHide();
       // No cleanup-time save: under React.StrictMode the cleanup of the
       // first dev mount fires while the buffer is still empty (load
       // hasn't run yet), and a fire-and-forget save here would clobber
@@ -1983,10 +2082,11 @@ export function Terminal({
         // Backend may not implement pty_kill yet — safe to ignore.
       });
       unpatchMouseCoordinateScale();
+      try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
+      webLinksDisposable = null;
       try { fileLinksDisposable?.dispose(); } catch { /* ignore */ }
       fileLinksDisposable = null;
       try { fitAddon.dispose(); } catch { /* ignore */ }
-      try { webLinksAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
       term.dispose();
       termRef.current = null;
@@ -2071,13 +2171,17 @@ export function Terminal({
       if (document.visibilityState === "hidden") return;
       scheduler.schedule();
     };
+    const onUiScaleChanged = () => {
+      setLinkTooltip(null);
+      scheduler.schedule();
+    };
 
     window.addEventListener("focus", scheduler.schedule);
-    window.addEventListener(UI_SCALE_CHANGED_EVENT, scheduler.schedule);
+    window.addEventListener(UI_SCALE_CHANGED_EVENT, onUiScaleChanged);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("focus", scheduler.schedule);
-      window.removeEventListener(UI_SCALE_CHANGED_EVENT, scheduler.schedule);
+      window.removeEventListener(UI_SCALE_CHANGED_EVENT, onUiScaleChanged);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       scheduler.dispose();
     };
@@ -2093,6 +2197,7 @@ export function Terminal({
   return (
     <div
       className="acorn-terminal-shell relative h-full w-full"
+      data-acorn-link-hover={linkTooltip ? "true" : undefined}
       style={{
         padding: "16px 8px",
         overflow: "hidden",
@@ -2126,6 +2231,12 @@ export function Terminal({
             <ArrowDownToLine size={15} aria-hidden="true" />
           </button>
         </Tooltip>
+      ) : null}
+      {linkTooltip ? (
+        <FloatingTerminalLinkUnderlines
+          linkKey={linkTooltip.linkKey}
+          rects={linkTooltip.underlineRects}
+        />
       ) : null}
       <FloatingTooltip
         label={`${MODIFIER_LINK_LABEL} to open link`}
