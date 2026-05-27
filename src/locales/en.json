@@ -1374,6 +1374,7 @@
     },
     "actions": {
       "killPty": "Kill PTY",
+      "openTooltip": "Open this session in its project tab",
       "restoreTooltip": "Adopt this session back into Acorn's sidebar",
       "restore": "Restore session",
       "forgetDisabledTooltip": "Kill first, then forget",

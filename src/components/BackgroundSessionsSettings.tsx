@@ -297,6 +297,8 @@ function SessionsList({
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const showToast = useToasts((s) => s.show);
+  const refreshAll = useAppStore((s) => s.refreshAll);
+  const selectSession = useAppStore((s) => s.selectSession);
   const appById = useMemo(() => {
     const m = new Map<string, Session>();
     for (const s of appSessions) m.set(s.id, s);
@@ -314,12 +316,49 @@ function SessionsList({
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setRowError(message);
-        showToast(`${t("backgroundSessions.toasts.sessionActionFailed")} ${message}`);
+        showToast(
+          `${t("backgroundSessions.toasts.sessionActionFailed")} ${message}`,
+        );
       } finally {
         setRowBusy(null);
       }
     },
     [onRefresh, showToast, t],
+  );
+
+  const restoreSessionToTab = useCallback(
+    async (daemonSession: DaemonSessionSummary) => {
+      const appSession = appById.get(daemonSession.id);
+      setRowBusy(daemonSession.id);
+      setRowError(null);
+      try {
+        if (!appSession) {
+          await api.daemonAdoptSession(daemonSession.id);
+        }
+        await refreshAll();
+        selectSession(daemonSession.id);
+        if (typeof window !== "undefined") {
+          requestAnimationFrame(() => {
+            window.dispatchEvent(
+              new CustomEvent("acorn:focus-session", {
+                detail: { sessionId: daemonSession.id },
+              }),
+            );
+          });
+        }
+        await onRefresh();
+        showToast(t("backgroundSessions.toasts.sessionRestored"));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRowError(message);
+        showToast(
+          `${t("backgroundSessions.toasts.sessionActionFailed")} ${message}`,
+        );
+      } finally {
+        setRowBusy(null);
+      }
+    },
+    [appById, onRefresh, refreshAll, selectSession, showToast, t],
   );
 
   if (!enabled) {
@@ -355,6 +394,9 @@ function SessionsList({
       <ul className="divide-y divide-border rounded border border-border bg-bg-elevated text-xs">
         {sessions.map((s) => {
           const busy = rowBusy === s.id;
+          const app = appById.get(s.id);
+          const displayName = sessionDisplayName(app, s);
+          const ts = app ? Date.parse(app.updated_at) : Number.NaN;
           return (
             <li key={s.id} className="flex items-center gap-2 px-3 py-1.5">
               <span
@@ -365,30 +407,24 @@ function SessionsList({
               >
                 {s.alive ? "●" : "○"}
               </span>
-              <span className="flex flex-1 items-center gap-1.5 truncate font-mono">
+              <span className="flex flex-1 items-center gap-1.5 truncate">
                 <Tooltip
-                  label={renderAppMetaTooltip(appById.get(s.id), s, t)}
+                  label={renderAppMetaTooltip(app, s, t)}
                   side="top"
                   multiline
                 >
-                  <span className="truncate cursor-help">{s.name}</span>
+                  <span className="truncate cursor-help">{displayName}</span>
                 </Tooltip>
-                {(() => {
-                  const app = appById.get(s.id);
-                  if (!app) return null;
-                  const ts = Date.parse(app.updated_at);
-                  if (Number.isNaN(ts)) return null;
-                  return (
-                    <Tooltip label={new Date(ts).toLocaleString()} side="top">
-                      <span className="shrink-0 cursor-help text-[10px] text-fg-muted">
-                        {formatRelativeTime(
-                          ts,
-                          t("backgroundSessions.relativeTime.ago"),
-                        )}
-                      </span>
-                    </Tooltip>
-                  );
-                })()}
+                {!Number.isNaN(ts) ? (
+                  <Tooltip label={new Date(ts).toLocaleString()} side="top">
+                    <span className="shrink-0 cursor-help text-[10px] text-fg-muted">
+                      {formatRelativeTime(
+                        ts,
+                        t("backgroundSessions.relativeTime.ago"),
+                      )}
+                    </span>
+                  </Tooltip>
+                ) : null}
                 {s.kind === "control" ? (
                   <Tooltip
                     label={t("backgroundSessions.sessions.controlSession")}
@@ -410,6 +446,22 @@ function SessionsList({
                 </span>
               ) : null}
               <div className="flex items-center gap-1">
+                <Tooltip
+                  label={
+                    app
+                      ? t("backgroundSessions.actions.openTooltip")
+                      : t("backgroundSessions.actions.restoreTooltip")
+                  }
+                  side="top"
+                >
+                  <RowButton
+                    busy={busy}
+                    onClick={() => void restoreSessionToTab(s)}
+                    aria-label={t("backgroundSessions.actions.restore")}
+                  >
+                    <Undo2 size={12} />
+                  </RowButton>
+                </Tooltip>
                 {s.alive ? (
                   <Tooltip
                     label={t("backgroundSessions.actions.killPty")}
@@ -430,26 +482,7 @@ function SessionsList({
                       <Power size={12} />
                     </RowButton>
                   </Tooltip>
-                ) : (
-                  <Tooltip
-                    label={t("backgroundSessions.actions.restoreTooltip")}
-                    side="top"
-                  >
-                    <RowButton
-                      busy={busy}
-                      onClick={() =>
-                        void runRowAction(
-                          s.id,
-                          () => api.daemonAdoptSession(s.id),
-                          t("backgroundSessions.toasts.sessionRestored"),
-                        )
-                      }
-                      aria-label={t("backgroundSessions.actions.restore")}
-                    >
-                      <Undo2 size={12} />
-                    </RowButton>
-                  </Tooltip>
-                )}
+                ) : null}
                 <Tooltip
                   label={
                     s.alive
@@ -501,6 +534,35 @@ function formatRelativeTime(timestampMs: number, ago: string): string {
   if (mo < 12) return `${mo}mo ${ago}`;
   const yr = Math.round(diffSec / (86400 * 365));
   return `${yr}y ${ago}`;
+}
+
+function sessionDisplayName(
+  app: Session | undefined,
+  daemon: DaemonSessionSummary,
+): string {
+  const appName = app?.name.trim();
+  if (appName) return appName;
+
+  const daemonName = daemon.name.trim();
+  if (daemonName && daemonName !== daemon.id && !isUuidLike(daemonName)) {
+    return daemonName;
+  }
+
+  const pathName = basenamePath(daemon.cwd ?? daemon.repo_path ?? "");
+  if (pathName && daemon.branch) return `${pathName} · ${daemon.branch}`;
+  if (pathName) return pathName;
+  return daemonName || daemon.id;
+}
+
+function basenamePath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function renderAppMetaTooltip(
