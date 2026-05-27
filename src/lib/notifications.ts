@@ -7,7 +7,12 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { useSettings } from "./settings";
-import type { Session, SessionStatus } from "./types";
+import type {
+  Session,
+  SessionNotification,
+  SessionNotificationKind,
+  SessionStatus,
+} from "./types";
 
 // Notification body copy keyed by the status the session transitioned *into*.
 // The watcher only fires on transitions to `needs_input` / `failed` /
@@ -29,20 +34,7 @@ const STATUS_SENTENCE: Record<SessionStatus, string> = {
 // in System Settings since boot) gets corrected the moment the user asks
 // "does this actually work?".
 let cachedPermission: boolean | null = null;
-const readStatusBySession = new Map<string, string>();
-const HISTORY_STORAGE_KEY = "acorn:notification-history:v1";
-
-export interface NotificationHistoryItem {
-  id: string;
-  sessionId: string;
-  projectName: string;
-  sessionName: string;
-  status: SessionStatus;
-  title: string;
-  body: string;
-  createdAt: string;
-  readAt: string | null;
-}
+let inboxNotificationCounter = 0;
 
 async function checkPermission(): Promise<boolean> {
   try {
@@ -80,169 +72,38 @@ function shouldNotifyTransition(prev: SessionStatus, next: SessionStatus): {
   return { notify: false, key: null };
 }
 
-function sessionStatusReadKey(session: Session): string {
-  return `${session.status}:${session.updated_at}`;
+function notificationKindForTransition(
+  prev: SessionStatus,
+  next: SessionStatus,
+): SessionNotificationKind | null {
+  if (prev === next) return null;
+  if (next === "needs_input") return "needs_input";
+  if (next === "failed") return "failed";
+  if (next === "completed") return "completed";
+  if (next === "idle") return "became_idle";
+  return null;
 }
 
-function markSessionStatusRead(sessionId: string): void {
-  const session = useAppStore
-    .getState()
-    .sessions.find((candidate) => candidate.id === sessionId);
-  if (!session) return;
-  readStatusBySession.set(sessionId, sessionStatusReadKey(session));
-}
-
-function parseHistoryItem(value: unknown): NotificationHistoryItem | null {
-  if (!value || typeof value !== "object") return null;
-  const item = value as Partial<NotificationHistoryItem>;
-  if (
-    typeof item.id !== "string" ||
-    typeof item.sessionId !== "string" ||
-    typeof item.projectName !== "string" ||
-    typeof item.sessionName !== "string" ||
-    typeof item.title !== "string" ||
-    typeof item.body !== "string" ||
-    typeof item.createdAt !== "string"
-  ) {
-    return null;
-  }
-  if (
-    item.status !== "idle" &&
-    item.status !== "running" &&
-    item.status !== "needs_input" &&
-    item.status !== "failed" &&
-    item.status !== "completed"
-  ) {
-    return null;
-  }
-  return {
-    id: item.id,
-    sessionId: item.sessionId,
-    projectName: item.projectName,
-    sessionName: item.sessionName,
-    status: item.status,
-    title: item.title,
-    body: item.body,
-    createdAt: item.createdAt,
-    readAt: typeof item.readAt === "string" ? item.readAt : null,
-  };
-}
-
-export function listNotificationHistory(): NotificationHistoryItem[] {
-  if (typeof localStorage === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(parseHistoryItem)
-      .filter((item): item is NotificationHistoryItem => item !== null);
-  } catch {
-    return [];
-  }
-}
-
-function saveNotificationHistory(items: NotificationHistoryItem[]): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(items));
-  } catch {
-    // ignore storage failures; system notifications should keep working.
-  }
-}
-
-function trimNotificationHistory(
-  items: NotificationHistoryItem[],
-): NotificationHistoryItem[] {
-  const max = useSettings.getState().settings.notifications.maxHistory;
-  return items.slice(0, max);
-}
-
-function recordNotificationHistory(
-  session: Session,
-  status: SessionStatus,
-  read: boolean,
-): void {
-  const now = new Date().toISOString();
-  const title = `${projectNameFor(session)} — ${session.name}`;
-  const item: NotificationHistoryItem = {
-    id: `${Date.now().toString(36)}:${session.id}:${status}`,
-    sessionId: session.id,
-    projectName: projectNameFor(session),
-    sessionName: session.name,
-    status,
-    title,
-    body: STATUS_SENTENCE[status],
-    createdAt: now,
-    readAt: read ? now : null,
-  };
-  saveNotificationHistory(
-    trimNotificationHistory([item, ...listNotificationHistory()]),
-  );
-}
-
-function markNotificationHistoryRead(sessionId: string): void {
-  const settings = useSettings.getState().settings.notifications;
-  const history = listNotificationHistory();
-  if (history.length === 0) return;
-  if (settings.autoDeleteRead) {
-    saveNotificationHistory(
-      trimNotificationHistory(
-        history.filter((item) => item.sessionId !== sessionId),
-      ),
-    );
-    return;
-  }
-  const now = new Date().toISOString();
-  saveNotificationHistory(
-    trimNotificationHistory(
-      history.map((item) =>
-        item.sessionId === sessionId && item.readAt === null
-          ? { ...item, readAt: now }
-          : item,
-      ),
-    ),
-  );
-}
-
-function applyNotificationHistoryRetention(): void {
-  const settings = useSettings.getState().settings.notifications;
-  const history = listNotificationHistory();
-  const filtered = settings.autoDeleteRead
-    ? history.filter((item) => item.readAt === null)
-    : history;
-  saveNotificationHistory(trimNotificationHistory(filtered));
-}
-
-function pruneNotificationHistoryToSessions(sessionIds: Set<string>): void {
-  const history = listNotificationHistory();
-  if (history.length === 0) return;
-  saveNotificationHistory(
-    trimNotificationHistory(
-      history.filter((item) => sessionIds.has(item.sessionId)),
-    ),
+function isSessionFocused(sessionId: string, activeSessionId: string | null): boolean {
+  return (
+    activeSessionId === sessionId &&
+    (typeof document === "undefined" || document.hasFocus())
   );
 }
 
 /**
  * Treat the currently visible session tab as having consumed its outstanding
- * status notifications. This intentionally does not clear delivered OS
- * notifications; it only records that the current status snapshot has been
- * read so Acorn does not re-surface it as unread.
+ * in-app notifications. This intentionally does not clear delivered OS
+ * notifications.
  */
 export function markSessionNotificationsRead(sessionId: string | null): void {
   if (!sessionId) return;
-  markSessionStatusRead(sessionId);
-  markNotificationHistoryRead(sessionId);
+  useAppStore.getState().markSessionNotificationsReadForSession(sessionId);
 }
 
 export function resetNotificationsForTests(): void {
   cachedPermission = null;
-  readStatusBySession.clear();
-  if (typeof localStorage !== "undefined") {
-    localStorage.removeItem(HISTORY_STORAGE_KEY);
-  }
+  inboxNotificationCounter = 0;
 }
 
 export function startFocusedSessionNotificationReadWatcher(): () => void {
@@ -251,8 +112,12 @@ export function startFocusedSessionNotificationReadWatcher(): () => void {
     markSessionNotificationsRead(useAppStore.getState().activeSessionId);
   };
 
-  const unsubscribe = useAppStore.subscribe((state, previous) => {
-    if (state.activeSessionId === previous.activeSessionId) return;
+  const unsubscribeStore = useAppStore.subscribe((state, previous) => {
+    if (state.activeSessionId !== previous.activeSessionId) {
+      markFocused();
+      return;
+    }
+    if (state.sessionNotifications === previous.sessionNotifications) return;
     markFocused();
   });
   const unsubscribeSettings = useSettings.subscribe((state, previous) => {
@@ -264,14 +129,19 @@ export function startFocusedSessionNotificationReadWatcher(): () => void {
     ) {
       return;
     }
-    applyNotificationHistoryRetention();
+    const { maxHistory, autoDeleteRead } = state.settings.notifications;
+    useAppStore.setState((store) => {
+      const filtered = autoDeleteRead
+        ? store.sessionNotifications.filter((notification) => !notification.readAt)
+        : store.sessionNotifications;
+      return { sessionNotifications: filtered.slice(0, maxHistory) };
+    });
   });
   window.addEventListener("focus", markFocused);
   markFocused();
-  applyNotificationHistoryRetention();
 
   return () => {
-    unsubscribe();
+    unsubscribeStore();
     unsubscribeSettings();
     window.removeEventListener("focus", markFocused);
   };
@@ -304,16 +174,8 @@ export function startSessionNotificationWatcher(): () => void {
       lastStatus.set(s.id, s.status);
       if (prev === undefined) continue;
       const { notify, key } = shouldNotifyTransition(prev, s.status);
-      if (!notify || !key || !settings.events[key]) {
-        if (prev !== s.status) readStatusBySession.delete(s.id);
-        continue;
-      }
-      const readNow =
-        state.activeSessionId === s.id &&
-        (typeof document === "undefined" || document.hasFocus());
-      if (readStatusBySession.get(s.id) === sessionStatusReadKey(s)) continue;
-      recordNotificationHistory(s, s.status, readNow);
-      if (readNow) {
+      if (!notify || !key || !settings.events[key]) continue;
+      if (isSessionFocused(s.id, state.activeSessionId)) {
         markSessionNotificationsRead(s.id);
         continue;
       }
@@ -325,11 +187,40 @@ export function startSessionNotificationWatcher(): () => void {
     for (const id of lastStatus.keys()) {
       if (!known.has(id)) lastStatus.delete(id);
     }
-    for (const id of readStatusBySession.keys()) {
-      if (!known.has(id)) readStatusBySession.delete(id);
+  });
+}
+
+/**
+ * Watches session status transitions and records an in-app activity item for
+ * changes that need review. This is intentionally independent from the
+ * system-notification setting: the inbox is Acorn's local status history.
+ */
+export function startSessionActivityInboxWatcher(): () => void {
+  const lastStatus = new Map<string, SessionStatus>();
+  for (const s of useAppStore.getState().sessions) {
+    lastStatus.set(s.id, s.status);
+  }
+
+  return useAppStore.subscribe((state) => {
+    const sessions: Session[] = state.sessions;
+    const store = useAppStore.getState();
+
+    for (const s of sessions) {
+      const prev = lastStatus.get(s.id);
+      lastStatus.set(s.id, s.status);
+      if (prev === undefined) continue;
+
+      const kind = notificationKindForTransition(prev, s.status);
+      if (!kind) continue;
+      store.addSessionNotification(buildInboxNotification(s, prev, kind));
+      if (isSessionFocused(s.id, state.activeSessionId)) {
+        store.markSessionNotificationsReadForSession(s.id);
+      }
     }
-    if (state.sessionsLoadedCleanly) {
-      pruneNotificationHistoryToSessions(known);
+
+    const known = new Set(sessions.map((s) => s.id));
+    for (const id of lastStatus.keys()) {
+      if (!known.has(id)) lastStatus.delete(id);
     }
   });
 }
@@ -339,6 +230,26 @@ function projectNameFor(session: Session): string {
   const match = projects.find((p) => p.repo_path === session.repo_path);
   if (match) return match.name;
   return session.repo_path.split("/").pop() || session.repo_path;
+}
+
+function buildInboxNotification(
+  session: Session,
+  previousStatus: SessionStatus,
+  kind: SessionNotificationKind,
+): SessionNotification {
+  const createdAt = new Date().toISOString();
+  inboxNotificationCounter += 1;
+  return {
+    id: `${createdAt}:${inboxNotificationCounter}:${session.id}:${kind}`,
+    sessionId: session.id,
+    kind,
+    status: session.status,
+    previousStatus,
+    sessionName: session.name,
+    projectName: projectNameFor(session),
+    repoPath: session.repo_path,
+    createdAt,
+  };
 }
 
 async function fire(

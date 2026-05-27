@@ -27,8 +27,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import {
-  listNotificationHistory,
   resetNotificationsForTests,
+  startSessionActivityInboxWatcher,
   startSessionNotificationWatcher,
 } from "./notifications";
 import { DEFAULT_SETTINGS, useSettings } from "./settings";
@@ -45,6 +45,7 @@ const BASE_SESSION: Session = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   last_message: null,
+  title_source: "default",
   kind: "regular",
   owner: { kind: "user" },
   position: null,
@@ -72,8 +73,17 @@ describe("notifications", () => {
     });
     useAppStore.setState({
       sessions: [session()],
-      projects: [{ repo_path: "/repo/acorn", name: "acorn", created_at: "", position: 0 }],
+      projects: [
+        {
+          repo_path: "/repo/acorn",
+          name: "acorn",
+          created_at: "",
+          position: 0,
+        },
+      ],
       activeSessionId: null,
+      sessionNotifications: [],
+      sessionsLoadedCleanly: true,
     });
     useSettings.setState({
       settings: structuredClone(DEFAULT_SETTINGS),
@@ -82,7 +92,7 @@ describe("notifications", () => {
     });
   });
 
-  it("sends a status notification for an unfocused session transition", async () => {
+  it("sends a system notification for an unfocused session transition", async () => {
     const dispose = startSessionNotificationWatcher();
 
     useAppStore.setState({
@@ -102,17 +112,10 @@ describe("notifications", () => {
         extra: { sessionId: "session-1" },
       }),
     );
-    expect(listNotificationHistory()).toMatchObject([
-      {
-        sessionId: "session-1",
-        status: "needs_input",
-        readAt: null,
-      },
-    ]);
     dispose();
   });
 
-  it("marks a focused session transition read instead of sending a notification", async () => {
+  it("marks a focused session transition read instead of sending a system notification", async () => {
     useAppStore.setState({ activeSessionId: "session-1" });
     const dispose = startSessionNotificationWatcher();
 
@@ -127,19 +130,34 @@ describe("notifications", () => {
     await flushPromises();
 
     expect(mocks.sendNotification).not.toHaveBeenCalled();
-    expect(listNotificationHistory()).toMatchObject([
+    dispose();
+  });
+
+  it("records in-app activity for an unfocused session transition", async () => {
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+
+    expect(useAppStore.getState().sessionNotifications).toMatchObject([
       {
         sessionId: "session-1",
         status: "needs_input",
       },
     ]);
-    expect(listNotificationHistory()[0]?.readAt).toEqual(expect.any(String));
+    expect(useAppStore.getState().sessionNotifications[0]?.readAt).toBeUndefined();
     dispose();
   });
 
-  it("allows a later unread transition after the session leaves the read status", async () => {
+  it("marks focused in-app activity read without clearing it", async () => {
     useAppStore.setState({ activeSessionId: "session-1" });
-    const dispose = startSessionNotificationWatcher();
+    const dispose = startSessionActivityInboxWatcher();
 
     useAppStore.setState({
       sessions: [
@@ -149,40 +167,19 @@ describe("notifications", () => {
         }),
       ],
     });
-    await flushPromises();
-    expect(mocks.sendNotification).not.toHaveBeenCalled();
 
-    useAppStore.setState({
-      activeSessionId: null,
-      sessions: [
-        session({
-          status: "running",
-          updated_at: "2026-01-01T00:01:00Z",
-        }),
-      ],
+    const [notification] = useAppStore.getState().sessionNotifications;
+    expect(notification).toMatchObject({
+      sessionId: "session-1",
+      status: "needs_input",
     });
-    useAppStore.setState({
-      sessions: [
-        session({
-          status: "needs_input",
-          updated_at: "2026-01-01T00:01:00Z",
-        }),
-      ],
-    });
-    await flushPromises();
-
-    expect(mocks.sendNotification).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "Awaiting your next input.",
-        extra: { sessionId: "session-1" },
-      }),
-    );
+    expect(notification?.readAt).toEqual(expect.any(String));
     dispose();
   });
 
-  it("trims notification history to the configured maximum", async () => {
+  it("trims in-app activity to the configured maximum", () => {
     useSettings.getState().patchNotifications({ maxHistory: 2 });
-    const dispose = startSessionNotificationWatcher();
+    const dispose = startSessionActivityInboxWatcher();
 
     for (let i = 1; i <= 3; i += 1) {
       useAppStore.setState({
@@ -202,18 +199,15 @@ describe("notifications", () => {
         ],
       });
     }
-    await flushPromises();
 
-    expect(listNotificationHistory()).toHaveLength(2);
+    expect(useAppStore.getState().sessionNotifications).toHaveLength(2);
     dispose();
   });
 
-  it("deletes read history entries when auto-delete read notifications is enabled", async () => {
-    useSettings
-      .getState()
-      .patchNotifications({ autoDeleteRead: true });
+  it("deletes read in-app activity when auto-delete read notifications is enabled", () => {
+    useSettings.getState().patchNotifications({ autoDeleteRead: true });
     useAppStore.setState({ activeSessionId: "session-1" });
-    const dispose = startSessionNotificationWatcher();
+    const dispose = startSessionActivityInboxWatcher();
 
     useAppStore.setState({
       sessions: [
@@ -223,55 +217,9 @@ describe("notifications", () => {
         }),
       ],
     });
-    await flushPromises();
 
-    expect(listNotificationHistory()).toHaveLength(0);
+    expect(useAppStore.getState().sessionNotifications).toHaveLength(0);
     expect(mocks.sendNotification).not.toHaveBeenCalled();
-    dispose();
-  });
-
-  it("drops history for sessions that disappear after a clean session load", async () => {
-    const dispose = startSessionNotificationWatcher();
-
-    useAppStore.setState({
-      sessions: [
-        session({
-          status: "needs_input",
-          updated_at: "2026-01-01T00:01:00Z",
-        }),
-      ],
-    });
-    await flushPromises();
-    expect(listNotificationHistory()).toHaveLength(1);
-
-    useAppStore.setState({
-      sessions: [],
-      sessionsLoadedCleanly: true,
-    });
-
-    expect(listNotificationHistory()).toHaveLength(0);
-    dispose();
-  });
-
-  it("keeps history when the session list is not known to be clean", async () => {
-    const dispose = startSessionNotificationWatcher();
-
-    useAppStore.setState({
-      sessions: [
-        session({
-          status: "needs_input",
-          updated_at: "2026-01-01T00:01:00Z",
-        }),
-      ],
-    });
-    await flushPromises();
-
-    useAppStore.setState({
-      sessions: [],
-      sessionsLoadedCleanly: false,
-    });
-
-    expect(listNotificationHistory()).toHaveLength(1);
     dispose();
   });
 });

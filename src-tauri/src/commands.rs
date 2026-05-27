@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
@@ -11,6 +12,7 @@ use crate::agent_resume;
 use crate::error::{AppError, AppResult};
 use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
+use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::pull_requests::{
     self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
     PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
@@ -21,7 +23,9 @@ use crate::worktree;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::AgentKind as StatusAgentKind;
-use acorn_session::{Project, Session, SessionAgentProvider, SessionKind, SessionStatus};
+use acorn_session::{
+    Project, Session, SessionAgentProvider, SessionKind, SessionOwner, SessionStatus,
+};
 
 use serde::Serialize;
 
@@ -94,7 +98,7 @@ pub struct AcornIpcShim {
     pub exists: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Eq, PartialEq, Serialize)]
 pub struct FolderPermissionWarmupResult {
     pub id: &'static str,
     pub path: String,
@@ -110,6 +114,17 @@ pub async fn warm_macos_folder_permissions() -> AppResult<Vec<FolderPermissionWa
     .await
 }
 
+#[tauri::command]
+pub async fn reset_macos_folder_permissions<R: Runtime>(
+    app: AppHandle<R>,
+) -> AppResult<()> {
+    let bundle_id = app.config().identifier.clone();
+    run_blocking("reset_macos_folder_permissions", move || {
+        reset_macos_folder_permissions_inner(&bundle_id)
+    })
+    .await
+}
+
 fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
     if !cfg!(target_os = "macos") {
         return Vec::new();
@@ -121,57 +136,138 @@ fn warm_macos_folder_permissions_inner() -> Vec<FolderPermissionWarmupResult> {
         .collect()
 }
 
+fn reset_macos_folder_permissions_inner(bundle_id: &str) -> AppResult<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let failures: Vec<String> = [
+        "SystemPolicyDesktopFolder",
+        "SystemPolicyDocumentsFolder",
+        "SystemPolicyDownloadsFolder",
+    ]
+    .into_iter()
+    .filter_map(|service| {
+        reset_macos_tcc_service(service, bundle_id)
+            .err()
+            .map(|err| format!("{service}: {err}"))
+    })
+    .collect();
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!(
+            "failed to reset macOS folder permissions: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
+fn reset_macos_tcc_service(service: &'static str, bundle_id: &str) -> AppResult<()> {
+    match std::process::Command::new("/usr/bin/tccutil")
+        .args(["reset", service, bundle_id])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let message = if stderr.is_empty() { stdout } else { stderr };
+            Err(AppError::Other(if message.is_empty() {
+                format!("tccutil exited with status {}", output.status)
+            } else {
+                message
+            }))
+        }
+        Err(err) => Err(AppError::Io(err)),
+    }
+}
+
 fn protected_folder_candidates() -> Vec<(&'static str, PathBuf)> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
+    let modern_icloud = home
+        .join("Library")
+        .join("CloudStorage")
+        .join("iCloud Drive");
+    let legacy_icloud = home
+        .join("Library")
+        .join("Mobile Documents")
+        .join("com~apple~CloudDocs");
+    let icloud = match modern_icloud.try_exists() {
+        Ok(true) | Err(_) => modern_icloud,
+        Ok(false) => legacy_icloud,
+    };
+
     vec![
         ("desktop", home.join("Desktop")),
         ("documents", home.join("Documents")),
         ("downloads", home.join("Downloads")),
-        (
-            "icloud",
-            home.join("Library")
-                .join("Mobile Documents")
-                .join("com~apple~CloudDocs"),
-        ),
+        ("icloud", icloud),
     ]
 }
 
 fn probe_folder_permission(id: &'static str, path: PathBuf) -> FolderPermissionWarmupResult {
     let rendered = path.display().to_string();
-    if !path.exists() {
-        return FolderPermissionWarmupResult {
-            id,
-            path: rendered,
-            status: "missing",
-            error: None,
-        };
-    }
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return folder_permission_missing(id, rendered),
+        Err(err) => return folder_permission_error(id, rendered, err),
+    };
 
     match std::fs::read_dir(&path) {
-        Ok(mut entries) => {
-            let _ = entries.next();
-            FolderPermissionWarmupResult {
-                id,
-                path: rendered,
-                status: "ok",
-                error: None,
-            }
+        Ok(entries) => {
+            folder_permission_from_first_entry(id, rendered, entries.map(|entry| entry.map(|_| ())))
         }
-        Err(err) => {
-            let status = if err.kind() == std::io::ErrorKind::PermissionDenied {
-                "denied"
-            } else {
-                "error"
-            };
-            FolderPermissionWarmupResult {
-                id,
-                path: rendered,
-                status,
-                error: Some(err.to_string()),
-            }
-        }
+        Err(err) => folder_permission_error(id, rendered, err),
+    }
+}
+
+fn folder_permission_from_first_entry<I>(
+    id: &'static str,
+    path: String,
+    mut entries: I,
+) -> FolderPermissionWarmupResult
+where
+    I: Iterator<Item = io::Result<()>>,
+{
+    match entries.next() {
+        Some(Err(err)) => folder_permission_error(id, path, err),
+        Some(Ok(())) | None => FolderPermissionWarmupResult {
+            id,
+            path,
+            status: "ok",
+            error: None,
+        },
+    }
+}
+
+fn folder_permission_missing(id: &'static str, path: String) -> FolderPermissionWarmupResult {
+    FolderPermissionWarmupResult {
+        id,
+        path,
+        status: "missing",
+        error: None,
+    }
+}
+
+fn folder_permission_error(
+    id: &'static str,
+    path: String,
+    err: io::Error,
+) -> FolderPermissionWarmupResult {
+    let status = if err.kind() == io::ErrorKind::PermissionDenied {
+        "denied"
+    } else {
+        "error"
+    };
+    FolderPermissionWarmupResult {
+        id,
+        path,
+        status,
+        error: Some(err.to_string()),
     }
 }
 
@@ -891,6 +987,19 @@ pub fn create_new_project(
     Ok(project)
 }
 
+#[tauri::command]
+pub fn get_project_settings(repo_path: String) -> AppResult<ProjectSettingsRecord> {
+    project_settings::get(&PathBuf::from(repo_path))
+}
+
+#[tauri::command]
+pub fn update_project_settings(
+    repo_path: String,
+    settings: ProjectSettings,
+) -> AppResult<ProjectSettingsRecord> {
+    project_settings::update(&PathBuf::from(repo_path), settings)
+}
+
 fn validate_new_project_name(name: &str, ignore_safe_name: bool) -> AppResult<&str> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -966,6 +1075,7 @@ pub async fn remove_project(
     repo_path: String,
     remove_sessions: Option<bool>,
     remove_worktrees: Option<bool>,
+    remove_settings: Option<bool>,
 ) -> AppResult<()> {
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
@@ -986,6 +1096,13 @@ pub async fn remove_project(
         }
     }
     state.projects.remove(&path);
+    let drop_settings = remove_settings.unwrap_or(false)
+        || project_settings::should_remove_on_project_close(&path).unwrap_or(false);
+    if drop_settings {
+        if let Err(err) = project_settings::remove(&path) {
+            tracing::warn!(error = %err, path = %path.display(), "failed to remove project settings");
+        }
+    }
     persist(&state);
     Ok(())
 }
@@ -1032,9 +1149,162 @@ pub fn rename_session(state: State<'_, AppState>, id: String, name: String) -> A
     if trimmed.is_empty() {
         return Err(AppError::Other("name must not be empty".to_string()));
     }
+    let current = state.sessions.get(&id)?;
+    if matches!(current.owner, SessionOwner::Control { .. }) {
+        return Err(AppError::Other(
+            "control-session owned tabs cannot be renamed".to_string(),
+        ));
+    }
     let updated = state.sessions.rename(&id, trimmed)?;
     persist(&state);
     Ok(enrich_session(updated))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum GenerateSessionTitleStatus {
+    Generated,
+    NotReady,
+    Skipped,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateSessionTitleResult {
+    status: GenerateSessionTitleStatus,
+    session: Session,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionTitleReadinessStatus {
+    Ready,
+    NotReady,
+    Skipped,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTitleReadinessResult {
+    status: SessionTitleReadinessStatus,
+    session: Session,
+}
+
+#[tauri::command]
+pub async fn session_title_readiness(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<SessionTitleReadinessResult> {
+    let state = state.inner().clone();
+    run_blocking("session_title_readiness", move || {
+        session_title_readiness_inner(state, id)
+    })
+    .await
+}
+
+fn session_title_readiness_inner(
+    state: AppState,
+    id: String,
+) -> AppResult<SessionTitleReadinessResult> {
+    let id = parse_id(&id)?;
+    let session = state.sessions.get(&id)?;
+    if !crate::session_titles::can_generate_title(&session) {
+        return Ok(SessionTitleReadinessResult {
+            status: SessionTitleReadinessStatus::Skipped,
+            session: enrich_session(session),
+        });
+    }
+    if crate::session_titles::resolve_first_user_message(id).is_none() {
+        return Ok(SessionTitleReadinessResult {
+            status: SessionTitleReadinessStatus::NotReady,
+            session: enrich_session(session),
+        });
+    }
+    Ok(SessionTitleReadinessResult {
+        status: SessionTitleReadinessStatus::Ready,
+        session: enrich_session(session),
+    })
+}
+
+#[tauri::command]
+pub async fn generate_session_title(
+    state: State<'_, AppState>,
+    id: String,
+    command: String,
+    args: Vec<String>,
+    prompt: Option<String>,
+) -> AppResult<GenerateSessionTitleResult> {
+    let state = state.inner().clone();
+    run_blocking("generate_session_title", move || {
+        generate_session_title_inner(state, id, command, args, prompt)
+    })
+    .await
+}
+
+fn generate_session_title_inner(
+    state: AppState,
+    id: String,
+    command: String,
+    args: Vec<String>,
+    prompt: Option<String>,
+) -> AppResult<GenerateSessionTitleResult> {
+    let id = parse_id(&id)?;
+    let session = state.sessions.get(&id)?;
+    if !crate::session_titles::can_generate_title(&session) {
+        return Ok(GenerateSessionTitleResult {
+            status: GenerateSessionTitleStatus::Skipped,
+            session: enrich_session(session),
+        });
+    }
+    let Some(first_user_message) = crate::session_titles::resolve_first_user_message(id) else {
+        return Ok(GenerateSessionTitleResult {
+            status: GenerateSessionTitleStatus::NotReady,
+            session: enrich_session(session),
+        });
+    };
+    let generated = crate::session_titles::generate_title(
+        &command,
+        &args,
+        prompt.as_deref(),
+        &first_user_message,
+    )?;
+    let latest = state.sessions.get(&id)?;
+    if !crate::session_titles::can_generate_title(&latest) {
+        return Ok(GenerateSessionTitleResult {
+            status: GenerateSessionTitleStatus::Skipped,
+            session: enrich_session(latest),
+        });
+    }
+    let updated = state.sessions.set_generated_title(&id, generated)?;
+    persist(&state);
+    Ok(GenerateSessionTitleResult {
+        status: GenerateSessionTitleStatus::Generated,
+        session: enrich_session(updated),
+    })
+}
+
+#[tauri::command]
+pub async fn preview_session_title(
+    command: String,
+    args: Vec<String>,
+    prompt: Option<String>,
+    first_user_message: String,
+) -> AppResult<String> {
+    run_blocking("preview_session_title", move || {
+        let first_user_message = first_user_message.trim().to_string();
+        if first_user_message.is_empty() {
+            return Err(AppError::Other(
+                "first user message must not be empty".to_string(),
+            ));
+        }
+        crate::session_titles::generate_title(
+            &command,
+            &args,
+            prompt.as_deref(),
+            &first_user_message,
+        )
+    })
+    .await
 }
 
 /// Re-point a session at a new worktree directory and persist the change.
@@ -2441,6 +2711,7 @@ pub async fn generate_pr_commit_message(
     method: MergeMethod,
     command: String,
     args: Vec<String>,
+    prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
     pull_requests::generate_pr_commit_message(
         &PathBuf::from(repo_path),
@@ -2448,6 +2719,7 @@ pub async fn generate_pr_commit_message(
         method,
         command,
         args,
+        prompt,
     )
 }
 
@@ -2733,6 +3005,48 @@ mod tests {
     }
 
     #[test]
+    fn folder_permission_probe_reports_first_entry_error() {
+        let result = super::folder_permission_from_first_entry(
+            "documents",
+            "/Users/me/Documents".to_string(),
+            [Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "operation not permitted",
+            ))]
+            .into_iter(),
+        );
+
+        assert_eq!(
+            result,
+            super::FolderPermissionWarmupResult {
+                id: "documents",
+                path: "/Users/me/Documents".to_string(),
+                status: "denied",
+                error: Some("operation not permitted".to_string()),
+            },
+        );
+    }
+
+    #[test]
+    fn folder_permission_probe_reports_empty_directory_as_ok() {
+        let result = super::folder_permission_from_first_entry(
+            "downloads",
+            "/Users/me/Downloads".to_string(),
+            std::iter::empty::<std::io::Result<()>>(),
+        );
+
+        assert_eq!(
+            result,
+            super::FolderPermissionWarmupResult {
+                id: "downloads",
+                path: "/Users/me/Downloads".to_string(),
+                status: "ok",
+                error: None,
+            },
+        );
+    }
+
+    #[test]
     fn local_session_removal_cleans_project_mirror_without_project_sessions() {
         let removed = scoped_session("local", "/Users/me", false);
 
@@ -2956,7 +3270,10 @@ mod tests {
         init_repo_with_commit(&repo_dir);
         let (_name, path) =
             create_unique_worktree(&repo_dir, "external").expect("worktree should be created");
-        assert!(path.exists(), "linked project root should exist before removal");
+        assert!(
+            path.exists(),
+            "linked project root should exist before removal"
+        );
 
         remove_linked_worktree_at_path(&path, &path).expect("remove linked project root by path");
 

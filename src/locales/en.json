@@ -1,4 +1,39 @@
 {
+  "toasts": {
+    "session": {
+      "createFailed": "Failed to create session:",
+      "duplicateFailed": "Failed to duplicate session:",
+      "removeFailed": "Failed to remove session:",
+      "worktreeRemoved": "Worktree deleted from disk.",
+      "worktreeRemoveFailed": "Failed to delete worktree:",
+      "refreshFailed": "Failed to refresh sessions:",
+      "renameFailed": "Failed to rename session:",
+      "worktreeAdopted": "Adopted new worktree: {name}",
+      "worktreeAdoptFailed": "Failed to adopt worktree:"
+    },
+    "project": {
+      "addFailed": "Failed to add project:",
+      "createFailed": "Failed to create project:",
+      "removeFailed": "Failed to remove project:",
+      "worktreesRemoved": "Project worktrees deleted from disk.",
+      "worktreesRemoveFailed": "Failed to delete project worktrees:"
+    },
+    "ipc": {
+      "restarted": "IPC server restarted.",
+      "restartFailed": "Failed to restart IPC server:"
+    },
+    "files": {
+      "renameFailed": "Failed to rename file:",
+      "trashFailed": "Failed to move to trash:",
+      "pathsCopied": "File paths copied.",
+      "copyFailed": "Failed to copy file paths."
+    },
+    "pullRequests": {
+      "mergeFailed": "Failed to merge pull request:",
+      "closeFailed": "Failed to close pull request:",
+      "bodyUpdateFailed": "Failed to update pull request:"
+    }
+  },
   "settings": {
     "title": "Settings",
     "reset": "Reset to defaults",
@@ -128,6 +163,14 @@
         "refresh": "Refresh",
         "revealFolder": "Reveal folder"
       },
+      "toastPosition": {
+        "label": "Toast position",
+        "hint": "Choose where transient app messages appear.",
+        "options": {
+          "top": "Top",
+          "bottom": "Bottom"
+        }
+      },
       "background": {
         "label": "Background image",
         "hint": "One image can be applied to the app area, terminal area, or both.",
@@ -147,7 +190,13 @@
           "label": "Opacity",
           "hint": "0 is transparent, 100 is opaque."
         },
-        "blur": "Blur"
+        "blur": "Blur",
+        "toasts": {
+          "imported": "Background image imported.",
+          "importFailed": "Failed to import background image:",
+          "removed": "Background image removed.",
+          "removeFailed": "Failed to remove background image:"
+        }
       },
       "sessionDisplay": {
         "title": {
@@ -209,6 +258,10 @@
       "statusBar": {
         "label": "Status bar",
         "hint": "Choose which optional badges show in the bottom status bar.",
+        "sessionActivity": {
+          "label": "Session activity",
+          "description": "Bell shortcut for unread session activity. The Activity tab remains available when hidden."
+        },
         "sessionCount": {
           "label": "Session count",
           "description": "Total number of sessions across the active project (`sessions: N`)."
@@ -415,6 +468,27 @@
         "label": "Custom command",
         "hint": "Used for both interactive sessions and one-shot AI generation. Falls back to Claude Code when blank."
       },
+      "sessionTitles": {
+        "label": "Session titles",
+        "hint": "When enabled, acorn sends the first user prompt in a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
+        "checkbox": "Auto-generate session titles"
+      },
+      "sessionTitlePrompt": {
+        "label": "Session title prompt",
+        "hint": "Instructions sent before the first user prompt. Leave blank to use the default prompt.",
+        "open": "Configure title prompt",
+        "shortButton": "Prompt",
+        "editorLabel": "Prompt",
+        "count": "{count} / {max}",
+        "reset": "Reset prompt",
+        "preview": {
+          "sample": "Acorn sample first message",
+          "generate": "Generate preview",
+          "generating": "Generating preview",
+          "result": "Tab",
+          "failed": "Preview failed"
+        }
+      },
       "requirement": "The selected agent's CLI must already be installed and authenticated on this machine. Surfaces a clear error when the binary is missing."
     },
     "storage": {
@@ -471,6 +545,13 @@
       "whatsNewInVersion": "What's new in {version}",
       "checking": "Checking...",
       "checkForUpdates": "Check for updates",
+      "toasts": {
+        "upToDate": "Acorn is up to date.",
+        "updateAvailable": "Acorn {version} is available.",
+        "checkFailed": "Update check failed:",
+        "installFailed": "Update install failed:",
+        "releaseNotesFailed": "Failed to load release notes:"
+      },
       "relative": {
         "never": "never",
         "justNow": "just now",
@@ -504,6 +585,26 @@
       "needsInput": "needs input",
       "failed": "failed",
       "completed": "completed"
+    },
+    "notifications": {
+      "ariaLabel": "Session notifications",
+      "tooltipEmpty": "No unread session notifications",
+      "tooltipWithCount": "{count} unread session notifications",
+      "title": "Session notifications",
+      "unreadCount": "{count} unread",
+      "empty": "No session status changes yet.",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "Needs input",
+        "failed": "Failed",
+        "completed": "Completed",
+        "becameIdle": "Idle"
+      },
+      "actions": {
+        "markAllRead": "Mark all read",
+        "clearRead": "Clear read",
+        "dismiss": "Dismiss"
+      }
     },
     "services": {
       "ariaLabel": "Service status",
@@ -626,6 +727,7 @@
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New isolated session (worktree)",
       "newControlSession": "New control session",
+      "projectSettings": "Project Settings",
       "closeProject": "Close project",
       "revealInFinder": "Reveal in Finder",
       "copyPath": "Copy path",
@@ -650,7 +752,8 @@
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
-      "controlSession": "control session"
+      "controlSession": "control session",
+      "generatingSessionTitle": "Generating session title"
     },
     "localTerminals": {
       "title": "Instant sessions",
@@ -682,6 +785,7 @@
     "aria": {
       "worktree": "worktree",
       "controlSession": "control session",
+      "generatingSessionTitle": "Generating session title",
       "closeSession": "Close session",
       "closeTab": "Close tab"
     },
@@ -725,6 +829,7 @@
       "commits": "Commits",
       "staged": "Staged",
       "prs": "PRs",
+      "activity": "Activity",
       "history": "History",
       "actions": "Actions"
     },
@@ -735,6 +840,23 @@
     "todos": {
       "doneCount": "{completed}/{total} done",
       "inProgressCount": "{count} in progress"
+    },
+    "activity": {
+      "unreadCount": "{count} unread",
+      "readCount": "{count} read",
+      "empty": "No session activity yet",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "Needs input",
+        "failed": "Failed",
+        "completed": "Completed",
+        "becameIdle": "Idle"
+      },
+      "actions": {
+        "markAllRead": "Mark all read",
+        "clearRead": "Clear read",
+        "dismiss": "Dismiss"
+      }
     },
     "loading": {
       "more": "Loading more…",
@@ -957,6 +1079,19 @@
       "closeDeleteWorktrees": "Close · delete worktrees",
       "closeProject": "Close project"
     },
+    "projectSettings": {
+      "title": "Project Settings",
+      "pullRequests": "Pull requests",
+      "pullRequestsHint": "Project-specific defaults for pull request workflows.",
+      "generationPrompt": "Prompt for generated PR titles, comments, and merge messages",
+      "generationPromptHint": "Used when Acorn asks the selected AI CLI to generate this project's pull request title, review comment, or merge message.",
+      "generationPromptPlaceholder": "Example: Use a standard GitHub-style pull request merge message with a Conventional Commit subject and a concise impact-focused body.",
+      "promptCount": "{count} / {max}",
+      "rememberAfterClose": "Keep project settings after closing this project",
+      "rememberAfterCloseHint": "When disabled, Acorn deletes this project's saved settings when you close the project.",
+      "saving": "Saving...",
+      "save": "Save"
+    },
     "newProject": {
       "title": "New project",
       "subtitle": "Create a git repository and add it to Acorn",
@@ -1006,15 +1141,20 @@
     },
     "folderPermissionWarmup": {
       "title": "Check folder permissions now?",
-      "subtitle": "Prepare macOS folder access after an update",
+      "subtitle": "Prepare macOS folder access after updates and restarts",
       "question": "Do you want Acorn to check folder access before you start working?",
-      "reason": "After an update, macOS can re-evaluate protected-folder access and ask again later. This check opens those prompts up front for Desktop, Documents, Downloads, and iCloud Drive.",
+      "complete": "Folder access is ready.",
+      "needsAttention": "Some protected folders need attention.",
+      "reason": "After an update or restart, macOS can re-evaluate protected-folder access and ask again later. This check opens those prompts up front for Desktop, Documents, Downloads, and iCloud Drive.",
       "bodyPrompt": "Acorn briefly reads these folders only to trigger macOS permission checks. No files are changed.",
       "check": "Check now",
       "checking": "Checking...",
+      "reset": "Reset permissions",
+      "resetting": "Resetting...",
       "skip": "Not now",
       "done": "Done",
       "genericError": "Could not check folder access.",
+      "deniedHint": "If macOS has already saved a denial, it may not show the prompt again. Re-enable Acorn in System Settings > Privacy & Security > Files and Folders.",
       "folder": {
         "desktop": "Desktop",
         "documents": "Documents",
@@ -1062,6 +1202,7 @@
       "generating": "Generating...",
       "generateVia": "Generate via",
       "generateWithAi": "Generate with AI",
+      "goToProjectSettings": "Go to project settings",
       "subjectPlaceholder": "Subject",
       "bodyPlaceholder": "Body (optional)",
       "rebaseMessageLocked": "Rebase replays the original commits onto the base branch - the commit messages are not customizable here.",
@@ -1250,6 +1391,19 @@
     },
     "relativeTime": {
       "ago": "ago"
+    },
+    "toasts": {
+      "enabled": "Background sessions enabled.",
+      "disabled": "Background sessions disabled.",
+      "toggleFailed": "Failed to update background sessions:",
+      "restarted": "Daemon restarted.",
+      "restartFailed": "Failed to restart daemon:",
+      "shutdown": "Daemon shut down.",
+      "shutdownFailed": "Failed to quit daemon:",
+      "sessionKilled": "PTY killed.",
+      "sessionRestored": "Session restored.",
+      "sessionForgotten": "Session forgotten.",
+      "sessionActionFailed": "Daemon session action failed:"
     }
   }
 }

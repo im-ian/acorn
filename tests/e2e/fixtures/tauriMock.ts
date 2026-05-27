@@ -11,6 +11,7 @@ export const tauriMockSource = `
 
   const handlers = window.__ACORN_MOCK_HANDLERS__ || {};
   let nextCallbackId = 0;
+  const standardPrGenerationPrompt = 'Use a standard GitHub-style pull request merge message.\\n- First line: Conventional Commit subject when the type is clear, e.g. feat(scope): concise summary. Keep it imperative/present tense and <=72 chars.\\n- Body: 1-2 concise paragraphs explaining why the change matters, user-visible impact, and key implementation notes when useful.\\n- Keep the wording specific to the PR. Avoid boilerplate, markdown headings, labels, and prompt explanations.';
 
   function pluginDefault(cmd, args) {
     if (cmd === 'plugin:event|listen') return Promise.resolve(nextCallbackId++);
@@ -43,6 +44,24 @@ export const tauriMockSource = `
     }
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
+    if (cmd === 'get_project_settings') {
+      return Promise.resolve({
+        key: 'path:' + (args?.repoPath || '/tmp/project'),
+        settings: {
+          remember_after_close: true,
+          pull_requests: { generation_prompt: standardPrGenerationPrompt },
+        },
+      });
+    }
+    if (cmd === 'update_project_settings') {
+      return Promise.resolve({
+        key: 'path:' + (args?.repoPath || '/tmp/project'),
+        settings: args?.settings || {
+          remember_after_close: true,
+          pull_requests: { generation_prompt: standardPrGenerationPrompt },
+        },
+      });
+    }
     if (cmd === 'create_new_project') {
       const name = args && typeof args.name === 'string' ? args.name : 'new-project';
       const parentPath = args && typeof args.parentPath === 'string' ? args.parentPath : '/tmp';
@@ -54,6 +73,12 @@ export const tauriMockSource = `
       });
     }
     if (cmd === 'detect_session_statuses') return Promise.resolve([]);
+    if (cmd === 'session_title_readiness') {
+      return Promise.resolve({ status: 'skipped', session: {} });
+    }
+    if (cmd === 'generate_session_title') {
+      return Promise.resolve({ status: 'skipped', session: {} });
+    }
     if (cmd === 'detect_session_agent') {
       return Promise.resolve({ claude: null, codex: null });
     }
@@ -105,6 +130,7 @@ export const tauriMockSource = `
       });
     }
     if (cmd === 'warm_macos_folder_permissions') return Promise.resolve([]);
+    if (cmd === 'reset_macos_folder_permissions') return Promise.resolve([]);
     if (cmd === 'ipc_restart') return Promise.resolve(undefined);
     if (cmd === 'reorder_projects') return Promise.resolve([]);
     if (cmd === 'reorder_sessions') return Promise.resolve([]);

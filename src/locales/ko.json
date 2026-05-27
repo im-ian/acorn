@@ -1,4 +1,39 @@
 {
+  "toasts": {
+    "session": {
+      "createFailed": "세션을 만들지 못했습니다:",
+      "duplicateFailed": "세션을 복제하지 못했습니다:",
+      "removeFailed": "세션을 제거하지 못했습니다:",
+      "worktreeRemoved": "디스크에서 worktree를 삭제했습니다.",
+      "worktreeRemoveFailed": "worktree를 삭제하지 못했습니다:",
+      "refreshFailed": "세션을 새로고침하지 못했습니다:",
+      "renameFailed": "세션 이름을 변경하지 못했습니다:",
+      "worktreeAdopted": "새 worktree를 가져왔습니다: {name}",
+      "worktreeAdoptFailed": "worktree를 가져오지 못했습니다:"
+    },
+    "project": {
+      "addFailed": "프로젝트를 추가하지 못했습니다:",
+      "createFailed": "프로젝트를 만들지 못했습니다:",
+      "removeFailed": "프로젝트를 제거하지 못했습니다:",
+      "worktreesRemoved": "디스크에서 프로젝트 worktree를 삭제했습니다.",
+      "worktreesRemoveFailed": "프로젝트 worktree를 삭제하지 못했습니다:"
+    },
+    "ipc": {
+      "restarted": "IPC 서버를 다시 시작했습니다.",
+      "restartFailed": "IPC 서버를 다시 시작하지 못했습니다:"
+    },
+    "files": {
+      "renameFailed": "파일 이름을 변경하지 못했습니다:",
+      "trashFailed": "휴지통으로 이동하지 못했습니다:",
+      "pathsCopied": "파일 경로를 복사했습니다.",
+      "copyFailed": "파일 경로를 복사하지 못했습니다."
+    },
+    "pullRequests": {
+      "mergeFailed": "Pull request를 병합하지 못했습니다:",
+      "closeFailed": "Pull request를 닫지 못했습니다:",
+      "bodyUpdateFailed": "Pull request를 업데이트하지 못했습니다:"
+    }
+  },
   "settings": {
     "title": "설정",
     "reset": "기본값으로 재설정",
@@ -128,6 +163,14 @@
         "refresh": "새로고침",
         "revealFolder": "폴더 보기"
       },
+      "toastPosition": {
+        "label": "토스트 위치",
+        "hint": "일시적인 앱 메시지를 표시할 위치를 선택합니다.",
+        "options": {
+          "top": "상단",
+          "bottom": "하단"
+        }
+      },
       "background": {
         "label": "배경 이미지",
         "hint": "이미지 하나를 앱 영역, 터미널 영역 또는 둘 다에 적용할 수 있습니다.",
@@ -147,7 +190,13 @@
           "label": "불투명도",
           "hint": "0은 투명, 100은 불투명입니다."
         },
-        "blur": "흐림"
+        "blur": "흐림",
+        "toasts": {
+          "imported": "배경 이미지를 가져왔습니다.",
+          "importFailed": "배경 이미지를 가져오지 못했습니다:",
+          "removed": "배경 이미지를 제거했습니다.",
+          "removeFailed": "배경 이미지를 제거하지 못했습니다:"
+        }
       },
       "sessionDisplay": {
         "title": {
@@ -209,6 +258,10 @@
       "statusBar": {
         "label": "상태 표시줄",
         "hint": "하단 상태 표시줄에 표시할 선택 배지를 고릅니다.",
+        "sessionActivity": {
+          "label": "세션 활동",
+          "description": "읽지 않은 세션 활동으로 바로 가는 벨 버튼입니다. 숨겨도 Activity 탭은 계속 사용할 수 있습니다."
+        },
         "sessionCount": {
           "label": "세션 수",
           "description": "활성 프로젝트 전체의 총 세션 수입니다(`sessions: N`)."
@@ -415,6 +468,27 @@
         "label": "사용자 지정 명령",
         "hint": "대화형 세션과 일회성 AI 생성 모두에 사용됩니다. 비워 두면 Claude Code로 대체됩니다."
       },
+      "sessionTitles": {
+        "label": "세션 제목",
+        "hint": "켜면 새 에이전트 세션의 첫 사용자 프롬프트를 선택한 AI CLI로 보내고 기본 탭 이름을 간결한 제목으로 바꿉니다.",
+        "checkbox": "세션 제목 자동 생성"
+      },
+      "sessionTitlePrompt": {
+        "label": "세션 제목 프롬프트",
+        "hint": "첫 사용자 프롬프트 앞에 함께 보낼 지시문입니다. 비워 두면 기본 프롬프트를 사용합니다.",
+        "open": "제목 프롬프트 설정",
+        "shortButton": "프롬프트",
+        "editorLabel": "프롬프트",
+        "count": "{count} / {max}",
+        "reset": "프롬프트 초기화",
+        "preview": {
+          "sample": "Acorn 샘플 첫 메시지",
+          "generate": "미리보기 생성",
+          "generating": "미리보기 생성 중",
+          "result": "탭",
+          "failed": "미리보기 실패"
+        }
+      },
       "requirement": "선택한 에이전트의 CLI는 이 컴퓨터에 이미 설치되어 있고 인증되어 있어야 합니다. 바이너리가 없으면 명확한 오류를 표시합니다."
     },
     "storage": {
@@ -471,6 +545,13 @@
       "whatsNewInVersion": "{version}의 새로운 내용",
       "checking": "확인 중...",
       "checkForUpdates": "업데이트 확인",
+      "toasts": {
+        "upToDate": "Acorn이 최신 상태입니다.",
+        "updateAvailable": "Acorn {version}을 사용할 수 있습니다.",
+        "checkFailed": "업데이트 확인에 실패했습니다:",
+        "installFailed": "업데이트 설치에 실패했습니다:",
+        "releaseNotesFailed": "릴리스 노트를 불러오지 못했습니다:"
+      },
       "relative": {
         "never": "확인한 적 없음",
         "justNow": "방금 전",
@@ -504,6 +585,26 @@
       "needsInput": "입력 필요",
       "failed": "실패",
       "completed": "완료"
+    },
+    "notifications": {
+      "ariaLabel": "세션 알림",
+      "tooltipEmpty": "읽지 않은 세션 알림 없음",
+      "tooltipWithCount": "읽지 않은 세션 알림 {count}개",
+      "title": "세션 알림",
+      "unreadCount": "읽지 않음 {count}개",
+      "empty": "아직 세션 상태 변경이 없습니다.",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "입력 필요",
+        "failed": "실패",
+        "completed": "완료",
+        "becameIdle": "유휴"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "dismiss": "닫기"
+      }
     },
     "services": {
       "ariaLabel": "서비스 상태",
@@ -626,6 +727,7 @@
       "newIsolatedSession": "새 격리 세션",
       "newIsolatedSessionWorktree": "새 격리 세션 (worktree)",
       "newControlSession": "새 컨트롤 세션",
+      "projectSettings": "프로젝트 설정",
       "closeProject": "프로젝트 닫기",
       "revealInFinder": "Finder에서 보기",
       "copyPath": "경로 복사",
@@ -650,7 +752,8 @@
       "dragToReorderSession": "세션 순서를 바꾸려면 드래그",
       "localTerminalSessions": "로컬 터미널 세션",
       "worktree": "worktree",
-      "controlSession": "컨트롤 세션"
+      "controlSession": "컨트롤 세션",
+      "generatingSessionTitle": "세션 제목 생성 중"
     },
     "localTerminals": {
       "title": "인스턴트 세션",
@@ -682,6 +785,7 @@
     "aria": {
       "worktree": "워크트리",
       "controlSession": "컨트롤 세션",
+      "generatingSessionTitle": "세션 제목 생성 중",
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"
     },
@@ -725,6 +829,7 @@
       "commits": "커밋",
       "staged": "스테이징",
       "prs": "PR",
+      "activity": "활동",
       "history": "기록",
       "actions": "작업"
     },
@@ -735,6 +840,23 @@
     "todos": {
       "doneCount": "{completed}/{total} 완료",
       "inProgressCount": "{count}개 진행 중"
+    },
+    "activity": {
+      "unreadCount": "읽지 않음 {count}개",
+      "readCount": "읽음 {count}개",
+      "empty": "아직 세션 활동이 없습니다",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "입력 필요",
+        "failed": "실패",
+        "completed": "완료",
+        "becameIdle": "유휴"
+      },
+      "actions": {
+        "markAllRead": "모두 읽음",
+        "clearRead": "읽은 항목 지우기",
+        "dismiss": "닫기"
+      }
     },
     "loading": {
       "more": "더 불러오는 중…",
@@ -957,6 +1079,19 @@
       "closeDeleteWorktrees": "닫기 · worktree 삭제",
       "closeProject": "프로젝트 닫기"
     },
+    "projectSettings": {
+      "title": "프로젝트 설정",
+      "pullRequests": "Pull request",
+      "pullRequestsHint": "이 프로젝트의 pull request 작업에만 적용되는 기본값입니다.",
+      "generationPrompt": "PR 제목, 코멘트, 머지 메시지 생성 프롬프트",
+      "generationPromptHint": "Acorn이 선택된 AI CLI로 이 프로젝트의 pull request 제목, 리뷰 코멘트, 머지 메시지를 생성할 때 사용합니다.",
+      "generationPromptPlaceholder": "예: Conventional Commit 제목과 영향 중심 본문을 사용하는 표준 GitHub 스타일 pull request merge message로 작성하세요.",
+      "promptCount": "{count} / {max}",
+      "rememberAfterClose": "프로젝트를 닫은 뒤에도 설정 유지",
+      "rememberAfterCloseHint": "끄면 이 프로젝트를 닫을 때 저장된 프로젝트 설정을 삭제합니다.",
+      "saving": "저장 중...",
+      "save": "저장"
+    },
     "newProject": {
       "title": "새 프로젝트",
       "subtitle": "Git 저장소를 만들고 Acorn에 추가합니다",
@@ -1006,15 +1141,20 @@
     },
     "folderPermissionWarmup": {
       "title": "폴더 권한을 지금 확인할까요?",
-      "subtitle": "업데이트 후 macOS 폴더 접근을 미리 확인합니다",
+      "subtitle": "업데이트와 재시작 후 macOS 폴더 접근을 미리 확인합니다",
       "question": "작업을 시작하기 전에 Acorn의 폴더 접근 권한을 확인할까요?",
-      "reason": "업데이트 후 macOS가 보호 폴더 접근을 다시 평가하면서 나중에 권한을 다시 물을 수 있습니다. 지금 확인하면 데스크탑, 문서, 다운로드, iCloud Drive 권한 요청을 미리 처리할 수 있습니다.",
+      "complete": "폴더 접근 권한이 준비되었습니다.",
+      "needsAttention": "일부 보호된 폴더에 확인이 필요합니다.",
+      "reason": "업데이트 또는 재시작 후 macOS가 보호 폴더 접근을 다시 평가하면서 나중에 권한을 다시 물을 수 있습니다. 지금 확인하면 데스크탑, 문서, 다운로드, iCloud Drive 권한 요청을 미리 처리할 수 있습니다.",
       "bodyPrompt": "Acorn은 macOS 권한 확인을 위해 이 폴더들을 잠깐 읽기만 합니다. 파일은 변경하지 않습니다.",
       "check": "지금 확인",
       "checking": "확인 중...",
+      "reset": "권한 초기화",
+      "resetting": "초기화 중...",
       "skip": "나중에",
       "done": "완료",
       "genericError": "폴더 접근 권한을 확인하지 못했습니다.",
+      "deniedHint": "macOS에 거절 상태가 이미 저장되어 있으면 권한 창이 다시 뜨지 않을 수 있습니다. 시스템 설정 > 개인정보 보호 및 보안 > 파일 및 폴더에서 Acorn을 다시 허용해 주세요.",
       "folder": {
         "desktop": "데스크탑",
         "documents": "문서",
@@ -1062,6 +1202,7 @@
       "generating": "생성 중...",
       "generateVia": "다음으로 생성:",
       "generateWithAi": "AI로 생성",
+      "goToProjectSettings": "프로젝트 설정으로 이동",
       "subjectPlaceholder": "제목",
       "bodyPlaceholder": "본문(선택 사항)",
       "rebaseMessageLocked": "Rebase는 원래 커밋을 기본 브랜치 위에 다시 적용하므로 여기서 커밋 메시지를 변경할 수 없습니다.",
@@ -1250,6 +1391,19 @@
     },
     "relativeTime": {
       "ago": "전"
+    },
+    "toasts": {
+      "enabled": "백그라운드 세션을 켰습니다.",
+      "disabled": "백그라운드 세션을 껐습니다.",
+      "toggleFailed": "백그라운드 세션 설정을 변경하지 못했습니다:",
+      "restarted": "데몬을 다시 시작했습니다.",
+      "restartFailed": "데몬을 다시 시작하지 못했습니다:",
+      "shutdown": "데몬을 종료했습니다.",
+      "shutdownFailed": "데몬을 종료하지 못했습니다:",
+      "sessionKilled": "PTY를 종료했습니다.",
+      "sessionRestored": "세션을 복원했습니다.",
+      "sessionForgotten": "세션을 잊었습니다.",
+      "sessionActionFailed": "데몬 세션 작업에 실패했습니다:"
     }
   }
 }

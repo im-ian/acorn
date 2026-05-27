@@ -16,5 +16,5 @@ pub mod status;
 
 pub use session::{
     Project, ProjectStore, Session, SessionAgentProvider, SessionError, SessionKind, SessionOwner,
-    SessionResult, SessionStatus, SessionStore,
+    SessionResult, SessionStatus, SessionStore, SessionTitleSource,
 };
