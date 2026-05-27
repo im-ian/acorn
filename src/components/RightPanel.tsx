@@ -3618,7 +3618,13 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
 function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number }) {
   const t = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const duration = formatJobDuration(job.started_at, job.completed_at, t, nowUnix);
+  const duration = formatJobDuration(
+    job.started_at,
+    job.completed_at,
+    job.status,
+    t,
+    nowUnix,
+  );
   return (
     <li className="bg-bg/40">
       <button
@@ -3733,13 +3739,15 @@ function formatDurationSeconds(seconds: number, t: Translator): string {
 function formatJobDuration(
   startedAt: string | null,
   completedAt: string | null,
+  status: string,
   t: Translator,
   nowUnix = Math.floor(Date.now() / 1000),
 ): string {
   if (!startedAt) return "";
   const start = toUnixSeconds(startedAt);
   if (start <= 0) return "";
-  const end = completedAt ? toUnixSeconds(completedAt) : nowUnix;
+  const completed = status.toLowerCase() === "completed";
+  const end = completed && completedAt ? toUnixSeconds(completedAt) : nowUnix;
   return formatDurationSeconds(Math.max(0, end - start), t);
 }
 
