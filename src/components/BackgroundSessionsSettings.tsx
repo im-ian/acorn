@@ -15,6 +15,7 @@ import type { Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
+import { useToasts } from "../lib/toasts";
 import { Tooltip } from "./Tooltip";
 import { CheckboxRow, Field } from "./ui";
 
@@ -37,6 +38,7 @@ export function BackgroundSessionsSettings() {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmShutdown, setConfirmShutdown] = useState(false);
   const appSessions = useAppStore((s) => s.sessions);
+  const showToast = useToasts((s) => s.show);
 
   const refresh = useCallback(async () => {
     try {
@@ -72,12 +74,19 @@ export function BackgroundSessionsSettings() {
       writeKillswitch(next);
       try {
         await api.daemonSetEnabled(next);
+        showToast(
+          next
+            ? t("backgroundSessions.toasts.enabled")
+            : t("backgroundSessions.toasts.disabled"),
+        );
       } catch (err) {
-        setStatusError(err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        setStatusError(message);
+        showToast(`${t("backgroundSessions.toasts.toggleFailed")} ${message}`);
       }
       void refresh();
     },
-    [refresh],
+    [refresh, showToast, t],
   );
 
   const handleRestart = useCallback(async () => {
@@ -86,12 +95,15 @@ export function BackgroundSessionsSettings() {
     try {
       await api.daemonRestart();
       await refresh();
+      showToast(t("backgroundSessions.toasts.restarted"));
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setStatusError(message);
+      showToast(`${t("backgroundSessions.toasts.restartFailed")} ${message}`);
     } finally {
       setBusy(null);
     }
-  }, [refresh]);
+  }, [refresh, showToast, t]);
 
   const handleShutdown = useCallback(async () => {
     setBusy("shutdown");
@@ -100,12 +112,15 @@ export function BackgroundSessionsSettings() {
       await api.daemonShutdown();
       setConfirmShutdown(false);
       await refresh();
+      showToast(t("backgroundSessions.toasts.shutdown"));
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setStatusError(message);
+      showToast(`${t("backgroundSessions.toasts.shutdownFailed")} ${message}`);
     } finally {
       setBusy(null);
     }
-  }, [refresh]);
+  }, [refresh, showToast, t]);
 
   const running = status?.running ?? false;
   const indicator = !enabled
@@ -281,6 +296,7 @@ function SessionsList({
 }) {
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
+  const showToast = useToasts((s) => s.show);
   const appById = useMemo(() => {
     const m = new Map<string, Session>();
     for (const s of appSessions) m.set(s.id, s);
@@ -288,19 +304,22 @@ function SessionsList({
   }, [appSessions]);
 
   const runRowAction = useCallback(
-    async (id: string, fn: () => Promise<void>) => {
+    async (id: string, fn: () => Promise<void>, successMessage: string) => {
       setRowBusy(id);
       setRowError(null);
       try {
         await fn();
         await onRefresh();
+        showToast(successMessage);
       } catch (err) {
-        setRowError(err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        setRowError(message);
+        showToast(`${t("backgroundSessions.toasts.sessionActionFailed")} ${message}`);
       } finally {
         setRowBusy(null);
       }
     },
-    [onRefresh],
+    [onRefresh, showToast, t],
   );
 
   if (!enabled) {
@@ -399,8 +418,10 @@ function SessionsList({
                     <RowButton
                       busy={busy}
                       onClick={() =>
-                        void runRowAction(s.id, () =>
-                          api.daemonKillSession(s.id),
+                        void runRowAction(
+                          s.id,
+                          () => api.daemonKillSession(s.id),
+                          t("backgroundSessions.toasts.sessionKilled"),
                         )
                       }
                       tone="danger"
@@ -417,8 +438,10 @@ function SessionsList({
                     <RowButton
                       busy={busy}
                       onClick={() =>
-                        void runRowAction(s.id, () =>
-                          api.daemonAdoptSession(s.id),
+                        void runRowAction(
+                          s.id,
+                          () => api.daemonAdoptSession(s.id),
+                          t("backgroundSessions.toasts.sessionRestored"),
                         )
                       }
                       aria-label={t("backgroundSessions.actions.restore")}
@@ -439,8 +462,10 @@ function SessionsList({
                     busy={busy}
                     disabled={s.alive}
                     onClick={() =>
-                      void runRowAction(s.id, () =>
-                        api.daemonForgetSession(s.id),
+                      void runRowAction(
+                        s.id,
+                        () => api.daemonForgetSession(s.id),
+                        t("backgroundSessions.toasts.sessionForgotten"),
                       )
                     }
                     aria-label={t("backgroundSessions.actions.forget")}

@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { homeDir } from "@tauri-apps/api/path";
-import { Activity, Loader2, Settings } from "lucide-react";
+import {
+  Activity,
+  Bell,
+  CheckCheck,
+  Loader2,
+  Settings,
+  Trash2,
+  X,
+} from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
-import type { MemoryProcess, SessionStatus } from "../lib/types";
+import { useToasts } from "../lib/toasts";
+import type {
+  MemoryProcess,
+  SessionNotification,
+  SessionNotificationKind,
+  SessionStatus,
+} from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
@@ -142,6 +156,9 @@ export function StatusBar() {
   const showSessionStatus = useSettings(
     (s) => s.settings.statusBar.showSessionStatus,
   );
+  const showSessionActivity = useSettings(
+    (s) => s.settings.statusBar.showSessionActivity !== false,
+  );
   const showGithubAccount = useSettings(
     (s) => s.settings.statusBar.showGithubAccount,
   );
@@ -175,6 +192,7 @@ export function StatusBar() {
             control-session socket or a stopped daemon without leaving
             the main view. */}
         <ServicesStatusButton />
+        {showSessionActivity ? <SessionNotificationsButton /> : null}
         {showSessionCount ? (
           <span className="whitespace-nowrap">
             {statusBarFormat(t, "statusBar.sessionCount", {
@@ -310,6 +328,297 @@ interface DaemonSnapshot {
 
 type DotState = "ok" | "down" | "muted";
 
+const NOTIFICATION_KIND_KEYS: Record<
+  SessionNotificationKind,
+  StatusBarTranslationKey
+> = {
+  needs_input: "statusBar.notifications.kind.needsInput",
+  failed: "statusBar.notifications.kind.failed",
+  completed: "statusBar.notifications.kind.completed",
+  became_idle: "statusBar.notifications.kind.becameIdle",
+};
+
+function SessionNotificationsButton() {
+  const t = useTranslation();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const notifications = useAppStore((s) => s.sessionNotifications);
+  const unreadCount = notifications.filter((notification) => !notification.readAt)
+    .length;
+  const tooltip =
+    unreadCount > 0
+      ? statusBarFormat(t, "statusBar.notifications.tooltipWithCount", {
+          count: unreadCount,
+        })
+      : statusBarText(t, "statusBar.notifications.tooltipEmpty");
+
+  return (
+    <>
+      <Tooltip label={tooltip} side="top">
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={statusBarText(t, "statusBar.notifications.ariaLabel")}
+          className={cn(
+            "relative flex h-5 items-center gap-1.5 rounded px-1.5 transition",
+            "hover:bg-bg-elevated",
+            unreadCount > 0 ? "text-warning" : "text-fg-muted",
+          )}
+        >
+          <Bell size={12} />
+          {unreadCount > 0 ? (
+            <span className="min-w-3 rounded-full bg-warning px-1 text-center text-[9px] leading-3 text-bg-sidebar">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          ) : null}
+        </button>
+      </Tooltip>
+      {open ? (
+        <SessionNotificationsDropdown
+          anchor={triggerRef.current}
+          onClose={() => setOpen(false)}
+          notifications={notifications}
+        />
+      ) : null}
+    </>
+  );
+}
+
+interface SessionNotificationsDropdownProps {
+  anchor: HTMLElement | null;
+  onClose: () => void;
+  notifications: SessionNotification[];
+}
+
+function SessionNotificationsDropdown({
+  anchor,
+  onClose,
+  notifications,
+}: SessionNotificationsDropdownProps) {
+  const t = useTranslation();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; bottom: number } | null>(
+    null,
+  );
+  const unreadCount = notifications.filter((notification) => !notification.readAt)
+    .length;
+  const markAllRead = useAppStore((s) => s.markAllSessionNotificationsRead);
+  const clearRead = useAppStore((s) => s.clearReadSessionNotifications);
+
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    setPosition({
+      left: rect.left,
+      bottom: Math.max(8, window.innerHeight - rect.top + 6),
+    });
+  }, [anchor]);
+
+  useLayoutEffect(() => {
+    if (!ref.current || !position) return;
+    const rect = ref.current.getBoundingClientRect();
+    const overflowRight = position.left + rect.width - (window.innerWidth - 8);
+    if (overflowRight > 0) {
+      setPosition((p) => (p ? { ...p, left: Math.max(8, p.left - overflowRight) } : p));
+    }
+  }, [position]);
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (ref.current && ref.current.contains(e.target as Node)) return;
+      if (anchor && anchor.contains(e.target as Node)) return;
+      onClose();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [anchor, onClose]);
+
+  if (!position) return null;
+
+  return createPortal(
+    <div
+      ref={ref}
+      role="menu"
+      style={{
+        position: "fixed",
+        left: position.left,
+        bottom: position.bottom,
+        zIndex: 60,
+      }}
+      className="flex max-h-[420px] w-96 flex-col overflow-hidden rounded-md border border-border bg-bg-elevated shadow-2xl"
+    >
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <div className="min-w-0">
+          <div className="font-mono text-xs text-fg">
+            {statusBarText(t, "statusBar.notifications.title")}
+          </div>
+          <div className="font-mono text-[10px] text-fg-muted">
+            {statusBarFormat(t, "statusBar.notifications.unreadCount", {
+              count: unreadCount,
+            })}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Tooltip
+            label={statusBarText(t, "statusBar.notifications.actions.markAllRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <CheckCheck size={13} />
+            </button>
+          </Tooltip>
+          <Tooltip
+            label={statusBarText(t, "statusBar.notifications.actions.clearRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={clearRead}
+              disabled={notifications.every((notification) => !notification.readAt)}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <Trash2 size={13} />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+      {notifications.length === 0 ? (
+        <div className="px-3 py-8 text-center text-xs text-fg-muted">
+          {statusBarText(t, "statusBar.notifications.empty")}
+        </div>
+      ) : (
+        <ul className="min-h-0 overflow-y-auto">
+          {notifications.map((notification) => (
+            <li key={notification.id}>
+              <NotificationRow
+                notification={notification}
+                onClose={onClose}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+function NotificationRow({
+  notification,
+  onClose,
+}: {
+  notification: SessionNotification;
+  onClose: () => void;
+}) {
+  const t = useTranslation();
+  const selectSession = useAppStore((s) => s.selectSession);
+  const markRead = useAppStore((s) => s.markSessionNotificationRead);
+  const dismiss = useAppStore((s) => s.dismissSessionNotification);
+  const unread = !notification.readAt;
+
+  const openSession = () => {
+    markRead(notification.id);
+    selectSession(notification.sessionId);
+    onClose();
+  };
+
+  return (
+    <div
+      role="menuitem"
+      tabIndex={0}
+      onClick={openSession}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openSession();
+      }}
+      className={cn(
+        "group flex w-full cursor-pointer items-start gap-2 border-b border-border/70 px-3 py-2 text-left transition last:border-b-0",
+        "hover:bg-bg-sidebar",
+        unread && "bg-warning/5",
+      )}
+    >
+      <span
+        className={cn(
+          "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+          notificationDotClass(notification.kind),
+        )}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              "truncate font-mono text-[11px]",
+              unread ? "text-fg" : "text-fg-muted",
+            )}
+          >
+            {statusBarText(t, NOTIFICATION_KIND_KEYS[notification.kind])}
+          </span>
+          <span className="shrink-0 font-mono text-[10px] text-fg-muted/70">
+            {formatNotificationTime(notification.createdAt)}
+          </span>
+        </span>
+        <span className="block truncate text-[11px] text-fg">
+          {statusBarFormat(t, "statusBar.notifications.itemTitle", {
+            project: notification.projectName,
+            session: notification.sessionName,
+          })}
+        </span>
+        <span className="block truncate text-[10px] text-fg-muted">
+          {notification.repoPath}
+        </span>
+      </span>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={statusBarText(t, "statusBar.notifications.actions.dismiss")}
+        onClick={(event) => {
+          event.stopPropagation();
+          dismiss(notification.id);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          dismiss(notification.id);
+        }}
+        className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-bg-elevated hover:text-fg group-hover:opacity-100"
+      >
+        <X size={12} />
+      </span>
+    </div>
+  );
+}
+
+function notificationDotClass(kind: SessionNotificationKind): string {
+  if (kind === "failed") return "bg-danger";
+  if (kind === "completed") return "bg-accent";
+  return "bg-warning";
+}
+
+function formatNotificationTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function StatusDot({ state }: { state: DotState }) {
   return (
     <span
@@ -328,6 +637,7 @@ function StatusDot({ state }: { state: DotState }) {
 
 function ServicesStatusButton() {
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -379,12 +689,14 @@ function ServicesStatusButton() {
       await api.ipcRestart();
       await refreshIpc();
       setIpc((s) => ({ ...s, busy: false }));
+      showToast(t("toasts.ipc.restarted"));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await refreshIpc();
       setIpc((s) => ({ ...s, busy: false, lastError: msg }));
+      showToast(`${t("toasts.ipc.restartFailed")} ${msg}`);
     }
-  }, [ipc.busy, refreshIpc]);
+  }, [ipc.busy, refreshIpc, showToast, t]);
 
   const openDaemonSettings = useCallback(() => {
     window.dispatchEvent(

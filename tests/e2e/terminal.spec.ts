@@ -175,6 +175,206 @@ test.describe("terminal: spawn", () => {
     expect(first.parentLimbo).toBeNull();
   });
 
+  test("opens file:line terminal links in the code viewer", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __fileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      w.__fileLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo/src/components/FolderPermissionWarmupModal.tsx") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      const lines = Array.from(
+        { length: 100 },
+        (_, index) => `line ${index + 1}`,
+      );
+      lines[77] = "target line 78";
+      return {
+        content: lines.join("\n"),
+        size: 1024,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    const linkText = "src/components/FolderPermissionWarmupModal.tsx:78";
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __fileLinkChannelId?: number })
+              .__fileLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await page.evaluate((text) => {
+      const w = window as unknown as {
+        __fileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      const id = w.__fileLinkChannelId;
+      if (id === undefined) throw new Error("missing terminal output channel");
+      const callback = w[`_${id}`] as
+        | ((payload: { index: number; message: number[] }) => void)
+        | undefined;
+      if (!callback) throw new Error("missing terminal output callback");
+      callback({
+        index: 0,
+        message: Array.from(new TextEncoder().encode(`${text}\r\n`)),
+      });
+    }, linkText);
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+    await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect(
+      page.getByRole("button", {
+        name: /FolderPermissionWarmupModal\.tsx Close tab/,
+      }),
+    ).toBeVisible();
+    await expect(page.locator('[data-acorn-target-line="true"]')).toContainText(
+      "target line 78",
+    );
+  });
+
+  test("opens file-only terminal links in the code viewer", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo/src/components");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __fileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      w.__fileLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo/.claude/rules/typescript/coding-style.md") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      return {
+        content: "file-only link target\nline 2",
+        size: 128,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    const linkText = "../../.claude/rules/typescript/coding-style.md";
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __fileLinkChannelId?: number })
+              .__fileLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+    await page.evaluate((text) => {
+      const w = window as unknown as {
+        __fileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      const id = w.__fileLinkChannelId;
+      if (id === undefined) throw new Error("missing terminal output channel");
+      const callback = w[`_${id}`] as
+        | ((payload: { index: number; message: number[] }) => void)
+        | undefined;
+      if (!callback) throw new Error("missing terminal output callback");
+      callback({
+        index: 0,
+        message: Array.from(new TextEncoder().encode(`${text}\r\n`)),
+      });
+    }, linkText);
+    await expect(page.locator(".xterm")).toContainText(linkText);
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 12, screenBox!.y + 10);
+    await page.mouse.click(screenBox!.x + 12, screenBox!.y + 10);
+
+    await expect(
+      page.getByRole("button", {
+        name: /coding-style\.md Close tab/,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("file-only link target")).toBeVisible();
+    await expect(page.locator('[data-acorn-target-line="true"]')).toHaveCount(
+      0,
+    );
+  });
+
   test("submitting a command resyncs the PTY size for agent TUIs", async ({
     page,
     tauri,
@@ -233,6 +433,77 @@ test.describe("terminal: spawn", () => {
         { timeout: 1_000 },
       )
       .toBeGreaterThanOrEqual(1);
+  });
+
+  test("global modifier shortcuts are claimed before terminal key listeners", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+
+    const result = await page.evaluate(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!textarea) throw new Error("xterm helper textarea missing");
+
+      let descendantListenerRan = false;
+      textarea.addEventListener(
+        "keydown",
+        () => {
+          descendantListenerRan = true;
+        },
+        { capture: true, once: true },
+      );
+
+      const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const canceled = !textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "e",
+          code: "KeyE",
+          metaKey: isMac,
+          ctrlKey: !isMac,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      return { canceled, descendantListenerRan };
+    });
+
+    expect(result).toEqual({
+      canceled: true,
+      descendantListenerRan: false,
+    });
   });
 
   test("reattaching a live daemon session replays daemon scrollback instead of stale disk scrollback", async ({

@@ -4,10 +4,13 @@ import type {
   AgentHistoryItem,
   CommitInfo,
   DiffPayload,
+  GenerateSessionTitleResult,
   GeneratedCommitMessage,
   MemoryUsage,
   MergeMethod,
   Project,
+  ProjectSettings,
+  ProjectSettingsRecord,
   PrStateFilter,
   PullRequestDetailListing,
   PullRequestListing,
@@ -15,6 +18,7 @@ import type {
   SessionAgentProvider,
   SessionKind,
   SessionStatus,
+  SessionTitleReadinessResult,
   StagedFile,
   TodoItem,
   WorkflowRunDetailListing,
@@ -68,6 +72,37 @@ export const api = {
   renameSession(id: string, name: string): Promise<Session> {
     return invoke<Session>("rename_session", { id, name });
   },
+  sessionTitleReadiness(id: string): Promise<SessionTitleReadinessResult> {
+    return invoke<SessionTitleReadinessResult>("session_title_readiness", {
+      id,
+    });
+  },
+  generateSessionTitle(
+    id: string,
+    command: string,
+    args: string[],
+    prompt: string,
+  ): Promise<GenerateSessionTitleResult> {
+    return invoke<GenerateSessionTitleResult>("generate_session_title", {
+      id,
+      command,
+      args,
+      prompt,
+    });
+  },
+  previewSessionTitle(
+    command: string,
+    args: string[],
+    prompt: string,
+    firstUserMessage: string,
+  ): Promise<string> {
+    return invoke<string>("preview_session_title", {
+      command,
+      args,
+      prompt,
+      firstUserMessage,
+    });
+  },
   listProjects(): Promise<Project[]> {
     return invoke<Project[]>("list_projects");
   },
@@ -89,11 +124,25 @@ export const api = {
     repoPath: string,
     removeSessions = true,
     removeWorktrees = false,
+    removeSettings = false,
   ): Promise<void> {
     return invoke<void>("remove_project", {
       repoPath,
       removeSessions,
       removeWorktrees,
+      removeSettings,
+    });
+  },
+  getProjectSettings(repoPath: string): Promise<ProjectSettingsRecord> {
+    return invoke<ProjectSettingsRecord>("get_project_settings", { repoPath });
+  },
+  updateProjectSettings(
+    repoPath: string,
+    settings: ProjectSettings,
+  ): Promise<ProjectSettingsRecord> {
+    return invoke<ProjectSettingsRecord>("update_project_settings", {
+      repoPath,
+      settings,
     });
   },
   reorderProjects(order: string[]): Promise<Project[]> {
@@ -214,6 +263,7 @@ export const api = {
     method: MergeMethod,
     command: string,
     args: string[],
+    prompt: string,
   ): Promise<GeneratedCommitMessage> {
     return invoke<GeneratedCommitMessage>("generate_pr_commit_message", {
       repoPath,
@@ -221,6 +271,7 @@ export const api = {
       method,
       command,
       args,
+      prompt,
     });
   },
   listWorkflowRuns(
@@ -257,6 +308,9 @@ export const api = {
     return invoke<FolderPermissionWarmupResult[]>(
       "warm_macos_folder_permissions",
     );
+  },
+  resetMacosFolderPermissions(): Promise<void> {
+    return invoke<void>("reset_macos_folder_permissions");
   },
   /**
    * Stop the in-process IPC listener and spawn a fresh one. Used when the

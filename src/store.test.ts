@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project, Session, SessionStatus } from "./lib/types";
+import type {
+  GenerateSessionTitleResult,
+  Project,
+  Session,
+  SessionNotification,
+  SessionStatus,
+} from "./lib/types";
 
 // Mock the Tauri-backed API surface used by the store.
 // Each method is a vi.fn so individual tests can stub return values.
@@ -20,6 +26,13 @@ vi.mock("./lib/api", () => {
       createSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => undefined),
       renameSession: vi.fn(async () => ({}) as Session),
+      generateSessionTitle: vi.fn(
+        async () =>
+          ({
+            status: "skipped",
+            session: {} as Session,
+          }) as GenerateSessionTitleResult,
+      ),
       addProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => undefined),
       reorderProjects: vi.fn(async (paths: string[]) =>
@@ -71,10 +84,29 @@ function session(
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
+    title_source: "default",
     kind: "regular",
     owner: { kind: "user" },
     position: null,
     in_worktree: false,
+    ...overrides,
+  };
+}
+
+function notification(
+  id: string,
+  overrides: Partial<SessionNotification> = {},
+): SessionNotification {
+  return {
+    id,
+    sessionId: "s1",
+    kind: "needs_input",
+    status: "needs_input",
+    previousStatus: "running",
+    sessionName: "s1",
+    projectName: "repo-a",
+    repoPath: REPO_A,
+    createdAt: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -100,6 +132,7 @@ function resetStore(): void {
       workspaceTabs: {},
       prAccountByRepo: {},
       pendingTerminalInput: {},
+      sessionNotifications: [],
       multiInputEnabled: false,
       loading: false,
       error: null,
@@ -107,6 +140,7 @@ function resetStore(): void {
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       liveInWorktree: {},
+      generatingSessionTitleIds: {},
     },
     false,
   );
@@ -160,6 +194,57 @@ describe("multi-input", () => {
     expect(useAppStore.getState().multiInputEnabled).toBe(true);
     expect(useAppStore.getState().toggleMultiInput()).toBe(false);
     expect(useAppStore.getState().multiInputEnabled).toBe(false);
+  });
+});
+
+describe("sessionNotifications", () => {
+  it("adds newest notifications first and caps the in-memory list", () => {
+    for (let i = 0; i < 105; i += 1) {
+      useAppStore.getState().addSessionNotification(notification(`n${i}`));
+    }
+
+    const items = useAppStore.getState().sessionNotifications;
+    expect(items).toHaveLength(100);
+    expect(items[0]?.id).toBe("n104");
+    expect(items[items.length - 1]?.id).toBe("n5");
+  });
+
+  it("marks individual and all notifications read, then clears read items", () => {
+    useAppStore.getState().addSessionNotification(notification("n1"));
+    useAppStore.getState().addSessionNotification(notification("n2"));
+
+    useAppStore.getState().markSessionNotificationRead("n1");
+    expect(
+      useAppStore
+        .getState()
+        .sessionNotifications.find((item) => item.id === "n1")?.readAt,
+    ).toBeTruthy();
+    expect(
+      useAppStore
+        .getState()
+        .sessionNotifications.find((item) => item.id === "n2")?.readAt,
+    ).toBeFalsy();
+
+    useAppStore.getState().markAllSessionNotificationsRead();
+    expect(
+      useAppStore
+        .getState()
+        .sessionNotifications.every((item) => item.readAt),
+    ).toBe(true);
+
+    useAppStore.getState().clearReadSessionNotifications();
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
+  });
+
+  it("dismisses one notification without touching others", () => {
+    useAppStore.getState().addSessionNotification(notification("n1"));
+    useAppStore.getState().addSessionNotification(notification("n2"));
+
+    useAppStore.getState().dismissSessionNotification("n1");
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n2"]);
   });
 });
 
@@ -314,6 +399,26 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("updates an existing code viewer tab with a line target", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A, { line: 78 });
+    const tabId = useAppStore.getState().activeTabId!;
+    const firstTarget = useAppStore.getState().workspaceTabs[tabId].target;
+
+    useAppStore
+      .getState()
+      .openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A, { line: 12 });
+
+    const s = useAppStore.getState();
+    expect(s.activeTabId).toBe(tabId);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", tabId]);
+    expect(s.workspaceTabs[tabId].target).toMatchObject({ line: 12 });
+    expect(s.workspaceTabs[tabId].target?.token).not.toBe(firstTarget?.token);
+  });
+
   it("reselects a worktree-scoped code tab after switching projects", async () => {
     const a1 = session("a1", REPO_A, {
       worktree_path: `${REPO_A}/.worktrees/a1`,
@@ -358,6 +463,41 @@ describe("workspace tabs", () => {
     expect(s.activeSessionId).toBe("a1");
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
+
+  it("returns to the last focused session when closing an active code viewer", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().selectSession("a2");
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const tabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().closeWorkspaceTab(tabId);
+
+    const s = useAppStore.getState();
+    expect(s.workspaceTabs[tabId]).toBeUndefined();
+    expect(s.activeTabId).toBe("a2");
+    expect(s.activeSessionId).toBe("a2");
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", "a2"]);
+  });
+
+  it("uses pane activation history when closing an active code viewer", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const appTabId = useAppStore.getState().activeTabId!;
+    useAppStore.getState().selectSession("a1");
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/README.md`);
+    const readmeTabId = useAppStore.getState().activeTabId!;
+    useAppStore.getState().selectTab(appTabId);
+
+    useAppStore.getState().closeWorkspaceTab(appTabId);
+
+    const s = useAppStore.getState();
+    expect(s.activeTabId).toBe(readmeTabId);
+    expect(s.activeSessionId).toBeNull();
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", readmeTabId]);
+  });
 });
 
 describe("removeSession", () => {
@@ -385,6 +525,32 @@ describe("removeSession", () => {
     pending.resolve(undefined);
     await removal;
     expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a2"]);
+  });
+
+  it("removes session activity locally before the backend delete finishes", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().addSessionNotification(
+      notification("n1", { sessionId: "a1" }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n2", { sessionId: "a2" }),
+    );
+
+    const pending = deferred<void>();
+    mockApi.removeSession.mockReturnValueOnce(pending.promise);
+    mockApi.listSessions.mockResolvedValue([a2]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const removal = useAppStore.getState().removeSession("a1", true);
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n2"]);
+
+    pending.resolve(undefined);
+    await removal;
   });
 
   it("refreshes from the backend if optimistic removal fails", async () => {
@@ -527,6 +693,9 @@ describe("splitFocusedPane", () => {
     useAppStore.getState().setPaneSplitSizes(split.id, [25, 75]);
     useAppStore.getState().setActiveProject(REPO_B);
     useAppStore.getState().setActiveProject(REPO_A);
+    useAppStore.getState().addSessionNotification(
+      notification("n-persist", { sessionId: "a1" }),
+    );
 
     const restored = useAppStore.getState().layout;
     expect(restored.kind).toBe("split");
@@ -537,6 +706,9 @@ describe("splitFocusedPane", () => {
     expect(raw).not.toBeNull();
     const persisted = JSON.parse(raw!);
     expect(persisted.state.workspaces[REPO_A].layout.sizes).toEqual([25, 75]);
+    expect(persisted.state.sessionNotifications).toEqual([
+      notification("n-persist", { sessionId: "a1" }),
+    ]);
 
     resetStore();
     window.localStorage.setItem("acorn-workspaces", raw!);
@@ -546,6 +718,9 @@ describe("splitFocusedPane", () => {
     expect(rehydrated.kind).toBe("split");
     if (rehydrated.kind !== "split") throw new Error("expected split layout");
     expect(rehydrated.sizes).toEqual([25, 75]);
+    expect(useAppStore.getState().sessionNotifications).toEqual([
+      notification("n-persist", { sessionId: "a1" }),
+    ]);
   });
 });
 
@@ -635,6 +810,41 @@ describe("moveTab", () => {
     expect(s.layout.kind).toBe("split");
     expect(Object.keys(s.panes)).toHaveLength(2);
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
+  });
+
+  it("uses the destination pane history after moving and closing a code viewer", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().splitFocusedPane("horizontal");
+    const sourcePaneId = Object.keys(useAppStore.getState().panes).find(
+      (pid) => useAppStore.getState().panes[pid].tabIds.length === 2,
+    )!;
+    const destinationPaneId = useAppStore.getState().focusedPaneId;
+    useAppStore.getState().moveTab({
+      tabId: "a1",
+      fromPaneId: sourcePaneId,
+      toPaneId: destinationPaneId,
+    });
+    useAppStore.getState().setFocusedPane(sourcePaneId);
+    useAppStore.getState().selectSession("a2");
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`);
+    const codeTabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().moveTab({
+      tabId: codeTabId,
+      fromPaneId: sourcePaneId,
+      toPaneId: destinationPaneId,
+    });
+    useAppStore.getState().closeWorkspaceTab(codeTabId);
+
+    const s = useAppStore.getState();
+    expect(s.focusedPaneId).toBe(destinationPaneId);
+    expect(s.activeTabId).toBe("a1");
+    expect(s.activeSessionId).toBe("a1");
+    expect(s.panes[destinationPaneId].tabIds).toEqual(["a1"]);
+    expect(s.panes[sourcePaneId].tabIds).toEqual(["a2"]);
   });
 });
 
@@ -742,6 +952,40 @@ describe("reconcile via refreshSessions", () => {
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1"]);
   });
 
+  it("drops activity for sessions removed by backend refresh", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A), session("a2", REPO_A)],
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n1", { sessionId: "a1" }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n2", { sessionId: "a2" }),
+    );
+
+    mockApi.listSessions.mockResolvedValueOnce([session("a1", REPO_A)]);
+    await useAppStore.getState().refreshSessions();
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n1"]);
+  });
+
+  it("keeps activity when an unclean empty session load may be transient", async () => {
+    useAppStore.setState({ sessionsLoadedCleanly: false });
+    useAppStore.getState().addSessionNotification(
+      notification("n1", { sessionId: "a1" }),
+    );
+
+    mockApi.listSessions.mockResolvedValueOnce([]);
+    await useAppStore.getState().refreshSessions();
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["n1"]);
+  });
+
   // TODO(acorn-tests): cross-pane collapse on session removal reproduces
   // reliably on macOS+local but the empty pane is not collapsed when run
   // under Linux + Node on CI. The state ends up with the empty
@@ -780,6 +1024,35 @@ describe("reconcile via refreshSessions", () => {
     await useAppStore.getState().refreshSessions();
     const s = useAppStore.getState();
     expect(s.panes[s.focusedPaneId].tabIds.sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("ignores stale refresh results that resolve after a newer session list", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1]);
+
+    const stale = deferred<Session[]>();
+    const fresh = deferred<Session[]>();
+    mockApi.listSessions
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise);
+
+    const staleRefresh = useAppStore.getState().refreshSessions();
+    const freshRefresh = useAppStore.getState().refreshSessions();
+
+    fresh.resolve([a1, a2]);
+    await freshRefresh;
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual([
+      "a1",
+      "a2",
+    ]);
+
+    stale.resolve([a1]);
+    await staleRefresh;
+
+    const s = useAppStore.getState();
+    expect(s.sessions.map((session) => session.id)).toEqual(["a1", "a2"]);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", "a2"]);
   });
 
   it("does NOT wipe persisted tabIds when load_status reports unclean", async () => {
@@ -977,6 +1250,113 @@ describe("pollSessionStatuses", () => {
   });
 });
 
+describe("generateSessionTitle", () => {
+  it("does not manually rename a session while title generation is active", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    useAppStore.setState({
+      generatingSessionTitleIds: { a1: true },
+    });
+
+    await useAppStore.getState().renameSession("a1", "Manual title");
+
+    expect(mockApi.renameSession).not.toHaveBeenCalled();
+  });
+
+  it("merges the generated session title without refreshing all sessions", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.generateSessionTitle.mockResolvedValueOnce(
+      {
+        status: "generated",
+        session: session("a1", REPO_A, {
+          name: "Fix Release Workflow",
+          title_source: "generated",
+        }),
+      },
+    );
+
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+
+    expect(status).toBe("generated");
+    expect(mockApi.generateSessionTitle).toHaveBeenCalledWith(
+      "a1",
+      "codex",
+      ["exec"],
+      "Title prompt",
+    );
+    expect(mockApi.listSessions).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().sessions[0]?.name).toBe(
+      "Fix Release Workflow",
+    );
+    expect(useAppStore.getState().sessions[0]?.title_source).toBe("generated");
+  });
+
+  it("returns not_ready without replacing the session title", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+    mockApi.generateSessionTitle.mockResolvedValueOnce({
+      status: "not_ready",
+      session: session("a1", REPO_A, {
+        name: "Backend no-op title",
+        title_source: "default",
+      }),
+    });
+
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+
+    expect(status).toBe("not_ready");
+    expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
+    expect(useAppStore.getState().sessions[0]?.title_source).toBe("default");
+    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
+  });
+
+  it("tracks title generation while the backend request is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+      let resolveTitle!: (value: GenerateSessionTitleResult) => void;
+      mockApi.generateSessionTitle.mockImplementationOnce(
+        () =>
+          new Promise<GenerateSessionTitleResult>((resolve) => {
+            resolveTitle = resolve;
+          }),
+      );
+
+      const request = useAppStore
+        .getState()
+        .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+
+      expect(useAppStore.getState().generatingSessionTitleIds).toEqual({
+        a1: true,
+      });
+
+      resolveTitle(
+        {
+          status: "generated",
+          session: session("a1", REPO_A, {
+            name: "Fix Release Workflow",
+            title_source: "generated",
+          }),
+        },
+      );
+      await Promise.resolve();
+
+      expect(useAppStore.getState().generatingSessionTitleIds).toEqual({
+        a1: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(900);
+      await request;
+
+      expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("removeProject", () => {
   it("optimistically drops the workspace and clears active project when removed one was active", async () => {
     await seed(
@@ -1022,7 +1402,12 @@ describe("requestRemoveProject", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(useAppStore.getState().pendingRemoveProject).toBeNull();
-    expect(mockApi.removeProject).toHaveBeenCalledWith(REPO_B, true, false);
+    expect(mockApi.removeProject).toHaveBeenCalledWith(
+      REPO_B,
+      true,
+      false,
+      false,
+    );
     expect(useAppStore.getState().workspaces[REPO_B]).toBeUndefined();
   });
 });
@@ -1201,6 +1586,87 @@ describe("createSession", () => {
     expect(s.activeSessionId).toBe("a4");
   });
 
+  it("keeps concurrent new tabs in request order when completions resolve out of order", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const c1 = session("c1", REPO_A);
+    const c2 = session("c2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const firstCreate = deferred<Session>();
+    const secondCreate = deferred<Session>();
+    let backendSessions = [a1, a2];
+    mockApi.createSession
+      .mockImplementationOnce(() => firstCreate.promise)
+      .mockImplementationOnce(() => secondCreate.promise);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+    mockApi.listSessions.mockImplementation(async () => backendSessions);
+
+    const first = useAppStore.getState().createSession("c1", REPO_A);
+    const second = useAppStore.getState().createSession("c2", REPO_A);
+
+    backendSessions = [a1, a2, c2];
+    secondCreate.resolve(c2);
+    await second;
+
+    backendSessions = [a1, a2, c2, c1];
+    firstCreate.resolve(c1);
+    await first;
+
+    const s = useAppStore.getState();
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual([
+      "a1",
+      "c1",
+      "c2",
+      "a2",
+    ]);
+  });
+
+  it("keeps placement intents until delayed sibling sessions are visible", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    const c1 = session("c1", REPO_A);
+    const c2 = session("c2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+    useAppStore.getState().selectSession("a1");
+
+    const firstCreate = deferred<Session>();
+    const secondCreate = deferred<Session>();
+    let backendSessions = [a1, a2];
+    mockApi.createSession
+      .mockImplementationOnce(() => firstCreate.promise)
+      .mockImplementationOnce(() => secondCreate.promise);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+    mockApi.listSessions.mockImplementation(async () => backendSessions);
+
+    const first = useAppStore.getState().createSession("c1", REPO_A);
+    const second = useAppStore.getState().createSession("c2", REPO_A);
+
+    secondCreate.resolve(c2);
+    await second;
+    expect(useAppStore.getState().panes.root.tabIds).toEqual(["a1", "a2"]);
+
+    backendSessions = [a1, a2, c1];
+    firstCreate.resolve(c1);
+    await first;
+    expect(useAppStore.getState().panes.root.tabIds).toEqual([
+      "a1",
+      "c1",
+      "a2",
+    ]);
+
+    backendSessions = [a1, a2, c1, c2];
+    await useAppStore.getState().refreshSessions();
+
+    expect(useAppStore.getState().panes.root.tabIds).toEqual([
+      "a1",
+      "c1",
+      "c2",
+      "a2",
+    ]);
+  });
+
   it("appends when the focused pane has no active tab yet", async () => {
     await seed([project(REPO_A, 0)], []);
     const newSess = session("first", REPO_A);
@@ -1358,7 +1824,7 @@ describe("right panel groups", () => {
     expect(s.rightTabByGroup.github).toBe("actions");
     // Other groups untouched.
     expect(s.rightTabByGroup.code).toBe("files");
-    expect(s.rightTabByGroup.agents).toBe("todos");
+    expect(s.rightTabByGroup.agents).toBe("activity");
   });
 
   it("setRightGroup restores the group's last sub-tab", () => {

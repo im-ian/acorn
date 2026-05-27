@@ -3,6 +3,7 @@ mod agent_hooks;
 mod agent_resume;
 mod agent_resume_persister;
 mod agent_wrappers;
+mod ai;
 mod cli_resolver;
 mod commands;
 mod daemon_bridge;
@@ -13,9 +14,11 @@ mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
+mod project_settings;
 pub mod pty_env;
 mod pty_output;
 mod pull_requests;
+mod session_titles;
 mod shell_args;
 mod shell_env;
 mod shell_init;
@@ -495,10 +498,15 @@ pub fn run() {
             commands::remove_session,
             commands::set_session_status,
             commands::rename_session,
+            commands::session_title_readiness,
+            commands::generate_session_title,
+            commands::preview_session_title,
             commands::list_projects,
             commands::add_project,
             commands::create_new_project,
             commands::remove_project,
+            commands::get_project_settings,
+            commands::update_project_settings,
             commands::reorder_projects,
             commands::reorder_sessions,
             commands::list_commits,
@@ -546,6 +554,7 @@ pub fn run() {
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::warm_macos_folder_permissions,
+            commands::reset_macos_folder_permissions,
             commands::ipc_restart,
             commands::list_system_fonts,
             commands::list_agent_history,

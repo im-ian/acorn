@@ -94,6 +94,63 @@
   background: var(--color-terminal-bg, #1f2326);
 }
 
+.acorn-session-title-indicator {
+  position: relative;
+  display: inline-flex;
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--color-accent) 14%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-accent) 36%, transparent),
+    0 0 8px color-mix(in oklab, var(--color-accent) 24%, transparent);
+}
+
+.acorn-session-title-indicator::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1px solid transparent;
+  border-top-color: color-mix(in oklab, var(--color-accent) 90%, transparent);
+  border-right-color: color-mix(in oklab, var(--color-accent) 45%, transparent);
+  animation: acorn-title-orbit 0.9s linear infinite;
+}
+
+.acorn-session-title-indicator-icon {
+  animation: acorn-title-twinkle 1.1s ease-in-out infinite;
+}
+
+@keyframes acorn-title-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes acorn-title-twinkle {
+  0%,
+  100% {
+    transform: scale(0.88);
+    opacity: 0.72;
+  }
+
+  45% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acorn-session-title-indicator::after,
+  .acorn-session-title-indicator-icon {
+    animation: none;
+  }
+}
+
 :root[data-bg-terminal="on"] .acorn-terminal-shell {
   background: color-mix(
     in srgb,
@@ -176,4 +233,87 @@ textarea,
   height: calc(100vh / var(--acorn-ui-scale, 1));
   transform: scale(var(--acorn-ui-scale, 1));
   transform-origin: top left;
+}
+
+.acorn-toast-progress {
+  animation: acorn-toast-progress var(--toast-duration) linear forwards;
+}
+
+.acorn-toast-progress[data-paused="true"],
+.acorn-toast-motion[data-state="exit"] .acorn-toast-progress {
+  animation-play-state: paused;
+}
+
+.acorn-toast-motion[data-position="top"][data-state="enter"] {
+  animation: acorn-toast-enter-top 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.acorn-toast-motion[data-position="top"][data-state="exit"] {
+  animation: acorn-toast-exit-top 160ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.acorn-toast-motion[data-position="bottom"][data-state="enter"] {
+  animation: acorn-toast-enter-bottom 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.acorn-toast-motion[data-position="bottom"][data-state="exit"] {
+  animation: acorn-toast-exit-bottom 160ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+@keyframes acorn-toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes acorn-toast-enter-top {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes acorn-toast-exit-top {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes acorn-toast-enter-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes acorn-toast-exit-bottom {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 }

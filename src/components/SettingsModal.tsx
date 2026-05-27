@@ -3,6 +3,7 @@ import {
   FolderOpen,
   ImagePlus,
   Keyboard,
+  Loader2,
   RefreshCcw,
   Settings as SettingsIcon,
   Sparkles,
@@ -35,17 +36,25 @@ import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
+  DEFAULT_SESSION_TITLE_PROMPT,
   PR_REFRESH_INTERVAL_OPTIONS,
+  resolveAiOneshotCommand,
+  resolveSessionTitlePrompt,
+  SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+  SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
+  TOAST_POSITION_OPTIONS,
   type SelectedAgent,
   type SessionTitleSource,
   type AcornSettings,
   type TerminalFontWeight,
   type TerminalLinkActivation,
+  type ToastPosition,
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
 import { revealThemesFolder, useThemes } from "../lib/themes";
+import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   CheckboxRow,
@@ -279,6 +288,12 @@ function stf(
   );
 }
 
+function messageFromUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "Unknown error";
+}
+
 export function SettingsModal() {
   const open = useSettings((s) => s.open);
   const setOpen = useSettings((s) => s.setOpen);
@@ -286,6 +301,7 @@ export function SettingsModal() {
   const pendingTab = useSettings((s) => s.pendingTab);
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("interface");
+  const [sessionTitlePromptOpen, setSessionTitlePromptOpen] = useState(false);
   const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
@@ -303,9 +319,14 @@ export function SettingsModal() {
     }
   }, [open, pendingTab, consumePendingTab]);
 
+  useEffect(() => {
+    if (!open) setSessionTitlePromptOpen(false);
+  }, [open]);
+
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
-  // change so there is no separate confirm step.
-  useDialogShortcuts(open, {
+  // change so there is no separate confirm step. While a child settings dialog
+  // is open, let that dialog own Escape.
+  useDialogShortcuts(open && !sessionTitlePromptOpen, {
     onCancel: () => setOpen(false),
     onConfirm: () => setOpen(false),
   });
@@ -360,7 +381,10 @@ export function SettingsModal() {
           ) : tab === "terminal" ? (
             <TerminalSettings />
           ) : tab === "agents" ? (
-            <AgentSettings />
+            <AgentSettings
+              sessionTitlePromptOpen={sessionTitlePromptOpen}
+              onSessionTitlePromptOpenChange={setSessionTitlePromptOpen}
+            />
           ) : tab === "sessions" ? (
             <SessionSettings />
           ) : tab === "services" ? (
@@ -871,6 +895,10 @@ function AppearanceSettings() {
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
       />
+      <ToastPositionSection
+        value={appearance.toastPosition}
+        onChange={(toastPosition) => patchAppearance({ toastPosition })}
+      />
       <BackgroundSection
         state={appearance.background}
         onChange={(background) => patchAppearance({ background })}
@@ -1004,6 +1032,39 @@ function ThemeSection({
   );
 }
 
+function ToastPositionSection({
+  value,
+  onChange,
+}: {
+  value: ToastPosition;
+  onChange: (value: ToastPosition) => void;
+}) {
+  const t = useTranslation();
+
+  return (
+    <Field
+      label={st(t, "settings.appearance.toastPosition.label")}
+      hint={st(t, "settings.appearance.toastPosition.hint")}
+    >
+      <div className="grid max-w-md grid-cols-2 gap-2">
+        {TOAST_POSITION_OPTIONS.map((option) => (
+          <RadioCard<ToastPosition>
+            key={option.value}
+            name="toast-position"
+            value={option.value}
+            current={value}
+            label={st(
+              t,
+              `settings.appearance.toastPosition.options.${option.value}`,
+            )}
+            onSelect={onChange}
+          />
+        ))}
+      </div>
+    </Field>
+  );
+}
+
 type BackgroundSettings = AcornSettings["appearance"]["background"];
 
 function BackgroundSection({
@@ -1016,6 +1077,7 @@ function BackgroundSection({
   const [pickError, setPickError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
 
   const handleFileChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -1034,21 +1096,35 @@ function BackgroundSection({
         applyToApp: true,
         applyToTerminal: true,
       });
+      showToast(st(t, "settings.appearance.background.toasts.imported"));
     } catch (err) {
-      setPickError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setPickError(message);
+      showToast(
+        `${st(t, "settings.appearance.background.toasts.importFailed")} ${message}`,
+      );
     }
   };
 
   const remove = async () => {
-    if (state.relativePath) {
-      await removeBackgroundImage(state.relativePath).catch(() => {});
+    try {
+      if (state.relativePath) {
+        await removeBackgroundImage(state.relativePath);
+      }
+      onChange({
+        relativePath: null,
+        fileName: null,
+        applyToApp: false,
+        applyToTerminal: false,
+      });
+      showToast(st(t, "settings.appearance.background.toasts.removed"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setPickError(message);
+      showToast(
+        `${st(t, "settings.appearance.background.toasts.removeFailed")} ${message}`,
+      );
     }
-    onChange({
-      relativePath: null,
-      fileName: null,
-      applyToApp: false,
-      applyToTerminal: false,
-    });
   };
 
   return (
@@ -1315,6 +1391,15 @@ function StatusBarSection({
     >
       <div className="flex flex-col gap-1">
         <CheckboxRow
+          label={st(t, "settings.appearance.statusBar.sessionActivity.label")}
+          description={st(
+            t,
+            "settings.appearance.statusBar.sessionActivity.description",
+          )}
+          checked={statusBar.showSessionActivity !== false}
+          onChange={(v) => patch({ showSessionActivity: v })}
+        />
+        <CheckboxRow
           label={st(t, "settings.appearance.statusBar.sessionCount.label")}
           description={st(
             t,
@@ -1401,6 +1486,7 @@ function NotificationSettings() {
     | { tone: "success" | "warning" | "danger"; text: string }
     | null
   >(null);
+  const showToast = useToasts((s) => s.show);
 
   async function handleTest() {
     setTesting(true);
@@ -1408,20 +1494,26 @@ function NotificationSettings() {
     try {
       const result = await sendTestNotification();
       if (result === "sent") {
+        const text = st(t, "settings.notifications.test.result.sent");
         setTestResult({
           tone: "success",
-          text: st(t, "settings.notifications.test.result.sent"),
+          text,
         });
+        showToast(text);
       } else if (result === "denied") {
+        const text = st(t, "settings.notifications.test.result.denied");
         setTestResult({
           tone: "warning",
-          text: st(t, "settings.notifications.test.result.denied"),
+          text,
         });
+        showToast(text);
       } else {
+        const text = st(t, "settings.notifications.test.result.failed");
         setTestResult({
           tone: "danger",
-          text: st(t, "settings.notifications.test.result.failed"),
+          text,
         });
+        showToast(text);
       }
     } finally {
       setTesting(false);
@@ -1523,7 +1615,15 @@ function NotificationSettings() {
   );
 }
 
-function AgentSettings() {
+interface AgentSettingsProps {
+  sessionTitlePromptOpen: boolean;
+  onSessionTitlePromptOpenChange: (open: boolean) => void;
+}
+
+function AgentSettings({
+  sessionTitlePromptOpen,
+  onSessionTitlePromptOpenChange,
+}: AgentSettingsProps) {
   const settings = useSettings((s) => s.settings);
   const patchAgents = useSettings((s) => s.patchAgents);
   const t = useTranslation();
@@ -1602,10 +1702,220 @@ function AgentSettings() {
           />
         </Field>
       ) : null}
+      <Field
+        label={st(t, "settings.agents.sessionTitles.label")}
+        hint={st(t, "settings.agents.sessionTitles.hint")}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <label className="flex min-w-0 items-center gap-2 text-xs text-fg">
+            <input
+              type="checkbox"
+              checked={settings.agents.autoGenerateSessionTitles}
+              onChange={(e) =>
+                patchAgents({ autoGenerateSessionTitles: e.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            <span className="truncate">
+              {st(t, "settings.agents.sessionTitles.checkbox")}
+            </span>
+          </label>
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={sessionTitlePromptOpen}
+            aria-label={st(t, "settings.agents.sessionTitlePrompt.open")}
+            title={st(t, "settings.agents.sessionTitlePrompt.open")}
+            onClick={() => onSessionTitlePromptOpenChange(true)}
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-bg px-2 text-[11px] font-medium text-fg-muted transition hover:border-accent/60 hover:bg-bg-elevated hover:text-fg"
+          >
+            <SettingsIcon size={12} />
+            {st(t, "settings.agents.sessionTitlePrompt.shortButton")}
+          </button>
+        </div>
+      </Field>
+      <SessionTitlePromptModal
+        open={sessionTitlePromptOpen}
+        onClose={() => onSessionTitlePromptOpenChange(false)}
+      />
       <p className="text-[11px] text-fg-muted">
         {st(t, "settings.agents.requirement")}
       </p>
     </section>
+  );
+}
+
+type SessionTitlePreviewState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; title: string }
+  | { status: "error"; message?: string };
+
+interface SessionTitlePromptModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+function SessionTitlePromptModal({
+  open,
+  onClose,
+}: SessionTitlePromptModalProps) {
+  const settings = useSettings((s) => s.settings);
+  const patchAgents = useSettings((s) => s.patchAgents);
+  const t = useTranslation();
+  const sessionTitlePromptLength = Array.from(
+    settings.agents.sessionTitlePrompt,
+  ).length;
+  const [titlePreview, setTitlePreview] = useState<SessionTitlePreviewState>({
+    status: "idle",
+  });
+
+  useDialogShortcuts(open, {
+    onCancel: onClose,
+  });
+
+  useEffect(() => {
+    setTitlePreview({ status: "idle" });
+  }, [
+    open,
+    settings.agents.selected,
+    settings.agents.customCommand,
+    settings.agents.ollama.model,
+    settings.agents.llm.model,
+    settings.agents.sessionTitlePrompt,
+  ]);
+
+  async function handlePreviewSessionTitle() {
+    setTitlePreview({ status: "loading" });
+    const { command, args } = resolveAiOneshotCommand(settings);
+    const prompt = resolveSessionTitlePrompt(settings);
+    try {
+      const title = await api.previewSessionTitle(
+        command,
+        args,
+        prompt,
+        SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+      );
+      setTitlePreview({ status: "success", title });
+    } catch (error) {
+      setTitlePreview({
+        status: "error",
+        message: messageFromUnknownError(error),
+      });
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      variant="dialog"
+      size="xl"
+      ariaLabelledBy="session-title-prompt-title"
+      className="max-h-[calc(100vh-8rem)]"
+    >
+      <ModalHeader
+        title={st(t, "settings.agents.sessionTitlePrompt.label")}
+        subtitle={st(t, "settings.agents.sessionTitlePrompt.hint")}
+        titleId="session-title-prompt-title"
+        icon={<SettingsIcon size={14} className="text-fg-muted" />}
+        variant="dialog"
+        onClose={onClose}
+      />
+      <div className="max-h-[calc(100vh-12rem)] overflow-y-auto p-4">
+        <Field
+          label={st(t, "settings.agents.sessionTitlePrompt.editorLabel")}
+        >
+          <div className="flex flex-col gap-2">
+            <textarea
+              aria-label={st(t, "settings.agents.sessionTitlePrompt.label")}
+              value={settings.agents.sessionTitlePrompt}
+              maxLength={SESSION_TITLE_PROMPT_MAX_CHARS}
+              spellCheck={false}
+              onChange={(e) =>
+                patchAgents({ sessionTitlePrompt: e.target.value })
+              }
+              className="min-h-40 w-full resize-y rounded-md border border-border bg-bg px-2 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus:border-accent"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-fg-muted">
+                {stf(t, "settings.agents.sessionTitlePrompt.count", {
+                  count: sessionTitlePromptLength,
+                  max: SESSION_TITLE_PROMPT_MAX_CHARS,
+                })}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  patchAgents({
+                    sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
+                  })
+                }
+                disabled={
+                  settings.agents.sessionTitlePrompt ===
+                  DEFAULT_SESSION_TITLE_PROMPT
+                }
+                title={st(t, "settings.agents.sessionTitlePrompt.reset")}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <RefreshCcw size={11} />
+                {st(t, "settings.agents.sessionTitlePrompt.reset")}
+              </button>
+            </div>
+            <div className="rounded-md border border-border bg-bg-sidebar/30 p-2">
+              <div className="mb-1 text-[11px] font-medium text-fg-muted">
+                {st(t, "settings.agents.sessionTitlePrompt.preview.sample")}
+              </div>
+              <p className="font-mono text-[11px] leading-relaxed text-fg">
+                {SESSION_TITLE_PROMPT_PREVIEW_MESSAGE}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handlePreviewSessionTitle()}
+                  disabled={titlePreview.status === "loading"}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-bg px-2.5 text-[11px] font-medium text-fg transition hover:border-accent/50 hover:bg-bg-elevated disabled:cursor-wait disabled:bg-bg-sidebar/40 disabled:text-fg-muted"
+                >
+                  {titlePreview.status === "loading" ? (
+                    <Loader2 size={12} className="animate-spin text-fg-muted" />
+                  ) : (
+                    <Sparkles size={12} className="text-accent" />
+                  )}
+                  {titlePreview.status === "loading"
+                    ? st(
+                        t,
+                        "settings.agents.sessionTitlePrompt.preview.generating",
+                      )
+                    : st(
+                        t,
+                        "settings.agents.sessionTitlePrompt.preview.generate",
+                      )}
+                </button>
+                {titlePreview.status === "success" && titlePreview.title ? (
+                  <div className="inline-flex h-7 max-w-full items-center gap-1 rounded-md border border-border bg-bg px-2 text-xs text-fg">
+                    <span className="text-[10px] text-fg-muted">
+                      {st(
+                        t,
+                        "settings.agents.sessionTitlePrompt.preview.result",
+                      )}
+                    </span>
+                    <span className="max-w-48 truncate font-medium">
+                      {titlePreview.title}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+              {titlePreview.status === "error" ? (
+                <p className="mt-2 text-[11px] text-danger">
+                  {st(t, "settings.agents.sessionTitlePrompt.preview.failed")}
+                  {titlePreview.message ? `: ${titlePreview.message}` : ""}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </Field>
+      </div>
+    </Modal>
   );
 }
 
@@ -1653,6 +1963,7 @@ function StorageSettings() {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const showToast = useToasts((s) => s.show);
 
   const refreshSizes = useCallback(async () => {
     const results = await Promise.allSettled(
@@ -1688,7 +1999,7 @@ function StorageSettings() {
         (sum, r) => sum + (r.status === "fulfilled" ? r.value : 0),
         0,
       );
-      setStatus(
+      const message =
         totalRemoved > 0
           ? stf(
               t,
@@ -1697,12 +2008,15 @@ function StorageSettings() {
                 : "settings.storage.status.clearedPlural",
               { count: totalRemoved },
             )
-          : st(t, "settings.storage.status.nothingToClear"),
-      );
+          : st(t, "settings.storage.status.nothingToClear");
+      setStatus(message);
+      showToast(message);
       await refreshSizes();
     } catch (err) {
       console.error("[Settings] cache clear failed", err);
-      setStatus(st(t, "settings.storage.status.clearFailed"));
+      const message = st(t, "settings.storage.status.clearFailed");
+      setStatus(message);
+      showToast(message);
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -1930,6 +2244,7 @@ function AboutSettings() {
   const [currentNotes, setCurrentNotes] = useState<ReleaseNotes | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
+  const showToast = useToasts((s) => s.show);
 
   useEffect(() => {
     void init();
@@ -1978,13 +2293,38 @@ function AboutSettings() {
         isFallback: true,
       });
     } catch (err) {
-      setNotesError(
-        err instanceof Error ? err.message : "Failed to fetch release notes",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to fetch release notes";
+      setNotesError(message);
+      showToast(`${st(t, "settings.about.toasts.releaseNotesFailed")} ${message}`);
     } finally {
       setNotesLoading(false);
     }
-  }, [currentVersion, currentNotes]);
+  }, [currentVersion, currentNotes, showToast, t]);
+
+  const handleCheck = useCallback(async () => {
+    await check();
+    const next = useUpdater.getState();
+    if (next.error) {
+      showToast(`${st(t, "settings.about.toasts.checkFailed")} ${next.error}`);
+    } else if (next.available) {
+      showToast(
+        stf(t, "settings.about.toasts.updateAvailable", {
+          version: next.available.version,
+        }),
+      );
+    } else {
+      showToast(st(t, "settings.about.toasts.upToDate"));
+    }
+  }, [check, showToast, t]);
+
+  const handleInstall = useCallback(async () => {
+    await install();
+    const next = useUpdater.getState();
+    if (next.error) {
+      showToast(`${st(t, "settings.about.toasts.installFailed")} ${next.error}`);
+    }
+  }, [install, showToast, t]);
 
   return (
     <section className="space-y-4">
@@ -2044,7 +2384,7 @@ function AboutSettings() {
               ) : null}
               <button
                 type="button"
-                onClick={() => void install()}
+                onClick={() => void handleInstall()}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
               >
@@ -2092,7 +2432,7 @@ function AboutSettings() {
         </button>
         <button
           type="button"
-          onClick={() => void check()}
+          onClick={() => void handleCheck()}
           disabled={busy}
           className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
         >
@@ -2115,7 +2455,9 @@ function AboutSettings() {
         busy={busy}
         error={whatsNewSource?.kind === "update" ? error : null}
         onInstall={
-          whatsNewSource?.kind === "update" ? () => void install() : undefined
+          whatsNewSource?.kind === "update"
+            ? () => void handleInstall()
+            : undefined
         }
         htmlUrl={
           whatsNewSource?.kind === "current" ? whatsNewSource.htmlUrl : undefined

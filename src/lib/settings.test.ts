@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_OPTIONS,
   DEFAULT_SETTINGS,
+  DEFAULT_SESSION_TITLE_PROMPT,
   resolveAiCommitCommand,
+  resolveAiOneshotCommand,
+  resolveSessionTitlePrompt,
+  SESSION_TITLE_PROMPT_MAX_CHARS,
 } from "./settings";
 
 describe("language settings", () => {
@@ -103,7 +107,147 @@ describe("session removal settings", () => {
   });
 });
 
+describe("status bar settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("shows the session activity shortcut by default", () => {
+    expect(DEFAULT_SETTINGS.statusBar.showSessionActivity).toBe(true);
+  });
+
+  it("loads a persisted session activity shortcut preference", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ statusBar: { showSessionActivity: false } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.statusBar.showSessionActivity).toBe(
+      false,
+    );
+  });
+});
+
 describe("AI commit command resolution", () => {
+  it("keeps automatic session title generation off by default", () => {
+    expect(DEFAULT_SETTINGS.agents.autoGenerateSessionTitles).toBe(false);
+  });
+
+  it("loads a persisted automatic session title preference", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({ agents: { autoGenerateSessionTitles: true } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.agents.autoGenerateSessionTitles,
+    ).toBe(true);
+  });
+
+  it("keeps the default session title prompt in settings", () => {
+    expect(DEFAULT_SETTINGS.agents.sessionTitlePrompt).toBe(
+      DEFAULT_SESSION_TITLE_PROMPT,
+    );
+    expect(DEFAULT_SESSION_TITLE_PROMPT).toContain(
+      "Separate each word with hyphens.",
+    );
+    expect(DEFAULT_SESSION_TITLE_PROMPT).toContain("Use lowercase words only.");
+  });
+
+  it("loads a persisted session title prompt", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        agents: { sessionTitlePrompt: "Name the tab in Korean." },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.agents.sessionTitlePrompt).toBe(
+      "Name the tab in Korean.",
+    );
+  });
+
+  it("migrates the old default session title prompt to the current default", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        agents: {
+          sessionTitlePrompt: `You are naming an Acorn terminal tab from the user's first agent prompt.
+
+Return only a concise title for the tab.
+Rules:
+- 2 to 5 words.
+- Fewer than 30 characters.
+- No quotes, Markdown, trailing punctuation, or extra commentary.
+- Prefer the concrete task over generic words like "help" or "question".`,
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.agents.sessionTitlePrompt).toBe(
+      DEFAULT_SESSION_TITLE_PROMPT,
+    );
+  });
+
+  it("limits persisted session title prompts", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        agents: {
+          sessionTitlePrompt: "x".repeat(SESSION_TITLE_PROMPT_MAX_CHARS + 1),
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.agents.sessionTitlePrompt,
+    ).toHaveLength(SESSION_TITLE_PROMPT_MAX_CHARS);
+  });
+
+  it("falls back to the default session title prompt when blank", () => {
+    expect(
+      resolveSessionTitlePrompt({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, sessionTitlePrompt: "  \n " },
+      }),
+    ).toBe(DEFAULT_SESSION_TITLE_PROMPT);
+  });
+
   it("runs Codex through non-interactive exec mode", () => {
     expect(
       resolveAiCommitCommand({
@@ -117,6 +261,19 @@ describe("AI commit command resolution", () => {
     expect(AGENT_OPTIONS.find((o) => o.value === "codex")?.oneshotHint).toBe(
       "codex exec",
     );
+  });
+
+  it("uses the Settings Agents model for one-shot providers that take one", () => {
+    expect(
+      resolveAiOneshotCommand({
+        ...DEFAULT_SETTINGS,
+        agents: {
+          ...DEFAULT_SETTINGS.agents,
+          selected: "ollama",
+          ollama: { model: "qwen2.5-coder" },
+        },
+      }),
+    ).toEqual({ command: "ollama", args: ["run", "qwen2.5-coder"] });
   });
 });
 
@@ -226,6 +383,7 @@ describe("appearance settings migration", () => {
     );
     expect(settings.appearance.background.relativePath).toBeNull();
     expect(settings.appearance.uiScalePercent).toBe(100);
+    expect(settings.appearance.toastPosition).toBe("top");
   });
 
   it("keeps terminal.fontFamily as the source of truth on load", async () => {
@@ -385,5 +543,33 @@ describe("appearance settings migration", () => {
     const { useSettings } = await import("./settings");
 
     expect(useSettings.getState().settings.appearance.uiScalePercent).toBe(100);
+  });
+
+  it("normalizes stored toast position", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { toastPosition: "bottom" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.toastPosition).toBe(
+      "bottom",
+    );
+  });
+
+  it("falls back to default toast position when stored value is invalid", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ appearance: { toastPosition: "left" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.appearance.toastPosition).toBe(
+      "top",
+    );
   });
 });

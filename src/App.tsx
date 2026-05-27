@@ -50,6 +50,7 @@ import {
   type UiScaleChangedDetail,
 } from "./lib/layoutEvents";
 import {
+  startSessionActivityInboxWatcher,
   startNotificationClickHandler,
   startSessionNotificationWatcher,
 } from "./lib/notifications";
@@ -58,12 +59,19 @@ import { isSessionTabId } from "./lib/workspaceTabs";
 import { flushAllScrollbacks } from "./lib/scrollback-coordinator";
 import { useToasts } from "./lib/toasts";
 import { useUpdater } from "./lib/updater-store";
-import { shouldShowPermissionWarmup } from "./lib/permissionWarmup";
+import {
+  hasDeniedFolderPermission,
+  isMacPlatform,
+  type FolderPermissionWarmupResult,
+} from "./lib/permissionWarmup";
 import {
   normalizeUiScalePercent,
+  resolveAiOneshotCommand,
+  resolveSessionTitlePrompt,
   UI_SCALE_PERCENT_STEP,
   useSettings,
 } from "./lib/settings";
+import { planAutoGenerateSessionTitles } from "./lib/sessionTitle";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
@@ -79,6 +87,8 @@ import { useTranslation } from "./lib/useTranslation";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
+const SESSION_TITLE_RETRY_MS = 30_000;
+const SESSION_TITLE_NOT_READY_RETRY_MS = 1_000;
 
 const SIDEBAR_DEFAULT_SIZE = 18;
 const SIDEBAR_MIN_SIZE = 12;
@@ -157,6 +167,7 @@ function App() {
   const autoDeleteWorktrees = useSettings(
     (s) => s.settings.sessions.autoDeleteWorktrees,
   );
+  const settings = useSettings((s) => s.settings);
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
@@ -176,10 +187,22 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [controlGuideOpen, setControlGuideOpen] = useState(false);
   const [permissionWarmupOpen, setPermissionWarmupOpen] = useState(false);
+  const [permissionWarmupInitialResults, setPermissionWarmupInitialResults] =
+    useState<FolderPermissionWarmupResult[] | null>(null);
+  const permissionWarmupAuditRef = useRef<{
+    key: string;
+    promise: Promise<FolderPermissionWarmupResult[]>;
+  } | null>(null);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const [resumeCandidates, setResumeCandidates] = useState<
     Map<string, { agent: AgentKind; candidate: ResumeCandidate }>
   >(new Map());
+  const titleGenerationInFlightRef = useRef<Set<string>>(new Set());
+  const titleGenerationLastAttemptAtRef = useRef<Map<string, number>>(
+    new Map(),
+  );
+  const titleGenerationConfigKeyRef = useRef<string | null>(null);
+  const [sessionTitleRetryTick, setSessionTitleRetryTick] = useState(0);
   const [stagedRevMismatch, setStagedRevMismatch] =
     useState<StagedRevMismatch | null>(null);
 
@@ -199,7 +222,19 @@ function App() {
   const themes = useThemes((s) => s.themes);
   const refreshThemes = useThemes((s) => s.refresh);
   const appearance = useSettings((s) => s.settings.appearance);
-  const currentVersion = useUpdater((s) => s.currentVersion);
+  const showToast = useToasts((s) => s.show);
+
+  const showStoreOperationToast = useCallback(
+    (successKey: TranslationKey | null, failureKey: TranslationKey) => {
+      const error = useAppStore.getState().consumeError();
+      if (error) {
+        showToast(`${t(failureKey)} ${error}`);
+      } else if (successKey) {
+        showToast(t(successKey));
+      }
+    },
+    [showToast, t],
+  );
 
   useEffect(() => {
     void refreshThemes();
@@ -540,13 +575,144 @@ function App() {
     ) {
       return;
     }
-    if (shouldShowPermissionWarmup(currentVersion, navigator.platform)) {
-      setPermissionWarmupOpen(true);
+    const platform = navigator.platform;
+    if (!isMacPlatform(platform)) return;
+
+    const auditKey = platform;
+    let audit = permissionWarmupAuditRef.current;
+    if (!audit || audit.key !== auditKey) {
+      audit = {
+        key: auditKey,
+        promise: api.warmMacosFolderPermissions(),
+      };
+      permissionWarmupAuditRef.current = audit;
     }
-  }, [currentVersion]);
+
+    let cancelled = false;
+    void audit.promise
+      .then((results) => {
+        if (cancelled || !hasDeniedFolderPermission(results)) return;
+        setPermissionWarmupInitialResults(results);
+        setPermissionWarmupOpen(true);
+      })
+      .catch((err) => {
+        console.warn("[App] folder permission audit failed", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     return startSessionNotificationWatcher();
+  }, []);
+
+  useEffect(() => {
+    if (!settings.agents.autoGenerateSessionTitles) return;
+
+    let cancelled = false;
+    const retryTimers = new Set<ReturnType<typeof window.setTimeout>>();
+    const scheduleRetryTick = (delayMs: number, allowAfterCleanup = false) => {
+      if (cancelled && !allowAfterCleanup) return;
+      const fireAfterCleanup = allowAfterCleanup;
+      const timeout = window.setTimeout(() => {
+        retryTimers.delete(timeout);
+        if (!cancelled || fireAfterCleanup) {
+          setSessionTitleRetryTick((tick) => tick + 1);
+        }
+      }, delayMs);
+      retryTimers.add(timeout);
+    };
+
+    const now = Date.now();
+    const { command, args } = resolveAiOneshotCommand(settings);
+    const prompt = resolveSessionTitlePrompt(settings);
+    const configKey = JSON.stringify([command, args, prompt]);
+    const inFlight = titleGenerationInFlightRef.current;
+    const lastAttemptAt = titleGenerationLastAttemptAtRef.current;
+    const latestTitleConfigMatches = () => {
+      const latestSettings = useSettings.getState().settings;
+      const latestCommand = resolveAiOneshotCommand(latestSettings);
+      const latestPrompt = resolveSessionTitlePrompt(latestSettings);
+      const latestConfigKey = JSON.stringify([
+        latestCommand.command,
+        latestCommand.args,
+        latestPrompt,
+      ]);
+      return (
+        latestSettings.agents.autoGenerateSessionTitles &&
+        latestConfigKey === configKey
+      );
+    };
+    const scheduleAfterStatus = (
+      sessionId: string,
+      status: "not_ready" | "skipped",
+    ) => {
+      if (status === "not_ready") {
+        lastAttemptAt.delete(sessionId);
+        scheduleRetryTick(SESSION_TITLE_NOT_READY_RETRY_MS, true);
+        return;
+      }
+      lastAttemptAt.set(sessionId, Date.now());
+      scheduleRetryTick(SESSION_TITLE_RETRY_MS, true);
+    };
+    if (titleGenerationConfigKeyRef.current !== configKey) {
+      titleGenerationConfigKeyRef.current = configKey;
+      lastAttemptAt.clear();
+    }
+    const plan = planAutoGenerateSessionTitles({
+      sessions,
+      enabled: settings.agents.autoGenerateSessionTitles,
+      inFlightIds: inFlight,
+      lastAttemptAt,
+      now,
+      retryMs: SESSION_TITLE_RETRY_MS,
+    });
+
+    for (const sessionId of plan.sessionIds) {
+      inFlight.add(sessionId);
+      void api
+        .sessionTitleReadiness(sessionId)
+        .then(async (readiness) => {
+          if (!latestTitleConfigMatches()) return;
+          if (readiness.status !== "ready") {
+            scheduleAfterStatus(sessionId, readiness.status);
+            return;
+          }
+
+          const status = await useAppStore
+            .getState()
+            .generateSessionTitle(sessionId, command, args, prompt);
+          if (!latestTitleConfigMatches()) return;
+          if (status !== "generated") {
+            scheduleAfterStatus(sessionId, status);
+          }
+        })
+        .catch((err) => {
+          console.warn("[acorn] session title readiness failed", err);
+          if (!latestTitleConfigMatches()) return;
+          scheduleAfterStatus(sessionId, "skipped");
+        })
+        .finally(() => {
+          inFlight.delete(sessionId);
+        });
+    }
+
+    if (plan.retryDelayMs !== null) {
+      scheduleRetryTick(plan.retryDelayMs);
+    }
+
+    return () => {
+      cancelled = true;
+      for (const timeout of retryTimers) {
+        window.clearTimeout(timeout);
+      }
+      retryTimers.clear();
+    };
+  }, [sessions, settings, sessionTitleRetryTick]);
+
+  useEffect(() => {
+    return startSessionActivityInboxWatcher();
   }, []);
 
   useEffect(() => {
@@ -710,18 +876,29 @@ function App() {
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
     if (recordedWorktree && autoDeleteWorktrees) {
       clearPendingRemove();
-      removeSession(pendingRemove.id, true);
+      void removeSession(pendingRemove.id, true).then(() =>
+        showStoreOperationToast(
+          "toasts.session.worktreeRemoved",
+          "toasts.session.worktreeRemoveFailed",
+        ),
+      );
       return;
     }
     if (confirmRemoveSession || recordedWorktree) return;
     clearPendingRemove();
-    removeSession(pendingRemove.id, false);
+    void removeSession(pendingRemove.id, false).then(() =>
+      showStoreOperationToast(
+        null,
+        "toasts.session.removeFailed",
+      ),
+    );
   }, [
     pendingRemove,
     autoDeleteWorktrees,
     clearPendingRemove,
     confirmRemoveSession,
     removeSession,
+    showStoreOperationToast,
   ]);
 
   // Restore the root layout (sidebar + right panel) and equalize the
@@ -1224,7 +1401,7 @@ function App() {
       />
       <FolderPermissionWarmupModal
         open={permissionWarmupOpen}
-        currentVersion={currentVersion}
+        initialResults={permissionWarmupInitialResults}
         onClose={() => setPermissionWarmupOpen(false)}
       />
       <SettingsModal />
@@ -1253,7 +1430,17 @@ function App() {
           const target = pendingRemove;
           clearPendingRemove();
           if (!target || choice === "cancel") return;
-          removeSession(target.id, choice === "session_and_worktree");
+          void removeSession(target.id, choice === "session_and_worktree").then(
+            () =>
+              showStoreOperationToast(
+                choice === "session_and_worktree"
+                  ? "toasts.session.worktreeRemoved"
+                  : null,
+                choice === "session_and_worktree"
+                  ? "toasts.session.worktreeRemoveFailed"
+                  : "toasts.session.removeFailed",
+              ),
+          );
         }}
       />
       <RemoveProjectDialog
@@ -1263,7 +1450,19 @@ function App() {
           const target = pendingProject;
           clearPendingRemoveProject();
           if (!target || choice === "cancel") return;
-          removeProject(target.repo_path, choice === "project_and_worktrees");
+          void removeProject(
+            target.repo_path,
+            choice === "project_and_worktrees",
+          ).then(() =>
+            showStoreOperationToast(
+              choice === "project_and_worktrees"
+                ? "toasts.project.worktreesRemoved"
+                : null,
+              choice === "project_and_worktrees"
+                ? "toasts.project.worktreesRemoveFailed"
+                : "toasts.project.removeFailed",
+            ),
+          );
         }}
       />
     </div>

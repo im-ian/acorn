@@ -56,6 +56,30 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   },
 ];
 
+const LEGACY_DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's first agent prompt.
+
+Return only a concise title for the tab.
+Rules:
+- 2 to 5 words.
+- Fewer than 30 characters.
+- No quotes, Markdown, trailing punctuation, or extra commentary.
+- Prefer the concrete task over generic words like "help" or "question".`;
+
+export const DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's first agent prompt.
+
+Return only a concise title for the tab.
+Rules:
+- 2 to 5 words.
+- Separate each word with hyphens.
+- Use lowercase words only.
+- Fewer than 30 characters.
+- No quotes, Markdown, trailing punctuation, or extra commentary.
+- Prefer the concrete task over generic words like "help" or "question".`;
+
+export const SESSION_TITLE_PROMPT_MAX_CHARS = 1_000;
+
+export const SESSION_TITLE_PROMPT_PREVIEW_MESSAGE =
+  "Add a Settings button that previews generated tab titles without creating a session.";
 
 /**
  * Allowed PRs-tab refresh intervals shown in the Settings UI. Picked to
@@ -78,6 +102,16 @@ export const PR_REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
 export const UI_SCALE_PERCENT_MIN = 75;
 export const UI_SCALE_PERCENT_MAX = 150;
 export const UI_SCALE_PERCENT_STEP = 5;
+
+export type ToastPosition = "top" | "bottom";
+
+export const TOAST_POSITION_OPTIONS: ReadonlyArray<{
+  value: ToastPosition;
+  label: string;
+}> = [
+  { value: "top", label: "Top" },
+  { value: "bottom", label: "Bottom" },
+];
 
 export type TerminalFontWeight =
   | 100
@@ -171,6 +205,17 @@ export interface AcornSettings {
   agents: {
     selected: SelectedAgent;
     /**
+     * When enabled, new user-owned agent sessions can have their default tab
+     * name replaced by an AI-generated title from the first user prompt.
+     * Default off: this can send prompt text to the configured AI CLI.
+     */
+    autoGenerateSessionTitles: boolean;
+    /**
+     * Instructions prepended to the first user prompt when Acorn asks the
+     * selected AI CLI to name a new session tab.
+     */
+    sessionTitlePrompt: string;
+    /**
      * Used when `selected === "custom"`. Whitespace-separated; no shell
      * expansion. Powers the one-shot commit-message invocation; empty
      * falls back to Claude Code.
@@ -222,6 +267,7 @@ export interface AcornSettings {
    * actually reduces the work acorn does — not just hides the readout.
    */
   statusBar: {
+    showSessionActivity: boolean;
     showSessionCount: boolean;
     showSessionStatus: boolean;
     showGithubAccount: boolean;
@@ -285,6 +331,7 @@ export interface AcornSettings {
     background: BackgroundState;
     fontSlots: [string, string | null, string | null];
     uiScalePercent: number;
+    toastPosition: ToastPosition;
   };
   /**
    * Opt-in toggles for unfinished features. Anything under here is
@@ -336,6 +383,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   agents: {
     selected: "claude",
+    autoGenerateSessionTitles: false,
+    sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
     customCommand: "",
     ollama: { model: "" },
     llm: { model: "" },
@@ -357,6 +406,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
   },
   statusBar: {
+    showSessionActivity: true,
     showSessionCount: true,
     showSessionStatus: true,
     showGithubAccount: true,
@@ -397,6 +447,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     },
     fontSlots: ["JetBrains Mono", "Fira Code", "Menlo"],
     uiScalePercent: 100,
+    toastPosition: "top",
   },
   experiments: {
     stickyPrompt: false,
@@ -422,6 +473,7 @@ const VALID_PR_INTERVALS = new Set<number>(
 );
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
+const VALID_TOAST_POSITIONS = new Set<ToastPosition>(["top", "bottom"]);
 
 function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
   if (typeof v === "string" && VALID_BG_FITS.has(v as BackgroundFit)) {
@@ -457,6 +509,19 @@ function normalizeThemeId(v: unknown, fallback: string): string {
   // id isn't in the merged registry at apply time.
   if (typeof v === "string" && v.trim().length > 0) {
     return v;
+  }
+  return fallback;
+}
+
+function normalizeToastPosition(
+  v: unknown,
+  fallback: ToastPosition,
+): ToastPosition {
+  if (
+    typeof v === "string" &&
+    VALID_TOAST_POSITIONS.has(v as ToastPosition)
+  ) {
+    return v as ToastPosition;
   }
   return fallback;
 }
@@ -537,6 +602,14 @@ function normalizeSelectedAgent(
   return fallback;
 }
 
+function normalizeSessionTitlePrompt(v: unknown, fallback: string): string {
+  if (typeof v !== "string") return fallback;
+  if (v.trim() === LEGACY_DEFAULT_SESSION_TITLE_PROMPT) {
+    return DEFAULT_SESSION_TITLE_PROMPT;
+  }
+  return Array.from(v).slice(0, SESSION_TITLE_PROMPT_MAX_CHARS).join("");
+}
+
 function normalizeLanguage(v: unknown, fallback: Language): Language {
   return isLanguage(v) ? v : fallback;
 }
@@ -580,6 +653,8 @@ function loadSettings(): AcornSettings {
     // `commitMessage` shape, then to the Claude default.
     const agentsRaw = (parsed.agents ?? {}) as {
       selected?: string;
+      autoGenerateSessionTitles?: boolean;
+      sessionTitlePrompt?: unknown;
       customCommand?: string;
       ollama?: { model?: string };
       llm?: { model?: string };
@@ -621,6 +696,10 @@ function loadSettings(): AcornSettings {
       uiScalePercent: normalizeUiScalePercent(
         appearanceRaw.uiScalePercent,
         DEFAULT_SETTINGS.appearance.uiScalePercent,
+      ),
+      toastPosition: normalizeToastPosition(
+        appearanceRaw.toastPosition,
+        DEFAULT_SETTINGS.appearance.toastPosition,
       ),
       background: {
         relativePath:
@@ -677,6 +756,14 @@ function loadSettings(): AcornSettings {
       },
       agents: {
         selected,
+        autoGenerateSessionTitles:
+          typeof agentsRaw.autoGenerateSessionTitles === "boolean"
+            ? agentsRaw.autoGenerateSessionTitles
+            : DEFAULT_SETTINGS.agents.autoGenerateSessionTitles,
+        sessionTitlePrompt: normalizeSessionTitlePrompt(
+          agentsRaw.sessionTitlePrompt,
+          DEFAULT_SETTINGS.agents.sessionTitlePrompt,
+        ),
         customCommand,
         ollama: { model: ollamaModel },
         llm: { model: llmModel },
@@ -803,6 +890,8 @@ interface SettingsState {
   patchAgents: (
     patch: Partial<{
       selected: SelectedAgent;
+      autoGenerateSessionTitles: boolean;
+      sessionTitlePrompt: string;
       customCommand: string;
       ollama: Partial<AcornSettings["agents"]["ollama"]>;
       llm: Partial<AcornSettings["agents"]["llm"]>;
@@ -867,6 +956,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
         agents: {
           ...s.settings.agents,
           ...(patch.selected !== undefined ? { selected: patch.selected } : {}),
+          ...(patch.autoGenerateSessionTitles !== undefined
+            ? { autoGenerateSessionTitles: patch.autoGenerateSessionTitles }
+            : {}),
+          ...(patch.sessionTitlePrompt !== undefined
+            ? {
+                sessionTitlePrompt: normalizeSessionTitlePrompt(
+                  patch.sessionTitlePrompt,
+                  DEFAULT_SETTINGS.agents.sessionTitlePrompt,
+                ),
+              }
+            : {}),
           ...(patch.customCommand !== undefined
             ? { customCommand: patch.customCommand }
             : {}),
@@ -1004,8 +1104,8 @@ interface ResolvedCommand {
 }
 
 /**
- * One-shot stdin → stdout invocation for an agent. Used by the merge
- * dialog's "Generate with AI" action.
+ * One-shot stdin → stdout invocation for an agent. Used by AI features that
+ * need a single prompt/response round trip.
  */
 function agentOneshotCommand(
   agent: AgentProvider,
@@ -1039,11 +1139,11 @@ function tokenizeCustom(raw: string): ResolvedCommand | null {
 }
 
 /**
- * Resolve the AI CLI invocation for the merge dialog's "Generate with AI"
- * action. The resolved value is sent to the Rust backend as
- * `(command, args)` so the backend stays provider-agnostic.
+ * Resolve the AI CLI invocation selected under Settings → Agents. The
+ * resolved value is sent to the Rust backend as `(command, args)` so the
+ * backend stays provider-agnostic.
  */
-export function resolveAiCommitCommand(s: AcornSettings): ResolvedCommand {
+export function resolveAiOneshotCommand(s: AcornSettings): ResolvedCommand {
   if (s.agents.selected === "custom") {
     return (
       tokenizeCustom(s.agents.customCommand) ??
@@ -1052,6 +1152,15 @@ export function resolveAiCommitCommand(s: AcornSettings): ResolvedCommand {
   }
   return agentOneshotCommand(s.agents.selected, s.agents);
 }
+
+export function resolveSessionTitlePrompt(s: AcornSettings): string {
+  return s.agents.sessionTitlePrompt.trim()
+    ? s.agents.sessionTitlePrompt
+    : DEFAULT_SESSION_TITLE_PROMPT;
+}
+
+/** Backwards-compat alias for callers that still read this name. */
+export const resolveAiCommitCommand = resolveAiOneshotCommand;
 
 /**
  * Human-friendly label for the global agent selection. Used by the merge
