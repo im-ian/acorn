@@ -5,7 +5,6 @@ import { useTranslation } from "../lib/useTranslation";
 import { Modal } from "./ui/Modal";
 import { ModalHeader } from "./ui/ModalHeader";
 import { Markdown } from "./ui/Markdown";
-import { TextSwap } from "./ui/TextSwap";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -140,11 +139,9 @@ export function WhatsNewModal({
             className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
             <Download size={12} />
-            <TextSwap>
-              {busy
-                ? dt(t, "dialogs.whatsNew.installing")
-                : dt(t, "dialogs.whatsNew.installRelaunch")}
-            </TextSwap>
+            {busy
+              ? dt(t, "dialogs.whatsNew.installing")
+              : dt(t, "dialogs.whatsNew.installRelaunch")}
           </button>
         ) : null}
       </footer>

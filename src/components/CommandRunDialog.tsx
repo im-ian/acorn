@@ -5,7 +5,7 @@ import { useToasts } from "../lib/toasts";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader, TextSwap } from "./ui";
+import { Modal, ModalHeader } from "./ui";
 import {
   applySessionCreateRequest,
   buildSessionCreateRequestFromScope,
@@ -217,9 +217,9 @@ export function CommandRunDialog({
           className="inline-flex items-center gap-1.5 rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Play size={12} />
-          <TextSwap>
-            {busy ? dt(t, "dialogs.commandRun.running") : dt(t, "dialogs.commandRun.run")}
-          </TextSwap>
+          {busy
+            ? dt(t, "dialogs.commandRun.running")
+            : dt(t, "dialogs.commandRun.run")}
         </button>
       </footer>
     </Modal>
