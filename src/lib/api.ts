@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
+  AgentTokenUsageSnapshot,
   AgentHistoryItem,
   CommitInfo,
   DiffPayload,
@@ -294,6 +295,9 @@ export const api = {
   },
   getMemoryUsage(): Promise<MemoryUsage> {
     return invoke<MemoryUsage>("get_memory_usage");
+  },
+  getAgentTokenUsage(): Promise<AgentTokenUsageSnapshot> {
+    return invoke<AgentTokenUsageSnapshot>("get_agent_token_usage");
   },
   /**
    * Inspect the runtime environment for the `acorn-ipc` CLI: bundled binary

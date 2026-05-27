@@ -26,6 +26,7 @@ mod shell_util;
 mod staged_rev_reconcile;
 mod state;
 mod todos;
+mod token_usage;
 mod unified_diff;
 mod worktree;
 
@@ -551,6 +552,7 @@ pub fn run() {
             commands::detect_session_statuses,
             commands::detect_session_agent,
             commands::prepare_claude_fork,
+            token_usage::get_agent_token_usage,
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
             commands::warm_macos_folder_permissions,
