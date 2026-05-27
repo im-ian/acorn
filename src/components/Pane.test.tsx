@@ -34,7 +34,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { Pane } from "./Pane";
 import { useAppStore } from "../store";
-import { clearTabDragPayload, getCurrentTabPayload } from "../lib/dnd";
+import { endAcornDrag, getCurrentTabPayload } from "../lib/dnd";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
 
 const REPO = "/Users/me/repo";
@@ -143,18 +143,22 @@ function seedInactivePaneWithTab(tab: Session): void {
 }
 
 function seedActivePaneWithTab(tab: Session): void {
+  seedActivePaneWithTabs([tab], tab.id);
+}
+
+function seedActivePaneWithTabs(tabs: Session[], activeTabId: string): void {
   const pane = {
     id: "root",
-    tabIds: [tab.id],
-    activeTabId: tab.id,
+    tabIds: tabs.map((tab) => tab.id),
+    activeTabId,
   };
 
   useAppStore.setState((s) => ({
     ...s,
-    sessions: [tab],
+    sessions: tabs,
     activeProject: REPO,
-    activeSessionId: tab.id,
-    activeTabId: tab.id,
+    activeSessionId: activeTabId,
+    activeTabId,
     workspaces: {
       ...s.workspaces,
       [REPO]: {
@@ -189,13 +193,19 @@ function dispatchDragStart(target: Element, dataTransfer: DataTransfer): Event {
   return event;
 }
 
+function dispatchDragEnd(target: Element): Event {
+  const event = new Event("dragend", { bubbles: true, cancelable: true });
+  target.dispatchEvent(event);
+  return event;
+}
+
 describe("Pane empty state", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     resetStore();
-    clearTabDragPayload();
+    endAcornDrag();
     vi.clearAllMocks();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -205,7 +215,7 @@ describe("Pane empty state", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    clearTabDragPayload();
+    endAcornDrag();
   });
 
   it("opens a terminal when Space is pressed twice while an empty pane is focused", async () => {
@@ -483,6 +493,54 @@ describe("Pane empty state", () => {
     expect(getCurrentTabPayload()).toMatchObject({
       kind: "tab",
       tabId: active.id,
+      fromPaneId: "root",
+    });
+  });
+
+  it("clears a tab drag payload when the source drag ends", () => {
+    const first = session("first-session");
+    const second = session("second-session");
+    seedActivePaneWithTabs([first, second], first.id);
+    const addWindowListener = window.addEventListener.bind(window);
+    const addWindowListenerSpy = vi
+      .spyOn(window, "addEventListener")
+      .mockImplementation((type, listener, options) => {
+        if (type === "dragend" || type === "drop") return;
+        addWindowListener(type, listener, options);
+      });
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+    addWindowListenerSpy.mockRestore();
+
+    const firstTab = container
+      .querySelector(`[data-tab-drag-handle="${first.id}"]`)
+      ?.closest('[role="button"]');
+    const secondTab = container
+      .querySelector(`[data-tab-drag-handle="${second.id}"]`)
+      ?.closest('[role="button"]');
+    expect(firstTab).toBeInstanceOf(HTMLElement);
+    expect(secondTab).toBeInstanceOf(HTMLElement);
+
+    act(() => {
+      dispatchDragStart(firstTab!, makeDataTransfer());
+    });
+    expect(getCurrentTabPayload()).toMatchObject({
+      tabId: first.id,
+      fromPaneId: "root",
+    });
+
+    act(() => {
+      dispatchDragEnd(firstTab!);
+    });
+    expect(getCurrentTabPayload()).toBeNull();
+
+    act(() => {
+      dispatchDragStart(secondTab!, makeDataTransfer());
+    });
+    expect(getCurrentTabPayload()).toMatchObject({
+      tabId: second.id,
       fromPaneId: "root",
     });
   });

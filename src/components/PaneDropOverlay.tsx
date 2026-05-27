@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/cn";
 import {
   classifyDropZone,
+  endAcornDrag,
   type DropZone,
   getCurrentDragPayload,
   getCurrentFilePayload,
@@ -92,39 +93,43 @@ export function PaneDropOverlay({
       onDrop={(e) => {
         if (!acceptsDrag) return;
         e.preventDefault();
-        setZone(null);
-        const filePayload = getCurrentFilePayload();
-        if (filePayload) {
-          useAppStore.getState().setFocusedPane(paneId);
-          useAppStore.getState().openCodeViewerTab(filePayload.path);
-          return;
-        }
-        const target = computeZone(e);
-        if (!target) return;
-        const payload = getCurrentTabPayload();
-        if (!payload) return;
-        if (target.kind === "center") {
-          if (payload.fromPaneId === paneId) return;
+        try {
+          setZone(null);
+          const filePayload = getCurrentFilePayload();
+          if (filePayload) {
+            useAppStore.getState().setFocusedPane(paneId);
+            useAppStore.getState().openCodeViewerTab(filePayload.path);
+            return;
+          }
+          const target = computeZone(e);
+          if (!target) return;
+          const payload = getCurrentTabPayload();
+          if (!payload) return;
+          if (target.kind === "center") {
+            if (payload.fromPaneId === paneId) return;
+            moveTab({
+              tabId: payload.tabId,
+              fromPaneId: payload.fromPaneId,
+              toPaneId: paneId,
+            });
+            return;
+          }
+          // Edge drop. Avoid the no-op of splitting a pane that holds only the
+          // dragged tab — the source would immediately collapse.
+          if (payload.fromPaneId === paneId) {
+            const fromPane = useAppStore.getState().panes[paneId];
+            if (fromPane && fromPane.tabIds.length <= 1) return;
+          }
           moveTab({
             tabId: payload.tabId,
             fromPaneId: payload.fromPaneId,
             toPaneId: paneId,
+            splitDirection: target.direction,
+            splitSide: target.side,
           });
-          return;
+        } finally {
+          endAcornDrag();
         }
-        // Edge drop. Avoid the no-op of splitting a pane that holds only the
-        // dragged tab — the source would immediately collapse.
-        if (payload.fromPaneId === paneId) {
-          const fromPane = useAppStore.getState().panes[paneId];
-          if (fromPane && fromPane.tabIds.length <= 1) return;
-        }
-        moveTab({
-          tabId: payload.tabId,
-          fromPaneId: payload.fromPaneId,
-          toPaneId: paneId,
-          splitDirection: target.direction,
-          splitSide: target.side,
-        });
       }}
     >
       <ZoneHighlight zone={zone} />

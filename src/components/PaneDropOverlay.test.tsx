@@ -15,8 +15,9 @@ vi.mock("../lib/api", () => ({
 }));
 
 import {
-  clearTabDragPayload,
-  setFileDragPayload,
+  beginFileDrag,
+  beginTabDrag,
+  endAcornDrag,
 } from "../lib/dnd";
 import { makePaneNode } from "../lib/layout";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
@@ -99,7 +100,7 @@ describe("PaneDropOverlay", () => {
 
   beforeEach(() => {
     resetStore();
-    clearTabDragPayload();
+    endAcornDrag();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -108,12 +109,12 @@ describe("PaneDropOverlay", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    clearTabDragPayload();
+    endAcornDrag();
   });
 
   it("opens a code viewer tab when a file is dropped on an empty pane", () => {
     const dataTransfer = makeDataTransfer();
-    setFileDragPayload(
+    beginFileDrag(
       { dataTransfer } as unknown as React.DragEvent,
       { path: FILE },
     );
@@ -142,7 +143,7 @@ describe("PaneDropOverlay", () => {
 
   it("does not intercept file drops when the pane reserves them for the terminal", () => {
     const dataTransfer = makeDataTransfer();
-    setFileDragPayload(
+    beginFileDrag(
       { dataTransfer } as unknown as React.DragEvent,
       { path: FILE },
     );
@@ -162,5 +163,31 @@ describe("PaneDropOverlay", () => {
     const state = useAppStore.getState();
     expect(state.panes.root.tabIds).toEqual([]);
     expect(state.workspaceTabs).toEqual({});
+  });
+
+  it("updates the overlay when a new drag starts before the previous payload is cleared", () => {
+    const fileTransfer = makeDataTransfer();
+    beginFileDrag(
+      { dataTransfer: fileTransfer } as unknown as React.DragEvent,
+      { path: FILE },
+    );
+
+    act(() => {
+      root.render(<PaneDropOverlay paneId="root" acceptFileDrops={false} />);
+    });
+
+    const overlay = container.firstElementChild;
+    if (!overlay) throw new Error("overlay did not render");
+    expect(overlay.className).toContain("pointer-events-none");
+
+    const tabTransfer = makeDataTransfer();
+    act(() => {
+      beginTabDrag(
+        { dataTransfer: tabTransfer } as unknown as React.DragEvent,
+        { tabId: "session-1", fromPaneId: "root" },
+      );
+    });
+
+    expect(overlay.className).not.toContain("pointer-events-none");
   });
 });
