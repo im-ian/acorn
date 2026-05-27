@@ -26,7 +26,7 @@ import type {
 import { useTranslation } from "../lib/useTranslation";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { Tooltip } from "./Tooltip";
-import { Modal, ModalHeader, TextSwap } from "./ui";
+import { Modal, ModalHeader } from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
   value: MergeMethod;
@@ -320,32 +320,22 @@ export function MergePullRequestDialog({
                     {dt(t, "dialogs.mergePullRequest.commitMessage")}
                   </p>
                   <div className="flex items-center gap-1">
-                    {generating ? (
+                    <Tooltip
+                      label={`${dt(t, "dialogs.mergePullRequest.generateVia")} ${providerLabel}`}
+                      side="top"
+                    >
                       <button
-                        key="gen-button-loading"
                         type="button"
-                        disabled
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted opacity-60"
+                        onClick={() => void handleGenerate()}
+                        disabled={generating}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
                       >
                         <Sparkles size={11} />
-                        {dt(t, "dialogs.mergePullRequest.generating")}
+                        {generating
+                          ? dt(t, "dialogs.mergePullRequest.generating")
+                          : dt(t, "dialogs.mergePullRequest.generateWithAi")}
                       </button>
-                    ) : (
-                      <Tooltip
-                        label={`${dt(t, "dialogs.mergePullRequest.generateVia")} ${providerLabel}`}
-                        side="top"
-                      >
-                        <button
-                          key="gen-button-idle"
-                          type="button"
-                          onClick={() => void handleGenerate()}
-                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-                        >
-                          <Sparkles size={11} />
-                          {dt(t, "dialogs.mergePullRequest.generateWithAi")}
-                        </button>
-                      </Tooltip>
-                    )}
+                    </Tooltip>
                     <Tooltip
                       label={dt(
                         t,
@@ -468,11 +458,9 @@ export function MergePullRequestDialog({
                   : "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30",
               )}
             >
-              <TextSwap>
-                {submitting
-                  ? dt(t, "dialogs.mergePullRequest.merging")
-                  : dt(t, "dialogs.mergePullRequest.merge")}
-              </TextSwap>
+              {submitting
+                ? dt(t, "dialogs.mergePullRequest.merging")
+                : dt(t, "dialogs.mergePullRequest.merge")}
             </button>
           </footer>
           </>

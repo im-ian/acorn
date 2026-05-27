@@ -6,7 +6,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import type { ProjectSettings } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { CheckboxRow, Field, Modal, ModalHeader, TextSwap } from "./ui";
+import { CheckboxRow, Field, Modal, ModalHeader } from "./ui";
 
 const PROMPT_MAX_CHARS = 2_000;
 
@@ -225,11 +225,9 @@ export function ProjectSettingsModal({
               disabled={loading || saving}
               className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <TextSwap>
-                {saving
-                  ? dt(t, "dialogs.projectSettings.saving")
-                  : dt(t, "dialogs.projectSettings.save")}
-              </TextSwap>
+              {saving
+                ? dt(t, "dialogs.projectSettings.saving")
+                : dt(t, "dialogs.projectSettings.save")}
             </button>
           </footer>
         </>

@@ -193,6 +193,23 @@ body {
   cursor: default;
 }
 
+/*
+ * WKWebView can retain a stale text paint when a disabled button animates
+ * opacity while its label changes. Keep normal color/background transitions,
+ * but make disabled opacity changes immediate.
+ */
+button.transition[class*="disabled:opacity"] {
+  transition-property:
+    color,
+    background-color,
+    border-color,
+    outline-color,
+    text-decoration-color,
+    fill,
+    stroke,
+    box-shadow;
+}
+
 input,
 textarea,
 .acorn-terminal,

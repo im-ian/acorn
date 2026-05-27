@@ -68,7 +68,6 @@ import {
   Select,
   Stepper,
   TextInput,
-  TextSwap,
 } from "./ui";
 
 type Tab =
@@ -2109,11 +2108,9 @@ function StorageSettings() {
               disabled={busy}
               className="rounded bg-danger px-2 py-1 text-[11px] font-medium text-white transition hover:bg-danger/90 disabled:opacity-50"
             >
-              <TextSwap>
-                {busy
-                  ? st(t, "settings.storage.clear.clearing")
-                  : st(t, "settings.storage.clear.button")}
-              </TextSwap>
+              {busy
+                ? st(t, "settings.storage.clear.clearing")
+                : st(t, "settings.storage.clear.button")}
             </button>
           </div>
         </div>
@@ -2421,11 +2418,9 @@ function AboutSettings() {
                 className="inline-flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
               >
                 <Download size={11} />
-                <TextSwap>
-                  {busy
-                    ? st(t, "settings.about.installing")
-                    : st(t, "settings.about.installRelaunch")}
-                </TextSwap>
+                {busy
+                  ? st(t, "settings.about.installing")
+                  : st(t, "settings.about.installRelaunch")}
               </button>
             </div>
           </div>
@@ -2452,15 +2447,13 @@ function AboutSettings() {
           className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
         >
           <Sparkles size={11} className={notesLoading ? "animate-pulse" : ""} />
-          <TextSwap>
-            {notesLoading
-              ? st(t, "settings.about.loading")
-              : currentVersion
-                ? stf(t, "settings.about.whatsNewInVersion", {
-                    version: currentVersion,
-                  })
-                : st(t, "settings.about.whatsNew")}
-          </TextSwap>
+          {notesLoading
+            ? st(t, "settings.about.loading")
+            : currentVersion
+              ? stf(t, "settings.about.whatsNewInVersion", {
+                  version: currentVersion,
+                })
+              : st(t, "settings.about.whatsNew")}
         </button>
         <button
           type="button"
@@ -2469,11 +2462,9 @@ function AboutSettings() {
           className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:opacity-50"
         >
           <RefreshCcw size={11} className={busy ? "animate-spin" : ""} />
-          <TextSwap>
-            {busy
-              ? st(t, "settings.about.checking")
-              : st(t, "settings.about.checkForUpdates")}
-          </TextSwap>
+          {busy
+            ? st(t, "settings.about.checking")
+            : st(t, "settings.about.checkForUpdates")}
         </button>
       </div>
 
