@@ -1372,11 +1372,11 @@ function App() {
           >
             <Sidebar />
           </Panel>
-          <ResizeHandle />
+          <ResizeHandle thin />
           <Panel id="main" order={2} defaultSize={56} minSize={30}>
             <LayoutRenderer node={layout} />
           </Panel>
-          <ResizeHandle />
+          <ResizeHandle thin />
           <Panel
             ref={rightPanelRef}
             id="right"
