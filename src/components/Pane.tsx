@@ -567,7 +567,7 @@ function isTabStripMouseDownTarget(target: EventTarget | null): boolean {
 }
 
 function isTabDragSuppressedTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement
+  return target instanceof Element
     ? target.closest("[data-tab-close-button], [data-tab-rename-input]") !== null
     : false;
 }
@@ -1304,6 +1304,9 @@ function TabItem({
           }
           data-tab-close-button={tab.id}
           draggable={false}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+          }}
           onMouseDown={(e) => {
             e.stopPropagation();
           }}

@@ -623,7 +623,10 @@ describe("Pane empty state", () => {
     expect(tab).toBeInstanceOf(HTMLElement);
 
     act(() => {
-      dispatchPointer(closeButton!, "pointerdown", { clientX: 110, clientY: 12 });
+      dispatchPointer(closeButton!, "pointerdown", {
+        clientX: 110,
+        clientY: 12,
+      });
       dispatchPointer(window as unknown as Element, "pointermove", {
         clientX: 140,
         clientY: 12,
@@ -631,5 +634,46 @@ describe("Pane empty state", () => {
     });
 
     expect(getWorkspaceTabDragSession()).toBeNull();
+  });
+
+  it("does not start tab drag from the close icon SVG", () => {
+    const active = session("active-session");
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const closeButton = container.querySelector(
+      `[data-tab-close-button="${active.id}"]`,
+    );
+    const closeIcon = closeButton?.querySelector("svg");
+    expect(closeButton).toBeInstanceOf(HTMLElement);
+    expect(closeIcon).toBeInstanceOf(SVGSVGElement);
+
+    act(() => {
+      dispatchPointer(closeIcon!, "pointerdown", {
+        clientX: 110,
+        clientY: 12,
+      });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 140,
+        clientY: 12,
+      });
+    });
+
+    expect(getWorkspaceTabDragSession()).toBeNull();
+
+    act(() => {
+      dispatchPointer(window as unknown as Element, "pointerup", {
+        clientX: 140,
+        clientY: 12,
+      });
+      closeIcon!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(useAppStore.getState().pendingRemoveId).toBe(active.id);
   });
 });
