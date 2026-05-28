@@ -42,6 +42,10 @@ import {
   useHotkeys,
   type HotkeyBindings,
 } from "./lib/hotkeys";
+import {
+  TERMINAL_CONVERSATION_NAV_EVENT,
+  type ConversationNavigationDirection,
+} from "./lib/terminalConversation";
 import { hasRecordedWorktree } from "./lib/sessionWorktree";
 import {
   EQUALIZE_PANES_EVENT,
@@ -142,6 +146,19 @@ function focusPaneTerminal(paneId: string) {
     (pane?.querySelector(".xterm-helper-textarea") as HTMLElement | null) ??
     (pane?.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null);
   target?.focus();
+}
+
+function dispatchFocusedTerminalConversationNav(
+  direction: ConversationNavigationDirection,
+): boolean {
+  const sessionId = findFocusedSessionId();
+  if (!sessionId) return false;
+  const event = new CustomEvent(TERMINAL_CONVERSATION_NAV_EVENT, {
+    cancelable: true,
+    detail: { direction, sessionId },
+  });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
 }
 
 function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
@@ -1220,6 +1237,16 @@ function App() {
             detail: { sessionId },
           }),
         );
+      },
+      [shortcuts.previousConversation]: (e: KeyboardEvent) => {
+        if (dispatchFocusedTerminalConversationNav("previous")) {
+          e.preventDefault();
+        }
+      },
+      [shortcuts.nextConversation]: (e: KeyboardEvent) => {
+        if (dispatchFocusedTerminalConversationNav("next")) {
+          e.preventDefault();
+        }
       },
       [shortcuts.toggleTodos]: (e: KeyboardEvent) => {
         e.preventDefault();

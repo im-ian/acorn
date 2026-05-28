@@ -53,6 +53,8 @@ export const DEFAULT_HOTKEYS = {
   uiScaleDown: "$mod+-",
   uiScaleUp: "$mod+=",
   uiScaleReset: "$mod+0",
+  previousConversation: "$mod+ArrowLeft",
+  nextConversation: "$mod+ArrowRight",
   toggleMultiInput: "$mod+Alt+KeyI",
   focusPaneLeft: "$mod+Alt+ArrowLeft",
   focusPaneRight: "$mod+Alt+ArrowRight",

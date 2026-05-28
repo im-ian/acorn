@@ -439,6 +439,12 @@
         "clearTerminal": {
           "label": "Clear terminal"
         },
+        "previousConversation": {
+          "label": "Previous conversation"
+        },
+        "nextConversation": {
+          "label": "Next conversation"
+        },
         "toggleMultiInput": {
           "label": "Toggle multi-input"
         },

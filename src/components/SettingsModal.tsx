@@ -254,6 +254,14 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
         labelKey: "settings.shortcuts.items.clearTerminal.label",
       },
       {
+        id: "previousConversation",
+        labelKey: "settings.shortcuts.items.previousConversation.label",
+      },
+      {
+        id: "nextConversation",
+        labelKey: "settings.shortcuts.items.nextConversation.label",
+      },
+      {
         id: "toggleMultiInput",
         labelKey: "settings.shortcuts.items.toggleMultiInput.label",
       },
