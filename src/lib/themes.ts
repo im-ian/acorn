@@ -17,6 +17,7 @@ import githubLightCss from "../assets/themes/github-light.css?raw";
 import gruvboxDarkCss from "../assets/themes/gruvbox-dark.css?raw";
 import gruvboxLightCss from "../assets/themes/gruvbox-light.css?raw";
 import highContrastDarkCss from "../assets/themes/high-contrast-dark.css?raw";
+import highContrastLightCss from "../assets/themes/high-contrast-light.css?raw";
 import kanagawaWaveCss from "../assets/themes/kanagawa-wave.css?raw";
 import monokaiProCss from "../assets/themes/monokai-pro.css?raw";
 import nordCss from "../assets/themes/nord.css?raw";
@@ -177,6 +178,13 @@ export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
     label: "GitHub Light",
     mode: "light",
     css: githubLightCss,
+    source: "builtin",
+  },
+  {
+    id: "high-contrast-light",
+    label: "High Contrast Light",
+    mode: "light",
+    css: highContrastLightCss,
     source: "builtin",
   },
   {
