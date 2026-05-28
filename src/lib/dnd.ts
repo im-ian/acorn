@@ -1,5 +1,5 @@
 /**
- * Drag-and-drop session helpers for Acorn-owned tab and file payloads.
+ * Drag-and-drop session helpers for Acorn-owned file payloads.
  *
  * The browser's `DataTransfer` is unreliable for custom MIME types in some
  * webviews (notably WKWebView used by Tauri on macOS): the `types` list and
@@ -9,38 +9,20 @@
  * OS preview and drop affordances.
  */
 import { useEffect, useState, type DragEvent } from "react";
-import type { Direction, PaneId, SplitSide } from "./layout";
-
-export interface TabDragPayload {
-  kind: "tab";
-  tabId: string;
-  fromPaneId: PaneId;
-}
+import type { Direction, SplitSide } from "./layout";
 
 export interface FileDragPayload {
   kind: "file";
   path: string;
 }
 
-export type DragPayload = TabDragPayload | FileDragPayload;
-
-let currentDrag: DragPayload | null = null;
+let currentDrag: FileDragPayload | null = null;
 let dragRevision = 0;
 const listeners = new Set<() => void>();
 
 function notify(): void {
   dragRevision += 1;
   for (const fn of listeners) fn();
-}
-
-export function beginTabDrag(
-  e: DragEvent,
-  payload: { tabId: string; fromPaneId: PaneId },
-): void {
-  beginAcornDrag(e, { kind: "tab", ...payload }, {
-    effectAllowed: "move",
-    text: payload.tabId,
-  });
 }
 
 export function beginFileDrag(
@@ -54,7 +36,7 @@ export function beginFileDrag(
 
 function beginAcornDrag(
   e: DragEvent,
-  payload: DragPayload,
+  payload: FileDragPayload,
   options: { effectAllowed: DataTransfer["effectAllowed"]; text?: string },
 ): void {
   currentDrag = payload;
@@ -75,24 +57,8 @@ export function endAcornDrag(): void {
   notify();
 }
 
-export function getCurrentDragPayload(): DragPayload | null {
-  return currentDrag;
-}
-
-export function getCurrentTabPayload(): TabDragPayload | null {
-  return currentDrag?.kind === "tab" ? currentDrag : null;
-}
-
 export function getCurrentFilePayload(): FileDragPayload | null {
   return currentDrag?.kind === "file" ? currentDrag : null;
-}
-
-export function isTabDrag(_e: DragEvent): boolean {
-  return currentDrag?.kind === "tab";
-}
-
-export function isAcornDrag(_e: DragEvent): boolean {
-  return currentDrag !== null;
 }
 
 export function useAcornDragGlobalCleanup(): void {
