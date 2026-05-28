@@ -9,15 +9,17 @@ import {
 
 interface ResizeHandleProps {
   direction?: "horizontal" | "vertical";
+  showDivider?: boolean;
+  thin?: boolean;
 }
 
 /**
  * Resize handle behaviour:
  *
- * 1. Open state: the 12px bar is fully invisible at rest. The cursor
- *    flips to col/row resize on hover, and a 1px accent line appears
- *    centred during drag — visually equivalent to the original 1px
- *    border between panels.
+ * 1. Open state: the handle is visually quiet at rest unless its caller
+ *    opts into a divider. Thin handles render as 1px while
+ *    `hitAreaMargins` preserves a forgiving resize target. The cursor flips
+ *    to col/row resize on hover, and a 1px accent line appears during drag.
  * 2. Closed state (an adjacent collapsible panel is collapsed): the bar
  *    fades to a faint white tint on hover and shows a fixed-size white
  *    grip pill so the user knows where to grab to re-expand.
@@ -31,7 +33,11 @@ interface ResizeHandleProps {
 const TOOLTIP_DELAY_MS = 250;
 const TOOLTIP_TEXT = "Double-click to expand";
 
-export function ResizeHandle({ direction = "horizontal" }: ResizeHandleProps) {
+export function ResizeHandle({
+  direction = "horizontal",
+  showDivider = false,
+  thin = false,
+}: ResizeHandleProps) {
   const isHorizontal = direction === "horizontal";
   const handleId = useId();
   const [dragging, setDragging] = useState(false);
@@ -128,7 +134,7 @@ export function ResizeHandle({ direction = "horizontal" }: ResizeHandleProps) {
     <>
       <PanelResizeHandle
         id={handleId}
-        hitAreaMargins={{ coarse: 0, fine: 0 }}
+        hitAreaMargins={thin ? { coarse: 12, fine: 6 } : { coarse: 0, fine: 0 }}
         onDragging={setDragging}
         onDoubleClick={handleDoubleClick}
         className={cn(
@@ -139,16 +145,21 @@ export function ResizeHandle({ direction = "horizontal" }: ResizeHandleProps) {
           showHandleVisual && hovered && !dragging
             ? "bg-white/5"
             : "bg-transparent",
-          isHorizontal ? "w-3 cursor-col-resize" : "h-3 cursor-row-resize",
+          isHorizontal
+            ? thin
+              ? "w-px cursor-col-resize"
+              : "w-3 cursor-col-resize"
+            : thin
+              ? "h-px cursor-row-resize"
+              : "h-3 cursor-row-resize",
         )}
       >
-        {/* Open-state drag indicator: 1px accent line in the centre of
-            the hit area, mimicking the original border-style separator. */}
-        {dragging && !showHandleVisual ? (
+        {showDivider || (dragging && !showHandleVisual) ? (
           <span
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute bg-accent",
+              "pointer-events-none absolute transition-colors duration-150",
+              dragging && !showHandleVisual ? "bg-accent" : "bg-border/80",
               isHorizontal ? "h-full w-px" : "h-px w-full",
             )}
           />
