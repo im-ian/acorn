@@ -16,12 +16,16 @@ vi.mock("../lib/api", () => ({
 
 import {
   beginFileDrag,
-  beginTabDrag,
   endAcornDrag,
 } from "../lib/dnd";
 import { makePaneNode } from "../lib/layout";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
 import { useAppStore } from "../store";
+import {
+  beginWorkspaceTabDrag,
+  cancelWorkspaceTabDrag,
+  finishWorkspaceTabDrag,
+} from "../lib/workspaceTabDrag";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 
 const REPO = "/tmp/acorn-repo";
@@ -72,6 +76,39 @@ function resetStore(): void {
   );
 }
 
+function seedTwoPaneWorkspace(): void {
+  const panes = {
+    root: {
+      id: "root",
+      tabIds: ["session-1", "session-2"],
+      activeTabId: "session-1",
+    },
+    "pane-2": { id: "pane-2", tabIds: [], activeTabId: null },
+  };
+  const layout = {
+    kind: "split" as const,
+    id: "split-test",
+    direction: "horizontal" as const,
+    a: makePaneNode("root"),
+    b: makePaneNode("pane-2"),
+  };
+
+  useAppStore.setState((s) => ({
+    ...s,
+    workspaces: {
+      [REPO]: {
+        layout,
+        panes,
+        focusedPaneId: "root",
+      },
+    },
+    layout,
+    panes,
+    activeTabId: "session-1",
+    activeSessionId: "session-1",
+  }));
+}
+
 function makeDataTransfer(): DataTransfer {
   return {
     dropEffect: "none",
@@ -101,6 +138,7 @@ describe("PaneDropOverlay", () => {
   beforeEach(() => {
     resetStore();
     endAcornDrag();
+    cancelWorkspaceTabDrag();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -110,6 +148,7 @@ describe("PaneDropOverlay", () => {
     act(() => root.unmount());
     container.remove();
     endAcornDrag();
+    cancelWorkspaceTabDrag();
   });
 
   it("opens a code viewer tab when a file is dropped on an empty pane", () => {
@@ -165,29 +204,41 @@ describe("PaneDropOverlay", () => {
     expect(state.workspaceTabs).toEqual({});
   });
 
-  it("updates the overlay when a new drag starts before the previous payload is cleared", () => {
-    const fileTransfer = makeDataTransfer();
-    beginFileDrag(
-      { dataTransfer: fileTransfer } as unknown as React.DragEvent,
-      { path: FILE },
-    );
+  it("moves a pointer-dragged tab onto a pane body center", () => {
+    seedTwoPaneWorkspace();
 
     act(() => {
-      root.render(<PaneDropOverlay paneId="root" acceptFileDrops={false} />);
+      root.render(<PaneDropOverlay paneId="pane-2" acceptFileDrops={false} />);
     });
 
     const overlay = container.firstElementChild;
     if (!overlay) throw new Error("overlay did not render");
-    expect(overlay.className).toContain("pointer-events-none");
-
-    const tabTransfer = makeDataTransfer();
-    act(() => {
-      beginTabDrag(
-        { dataTransfer: tabTransfer } as unknown as React.DragEvent,
-        { tabId: "session-1", fromPaneId: "root" },
-      );
+    vi.spyOn(overlay, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 100,
+      bottom: 100,
+      width: 100,
+      height: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
     });
 
-    expect(overlay.className).not.toContain("pointer-events-none");
+    act(() => {
+      beginWorkspaceTabDrag({
+        payload: { tabId: "session-1", fromPaneId: "root" },
+        title: "session-1",
+        pointer: { x: 50, y: 50 },
+        offset: { x: 8, y: 8 },
+        sourceRect: { width: 100, height: 32 },
+      });
+      finishWorkspaceTabDrag({ x: 50, y: 50 });
+    });
+
+    const state = useAppStore.getState();
+    expect(state.panes.root.tabIds).toEqual(["session-2"]);
+    expect(state.panes["pane-2"].tabIds).toEqual(["session-1"]);
+    expect(state.panes["pane-2"].activeTabId).toBe("session-1");
   });
 });

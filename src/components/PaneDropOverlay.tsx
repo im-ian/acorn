@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../lib/cn";
 import {
   classifyDropZone,
   endAcornDrag,
   type DropZone,
-  getCurrentDragPayload,
   getCurrentFilePayload,
-  getCurrentTabPayload,
   useAcornDragInProgress,
 } from "../lib/dnd";
 import { useAppStore } from "../store";
 import type { PaneId } from "../lib/layout";
+import {
+  registerWorkspaceTabDropTarget,
+  useWorkspaceTabDragSession,
+  type WorkspaceTabDragPoint,
+} from "../lib/workspaceTabDrag";
 
 interface PaneDropOverlayProps {
   paneId: PaneId;
@@ -27,30 +30,87 @@ export function PaneDropOverlay({
   paneId,
   acceptFileDrops = true,
 }: PaneDropOverlayProps) {
-  const dragging = useAcornDragInProgress();
-  const dragPayload = dragging ? getCurrentDragPayload() : null;
-  const acceptsDrag =
-    dragPayload?.kind === "tab" ||
-    (acceptFileDrops && dragPayload?.kind === "file");
+  const fileDragging = useAcornDragInProgress();
+  const filePayload = fileDragging ? getCurrentFilePayload() : null;
+  const tabDrag = useWorkspaceTabDragSession();
+  const acceptsFileDrop = acceptFileDrops && filePayload !== null;
   const moveTab = useAppStore((s) => s.moveTab);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
 
-  // Clear any lingering highlight when the drag ends without a dragleave
-  // event firing on this overlay (e.g., dropped on a sibling pane).
-  useEffect(() => {
-    if (!dragging && zone) setZone(null);
-  }, [dragging, zone]);
+  const computeTabZone = useCallback(
+    (point: WorkspaceTabDragPoint): DropZone | null => {
+      const el = containerRef.current;
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      if (
+        point.x < rect.left ||
+        point.x > rect.right ||
+        point.y < rect.top ||
+        point.y > rect.bottom
+      ) {
+        return null;
+      }
+      return classifyDropZone(point, rect);
+    },
+    [],
+  );
 
-  function computeZone(e: React.DragEvent): DropZone | null {
-    if (getCurrentFilePayload()) return { kind: "center" };
-    const el = containerRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    return classifyDropZone(
-      { x: e.clientX, y: e.clientY },
-      rect,
-    );
+  useEffect(() => {
+    return registerWorkspaceTabDropTarget({
+      id: `pane-body:${paneId}`,
+      priority: 10,
+      getRect: () => containerRef.current?.getBoundingClientRect() ?? null,
+      onDrop: (payload, point) => {
+        const target = computeTabZone(point);
+        if (!target) return;
+        if (target.kind === "center") {
+          if (payload.fromPaneId === paneId) return;
+          moveTab({
+            tabId: payload.tabId,
+            fromPaneId: payload.fromPaneId,
+            toPaneId: paneId,
+          });
+          return;
+        }
+        if (payload.fromPaneId === paneId) {
+          const fromPane = useAppStore.getState().panes[paneId];
+          if (fromPane && fromPane.tabIds.length <= 1) return;
+        }
+        moveTab({
+          tabId: payload.tabId,
+          fromPaneId: payload.fromPaneId,
+          toPaneId: paneId,
+          splitDirection: target.direction,
+          splitSide: target.side,
+        });
+      },
+    });
+  }, [computeTabZone, moveTab, paneId]);
+
+  // Clear or update highlights when pointer tab drags or native file drags end
+  // without firing a dragleave on this overlay.
+  useEffect(() => {
+    if (tabDrag) {
+      const next = computeTabZone(tabDrag.pointer);
+      if (
+        !zone ||
+        !next ||
+        zone.kind !== next.kind ||
+        (zone.kind === "edge" &&
+          next.kind === "edge" &&
+          (zone.direction !== next.direction || zone.side !== next.side))
+      ) {
+        setZone(next);
+      }
+      return;
+    }
+    if (!filePayload && zone) setZone(null);
+  }, [computeTabZone, filePayload, tabDrag, zone]);
+
+  function computeZone(): DropZone | null {
+    if (!getCurrentFilePayload()) return null;
+    return { kind: "center" };
   }
 
   // Always mount so the very first dragenter into a pane body is captured;
@@ -60,21 +120,20 @@ export function PaneDropOverlay({
     <div
       ref={containerRef}
       className={
-        acceptsDrag
+        acceptsFileDrop
           ? "absolute inset-0 z-20"
           : "pointer-events-none absolute inset-0 z-20"
       }
       onDragEnter={(e) => {
-        if (!acceptsDrag) return;
+        if (!acceptsFileDrop) return;
         e.preventDefault();
-        setZone(computeZone(e));
+        setZone(computeZone());
       }}
       onDragOver={(e) => {
-        if (!acceptsDrag) return;
+        if (!acceptsFileDrop) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect =
-          getCurrentTabPayload() !== null ? "move" : "copy";
-        const next = computeZone(e);
+        e.dataTransfer.dropEffect = "copy";
+        const next = computeZone();
         if (
           !zone ||
           !next ||
@@ -91,7 +150,7 @@ export function PaneDropOverlay({
         if (e.currentTarget === e.target) setZone(null);
       }}
       onDrop={(e) => {
-        if (!acceptsDrag) return;
+        if (!acceptsFileDrop) return;
         e.preventDefault();
         try {
           setZone(null);
@@ -101,32 +160,6 @@ export function PaneDropOverlay({
             useAppStore.getState().openCodeViewerTab(filePayload.path);
             return;
           }
-          const target = computeZone(e);
-          if (!target) return;
-          const payload = getCurrentTabPayload();
-          if (!payload) return;
-          if (target.kind === "center") {
-            if (payload.fromPaneId === paneId) return;
-            moveTab({
-              tabId: payload.tabId,
-              fromPaneId: payload.fromPaneId,
-              toPaneId: paneId,
-            });
-            return;
-          }
-          // Edge drop. Avoid the no-op of splitting a pane that holds only the
-          // dragged tab — the source would immediately collapse.
-          if (payload.fromPaneId === paneId) {
-            const fromPane = useAppStore.getState().panes[paneId];
-            if (fromPane && fromPane.tabIds.length <= 1) return;
-          }
-          moveTab({
-            tabId: payload.tabId,
-            fromPaneId: payload.fromPaneId,
-            toPaneId: paneId,
-            splitDirection: target.direction,
-            splitSide: target.side,
-          });
         } finally {
           endAcornDrag();
         }
