@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "./support";
+import { test, expect, pressHotkey, type Page } from "./support";
 import type { TauriMock } from "./support";
 
 // Tauri handler callbacks run in the page context and must not close over
@@ -1244,6 +1244,87 @@ test.describe("terminal: spawn", () => {
         { timeout: 1_000 },
       )
       .toBeGreaterThanOrEqual(1);
+  });
+
+  test("Cmd+Left and Cmd+Right move through terminal conversation prompts", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __conversationNavChannelId?: number;
+        [key: string]: unknown;
+      };
+      w.__conversationNavChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __conversationNavChannelId?: number })
+              .__conversationNavChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const lines: string[] = [];
+    for (let i = 0; i < 10; i++) lines.push(`intro ${i}`);
+    lines.push("> first prompt");
+    for (let i = 0; i < 18; i++) lines.push(`first answer ${i}`);
+    lines.push("> second prompt");
+    for (let i = 0; i < 18; i++) lines.push(`second answer ${i}`);
+    lines.push("> third prompt");
+    for (let i = 0; i < 36; i++) lines.push(`tail ${i}`);
+    await emitSubscribedPtyOutput(
+      page,
+      "__conversationNavChannelId",
+      lines.join("\r\n") + "\r\n",
+    );
+    await expect(page.locator(".xterm-rows")).toContainText("tail 35");
+
+    await page.locator(".xterm-helper-textarea").focus();
+    await pressHotkey(page, { mod: true, key: "ArrowLeft" });
+    await expect(page.locator(".xterm-rows")).toContainText("third prompt");
+
+    await pressHotkey(page, { mod: true, key: "ArrowLeft" });
+    await expect(page.locator(".xterm-rows")).toContainText("second prompt");
+
+    await pressHotkey(page, { mod: true, key: "ArrowRight" });
+    await expect(page.locator(".xterm-rows")).toContainText("third prompt");
+
+    await pressHotkey(page, { mod: true, key: "ArrowRight" });
+    await expect(page.locator(".xterm-rows")).toContainText("tail 35");
   });
 
   test("global modifier shortcuts are claimed before terminal key listeners", async ({

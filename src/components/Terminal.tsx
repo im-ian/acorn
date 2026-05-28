@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Terminal as XTerm,
-  type IBuffer,
   type IDisposable,
   type ITheme,
   type IViewportRange,
@@ -30,6 +29,12 @@ import {
   createTerminalRepaintScheduler,
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
+import {
+  findConversationPromptTarget,
+  scanForContextPrompt,
+  TERMINAL_CONVERSATION_NAV_EVENT,
+  type ConversationNavigationDirection,
+} from "../lib/terminalConversation";
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
@@ -156,96 +161,6 @@ interface ContextPromptDetail {
   sessionId: string;
   /** Prompt text to pin, or `null` to revert to JSONL-latest. */
   prompt: string | null;
-}
-
-// Markers Claude TUI uses to introduce a user turn. v2.1.x renders `›`
-// (U+203A); older versions used `>`; `❯` shows up in some shell-prompt
-// theming. Matching any of these lets the scroll-aware banner cope with
-// claude version churn without code changes.
-const PROMPT_MARKER_RE = /^[›>❯]\s+/u;
-// Lines that look like the *start* of an assistant turn or another
-// claude UI element — used to bound the continuation walk so a long
-// stream of assistant output doesn't get spliced into the pinned prompt.
-const TURN_BOUNDARY_RE = /^[●○*✱⏺·]\s/u;
-const BOX_DRAWING_RE = /^[\s│╭╮╰╯─┃┏┓┗┛━]+/u;
-
-/**
- * Walk xterm buffer rows upwards from `startY` to find the nearest
- * user-prompt marker line, then walk down to collect the rest of the
- * prompt body (continuation rows are either xterm wrap-continuations
- * or indented rows beneath the marker). The result is the full prompt
- * text the user typed, joined with `\n` between hard-wrapped rows so
- * the banner's `whitespace-pre-wrap` styling preserves line breaks.
- *
- * Returns `null` when no prompt line is reachable above the start row —
- * e.g. user scrolled past the top of scrollback, or the buffer contains
- * raw shell output rather than a claude conversation.
- */
-function scanForContextPrompt(buf: IBuffer, startY: number): string | null {
-  // Max walk distance. Bounded so a terminal with a massive scrollback
-  // (claude conversations easily push tens of thousands of rows) doesn't
-  // freeze the UI on every scroll event. 5000 rows ≈ the default xterm
-  // scrollback limit (`scrollback: 5000` in this file).
-  const MAX_WALK = 5000;
-  const MAX_CONTINUATION = 200;
-  const limit = Math.max(0, startY - MAX_WALK);
-  for (let y = startY; y >= limit; y--) {
-    const line = buf.getLine(y);
-    if (!line) continue;
-    const raw = line.translateToString(true);
-    const stripped = raw.replace(BOX_DRAWING_RE, "");
-    const match = stripped.match(PROMPT_MARKER_RE);
-    if (!match) continue;
-    const headBody = stripped
-      .slice(match[0].length)
-      .replace(/\s*[│┃]?\s*$/u, "")
-      .trim();
-    if (headBody.length === 0) continue;
-    const parts: string[] = [headBody];
-    for (let yy = y + 1; yy <= y + MAX_CONTINUATION; yy++) {
-      const cont = buf.getLine(yy);
-      if (!cont) break;
-      const contRaw = cont.translateToString(true);
-      // Use the raw line (not the box-stripped form) to detect "blank-ish"
-      // continuation gutters that still belong to the same turn.
-      const trimmedTail = contRaw.replace(/\s+$/u, "");
-      const contStripped = trimmedTail.replace(BOX_DRAWING_RE, "");
-      // Hit the next prompt marker → previous user turn ended.
-      if (PROMPT_MARKER_RE.test(contStripped)) break;
-      // Hit an assistant or other turn-class marker.
-      if (TURN_BOUNDARY_RE.test(contStripped)) break;
-      // An xterm wrap-continuation row is unambiguously the same logical
-      // line, so always accept it.
-      if (cont.isWrapped) {
-        const wrapBody = contStripped.replace(/\s*[│┃]?\s*$/u, "");
-        if (wrapBody.length > 0) parts.push(wrapBody);
-        continue;
-      }
-      // Hard-wrapped continuation rows in claude's TUI keep a leading
-      // indent (so the body lines up under the `> ` marker). Accept
-      // rows whose first non-whitespace column matches the marker's,
-      // and bail on anything that looks like a new gutter / divider.
-      if (trimmedTail.length === 0) {
-        // Single blank row inside a long pasted prompt is part of the
-        // same turn (the user pressed Enter twice). Treat as line
-        // break, keep collecting.
-        parts.push("");
-        continue;
-      }
-      if (/^\s{2,}/u.test(contRaw) && contStripped.length > 0) {
-        parts.push(contStripped.replace(/\s*[│┃]?\s*$/u, ""));
-        continue;
-      }
-      break;
-    }
-    // Strip trailing blank-string entries the loop may have collected
-    // before hitting the boundary.
-    while (parts.length > 0 && parts[parts.length - 1] === "") {
-      parts.pop();
-    }
-    return parts.join("\n");
-  }
-  return null;
 }
 
 // macOS uses Cmd (metaKey); other platforms use Ctrl. Matches the
@@ -1110,14 +1025,50 @@ export function Terminal({
         writeToPty(targetId, data);
       }
     };
+    let conversationNavigationFromY: number | null = null;
+    const setConversationNavigationFromY = (line: number) => {
+      conversationNavigationFromY = Math.max(0, Math.floor(line));
+    };
     const scrollToLiveTail = () => {
+      const buffer = term.buffer.active;
       try {
         term.scrollToBottom();
+        setConversationNavigationFromY(buffer.baseY);
         setIsScrolledBack(false);
       } catch {
         // Terminal may have been disposed between the event and scroll.
       }
       term.focus();
+    };
+    const scrollToBufferLine = (line: number) => {
+      const buffer = term.buffer.active;
+      const target = Math.max(0, Math.min(line, buffer.baseY));
+      try {
+        term.scrollToLine(target);
+        setIsScrolledBack(target < buffer.baseY);
+        term.focus();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const scrollToConversationPrompt = (
+      direction: ConversationNavigationDirection,
+    ) => {
+      const buffer = term.buffer.active;
+      if (buffer.type !== "normal") return false;
+      const fromY = conversationNavigationFromY ?? buffer.viewportY;
+      const target = findConversationPromptTarget(buffer, direction, fromY);
+      if (target) {
+        const didScroll = scrollToBufferLine(target.markerRow);
+        if (didScroll) setConversationNavigationFromY(target.markerRow);
+        return didScroll;
+      }
+      if (direction === "next" && fromY < buffer.baseY) {
+        scrollToLiveTail();
+        return true;
+      }
+      return false;
     };
     const syncScrolledBackState = () => {
       setIsScrolledBack(
@@ -1618,7 +1569,10 @@ export function Terminal({
       const enabled =
         useSettings.getState().settings.experiments.stickyPrompt;
       const next = enabled
-        ? scanForContextPrompt(term.buffer.active, term.buffer.active.viewportY)
+        ? scanForContextPrompt(
+            term.buffer.active,
+            term.buffer.active.viewportY,
+          )?.prompt ?? null
         : null;
       if (next === lastDispatchedContext) return;
       lastDispatchedContext = next;
@@ -1633,6 +1587,9 @@ export function Terminal({
       contextDispatchPending = true;
       requestAnimationFrame(dispatchContextPrompt);
     };
+    const conversationPositionDisposable = term.onScroll(
+      setConversationNavigationFromY,
+    );
     const contextScrollDisposable = term.onScroll(scheduleContextDispatch);
     const scrollbackStateDisposable = term.onScroll(syncScrolledBackState);
     const viewportElement =
@@ -1652,6 +1609,24 @@ export function Terminal({
         scheduleContextDispatch();
       }
     });
+
+    const onConversationNavRequested = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{
+          direction: ConversationNavigationDirection;
+          sessionId: string;
+        }>
+      ).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      if (!scrollToConversationPrompt(detail.direction)) return;
+      e.preventDefault();
+      scheduleContextDispatch();
+      syncScrolledBackState();
+    };
+    window.addEventListener(
+      TERMINAL_CONVERSATION_NAV_EVENT,
+      onConversationNavRequested,
+    );
 
     // Custom event hook so a global hotkey (Cmd+K) can clear THIS terminal
     // without needing a cross-component ref registry. The dispatcher passes
@@ -2180,9 +2155,14 @@ export function Terminal({
       scrollDisposable.dispose();
       cursorMoveDisposable.dispose();
       contextScrollDisposable.dispose();
+      conversationPositionDisposable.dispose();
       scrollbackStateDisposable.dispose();
       viewportElement?.removeEventListener("scroll", syncScrolledBackState);
       unsubStickyToggle();
+      window.removeEventListener(
+        TERMINAL_CONVERSATION_NAV_EVENT,
+        onConversationNavRequested,
+      );
       resizeDisposable.dispose();
       if (liveCwdProbeTimer !== null) {
         window.clearTimeout(liveCwdProbeTimer);
