@@ -180,16 +180,32 @@ export function resolveTerminalFilePath(
   referencePath: string,
   home?: string | null,
 ): string {
+  return resolveTerminalFilePathCandidates(cwd, referencePath, {
+    home,
+  })[0];
+}
+
+export function resolveTerminalFilePathCandidates(
+  cwd: string,
+  referencePath: string,
+  options: { home?: string | null; basePaths?: string[] } = {},
+): string[] {
   if (referencePath.startsWith("/")) {
-    return normalizePosixPath(referencePath);
+    return [normalizePosixPath(referencePath)];
   }
   if (referencePath.startsWith("~/")) {
-    if (!home) return referencePath;
-    return normalizePosixPath(
-      `${home.replace(/\/+$/u, "")}/${referencePath.slice(2)}`,
-    );
+    const { home } = options;
+    if (!home) return [referencePath];
+    return [
+      normalizePosixPath(
+        `${home.replace(/\/+$/u, "")}/${referencePath.slice(2)}`,
+      ),
+    ];
   }
-  return normalizePosixPath(`${cwd.replace(/\/+$/u, "")}/${referencePath}`);
+  const candidates = [cwd, ...(options.basePaths ?? [])].map((base) =>
+    normalizePosixPath(`${base.replace(/\/+$/u, "")}/${referencePath}`),
+  );
+  return Array.from(new Set(candidates));
 }
 
 function normalizePosixPath(path: string): string {

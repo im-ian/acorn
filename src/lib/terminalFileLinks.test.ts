@@ -3,6 +3,7 @@ import {
   createTerminalFileLinkProvider,
   findTerminalFileReferences,
   resolveTerminalFilePath,
+  resolveTerminalFilePathCandidates,
 } from "./terminalFileLinks";
 import type {
   IBufferCell,
@@ -92,6 +93,21 @@ describe("terminal file links", () => {
         column: 5,
         text: "~/projects/acorn/src/App.tsx:12:5",
         startIndex: 4,
+      },
+    ]);
+  });
+
+  it("finds Acorn worktree-relative file references", () => {
+    expect(
+      findTerminalFileReferences(
+        ".acorn/worktrees/acorn-worktree-3220b1cc6655/src/components/RightPanel.tsx:3104",
+      ),
+    ).toEqual([
+      {
+        path: ".acorn/worktrees/acorn-worktree-3220b1cc6655/src/components/RightPanel.tsx",
+        line: 3104,
+        text: ".acorn/worktrees/acorn-worktree-3220b1cc6655/src/components/RightPanel.tsx:3104",
+        startIndex: 0,
       },
     ]);
   });
@@ -198,6 +214,22 @@ describe("terminal file links", () => {
     expect(resolveTerminalFilePath("/repo/app", "~/src/App.tsx")).toBe(
       "~/src/App.tsx",
     );
+  });
+
+  it("returns fallback candidates for repo-root-relative paths", () => {
+    expect(
+      resolveTerminalFilePathCandidates(
+        "/repo/app/.acorn/worktrees/current/src",
+        ".acorn/worktrees/other/src/components/RightPanel.tsx",
+        {
+          basePaths: ["/repo/app/.acorn/worktrees/current", "/repo/app"],
+        },
+      ),
+    ).toEqual([
+      "/repo/app/.acorn/worktrees/current/src/.acorn/worktrees/other/src/components/RightPanel.tsx",
+      "/repo/app/.acorn/worktrees/current/.acorn/worktrees/other/src/components/RightPanel.tsx",
+      "/repo/app/.acorn/worktrees/other/src/components/RightPanel.tsx",
+    ]);
   });
 
   it("keeps file link hover decorations from drawing xterm underlines", () => {
