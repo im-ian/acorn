@@ -340,7 +340,17 @@
       "permissionHint": "처음 알림이 발생할 때 macOS가 한 번 권한을 요청할 수 있습니다."
     },
     "shortcuts": {
-      "editingSoon": "단축키 편집 기능은 준비 중이다.",
+      "record": "기록",
+      "cancel": "취소",
+      "recording": "키 입력 중",
+      "recordShortcut": "{command} 단축키 기록",
+      "cancelRecording": "{command} 단축키 기록 취소",
+      "resetShortcut": "{command} 단축키 초기화",
+      "resetAll": "모든 단축키 초기화",
+      "errors": {
+        "modifierOnly": "수정 키가 아닌 키를 누르세요.",
+        "conflict": "{shortcut} 단축키는 이미 {command}에 사용 중입니다."
+      },
       "groups": {
         "general": "일반",
         "navigation": "이동",

@@ -86,6 +86,14 @@ const TAB_MARKERS: Array<{
     },
   },
   {
+    tab: /^(Shortcuts|단축키)$/,
+    label: "Shortcuts",
+    marker: {
+      kind: "text",
+      pattern: /Reset all shortcuts|모든 단축키 초기화/i,
+    },
+  },
+  {
     tab: /^(Storage|저장 공간)$/,
     label: "Storage",
     marker: {
@@ -142,6 +150,7 @@ test.describe("settings modal: tab content", () => {
       "GitHub",
       "편집기",
       "알림",
+      "단축키",
       "저장 공간",
       "실험 기능",
       "정보",

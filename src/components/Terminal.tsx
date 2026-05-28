@@ -49,7 +49,7 @@ import {
 } from "../lib/terminalPaste";
 import {
   createTerminalFileLinkProvider,
-  resolveTerminalFilePath,
+  resolveTerminalFilePathCandidates,
   type TerminalFileReference,
 } from "../lib/terminalFileLinks";
 import { createTerminalWebLinkProvider } from "../lib/terminalWebLinks";
@@ -76,6 +76,7 @@ import { FloatingTooltip, Tooltip, type TooltipAnchorRect } from "./Tooltip";
 
 interface TerminalProps {
   sessionId: string;
+  repoPath: string;
   cwd: string;
   agentProvider?: SessionAgentProvider | null;
   pasteAgentProvider?: SessionAgentProvider | null;
@@ -427,8 +428,13 @@ function encodeStringToBase64(input: string): string {
   return btoa(binary);
 }
 
+function usesExplicitRelativePath(path: string): boolean {
+  return path.startsWith("./") || path.startsWith("../");
+}
+
 export function Terminal({
   sessionId,
+  repoPath,
   cwd,
   agentProvider = null,
   pasteAgentProvider = null,
@@ -600,21 +606,35 @@ export function Terminal({
         resolveTerminalFileBaseCwd(),
         needsHome ? resolveTerminalFileHomeDir() : Promise.resolve(null),
       ]);
-      const resolved: Array<TerminalFileReference | null> = await Promise.all(
-        references.map(async (reference) => {
-          const absolutePath = resolveTerminalFilePath(
-            baseCwd,
-            reference.path,
+      const resolveExistingFilePath = async (
+        reference: TerminalFileReference,
+      ): Promise<string | null> => {
+        const basePaths = usesExplicitRelativePath(reference.path)
+          ? []
+          : [cwd, repoPath];
+        const candidates = resolveTerminalFilePathCandidates(
+          baseCwd,
+          reference.path,
+          {
             home,
-          );
+            basePaths,
+          },
+        );
+        for (const candidate of candidates) {
           try {
-            if (!(await api.fsFileExists(absolutePath))) {
-              return null;
+            if (await api.fsFileExists(candidate)) {
+              return candidate;
             }
           } catch (err: unknown) {
             console.debug("[Terminal] fs_file_exists for file link failed", err);
-            return null;
           }
+        }
+        return null;
+      };
+      const resolved: Array<TerminalFileReference | null> = await Promise.all(
+        references.map(async (reference) => {
+          const absolutePath = await resolveExistingFilePath(reference);
+          if (!absolutePath) return null;
           return { ...reference, absolutePath };
         }),
       );
@@ -624,23 +644,48 @@ export function Terminal({
     };
     const openTerminalFileReference = (reference: TerminalFileReference) => {
       void (async () => {
-        let path = reference.absolutePath;
-        if (!path) {
+        let path: string | null = reference.absolutePath ?? null;
+        if (path) {
+          try {
+            if (!(await api.fsFileExists(path))) {
+              return;
+            }
+          } catch (err: unknown) {
+            console.debug("[Terminal] fs_file_exists before open failed", err);
+            return;
+          }
+        } else {
           const [baseCwd, home] = await Promise.all([
             resolveTerminalFileBaseCwd(),
             reference.path.startsWith("~/")
               ? resolveTerminalFileHomeDir()
               : Promise.resolve(null),
           ]);
-          path = resolveTerminalFilePath(baseCwd, reference.path, home);
-        }
-        try {
-          if (!(await api.fsFileExists(path))) {
+          const basePaths = usesExplicitRelativePath(reference.path)
+            ? []
+            : [cwd, repoPath];
+          const candidates = resolveTerminalFilePathCandidates(
+            baseCwd,
+            reference.path,
+            {
+              home,
+              basePaths,
+            },
+          );
+          path = null;
+          for (const candidate of candidates) {
+            try {
+              if (await api.fsFileExists(candidate)) {
+                path = candidate;
+                break;
+              }
+            } catch (err: unknown) {
+              console.debug("[Terminal] fs_file_exists before open failed", err);
+            }
+          }
+          if (!path) {
             return;
           }
-        } catch (err: unknown) {
-          console.debug("[Terminal] fs_file_exists before open failed", err);
-          return;
         }
         const target =
           reference.line === undefined
@@ -980,9 +1025,15 @@ export function Terminal({
         writeToPty(targetId, data);
       }
     };
+    let conversationNavigationFromY: number | null = null;
+    const setConversationNavigationFromY = (line: number) => {
+      conversationNavigationFromY = Math.max(0, Math.floor(line));
+    };
     const scrollToLiveTail = () => {
+      const buffer = term.buffer.active;
       try {
         term.scrollToBottom();
+        setConversationNavigationFromY(buffer.baseY);
         setIsScrolledBack(false);
       } catch {
         // Terminal may have been disposed between the event and scroll.
@@ -1006,11 +1057,14 @@ export function Terminal({
     ) => {
       const buffer = term.buffer.active;
       if (buffer.type !== "normal") return false;
-      const target = findConversationPromptTarget(buffer, direction);
+      const fromY = conversationNavigationFromY ?? buffer.viewportY;
+      const target = findConversationPromptTarget(buffer, direction, fromY);
       if (target) {
-        return scrollToBufferLine(target.markerRow);
+        const didScroll = scrollToBufferLine(target.markerRow);
+        if (didScroll) setConversationNavigationFromY(target.markerRow);
+        return didScroll;
       }
-      if (direction === "next" && buffer.viewportY < buffer.baseY) {
+      if (direction === "next" && fromY < buffer.baseY) {
         scrollToLiveTail();
         return true;
       }
@@ -1533,6 +1587,9 @@ export function Terminal({
       contextDispatchPending = true;
       requestAnimationFrame(dispatchContextPrompt);
     };
+    const conversationPositionDisposable = term.onScroll(
+      setConversationNavigationFromY,
+    );
     const contextScrollDisposable = term.onScroll(scheduleContextDispatch);
     const scrollbackStateDisposable = term.onScroll(syncScrolledBackState);
     const viewportElement =
@@ -2098,6 +2155,7 @@ export function Terminal({
       scrollDisposable.dispose();
       cursorMoveDisposable.dispose();
       contextScrollDisposable.dispose();
+      conversationPositionDisposable.dispose();
       scrollbackStateDisposable.dispose();
       viewportElement?.removeEventListener("scroll", syncScrolledBackState);
       unsubStickyToggle();
@@ -2130,7 +2188,7 @@ export function Terminal({
       fitRef.current = null;
       fitTerminalRef.current = null;
     };
-  }, [sessionId, cwd]);
+  }, [sessionId, repoPath, cwd]);
 
   useEffect(() => {
     const term = termRef.current;
