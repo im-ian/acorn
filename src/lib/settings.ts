@@ -282,6 +282,7 @@ export interface AcornSettings {
     showSessionStatus: boolean;
     showGithubAccount: boolean;
     showWorkingDirectory: boolean;
+    showAgentTokenUsage: boolean;
     showMemory: boolean;
   };
   github: {
@@ -423,6 +424,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     showSessionStatus: true,
     showGithubAccount: true,
     showWorkingDirectory: true,
+    showAgentTokenUsage: false,
     showMemory: true,
   },
   github: {

@@ -278,6 +278,10 @@
           "label": "작업 디렉터리",
           "description": "활성 세션의 worktree 경로입니다($HOME 기준으로 ~ 처리됨)."
         },
+        "agentTokenUsage": {
+          "label": "에이전트 토큰 사용량",
+          "description": "Codex는 로컬 rate-limit 이벤트를 읽고, Claude는 token-widget 호환 statusline 캡처를 읽습니다. 표시 중일 때 1분마다 확인합니다."
+        },
         "memoryUsage": {
           "label": "메모리 사용량",
           "description": "acorn과 하위 셸의 실시간 메모리 표시입니다. 끄면 2초 폴링 루프도 중지되어 숨겨진 동안 비용이 들지 않습니다."
@@ -579,6 +583,15 @@
     "branch": "브랜치: {branch}",
     "memoryTooltip": "프로세스별 세부 정보를 보려면 클릭",
     "memory": "메모리: {memory}",
+    "agentTokens": "토큰: {summary}",
+    "agentTokensUnavailable": "불러오는 중",
+    "agentTokensNoData": "데이터 없음",
+    "agentTokensWindowFiveHour": "5시간",
+    "agentTokensWindowWeekly": "주간",
+    "agentTokensResetUnknown": "-",
+    "agentTokensTooltipLine": "{window}: 잔여 {remaining}, 갱신까지 {reset}",
+    "agentTokensTooltipError": "{window}: {error}",
+    "agentTokensUpdated": "확인 시각 {time}",
     "sessionStatus": {
       "idle": "유휴",
       "running": "실행 중",
@@ -877,7 +890,13 @@
     "history": {
       "loading": "agent 세션을 스캔하는 중…",
       "count": "agent 세션 {count}개",
+      "filterByAgent": "에이전트로 필터링",
+      "allAgents": "모든 에이전트",
+      "codex": "Codex",
+      "claude": "Claude",
+      "antigravity": "Antigravity",
       "empty": "이 프로젝트의 Claude, Codex 또는 Antigravity 세션을 찾지 못했습니다",
+      "emptyForFilter": "이 필터와 일치하는 세션이 없습니다.",
       "runSession": "새 터미널에서 실행",
       "runInWorktree": "워크트리에서 실행",
       "copyResume": "resume 명령 복사",
@@ -1378,6 +1397,7 @@
     },
     "actions": {
       "killPty": "PTY 종료",
+      "openTooltip": "이 세션을 원래 프로젝트 탭에서 열기",
       "restoreTooltip": "이 세션을 Acorn 사이드바로 다시 가져오기",
       "restore": "세션 복원",
       "forgetDisabledTooltip": "먼저 종료한 뒤 잊기",

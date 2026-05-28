@@ -278,6 +278,10 @@
           "label": "Working directory",
           "description": "The active session's worktree path (tildified against $HOME)."
         },
+        "agentTokenUsage": {
+          "label": "Agent token usage",
+          "description": "Codex reads local rate-limit events; Claude reads a token-widget-compatible statusline capture. Polls once per minute when shown."
+        },
         "memoryUsage": {
           "label": "Memory usage",
           "description": "Live memory readout for acorn and its child shells. Disabling also stops the 2-second polling loop, so it costs nothing when hidden."
@@ -579,6 +583,15 @@
     "branch": "branch: {branch}",
     "memoryTooltip": "Click to view per-process breakdown",
     "memory": "memory: {memory}",
+    "agentTokens": "tokens: {summary}",
+    "agentTokensUnavailable": "loading",
+    "agentTokensNoData": "no data",
+    "agentTokensWindowFiveHour": "5h",
+    "agentTokensWindowWeekly": "weekly",
+    "agentTokensResetUnknown": "-",
+    "agentTokensTooltipLine": "{window}: {remaining} left, resets in {reset}",
+    "agentTokensTooltipError": "{window}: {error}",
+    "agentTokensUpdated": "updated {time}",
     "sessionStatus": {
       "idle": "idle",
       "running": "running",
@@ -877,7 +890,13 @@
     "history": {
       "loading": "Scanning agent sessions…",
       "count": "{count} agent sessions",
+      "filterByAgent": "Filter by agent",
+      "allAgents": "All agents",
+      "codex": "Codex",
+      "claude": "Claude",
+      "antigravity": "Antigravity",
       "empty": "No Claude, Codex, or Antigravity sessions found for this project",
+      "emptyForFilter": "No sessions match this filter.",
       "runSession": "Run in new terminal",
       "runInWorktree": "Run in worktree",
       "copyResume": "Copy resume command",
@@ -1378,6 +1397,7 @@
     },
     "actions": {
       "killPty": "Kill PTY",
+      "openTooltip": "Open this session in its project tab",
       "restoreTooltip": "Adopt this session back into Acorn's sidebar",
       "restore": "Restore session",
       "forgetDisabledTooltip": "Kill first, then forget",

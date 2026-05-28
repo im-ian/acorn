@@ -8,6 +8,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::fs_explorer::move_to_trash;
 use crate::worktree;
 
 const MAX_SCAN_FILES_PER_PROVIDER: usize = 5_000;
@@ -174,7 +175,7 @@ pub fn trash_agent_history_transcript(
         }
     }
 
-    trash::delete(&path).map_err(|e| AppError::Other(format!("trash failed: {e}")))?;
+    move_to_trash(&path)?;
     Ok(())
 }
 

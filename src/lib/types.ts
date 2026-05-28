@@ -212,6 +212,24 @@ export interface MemoryUsage {
   processes: MemoryProcess[];
 }
 
+export type AgentTokenProvider = "codex" | "claude";
+export type AgentTokenWindow = "five_hour" | "weekly";
+
+export interface AgentTokenUsageMetric {
+  provider: AgentTokenProvider;
+  window: AgentTokenWindow;
+  used_percent: number | null;
+  remaining_percent: number | null;
+  reset_at: number | null;
+  source: string;
+  error: string | null;
+}
+
+export interface AgentTokenUsageSnapshot {
+  metrics: AgentTokenUsageMetric[];
+  updated_at: number;
+}
+
 export interface AcornIpcShim {
   path: string;
   exists: boolean;

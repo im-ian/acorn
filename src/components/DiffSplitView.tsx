@@ -177,7 +177,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
           </ul>
         </aside>
       </Panel>
-      <ResizeHandle />
+      <ResizeHandle thin />
       <Panel id="content" order={2} defaultSize={72} minSize={40}>
         <section className="flex h-full flex-col bg-bg">
           <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-bg-elevated px-3 py-2 font-mono text-xs">

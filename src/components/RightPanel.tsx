@@ -65,6 +65,7 @@ import {
 import type {
   AccountSummary,
   AgentHistoryItem,
+  AgentHistoryProvider,
   CommitInfo,
   DiffPayload,
   PrStateFilter,
@@ -1379,6 +1380,11 @@ function formatActivityTime(value: string): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const ALL_AGENT_HISTORY_PROVIDERS = "__all__";
+type AgentHistoryProviderFilter =
+  | typeof ALL_AGENT_HISTORY_PROVIDERS
+  | AgentHistoryProvider;
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1410,6 +1416,8 @@ function AgentHistoryTab({
         ? rightPanelCache.getUnscopedAgentHistory(historyLimit)
       : null,
   );
+  const [providerFilter, setProviderFilter] =
+    useState<AgentHistoryProviderFilter>(ALL_AGENT_HISTORY_PROVIDERS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{
@@ -1460,6 +1468,13 @@ function AgentHistoryTab({
   useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
+
+  const visibleItems = useMemo(() => {
+    if (!items) return [];
+    return providerFilter === ALL_AGENT_HISTORY_PROVIDERS
+      ? items
+      : items.filter((item) => item.provider === providerFilter);
+  }, [items, providerFilter]);
 
   async function copy(text: string) {
     try {
@@ -1565,12 +1580,25 @@ function AgentHistoryTab({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
-        <div className="min-w-0 flex-1 truncate text-[11px] text-fg-muted">
-          {items
-            ? rtf(t, "rightPanel.history.count", { count: items.length })
-            : rt(t, "rightPanel.history.loading")}
-        </div>
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+        <Select
+          value={providerFilter}
+          onChange={(e) =>
+            setProviderFilter(e.target.value as AgentHistoryProviderFilter)
+          }
+          aria-label={rt(t, "rightPanel.history.filterByAgent")}
+          disabled={!items || items.length === 0}
+          className="min-w-0 max-w-full flex-1 truncate"
+        >
+          <option value={ALL_AGENT_HISTORY_PROVIDERS}>
+            {rt(t, "rightPanel.history.allAgents")}
+          </option>
+          <option value="codex">{rt(t, "rightPanel.history.codex")}</option>
+          <option value="claude">{rt(t, "rightPanel.history.claude")}</option>
+          <option value="antigravity">
+            {rt(t, "rightPanel.history.antigravity")}
+          </option>
+        </Select>
         <RefreshButton
           onClick={() => void fetchHistory({ force: true })}
           loading={loading}
@@ -1596,9 +1624,11 @@ function AgentHistoryTab({
           </div>
         ) : items.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.empty")} />
+        ) : visibleItems.length === 0 ? (
+          <Empty msg={rt(t, "rightPanel.history.emptyForFilter")} />
         ) : (
           <div className="divide-y divide-border/50">
-            {items.map((item) => {
+            {visibleItems.map((item) => {
               const providerTone =
                 item.provider === "codex"
                   ? "bg-[#3867ff]/15 text-[#5f7dff]"
@@ -2106,7 +2136,7 @@ function CommitsTab({
             <SkeletonList count={8} />
           </div>
         </Panel>
-        <ResizeHandle direction="vertical" />
+        <ResizeHandle direction="vertical" thin />
         <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
           <div className="acorn-no-scrollbar h-full overflow-y-auto p-3">
             <div className="h-3 w-1/2 animate-pulse rounded bg-fg-muted/15" />
@@ -2214,7 +2244,7 @@ function CommitsTab({
         </div>
         </div>
       </Panel>
-      <ResizeHandle direction="vertical" />
+      <ResizeHandle direction="vertical" thin />
       <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selected && diff ? (
@@ -2512,7 +2542,7 @@ function StagedTab({
           ))}
         </ul>
       </Panel>
-      <ResizeHandle direction="vertical" />
+      <ResizeHandle direction="vertical" thin />
       <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selectedDiff ? (

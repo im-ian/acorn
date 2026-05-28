@@ -1863,7 +1863,7 @@ fn spawn_via_daemon<R: Runtime>(
     let outcome = bridge
         .spawn(
             id,
-            id.to_string(),
+            daemon_spawn_name_for_session(session.as_ref(), id),
             cwd.to_path_buf(),
             command.to_string(),
             args.to_vec(),
@@ -1895,6 +1895,16 @@ fn spawn_via_daemon<R: Runtime>(
         replay_scrollback,
     )
     .map_err(|e| format!("daemon stream attach failed: {e}"))
+}
+
+fn daemon_spawn_name_for_session(session: Option<&Session>, id: Uuid) -> String {
+    if let Some(name) = session
+        .map(|session| session.name.trim())
+        .filter(|name| !name.is_empty())
+    {
+        return name.to_string();
+    }
+    id.to_string()
 }
 
 /// Drop a `<cwd>/.acorn-control.md` marker every time a control session
@@ -3025,10 +3035,10 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_memory_usage_from_roots, create_unique_worktree, font_name_from_path,
-        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        remove_linked_worktree_at_path, should_remove_local_project_mirror,
-        validate_new_project_name, ProcessMemorySnapshot,
+        collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
+        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        memory_root_pids, remove_linked_worktree_at_path,
+        should_remove_local_project_mirror, validate_new_project_name, ProcessMemorySnapshot,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
     use std::collections::HashMap;
@@ -3145,6 +3155,31 @@ mod tests {
                 error: None,
             },
         );
+    }
+
+    #[test]
+    fn daemon_spawn_name_prefers_session_name_over_uuid() {
+        let id = Uuid::new_v4();
+        let session = Session::new(
+            "Readable tab".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+
+        assert_eq!(
+            daemon_spawn_name_for_session(Some(&session), id),
+            "Readable tab"
+        );
+    }
+
+    #[test]
+    fn daemon_spawn_name_falls_back_to_uuid_without_session() {
+        let id = Uuid::new_v4();
+
+        assert_eq!(daemon_spawn_name_for_session(None, id), id.to_string());
     }
 
     #[test]
