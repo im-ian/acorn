@@ -8,6 +8,7 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
@@ -18,7 +19,15 @@ import {
 } from "../lib/background";
 import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
-import { formatHotkey, Hotkeys, type HotkeyId } from "../lib/hotkeys";
+import {
+  DEFAULT_HOTKEYS,
+  formatHotkey,
+  hotkeyBindingsFor,
+  recordHotkeyFromEvent,
+  setShortcutRecordingActive,
+  type HotkeyConfig,
+  type HotkeyId,
+} from "../lib/hotkeys";
 import {
   LANGUAGE_OPTIONS,
   type Language,
@@ -272,6 +281,30 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ],
   },
 ];
+
+function shortcutLabel(t: SettingsTranslator, id: HotkeyId): string {
+  for (const group of SHORTCUT_GROUPS) {
+    const item = group.items.find((candidate) => candidate.id === id);
+    if (item) return st(t, item.labelKey);
+  }
+  return id;
+}
+
+function findShortcutConflict(
+  shortcuts: HotkeyConfig,
+  currentId: HotkeyId,
+  binding: string,
+): HotkeyId | null {
+  for (const group of SHORTCUT_GROUPS) {
+    for (const item of group.items) {
+      if (item.id === currentId) continue;
+      if (hotkeyBindingsFor(shortcuts, item.id).includes(binding)) {
+        return item.id;
+      }
+    }
+  }
+  return null;
+}
 
 function st(t: SettingsTranslator, key: TranslationKey): string {
   return t(key);
@@ -2219,14 +2252,88 @@ function ExperimentsSettings() {
 }
 
 function ShortcutsSettings() {
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const patchShortcut = useSettings((s) => s.patchShortcut);
+  const resetShortcut = useSettings((s) => s.resetShortcut);
+  const resetShortcuts = useSettings((s) => s.resetShortcuts);
+  const [recordingId, setRecordingId] = useState<HotkeyId | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const t = useTranslation();
+
+  useEffect(() => {
+    setShortcutRecordingActive(recordingId !== null);
+    return () => setShortcutRecordingActive(false);
+  }, [recordingId]);
+
+  const stopRecording = useCallback(() => {
+    setShortcutRecordingActive(false);
+    setRecordingId(null);
+    setRecordingError(null);
+  }, []);
+
+  const startRecording = useCallback((id: HotkeyId) => {
+    setShortcutRecordingActive(true);
+    setRecordingId(id);
+    setRecordingError(null);
+  }, []);
+
+  useEffect(() => {
+    if (recordingId === null) return;
+
+    const handler = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const binding = recordHotkeyFromEvent(event);
+      if (!binding) {
+        setRecordingError(st(t, "settings.shortcuts.errors.modifierOnly"));
+        return;
+      }
+
+      const conflictId = findShortcutConflict(shortcuts, recordingId, binding);
+      if (conflictId) {
+        setRecordingError(
+          stf(t, "settings.shortcuts.errors.conflict", {
+            shortcut: formatHotkey(binding),
+            command: shortcutLabel(t, conflictId),
+          }),
+        );
+        return;
+      }
+
+      patchShortcut(recordingId, binding);
+      stopRecording();
+    };
+
+    window.addEventListener("keydown", handler, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handler, { capture: true });
+  }, [patchShortcut, recordingId, shortcuts, stopRecording, t]);
 
   return (
     <section className="space-y-4">
-      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
-        <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
-        {st(t, "settings.shortcuts.editingSoon")}
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            resetShortcuts();
+            stopRecording();
+          }}
+          className="inline-flex h-7 items-center gap-1.5 rounded border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <RefreshCcw size={11} />
+          {st(t, "settings.shortcuts.resetAll")}
+        </button>
       </div>
+      {recordingError ? (
+        <div
+          role="alert"
+          className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-snug text-danger"
+        >
+          {recordingError}
+        </div>
+      ) : null}
       <div className="space-y-3">
         {SHORTCUT_GROUPS.map((group) => (
           <section
@@ -2241,7 +2348,10 @@ function ShortcutsSettings() {
               {group.items.map((item) => (
                 <div
                   key={item.id}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2"
+                  className={cn(
+                    "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2",
+                    recordingId === item.id ? "bg-accent/10" : null,
+                  )}
                 >
                   <div className="min-w-0">
                     <div className="text-xs font-medium text-fg">
@@ -2253,9 +2363,64 @@ function ShortcutsSettings() {
                       </div>
                     ) : null}
                   </div>
-                  <kbd className="rounded border border-border bg-bg-elevated px-1.5 py-0.5 font-mono text-[11px] leading-5 text-fg">
-                    {formatHotkey(Hotkeys[item.id])}
-                  </kbd>
+                  <div className="flex items-center gap-1.5">
+                    <kbd className="min-w-16 rounded border border-border bg-bg-elevated px-1.5 py-0.5 text-center font-mono text-[11px] leading-5 text-fg">
+                      {recordingId === item.id
+                        ? st(t, "settings.shortcuts.recording")
+                        : formatHotkey(shortcuts[item.id])}
+                    </kbd>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        recordingId === item.id
+                          ? stopRecording()
+                          : startRecording(item.id)
+                      }
+                      aria-label={stf(
+                        t,
+                        recordingId === item.id
+                          ? "settings.shortcuts.cancelRecording"
+                          : "settings.shortcuts.recordShortcut",
+                        { command: shortcutLabel(t, item.id) },
+                      )}
+                      title={stf(
+                        t,
+                        recordingId === item.id
+                          ? "settings.shortcuts.cancelRecording"
+                          : "settings.shortcuts.recordShortcut",
+                        { command: shortcutLabel(t, item.id) },
+                      )}
+                      className={cn(
+                        "inline-flex h-7 w-[4.75rem] items-center justify-center gap-1 rounded border text-[11px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                        recordingId === item.id
+                          ? "border-danger/50 bg-danger/10 text-danger hover:bg-danger/15"
+                          : "border-border bg-bg text-fg-muted hover:border-accent/60 hover:text-fg",
+                      )}
+                    >
+                      {recordingId === item.id ? (
+                        <X size={11} />
+                      ) : (
+                        <Keyboard size={11} />
+                      )}
+                      {recordingId === item.id
+                        ? st(t, "settings.shortcuts.cancel")
+                        : st(t, "settings.shortcuts.record")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resetShortcut(item.id)}
+                      disabled={shortcuts[item.id] === DEFAULT_HOTKEYS[item.id]}
+                      aria-label={stf(t, "settings.shortcuts.resetShortcut", {
+                        command: shortcutLabel(t, item.id),
+                      })}
+                      title={stf(t, "settings.shortcuts.resetShortcut", {
+                        command: shortcutLabel(t, item.id),
+                      })}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-bg text-fg-muted transition hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:opacity-40 disabled:hover:border-border disabled:hover:text-fg-muted"
+                    >
+                      <RefreshCcw size={11} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

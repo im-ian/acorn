@@ -23,10 +23,10 @@ type Tinykeys = (
 const tinykeys = tinykeysRaw as Tinykeys;
 
 /**
- * Named keybinding constants used across the app. `$mod` resolves to
+ * Named keybinding defaults used across the app. `$mod` resolves to
  * the platform-appropriate primary modifier (Cmd on macOS, Ctrl elsewhere).
  */
-export const Hotkeys = {
+export const DEFAULT_HOTKEYS = {
   openPalette: "$mod+p",
   clearTerminal: "$mod+k",
   newSession: "$mod+t",
@@ -51,9 +51,7 @@ export const Hotkeys = {
   togglePrs: "$mod+Shift+p",
   toggleFiles: "$mod+Shift+e",
   uiScaleDown: "$mod+-",
-  uiScaleDownShift: "$mod+Shift+Minus",
   uiScaleUp: "$mod+=",
-  uiScaleUpShift: "$mod+Shift+Equal",
   uiScaleReset: "$mod+0",
   toggleMultiInput: "$mod+Alt+KeyI",
   focusPaneLeft: "$mod+Alt+ArrowLeft",
@@ -79,7 +77,21 @@ export const Hotkeys = {
   prevProject: "Control+Alt+Shift+Tab",
 } as const;
 
-export type HotkeyId = keyof typeof Hotkeys;
+export type HotkeyId = keyof typeof DEFAULT_HOTKEYS;
+export type HotkeyConfig = Record<HotkeyId, string>;
+
+export const HOTKEY_IDS = Object.keys(DEFAULT_HOTKEYS) as HotkeyId[];
+
+const HOTKEY_ALIASES: Partial<Record<HotkeyId, string[]>> = {
+  uiScaleDown: ["$mod+Shift+Minus"],
+  uiScaleUp: ["$mod+Shift+Equal"],
+};
+
+export const Hotkeys = {
+  ...DEFAULT_HOTKEYS,
+  uiScaleDownShift: "$mod+Shift+Minus",
+  uiScaleUpShift: "$mod+Shift+Equal",
+} as const;
 
 export type HotkeyHandler = (event: KeyboardEvent) => void;
 
@@ -96,6 +108,81 @@ const MODIFIER_TOKENS = new Set([
   "Option",
   "Shift",
 ]);
+
+const MODIFIER_ALIASES: Record<string, string> = {
+  $mod: "$mod",
+  Meta: "Meta",
+  Cmd: "$mod",
+  Command: "$mod",
+  Control: "Control",
+  Ctrl: "Control",
+  Alt: "Alt",
+  Option: "Alt",
+  Shift: "Shift",
+};
+
+const BINDING_MODIFIER_ORDER = ["$mod", "Control", "Alt", "Shift", "Meta"];
+
+const NAMED_KEY_TOKENS = new Set([
+  "Enter",
+  "Return",
+  "Escape",
+  "Esc",
+  "Backspace",
+  "Delete",
+  "Tab",
+  "Space",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Minus",
+  "Equal",
+  "Comma",
+  "Period",
+  "Slash",
+  "Backslash",
+  "Semicolon",
+  "Quote",
+  "BracketLeft",
+  "BracketRight",
+  "Backquote",
+]);
+
+const EVENT_CODE_KEY_TOKENS: Record<string, string> = {
+  Enter: "Enter",
+  Return: "Return",
+  Escape: "Escape",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  Tab: "Tab",
+  Space: "Space",
+  ArrowLeft: "ArrowLeft",
+  ArrowRight: "ArrowRight",
+  ArrowUp: "ArrowUp",
+  ArrowDown: "ArrowDown",
+  Minus: "Minus",
+  Equal: "Equal",
+  Comma: "Comma",
+  Period: "Period",
+  Slash: "Slash",
+  Backslash: "Backslash",
+  Semicolon: "Semicolon",
+  Quote: "Quote",
+  BracketLeft: "BracketLeft",
+  BracketRight: "BracketRight",
+  Backquote: "Backquote",
+};
+
+const MODIFIER_EVENT_KEYS = new Set([
+  "Shift",
+  "Control",
+  "Alt",
+  "Meta",
+  "OS",
+]);
+
+let shortcutRecordingActive = false;
 
 type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
 
@@ -115,6 +202,175 @@ function isMacPlatform(): boolean {
     typeof navigator !== "undefined" &&
     /Mac|iP(hone|od|ad)/.test(navigator.platform)
   );
+}
+
+function normalizeModifierToken(token: string): string | null {
+  return MODIFIER_ALIASES[token] ?? null;
+}
+
+function normalizeKeyToken(token: string): string | null {
+  if (/^[a-zA-Z]$/.test(token)) return token.toLowerCase();
+  if (/^[0-9]$/.test(token)) return token;
+  const keyMatch = /^Key([A-Z])$/.exec(token);
+  if (keyMatch) return token;
+  const digitMatch = /^Digit([0-9])$/.exec(token);
+  if (digitMatch) return token;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(token)) return token;
+  if (NAMED_KEY_TOKENS.has(token)) {
+    if (token === "Esc") return "Escape";
+    if (token === "Return") return "Enter";
+    return token;
+  }
+  if (token === " ") return "Space";
+  return null;
+}
+
+function canonicalizeHotkeyBinding(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed)) return null;
+
+  const rawParts = trimmed.split("+");
+  if (rawParts.length === 0 || rawParts.some((part) => part.trim() === "")) {
+    return null;
+  }
+
+  const key = normalizeKeyToken(rawParts[rawParts.length - 1].trim());
+  if (!key || normalizeModifierToken(key)) return null;
+
+  const modifiers = new Set<string>();
+  for (const rawPart of rawParts.slice(0, -1)) {
+    const modifier = normalizeModifierToken(rawPart.trim());
+    if (!modifier || modifiers.has(modifier)) return null;
+    modifiers.add(modifier);
+  }
+
+  const orderedModifiers = BINDING_MODIFIER_ORDER.filter((modifier) =>
+    modifiers.has(modifier),
+  );
+  return [...orderedModifiers, key].join("+");
+}
+
+export function normalizeHotkeyBinding(
+  value: unknown,
+  fallback: string,
+): string {
+  return canonicalizeHotkeyBinding(value) ?? fallback;
+}
+
+export function resolveHotkeys(
+  value?: Partial<Record<HotkeyId, unknown>> | null,
+): HotkeyConfig {
+  const custom = new Map<HotkeyId, string>();
+  const defaultOwnerByBinding = new Map<string, HotkeyId>();
+
+  for (const id of HOTKEY_IDS) {
+    defaultOwnerByBinding.set(DEFAULT_HOTKEYS[id], id);
+  }
+
+  for (const id of HOTKEY_IDS) {
+    const candidate = canonicalizeHotkeyBinding(value?.[id]);
+    if (candidate && candidate !== DEFAULT_HOTKEYS[id]) {
+      custom.set(id, candidate);
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    const duplicateBindings = new Set<string>();
+    const seenBindings = new Set<string>();
+    for (const binding of custom.values()) {
+      if (seenBindings.has(binding)) {
+        duplicateBindings.add(binding);
+      } else {
+        seenBindings.add(binding);
+      }
+    }
+
+    if (duplicateBindings.size > 0) {
+      for (const [id, binding] of custom) {
+        if (duplicateBindings.has(binding)) {
+          custom.delete(id);
+          changed = true;
+        }
+      }
+    }
+
+    for (const [id, binding] of custom) {
+      const defaultOwner = defaultOwnerByBinding.get(binding);
+      if (defaultOwner && defaultOwner !== id && !custom.has(defaultOwner)) {
+        custom.delete(id);
+        changed = true;
+      }
+    }
+  }
+
+  const resolved = { ...DEFAULT_HOTKEYS } as HotkeyConfig;
+  for (const [id, binding] of custom) {
+    resolved[id] = binding;
+  }
+
+  return resolved;
+}
+
+export function hotkeyBindingsFor(
+  hotkeys: HotkeyConfig,
+  id: HotkeyId,
+): string[] {
+  const bindings = [hotkeys[id]];
+  if (hotkeys[id] === DEFAULT_HOTKEYS[id]) {
+    bindings.push(...(HOTKEY_ALIASES[id] ?? []));
+  }
+  return Array.from(new Set(bindings));
+}
+
+function keyTokenFromEvent(event: KeyboardEvent): string | null {
+  if (
+    event.isComposing ||
+    MODIFIER_EVENT_KEYS.has(event.key) ||
+    event.key === "Dead"
+  ) {
+    return null;
+  }
+
+  if (/^Key[A-Z]$/.test(event.code)) {
+    if (event.altKey || !/^[a-zA-Z]$/.test(event.key)) return event.code;
+    return event.key.toLowerCase();
+  }
+  if (/^Digit[0-9]$/.test(event.code)) {
+    if (event.altKey || !/^[0-9]$/.test(event.key)) return event.code;
+    return event.key;
+  }
+  if (EVENT_CODE_KEY_TOKENS[event.code]) {
+    return EVENT_CODE_KEY_TOKENS[event.code];
+  }
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key;
+  if (event.key === " ") return "Space";
+  return normalizeKeyToken(event.key);
+}
+
+export function recordHotkeyFromEvent(event: KeyboardEvent): string | null {
+  const key = keyTokenFromEvent(event);
+  if (!key) return null;
+
+  const mac = isMacPlatform();
+  const modifiers: string[] = [];
+  if (event.metaKey) modifiers.push(mac ? "$mod" : "Meta");
+  if (event.ctrlKey) modifiers.push(mac ? "Control" : "$mod");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+
+  return canonicalizeHotkeyBinding([...modifiers, key].join("+"));
+}
+
+export function setShortcutRecordingActive(active: boolean): void {
+  shortcutRecordingActive = active;
+}
+
+export function isShortcutRecordingActive(): boolean {
+  return shortcutRecordingActive;
 }
 
 const MAC_KEY_SYMBOL: Record<string, string> = {
@@ -143,6 +399,13 @@ const MAC_KEY_SYMBOL: Record<string, string> = {
   Equal: "=",
   Comma: ",",
   Period: ".",
+  Slash: "/",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backquote: "`",
 };
 
 const NON_MAC_KEY_LABEL: Record<string, string> = {
@@ -166,6 +429,13 @@ const NON_MAC_KEY_LABEL: Record<string, string> = {
   Equal: "=",
   Comma: ",",
   Period: ".",
+  Slash: "/",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backquote: "`",
   ArrowLeft: "←",
   ArrowRight: "→",
   ArrowUp: "↑",
@@ -214,12 +484,25 @@ function stopPropagationAfterHandling(
     Object.entries(bindings).map(([binding, handler]) => [
       binding,
       (event: KeyboardEvent) => {
+        if (isShortcutRecordingActive()) return;
         handler(event);
         // App-level shortcuts that handled the key must own it before focused
         // surfaces like xterm also interpret the same chord.
         if (event.defaultPrevented) {
           event.stopImmediatePropagation();
         }
+      },
+    ]),
+  );
+}
+
+function skipWhileRecording(bindings: HotkeyBindings): HotkeyBindings {
+  return Object.fromEntries(
+    Object.entries(bindings).map(([binding, handler]) => [
+      binding,
+      (event: KeyboardEvent) => {
+        if (isShortcutRecordingActive()) return;
+        handler(event);
       },
     ]),
   );
@@ -273,7 +556,7 @@ export function useHotkeys(bindings: HotkeyBindings): void {
       );
     }
     if (Object.keys(bubbleBindings).length > 0) {
-      unsubscribes.push(tinykeys(window, bubbleBindings));
+      unsubscribes.push(tinykeys(window, skipWhileRecording(bubbleBindings)));
     }
 
     return () => {
