@@ -242,7 +242,7 @@
           },
           "agentProvider": {
             "label": "에이전트 제공자 아이콘",
-            "description": "상태 위치와 Agents History에 Claude/Codex 아이콘을 표시합니다. 끄면 상태 점과 텍스트 배지를 표시합니다."
+            "description": "상태 위치와 Agents History에 Claude/Codex/Antigravity 아이콘을 표시합니다. 끄면 상태 점과 텍스트 배지를 표시합니다."
           },
           "sessionKind": {
             "label": "세션 종류 아이콘",
@@ -811,6 +811,8 @@
       "forkInNewWorktree": "새 워크트리에 포크",
       "forkCodexSession": "Codex 세션 포크",
       "forkCodexInNewWorktree": "새 워크트리에 Codex 포크",
+      "forkAntigravitySession": "Antigravity 세션 포크",
+      "forkAntigravityInNewWorktree": "새 워크트리에 Antigravity 포크",
       "splitRight": "오른쪽으로 분할",
       "splitDown": "아래로 분할",
       "equalizePaneSizes": "패널 크기 균등화",
@@ -892,7 +894,8 @@
       "allAgents": "모든 에이전트",
       "codex": "Codex",
       "claude": "Claude",
-      "empty": "이 프로젝트의 Claude 또는 Codex 세션을 찾지 못했습니다",
+      "antigravity": "Antigravity",
+      "empty": "이 프로젝트의 Claude, Codex 또는 Antigravity 세션을 찾지 못했습니다",
       "emptyForFilter": "이 필터와 일치하는 세션이 없습니다.",
       "runSession": "새 터미널에서 실행",
       "runInWorktree": "워크트리에서 실행",
@@ -905,7 +908,7 @@
       "worktreeRunBody": "resume 세션이 {name} 워크트리에서 시작되었습니다.",
       "worktreeRunConfirm": "확인",
       "trashTranscriptTitle": "transcript를 휴지통으로 이동할까요?",
-      "trashTranscriptBody": "Claude/Codex 원본 transcript JSONL 파일을 OS 휴지통으로 이동합니다. 이 History 항목의 resume이 더 이상 동작하지 않을 수 있지만, 보통 휴지통에서 복원할 수 있습니다.",
+      "trashTranscriptBody": "원본 agent transcript JSONL 파일을 OS 휴지통으로 이동합니다. 이 History 항목의 resume이 더 이상 동작하지 않을 수 있지만, 보통 휴지통에서 복원할 수 있습니다.",
       "trashTranscriptCancel": "취소",
       "trashTranscriptConfirm": "휴지통으로 이동",
       "resumeSessionName": "resume",
@@ -1023,6 +1026,7 @@
       "attachAllToConversation": "모두 대화에 첨부",
       "attachToClaude": "Claude에 첨부",
       "attachToCodex": "Codex에 첨부",
+      "attachToAntigravity": "Antigravity에 첨부",
       "copyAbsolutePath": "절대 경로 복사",
       "copyAbsolutePaths": "절대 경로 복사",
       "copyRelativePath": "상대 경로 복사",
@@ -1136,6 +1140,7 @@
       "title": "이전 대화 재개",
       "bodyClaude": "이 세션에 진행 중이던 Claude 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
       "bodyCodex": "이 세션에 진행 중이던 Codex 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
+      "bodyAntigravity": "이 세션에 진행 중이던 Antigravity 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
       "sessionIdCopied": "세션 ID를 복사했습니다",
       "copyFailed": "클립보드에 복사하지 못했습니다",
       "copyId": "ID 복사",

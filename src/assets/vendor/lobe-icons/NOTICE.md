@@ -6,6 +6,7 @@ The SVG files in this directory are vendored from Lobe Icons.
 - Package: `@lobehub/icons-static-svg@1.90.0`
 - License: MIT
 - Vendored files:
+  - `antigravity.svg` from `icons/antigravity.svg`
   - `claude.svg` from `icons/claude.svg`
   - `codex.svg` from `icons/codex.svg`
 

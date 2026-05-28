@@ -1949,7 +1949,7 @@ export function Terminal({
       // If the daemon already owns a live PTY for this session, its ring
       // buffer is the freshest representation of the screen. Disk scrollback
       // is only the last saved frontend snapshot and can be stale after the
-      // app has been closed while Claude/Codex kept running. Replaying that
+      // app has been closed while an agent kept running. Replaying that
       // stale snapshot first leaves xterm's buffer/cursor out of sync with
       // the next daemon redraw, so live daemon reattach skips disk restore
       // and asks `pty_spawn` to replay the daemon ring instead.

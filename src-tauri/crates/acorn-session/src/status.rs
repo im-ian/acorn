@@ -18,6 +18,10 @@
 //! - everything else with content → Running (function calls, intermediate
 //!   `agent_message phase=commentary`, reasoning, etc.).
 //!
+//! Antigravity transcripts:
+//! - last `type=PLANNER_RESPONSE` with `status=DONE` → NeedsInput.
+//! - last `type=USER_INPUT` or any non-DONE model/tool line → Running.
+//!
 //! Meta-only lines (claude: `last-prompt` / `permission-mode` /
 //! `attachment` / `file-history-snapshot` / `system`; codex: `token_count`
 //! and other event_msg telemetry) are ignored when picking the last
@@ -44,12 +48,13 @@ use crate::session::SessionStatus;
 const TAIL_BYTES: u64 = 262_144;
 
 /// Which agent's transcript format the tail should be parsed as. The host
-/// crate maps its richer `agent_resume::AgentKind` onto this two-variant
-/// enum at the call site.
+/// crate maps its richer `agent_resume::AgentKind` onto this enum when a
+/// transcript exists.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AgentKind {
     Claude,
     Codex,
+    Antigravity,
 }
 
 /// Infer a session's status from its transcript tail (when one was resolved)
@@ -96,6 +101,7 @@ pub fn detect(
     let classified = match kind {
         AgentKind::Claude => classify_claude_tail(&tail, read_full),
         AgentKind::Codex => classify_codex_tail(&tail, read_full),
+        AgentKind::Antigravity => classify_antigravity_tail(&tail, read_full),
     };
 
     match classified {
@@ -208,6 +214,30 @@ fn classify_codex_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
             // `agent_reasoning_*`, `rate_limit_*`, etc.) are skipped —
             // they don't change the turn-completion state.
             _ => continue,
+        }
+    }
+    None
+}
+
+fn classify_antigravity_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
+    for line in tail_lines_newest_first(tail, read_full) {
+        let Some(v) = parse_json_line(line) else {
+            continue;
+        };
+        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        match line_type {
+            "USER_INPUT" => return Some(TurnClass::Running),
+            "PLANNER_RESPONSE" => {
+                return Some(if status == "DONE" {
+                    TurnClass::NeedsInput
+                } else {
+                    TurnClass::Running
+                });
+            }
+            "CONVERSATION_HISTORY" => continue,
+            "" => continue,
+            _ => return Some(TurnClass::Running),
         }
     }
     None
@@ -404,6 +434,35 @@ mod tests {
     #[test]
     fn codex_empty_tail_returns_none() {
         assert_eq!(classify_codex_tail("", true), None);
+    }
+
+    // --- antigravity format ---
+
+    #[test]
+    fn antigravity_done_planner_maps_to_needs_input() {
+        let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
+        assert_eq!(
+            classify_antigravity_tail(tail, true),
+            Some(TurnClass::NeedsInput),
+        );
+    }
+
+    #[test]
+    fn antigravity_user_input_maps_to_running() {
+        let tail = r#"{"type":"USER_INPUT","status":"DONE","content":"hi"}"#;
+        assert_eq!(
+            classify_antigravity_tail(tail, true),
+            Some(TurnClass::Running),
+        );
+    }
+
+    #[test]
+    fn antigravity_non_planner_done_maps_to_running() {
+        let tail = r#"{"type":"TOOL_CALL","status":"DONE","content":"done"}"#;
+        assert_eq!(
+            classify_antigravity_tail(tail, true),
+            Some(TurnClass::Running),
+        );
     }
 
     // --- detect() entry point ---

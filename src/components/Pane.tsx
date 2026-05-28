@@ -240,7 +240,7 @@ export function Pane({ paneId }: PaneProps) {
     if (error) showToast(`${t("toasts.session.createFailed")} ${error}`);
   }
 
-  // Fork an existing claude/codex conversation into a new Acorn session.
+  // Fork an existing agent conversation into a new Acorn session.
   // Inherits the parent's cwd and queues the explicit fork command into
   // the new shell's stdin so the user does not retype it. We bypass the
   // shim's fork-env branch deliberately — the shim may not even be on
@@ -817,6 +817,7 @@ function TabItem({
   const [agent, setAgent] = useState<{
     claude: string | null;
     codex: string | null;
+    antigravity: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -833,7 +834,9 @@ function TabItem({
           sessionId: session.id,
           err,
         });
-        if (!cancelled) setAgent({ claude: null, codex: null });
+        if (!cancelled) {
+          setAgent({ claude: null, codex: null, antigravity: null });
+        }
       });
     return () => {
       cancelled = true;
@@ -847,17 +850,20 @@ function TabItem({
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
     const items: ContextMenuItem[] = [];
-    const both = agent.claude && agent.codex;
+    const providerCount = [agent.claude, agent.codex, agent.antigravity].filter(
+      Boolean,
+    ).length;
+    const multiple = providerCount > 1;
     if (agent.claude) {
       items.push({
-        label: both
+        label: multiple
           ? paneT(t, "pane.menu.forkClaudeSession")
           : paneT(t, "pane.menu.forkSession"),
         icon: <GitFork size={12} />,
         onClick: () => onFork("claude", agent.claude!, false),
       });
       items.push({
-        label: both
+        label: multiple
           ? paneT(t, "pane.menu.forkClaudeInNewWorktree")
           : paneT(t, "pane.menu.forkInNewWorktree"),
         icon: <GitBranch size={12} />,
@@ -866,18 +872,34 @@ function TabItem({
     }
     if (agent.codex) {
       items.push({
-        label: both
+        label: multiple
           ? paneT(t, "pane.menu.forkCodexSession")
           : paneT(t, "pane.menu.forkSession"),
         icon: <GitFork size={12} />,
         onClick: () => onFork("codex", agent.codex!, false),
       });
       items.push({
-        label: both
+        label: multiple
           ? paneT(t, "pane.menu.forkCodexInNewWorktree")
           : paneT(t, "pane.menu.forkInNewWorktree"),
         icon: <GitBranch size={12} />,
         onClick: () => onFork("codex", agent.codex!, true),
+      });
+    }
+    if (agent.antigravity) {
+      items.push({
+        label: multiple
+          ? paneT(t, "pane.menu.forkAntigravitySession")
+          : paneT(t, "pane.menu.forkSession"),
+        icon: <GitFork size={12} />,
+        onClick: () => onFork("antigravity", agent.antigravity!, false),
+      });
+      items.push({
+        label: multiple
+          ? paneT(t, "pane.menu.forkAntigravityInNewWorktree")
+          : paneT(t, "pane.menu.forkInNewWorktree"),
+        icon: <GitBranch size={12} />,
+        onClick: () => onFork("antigravity", agent.antigravity!, true),
       });
     }
     return items.length > 0

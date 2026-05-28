@@ -242,7 +242,7 @@
           },
           "agentProvider": {
             "label": "Agent provider icons",
-            "description": "Use Claude/Codex icons in status positions and Agents History. Turn off to show status dots and text badges."
+            "description": "Use Claude/Codex/Antigravity icons in status positions and Agents History. Turn off to show status dots and text badges."
           },
           "sessionKind": {
             "label": "Session kind icons",
@@ -811,6 +811,8 @@
       "forkInNewWorktree": "Fork in New Worktree",
       "forkCodexSession": "Fork Codex Session",
       "forkCodexInNewWorktree": "Fork Codex in New Worktree",
+      "forkAntigravitySession": "Fork Antigravity Session",
+      "forkAntigravityInNewWorktree": "Fork Antigravity in New Worktree",
       "splitRight": "Split Right",
       "splitDown": "Split Down",
       "equalizePaneSizes": "Equalize Pane Sizes",
@@ -892,7 +894,8 @@
       "allAgents": "All agents",
       "codex": "Codex",
       "claude": "Claude",
-      "empty": "No Claude or Codex sessions found for this project",
+      "antigravity": "Antigravity",
+      "empty": "No Claude, Codex, or Antigravity sessions found for this project",
       "emptyForFilter": "No sessions match this filter.",
       "runSession": "Run in new terminal",
       "runInWorktree": "Run in worktree",
@@ -905,7 +908,7 @@
       "worktreeRunBody": "The resumed session was started in worktree {name}.",
       "worktreeRunConfirm": "OK",
       "trashTranscriptTitle": "Move transcript to Trash?",
-      "trashTranscriptBody": "This moves the original Claude/Codex transcript JSONL to the OS Trash. Resume for this history item may stop working, but the file can usually be restored from Trash.",
+      "trashTranscriptBody": "This moves the original agent transcript JSONL to the OS Trash. Resume for this history item may stop working, but the file can usually be restored from Trash.",
       "trashTranscriptCancel": "Cancel",
       "trashTranscriptConfirm": "Move to Trash",
       "resumeSessionName": "resume",
@@ -1023,6 +1026,7 @@
       "attachAllToConversation": "Attach All to Conversation",
       "attachToClaude": "Attach to Claude",
       "attachToCodex": "Attach to Codex",
+      "attachToAntigravity": "Attach to Antigravity",
       "copyAbsolutePath": "Copy Absolute Path",
       "copyAbsolutePaths": "Copy Absolute Paths",
       "copyRelativePath": "Copy Relative Path",
@@ -1136,6 +1140,7 @@
       "title": "Resume previous conversation",
       "bodyClaude": "There's a Claude conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
       "bodyCodex": "There's a Codex conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
+      "bodyAntigravity": "There's an Antigravity conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
       "sessionIdCopied": "Session ID copied",
       "copyFailed": "Failed to copy to clipboard",
       "copyId": "Copy ID",

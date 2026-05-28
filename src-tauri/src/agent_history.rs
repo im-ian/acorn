@@ -19,11 +19,12 @@ const READ_HEAD_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const READ_TAIL_BYTES: u64 = 256 * 1024;
 const PREVIEW_CHARS: usize = 160;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentHistoryProvider {
     Claude,
     Codex,
+    Antigravity,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +61,7 @@ pub fn list_agent_history(
     let scope = HistoryScope::Project(&repo);
     items.extend(scan_codex(scope));
     items.extend(scan_claude(scope));
+    items.extend(scan_antigravity(scope));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -82,6 +84,7 @@ pub fn list_unscoped_agent_history(
     };
     items.extend(scan_codex(scope));
     items.extend(scan_claude(scope));
+    items.extend(scan_antigravity(scope));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -142,6 +145,34 @@ pub fn trash_agent_history_transcript(
                 ));
             }
         }
+        AgentHistoryProvider::Antigravity => {
+            let roots = antigravity_brain_roots()
+                .into_iter()
+                .filter_map(|root| root.canonicalize().ok())
+                .collect::<Vec<_>>();
+            if roots.is_empty() {
+                return Err(AppError::InvalidPath(
+                    "Antigravity sessions root missing".to_string(),
+                ));
+            }
+            if !roots.iter().any(|root| path.starts_with(root)) {
+                return Err(AppError::InvalidPath(format!(
+                    "transcript is outside Antigravity sessions: {}",
+                    path.display()
+                )));
+            }
+            if !antigravity_transcript_matches_id(&path, &id) {
+                return Err(AppError::InvalidPath(
+                    "transcript id does not match selected Antigravity session".to_string(),
+                ));
+            }
+            if !is_antigravity_transcript_path(&path) {
+                return Err(AppError::InvalidPath(format!(
+                    "transcript is outside Antigravity sessions: {}",
+                    path.display()
+                )));
+            }
+        }
     }
 
     move_to_trash(&path)?;
@@ -193,6 +224,19 @@ fn scan_claude(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
     files
         .into_iter()
         .filter_map(|path| parse_claude_file(&path, scope))
+        .collect()
+}
+
+fn scan_antigravity(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
+    let mut files = Vec::new();
+    for root in antigravity_brain_roots() {
+        files.extend(collect_files(&root, is_antigravity_transcript_path));
+    }
+    files.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
+    files.truncate(MAX_SCAN_FILES_PER_PROVIDER);
+    files
+        .into_iter()
+        .filter_map(|path| parse_antigravity_file(&path, scope))
         .collect()
 }
 
@@ -285,6 +329,45 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
     })
 }
 
+fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
+    let state = parse_antigravity_state(path)?;
+    let id = state.id.or_else(|| antigravity_id_from_path(path))?;
+    let mut cwd_candidates = Vec::new();
+    if let Some(cwd) = state.cwd.clone() {
+        cwd_candidates.push(cwd);
+    } else {
+        cwd_candidates.extend(antigravity_cwds_from_agent_state(&id));
+    }
+    let saw_cwd_candidate = !cwd_candidates.is_empty();
+    let cwd = cwd_candidates
+        .into_iter()
+        .find(|cwd| scope.accepts_cwd(cwd));
+    match (scope, cwd.as_deref(), saw_cwd_candidate) {
+        (HistoryScope::Project(_), None, _) => return None,
+        (HistoryScope::Unscoped { .. }, None, true) => return None,
+        _ => {}
+    }
+    let worktree = cwd.as_deref().and_then(|cwd| scope.worktree_for_cwd(cwd));
+    let title = state
+        .title
+        .or_else(|| state.preview.clone())
+        .unwrap_or_else(|| "Antigravity session".to_string());
+    Some(AgentHistoryItem {
+        provider: AgentHistoryProvider::Antigravity,
+        resume_command: Some(format!("agy --conversation {id}")),
+        id,
+        title: collapse_preview(&title, PREVIEW_CHARS)
+            .unwrap_or_else(|| "Antigravity session".to_string()),
+        preview: state
+            .preview
+            .and_then(|s| collapse_preview(&s, PREVIEW_CHARS)),
+        cwd,
+        worktree,
+        transcript_path: path.display().to_string(),
+        updated_at: file_updated_at(path),
+    })
+}
+
 pub fn transcript_first_user_message(
     provider: AgentHistoryProvider,
     path: &Path,
@@ -293,6 +376,7 @@ pub fn transcript_first_user_message(
     let state = match provider {
         AgentHistoryProvider::Codex => parse_codex_state(path)?,
         AgentHistoryProvider::Claude => parse_claude_state(path)?,
+        AgentHistoryProvider::Antigravity => parse_antigravity_state(path)?,
     };
     state
         .title
@@ -361,6 +445,61 @@ fn parse_claude_state(path: &Path) -> Option<ParsedAgentFile> {
     }
 
     Some(state)
+}
+
+fn parse_antigravity_state(path: &Path) -> Option<ParsedAgentFile> {
+    let mut state = ParsedAgentFile {
+        id: antigravity_id_from_path(path),
+        ..ParsedAgentFile::default()
+    };
+    for line in sample_lines(path).ok()? {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        let ty = string_at(Some(&value), "type");
+        let text = string_at(Some(&value), "content").or_else(|| first_text(&value_texts(&value)));
+        if state.cwd.is_none() {
+            state.cwd = string_at(Some(&value), "cwd")
+                .or_else(|| string_at(Some(&value), "project"))
+                .or_else(|| first_workspace_path(&value));
+        }
+        match ty.as_deref() {
+            Some("USER_INPUT") => {
+                if state.title.is_none() {
+                    state.title = text.and_then(|s| extract_antigravity_user_request(&s));
+                }
+            }
+            Some("PLANNER_RESPONSE") => {
+                state.preview = text.or(state.preview);
+            }
+            _ => {}
+        }
+    }
+
+    Some(state)
+}
+
+fn extract_antigravity_user_request(content: &str) -> Option<String> {
+    let marker = "<USER_REQUEST>";
+    let end_marker = "</USER_REQUEST>";
+    if let Some(start) = content.find(marker) {
+        let after = start + marker.len();
+        let end = content[after..]
+            .find(end_marker)
+            .map(|offset| after + offset)
+            .unwrap_or(content.len());
+        return collapse_preview(&content[after..end], PREVIEW_CHARS);
+    }
+    collapse_preview(content, PREVIEW_CHARS)
+}
+
+fn first_workspace_path(value: &Value) -> Option<String> {
+    value
+        .get("workspacePaths")
+        .or_else(|| value.get("workspace_paths"))
+        .and_then(|paths| paths.as_array())
+        .and_then(|paths| paths.iter().find_map(|path| path.as_str()))
+        .map(ToString::to_string)
 }
 
 #[derive(Default)]
@@ -779,6 +918,107 @@ fn claude_projects_root() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".claude").join("projects"))
 }
 
+fn google_agent_storage_root() -> Option<PathBuf> {
+    std::env::var_os("ANTIGRAVITY_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("GEMINI_DIR").map(PathBuf::from))
+        .or_else(|| home_dir().map(|home| home.join(".gemini")))
+}
+
+fn antigravity_brain_roots() -> Vec<PathBuf> {
+    let Some(root) = google_agent_storage_root() else {
+        return Vec::new();
+    };
+    ["antigravity", "antigravity-ide", "antigravity-cli"]
+        .into_iter()
+        .map(|profile| root.join(profile).join("brain"))
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn is_antigravity_transcript_path(path: &Path) -> bool {
+    path.file_name().and_then(|s| s.to_str()) == Some("transcript.jsonl")
+        && path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some("logs")
+        && path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some(".system_generated")
+        && antigravity_id_from_path(path).is_some()
+}
+
+fn antigravity_id_from_path(path: &Path) -> Option<String> {
+    let filename = path.file_name()?.to_str()?;
+    if filename != "transcript.jsonl" {
+        return None;
+    }
+    let logs = path.parent()?.file_name()?.to_str()?;
+    let generated = path.parent()?.parent()?.file_name()?.to_str()?;
+    if logs != "logs" || generated != ".system_generated" {
+        return None;
+    }
+    let id = path.parent()?.parent()?.parent()?.file_name()?.to_str()?;
+    Uuid::parse_str(id).ok().map(|_| id.to_string())
+}
+
+fn antigravity_transcript_matches_id(path: &Path, id: &str) -> bool {
+    antigravity_id_from_path(path).as_deref() == Some(id)
+}
+
+#[derive(Debug)]
+struct AgentStateCwd {
+    cwd: String,
+    updated_at: u64,
+}
+
+fn antigravity_cwds_from_agent_state(id: &str) -> Vec<String> {
+    let Some(data_dir) = acorn_daemon::paths::data_dir().ok() else {
+        return Vec::new();
+    };
+    antigravity_cwds_from_agent_state_at(&data_dir, id)
+        .into_iter()
+        .map(|entry| entry.cwd)
+        .collect()
+}
+
+fn antigravity_cwds_from_agent_state_at(data_dir: &Path, id: &str) -> Vec<AgentStateCwd> {
+    let root = data_dir.join("agent-state");
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out = entries
+        .flatten()
+        .filter_map(|entry| {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                return None;
+            }
+            if read_trimmed_state_file(&dir.join("antigravity.id")).as_deref() != Some(id) {
+                return None;
+            }
+            let cwd = read_trimmed_state_file(&dir.join("antigravity.cwd"))?;
+            let updated_at = file_updated_at(&dir.join("antigravity.id"))
+                .max(file_updated_at(&dir.join("antigravity.cwd")));
+            Some(AgentStateCwd { cwd, updated_at })
+        })
+        .collect::<Vec<_>>();
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.dedup_by(|a, b| a.cwd == b.cwd);
+    out
+}
+
+fn read_trimmed_state_file(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn home_dir() -> Option<PathBuf> {
     directories::UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
@@ -874,6 +1114,94 @@ mod tests {
         let path = root.join("-Users-tester-demo/history.jsonl");
 
         assert!(!is_claude_transcript_path(&path, root));
+    }
+
+    #[test]
+    fn antigravity_transcript_path_accepts_brain_transcript() {
+        let path = Path::new(
+            "/Users/tester/.gemini/antigravity/brain/17f38e8c-3a7e-408b-8c79-aef7432c0fd2/.system_generated/logs/transcript.jsonl",
+        );
+
+        assert!(is_antigravity_transcript_path(path));
+        assert_eq!(
+            antigravity_id_from_path(path).as_deref(),
+            Some("17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
+        );
+    }
+
+    #[test]
+    fn antigravity_history_uses_user_request_and_planner_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("17f38e8c-3a7e-408b-8c79-aef7432c0fd2/.system_generated/logs/transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "workspacePaths": ["/tmp/acorn-antigravity-project"],
+                "content": "<USER_REQUEST>\nWire Antigravity as a session provider\n</USER_REQUEST>",
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "content": "Antigravity provider wiring is complete.",
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let projects: Vec<PathBuf> = Vec::new();
+        let item = parse_antigravity_file(
+            &transcript,
+            HistoryScope::Unscoped {
+                projects: &projects,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(item.provider, AgentHistoryProvider::Antigravity);
+        assert_eq!(item.id, "17f38e8c-3a7e-408b-8c79-aef7432c0fd2");
+        assert_eq!(item.cwd.as_deref(), Some("/tmp/acorn-antigravity-project"));
+        assert_eq!(item.title, "Wire Antigravity as a session provider");
+        assert_eq!(
+            item.preview.as_deref(),
+            Some("Antigravity provider wiring is complete.")
+        );
+        assert_eq!(
+            item.resume_command.as_deref(),
+            Some("agy --conversation 17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
+        );
+    }
+
+    #[test]
+    fn antigravity_cwd_fallback_reads_agent_state_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("agent-state/session-1");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join("antigravity.id"),
+            "17f38e8c-3a7e-408b-8c79-aef7432c0fd2\n",
+        )
+        .unwrap();
+        fs::write(state_dir.join("antigravity.cwd"), "/tmp/acorn-project\n").unwrap();
+
+        let entries = antigravity_cwds_from_agent_state_at(
+            dir.path(),
+            "17f38e8c-3a7e-408b-8c79-aef7432c0fd2",
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].cwd, "/tmp/acorn-project");
     }
 
     #[test]

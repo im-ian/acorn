@@ -46,6 +46,21 @@ export function AgentProviderIcon({
   className?: string;
 }) {
   const definition = getAgentProviderDefinition(provider);
+  if (definition.icon.kind === "glyph") {
+    return (
+      <span
+        role="img"
+        aria-label={definition.icon.alt}
+        className={cn(
+          "inline-flex size-3 shrink-0 items-center justify-center align-middle text-[9px] font-semibold leading-none",
+          className,
+        )}
+      >
+        {definition.icon.text}
+      </span>
+    );
+  }
+
   const iconStyle: CSSProperties = {
     WebkitMaskImage: `url("${definition.icon.url}")`,
     WebkitMaskPosition: "center",

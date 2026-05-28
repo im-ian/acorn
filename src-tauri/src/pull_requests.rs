@@ -1607,7 +1607,7 @@ pub struct GeneratedCommitMessage {
 /// frontend (so each provider's invocation conventions live in one place,
 /// alongside the Settings UI) and passed in here. The CLI is expected to
 /// follow the standard `stdin = prompt, stdout = response` convention —
-/// `claude -p --output-format text`, `gemini -p`, `ollama run <model>`,
+/// `claude -p --output-format text`, `agy -p`, `ollama run <model>`,
 /// `llm -m <model>`, or any user-supplied custom command all fit.
 pub fn generate_pr_commit_message(
     repo_path: &Path,

@@ -201,17 +201,19 @@ fn default_title_source_for_existing_sessions() -> SessionTitleSource {
 pub enum SessionAgentProvider {
     Claude,
     Codex,
+    Antigravity,
 }
 
 impl SessionAgentProvider {
     pub fn supports_hooks(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex)
+        matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
     }
 
     pub fn hook_provider_env_value(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -276,7 +278,7 @@ pub struct Session {
     #[serde(default, skip_deserializing)]
     pub in_worktree: bool,
     /// Derived from Acorn's per-session agent-state markers. This reflects
-    /// the most recently associated Claude/Codex transcript and is not
+    /// the most recently associated Claude/Codex/Antigravity transcript and is not
     /// persisted in sessions.json.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub agent_provider: Option<SessionAgentProvider>,
@@ -629,6 +631,7 @@ mod tests {
     fn session_agent_provider_reports_hook_env_metadata() {
         assert!(SessionAgentProvider::Claude.supports_hooks());
         assert!(SessionAgentProvider::Codex.supports_hooks());
+        assert!(SessionAgentProvider::Antigravity.supports_hooks());
         assert_eq!(
             SessionAgentProvider::Claude.hook_provider_env_value(),
             "claude"
@@ -636,6 +639,10 @@ mod tests {
         assert_eq!(
             SessionAgentProvider::Codex.hook_provider_env_value(),
             "codex"
+        );
+        assert_eq!(
+            SessionAgentProvider::Antigravity.hook_provider_env_value(),
+            "antigravity"
         );
     }
 }
