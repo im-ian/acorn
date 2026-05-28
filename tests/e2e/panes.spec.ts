@@ -185,7 +185,51 @@ test.describe("pane / sidebar shortcuts", () => {
       geometry?.closeLeft ?? 0,
     );
 
-    await closeButton.click({ position: { x: 1, y: 12 } });
+    await page.evaluate(() => {
+      const closeIcon = document.querySelector(
+        '[data-tab-close-button="s-1"] svg',
+      );
+      const closeButton = document.querySelector(
+        '[data-tab-close-button="s-1"]',
+      );
+      if (!closeIcon) throw new Error("missing tab close icon");
+      if (!(closeButton instanceof HTMLElement)) {
+        throw new Error("missing tab close button");
+      }
+      const rect = closeIcon.getBoundingClientRect();
+      const pointerId = 1;
+      closeIcon.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          button: 0,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          button: 0,
+          clientX: rect.left + rect.width / 2 + 8,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          button: 0,
+          clientX: rect.left + rect.width / 2 + 8,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+      closeButton.click();
+    });
     await expect(
       page.getByRole("heading", { name: "Remove session" }),
     ).toBeVisible();
