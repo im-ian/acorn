@@ -33,19 +33,20 @@ describe("BUILT_IN_THEMES", () => {
       "ayu-dark",
       "acorn-light",
       "github-light",
+      "high-contrast-light",
       "flexoki-light",
       "solarized-light",
       "catppuccin-latte",
       "one-light",
       "gruvbox-light",
     ]);
-    expect(BUILT_IN_THEMES).toHaveLength(23);
+    expect(BUILT_IN_THEMES).toHaveLength(24);
     expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(
       16,
     );
     expect(
       BUILT_IN_THEMES.filter((theme) => theme.mode === "light"),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
   });
 
   it("every built-in css passes validation", () => {
