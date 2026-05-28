@@ -28,9 +28,9 @@ export interface TerminalFileLinkProviderOptions {
 }
 
 const FILE_REF_RE =
-  /(^|[\s([{"'`<])((?:\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z0-9._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))/g;
+  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z0-9._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))/g;
 const FILE_PATH_RE =
-  /(^|[\s([{"'`<])((?:\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+))(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))/g;
+  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+))(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))/g;
 
 export function createTerminalFileLinkProvider(
   terminal: XTerm,
@@ -178,9 +178,16 @@ function stringIndexToBufferColumn(
 export function resolveTerminalFilePath(
   cwd: string,
   referencePath: string,
+  home?: string | null,
 ): string {
   if (referencePath.startsWith("/")) {
     return normalizePosixPath(referencePath);
+  }
+  if (referencePath.startsWith("~/")) {
+    if (!home) return referencePath;
+    return normalizePosixPath(
+      `${home.replace(/\/+$/u, "")}/${referencePath.slice(2)}`,
+    );
   }
   return normalizePosixPath(`${cwd.replace(/\/+$/u, "")}/${referencePath}`);
 }
