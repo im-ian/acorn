@@ -15,16 +15,22 @@ vi.mock("../lib/highlight", () => ({
 }));
 
 vi.mock("../lib/api", () => ({
+  FS_CHANGED_EVENT: "acorn:fs-changed",
   api: {
     fsReadFile: vi.fn<(path: string) => Promise<FsReadFileResult>>(),
     fsGitDiffLines: vi.fn<(path: string) => Promise<FsLineDiffEntry[]>>(),
   },
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => undefined),
 }));
 
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
 import { highlightCode, langFromPath } from "../lib/highlight";
 import { CodeViewer } from "./CodeViewer";
@@ -40,6 +46,23 @@ async function flushPromises() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+  });
+}
+
+function emitFsChanged(payload: {
+  paths: string[];
+  root?: string;
+  overflow?: boolean;
+  refresh?: { kind: "root" | "subtree"; path: string } | null;
+  dotgit_changed: boolean;
+}) {
+  const calls = vi.mocked(listen).mock.calls;
+  const listener = calls[calls.length - 1]?.[1];
+  if (!listener) throw new Error("fs listener not registered");
+  listener({
+    event: "acorn:fs-changed",
+    id: 1,
+    payload,
   });
 }
 
@@ -81,6 +104,8 @@ describe("virtualized code and diff rendering", () => {
     root = createRoot(container);
     vi.mocked(api.fsReadFile).mockReset();
     vi.mocked(api.fsGitDiffLines).mockReset();
+    vi.mocked(listen).mockClear();
+    vi.mocked(listen).mockResolvedValue(() => {});
     vi.mocked(highlightCode).mockClear();
     vi.mocked(langFromPath).mockReturnValue(null);
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
@@ -247,6 +272,91 @@ describe("virtualized code and diff rendering", () => {
       1,
     );
     expect(container.textContent).toContain("1/1");
+  });
+
+  it("refreshes an open code viewer when its file changes", async () => {
+    vi.mocked(api.fsReadFile)
+      .mockResolvedValueOnce({
+        content: "old content",
+        size: "old content".length,
+        truncated: false,
+        binary: false,
+      })
+      .mockResolvedValueOnce({
+        content: "new content",
+        size: "new content".length,
+        truncated: false,
+        binary: false,
+      });
+    vi.mocked(api.fsGitDiffLines)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ line: 1, kind: "modified" }]);
+
+    await act(async () => {
+      root.render(<CodeViewer path="/repo/src/live.ts" isActive />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("old content");
+
+    await act(async () => {
+      emitFsChanged({
+        root: "/repo",
+        paths: ["/repo/src/live.ts"],
+        dotgit_changed: false,
+      });
+    });
+    await flushPromises();
+
+    expect(api.fsReadFile).toHaveBeenCalledTimes(2);
+    expect(api.fsGitDiffLines).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("new content");
+  });
+
+  it("keeps markdown preview mode live across file changes", async () => {
+    vi.mocked(api.fsReadFile)
+      .mockResolvedValueOnce({
+        content: "# Old title",
+        size: "# Old title".length,
+        truncated: false,
+        binary: false,
+      })
+      .mockResolvedValueOnce({
+        content: "# New title",
+        size: "# New title".length,
+        truncated: false,
+        binary: false,
+      });
+    vi.mocked(api.fsGitDiffLines).mockResolvedValue([]);
+
+    await act(async () => {
+      root.render(<CodeViewer path="/repo/README.md" isActive />);
+    });
+    await flushPromises();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-pressed="false"]',
+    );
+    await act(async () => {
+      toggle?.click();
+    });
+
+    expect(container.querySelector("h1")?.textContent).toBe("Old title");
+
+    await act(async () => {
+      emitFsChanged({
+        root: "/repo",
+        paths: ["/repo/README.md"],
+        dotgit_changed: false,
+      });
+    });
+    await flushPromises();
+
+    expect(container.querySelector("h1")?.textContent).toBe("New title");
+    expect(container.querySelector("pre")).toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-pressed="true"]'),
+    ).not.toBeNull();
   });
 
   it("copies selected text by source line in virtualized lists", () => {

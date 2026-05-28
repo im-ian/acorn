@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronUp, Code2, Eye, Search, X } from "lucide-react";
 import {
   api,
+  FS_CHANGED_EVENT,
+  type FsChangePayload,
   type FsLineDiffEntry,
   type FsReadFileResult,
 } from "../lib/api";
@@ -74,6 +77,49 @@ function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXT_RE.test(path);
 }
 
+function classifyCodeViewerFsChange(
+  filePath: string,
+  payload: FsChangePayload,
+): { content: boolean; diff: boolean } {
+  const sameRoot =
+    !payload.root ||
+    isSameOrInside(payload.root, filePath) ||
+    isSameOrInside(filePath, payload.root);
+  if (!sameRoot) return { content: false, diff: false };
+
+  const content =
+    payload.paths.some((changedPath) => pathsOverlap(changedPath, filePath)) ||
+    (payload.overflow
+      ? payload.refresh
+        ? isSameOrInside(payload.refresh.path, filePath)
+        : true
+      : false);
+
+  return {
+    content,
+    diff: content || payload.dotgit_changed,
+  };
+}
+
+function normalizeFsPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized === "" ? "/" : normalized;
+}
+
+function isSameOrInside(parent: string, child: string): boolean {
+  const normalizedParent = normalizeFsPath(parent);
+  const normalizedChild = normalizeFsPath(child);
+  if (normalizedParent === "/") return normalizedChild.startsWith("/");
+  return (
+    normalizedChild === normalizedParent ||
+    normalizedChild.startsWith(`${normalizedParent}/`)
+  );
+}
+
+function pathsOverlap(a: string, b: string): boolean {
+  return isSameOrInside(a, b) || isSameOrInside(b, a);
+}
+
 export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   const t = useTranslation();
   const themeId = useSettings((s) => s.settings.appearance.themeId);
@@ -88,9 +134,36 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   const lineListRef = useRef<VirtualizedLineListHandle | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const loadSeqRef = useRef(0);
   const themeMode = useMemo(
     () => resolveThemeMode(themeId, themes),
     [themeId, themes],
+  );
+
+  const refreshFile = useCallback(
+    async ({ reset = false }: { reset?: boolean } = {}) => {
+      const seq = ++loadSeqRef.current;
+      if (reset) setState(EMPTY_STATE);
+      try {
+        const data = await api.fsReadFile(path);
+        if (seq !== loadSeqRef.current) return;
+        setState({
+          data,
+          highlightedLines: null,
+          error: null,
+          loading: false,
+        });
+      } catch (err: unknown) {
+        if (seq !== loadSeqRef.current) return;
+        setState({
+          data: null,
+          highlightedLines: null,
+          error: err instanceof Error ? err.message : String(err),
+          loading: false,
+        });
+      }
+    },
+    [path],
   );
 
   const refreshDiff = useCallback(async () => {
@@ -103,37 +176,16 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   }, [path]);
 
   useEffect(() => {
-    let cancelled = false;
-    setState(EMPTY_STATE);
     setPreviewMarkdown(false);
     setSearchOpen(false);
     setSearchQuery("");
     setActiveMatchIndex(0);
     setPreviewMatchCount(0);
-    api
-      .fsReadFile(path)
-      .then((data) => {
-        if (cancelled) return;
-        setState({
-          data,
-          highlightedLines: null,
-          error: null,
-          loading: false,
-        });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setState({
-          data: null,
-          highlightedLines: null,
-          error: err instanceof Error ? err.message : String(err),
-          loading: false,
-        });
-      });
+    void refreshFile({ reset: true });
     return () => {
-      cancelled = true;
+      loadSeqRef.current += 1;
     };
-  }, [path]);
+  }, [path, refreshFile]);
 
   useEffect(() => {
     const data = state.data;
@@ -169,6 +221,33 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   useEffect(() => {
     void refreshDiff();
   }, [refreshDiff]);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+
+    void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
+      if (cancelled) return;
+      const change = classifyCodeViewerFsChange(path, event.payload);
+      if (change.content) {
+        void refreshFile();
+      }
+      if (change.content || change.diff) {
+        void refreshDiff();
+      }
+    }).then((cancel) => {
+      if (cancelled) {
+        cancel();
+        return;
+      }
+      unlisten = cancel;
+    });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [path, refreshDiff, refreshFile]);
 
   const diffByLine = useMemo(() => {
     const map = new Map<number, FsLineDiffEntry["kind"]>();
