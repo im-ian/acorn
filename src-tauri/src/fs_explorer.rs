@@ -366,6 +366,28 @@ fn reject_dangerous(p: &Path) -> AppResult<()> {
     Ok(())
 }
 
+pub(crate) fn move_to_trash(p: &Path) -> AppResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+        // Finder-backed AppleScript trashing can reject valid POSIX paths
+        // before Finder moves the file. NSFileManager accepts file URLs
+        // directly and avoids the extra Automation permission hop.
+        let mut ctx = trash::TrashContext::new();
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        ctx.delete(p)
+            .map_err(|e| AppError::Other(format!("trash failed: {e}")))?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(p).map_err(|e| AppError::Other(format!("trash failed: {e}")))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn fs_rename(from: String, to: String) -> AppResult<()> {
     let from_p = PathBuf::from(&from);
@@ -389,7 +411,7 @@ pub fn fs_trash(path: String) -> AppResult<()> {
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
-    trash::delete(&p).map_err(|e| AppError::Other(format!("trash failed: {e}")))?;
+    move_to_trash(&p)?;
     Ok(())
 }
 
