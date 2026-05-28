@@ -97,6 +97,7 @@ function PortaledTerminal({ session }: { session: Session }) {
   return createPortal(
     <Terminal
       sessionId={session.id}
+      repoPath={session.repo_path}
       cwd={session.worktree_path}
       agentProvider={resolveSessionAgentProvider(session)}
       pasteAgentProvider={session.agent_provider ?? null}
