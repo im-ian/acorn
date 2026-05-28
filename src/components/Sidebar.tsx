@@ -48,7 +48,7 @@ import {
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import { formatHotkey, Hotkeys } from "../lib/hotkeys";
+import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
@@ -110,6 +110,13 @@ type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 
 function sidebarText(t: Translator, key: SidebarTranslationKey): string {
   return t(key);
+}
+
+function shortcutLabel(
+  shortcuts: Record<HotkeyId, string>,
+  id: HotkeyId,
+): string {
+  return formatHotkey(shortcuts[id]);
 }
 
 function statusLabel(t: Translator, status: SessionStatus): string {
@@ -1026,6 +1033,7 @@ function SessionRow({
   const renameSession = useAppStore((s) => s.renameSession);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const showAgentProviderIcons = sessionDisplay.icons.agentProvider;
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
@@ -1127,7 +1135,7 @@ function SessionRow({
     {
       label: sidebarText(t, "sidebar.actions.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
-      shortcut: formatHotkey(Hotkeys.equalizePanes),
+      shortcut: shortcutLabel(shortcuts, "equalizePanes"),
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },

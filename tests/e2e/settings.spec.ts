@@ -32,4 +32,43 @@ test.describe("settings modal", () => {
     await modal.getByRole("button", { name: /close/i }).first().click();
     await expect(modal).toHaveCount(0);
   });
+
+  test("records a custom shortcut and reset all restores defaults", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Shortcuts|단축키)$/ }).click();
+
+    await modal
+      .getByRole("button", {
+        name: "Record shortcut for Increase UI scale",
+      })
+      .click();
+    await expect(modal.getByText("Press keys")).toBeVisible();
+
+    await pressHotkey(page, { mod: true, alt: true, key: "u" });
+    await expect(modal.getByText(/⌥⌘U|Ctrl\+Alt\+U/)).toBeVisible();
+
+    await modal.getByRole("button", { name: /close/i }).first().click();
+    await expect(modal).toHaveCount(0);
+
+    await pressHotkey(page, { mod: true, alt: true, key: "u" });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          document.documentElement.style.getPropertyValue("--acorn-ui-scale"),
+        ),
+      )
+      .toBe("1.05");
+
+    await pressHotkey(page, { mod: true, key: "," });
+    await modal.getByRole("button", { name: /^(Shortcuts|단축키)$/ }).click();
+    await modal
+      .getByRole("button", { name: "Reset all shortcuts" })
+      .click();
+    await expect(modal.getByText(/⌘=|Ctrl\+=/).first()).toBeVisible();
+  });
 });

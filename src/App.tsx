@@ -36,9 +36,11 @@ import {
   type StagedRevMismatch,
 } from "./lib/api";
 import {
-  Hotkeys,
+  DEFAULT_HOTKEYS,
+  hotkeyBindingsFor,
   shouldUseTinykeysToggleMultiInputFallback,
   useHotkeys,
+  type HotkeyBindings,
 } from "./lib/hotkeys";
 import { hasRecordedWorktree } from "./lib/sessionWorktree";
 import {
@@ -171,6 +173,7 @@ function App() {
     (s) => s.settings.sessions.autoDeleteWorktrees,
   );
   const settings = useSettings((s) => s.settings);
+  const shortcuts = settings.shortcuts;
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
@@ -1114,57 +1117,76 @@ function App() {
     };
   }, []);
 
-  const bindings = useMemo(
-    () => ({
-      [Hotkeys.openPalette]: (e: KeyboardEvent) => {
+  const bindings = useMemo<HotkeyBindings>(() => {
+    const uiScaleDownHandler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
+    };
+    const uiScaleUpHandler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      updateUiScalePercent(UI_SCALE_PERCENT_STEP);
+    };
+    const toggleMultiInputHandler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      if (
+        shortcuts.toggleMultiInput === DEFAULT_HOTKEYS.toggleMultiInput &&
+        !shouldUseTinykeysToggleMultiInputFallback()
+      ) {
+        return;
+      }
+      toggleMultiInput();
+    };
+
+    const next: HotkeyBindings = {
+      [shortcuts.openPalette]: (e: KeyboardEvent) => {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       },
-      [Hotkeys.newSession]: (e: KeyboardEvent) => {
+      [shortcuts.newSession]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("acorn:new-session"));
       },
-      [Hotkeys.newIsolatedSession]: (e: KeyboardEvent) => {
+      [shortcuts.newIsolatedSession]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("acorn:new-isolated-session"));
       },
-      [Hotkeys.newControlSession]: (e: KeyboardEvent) => {
+      [shortcuts.newControlSession]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
       },
-      [Hotkeys.addProject]: (e: KeyboardEvent) => {
+      [shortcuts.addProject]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("acorn:add-project"));
       },
-      [Hotkeys.focusSidebar]: (e: KeyboardEvent) => {
+      [shortcuts.focusSidebar]: (e: KeyboardEvent) => {
         e.preventDefault();
         sidebarPanelRef.current?.expand();
         focusPanel("sidebar");
       },
-      [Hotkeys.focusMain]: (e: KeyboardEvent) => {
+      [shortcuts.focusMain]: (e: KeyboardEvent) => {
         e.preventDefault();
         focusPanel("main");
       },
-      [Hotkeys.focusRight]: (e: KeyboardEvent) => {
+      [shortcuts.focusRight]: (e: KeyboardEvent) => {
         e.preventDefault();
         rightPanelRef.current?.expand();
         focusPanel("right");
       },
-      [Hotkeys.toggleSidebar]: (e: KeyboardEvent) => {
+      [shortcuts.toggleSidebar]: (e: KeyboardEvent) => {
         e.preventDefault();
         const panel = sidebarPanelRef.current;
         if (!panel) return;
         if (panel.isCollapsed()) panel.expand();
         else panel.collapse();
       },
-      [Hotkeys.toggleRightPanel]: (e: KeyboardEvent) => {
+      [shortcuts.toggleRightPanel]: (e: KeyboardEvent) => {
         e.preventDefault();
         const panel = rightPanelRef.current;
         if (!panel) return;
         if (panel.isCollapsed()) panel.expand();
         else panel.collapse();
       },
-      [Hotkeys.clearTerminal]: (e: KeyboardEvent) => {
+      [shortcuts.clearTerminal]: (e: KeyboardEvent) => {
         // Prefer the terminal whose helper textarea currently owns DOM
         // focus over `state.activeSessionId`. The app-level `focusin`
         // listener keeps `focusedPaneId` synced for clicks, but a hotkey
@@ -1199,23 +1221,23 @@ function App() {
           }),
         );
       },
-      [Hotkeys.toggleTodos]: (e: KeyboardEvent) => {
+      [shortcuts.toggleTodos]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().setRightTab("todos");
       },
-      [Hotkeys.toggleCommits]: (e: KeyboardEvent) => {
+      [shortcuts.toggleCommits]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().setRightTab("commits");
       },
-      [Hotkeys.toggleStaged]: (e: KeyboardEvent) => {
+      [shortcuts.toggleStaged]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().setRightTab("staged");
       },
-      [Hotkeys.togglePrs]: (e: KeyboardEvent) => {
+      [shortcuts.togglePrs]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().setRightTab("prs");
       },
-      [Hotkeys.toggleFiles]: (e: KeyboardEvent) => {
+      [shortcuts.toggleFiles]: (e: KeyboardEvent) => {
         e.preventDefault();
         const panel = rightPanelRef.current;
         const state = useAppStore.getState();
@@ -1232,84 +1254,66 @@ function App() {
           state.setRightTab("files");
         }
       },
-      [Hotkeys.uiScaleDown]: (e: KeyboardEvent) => {
-        e.preventDefault();
-        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
-      },
-      [Hotkeys.uiScaleDownShift]: (e: KeyboardEvent) => {
-        e.preventDefault();
-        updateUiScalePercent(-UI_SCALE_PERCENT_STEP);
-      },
-      [Hotkeys.uiScaleUp]: (e: KeyboardEvent) => {
-        e.preventDefault();
-        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
-      },
-      [Hotkeys.uiScaleUpShift]: (e: KeyboardEvent) => {
-        e.preventDefault();
-        updateUiScalePercent(UI_SCALE_PERCENT_STEP);
-      },
-      [Hotkeys.uiScaleReset]: (e: KeyboardEvent) => {
+      [shortcuts.uiScaleDown]: uiScaleDownHandler,
+      [shortcuts.uiScaleUp]: uiScaleUpHandler,
+      [shortcuts.uiScaleReset]: (e: KeyboardEvent) => {
         e.preventDefault();
         useSettings.getState().patchAppearance({ uiScalePercent: 100 });
       },
-      [Hotkeys.toggleMultiInput]: (e: KeyboardEvent) => {
-        e.preventDefault();
-        if (!shouldUseTinykeysToggleMultiInputFallback()) return;
-        toggleMultiInput();
-      },
-      [Hotkeys.focusPaneLeft]: (e: KeyboardEvent) => {
+      [shortcuts.toggleMultiInput]: toggleMultiInputHandler,
+      [shortcuts.focusPaneLeft]: (e: KeyboardEvent) => {
         e.preventDefault();
         focusAdjacentPane("left");
       },
-      [Hotkeys.focusPaneRight]: (e: KeyboardEvent) => {
+      [shortcuts.focusPaneRight]: (e: KeyboardEvent) => {
         e.preventDefault();
         focusAdjacentPane("right");
       },
-      [Hotkeys.focusPaneUp]: (e: KeyboardEvent) => {
+      [shortcuts.focusPaneUp]: (e: KeyboardEvent) => {
         e.preventDefault();
         focusAdjacentPane("up");
       },
-      [Hotkeys.focusPaneDown]: (e: KeyboardEvent) => {
+      [shortcuts.focusPaneDown]: (e: KeyboardEvent) => {
         e.preventDefault();
         focusAdjacentPane("down");
       },
-      [Hotkeys.splitVertical]: (e: KeyboardEvent) => {
+      [shortcuts.splitVertical]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().splitFocusedPane("horizontal");
       },
-      [Hotkeys.splitHorizontal]: (e: KeyboardEvent) => {
+      [shortcuts.splitHorizontal]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().splitFocusedPane("vertical");
       },
-      [Hotkeys.equalizePanes]: (e: KeyboardEvent) => {
+      [shortcuts.equalizePanes]: (e: KeyboardEvent) => {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
-      [Hotkeys.closeTab]: (e: KeyboardEvent) => {
+      [shortcuts.closeTab]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().closeFocusedTab();
       },
-      [Hotkeys.nextTab]: (e: KeyboardEvent) => {
+      [shortcuts.nextTab]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleTab(1);
       },
-      [Hotkeys.prevTab]: (e: KeyboardEvent) => {
+      [shortcuts.prevTab]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleTab(-1);
       },
-      [Hotkeys.nextProject]: (e: KeyboardEvent) => {
+      [shortcuts.nextProject]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleProject(1);
       },
-      [Hotkeys.prevProject]: (e: KeyboardEvent) => {
+      [shortcuts.prevProject]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleProject(-1);
       },
-      [Hotkeys.openSettings]: (e: KeyboardEvent) => {
+      [shortcuts.openSettings]: (e: KeyboardEvent) => {
         e.preventDefault();
         useSettings.getState().setOpen(true);
       },
-      [Hotkeys.reloadShellEnv]: (e: KeyboardEvent) => {
+      [shortcuts.reloadShellEnv]: (e: KeyboardEvent) => {
         e.preventDefault();
         const show = useToasts.getState().show;
         api
@@ -1335,7 +1339,7 @@ function App() {
             );
           });
       },
-      [Hotkeys.closeEmptyPane]: (e: KeyboardEvent) => {
+      [shortcuts.closeEmptyPane]: (e: KeyboardEvent) => {
         // Only collapse the focused pane when it's empty, so Escape stays
         // available for inputs, dialogs, and the command palette.
         const { focusedPaneId, panes } = useAppStore.getState();
@@ -1346,9 +1350,17 @@ function App() {
         e.preventDefault();
         useAppStore.getState().closePane(focusedPaneId);
       },
-    }),
-    [t, toggleMultiInput],
-  );
+    };
+
+    for (const alias of hotkeyBindingsFor(shortcuts, "uiScaleDown").slice(1)) {
+      next[alias] = uiScaleDownHandler;
+    }
+    for (const alias of hotkeyBindingsFor(shortcuts, "uiScaleUp").slice(1)) {
+      next[alias] = uiScaleUpHandler;
+    }
+
+    return next;
+  }, [shortcuts, t, toggleMultiInput]);
 
   useHotkeys(bindings);
 

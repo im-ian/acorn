@@ -340,7 +340,17 @@
       "permissionHint": "macOS may ask once for permission the first time a notification fires."
     },
     "shortcuts": {
-      "editingSoon": "Shortcut editing is coming soon.",
+      "record": "Record",
+      "cancel": "Cancel",
+      "recording": "Press keys",
+      "recordShortcut": "Record shortcut for {command}",
+      "cancelRecording": "Cancel recording for {command}",
+      "resetShortcut": "Reset shortcut for {command}",
+      "resetAll": "Reset all shortcuts",
+      "errors": {
+        "modifierOnly": "Press a non-modifier key.",
+        "conflict": "{shortcut} is already used by {command}."
+      },
       "groups": {
         "general": "General",
         "navigation": "Navigation",

@@ -5,6 +5,12 @@ import {
   sanitizeFontFamilyName,
   type CuratedMonospaceFont,
 } from "./fonts";
+import {
+  DEFAULT_HOTKEYS,
+  resolveHotkeys,
+  type HotkeyConfig,
+  type HotkeyId,
+} from "./hotkeys";
 import { isLanguage, type Language } from "./i18n";
 
 const STORAGE_KEY = "acorn:settings:v1";
@@ -344,6 +350,7 @@ export interface AcornSettings {
     uiScalePercent: number;
     toastPosition: ToastPosition;
   };
+  shortcuts: HotkeyConfig;
   /**
    * Opt-in toggles for unfinished features. Anything under here is
    * unstable on purpose — the contract is "we keep the toggle, the
@@ -463,6 +470,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     uiScalePercent: 100,
     toastPosition: "top",
   },
+  shortcuts: { ...DEFAULT_HOTKEYS },
   experiments: {
     stickyPrompt: false,
     cjkCellWidthHeuristic: false,
@@ -876,6 +884,9 @@ function loadSettings(): AcornSettings {
             : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
       },
       appearance,
+      shortcuts: resolveHotkeys(
+        (parsed.shortcuts ?? {}) as Partial<Record<HotkeyId, unknown>>,
+      ),
       experiments: {
         ...DEFAULT_SETTINGS.experiments,
         ...(parsed.experiments ?? {}),
@@ -956,6 +967,9 @@ interface SettingsState {
       fontSlots?: AcornSettings["appearance"]["fontSlots"];
     },
   ) => void;
+  patchShortcut: (id: HotkeyId, binding: string) => void;
+  resetShortcut: (id: HotkeyId) => void;
+  resetShortcuts: () => void;
   patchExperiments: (patch: Partial<AcornSettings["experiments"]>) => void;
   patchLanguage: (language: Language) => void;
   reset: () => void;
@@ -1111,6 +1125,41 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         appearance,
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchShortcut: (id, binding) =>
+    set((s) => {
+      const shortcuts = resolveHotkeys({
+        ...s.settings.shortcuts,
+        [id]: binding,
+      });
+      const next: AcornSettings = {
+        ...s.settings,
+        shortcuts,
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  resetShortcut: (id) =>
+    set((s) => {
+      const shortcuts = resolveHotkeys({
+        ...s.settings.shortcuts,
+        [id]: DEFAULT_HOTKEYS[id],
+      });
+      const next: AcornSettings = {
+        ...s.settings,
+        shortcuts,
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  resetShortcuts: () =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        shortcuts: { ...DEFAULT_HOTKEYS },
       };
       persist(next);
       return { settings: next };
