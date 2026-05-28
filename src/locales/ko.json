@@ -429,6 +429,12 @@
         "clearTerminal": {
           "label": "터미널 지우기"
         },
+        "previousConversation": {
+          "label": "이전 대화로 이동"
+        },
+        "nextConversation": {
+          "label": "다음 대화로 이동"
+        },
         "toggleMultiInput": {
           "label": "다중 입력 켜기/끄기"
         },

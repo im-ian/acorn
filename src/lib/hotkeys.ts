@@ -55,6 +55,8 @@ export const Hotkeys = {
   uiScaleUp: "$mod+=",
   uiScaleUpShift: "$mod+Shift+Equal",
   uiScaleReset: "$mod+0",
+  previousConversation: "$mod+ArrowLeft",
+  nextConversation: "$mod+ArrowRight",
   toggleMultiInput: "$mod+Alt+KeyI",
   focusPaneLeft: "$mod+Alt+ArrowLeft",
   focusPaneRight: "$mod+Alt+ArrowRight",
