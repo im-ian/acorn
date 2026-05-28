@@ -82,6 +82,20 @@ describe("terminal file links", () => {
     ]);
   });
 
+  it("finds home-relative file references", () => {
+    expect(
+      findTerminalFileReferences("see ~/projects/acorn/src/App.tsx:12:5"),
+    ).toEqual([
+      {
+        path: "~/projects/acorn/src/App.tsx",
+        line: 12,
+        column: 5,
+        text: "~/projects/acorn/src/App.tsx:12:5",
+        startIndex: 4,
+      },
+    ]);
+  });
+
   it("finds file references with a trailing colon and no line number", () => {
     expect(
       findTerminalFileReferences(
@@ -167,6 +181,22 @@ describe("terminal file links", () => {
     );
     expect(resolveTerminalFilePath("/repo/app", "/tmp/file.ts")).toBe(
       "/tmp/file.ts",
+    );
+  });
+
+  it("resolves home-relative paths when a home directory is available", () => {
+    expect(
+      resolveTerminalFilePath(
+        "/repo/app",
+        "~/projects/acorn/src/App.tsx",
+        "/Users/me",
+      ),
+    ).toBe("/Users/me/projects/acorn/src/App.tsx");
+  });
+
+  it("leaves home-relative paths untouched without a home directory", () => {
+    expect(resolveTerminalFilePath("/repo/app", "~/src/App.tsx")).toBe(
+      "~/src/App.tsx",
     );
   });
 

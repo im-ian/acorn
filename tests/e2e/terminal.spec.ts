@@ -505,6 +505,112 @@ test.describe("terminal: spawn", () => {
     );
   });
 
+  test("opens home-relative terminal file links in the code viewer", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("plugin:path|resolve_directory", () => "/Users/tester");
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_cwd", () => "/tmp/demo");
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __homeFileLinkChannelId?: number;
+        [key: string]: unknown;
+      };
+      w.__homeFileLinkChannelId = channel.id;
+      return 1;
+    });
+    await tauri.handle("fs_file_exists", (args) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __fsFileExistsCalls?: string[] };
+      w.__fsFileExistsCalls = [...(w.__fsFileExistsCalls ?? []), path];
+      return path === "/Users/tester/projects/acorn/src/App.tsx";
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/Users/tester/projects/acorn/src/App.tsx") {
+        throw new Error(`unexpected path: ${path}`);
+      }
+      return {
+        content: "home-relative file link\nresolved target",
+        size: 48,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __homeFileLinkChannelId?: number })
+              .__homeFileLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const linkText = "~/projects/acorn/src/App.tsx:2";
+    await emitSubscribedPtyOutput(
+      page,
+      "__homeFileLinkChannelId",
+      `${linkText}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(linkText);
+
+    const screenBox = await page.locator(".xterm-screen").boundingBox();
+    expect(screenBox).not.toBeNull();
+    await page.mouse.move(screenBox!.x + 36, screenBox!.y + 10);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __fsFileExistsCalls?: string[] })
+              .__fsFileExistsCalls ?? []
+          ).includes("/Users/tester/projects/acorn/src/App.tsx"),
+        ),
+      )
+      .toBe(true);
+    await page.waitForTimeout(30);
+    await page.mouse.click(screenBox!.x + 36, screenBox!.y + 10);
+
+    await expect(
+      page.getByRole("button", {
+        name: /App\.tsx Close tab/,
+      }),
+    ).toBeVisible();
+    await expect(page.locator('[data-acorn-target-line="true"]')).toContainText(
+      "resolved target",
+    );
+  });
+
   test("does not underline or open missing file terminal links", async ({
     page,
     tauri,

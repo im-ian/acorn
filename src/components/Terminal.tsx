@@ -11,6 +11,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowDownToLine } from "lucide-react";
 import { createPortal } from "react-dom";
@@ -662,13 +663,35 @@ export function Terminal({
       }
       return baseCwd;
     };
+    let terminalFileHomeDirPromise: Promise<string | null> | null = null;
+    const resolveTerminalFileHomeDir = (): Promise<string | null> => {
+      if (!terminalFileHomeDirPromise) {
+        terminalFileHomeDirPromise = homeDir()
+          .then((home) => home?.replace(/\/+$/u, "") ?? null)
+          .catch((err: unknown) => {
+            console.debug("[Terminal] home_dir for file link failed", err);
+            return null;
+          });
+      }
+      return terminalFileHomeDirPromise;
+    };
     const resolveOpenableTerminalFileReferences = async (
       references: TerminalFileReference[],
     ): Promise<TerminalFileReference[]> => {
-      const baseCwd = await resolveTerminalFileBaseCwd();
+      const needsHome = references.some((reference) =>
+        reference.path.startsWith("~/"),
+      );
+      const [baseCwd, home] = await Promise.all([
+        resolveTerminalFileBaseCwd(),
+        needsHome ? resolveTerminalFileHomeDir() : Promise.resolve(null),
+      ]);
       const resolved: Array<TerminalFileReference | null> = await Promise.all(
         references.map(async (reference) => {
-          const absolutePath = resolveTerminalFilePath(baseCwd, reference.path);
+          const absolutePath = resolveTerminalFilePath(
+            baseCwd,
+            reference.path,
+            home,
+          );
           try {
             if (!(await api.fsFileExists(absolutePath))) {
               return null;
@@ -686,12 +709,16 @@ export function Terminal({
     };
     const openTerminalFileReference = (reference: TerminalFileReference) => {
       void (async () => {
-        const path =
-          reference.absolutePath ??
-          resolveTerminalFilePath(
-            await resolveTerminalFileBaseCwd(),
-            reference.path,
-          );
+        let path = reference.absolutePath;
+        if (!path) {
+          const [baseCwd, home] = await Promise.all([
+            resolveTerminalFileBaseCwd(),
+            reference.path.startsWith("~/")
+              ? resolveTerminalFileHomeDir()
+              : Promise.resolve(null),
+          ]);
+          path = resolveTerminalFilePath(baseCwd, reference.path, home);
+        }
         try {
           if (!(await api.fsFileExists(path))) {
             return;
