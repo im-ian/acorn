@@ -34,8 +34,12 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { Pane } from "./Pane";
 import { useAppStore } from "../store";
-import { endAcornDrag, getCurrentTabPayload } from "../lib/dnd";
+import { endAcornDrag } from "../lib/dnd";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
+import {
+  cancelWorkspaceTabDrag,
+  getWorkspaceTabDragSession,
+} from "../lib/workspaceTabDrag";
 
 const REPO = "/Users/me/repo";
 const HOME = "/Users/me";
@@ -172,29 +176,19 @@ function seedActivePaneWithTabs(tabs: Session[], activeTabId: string): void {
   }));
 }
 
-function makeDataTransfer(): DataTransfer {
-  return {
-    dropEffect: "none",
-    effectAllowed: "all",
-    setData: vi.fn(),
-    getData: vi.fn(() => ""),
-    clearData: vi.fn(),
-    files: [] as unknown as FileList,
-    items: [] as unknown as DataTransferItemList,
-    types: [],
-    setDragImage: vi.fn(),
-  };
-}
-
-function dispatchDragStart(target: Element, dataTransfer: DataTransfer): Event {
-  const event = new Event("dragstart", { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  target.dispatchEvent(event);
-  return event;
-}
-
-function dispatchDragEnd(target: Element): Event {
-  const event = new Event("dragend", { bubbles: true, cancelable: true });
+function dispatchPointer(
+  target: Element,
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  init: { clientX: number; clientY: number; button?: number; pointerId?: number },
+): Event {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: init.button ?? 0,
+    clientX: init.clientX,
+    clientY: init.clientY,
+  });
+  Object.defineProperty(event, "pointerId", { value: init.pointerId ?? 1 });
   target.dispatchEvent(event);
   return event;
 }
@@ -206,6 +200,7 @@ describe("Pane empty state", () => {
   beforeEach(() => {
     resetStore();
     endAcornDrag();
+    cancelWorkspaceTabDrag();
     vi.clearAllMocks();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -216,6 +211,7 @@ describe("Pane empty state", () => {
     act(() => root.unmount());
     container.remove();
     endAcornDrag();
+    cancelWorkspaceTabDrag();
   });
 
   it("opens a terminal when Space is pressed twice while an empty pane is focused", async () => {
@@ -469,7 +465,7 @@ describe("Pane empty state", () => {
     expect(useAppStore.getState().focusedPaneId).toBe("pane-2");
   });
 
-  it("starts tab drag from active tab chrome outside the inner handle", () => {
+  it("starts tab drag from active tab chrome after pointer movement", () => {
     const active = session("active-session");
     seedActivePaneWithTab(active);
 
@@ -482,37 +478,92 @@ describe("Pane empty state", () => {
     );
     const tab = dragHandle?.closest('[role="button"]');
     expect(tab).toBeInstanceOf(HTMLElement);
-    expect((tab as HTMLElement).getAttribute("draggable")).toBe("true");
 
-    const dataTransfer = makeDataTransfer();
     act(() => {
-      dispatchDragStart(tab!, dataTransfer);
+      dispatchPointer(tab!, "pointerdown", { clientX: 32, clientY: 12 });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 48,
+        clientY: 12,
+      });
     });
 
-    expect(dataTransfer.setDragImage).toHaveBeenCalled();
-    expect(getCurrentTabPayload()).toMatchObject({
-      kind: "tab",
+    expect(getWorkspaceTabDragSession()?.payload).toMatchObject({
       tabId: active.id,
       fromPaneId: "root",
     });
   });
 
-  it("clears a tab drag payload when the source drag ends", () => {
+  it("keeps small pointer movement on the click path selecting the tab", () => {
     const first = session("first-session");
     const second = session("second-session");
     seedActivePaneWithTabs([first, second], first.id);
-    const addWindowListener = window.addEventListener.bind(window);
-    const addWindowListenerSpy = vi
-      .spyOn(window, "addEventListener")
-      .mockImplementation((type, listener, options) => {
-        if (type === "dragend" || type === "drop") return;
-        addWindowListener(type, listener, options);
-      });
 
     act(() => {
       root.render(<Pane paneId="root" />);
     });
-    addWindowListenerSpy.mockRestore();
+
+    const secondTab = container
+      .querySelector(`[data-tab-drag-handle="${second.id}"]`)
+      ?.closest('[role="button"]');
+    expect(secondTab).toBeInstanceOf(HTMLElement);
+
+    act(() => {
+      dispatchPointer(secondTab!, "pointerdown", { clientX: 32, clientY: 12 });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 34,
+        clientY: 12,
+      });
+      dispatchPointer(window as unknown as Element, "pointerup", {
+        clientX: 34,
+        clientY: 12,
+      });
+      secondTab!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(getWorkspaceTabDragSession()).toBeNull();
+    expect(useAppStore.getState().activeTabId).toBe(second.id);
+  });
+
+  it("starts tab drag from the title text area without native draggable", () => {
+    const active = session("active-session");
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const dragHandle = container.querySelector(
+      `[data-tab-drag-handle="${active.id}"]`,
+    );
+    const tab = dragHandle?.closest('[role="button"]');
+    expect(tab).toBeInstanceOf(HTMLElement);
+    expect((tab as HTMLElement).hasAttribute("draggable")).toBe(false);
+    expect((dragHandle as HTMLElement).hasAttribute("draggable")).toBe(false);
+
+    act(() => {
+      dispatchPointer(tab!, "pointerdown", { clientX: 32, clientY: 12 });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 44,
+        clientY: 12,
+      });
+    });
+
+    expect(getWorkspaceTabDragSession()?.payload).toMatchObject({
+      tabId: active.id,
+      fromPaneId: "root",
+    });
+  });
+
+  it("clears a tab drag payload when the source pointer ends", () => {
+    const first = session("first-session");
+    const second = session("second-session");
+    seedActivePaneWithTabs([first, second], first.id);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
 
     const firstTab = container
       .querySelector(`[data-tab-drag-handle="${first.id}"]`)
@@ -524,22 +575,33 @@ describe("Pane empty state", () => {
     expect(secondTab).toBeInstanceOf(HTMLElement);
 
     act(() => {
-      dispatchDragStart(firstTab!, makeDataTransfer());
+      dispatchPointer(firstTab!, "pointerdown", { clientX: 32, clientY: 12 });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 48,
+        clientY: 12,
+      });
     });
-    expect(getCurrentTabPayload()).toMatchObject({
+    expect(getWorkspaceTabDragSession()?.payload).toMatchObject({
       tabId: first.id,
       fromPaneId: "root",
     });
 
     act(() => {
-      dispatchDragEnd(firstTab!);
+      dispatchPointer(window as unknown as Element, "pointerup", {
+        clientX: 48,
+        clientY: 12,
+      });
     });
-    expect(getCurrentTabPayload()).toBeNull();
+    expect(getWorkspaceTabDragSession()).toBeNull();
 
     act(() => {
-      dispatchDragStart(secondTab!, makeDataTransfer());
+      dispatchPointer(secondTab!, "pointerdown", { clientX: 32, clientY: 12 });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 48,
+        clientY: 12,
+      });
     });
-    expect(getCurrentTabPayload()).toMatchObject({
+    expect(getWorkspaceTabDragSession()?.payload).toMatchObject({
       tabId: second.id,
       fromPaneId: "root",
     });
@@ -560,22 +622,14 @@ describe("Pane empty state", () => {
     expect(closeButton).toBeInstanceOf(HTMLElement);
     expect(tab).toBeInstanceOf(HTMLElement);
 
-    let dragStartDefaultPrevented = false;
     act(() => {
-      closeButton!.dispatchEvent(
-        new MouseEvent("mousedown", {
-          bubbles: true,
-          button: 0,
-          cancelable: true,
-        }),
-      );
-      dragStartDefaultPrevented = dispatchDragStart(
-        tab!,
-        makeDataTransfer(),
-      ).defaultPrevented;
+      dispatchPointer(closeButton!, "pointerdown", { clientX: 110, clientY: 12 });
+      dispatchPointer(window as unknown as Element, "pointermove", {
+        clientX: 140,
+        clientY: 12,
+      });
     });
 
-    expect(dragStartDefaultPrevented).toBe(true);
-    expect(getCurrentTabPayload()).toBeNull();
+    expect(getWorkspaceTabDragSession()).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import {
   GitFork,
   Pencil,
   PencilLine,
+  Sparkles,
   SplitSquareHorizontal,
   SplitSquareVertical,
   SquareX,
@@ -17,12 +18,14 @@ import {
   X,
 } from "lucide-react";
 import {
+  useCallback,
   useMemo,
   useRef,
   useState,
   useEffect,
-  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { selectSessionsById, useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
@@ -35,14 +38,7 @@ import {
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import {
-  beginTabDrag,
-  endAcornDrag,
-  getCurrentFilePayload,
-  getCurrentTabPayload,
-  isAcornDrag,
-  isTabDrag,
-} from "../lib/dnd";
+import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
 import {
   hasConfiguredEditor,
   openInConfiguredEditor,
@@ -76,6 +72,15 @@ import {
   type CodeWorkspaceTab,
   type SessionWorkspaceTab,
 } from "../lib/workspaceTabs";
+import {
+  beginWorkspaceTabDrag,
+  cancelWorkspaceTabDrag,
+  finishWorkspaceTabDrag,
+  registerWorkspaceTabDropTarget,
+  updateWorkspaceTabDrag,
+  useWorkspaceTabDragSession,
+  type WorkspaceTabDragSession,
+} from "../lib/workspaceTabDrag";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
   idle: "bg-fg-muted",
@@ -94,6 +99,7 @@ const STATUS_ICON: Record<SessionStatus, string> = {
 };
 
 const EMPTY_PANE_DOUBLE_SPACE_MS = 500;
+const TAB_DRAG_START_THRESHOLD_PX = 6;
 
 type PaneTranslationKey = Extract<TranslationKey, `pane.${string}`>;
 
@@ -118,8 +124,8 @@ type PaneTab =
 
 /**
  * A single workspace pane. Hosts a tab strip and a body with the active
- * session's Terminal mounted. Tabs are draggable and the body is a drop
- * target for tab drags (via {@link PaneDropOverlay}).
+ * session's Terminal mounted. Tabs use pointer-based drag and the body is a
+ * drop target for tab drags (via {@link PaneDropOverlay}).
  *
  * State (tab list, active session) lives in the global store keyed by
  * `paneId`. The pane itself only renders.
@@ -566,31 +572,24 @@ function isTabDragSuppressedTarget(target: EventTarget | null): boolean {
     : false;
 }
 
-function setTabDragImage(e: React.DragEvent<HTMLElement>): void {
-  const source = e.currentTarget;
-  const rect = source.getBoundingClientRect();
-  const clone = source.cloneNode(true) as HTMLElement;
-  clone.setAttribute("aria-hidden", "true");
-  clone.style.position = "fixed";
-  clone.style.top = "-1000px";
-  clone.style.left = "-1000px";
-  clone.style.width = `${rect.width}px`;
-  clone.style.height = `${rect.height}px`;
-  clone.style.pointerEvents = "none";
-  clone.style.zIndex = "9999";
-  clone.style.transform = "none";
-  clone.style.opacity = "0.95";
-  clone.style.boxShadow = "0 8px 20px rgba(0, 0, 0, 0.32)";
-  document.body.appendChild(clone);
+interface PointerPoint {
+  x: number;
+  y: number;
+}
 
-  const offsetX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-  const offsetY = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-  try {
-    e.dataTransfer.setDragImage(clone, offsetX, offsetY);
-  } catch {
-    // Keep drag startup working when a webview rejects a custom drag image.
-  }
-  window.setTimeout(() => clone.remove(), 0);
+function distanceSquared(a: PointerPoint, b: PointerPoint): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+function rectContainsPoint(rect: DOMRect, point: PointerPoint): boolean {
+  return (
+    point.x >= rect.left &&
+    point.x <= rect.right &&
+    point.y >= rect.top &&
+    point.y <= rect.bottom
+  );
 }
 
 interface TabStripProps {
@@ -633,8 +632,9 @@ function TabStrip({
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const tabDrag = useWorkspaceTabDragSession();
 
-  function computeInsertIndex(clientX: number): number {
+  const computeInsertIndex = useCallback((clientX: number): number => {
     let idx = tabs.length;
     for (let i = 0; i < tabs.length; i++) {
       const el = tabRefs.current.get(tabs[i].id);
@@ -646,7 +646,37 @@ function TabStrip({
       }
     }
     return idx;
-  }
+  }, [tabs]);
+
+  useEffect(() => {
+    return registerWorkspaceTabDropTarget({
+      id: `tab-strip:${paneId}`,
+      priority: 20,
+      getRect: () => stripRef.current?.getBoundingClientRect() ?? null,
+      onDrop: (payload, point) => {
+        const idx = computeInsertIndex(point.x);
+        if (payload.fromPaneId === paneId) {
+          const currentIdx = tabs.findIndex((t) => t.id === payload.tabId);
+          if (currentIdx === idx || currentIdx + 1 === idx) return;
+        }
+        onDropReorder(payload, idx);
+      },
+    });
+  }, [computeInsertIndex, onDropReorder, paneId, tabs]);
+
+  useEffect(() => {
+    if (!tabDrag) {
+      if (insertIndex !== null) setInsertIndex(null);
+      return;
+    }
+    const rect = stripRef.current?.getBoundingClientRect();
+    if (!rect || !rectContainsPoint(rect, tabDrag.pointer)) {
+      if (insertIndex !== null) setInsertIndex(null);
+      return;
+    }
+    const next = computeInsertIndex(tabDrag.pointer.x);
+    if (next !== insertIndex) setInsertIndex(next);
+  }, [computeInsertIndex, insertIndex, tabDrag]);
 
   return (
     <div
@@ -654,24 +684,21 @@ function TabStrip({
       data-pane-tab-strip={paneId}
       className="acorn-no-scrollbar relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
       onDragEnter={(e) => {
-        if (!isAcornDrag(e)) return;
+        if (!getCurrentFilePayload()) return;
         e.preventDefault();
-        setInsertIndex(computeInsertIndex(e.clientX));
       }}
       onDragOver={(e) => {
-        if (!isAcornDrag(e)) return;
+        if (!getCurrentFilePayload()) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = isTabDrag(e) ? "move" : "copy";
-        setInsertIndex(computeInsertIndex(e.clientX));
+        e.dataTransfer.dropEffect = "copy";
       }}
       onDragLeave={(e) => {
         if (e.currentTarget === e.target) setInsertIndex(null);
       }}
       onDrop={(e) => {
-        if (!isAcornDrag(e)) return;
+        if (!getCurrentFilePayload()) return;
         e.preventDefault();
         try {
-          const idx = computeInsertIndex(e.clientX);
           setInsertIndex(null);
           const filePayload = getCurrentFilePayload();
           if (filePayload) {
@@ -679,14 +706,6 @@ function TabStrip({
             useAppStore.getState().openCodeViewerTab(filePayload.path);
             return;
           }
-          const payload = getCurrentTabPayload();
-          if (!payload) return;
-          // No-op: dropping onto the same pane at the same position.
-          if (payload.fromPaneId === paneId) {
-            const currentIdx = tabs.findIndex((t) => t.id === payload.tabId);
-            if (currentIdx === idx || currentIdx + 1 === idx) return;
-          }
-          onDropReorder(payload, idx);
         } finally {
           endAcornDrag();
         }
@@ -811,6 +830,9 @@ function TabItem({
   const liveInWorktree = useAppStore((s) =>
     session ? s.liveInWorktree[session.id] : false,
   );
+  const showWorktreeIcon = session
+    ? Boolean(liveInWorktree ?? hasRecordedWorktree(session))
+    : false;
   // Subscribe to the editor command so the menu's enabled/disabled state
   // updates immediately when the user configures an editor in Settings.
   const editorCommand = useSettings(
@@ -820,7 +842,10 @@ function TabItem({
   const editorConfigured = editorCommand.trim().length > 0;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
-  const suppressNextDragStartRef = useRef(false);
+  const pendingDragCleanupRef = useRef<(() => void) | null>(null);
+  const suppressNextClickRef = useRef(false);
+  const tabDrag = useWorkspaceTabDragSession();
+  const isDraggingThisTab = tabDrag?.payload.tabId === tab.id;
   // Per-session agent detection result, refreshed each time the context
   // menu opens. Null while loading; the menu rebuilds when this resolves
   // so the Fork item gets the right label / enabled state.
@@ -856,6 +881,125 @@ function TabItem({
   useEffect(() => {
     if (isGeneratingTitle && editing) setEditing(false);
   }, [editing, isGeneratingTitle]);
+
+  useEffect(() => {
+    return () => {
+      pendingDragCleanupRef.current?.();
+      pendingDragCleanupRef.current = null;
+    };
+  }, []);
+
+  function onTabPointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
+    if (
+      e.button !== 0 ||
+      isTabDragSuppressedTarget(e.target)
+    ) {
+      return;
+    }
+
+    pendingDragCleanupRef.current?.();
+    const source = e.currentTarget;
+    const rect = source.getBoundingClientRect();
+    const start = { x: e.clientX, y: e.clientY };
+    const offset = {
+      x: Math.max(0, Math.min(e.clientX - rect.left, rect.width)),
+      y: Math.max(0, Math.min(e.clientY - rect.top, rect.height)),
+    };
+    const pointerId = e.pointerId;
+    let dragging = false;
+
+    const cleanup = () => {
+      try {
+        source.releasePointerCapture?.(pointerId);
+      } catch {
+        // The pointer may already be released if the tab moved or unmounted.
+      }
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerCancel, true);
+      window.removeEventListener("blur", onWindowBlur);
+      if (pendingDragCleanupRef.current === cleanup) {
+        pendingDragCleanupRef.current = null;
+      }
+    };
+
+    const clearClickSuppressionSoon = () => {
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 0);
+    };
+
+    const startDragging = (point: PointerPoint) => {
+      dragging = true;
+      suppressNextClickRef.current = true;
+      if (editing) setEditing(false);
+      beginWorkspaceTabDrag({
+        payload: { tabId: tab.id, fromPaneId: paneId },
+        title: tab.title,
+        pointer: point,
+        offset,
+        sourceRect: { width: rect.width, height: rect.height },
+      });
+    };
+
+    function onPointerMove(event: PointerEvent): void {
+      if (event.pointerId !== pointerId) return;
+      const point = { x: event.clientX, y: event.clientY };
+      if (!dragging) {
+        if (
+          distanceSquared(point, start) <
+          TAB_DRAG_START_THRESHOLD_PX ** 2
+        ) {
+          return;
+        }
+        startDragging(point);
+      } else {
+        updateWorkspaceTabDrag(point);
+      }
+      event.preventDefault();
+    }
+
+    function onPointerUp(event: PointerEvent): void {
+      if (event.pointerId !== pointerId) return;
+      cleanup();
+      if (dragging) {
+        event.preventDefault();
+        event.stopPropagation();
+        finishWorkspaceTabDrag({ x: event.clientX, y: event.clientY });
+        clearClickSuppressionSoon();
+      }
+    }
+
+    function onPointerCancel(event: PointerEvent): void {
+      if (event.pointerId !== pointerId) return;
+      cleanup();
+      if (dragging) {
+        event.preventDefault();
+        cancelWorkspaceTabDrag();
+        clearClickSuppressionSoon();
+      }
+    }
+
+    function onWindowBlur(): void {
+      cleanup();
+      if (dragging) {
+        cancelWorkspaceTabDrag();
+        clearClickSuppressionSoon();
+      }
+    }
+
+    pendingDragCleanupRef.current = cleanup;
+    try {
+      source.setPointerCapture?.(pointerId);
+    } catch {
+      // Synthetic events and some webviews can reject capture; window
+      // listeners still cover normal in-window dragging.
+    }
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerCancel, true);
+    window.addEventListener("blur", onWindowBlur);
+  }
 
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
@@ -1042,29 +1186,19 @@ function TabItem({
         ref={registerRef}
         role="button"
         tabIndex={0}
-        draggable
-        style={{ WebkitUserDrag: "element" } as CSSProperties}
-        onMouseDownCapture={(e) => {
-          suppressNextDragStartRef.current = isTabDragSuppressedTarget(e.target);
-        }}
+        onPointerDown={onTabPointerDown}
         onDragStart={(e) => {
-          if (
-            suppressNextDragStartRef.current ||
-            isTabDragSuppressedTarget(e.target)
-          ) {
+          if (!getCurrentFilePayload()) {
             e.preventDefault();
             e.stopPropagation();
-            suppressNextDragStartRef.current = false;
-            endAcornDrag();
-            return;
           }
-          if (editing) setEditing(false);
-          setTabDragImage(e);
-          beginTabDrag(e, { tabId: tab.id, fromPaneId: paneId });
         }}
-        onDragEnd={() => {
-          suppressNextDragStartRef.current = false;
-          endAcornDrag();
+        onClickCapture={(e) => {
+          if (suppressNextClickRef.current) {
+            suppressNextClickRef.current = false;
+            e.preventDefault();
+            e.stopPropagation();
+          }
         }}
         onClick={editing ? undefined : onSelect}
         onDoubleClick={(e) => {
@@ -1091,6 +1225,7 @@ function TabItem({
         }}
         className={cn(
           "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pr-1 text-[13px] leading-5 transition",
+          isDraggingThisTab && "opacity-40",
           active
             ? "bg-bg text-fg"
             : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
@@ -1099,11 +1234,9 @@ function TabItem({
         <div
           className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-3"
           data-tab-drag-handle={tab.id}
-          draggable
-          style={{ WebkitUserDrag: "element" } as CSSProperties}
         >
           {agentProvider ? (
-            <Tooltip label={agentProvider} side="bottom" draggable>
+            <Tooltip label={agentProvider} side="bottom">
               <AgentProviderIcon
                 provider={agentProvider}
                 className={cn(
@@ -1145,11 +1278,9 @@ function TabItem({
           {isGeneratingTitle && !editing ? (
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
-              draggable
             />
           ) : null}
-          {session &&
-          (liveInWorktree ?? hasRecordedWorktree(session)) ? (
+          {showWorktreeIcon ? (
             <GitBranch
               size={10}
               className="pointer-events-none shrink-0 text-fg-muted"
@@ -1197,6 +1328,16 @@ function TabItem({
         {active ? (
           <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent/30" />
         ) : null}
+        {isDraggingThisTab ? (
+          <WorkspaceTabDragGhost
+            drag={tabDrag}
+            tab={tab}
+            session={session}
+            agentProvider={agentProvider}
+            isGeneratingTitle={isGeneratingTitle}
+            showWorktreeIcon={showWorktreeIcon}
+          />
+        ) : null}
       </div>
       <ContextMenu
         open={menu !== null}
@@ -1206,6 +1347,77 @@ function TabItem({
         items={menuItems}
       />
     </>
+  );
+}
+
+function WorkspaceTabDragGhost({
+  drag,
+  tab,
+  session,
+  agentProvider,
+  isGeneratingTitle,
+  showWorktreeIcon,
+}: {
+  drag: WorkspaceTabDragSession;
+  tab: PaneTab;
+  session: Session | null;
+  agentProvider: SessionAgentProvider | null;
+  isGeneratingTitle: boolean;
+  showWorktreeIcon: boolean;
+}) {
+  return createPortal(
+    <div
+      aria-hidden
+      className="pointer-events-none fixed z-[9999] flex items-center gap-1.5 border border-border bg-bg-elevated px-3 text-[13px] leading-5 text-fg opacity-95 shadow-2xl"
+      style={{
+        left: drag.pointer.x - drag.offset.x,
+        top: drag.pointer.y - drag.offset.y,
+        width: drag.sourceRect.width,
+        height: drag.sourceRect.height,
+      }}
+    >
+      {agentProvider ? (
+        <AgentProviderIcon
+          provider={agentProvider}
+          className={cn(
+            "pointer-events-none size-2.5",
+            session && STATUS_ICON[session.status],
+          )}
+        />
+      ) : tab.kind === "code" ? (
+        <Files
+          size={11}
+          className="pointer-events-none shrink-0 text-fg-muted"
+        />
+      ) : (
+        <span
+          className={cn(
+            "pointer-events-none size-1.5 shrink-0 rounded-full",
+            session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
+          )}
+        />
+      )}
+      <span className="min-w-0 truncate">{drag.title}</span>
+      {isGeneratingTitle ? (
+        <Sparkles
+          size={9}
+          className="pointer-events-none shrink-0 text-accent"
+        />
+      ) : null}
+      {showWorktreeIcon ? (
+        <GitBranch
+          size={10}
+          className="pointer-events-none shrink-0 text-fg-muted"
+        />
+      ) : null}
+      {session?.kind === "control" ? (
+        <Bot
+          size={10}
+          className="pointer-events-none shrink-0 text-accent"
+        />
+      ) : null}
+    </div>,
+    document.body,
   );
 }
 

@@ -158,7 +158,7 @@ test.describe("pane / sidebar shortcuts", () => {
     await expect(dragHandle).toBeVisible();
 
     await expect(closeButton).toHaveAttribute("draggable", "false");
-    await expect(dragHandle).toHaveAttribute("draggable", "true");
+    await expect(dragHandle).not.toHaveAttribute("draggable", "true");
 
     const geometry = await page.evaluate(() => {
       const close = document.querySelector(
@@ -212,19 +212,39 @@ test.describe("pane / sidebar shortcuts", () => {
     const renameInput = page.locator("[data-tab-rename-input]");
     await expect(renameInput).toBeFocused();
     await expect(renameInput).toHaveAttribute("draggable", "false");
-    await expect(dragHandle).toHaveAttribute("draggable", "true");
+    await expect(dragHandle).not.toHaveAttribute("draggable", "true");
 
     await page.evaluate(() => {
       const handle = document.querySelector(
         '[data-tab-drag-handle="s-1"]',
       );
       if (!handle) throw new Error("missing tab drag handle");
-      const event = new DragEvent("dragstart", {
+      const rect = handle.getBoundingClientRect();
+      const pointerId = 1;
+      handle.dispatchEvent(new PointerEvent("pointerdown", {
         bubbles: true,
         cancelable: true,
-        dataTransfer: new DataTransfer(),
-      });
-      handle.dispatchEvent(event);
+        pointerId,
+        button: 0,
+        clientX: rect.left + 4,
+        clientY: rect.top + rect.height / 2,
+      }));
+      window.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        button: 0,
+        clientX: rect.left + 24,
+        clientY: rect.top + rect.height / 2,
+      }));
+      window.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        button: 0,
+        clientX: rect.left + 24,
+        clientY: rect.top + rect.height / 2,
+      }));
     });
 
     await expect(renameInput).toHaveCount(0);
