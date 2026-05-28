@@ -1602,6 +1602,8 @@ function AgentHistoryTab({
               const providerTone =
                 item.provider === "codex"
                   ? "bg-[#3867ff]/15 text-[#5f7dff]"
+                  : item.provider === "antigravity"
+                    ? "bg-[#19a974]/15 text-[#22b47e]"
                   : "bg-[#de7356]/15 text-[#de7356]";
               return (
                 <div

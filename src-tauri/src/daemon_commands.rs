@@ -351,6 +351,7 @@ fn parse_agent_kind(s: &str) -> Option<AgentKind> {
         "llm" => Some(AgentKind::Llm),
         "open-interpreter" => Some(AgentKind::OpenInterpreter),
         "codex" => Some(AgentKind::Codex),
+        "antigravity" => Some(AgentKind::Antigravity),
         "unknown" => Some(AgentKind::Unknown),
         _ => None,
     }
@@ -363,6 +364,7 @@ fn agent_kind_to_str(k: AgentKind) -> String {
         AgentKind::Llm => "llm".into(),
         AgentKind::OpenInterpreter => "open-interpreter".into(),
         AgentKind::Codex => "codex".into(),
+        AgentKind::Antigravity => "antigravity".into(),
         AgentKind::Unknown => "unknown".into(),
     }
 }
@@ -424,6 +426,10 @@ mod tests {
         assert!(matches!(
             parse_agent_kind("claude-code"),
             Some(AgentKind::ClaudeCode)
+        ));
+        assert!(matches!(
+            parse_agent_kind("antigravity"),
+            Some(AgentKind::Antigravity)
         ));
         assert!(parse_agent_kind("nope").is_none());
     }

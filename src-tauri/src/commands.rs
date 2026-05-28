@@ -115,9 +115,7 @@ pub async fn warm_macos_folder_permissions() -> AppResult<Vec<FolderPermissionWa
 }
 
 #[tauri::command]
-pub async fn reset_macos_folder_permissions<R: Runtime>(
-    app: AppHandle<R>,
-) -> AppResult<()> {
+pub async fn reset_macos_folder_permissions<R: Runtime>(app: AppHandle<R>) -> AppResult<()> {
     let bundle_id = app.config().identifier.clone();
     run_blocking("reset_macos_folder_permissions", move || {
         reset_macos_folder_permissions_inner(&bundle_id)
@@ -622,6 +620,9 @@ fn enrich_session(mut s: Session) -> Session {
         crate::agent_resume::live_transcript(s.id).map(|transcript| match transcript.kind {
             crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
             crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
+            crate::agent_resume::AgentKind::Antigravity => {
+                acorn_session::SessionAgentProvider::Antigravity
+            }
         });
     s.agent_provider = live_provider.or(s.agent_provider);
     s
@@ -1332,14 +1333,12 @@ pub fn update_session_worktree(
 pub struct AgentDetection {
     /// Parent claude session id when a claude transcript is present at
     /// `~/.claude/projects/<slug>/<uuid>.jsonl`. This is whatever UUID
-    /// claude minted for its most recent run in this Acorn session —
-    /// observed live by `transcript_watcher` and mirrored to
-    /// `<state_dir>/claude.id` by the shim. It is *not* guaranteed to
-    /// equal the Acorn session UUID.
+    /// claude minted for its most recent run in this Acorn session.
     pub claude: Option<String>,
-    /// Codex session UUID captured by the codex shim in
-    /// `<state_dir>/codex.id` after the first zero-arg `codex` run.
+    /// Codex session UUID captured from the live rollout transcript.
     pub codex: Option<String>,
+    /// Antigravity conversation UUID captured from the live brain transcript.
+    pub antigravity: Option<String>,
 }
 
 /// Stage a parent claude transcript inside the new worktree's project
@@ -1433,8 +1432,8 @@ pub fn prepare_claude_fork(parent_uuid: String, new_cwd: String) -> AppResult<()
 
 /// Live-process snapshot of which agent transcripts (if any) the user is
 /// currently writing inside this Acorn session. Drives the Tab context
-/// menu's Fork items — they only appear while the underlying claude /
-/// codex process is alive in the session's PTY tree.
+/// menu's agent actions — they only appear while the underlying agent
+/// process is alive in the session's PTY tree.
 ///
 /// We deliberately re-run the full process scan on every call instead
 /// of reading the watcher's cached map. The cache is at most one cycle
@@ -1461,6 +1460,9 @@ pub fn detect_session_agent(
             }
             acorn_transcript::AgentKind::Codex => {
                 detection.codex = Some(uuid);
+            }
+            acorn_transcript::AgentKind::Antigravity => {
+                detection.antigravity = Some(uuid);
             }
         }
     }
@@ -2035,7 +2037,10 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        ProcessRefreshKind::new()
+            .with_cwd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always)
+            .with_cmd(UpdateKind::Always),
     );
 
     Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
@@ -2338,8 +2343,8 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .and_then(|s| s.daemon_session_id)
                 .and_then(daemon_pid_for);
-            let root_pid = parsed_id
-                .and_then(|uuid| status_poll_root_pid_source(&state, uuid, daemon_pid));
+            let root_pid =
+                parsed_id.and_then(|uuid| status_poll_root_pid_source(&state, uuid, daemon_pid));
             let shell_hint = parsed_id.and_then(|uuid| {
                 let (root, source) = root_pid?;
                 let has_child_now = has_live_descendant(&children, Pid::from_u32(root));
@@ -2359,7 +2364,7 @@ pub async fn detect_session_statuses(
                 }
             });
             // Resolve the live transcript via the persister's resume markers
-            // first (covers claude/codex run inside a shell session — JSONL
+            // first (covers claude/codex/antigravity run inside a shell session — JSONL
             // is named after the agent's own UUID, not Acorn's). Fall back
             // to the legacy Acorn-UUID-named JSONL so any direct claude
             // session-id caller keeps working.
@@ -2369,6 +2374,9 @@ pub async fn detect_session_statuses(
                     let kind = match t.kind {
                         agent_resume::AgentKind::Claude => acorn_session::status::AgentKind::Claude,
                         agent_resume::AgentKind::Codex => acorn_session::status::AgentKind::Codex,
+                        agent_resume::AgentKind::Antigravity => {
+                            acorn_session::status::AgentKind::Antigravity
+                        }
                     };
                     Some((t.path, kind))
                 }
@@ -2446,9 +2454,7 @@ fn status_poll_root_pid_source(
         .or_else(|| daemon_pid.map(|pid| (pid, StatusPollRootPidSource::UnattachedDaemon)))
 }
 
-fn shell_hint_for_unattached_daemon_status_poll(
-    has_live_descendant: bool,
-) -> acorn_pty::ShellHint {
+fn shell_hint_for_unattached_daemon_status_poll(has_live_descendant: bool) -> acorn_pty::ShellHint {
     if has_live_descendant {
         acorn_pty::ShellHint::Running
     } else {
@@ -2460,6 +2466,7 @@ fn status_agent_kind_to_provider(kind: StatusAgentKind) -> SessionAgentProvider 
     match kind {
         StatusAgentKind::Claude => SessionAgentProvider::Claude,
         StatusAgentKind::Codex => SessionAgentProvider::Codex,
+        StatusAgentKind::Antigravity => SessionAgentProvider::Antigravity,
     }
 }
 
@@ -2500,10 +2507,17 @@ fn live_agent_kind_in_descendants(
     let mut stack = children.get(&root).cloned().unwrap_or_default();
     while let Some(pid) = stack.pop() {
         if let Some(proc) = sys.process(pid) {
-            match process_basename(proc) {
-                "codex" => return Some(StatusAgentKind::Codex),
-                "claude" => return Some(StatusAgentKind::Claude),
-                _ => {}
+            if process_basename_matches(proc, "codex") {
+                return Some(StatusAgentKind::Codex);
+            }
+            if process_basename_matches(proc, "claude") {
+                return Some(StatusAgentKind::Claude);
+            }
+            if process_basename_matches(proc, "agy")
+                || process_basename_matches(proc, "antigravity")
+                || process_basename_matches(proc, "antigravity-cli")
+            {
+                return Some(StatusAgentKind::Antigravity);
             }
         }
         if let Some(kids) = children.get(&pid) {
@@ -2511,13 +2525,6 @@ fn live_agent_kind_in_descendants(
         }
     }
     None
-}
-
-fn process_basename(proc: &sysinfo::Process) -> &str {
-    proc.exe()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-        .unwrap_or_else(|| proc.name().to_str().unwrap_or(""))
 }
 
 /// `true` if any descendant of `root` exists in the children map. The root
@@ -2562,6 +2569,14 @@ mod status_hint_tests {
                 Some(acorn_pty::ShellHint::Running),
                 false,
                 Some(StatusAgentKind::Claude),
+            ),
+            Some(acorn_pty::ShellHint::Running),
+        );
+        assert_eq!(
+            refine_shell_hint_for_unpaired_agent(
+                Some(acorn_pty::ShellHint::Running),
+                false,
+                Some(StatusAgentKind::Antigravity),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -2851,6 +2866,22 @@ pub fn get_codex_resume_candidate(
     agent_resume::codex_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
 }
 
+/// Antigravity equivalent of `get_claude_resume_candidate`.
+#[tauri::command]
+pub fn get_antigravity_resume_candidate(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<agent_resume::ResumeCandidate>> {
+    let id = parse_id(&session_id)?;
+    if agent_is_running_in_session(&state, &id, "agy")
+        || agent_is_running_in_session(&state, &id, "antigravity")
+        || agent_is_running_in_session(&state, &id, "antigravity-cli")
+    {
+        return Ok(None);
+    }
+    agent_resume::antigravity_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
 /// Mark the current `claude.id` as seen so the modal does not pop again
 /// for the same UUID. Invoked by every modal-button handler (이어하기 /
 /// ID 복사 / 취소) — the only thing that revives the candidate is a
@@ -2868,6 +2899,13 @@ pub fn acknowledge_codex_resume(session_id: String) -> AppResult<()> {
     agent_resume::acknowledge_codex_resume(id).map_err(|e| AppError::Other(e.to_string()))
 }
 
+/// Antigravity equivalent of `acknowledge_claude_resume`.
+#[tauri::command]
+pub fn acknowledge_antigravity_resume(session_id: String) -> AppResult<()> {
+    let id = parse_id(&session_id)?;
+    agent_resume::acknowledge_antigravity_resume(id).map_err(|e| AppError::Other(e.to_string()))
+}
+
 /// `true` when a process matching `basename` is alive anywhere in the
 /// session's PTY descendant tree. Cheap process-table scan — fine on
 /// the focus path which fires at most a few times per second.
@@ -2878,7 +2916,7 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
         .or_else(|| state.pty.child_pid(session_id))
         // On cold app boot with background sessions enabled, the resume
         // probe can run before `pty_spawn` reattaches the frontend stream.
-        // Ask the daemon directly so live claude/codex processes still
+        // Ask the daemon directly so live agent processes still
         // suppress the modal during that attach race.
         .or_else(|| state.daemon_bridge.session_pid(*session_id))
     else {
@@ -2922,20 +2960,27 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
 /// makes the detection robust against the user's `claude` binary
 /// being a Bun-compiled symlink target rather than a script.
 fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
-    let basename = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
+    fn basename_matches(s: &str, target: &str) -> bool {
+        let base = s.rsplit('/').next().unwrap_or(s);
+        base == target
+            || base.strip_suffix(".js") == Some(target)
+            || base.strip_suffix(".mjs") == Some(target)
+            || base.strip_suffix(".cjs") == Some(target)
+    }
+
     if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
-        if basename(exe) == target {
+        if basename_matches(exe, target) {
             return true;
         }
     }
     if let Some(name) = proc.name().to_str() {
-        if name == target || basename(name) == target {
+        if basename_matches(name, target) {
             return true;
         }
     }
-    if let Some(first) = proc.cmd().first() {
-        let s = first.to_string_lossy();
-        if basename(&s) == target {
+    for arg in proc.cmd() {
+        let s = arg.to_string_lossy();
+        if basename_matches(&s, target) {
             return true;
         }
     }

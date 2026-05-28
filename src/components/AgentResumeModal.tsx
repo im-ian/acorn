@@ -44,6 +44,10 @@ const COPY: Record<AgentKind, AgentCopy> = {
     bodyKey: "dialogs.agentResume.bodyCodex",
     ariaLabelledBy: "acorn-codex-resume-title",
   },
+  antigravity: {
+    bodyKey: "dialogs.agentResume.bodyAntigravity",
+    ariaLabelledBy: "acorn-antigravity-resume-title",
+  },
 };
 
 /**
@@ -79,8 +83,10 @@ export function AgentResumeModal({
   const ack = () => {
     if (agent === "claude") {
       void api.acknowledgeClaudeResume(sessionId).catch(() => {});
-    } else {
+    } else if (agent === "codex") {
       void api.acknowledgeCodexResume(sessionId).catch(() => {});
+    } else {
+      void api.acknowledgeAntigravityResume(sessionId).catch(() => {});
     }
   };
 
@@ -94,7 +100,7 @@ export function AgentResumeModal({
     });
     // Deliberately do NOT ack here. Resume means "I want to keep
     // working in this conversation"; after the user exits the
-    // resumed claude/codex run, the same JSONL UUID stays on disk
+    // resumed agent run, the same JSONL UUID stays on disk
     // and the next cold boot should re-offer the modal so they can
     // pick it up again. Cancel and Copy still ack — those signal
     // "I'm done deciding about this UUID".

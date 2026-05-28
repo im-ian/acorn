@@ -229,6 +229,7 @@ pub enum AgentKind {
     Llm,
     OpenInterpreter,
     Codex,
+    Antigravity,
     Unknown,
 }
 

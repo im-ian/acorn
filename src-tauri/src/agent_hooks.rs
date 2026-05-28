@@ -77,6 +77,7 @@ pub struct AgentHookServer {
 }
 
 impl AgentHookServer {
+    #[cfg(test)]
     pub fn start() -> io::Result<Self> {
         Self::start_with_handler(|_| {})
     }

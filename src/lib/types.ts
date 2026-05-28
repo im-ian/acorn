@@ -38,7 +38,7 @@ export type SessionOwner =
 
 export type SessionTitleSource = "default" | "generated" | "manual";
 
-export type SessionAgentProvider = "claude" | "codex";
+export type SessionAgentProvider = "claude" | "codex" | "antigravity";
 
 export type SessionTitleGenerationStatus =
   | "generated"
@@ -64,11 +64,17 @@ export type AgentProviderCapability =
   | "status"
   | "hooks";
 
-export interface AgentProviderIconMetadata {
-  kind: "mask";
-  url: string;
-  alt: string;
-}
+export type AgentProviderIconMetadata =
+  | {
+      kind: "mask";
+      url: string;
+      alt: string;
+    }
+  | {
+      kind: "glyph";
+      text: string;
+      alt: string;
+    };
 
 export interface AgentProviderHookMetadata {
   supportsHooks: boolean;
@@ -142,7 +148,7 @@ export interface ProjectSettingsRecord {
   settings: ProjectSettings;
 }
 
-export type AgentHistoryProvider = "claude" | "codex";
+export type AgentHistoryProvider = "claude" | "codex" | "antigravity";
 
 export interface AgentHistoryWorktree {
   name: string;

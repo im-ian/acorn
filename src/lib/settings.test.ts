@@ -314,6 +314,15 @@ Rules:
     );
   });
 
+  it("runs Antigravity through the AGY CLI one-shot mode", () => {
+    expect(
+      resolveAiOneshotCommand({
+        ...DEFAULT_SETTINGS,
+        agents: { ...DEFAULT_SETTINGS.agents, selected: "antigravity" },
+      }),
+    ).toEqual({ command: "agy", args: ["-p"] });
+  });
+
   it("uses the Settings Agents model for one-shot providers that take one", () => {
     expect(
       resolveAiOneshotCommand({

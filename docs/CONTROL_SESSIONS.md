@@ -69,7 +69,7 @@ layers that fire automatically every time a control-session PTY spawns:
 2. **Worktree marker file.** A `.acorn-control.md` is written to the
    session's cwd on every spawn (overwritten each time so the substituted
    session id is current). Agents that read project docs (Claude Code,
-   Codex, Gemini, Ollama, llm, …) find it; humans can `cat` it. Safe to
+   Codex, Antigravity, Ollama, llm, …) find it; humans can `cat` it. Safe to
    commit-ignore. The marker is the primary cue the agent uses to learn
    the protocol — point the agent at it explicitly if it doesn't auto-
    ingest project docs on startup.

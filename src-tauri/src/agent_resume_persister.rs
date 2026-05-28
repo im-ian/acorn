@@ -4,12 +4,12 @@
 //!
 //! The on-demand pairing logic in `transcript_watcher::collect_live_mappings`
 //! is already what the Fork menu uses to map a running `claude` / `codex`
-//! process to its JSONL transcript via PTY descendant scan + cwd match +
+//! process to its transcript via PTY descendant scan + cwd match +
 //! mtime window. The modal needs the same answer but from a different
 //! direction: when the user focuses a session and the agent is *not*
 //! currently running, what was the last transcript that session had been
-//! writing? This task keeps `<state_dir>/claude.id` and `<state_dir>/codex.id`
-//! up to date so the modal lookup is a single file read.
+//! writing? This task keeps `<state_dir>/{claude,codex,antigravity}.id` up to
+//! date so the modal lookup is a single file read.
 //!
 //! Why polling and not filesystem events: PTY-tree resolution is the
 //! decisive disambiguator when two sessions are running the same agent
@@ -20,9 +20,9 @@
 //! A second benefit: the persister shares its scan with the Fork menu's
 //! `SCAN_CACHE_TTL_MS` cache, so neither pays the cost twice.
 //!
-//! `claude.id.acknowledged` is deliberately *not* touched here. When a
+//! `*.id.acknowledged` is deliberately *not* touched here. When a
 //! session starts a new conversation, its UUID changes; the new value
-//! lands in `claude.id` while the old ack stays put, so the modal pops
+//! lands in `*.id` while the old ack stays put, so the modal pops
 //! exactly once per fresh UUID per session.
 
 use std::fs;
@@ -85,7 +85,21 @@ fn run(state: AppState) {
 }
 
 fn tick(state: &AppState) -> io::Result<()> {
-    let sessions = collect_session_pids(state);
+    let session_rows = state.sessions.list();
+    let session_cwds = session_rows
+        .iter()
+        .map(|s| (s.id, s.worktree_path.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let sessions = session_rows
+        .into_iter()
+        .map(|s| SessionPid {
+            session_id: s.id,
+            root_pid: state
+                .stream_registry
+                .pid(&s.id)
+                .or_else(|| state.pty.child_pid(&s.id)),
+        })
+        .collect::<Vec<_>>();
     let mappings = transcript_watcher::collect_live_mappings(&sessions);
     if mappings.is_empty() {
         return Ok(());
@@ -101,11 +115,23 @@ fn tick(state: &AppState) -> io::Result<()> {
                 continue;
             }
         };
+        if let Some(cwd_file) = cwd_filename(kind) {
+            if let Some(cwd) = session_cwds.get(&session_id) {
+                if let Err(err) =
+                    write_if_changed(&state_dir.join(cwd_file), &format!("{}\n", cwd.display()))
+                {
+                    tracing::warn!(
+                        %session_id, ?kind, error = %err,
+                        "agent_resume_persister: cwd write failed"
+                    );
+                }
+            }
+        }
         let id_file = state_dir.join(id_filename(kind));
         if read_trimmed(&id_file).as_deref() == Some(uuid.as_str()) {
             continue;
         }
-        if let Err(err) = fs::write(&id_file, format!("{uuid}\n")) {
+        if let Err(err) = write_if_changed(&id_file, &format!("{uuid}\n")) {
             tracing::warn!(
                 %session_id, ?kind, %uuid, error = %err,
                 "agent_resume_persister: write failed"
@@ -119,7 +145,22 @@ fn id_filename(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "claude.id",
         AgentKind::Codex => "codex.id",
+        AgentKind::Antigravity => "antigravity.id",
     }
+}
+
+fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
+    match kind {
+        AgentKind::Antigravity => Some("antigravity.cwd"),
+        AgentKind::Claude | AgentKind::Codex => None,
+    }
+}
+
+fn write_if_changed(path: &PathBuf, content: &str) -> io::Result<()> {
+    if fs::read_to_string(path).ok().as_deref() == Some(content) {
+        return Ok(());
+    }
+    fs::write(path, content)
 }
 
 fn read_trimmed(path: &PathBuf) -> Option<String> {

@@ -103,6 +103,7 @@ fn resolve_transcript(session_id: uuid::Uuid) -> Option<(PathBuf, AgentHistoryPr
         let provider = match live.kind {
             agent_resume::AgentKind::Claude => AgentHistoryProvider::Claude,
             agent_resume::AgentKind::Codex => AgentHistoryProvider::Codex,
+            agent_resume::AgentKind::Antigravity => AgentHistoryProvider::Antigravity,
         };
         return Some((live.path, provider));
     }

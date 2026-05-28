@@ -370,8 +370,16 @@ export const api = {
    */
   detectSessionAgent(
     sessionId: string,
-  ): Promise<{ claude: string | null; codex: string | null }> {
-    return invoke<{ claude: string | null; codex: string | null }>(
+  ): Promise<{
+    claude: string | null;
+    codex: string | null;
+    antigravity: string | null;
+  }> {
+    return invoke<{
+      claude: string | null;
+      codex: string | null;
+      antigravity: string | null;
+    }>(
       "detect_session_agent",
       { sessionId },
     );
@@ -586,6 +594,15 @@ export const api = {
       { sessionId },
     );
   },
+  /** Antigravity equivalent of `getClaudeResumeCandidate`. */
+  getAntigravityResumeCandidate(
+    sessionId: string,
+  ): Promise<ResumeCandidate | null> {
+    return invoke<ResumeCandidate | null>(
+      "get_antigravity_resume_candidate",
+      { sessionId },
+    );
+  },
   /**
    * Mark the current `claude.id` as seen. All three modal buttons call
    * this so the modal does not pop again for the same UUID; only a new
@@ -597,6 +614,10 @@ export const api = {
   /** Codex equivalent of `acknowledgeClaudeResume`. */
   acknowledgeCodexResume(sessionId: string): Promise<void> {
     return invoke<void>("acknowledge_codex_resume", { sessionId });
+  },
+  /** Antigravity equivalent of `acknowledgeClaudeResume`. */
+  acknowledgeAntigravityResume(sessionId: string): Promise<void> {
+    return invoke<void>("acknowledge_antigravity_resume", { sessionId });
   },
   /**
    * Write raw bytes to a session's PTY master (i.e. as if the user
@@ -762,7 +783,7 @@ function encodeStringToBase64(input: string): string {
 }
 
 /** Which user-invoked agent a resume candidate belongs to. */
-export type AgentKind = "claude" | "codex";
+export type AgentKind = "claude" | "codex" | "antigravity";
 
 export interface ResumeCandidate {
   /** JSONL transcript UUID the user is being offered to resume. */
