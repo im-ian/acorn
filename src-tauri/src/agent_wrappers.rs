@@ -11,6 +11,8 @@ const CODEX_NOTIFY_NAME: &str = "acorn-codex-notify";
 const CLAUDE_WRAPPER_NAME: &str = "claude";
 const CLAUDE_NOTIFY_NAME: &str = "acorn-claude-notify";
 const CLAUDE_SETTINGS_NAME: &str = "acorn-claude-settings.json";
+const ANTIGRAVITY_WRAPPER_NAME: &str = "agy";
+const ANTIGRAVITY_NOTIFY_NAME: &str = "acorn-antigravity-notify";
 
 const CODEX_WRAPPER_BODY: &str = r#"#!/bin/sh
 _acorn_find_real_binary() {
@@ -235,6 +237,142 @@ curl -sf -X POST \
   "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
 "#;
 
+const ANTIGRAVITY_WRAPPER_BODY: &str = r#"#!/bin/sh
+_acorn_find_real_binary() {
+  _acorn_name="$1"
+  _acorn_old_ifs=$IFS
+  IFS=:
+  for _acorn_dir in $PATH; do
+    [ -n "$_acorn_dir" ] || continue
+    _acorn_dir=${_acorn_dir%/}
+    case "$_acorn_dir" in
+      "$ACORN_AGENT_WRAPPER_DIR") continue ;;
+    esac
+    if [ -x "$_acorn_dir/$_acorn_name" ] && [ ! -d "$_acorn_dir/$_acorn_name" ]; then
+      IFS=$_acorn_old_ifs
+      printf '%s\n' "$_acorn_dir/$_acorn_name"
+      return 0
+    fi
+  done
+  IFS=$_acorn_old_ifs
+  return 1
+}
+
+_acorn_mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+}
+
+_acorn_latest_antigravity_transcript() {
+  _acorn_root="${ANTIGRAVITY_DIR:-${GEMINI_DIR:-$HOME/.gemini}}"
+  _acorn_latest=""
+  _acorn_latest_mtime=0
+  for _acorn_profile in antigravity antigravity-cli antigravity-ide; do
+    _acorn_brain="$_acorn_root/$_acorn_profile/brain"
+    [ -d "$_acorn_brain" ] || continue
+    while IFS= read -r _acorn_path; do
+      [ -f "$_acorn_path" ] || continue
+      _acorn_file_mtime=$(_acorn_mtime "$_acorn_path")
+      [ "$_acorn_file_mtime" -ge "$_acorn_start_ts" ] || continue
+      if [ "$_acorn_file_mtime" -ge "$_acorn_latest_mtime" ]; then
+        _acorn_latest="$_acorn_path"
+        _acorn_latest_mtime="$_acorn_file_mtime"
+      fi
+    done <<EOF
+$(find "$_acorn_brain" -type f -path '*/.system_generated/logs/transcript.jsonl' 2>/dev/null)
+EOF
+  done
+  [ -n "$_acorn_latest" ] && printf '%s\n' "$_acorn_latest"
+}
+
+REAL_BIN=$(_acorn_find_real_binary agy)
+if [ -z "$REAL_BIN" ]; then
+  echo "Acorn: agy not found in PATH. Install Antigravity CLI and ensure it is available in your shell PATH." >&2
+  exit 127
+fi
+
+if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
+   [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] &&
+   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
+   [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+   [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify" ]; then
+  _acorn_start_ts=$(date +%s 2>/dev/null || echo 0)
+  (
+    _acorn_notify="$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify"
+    _acorn_transcript=""
+    _acorn_i=0
+    while [ -z "$_acorn_transcript" ] && [ "$_acorn_i" -lt 400 ]; do
+      _acorn_i=$((_acorn_i + 1))
+      _acorn_transcript=$(_acorn_latest_antigravity_transcript)
+      [ -n "$_acorn_transcript" ] || sleep 0.05
+    done
+    [ -n "$_acorn_transcript" ] || exit 0
+
+    tail -n 0 -F "$_acorn_transcript" 2>/dev/null | while IFS= read -r _acorn_line; do
+      case "$_acorn_line" in
+        *'"type":"USER_INPUT"'*)
+          "$_acorn_notify" start >/dev/null 2>&1 || true
+          ;;
+        *'"type":"PLANNER_RESPONSE"'*'"status":"DONE"'*)
+          "$_acorn_notify" needs_input >/dev/null 2>&1 || true
+          ;;
+        *'"status":"ERROR"'*)
+          "$_acorn_notify" error >/dev/null 2>&1 || true
+          ;;
+      esac
+    done
+  ) &
+  ACORN_ANTIGRAVITY_WATCHER_PID=$!
+
+  "$REAL_BIN" "$@"
+  ACORN_ANTIGRAVITY_STATUS=$?
+
+  "$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify" stop >/dev/null 2>&1 || true
+  if [ -n "${ACORN_ANTIGRAVITY_WATCHER_PID-}" ]; then
+    kill "$ACORN_ANTIGRAVITY_WATCHER_PID" >/dev/null 2>&1 || true
+    wait "$ACORN_ANTIGRAVITY_WATCHER_PID" 2>/dev/null || true
+  fi
+  exit "$ACORN_ANTIGRAVITY_STATUS"
+fi
+
+exec "$REAL_BIN" "$@"
+"#;
+
+const ANTIGRAVITY_NOTIFY_BODY: &str = r#"#!/bin/sh
+input="${1-}"
+if [ -z "$input" ]; then
+  input=$(cat 2>/dev/null || true)
+fi
+
+event="$input"
+case "$event" in
+  start|stop|needs_input|error)
+    ;;
+  *)
+    event=""
+    hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hookEventName"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    [ -n "$hook_event_name" ] || hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    case "$hook_event_name" in
+      SessionStart|UserPromptSubmit|PreToolUse) event="start" ;;
+      Stop|SubagentStop) event="stop" ;;
+      Notification|PermissionRequest) event="needs_input" ;;
+      Error) event="error" ;;
+    esac
+    [ -n "$event" ] || exit 0
+    ;;
+esac
+
+[ -n "${ACORN_AGENT_HOOK_URL-}" ] || exit 0
+[ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] || exit 0
+[ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
+
+payload=$(printf '{"session_id":"%s","provider":"antigravity","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
+curl -sf -X POST \
+  -H 'Content-Type: application/json' \
+  -H "X-Acorn-Agent-Hook-Token: $ACORN_AGENT_HOOK_TOKEN" \
+  -d "$payload" \
+  "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
+"#;
+
 pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
     ensure_agent_wrapper_dir_at(&acorn_daemon::paths::data_dir()?)
 }
@@ -246,6 +384,11 @@ fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
     write_executable(&dir.join(CODEX_NOTIFY_NAME), CODEX_NOTIFY_BODY)?;
     write_executable(&dir.join(CLAUDE_WRAPPER_NAME), CLAUDE_WRAPPER_BODY)?;
     write_executable(&dir.join(CLAUDE_NOTIFY_NAME), CLAUDE_NOTIFY_BODY)?;
+    write_executable(
+        &dir.join(ANTIGRAVITY_WRAPPER_NAME),
+        ANTIGRAVITY_WRAPPER_BODY,
+    )?;
+    write_executable(&dir.join(ANTIGRAVITY_NOTIFY_NAME), ANTIGRAVITY_NOTIFY_BODY)?;
     write_claude_settings(&dir)?;
     Ok(dir)
 }
@@ -356,8 +499,10 @@ mod tests {
         for name in [
             "codex",
             "claude",
+            "agy",
             "acorn-codex-notify",
             "acorn-claude-notify",
+            "acorn-antigravity-notify",
         ] {
             let mode = fs::metadata(dir.join(name)).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111, "{name} not executable");
@@ -482,5 +627,27 @@ mod tests {
                 "notify missing acorn event mapping {acorn_event}"
             );
         }
+    }
+
+    #[test]
+    fn writes_antigravity_wrapper_and_notify_helper() {
+        let base = ScratchDir::new("antigravity");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let wrapper = fs::read_to_string(dir.join("agy")).unwrap();
+        assert!(wrapper.contains("_acorn_find_real_binary agy"));
+        assert!(wrapper.contains(".system_generated/logs/transcript.jsonl"));
+        assert!(wrapper.contains("ANTIGRAVITY_DIR"));
+        assert!(wrapper.contains("GEMINI_DIR"));
+        assert!(wrapper.contains("acorn-antigravity-notify"));
+        assert!(wrapper.contains("PLANNER_RESPONSE"));
+        assert!(wrapper.contains("USER_INPUT"));
+
+        let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
+        assert!(notify.contains("\"provider\":\"antigravity\""));
+        assert!(notify.contains("hookEventName"));
+        assert!(notify.contains("PermissionRequest"));
+        assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
+        assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
     }
 }

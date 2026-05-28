@@ -411,11 +411,12 @@ function App() {
     for (const sid of toProbe) probedSessionsRef.current.add(sid);
     void Promise.all(
       toProbe.map(async (sid) => {
-        const [claude, codex] = await Promise.all([
+        const [claude, codex, antigravity] = await Promise.all([
           api.getClaudeResumeCandidate(sid).catch(() => null),
           api.getCodexResumeCandidate(sid).catch(() => null),
+          api.getAntigravityResumeCandidate(sid).catch(() => null),
         ]);
-        const pick = pickResumeCandidate(claude, codex);
+        const pick = pickResumeCandidate(claude, codex, antigravity);
         return pick ? ([sid, pick] as const) : null;
       }),
     )
@@ -1485,15 +1486,21 @@ function App() {
 function pickResumeCandidate(
   claude: ResumeCandidate | null,
   codex: ResumeCandidate | null,
+  antigravity: ResumeCandidate | null,
 ): { agent: AgentKind; candidate: ResumeCandidate } | null {
-  if (claude && codex) {
-    return claude.lastActivityUnix >= codex.lastActivityUnix
-      ? { agent: "claude", candidate: claude }
-      : { agent: "codex", candidate: codex };
-  }
-  if (claude) return { agent: "claude", candidate: claude };
-  if (codex) return { agent: "codex", candidate: codex };
-  return null;
+  const candidates = [
+    claude ? ({ agent: "claude", candidate: claude } as const) : null,
+    codex ? ({ agent: "codex", candidate: codex } as const) : null,
+    antigravity
+      ? ({ agent: "antigravity", candidate: antigravity } as const)
+      : null,
+  ]
+    .filter(
+      (entry): entry is { agent: AgentKind; candidate: ResumeCandidate } =>
+        entry !== null,
+    )
+    .sort((a, b) => b.candidate.lastActivityUnix - a.candidate.lastActivityUnix);
+  return candidates[0] ?? null;
 }
 
 function shouldSkipResumeProbeForStatus(status: SessionStatus): boolean {

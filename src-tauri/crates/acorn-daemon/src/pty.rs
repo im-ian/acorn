@@ -361,6 +361,7 @@ fn apply_resume_strategy(
         | AgentKind::Llm
         | AgentKind::OpenInterpreter
         | AgentKind::Codex
+        | AgentKind::Antigravity
         | AgentKind::Unknown => (command.to_string(), args.to_vec()),
     }
 }

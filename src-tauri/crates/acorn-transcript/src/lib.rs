@@ -1,9 +1,10 @@
 //! On-demand process-inspection pairing for the Tab > Fork menu.
 //!
 //! Each call walks every Acorn session's PTY descendant tree, picks
-//! the `claude` / `codex` processes, and resolves each one to the
-//! transcript file it is currently writing. The returned UUID is what
-//! `claude --resume <id>` / `codex fork <id>` expect.
+//! the `claude` / `codex` / `antigravity` processes, and resolves each one
+//! to the transcript file it is currently writing. The returned UUID is
+//! what `claude --resume <id>` / `codex fork <id>` expect, or the
+//! Antigravity brain id for Antigravity sessions.
 //!
 //! Algorithm (mirrors agent-sessions' approach):
 //!   1. List PTY descendants by basename.
@@ -12,12 +13,14 @@
 //!      codex:  scan `${CODEX_HOME:-~/.codex}/sessions/<y>/<m>/<d>/`
 //!              (filename does not encode cwd, so read each candidate's
 //!              first line `payload.cwd` and match).
+//!      antigravity: scan `${ANTIGRAVITY_DIR:-~/.gemini}/antigravity*/brain/<uuid>/.system_generated/logs/transcript.jsonl`
 //!   3. Sort processes by start-time DESC so newer fork chains claim
 //!      newer transcripts first; an `assigned` set keeps each
 //!      transcript pinned to one session per scan.
 //!   4. Filter by transcript mtime ≥ process start to never pair a
 //!      process with its predecessor's file.
-//!   5. Trailing 36 chars of the filename stem is the session UUID.
+//!   5. Extract the provider's session id from the transcript path or
+//!      metadata line.
 //!
 //! No disk markers, no `lsof` (claude does not keep the JSONL open
 //! between writes; macOS lsof can hang on stale vnodes). The fresh
@@ -59,6 +62,7 @@ fn scan_cache() -> &'static Mutex<Option<ScanCache>> {
 pub enum AgentKind {
     Claude,
     Codex,
+    Antigravity,
 }
 
 /// Per-session input handed to [`collect_live_mappings`]: the Acorn
@@ -116,12 +120,15 @@ pub fn collect_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentK
 
 fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
     let mut out = Vec::new();
-    let mut sys =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let refresh = ProcessRefreshKind::new()
+        .with_cwd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always);
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        refresh,
     );
 
     let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
@@ -142,6 +149,7 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
 
     let claude_root = claude_projects_root();
     let codex_root = codex_sessions_root();
+    let antigravity_roots = antigravity_brain_roots();
 
     // Collect every (session, agent-process) candidate first so we can
     // sort by process-start-time before matching. Newest agent runs get
@@ -167,11 +175,17 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
         let mut stack = vec![Pid::from_u32(root_pid)];
         while let Some(pid) = stack.pop() {
             if let Some(proc) = sys.process(pid) {
-                let basename = process_basename(proc);
-                let kind = match basename {
-                    "claude" => Some(AgentKind::Claude),
-                    "codex" => Some(AgentKind::Codex),
-                    _ => None,
+                let kind = if process_basename_matches(proc, "claude") {
+                    Some(AgentKind::Claude)
+                } else if process_basename_matches(proc, "codex") {
+                    Some(AgentKind::Codex)
+                } else if process_basename_matches(proc, "agy")
+                    || process_basename_matches(proc, "antigravity")
+                    || process_basename_matches(proc, "antigravity-cli")
+                {
+                    Some(AgentKind::Antigravity)
+                } else {
+                    None
                 };
                 if let Some(kind) = kind {
                     if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
@@ -212,6 +226,12 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
                 c.start_time,
                 &assigned,
             ),
+            AgentKind::Antigravity => find_recent_antigravity_jsonl(
+                &antigravity_roots,
+                recency_cutoff,
+                c.start_time,
+                &assigned,
+            ),
         };
         if let Some((path, uuid)) = candidate {
             tracing::info!(
@@ -231,11 +251,32 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
     out
 }
 
-fn process_basename(proc: &sysinfo::Process) -> &str {
-    proc.exe()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-        .unwrap_or_else(|| proc.name().to_str().unwrap_or(""))
+fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    fn basename_matches(s: &str, target: &str) -> bool {
+        let base = s.rsplit('/').next().unwrap_or(s);
+        base == target
+            || base.strip_suffix(".js") == Some(target)
+            || base.strip_suffix(".mjs") == Some(target)
+            || base.strip_suffix(".cjs") == Some(target)
+    }
+
+    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
+        if basename_matches(exe, target) {
+            return true;
+        }
+    }
+    if let Some(name) = proc.name().to_str() {
+        if basename_matches(name, target) {
+            return true;
+        }
+    }
+    for arg in proc.cmd() {
+        let s = arg.to_string_lossy();
+        if basename_matches(&s, target) {
+            return true;
+        }
+    }
+    false
 }
 
 fn claude_projects_root() -> Option<PathBuf> {
@@ -250,6 +291,24 @@ fn codex_sessions_root() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
         .map(|p| p.join("sessions"))
+}
+
+fn google_agent_storage_root() -> Option<PathBuf> {
+    std::env::var_os("ANTIGRAVITY_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("GEMINI_DIR").map(PathBuf::from))
+        .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".gemini")))
+}
+
+fn antigravity_brain_roots() -> Vec<PathBuf> {
+    let Some(root) = google_agent_storage_root() else {
+        return Vec::new();
+    };
+    ["antigravity", "antigravity-ide", "antigravity-cli"]
+        .into_iter()
+        .map(|profile| root.join(profile).join("brain"))
+        .filter(|path| path.is_dir())
+        .collect()
 }
 
 /// Resolve the JSONL transcript a `claude` process is currently writing
@@ -317,6 +376,56 @@ fn find_recent_codex_jsonl(
         if let Some(uuid) = extract_uuid_from_path(&path) {
             return Some((path, uuid));
         }
+    }
+    None
+}
+
+fn find_recent_antigravity_jsonl(
+    brain_roots: &[PathBuf],
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    for root in brain_roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let session_dir = entry.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let Some(uuid) = session_dir.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !is_uuid_v4_shape(uuid) {
+                continue;
+            }
+            let path = session_dir
+                .join(".system_generated")
+                .join("logs")
+                .join("transcript.jsonl");
+            if assigned.contains(&path) || !path.is_file() {
+                continue;
+            }
+            let Some(id) = antigravity_uuid_from_transcript_path(&path) else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff || mtime < process_start {
+                continue;
+            }
+            let created = meta.created().unwrap_or(mtime);
+            candidates.push((path, created, id));
+        }
+    }
+    candidates.sort_by_key(|c| time_distance(c.1, process_start));
+    for (path, _, id) in candidates {
+        return Some((path, id));
     }
     None
 }
@@ -443,6 +552,20 @@ fn extract_uuid_from_path(path: &Path) -> Option<String> {
     is_uuid_v4_shape(candidate).then(|| candidate.to_string())
 }
 
+fn antigravity_uuid_from_transcript_path(path: &Path) -> Option<String> {
+    let filename = path.file_name()?.to_str()?;
+    if filename != "transcript.jsonl" {
+        return None;
+    }
+    let logs = path.parent()?.file_name()?.to_str()?;
+    let generated = path.parent()?.parent()?.file_name()?.to_str()?;
+    if logs != "logs" || generated != ".system_generated" {
+        return None;
+    }
+    let uuid = path.parent()?.parent()?.parent()?.file_name()?.to_str()?;
+    is_uuid_v4_shape(uuid).then(|| uuid.to_string())
+}
+
 fn is_uuid_v4_shape(s: &str) -> bool {
     if s.len() != 36 {
         return false;
@@ -497,6 +620,17 @@ mod tests {
         assert_eq!(
             extract_uuid_from_path(path).as_deref(),
             Some("019e2001-3250-76b0-8410-2e073b38a2c1")
+        );
+    }
+
+    #[test]
+    fn extracts_uuid_from_antigravity_transcript_path() {
+        let path = Path::new(
+            "/Users/me/.gemini/antigravity/brain/17f38e8c-3a7e-408b-8c79-aef7432c0fd2/.system_generated/logs/transcript.jsonl",
+        );
+        assert_eq!(
+            antigravity_uuid_from_transcript_path(path).as_deref(),
+            Some("17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
         );
     }
 

@@ -1595,6 +1595,9 @@ function AgentHistoryTab({
           </option>
           <option value="codex">{rt(t, "rightPanel.history.codex")}</option>
           <option value="claude">{rt(t, "rightPanel.history.claude")}</option>
+          <option value="antigravity">
+            {rt(t, "rightPanel.history.antigravity")}
+          </option>
         </Select>
         <RefreshButton
           onClick={() => void fetchHistory({ force: true })}
@@ -1629,6 +1632,8 @@ function AgentHistoryTab({
               const providerTone =
                 item.provider === "codex"
                   ? "bg-[#3867ff]/15 text-[#5f7dff]"
+                  : item.provider === "antigravity"
+                    ? "bg-[#19a974]/15 text-[#22b47e]"
                   : "bg-[#de7356]/15 text-[#de7356]";
               return (
                 <div

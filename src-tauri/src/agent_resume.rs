@@ -1,12 +1,12 @@
 //! Per-session resume state for the focus-time "이전 대화 이어하기" modal.
 //!
 //! The `agent_resume_persister` background task mirrors the live transcript
-//! UUID of each running `claude` / `codex` process into per-session files
-//! under Acorn's data dir. This module owns the on-disk layout, the modal
-//! candidate readers, and the acknowledgement writers; the persister is
-//! the only writer of `claude.id` / `codex.id`, the frontend modal is the
-//! only writer of `claude.id.acknowledged` / `codex.id.acknowledged` via
-//! the `acknowledge_*_resume` commands.
+//! UUID of each running `claude` / `codex` / `antigravity` process into
+//! per-session files under Acorn's data dir. This module owns the on-disk
+//! layout, the modal candidate readers for providers with verified resume
+//! commands, and the acknowledgement writers; the persister is the only
+//! writer of `*.id`, the frontend modal is the only writer of
+//! `*.id.acknowledged` via the `acknowledge_*_resume` commands.
 //!
 //! On-disk layout (under `<data_dir>/agent-state/<session-uuid>/`):
 //!
@@ -15,6 +15,9 @@
 //! claude.id.acknowledged   # bare UUID, written by the frontend modal
 //! codex.id                 # bare UUID
 //! codex.id.acknowledged    # bare UUID
+//! antigravity.id           # bare session id / UUID
+//! antigravity.cwd          # Acorn worktree cwd fallback for cwd-less brain transcripts
+//! antigravity.id.acknowledged
 //! ```
 //!
 //! Modal pop rule: surface a candidate when `*.id` exists, is non-empty,
@@ -33,10 +36,12 @@ const CLAUDE_ID_FILE: &str = "claude.id";
 const CLAUDE_ID_ACK_FILE: &str = "claude.id.acknowledged";
 const CODEX_ID_FILE: &str = "codex.id";
 const CODEX_ID_ACK_FILE: &str = "codex.id.acknowledged";
+const ANTIGRAVITY_ID_FILE: &str = "antigravity.id";
+const ANTIGRAVITY_ID_ACK_FILE: &str = "antigravity.id.acknowledged";
 
 /// Per-Acorn-session scratch directory the resume persister writes
-/// `claude.id` / `codex.id` into. The directory is also the modal's
-/// read source via `claude_resume_candidate` / `codex_resume_candidate`.
+/// `*.id` into. The directory is also the modal's read source via the
+/// provider-specific `*_resume_candidate` helpers.
 pub fn ensure_session_state_dir(session_id: uuid::Uuid) -> io::Result<PathBuf> {
     ensure_session_state_dir_at(&acorn_daemon::paths::data_dir()?, session_id)
 }
@@ -61,9 +66,9 @@ fn session_state_dir_if_exists_at(
 
 /// Shape returned to the frontend modal.
 ///
-/// `uuid` is the JSONL stem; the frontend uses it both to render
-/// "Resume this conversation?" and to dispatch `claude --resume <uuid>` /
-/// `codex resume <uuid>` when the user accepts. `last_activity_unix` is
+/// `uuid` is the provider transcript id; the frontend uses it both to render
+/// "Resume this conversation?" and to dispatch the provider's resume command
+/// when that provider has one. `last_activity_unix` is
 /// the JSONL mtime — good enough as a "last touched" signal without
 /// parsing the file. `preview` is a single-line excerpt from the last
 /// model turn, trimmed to fit the modal layout.
@@ -99,10 +104,21 @@ pub fn codex_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<Resum
     )
 }
 
+/// Antigravity equivalent of `codex_resume_candidate`.
+pub fn antigravity_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
+    candidate_at(
+        &acorn_daemon::paths::data_dir()?,
+        session_id,
+        ANTIGRAVITY_ID_FILE,
+        ANTIGRAVITY_ID_ACK_FILE,
+        AgentKind::Antigravity,
+    )
+}
+
 /// Identifier + live transcript path resolved through the persister's
-/// `<data_dir>/agent-state/<session-uuid>/{claude,codex}.id` marker. The
-/// status detector consumes this to read the actual JSONL the agent is
-/// writing instead of guessing from PTY descendant liveness.
+/// `<data_dir>/agent-state/<session-uuid>/{claude,codex,antigravity}.id`
+/// marker. The status detector consumes this to read the actual JSONL the
+/// agent is writing instead of guessing from PTY descendant liveness.
 #[derive(Debug, Clone)]
 pub struct LiveTranscript {
     pub path: PathBuf,
@@ -115,15 +131,16 @@ pub struct LiveTranscript {
 pub enum AgentKind {
     Claude,
     Codex,
+    Antigravity,
 }
 
 /// Resolve `session_id` to the live transcript its in-flight agent is
 /// writing, by reading the on-disk resume markers and looking up the
-/// matching JSONL. Returns `None` when neither marker is present, both
+/// matching transcript. Returns `None` when no marker is present, all markers
 /// point to UUIDs whose transcript files have not (or no longer) exist on
 /// disk, or `data_dir()` fails to resolve.
 ///
-/// When both `claude.id` and `codex.id` exist, the marker file with the
+/// When multiple provider markers exist, the marker file with the
 /// newer mtime wins — that matches the persister's behaviour of only
 /// touching a marker when the live UUID rotates, so "most recently
 /// written marker" is "the agent the session was last paired with".
@@ -136,21 +153,25 @@ fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscr
     let dir = session_state_dir_if_exists_at(base, session_id)
         .ok()
         .flatten()?;
-    let claude_mtime = fs::metadata(dir.join(CLAUDE_ID_FILE))
-        .and_then(|m| m.modified())
-        .ok();
-    let codex_mtime = fs::metadata(dir.join(CODEX_ID_FILE))
-        .and_then(|m| m.modified())
-        .ok();
-    let prefer_codex = match (claude_mtime, codex_mtime) {
-        (Some(c), Some(x)) => x > c,
-        (None, Some(_)) => true,
-        _ => false,
-    };
+    let mut markers = [
+        (AgentKind::Claude, CLAUDE_ID_FILE),
+        (AgentKind::Codex, CODEX_ID_FILE),
+        (AgentKind::Antigravity, ANTIGRAVITY_ID_FILE),
+    ]
+    .into_iter()
+    .filter_map(|(kind, file)| {
+        let mtime = fs::metadata(dir.join(file))
+            .and_then(|m| m.modified())
+            .ok()?;
+        Some((kind, mtime))
+    })
+    .collect::<Vec<_>>();
+    markers.sort_by(|a, b| b.1.cmp(&a.1));
     let resolve = |kind: AgentKind| -> Option<LiveTranscript> {
         let file = match kind {
             AgentKind::Claude => CLAUDE_ID_FILE,
             AgentKind::Codex => CODEX_ID_FILE,
+            AgentKind::Antigravity => ANTIGRAVITY_ID_FILE,
         };
         let uuid = fs::read_to_string(dir.join(file)).ok()?.trim().to_string();
         if uuid.is_empty() {
@@ -159,11 +180,7 @@ fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscr
         let path = locate_transcript(kind, &uuid)?;
         Some(LiveTranscript { path, kind })
     };
-    if prefer_codex {
-        resolve(AgentKind::Codex).or_else(|| resolve(AgentKind::Claude))
-    } else {
-        resolve(AgentKind::Claude).or_else(|| resolve(AgentKind::Codex))
-    }
+    markers.into_iter().find_map(|(kind, _)| resolve(kind))
 }
 
 /// Mark the current `claude.id` value as seen so the modal stops popping
@@ -185,6 +202,17 @@ pub fn acknowledge_codex_resume(session_id: uuid::Uuid) -> io::Result<()> {
         session_id,
         CODEX_ID_FILE,
         CODEX_ID_ACK_FILE,
+    )
+}
+
+/// Mark the current `antigravity.id` value as seen. No-op if `antigravity.id`
+/// does not exist.
+pub fn acknowledge_antigravity_resume(session_id: uuid::Uuid) -> io::Result<()> {
+    acknowledge_at(
+        &acorn_daemon::paths::data_dir()?,
+        session_id,
+        ANTIGRAVITY_ID_FILE,
+        ANTIGRAVITY_ID_ACK_FILE,
     )
 }
 
@@ -253,6 +281,7 @@ fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> {
     match kind {
         AgentKind::Claude => crate::todos::locate_transcript_for(uuid).ok().flatten(),
         AgentKind::Codex => locate_codex_transcript(uuid),
+        AgentKind::Antigravity => locate_antigravity_transcript(uuid),
     }
 }
 
@@ -281,6 +310,38 @@ fn codex_sessions_root() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
         .map(|p| p.join("sessions"))
+}
+
+fn locate_antigravity_transcript(id: &str) -> Option<PathBuf> {
+    for root in antigravity_brain_roots() {
+        let path = root
+            .join(id)
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn google_agent_storage_root() -> Option<PathBuf> {
+    std::env::var_os("ANTIGRAVITY_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("GEMINI_DIR").map(PathBuf::from))
+        .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".gemini")))
+}
+
+fn antigravity_brain_roots() -> Vec<PathBuf> {
+    let Some(root) = google_agent_storage_root() else {
+        return Vec::new();
+    };
+    ["antigravity", "antigravity-ide", "antigravity-cli"]
+        .into_iter()
+        .map(|profile| root.join(profile).join("brain"))
+        .filter(|path| path.is_dir())
+        .collect()
 }
 
 fn iter_subdirs_desc(dir: &Path) -> Option<Vec<PathBuf>> {
@@ -318,6 +379,7 @@ fn extract_preview(kind: AgentKind, path: &Path) -> io::Result<Option<String>> {
     match kind {
         AgentKind::Claude => extract_claude_preview(path),
         AgentKind::Codex => extract_codex_preview(path),
+        AgentKind::Antigravity => extract_antigravity_preview(path),
     }
 }
 
@@ -423,6 +485,32 @@ fn extract_codex_preview(path: &Path) -> io::Result<Option<String>> {
                         }
                     }
                 }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn extract_antigravity_preview(path: &Path) -> io::Result<Option<String>> {
+    extract_antigravity_brain_preview(path)
+}
+
+fn extract_antigravity_brain_preview(path: &Path) -> io::Result<Option<String>> {
+    let text = read_tail_lossy(path)?;
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("PLANNER_RESPONSE") {
+            continue;
+        }
+        if let Some(text) = v.get("content").and_then(|t| t.as_str()) {
+            if let Some(p) = collapse_preview(text) {
+                return Ok(Some(p));
             }
         }
     }
@@ -558,6 +646,26 @@ mod tests {
         let preview = extract_codex_preview(&path).unwrap();
 
         assert_eq!(preview.as_deref(), Some("Here is the latest Codex answer."));
+    }
+
+    #[test]
+    fn antigravity_preview_reads_latest_planner_response() {
+        let base = ScratchDir::new("antigravity-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>hello</USER_REQUEST>"}
+{"type":"PLANNER_RESPONSE","status":"DONE","content":"Here is the latest Antigravity answer."}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_antigravity_preview(&path).unwrap();
+
+        assert_eq!(
+            preview.as_deref(),
+            Some("Here is the latest Antigravity answer.")
+        );
     }
 
     #[test]

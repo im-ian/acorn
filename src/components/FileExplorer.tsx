@@ -335,7 +335,8 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   const [agent, setAgent] = useState<{
     claude: string | null;
     codex: string | null;
-  }>({ claude: null, codex: null });
+    antigravity: string | null;
+  }>({ claude: null, codex: null, antigravity: null });
   const gitStatsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gitStatusRef = useRef<Record<string, FsGitStatusEntry>>({});
   const gitHugeRef = useRef(false);
@@ -585,7 +586,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       const sync = (sid: string | null) => {
         setActiveSessionIdLocal(sid);
         if (!sid) {
-          setAgent({ claude: null, codex: null });
+          setAgent({ claude: null, codex: null, antigravity: null });
           return;
         }
         api
@@ -1159,7 +1160,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
 
     // Group 2: Agent attach (only when an agent is live)
-    if (entry && (agent.claude || agent.codex)) {
+    if (entry && (agent.claude || agent.codex || agent.antigravity)) {
       items.push({ type: "separator" });
       if (agent.claude) {
         items.push({
@@ -1179,6 +1180,21 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (agent.codex) {
         items.push({
           label: fileExplorerText(t, "fileExplorer.menu.attachToCodex"),
+          icon: <MessageSquarePlus size={13} />,
+          onClick: () => {
+            void writeToActiveSession(
+              activeSessionId,
+              ` @${rel} `,
+              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
+            ).catch(
+              (e) => setError(e instanceof Error ? e.message : String(e)),
+            );
+          },
+        });
+      }
+      if (agent.antigravity) {
+        items.push({
+          label: fileExplorerText(t, "fileExplorer.menu.attachToAntigravity"),
           icon: <MessageSquarePlus size={13} />,
           onClick: () => {
             void writeToActiveSession(

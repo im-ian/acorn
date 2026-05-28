@@ -1,3 +1,4 @@
+import antigravityIconUrl from "../assets/vendor/lobe-icons/antigravity.svg";
 import claudeIconUrl from "../assets/vendor/lobe-icons/claude.svg";
 import codexIconUrl from "../assets/vendor/lobe-icons/codex.svg";
 import type { AgentProviderDefinition, SessionAgentProvider } from "./types";
@@ -5,6 +6,7 @@ import type { AgentProviderDefinition, SessionAgentProvider } from "./types";
 export const AGENT_PROVIDER_ORDER = [
   "claude",
   "codex",
+  "antigravity",
 ] as const satisfies readonly SessionAgentProvider[];
 
 type AgentProviderRegistry = {
@@ -58,6 +60,30 @@ export const AGENT_PROVIDER_REGISTRY = {
       requiresForkTranscriptPrep: false,
     },
     inferNamePattern: /\bcodex\b/i,
+  },
+  antigravity: {
+    id: "antigravity",
+    label: "Antigravity",
+    icon: {
+      kind: "mask",
+      url: antigravityIconUrl,
+      alt: "Antigravity",
+    },
+    capabilities: ["history", "resume", "fork", "status", "hooks"],
+    hooks: {
+      supportsHooks: true,
+      providerEnvValue: "antigravity",
+    },
+    session: {
+      supportsSessionResume: true,
+      markerFile: "antigravity.id",
+      acknowledgedMarkerFile: "antigravity.id.acknowledged",
+      resumeCommandPrefix: "agy --conversation",
+      forkCommandPrefix: "agy --conversation",
+      forkCommandSuffix: '--prompt-interactive "/fork"',
+      requiresForkTranscriptPrep: false,
+    },
+    inferNamePattern: /\b(antigravity|agy)\b/i,
   },
 } as const satisfies AgentProviderRegistry;
 

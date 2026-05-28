@@ -96,6 +96,12 @@ function tildify(path: string, home: string | null): string {
   return path;
 }
 
+function toAgentTokenProvider(
+  provider: ReturnType<typeof resolveSessionAgentProvider>,
+): AgentTokenProvider | null {
+  return provider === "codex" || provider === "claude" ? provider : null;
+}
+
 interface MemorySnapshot {
   bytes: number;
   processes: MemoryProcess[];
@@ -222,7 +228,7 @@ export function StatusBar() {
   const showMemory = useSettings((s) => s.settings.statusBar.showMemory);
   const active = sessions.find((s) => s.id === activeSessionId);
   const activeTokenProvider: AgentTokenProvider | null = active
-    ? resolveSessionAgentProvider(active)
+    ? toAgentTokenProvider(resolveSessionAgentProvider(active))
     : null;
   const showActiveAgentTokenUsage =
     showAgentTokenUsage && activeTokenProvider !== null;

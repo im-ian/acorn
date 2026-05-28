@@ -17,7 +17,12 @@ const STORAGE_KEY = "acorn:settings:v1";
  * stdin/stdout invocation convention, captured in `agentOneshotCommand`
  * below.
  */
-export type AgentProvider = "claude" | "gemini" | "ollama" | "llm" | "codex";
+export type AgentProvider =
+  | "claude"
+  | "antigravity"
+  | "ollama"
+  | "llm"
+  | "codex";
 
 /** Agent selection accepts every catalogued agent plus an arbitrary custom
  *  command for tools that don't fit the catalog. */
@@ -35,9 +40,9 @@ export const AGENT_OPTIONS: ReadonlyArray<{
     oneshotHint: "claude -p --output-format text",
   },
   {
-    value: "gemini",
-    label: "Gemini CLI",
-    oneshotHint: "gemini -p",
+    value: "antigravity",
+    label: "Antigravity CLI",
+    oneshotHint: "agy -p",
   },
   {
     value: "ollama",
@@ -316,7 +321,7 @@ export interface AcornSettings {
     };
     /**
      * Inline icon toggles. Status dot is the colored bullet at row start;
-     * agentProvider lets live Claude/Codex sessions replace that dot with
+     * agentProvider lets live Claude/Codex/Antigravity sessions replace that dot with
      * their provider mark; sessionKind covers the isolated-worktree
      * (GitBranch) and control (Bot) glyphs trailing the title.
      */
@@ -471,7 +476,7 @@ const VALID_WEIGHTS = new Set<TerminalFontWeight>([
 
 const VALID_AGENTS = new Set<AgentProvider>([
   "claude",
-  "gemini",
+  "antigravity",
   "ollama",
   "llm",
   "codex",
@@ -613,6 +618,7 @@ function normalizeSelectedAgent(
   v: unknown,
   fallback: SelectedAgent,
 ): SelectedAgent {
+  if (v === "gemini") return "antigravity";
   if (
     typeof v === "string" &&
     (VALID_AGENTS.has(v as AgentProvider) || v === "custom")
@@ -1149,8 +1155,8 @@ function agentOneshotCommand(
   switch (agent) {
     case "claude":
       return { command: "claude", args: ["-p", "--output-format", "text"] };
-    case "gemini":
-      return { command: "gemini", args: ["-p"] };
+    case "antigravity":
+      return { command: "agy", args: ["-p"] };
     case "codex":
       return { command: "codex", args: ["exec"] };
     case "ollama": {
