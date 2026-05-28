@@ -3037,8 +3037,8 @@ mod tests {
     use super::{
         collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, remove_linked_worktree_at_path,
-        should_remove_local_project_mirror, validate_new_project_name, ProcessMemorySnapshot,
+        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        validate_new_project_name, ProcessMemorySnapshot,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
     use std::collections::HashMap;
