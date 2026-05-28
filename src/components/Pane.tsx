@@ -47,7 +47,7 @@ import {
   hasConfiguredEditor,
   openInConfiguredEditor,
 } from "../lib/editor";
-import { formatHotkey, Hotkeys } from "../lib/hotkeys";
+import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import { useSettings } from "../lib/settings";
 import { canRenameSession } from "../lib/sessionTitle";
@@ -101,6 +101,13 @@ function paneT(t: Translator, key: PaneTranslationKey): string {
   return t(key);
 }
 
+function shortcutLabel(
+  shortcuts: Record<HotkeyId, string>,
+  id: HotkeyId,
+): string {
+  return formatHotkey(shortcuts[id]);
+}
+
 interface PaneProps {
   paneId: PaneId;
 }
@@ -134,6 +141,7 @@ export function Pane({ paneId }: PaneProps) {
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
   const closePane = useAppStore((s) => s.closePane);
   const sessionsById = useAppStore(selectSessionsById);
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -485,6 +493,7 @@ export function Pane({ paneId }: PaneProps) {
           onSplit: splitFocusedPane,
           onClose: () => closePane(paneId),
           activeProjectFallback: useAppStore.getState().activeProject,
+          shortcuts,
         })}
       />
     </div>
@@ -807,6 +816,7 @@ function TabItem({
   const editorCommand = useSettings(
     (s) => s.settings.editor.command,
   );
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const editorConfigured = editorCommand.trim().length > 0;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -925,21 +935,21 @@ function TabItem({
     {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
-      shortcut: formatHotkey(Hotkeys.splitVertical),
+      shortcut: shortcutLabel(shortcuts, "splitVertical"),
       onClick: () => onSplitTab("horizontal"),
       disabled: siblingCount <= 1,
     },
     {
       label: paneT(t, "pane.menu.splitDown"),
       icon: <SplitSquareVertical size={12} />,
-      shortcut: formatHotkey(Hotkeys.splitHorizontal),
+      shortcut: shortcutLabel(shortcuts, "splitHorizontal"),
       onClick: () => onSplitTab("vertical"),
       disabled: siblingCount <= 1,
     },
     {
       label: paneT(t, "pane.menu.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
-      shortcut: formatHotkey(Hotkeys.equalizePanes),
+      shortcut: shortcutLabel(shortcuts, "equalizePanes"),
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
@@ -1007,7 +1017,7 @@ function TabItem({
     {
       label: paneT(t, "pane.menu.close"),
       icon: <X size={12} />,
-      shortcut: formatHotkey(Hotkeys.closeTab),
+      shortcut: shortcutLabel(shortcuts, "closeTab"),
       onClick: onClose,
     },
     {
@@ -1253,6 +1263,7 @@ function buildPaneMenuItems({
   onSplit,
   onClose,
   activeProjectFallback,
+  shortcuts,
 }: {
   t: Translator;
   activeSession: Session | null;
@@ -1262,6 +1273,7 @@ function buildPaneMenuItems({
   onSplit: (direction: Direction) => void;
   onClose: () => void;
   activeProjectFallback: string | null;
+  shortcuts: Record<HotkeyId, string>;
 }): ContextMenuItem[] {
   const editorReady = hasConfiguredEditor();
   const worktreeItems: ContextMenuItem[] = activeSession
@@ -1309,7 +1321,7 @@ function buildPaneMenuItems({
     {
       label: paneT(t, "pane.menu.newSessionInThisPane"),
       icon: <TerminalIcon size={12} />,
-      shortcut: formatHotkey(Hotkeys.newSession),
+      shortcut: shortcutLabel(shortcuts, "newSession"),
       onClick: onNewTab,
       disabled: !activeSession && activeProjectFallback === null,
     },
@@ -1317,19 +1329,19 @@ function buildPaneMenuItems({
     {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
-      shortcut: formatHotkey(Hotkeys.splitVertical),
+      shortcut: shortcutLabel(shortcuts, "splitVertical"),
       onClick: () => onSplit("horizontal"),
     },
     {
       label: paneT(t, "pane.menu.splitDown"),
       icon: <SplitSquareVertical size={12} />,
-      shortcut: formatHotkey(Hotkeys.splitHorizontal),
+      shortcut: shortcutLabel(shortcuts, "splitHorizontal"),
       onClick: () => onSplit("vertical"),
     },
     {
       label: paneT(t, "pane.menu.equalizePaneSizes"),
       icon: <Columns2 size={12} />,
-      shortcut: formatHotkey(Hotkeys.equalizePanes),
+      shortcut: shortcutLabel(shortcuts, "equalizePanes"),
       onClick: () => {
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
@@ -1340,7 +1352,7 @@ function buildPaneMenuItems({
     {
       label: paneT(t, "pane.menu.closePane"),
       icon: <X size={12} />,
-      shortcut: formatHotkey(Hotkeys.closeEmptyPane),
+      shortcut: shortcutLabel(shortcuts, "closeEmptyPane"),
       onClick: onClose,
       disabled: totalPanes <= 1,
     },

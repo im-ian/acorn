@@ -445,7 +445,7 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("언어");
   });
 
-  it("renders shortcut hints with the edit-coming-soon notice", async () => {
+  it("renders shortcut hints with editing controls", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -457,11 +457,82 @@ describe("SettingsModal font controls", () => {
 
     const bodyText = document.body.textContent ?? "";
 
-    expect(bodyText).toContain("Shortcut editing is coming soon.");
+    expect(bodyText).toContain("Reset all shortcuts");
     expect(bodyText).toContain("Open command palette");
     expect(bodyText).toContain("New control session");
     expect(bodyText).toContain("Right panel");
+    expect(bodyText).toContain("Record");
     expect(bodyText).toMatch(/⌘P|Ctrl\+P/);
+  });
+
+  it("records and resets a shortcut binding", async () => {
+    const originalPlatform = navigator.platform;
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openShortcutsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const record = Array.from(document.querySelectorAll("button")).find(
+      (element) =>
+        element.getAttribute("aria-label") ===
+        "Record shortcut for Open command palette",
+    );
+    expect(record).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      record?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toContain("Press keys");
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "O",
+          code: "KeyO",
+          metaKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(useSettings.getState().settings.shortcuts.openPalette).toBe(
+      "$mod+Shift+o",
+    );
+    expect(document.body.textContent).toContain("⇧⌘O");
+
+    const reset = Array.from(document.querySelectorAll("button")).find(
+      (element) =>
+        element.getAttribute("aria-label") ===
+        "Reset shortcut for Open command palette",
+    );
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      reset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(useSettings.getState().settings.shortcuts.openPalette).toBe(
+      "$mod+p",
+    );
+
+    Object.defineProperty(navigator, "platform", {
+      value: originalPlatform,
+      configurable: true,
+    });
   });
 
   it("patches the worktree auto-delete session toggle", async () => {
