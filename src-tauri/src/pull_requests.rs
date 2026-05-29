@@ -725,7 +725,6 @@ pub struct PullRequestDetail {
     pub reviews: Vec<PullRequestReview>,
     pub checks: Vec<PullRequestCheck>,
     pub commits: Vec<PullRequestCommit>,
-    pub diff: DiffPayload,
 }
 
 #[derive(Debug, Serialize)]
@@ -735,6 +734,17 @@ pub enum PullRequestDetailListing {
         account: String,
         detail: PullRequestDetail,
     },
+    NotGithub,
+    NoAccess {
+        slug: String,
+        accounts: Vec<AccountSummary>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PullRequestDiffListing {
+    Ok { account: String, diff: DiffPayload },
     NotGithub,
     NoAccess {
         slug: String,
@@ -752,16 +762,7 @@ pub fn get_pull_request_detail(
 
     match try_with_account(repo_path, &slug, |token| {
         let view = run_pr_view(&slug, number, token)?;
-        let diff_text = run_pr_diff(&slug, number, token)?;
-        let mut detail = build_detail(number, view, diff_text);
-        // The unified diff `gh pr diff` returns reduces binary changes to a
-        // "Binary files ... differ" line. Enrich image entries with actual
-        // bytes fetched from the head/base refs so the renderer can show
-        // before/after previews instead of that placeholder text.
-        let head = detail.head_branch.clone();
-        let base = detail.base_branch.clone();
-        enrich_image_previews_against_refs(&slug, &head, &base, token, &mut detail.diff);
-        Ok(detail)
+        Ok(build_detail(number, view))
     })? {
         AccountOutcome::Ok {
             account,
@@ -769,6 +770,39 @@ pub fn get_pull_request_detail(
         } => Ok(PullRequestDetailListing::Ok { account, detail }),
         AccountOutcome::NoAccess { accounts } => {
             Ok(PullRequestDetailListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+pub fn get_pull_request_diff(
+    repo_path: &Path,
+    number: u64,
+) -> AppResult<PullRequestDiffListing> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(PullRequestDiffListing::NotGithub);
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        let diff_text = run_pr_diff(&slug, number, token)?;
+        let mut diff = crate::unified_diff::parse_unified_diff(&diff_text);
+        if diff.files.iter().any(|file| file.is_image) {
+            let refs = run_pr_refs(&slug, number, token)?;
+            enrich_image_previews_against_refs(
+                &slug,
+                &refs.head_ref_name,
+                &refs.base_ref_name,
+                token,
+                &mut diff,
+            );
+        }
+        Ok(diff)
+    })? {
+        AccountOutcome::Ok {
+            account,
+            value: diff,
+        } => Ok(PullRequestDiffListing::Ok { account, diff }),
+        AccountOutcome::NoAccess { accounts } => {
+            Ok(PullRequestDiffListing::NoAccess { slug, accounts })
         }
     }
 }
@@ -802,7 +836,7 @@ fn enrich_image_previews_against_refs(
     }
 }
 
-fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> PullRequestDetail {
+fn build_detail(number: u64, view: GhPullRequestView) -> PullRequestDetail {
     let actor_avatars = view
         .actor_avatars
         .as_ref()
@@ -919,7 +953,6 @@ fn build_detail(number: u64, view: GhPullRequestView, diff_text: String) -> Pull
         reviews,
         checks,
         commits,
-        diff: crate::unified_diff::parse_unified_diff(&diff_text),
     }
 }
 
@@ -952,6 +985,35 @@ fn run_pr_view(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestV
     let mut view: GhPullRequestView = serde_json::from_slice(&output.stdout)
         .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
     view.actor_avatars = Some(resolve_pr_actor_avatars(&view, token));
+    Ok(view)
+}
+
+fn run_pr_refs(slug: &str, number: u64, token: &str) -> AppResult<GhPullRequestRefs> {
+    let number_s = number.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "pr",
+            "view",
+            &number_s,
+            "--repo",
+            slug,
+            "--json",
+            "headRefName,baseRefName",
+        ]);
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    let view: GhPullRequestRefs = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
     Ok(view)
 }
 
@@ -1257,6 +1319,14 @@ fn run_pr_diff(slug: &str, number: u64, token: &str) -> AppResult<String> {
     // mojibake) — those segments are non-renderable anyway and the parser
     // ultimately routes them into the binary-placeholder branch.
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhPullRequestRefs {
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

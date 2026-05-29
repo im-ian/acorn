@@ -1246,7 +1246,7 @@ test.describe("terminal: spawn", () => {
       .toBeGreaterThanOrEqual(1);
   });
 
-  test("Cmd+Left and Cmd+Right move through terminal conversation prompts", async ({
+  test("conversation shortcuts move through terminal conversation prompts", async ({
     page,
     tauri,
   }) => {
@@ -1314,16 +1314,16 @@ test.describe("terminal: spawn", () => {
     await expect(page.locator(".xterm-rows")).toContainText("tail 35");
 
     await page.locator(".xterm-helper-textarea").focus();
-    await pressHotkey(page, { mod: true, key: "ArrowLeft" });
+    await pressHotkey(page, { mod: true, alt: true, key: "ArrowUp" });
     await expect(page.locator(".xterm-rows")).toContainText("third prompt");
 
-    await pressHotkey(page, { mod: true, key: "ArrowLeft" });
+    await pressHotkey(page, { mod: true, alt: true, key: "ArrowUp" });
     await expect(page.locator(".xterm-rows")).toContainText("second prompt");
 
-    await pressHotkey(page, { mod: true, key: "ArrowRight" });
+    await pressHotkey(page, { mod: true, alt: true, key: "ArrowDown" });
     await expect(page.locator(".xterm-rows")).toContainText("third prompt");
 
-    await pressHotkey(page, { mod: true, key: "ArrowRight" });
+    await pressHotkey(page, { mod: true, alt: true, key: "ArrowDown" });
     await expect(page.locator(".xterm-rows")).toContainText("tail 35");
   });
 

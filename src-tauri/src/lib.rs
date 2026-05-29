@@ -521,6 +521,7 @@ pub fn run() {
             commands::staged_file_diff,
             commands::list_pull_requests,
             commands::get_pull_request_detail,
+            commands::get_pull_request_diff,
             commands::get_pull_request_commit_diff,
             commands::resolve_commit_logins,
             commands::merge_pull_request,

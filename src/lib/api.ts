@@ -14,6 +14,7 @@ import type {
   ProjectSettingsRecord,
   PrStateFilter,
   PullRequestDetailListing,
+  PullRequestDiffListing,
   PullRequestListing,
   Session,
   SessionAgentProvider,
@@ -200,6 +201,15 @@ export const api = {
     number: number,
   ): Promise<PullRequestDetailListing> {
     return invoke<PullRequestDetailListing>("get_pull_request_detail", {
+      repoPath,
+      number,
+    });
+  },
+  getPullRequestDiff(
+    repoPath: string,
+    number: number,
+  ): Promise<PullRequestDiffListing> {
+    return invoke<PullRequestDiffListing>("get_pull_request_diff", {
       repoPath,
       number,
     });

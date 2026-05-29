@@ -91,6 +91,9 @@ export const tauriMockSource = `
     if (cmd === 'list_pull_requests') {
       return Promise.resolve({ items: [], account: null, error: null });
     }
+    if (cmd === 'get_pull_request_diff') {
+      return Promise.resolve({ kind: 'ok', account: 'test', diff: { files: [] } });
+    }
     if (cmd === 'list_workflow_runs') {
       return Promise.resolve({ kind: 'not_github' });
     }
