@@ -26,7 +26,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { selectSessionsById, useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
 import { api } from "../lib/api";
@@ -1117,7 +1116,7 @@ function TabItem({
       label: paneT(t, "pane.menu.revealInFinder"),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void openPath(tabPath).catch((err: unknown) => {
+        void api.fsReveal(tabPath).catch((err: unknown) => {
           console.error("[Pane] reveal in finder failed", err);
         });
       },
@@ -1510,7 +1509,7 @@ function buildPaneMenuItems({
           label: paneT(t, "pane.menu.revealInFinder"),
           icon: <FolderOpen size={12} />,
           onClick: () => {
-            void openPath(activeSession.worktree_path).catch(
+            void api.fsReveal(activeSession.worktree_path).catch(
               (err: unknown) => {
                 console.error("[Pane] reveal failed", err);
               },
