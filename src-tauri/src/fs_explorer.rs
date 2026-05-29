@@ -229,18 +229,137 @@ enum FsRefreshKind {
     Subtree,
 }
 
-fn canonical(path: &str) -> AppResult<PathBuf> {
-    let p = PathBuf::from(path);
-    if p.as_os_str().is_empty() {
-        return Err(AppError::InvalidPath("empty path".into()));
+#[derive(Debug, Clone)]
+struct ScopedPath {
+    requested: PathBuf,
+    resolved: PathBuf,
+    root: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct FsScope {
+    roots: Vec<PathBuf>,
+}
+
+impl FsScope {
+    fn from_state(state: &AppState) -> Self {
+        let mut roots = Vec::new();
+        for project in state.projects.list() {
+            Self::push_root(&mut roots, project.repo_path);
+        }
+        for session in state.sessions.list() {
+            Self::push_root(&mut roots, session.repo_path);
+            Self::push_root(&mut roots, session.worktree_path);
+        }
+        roots.sort_by(|a, b| {
+            b.components()
+                .count()
+                .cmp(&a.components().count())
+                .then_with(|| a.cmp(b))
+        });
+        roots.dedup();
+        Self { roots }
     }
-    // For browsing we do not require the path to exist on create operations;
-    // canonicalize only when the path already exists.
-    if p.exists() {
-        p.canonicalize().map_err(AppError::from)
-    } else {
-        Ok(p)
+
+    #[cfg(test)]
+    fn from_roots<I>(roots: I) -> Self
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let mut out = Vec::new();
+        for root in roots {
+            Self::push_root(&mut out, root);
+        }
+        out.sort_by(|a, b| {
+            b.components()
+                .count()
+                .cmp(&a.components().count())
+                .then_with(|| a.cmp(b))
+        });
+        out.dedup();
+        Self { roots: out }
     }
+
+    fn push_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
+        if root.as_os_str().is_empty() || !root.is_absolute() || !root.exists() {
+            return;
+        }
+        match root.canonicalize() {
+            Ok(canonical_root) => roots.push(canonical_root),
+            Err(err) => {
+                tracing::debug!(
+                    path = %root.display(),
+                    error = %err,
+                    "skipping filesystem scope root"
+                );
+            }
+        }
+    }
+
+    fn authorize_existing(&self, path: &Path) -> AppResult<ScopedPath> {
+        reject_dangerous(path)?;
+        let resolved = path.canonicalize().map_err(AppError::from)?;
+        let root = self.match_root(&resolved)?;
+        Ok(ScopedPath {
+            requested: path.to_path_buf(),
+            resolved,
+            root,
+        })
+    }
+
+    fn authorize_existing_or_missing(&self, path: &Path) -> AppResult<ScopedPath> {
+        reject_dangerous(path)?;
+        if path.exists() {
+            return self.authorize_existing(path);
+        }
+        let requested = normalize_absolute_path(path)
+            .ok_or_else(|| AppError::InvalidPath("absolute path required".into()))?;
+        let nearest = nearest_existing_ancestor(&requested).ok_or_else(|| {
+            AppError::InvalidPath(format!("path outside allowed roots: {}", path.display()))
+        })?;
+        let nearest_resolved = nearest.canonicalize().map_err(AppError::from)?;
+        let suffix = requested.strip_prefix(&nearest).map_err(|_| {
+            AppError::InvalidPath(format!("path outside allowed roots: {}", path.display()))
+        })?;
+        let resolved = nearest_resolved.join(suffix);
+        let root = self.match_root(&resolved)?;
+        let nearest_root = self.match_root(&nearest_resolved)?;
+        if root != nearest_root {
+            return Err(AppError::InvalidPath(format!(
+                "path outside allowed roots: {}",
+                path.display()
+            )));
+        }
+        Ok(ScopedPath {
+            requested: path.to_path_buf(),
+            resolved,
+            root,
+        })
+    }
+
+    fn match_root(&self, path: &Path) -> AppResult<PathBuf> {
+        self.roots
+            .iter()
+            .find(|root| path_is_inside_root(path, root))
+            .cloned()
+            .ok_or_else(|| {
+                AppError::InvalidPath(format!(
+                    "path outside allowed project roots: {}",
+                    path.display()
+                ))
+            })
+    }
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if candidate.exists() {
+            return Some(candidate.to_path_buf());
+        }
+        current = candidate.parent();
+    }
+    None
 }
 
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
@@ -280,11 +399,22 @@ pub struct ListResult {
 
 #[tauri::command]
 pub fn fs_list_dir(
+    state: State<'_, AppState>,
     path: String,
     show_hidden: bool,
     respect_gitignore: bool,
 ) -> AppResult<ListResult> {
-    let dir = canonical(&path)?;
+    let scope = FsScope::from_state(state.inner());
+    fs_list_dir_scoped(&scope, path, show_hidden, respect_gitignore)
+}
+
+fn fs_list_dir_scoped(
+    scope: &FsScope,
+    path: String,
+    show_hidden: bool,
+    respect_gitignore: bool,
+) -> AppResult<ListResult> {
+    let dir = scope.authorize_existing(Path::new(&path))?.resolved;
     if !dir.is_dir() {
         return Err(AppError::InvalidPath(format!("not a directory: {path}")));
     }
@@ -389,36 +519,56 @@ pub(crate) fn move_to_trash(p: &Path) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn fs_rename(from: String, to: String) -> AppResult<()> {
+pub fn fs_rename(state: State<'_, AppState>, from: String, to: String) -> AppResult<()> {
+    let scope = FsScope::from_state(state.inner());
+    fs_rename_scoped(&scope, from, to)
+}
+
+fn fs_rename_scoped(scope: &FsScope, from: String, to: String) -> AppResult<()> {
     let from_p = PathBuf::from(&from);
     let to_p = PathBuf::from(&to);
-    reject_dangerous(&from_p)?;
-    reject_dangerous(&to_p)?;
+    let from_scoped = scope.authorize_existing(&from_p)?;
+    let to_scoped = scope.authorize_existing_or_missing(&to_p)?;
+    if from_scoped.root != to_scoped.root {
+        return Err(AppError::InvalidPath(
+            "rename destination must stay inside the same project root".into(),
+        ));
+    }
     if !from_p.exists() {
         return Err(AppError::InvalidPath(format!("source missing: {from}")));
     }
-    if to_p.exists() {
+    if to_p.exists() || std::fs::symlink_metadata(&to_p).is_ok() {
         return Err(AppError::InvalidPath(format!("destination exists: {to}")));
     }
-    std::fs::rename(&from_p, &to_p)?;
+    std::fs::rename(&from_scoped.requested, &to_scoped.requested)?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn fs_trash(path: String) -> AppResult<()> {
+pub fn fs_trash(state: State<'_, AppState>, path: String) -> AppResult<()> {
+    let scope = FsScope::from_state(state.inner());
+    fs_trash_scoped(&scope, path)
+}
+
+fn fs_trash_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
-    reject_dangerous(&p)?;
+    let scoped = scope.authorize_existing(&p)?;
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
-    move_to_trash(&p)?;
+    move_to_trash(&scoped.requested)?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn fs_reveal(path: String) -> AppResult<()> {
+pub fn fs_reveal(state: State<'_, AppState>, path: String) -> AppResult<()> {
+    let scope = FsScope::from_state(state.inner());
+    fs_reveal_scoped(&scope, path)
+}
+
+fn fs_reveal_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
-    reject_dangerous(&p)?;
+    let scoped = scope.authorize_existing(&p)?;
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
@@ -426,14 +576,14 @@ pub fn fs_reveal(path: String) -> AppResult<()> {
     {
         std::process::Command::new("open")
             .arg("-R")
-            .arg(&p)
+            .arg(&scoped.requested)
             .spawn()
             .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(p.parent().unwrap_or(&p))
+            .arg(scoped.requested.parent().unwrap_or(&scoped.requested))
             .spawn()
             .map_err(|e| AppError::Other(format!("xdg-open failed: {e}")))?;
     }
@@ -441,7 +591,7 @@ pub fn fs_reveal(path: String) -> AppResult<()> {
     {
         std::process::Command::new("explorer")
             .arg("/select,")
-            .arg(&p)
+            .arg(&scoped.requested)
             .spawn()
             .map_err(|e| AppError::Other(format!("explorer failed: {e}")))?;
     }
@@ -453,23 +603,28 @@ pub fn fs_reveal(path: String) -> AppResult<()> {
 /// PTY path otherwise blows up with `permission denied` because the
 /// shell tries to execute the empty command followed by the file.
 #[tauri::command]
-pub fn fs_open_default(path: String) -> AppResult<()> {
+pub fn fs_open_default(state: State<'_, AppState>, path: String) -> AppResult<()> {
+    let scope = FsScope::from_state(state.inner());
+    fs_open_default_scoped(&scope, path)
+}
+
+fn fs_open_default_scoped(scope: &FsScope, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
-    reject_dangerous(&p)?;
+    let scoped = scope.authorize_existing(&p)?;
     if !p.exists() {
         return Err(AppError::InvalidPath(format!("missing: {path}")));
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(&p)
+            .arg(&scoped.requested)
             .spawn()
             .map_err(|e| AppError::Other(format!("open failed: {e}")))?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(&p)
+            .arg(&scoped.requested)
             .spawn()
             .map_err(|e| AppError::Other(format!("xdg-open failed: {e}")))?;
     }
@@ -477,7 +632,7 @@ pub fn fs_open_default(path: String) -> AppResult<()> {
     {
         std::process::Command::new("cmd")
             .args(["/c", "start", ""])
-            .arg(&p)
+            .arg(&scoped.requested)
             .spawn()
             .map_err(|e| AppError::Other(format!("start failed: {e}")))?;
     }
@@ -513,10 +668,13 @@ pub struct GitStatusResult {
 
 #[tauri::command]
 pub fn fs_git_status(
+    state: State<'_, AppState>,
     repo_root: String,
     status_limit: Option<u32>,
 ) -> AppResult<GitStatusResult> {
-    fs_git_status_with_limit(repo_root, status_limit)
+    let scope = FsScope::from_state(state.inner());
+    let root = scope.authorize_existing(Path::new(&repo_root))?.resolved;
+    fs_git_status_with_limit(root.to_string_lossy().into_owned(), status_limit)
 }
 
 /// Same as `fs_git_status` but explicit about the limit; kept callable
@@ -602,10 +760,20 @@ pub struct GitDiffStatsEntry {
 
 #[tauri::command]
 pub fn fs_git_diff_stats(
+    state: State<'_, AppState>,
     repo_root: String,
     entries: Vec<GitDiffStatsRequest>,
 ) -> AppResult<HashMap<String, GitDiffStatsEntry>> {
-    let root = PathBuf::from(&repo_root);
+    let scope = FsScope::from_state(state.inner());
+    fs_git_diff_stats_scoped(&scope, repo_root, entries)
+}
+
+fn fs_git_diff_stats_scoped(
+    scope: &FsScope,
+    repo_root: String,
+    entries: Vec<GitDiffStatsRequest>,
+) -> AppResult<HashMap<String, GitDiffStatsEntry>> {
+    let root = scope.authorize_existing(Path::new(&repo_root))?.resolved;
     if !root.exists() {
         return Err(AppError::InvalidPath(format!("missing: {repo_root}")));
     }
@@ -625,14 +793,24 @@ pub fn fs_git_diff_stats(
     let mut diffable: Vec<(String, String)> = Vec::new();
     for entry in entries {
         let path = PathBuf::from(&entry.path);
-        reject_dangerous(&path)?;
-        let Ok(rel_path) = path.strip_prefix(&workdir) else {
+        let scoped = match scope.authorize_existing_or_missing(&path) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::debug!(
+                    path = %entry.path,
+                    error = %err,
+                    "skipping diff stats path outside filesystem scope"
+                );
+                continue;
+            }
+        };
+        let Ok(rel_path) = scoped.resolved.strip_prefix(&workdir) else {
             continue;
         };
         let rel = rel_path.to_string_lossy().into_owned();
-        let abs = path.to_string_lossy().into_owned();
+        let abs = scoped.requested.to_string_lossy().into_owned();
         match entry.kind.as_str() {
-            "added" => added.push((abs, path)),
+            "added" => added.push((abs, scoped.resolved)),
             "deleted" => deleted.push((abs, rel)),
             _ => diffable.push((abs, rel)),
         }
@@ -643,10 +821,14 @@ pub fn fs_git_diff_stats(
 
     // Untracked / freshly-added: line count of the working-tree file.
     for (abs, path) in added {
-        let additions = std::fs::read(&path)
-            .map(|b| count_lines(&b))
-            .unwrap_or(0);
-        out.insert(abs, GitDiffStatsEntry { additions, deletions: 0 });
+        let additions = std::fs::read(&path).map(|b| count_lines(&b)).unwrap_or(0);
+        out.insert(
+            abs,
+            GitDiffStatsEntry {
+                additions,
+                deletions: 0,
+            },
+        );
     }
 
     // Deleted: line count of the HEAD blob.
@@ -658,7 +840,13 @@ pub fn fs_git_diff_stats(
             .and_then(|e| e.to_object(&repo).ok())
             .and_then(|o| o.as_blob().map(|b| count_lines(b.content())))
             .unwrap_or(0);
-        out.insert(abs, GitDiffStatsEntry { additions: 0, deletions });
+        out.insert(
+            abs,
+            GitDiffStatsEntry {
+                additions: 0,
+                deletions,
+            },
+        );
     }
 
     // Modified / renamed / conflicted: one diff scoped to every diffable
@@ -704,13 +892,25 @@ pub fn fs_git_diff_stats(
                 }
                 for (abs, rel) in diffable {
                     let (a, d) = per_path.get(&rel).copied().unwrap_or((0, 0));
-                    out.insert(abs, GitDiffStatsEntry { additions: a, deletions: d });
+                    out.insert(
+                        abs,
+                        GitDiffStatsEntry {
+                            additions: a,
+                            deletions: d,
+                        },
+                    );
                 }
             }
             Err(err) => {
                 tracing::warn!(error = %err, "diff_tree_to_workdir_with_index failed; diff stats zeroed");
                 for (abs, _rel) in diffable {
-                    out.insert(abs, GitDiffStatsEntry { additions: 0, deletions: 0 });
+                    out.insert(
+                        abs,
+                        GitDiffStatsEntry {
+                            additions: 0,
+                            deletions: 0,
+                        },
+                    );
                 }
             }
         }
@@ -769,24 +969,34 @@ pub struct ReadFileResult {
 const VIEWER_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[tauri::command]
-pub fn fs_file_exists(path: String) -> AppResult<bool> {
+pub fn fs_file_exists(state: State<'_, AppState>, path: String) -> AppResult<bool> {
+    let scope = FsScope::from_state(state.inner());
+    fs_file_exists_scoped(&scope, path)
+}
+
+fn fs_file_exists_scoped(scope: &FsScope, path: String) -> AppResult<bool> {
     let p = PathBuf::from(&path);
-    reject_dangerous(&p)?;
+    scope.authorize_existing_or_missing(&p)?;
     Ok(p.is_file())
 }
 
 #[tauri::command]
-pub fn fs_read_file(path: String) -> AppResult<ReadFileResult> {
+pub fn fs_read_file(state: State<'_, AppState>, path: String) -> AppResult<ReadFileResult> {
+    let scope = FsScope::from_state(state.inner());
+    fs_read_file_scoped(&scope, path)
+}
+
+fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResult> {
     let p = PathBuf::from(&path);
-    reject_dangerous(&p)?;
-    if !p.is_file() {
+    let scoped = scope.authorize_existing(&p)?;
+    if !scoped.resolved.is_file() {
         return Err(AppError::InvalidPath(format!("not a file: {path}")));
     }
-    let meta = std::fs::metadata(&p)?;
+    let meta = std::fs::metadata(&scoped.resolved)?;
     let size = meta.len();
     let mut probe = vec![0u8; 4096.min(size as usize)];
     use std::io::Read;
-    let mut file = std::fs::File::open(&p)?;
+    let mut file = std::fs::File::open(&scoped.resolved)?;
     let probe_n = file.read(&mut probe)?;
     if probe[..probe_n].contains(&0) {
         return Ok(ReadFileResult {
@@ -799,7 +1009,7 @@ pub fn fs_read_file(path: String) -> AppResult<ReadFileResult> {
     let truncated = size > VIEWER_MAX_BYTES;
     let to_read = if truncated { VIEWER_MAX_BYTES } else { size };
     let mut buf = Vec::with_capacity(to_read as usize);
-    let file = std::fs::File::open(&p)?;
+    let file = std::fs::File::open(&scoped.resolved)?;
     let mut take = file.take(to_read);
     take.read_to_end(&mut buf)?;
     let content = String::from_utf8_lossy(&buf).into_owned();
@@ -821,9 +1031,18 @@ pub struct LineDiffEntry {
 }
 
 #[tauri::command]
-pub fn fs_git_diff_lines(path: String) -> AppResult<Vec<LineDiffEntry>> {
+pub fn fs_git_diff_lines(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<Vec<LineDiffEntry>> {
+    let scope = FsScope::from_state(state.inner());
+    fs_git_diff_lines_scoped(&scope, path)
+}
+
+fn fs_git_diff_lines_scoped(scope: &FsScope, path: String) -> AppResult<Vec<LineDiffEntry>> {
     let target = PathBuf::from(&path);
-    reject_dangerous(&target)?;
+    let scoped = scope.authorize_existing(&target)?;
+    let target = scoped.resolved;
     if !target.is_file() {
         return Ok(Vec::new());
     }
@@ -914,8 +1133,9 @@ pub fn fs_git_diff_lines(path: String) -> AppResult<Vec<LineDiffEntry>> {
 /// the repo enclosing `repo_root`. Empty string when the path is not a
 /// git repo — frontend then hides the branch chip.
 #[tauri::command]
-pub fn fs_git_branch(repo_root: String) -> AppResult<String> {
-    let root = PathBuf::from(&repo_root);
+pub fn fs_git_branch(state: State<'_, AppState>, repo_root: String) -> AppResult<String> {
+    let scope = FsScope::from_state(state.inner());
+    let root = scope.authorize_existing(Path::new(&repo_root))?.resolved;
     let repo = match Repository::discover(&root) {
         Ok(r) => r,
         Err(_) => return Ok(String::new()),
@@ -955,7 +1175,8 @@ pub fn fs_watch_set_root<R: Runtime>(
 ) -> AppResult<()> {
     let mut guard = state.fs_watcher.inner.lock();
     if let Some(p) = path.as_deref() {
-        let root = canonical(p)?;
+        let scope = FsScope::from_state(state.inner());
+        let root = scope.authorize_existing(Path::new(p))?.resolved;
         if !root.is_dir() {
             return Err(AppError::InvalidPath(format!("not a directory: {p}")));
         }
@@ -1358,6 +1579,10 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
+    fn scope_for(root: &Path) -> FsScope {
+        FsScope::from_roots([root.to_path_buf()])
+    }
+
     fn create_event(paths: Vec<PathBuf>) -> Event {
         let mut event = Event::new(EventKind::Create(CreateKind::Any));
         event.paths = paths;
@@ -1388,7 +1613,14 @@ mod tests {
         fs::create_dir(d.path().join("middle")).unwrap();
         fs::create_dir(d.path().join("Alpha")).unwrap();
 
-        let res = fs_list_dir(d.path().to_string_lossy().into_owned(), false, false).unwrap();
+        let scope = scope_for(d.path());
+        let res = fs_list_dir_scoped(
+            &scope,
+            d.path().to_string_lossy().into_owned(),
+            false,
+            false,
+        )
+        .unwrap();
         let names: Vec<_> = res.entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(names, vec!["Alpha", "middle", "apple.txt", "zebra.txt"]);
     }
@@ -1399,10 +1631,18 @@ mod tests {
         fs::write(d.path().join(".env"), b"").unwrap();
         fs::write(d.path().join("visible.txt"), b"").unwrap();
 
-        let hidden_off =
-            fs_list_dir(d.path().to_string_lossy().into_owned(), false, false).unwrap();
+        let scope = scope_for(d.path());
+        let hidden_off = fs_list_dir_scoped(
+            &scope,
+            d.path().to_string_lossy().into_owned(),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(hidden_off.entries.len(), 1);
-        let hidden_on = fs_list_dir(d.path().to_string_lossy().into_owned(), true, false).unwrap();
+        let hidden_on =
+            fs_list_dir_scoped(&scope, d.path().to_string_lossy().into_owned(), true, false)
+                .unwrap();
         assert_eq!(hidden_on.entries.len(), 2);
     }
 
@@ -1415,11 +1655,19 @@ mod tests {
         fs::write(d.path().join("secret.txt"), b"").unwrap();
         fs::write(d.path().join("keep.txt"), b"").unwrap();
 
-        let on = fs_list_dir(d.path().to_string_lossy().into_owned(), false, true).unwrap();
+        let scope = scope_for(d.path());
+        let on = fs_list_dir_scoped(&scope, d.path().to_string_lossy().into_owned(), false, true)
+            .unwrap();
         let names: Vec<_> = on.entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(names, vec!["keep.txt"]);
 
-        let off = fs_list_dir(d.path().to_string_lossy().into_owned(), false, false).unwrap();
+        let off = fs_list_dir_scoped(
+            &scope,
+            d.path().to_string_lossy().into_owned(),
+            false,
+            false,
+        )
+        .unwrap();
         let off_names: Vec<_> = off.entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(off_names, vec!["build", "keep.txt", "secret.txt"]);
     }
@@ -1517,10 +1765,7 @@ mod tests {
 
     #[test]
     fn ignore_matcher_accepts_user_globs() {
-        let m = WatchIgnoreMatcher::with_defaults(&[
-            "out/**".to_string(),
-            "**/*.log".to_string(),
-        ]);
+        let m = WatchIgnoreMatcher::with_defaults(&["out/**".to_string(), "**/*.log".to_string()]);
         let root = Path::new("/proj");
         assert!(m.is_ignored(&root.join("out/bundle.js"), root));
         assert!(m.is_ignored(&root.join("nested/a.log"), root));
@@ -1555,11 +1800,8 @@ mod tests {
             fs::write(repo_path.join(format!("u{i}.txt")), b"x").unwrap();
         }
 
-        let res = fs_git_status_with_limit(
-            repo_path.to_string_lossy().into_owned(),
-            Some(5),
-        )
-        .unwrap();
+        let res =
+            fs_git_status_with_limit(repo_path.to_string_lossy().into_owned(), Some(5)).unwrap();
         assert!(res.huge);
         assert_eq!(res.limit, 5);
         assert_eq!(res.statuses.len(), 5);
@@ -1572,22 +1814,53 @@ mod tests {
         let repo_path = d.path().canonicalize().unwrap();
         git2::Repository::init(&repo_path).unwrap();
         fs::write(repo_path.join("a.txt"), b"hi").unwrap();
-        let res = fs_git_status_with_limit(
-            repo_path.to_string_lossy().into_owned(),
-            Some(10_000),
-        )
-        .unwrap();
+        let res = fs_git_status_with_limit(repo_path.to_string_lossy().into_owned(), Some(10_000))
+            .unwrap();
         assert!(!res.huge);
         assert_eq!(res.limit, 10_000);
-        assert!(res.statuses.contains_key(
-            &repo_path.join("a.txt").to_string_lossy().into_owned()
-        ));
+        assert!(res
+            .statuses
+            .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned()));
     }
 
     #[test]
     fn rename_rejects_traversal_segments() {
-        let res = fs_rename("/tmp/../etc/evil".to_string(), "/tmp/x".to_string());
+        let scope = FsScope::from_roots([PathBuf::from("/tmp")]);
+        let res = fs_rename_scoped(&scope, "/tmp/../etc/evil".to_string(), "/tmp/x".to_string());
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn scope_rejects_file_read_outside_registered_root() {
+        let allowed = tmpdir();
+        let outside = tmpdir();
+        let outside_file = outside.path().join("secret.txt");
+        fs::write(&outside_file, b"secret").unwrap();
+
+        let scope = scope_for(allowed.path());
+        let res = fs_read_file_scoped(&scope, outside_file.to_string_lossy().into_owned());
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn scope_rejects_rename_destination_outside_registered_root() {
+        let allowed = tmpdir();
+        let outside = tmpdir();
+        let source = allowed.path().join("a.txt");
+        let target = outside.path().join("a.txt");
+        fs::write(&source, b"hi").unwrap();
+
+        let scope = scope_for(allowed.path());
+        let res = fs_rename_scoped(
+            &scope,
+            source.to_string_lossy().into_owned(),
+            target.to_string_lossy().into_owned(),
+        );
+
+        assert!(res.is_err());
+        assert!(source.exists());
+        assert!(!target.exists());
     }
 
     #[test]
@@ -1597,12 +1870,15 @@ mod tests {
         let dir = d.path().join("folder");
         fs::write(&file, b"hi").unwrap();
         fs::create_dir(&dir).unwrap();
+        let scope = scope_for(d.path());
 
-        assert!(fs_file_exists(file.to_string_lossy().into_owned()).unwrap());
-        assert!(!fs_file_exists(dir.to_string_lossy().into_owned()).unwrap());
-        assert!(
-            !fs_file_exists(d.path().join("missing.txt").to_string_lossy().into_owned()).unwrap()
-        );
+        assert!(fs_file_exists_scoped(&scope, file.to_string_lossy().into_owned()).unwrap());
+        assert!(!fs_file_exists_scoped(&scope, dir.to_string_lossy().into_owned()).unwrap());
+        assert!(!fs_file_exists_scoped(
+            &scope,
+            d.path().join("missing.txt").to_string_lossy().into_owned()
+        )
+        .unwrap());
     }
 
     #[test]
@@ -1611,7 +1887,9 @@ mod tests {
         let a = d.path().join("a.txt");
         let b = d.path().join("b.txt");
         std::fs::write(&a, b"hi").unwrap();
-        fs_rename(
+        let scope = scope_for(d.path());
+        fs_rename_scoped(
+            &scope,
             a.to_string_lossy().into_owned(),
             b.to_string_lossy().into_owned(),
         )
@@ -1693,7 +1971,10 @@ mod tests {
             state.record_restart();
         }
         // After 5 restarts, give up.
-        assert_eq!(decide(&state, ErrorClass::Unknown), SupervisorAction::GiveUp);
+        assert_eq!(
+            decide(&state, ErrorClass::Unknown),
+            SupervisorAction::GiveUp
+        );
     }
 
     #[test]
@@ -1708,7 +1989,10 @@ mod tests {
     #[test]
     fn supervisor_emits_warn_only_once_for_enospc() {
         let mut state = SupervisorState::default();
-        assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::WarnOnce);
+        assert_eq!(
+            decide(&state, ErrorClass::Enospc),
+            SupervisorAction::WarnOnce
+        );
         state.record_enospc_logged();
         assert_eq!(decide(&state, ErrorClass::Enospc), SupervisorAction::NoOp);
     }
@@ -1827,7 +2111,10 @@ mod tests {
         let root = d.path().canonicalize().unwrap();
         let mut batch = new_batch(&root);
         batch.add_event(create_event(vec![root.join(".git/index.lock")]));
-        assert!(batch.finish().is_none(), "noise-only batch produces no payload");
+        assert!(
+            batch.finish().is_none(),
+            "noise-only batch produces no payload"
+        );
     }
 
     #[test]
@@ -1860,7 +2147,10 @@ mod tests {
         let f = root.join("a.txt");
         batch.add_event(create_event(vec![f.clone()]));
         batch.add_event(remove_event(vec![f]));
-        assert!(batch.finish().is_none(), "create+delete must net to nothing");
+        assert!(
+            batch.finish().is_none(),
+            "create+delete must net to nothing"
+        );
     }
 
     #[test]
@@ -1898,7 +2188,10 @@ mod tests {
         let parent = root.join("dir");
         let other = root.join("untouched.txt");
         batch.add_event(modify_event(vec![other.clone()]));
-        batch.add_event(remove_event(vec![parent.join("inside.txt"), parent.clone()]));
+        batch.add_event(remove_event(vec![
+            parent.join("inside.txt"),
+            parent.clone(),
+        ]));
         let payload = batch.finish().expect("payload");
         let mut got = payload.paths;
         got.sort();
@@ -1929,7 +2222,8 @@ mod tests {
             index.write().unwrap();
             let tree_id = index.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
         }
 
         // Purely additive: insert 3 new lines between "2" and "3".
@@ -1939,11 +2233,10 @@ mod tests {
             path: repo_path.join("a.rs").to_string_lossy().into_owned(),
             kind: "modified".to_string(),
         }];
-        let stats = fs_git_diff_stats(
-            repo_path.to_string_lossy().into_owned(),
-            entries,
-        )
-        .unwrap();
+        let scope = scope_for(&repo_path);
+        let stats =
+            fs_git_diff_stats_scoped(&scope, repo_path.to_string_lossy().into_owned(), entries)
+                .unwrap();
         let entry = stats.values().next().expect("one entry");
         assert_eq!(entry.additions, 3);
         assert_eq!(entry.deletions, 0);
@@ -1966,7 +2259,8 @@ mod tests {
             index.write().unwrap();
             let tree_id = index.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
         }
         // x.rs: +2 lines (purely additive). y.rs: -1 line.
         fs::write(repo_path.join("x.rs"), "a\nb\nc\nNEW1\nNEW2\n").unwrap();
@@ -1982,11 +2276,10 @@ mod tests {
                 kind: "modified".to_string(),
             },
         ];
-        let stats = fs_git_diff_stats(
-            repo_path.to_string_lossy().into_owned(),
-            entries,
-        )
-        .unwrap();
+        let scope = scope_for(&repo_path);
+        let stats =
+            fs_git_diff_stats_scoped(&scope, repo_path.to_string_lossy().into_owned(), entries)
+                .unwrap();
         let x_key = repo_path.join("x.rs").to_string_lossy().into_owned();
         let y_key = repo_path.join("y.rs").to_string_lossy().into_owned();
         assert_eq!(stats[&x_key].additions, 2);

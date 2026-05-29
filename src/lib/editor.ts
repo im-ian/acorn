@@ -1,4 +1,3 @@
-import { openPath } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
 import { useSettings } from "./settings";
 
@@ -19,7 +18,7 @@ export async function openFileInEditor(absolutePath: string): Promise<void> {
     await api.openInEditor(program, args, absolutePath);
     return;
   }
-  await openPath(absolutePath);
+  await api.fsOpenDefault(absolutePath);
 }
 
 /** Strict variant of {@link openFileInEditor}: only spawns the configured
