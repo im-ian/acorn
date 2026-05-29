@@ -84,6 +84,10 @@ import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAcornDragGlobalCleanup } from "./lib/dnd";
 import {
+  TERMINAL_PASTE_EVENT,
+  type TerminalPasteEventDetail,
+} from "./lib/pasteEvents";
+import {
   nextSessionStatusPollDelayMs,
   selectDueSessionStatusPollIds,
   selectImmediateSessionStatusPollIds,
@@ -107,6 +111,68 @@ type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
 
 function appText(t: Translator, key: AppTranslationKey): string {
   return t(key);
+}
+
+function isEditableTextElement(
+  element: Element | null,
+): element is HTMLInputElement | HTMLTextAreaElement {
+  if (
+    !(element instanceof HTMLInputElement) &&
+    !(element instanceof HTMLTextAreaElement)
+  ) {
+    return false;
+  }
+  return !element.disabled && !element.readOnly;
+}
+
+function dispatchInputEvent(element: Element, text: string) {
+  try {
+    element.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: text,
+        inputType: "insertFromPaste",
+      }),
+    );
+  } catch {
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+}
+
+function insertTextIntoActiveElement(text: string): boolean {
+  const active = document.activeElement;
+  if (isEditableTextElement(active)) {
+    const start = active.selectionStart ?? active.value.length;
+    const end = active.selectionEnd ?? active.value.length;
+    active.setRangeText(text, start, end, "end");
+    dispatchInputEvent(active, text);
+    return true;
+  }
+  if (active instanceof HTMLElement && active.isContentEditable) {
+    active.focus();
+    return document.execCommand("insertText", false, text);
+  }
+  return false;
+}
+
+function activeOrFocusedSessionId(): string | null {
+  const focused = findFocusedSessionId();
+  if (focused) return focused;
+  const state = useAppStore.getState();
+  if (state.activeSessionId) return state.activeSessionId;
+  if (!state.activeProject) return null;
+  const ws = state.workspaces[state.activeProject];
+  if (!ws) return null;
+  const activeTabId = ws.panes[ws.focusedPaneId]?.activeTabId;
+  return activeTabId && isSessionTabId(activeTabId) ? activeTabId : null;
+}
+
+function dispatchTerminalPaste(sessionId: string) {
+  window.dispatchEvent(
+    new CustomEvent<TerminalPasteEventDetail>(TERMINAL_PASTE_EVENT, {
+      detail: { sessionId },
+    }),
+  );
 }
 
 function focusPanel(id: "sidebar" | "main" | "right") {
@@ -536,6 +602,48 @@ function App() {
       unlisten?.();
     };
   }, [toggleMultiInput]);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>("acorn:paste", () => {
+      const focusedTerminal = findFocusedSessionId();
+      if (focusedTerminal) {
+        dispatchTerminalPaste(focusedTerminal);
+        return;
+      }
+
+      if (isEditableTextElement(document.activeElement)) {
+        void api
+          .clipboardSnapshot()
+          .then((snapshot) => {
+            if (snapshot.text) insertTextIntoActiveElement(snapshot.text);
+          })
+          .catch((err: unknown) => {
+            console.debug("[App] clipboard paste failed", err);
+          });
+        return;
+      }
+
+      const sessionId = activeOrFocusedSessionId();
+      if (sessionId) dispatchTerminalPaste(sessionId);
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach paste listener", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // Refresh the "live cwd is inside a linked worktree" map whenever the
   // window regains focus — the user may have `cd`'d into a worktree (or
