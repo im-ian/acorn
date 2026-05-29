@@ -293,6 +293,7 @@ export function PullRequestDetailModal({
             onClose={onClose}
             onRefresh={handleRefresh}
             refreshing={refreshing}
+            diffReloadKey={reloadKey}
             onOpenMerge={() => setMergeDialogOpen(true)}
             onOpenClose={() => setCloseDialogOpen(true)}
           />
@@ -356,6 +357,7 @@ function DetailBody({
   onClose,
   onRefresh,
   refreshing,
+  diffReloadKey,
   onOpenMerge,
   onOpenClose,
 }: {
@@ -371,6 +373,7 @@ function DetailBody({
   onClose: () => void;
   onRefresh: () => void;
   refreshing: boolean;
+  diffReloadKey: number;
   onOpenMerge: () => void;
   onOpenClose: () => void;
 }) {
@@ -389,7 +392,7 @@ function DetailBody({
   const checksPartial =
     effectiveChecks > 0 && !allChecksPassed && !allChecksFailed;
   const totalChecks = effectiveChecks;
-  const fileCount = detail.diff.files.length;
+  const fileCount = detail.changed_files;
   const commitCount = detail.commits.length;
 
   return (
@@ -566,11 +569,109 @@ function DetailBody({
         ) : tab === "checks" ? (
           <ChecksPane checks={detail.checks} />
         ) : (
-          <DiffSplitView payload={detail.diff} cwd={cwd} />
+          <PullRequestFilesPane
+            active={tab === "files"}
+            repoPath={repoPath}
+            number={detail.number}
+            cwd={cwd}
+            reloadKey={diffReloadKey}
+          />
         )}
       </div>
     </>
   );
+}
+
+function PullRequestFilesPane({
+  active,
+  repoPath,
+  number,
+  cwd,
+  reloadKey,
+}: {
+  active: boolean;
+  repoPath: string;
+  number: number;
+  cwd?: string;
+  reloadKey: number;
+}) {
+  const t = useTranslation();
+  const [diff, setDiff] = useState<DiffPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const loadedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setDiff(null);
+    setError(null);
+    setLoading(false);
+    loadedKeyRef.current = null;
+  }, [repoPath, number]);
+
+  useEffect(() => {
+    if (!active) return;
+    const requestKey = `${repoPath}#${number}:${reloadKey}`;
+    if (loadedKeyRef.current === requestKey) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .getPullRequestDiff(repoPath, number)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.kind === "ok") {
+          loadedKeyRef.current = requestKey;
+          setDiff(result.diff);
+          setError(null);
+        } else if (result.kind === "not_github") {
+          setDiff(null);
+          setError(dt(t, "dialogs.pullRequestDetail.notGithub"));
+        } else {
+          setDiff(null);
+          setError(
+            `${dt(t, "dialogs.pullRequestDetail.noAccessPrefix")} gh ${dt(
+              t,
+              "dialogs.pullRequestDetail.noAccessSuffix",
+            )} ${result.slug}.`,
+          );
+        }
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(String(e));
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, repoPath, number, reloadKey, t]);
+
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center px-4 text-center text-xs text-danger">
+        {error}
+      </div>
+    );
+  }
+  if (loading && !diff) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+        {dt(t, "dialogs.pullRequestDetail.loadingDiff")}
+      </div>
+    );
+  }
+  if (!diff) {
+    return null;
+  }
+  if (diff.files.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+        {t("diffView.noChanges")}
+      </div>
+    );
+  }
+  return <DiffSplitView payload={diff} cwd={cwd} />;
 }
 
 /**

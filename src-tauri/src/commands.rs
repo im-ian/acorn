@@ -15,7 +15,7 @@ use crate::persistence;
 use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::pull_requests::{
     self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
-    PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
+    PullRequestDiffListing, PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
 };
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
@@ -2714,7 +2714,21 @@ pub async fn get_pull_request_detail(
     repo_path: String,
     number: u64,
 ) -> AppResult<PullRequestDetailListing> {
-    pull_requests::get_pull_request_detail(&PathBuf::from(repo_path), number)
+    run_blocking("get_pull_request_detail", move || {
+        pull_requests::get_pull_request_detail(&PathBuf::from(repo_path), number)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_pull_request_diff(
+    repo_path: String,
+    number: u64,
+) -> AppResult<PullRequestDiffListing> {
+    run_blocking("get_pull_request_diff", move || {
+        pull_requests::get_pull_request_diff(&PathBuf::from(repo_path), number)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2722,7 +2736,10 @@ pub async fn get_pull_request_commit_diff(
     repo_path: String,
     sha: String,
 ) -> AppResult<DiffPayload> {
-    pull_requests::get_pull_request_commit_diff(&PathBuf::from(repo_path), &sha)
+    run_blocking("get_pull_request_commit_diff", move || {
+        pull_requests::get_pull_request_commit_diff(&PathBuf::from(repo_path), &sha)
+    })
+    .await
 }
 
 #[tauri::command]
