@@ -7,6 +7,7 @@ import {
 } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -25,6 +26,10 @@ import {
   patchTerminalCellMeasurements,
   unpatchTerminalCellMeasurements,
 } from "../lib/terminal-cjk-cell-width-addon";
+import {
+  patchTerminalEmojiWidthMeasurements,
+  unpatchTerminalEmojiWidthMeasurements,
+} from "../lib/terminal-emoji-width-addon";
 import {
   createTerminalRepaintScheduler,
   repaintTerminalViewport,
@@ -727,14 +732,16 @@ export function Terminal({
     );
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
+    const unicodeGraphemesAddon = new UnicodeGraphemesAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(serializeAddon);
     term.loadAddon(unicode11Addon);
-    // xterm.js defaults to Unicode 6 width tables that treat most emoji as
-    // width 1. The glyph then overflows its cell and adjacent cells overwrite
-    // it, producing the half-rendered / crammed look. Unicode 11 tables mark
-    // modern emoji as width 2 so cell allocation matches the glyph footprint.
-    term.unicode.activeVersion = "11";
+    term.loadAddon(unicodeGraphemesAddon);
+    // xterm.js defaults to Unicode 6 width tables and plain codepoint
+    // accounting. The grapheme provider uses newer width data and keeps
+    // variation-selector, skin-tone, regional-flag, and ZWJ emoji clusters in
+    // a single rendered cell group so following text starts on the right
+    // terminal column.
     termRef.current = term;
     fitRef.current = fitAddon;
 
@@ -744,6 +751,7 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
+    patchTerminalEmojiWidthMeasurements(term);
     const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
@@ -2176,6 +2184,7 @@ export function Terminal({
       invoke("pty_kill", { sessionId }).catch(() => {
         // Backend may not implement pty_kill yet — safe to ignore.
       });
+      unpatchTerminalEmojiWidthMeasurements(term);
       unpatchMouseCoordinateScale();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;
