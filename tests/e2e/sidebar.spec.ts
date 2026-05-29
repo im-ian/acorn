@@ -368,20 +368,18 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
-  test("Add existing project invokes add_project with the picked path", async ({
+  test("Add existing project opens the backend project picker", async ({
     page,
     tauri,
   }) => {
-    await tauri.handle("plugin:dialog|open", () => "/tmp/picked");
     // Capture the add_project call arguments on window so the test can
-    // verify the picked path actually flowed into the invoke.
+    // verify the request goes through the backend-owned picker.
     await tauri.handle("add_project", (args) => {
       const w = window as unknown as { __addProjectCalls?: unknown[] };
       w.__addProjectCalls = w.__addProjectCalls ?? [];
       w.__addProjectCalls.push(args);
-      const a = args as { repoPath: string };
       return {
-        repo_path: a.repoPath,
+        repo_path: "/tmp/picked",
         name: "picked",
         created_at: "2026-01-01T00:00:00Z",
         position: 0,
@@ -407,16 +405,15 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __addProjectCalls?: unknown[] })
           .__addProjectCalls,
-    )) as Array<{ repoPath: string }>;
+    )) as Array<{ title: string }>;
     expect(calls).toHaveLength(1);
-    expect(calls[0].repoPath).toBe("/tmp/picked");
+    expect(calls[0].title).toBe("Select an existing project");
   });
 
   test("empty project state opens an existing project picker", async ({
     page,
     tauri,
   }) => {
-    await tauri.handle("plugin:dialog|open", () => "/tmp/empty-picked");
     await tauri.handle("list_projects", () => {
       const w = window as unknown as { __projectOpened?: boolean };
       return w.__projectOpened
@@ -461,16 +458,16 @@ test.describe("sidebar: project lifecycle", () => {
       () =>
         (window as unknown as { __addProjectCalls?: unknown[] })
           .__addProjectCalls,
-    )) as Array<{ repoPath: string }>;
+    )) as Array<{ title: string }>;
     expect(calls).toHaveLength(1);
-    expect(calls[0].repoPath).toBe("/tmp/empty-picked");
+    expect(calls[0].title).toBe("Select an existing project");
   });
 
   test("New project creates a git-backed project under the selected parent", async ({
     page,
     tauri,
   }) => {
-    await tauri.handle("plugin:dialog|open", () => "/tmp/parent");
+    await tauri.handle("select_project_parent_folder", () => "/tmp/parent");
     await tauri.handle("create_new_project", (args) => {
       const w = window as unknown as {
         __newProjectCalls?: unknown[];
@@ -529,7 +526,7 @@ test.describe("sidebar: project lifecycle", () => {
     page,
     tauri,
   }) => {
-    await tauri.handle("plugin:dialog|open", () => "/tmp/parent");
+    await tauri.handle("select_project_parent_folder", () => "/tmp/parent");
     await tauri.handle("create_new_project", (args) => {
       const w = window as unknown as {
         __newProjectCalls?: unknown[];

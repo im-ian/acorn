@@ -291,7 +291,7 @@
     "editor": {
       "command": {
         "label": "편집기 명령",
-        "hint": "비워 두면 OS 기본값을 사용합니다. 예: \"code\", \"cursor --wait\", \"subl\", \"idea\". 파일 경로는 마지막 인수로 추가됩니다.",
+        "hint": "비워 두면 OS 기본값을 사용합니다. 알려진 에디터 바이너리만 허용됩니다. 예: \"code\", \"cursor --wait\", \"subl\", \"idea\". 파일 경로는 마지막 인수로 추가됩니다.",
         "placeholder": "(OS 기본값 사용)",
         "description": "diff 및 스테이징된 파일 목록의 \"편집기에서 열기\" 우클릭 동작에 사용됩니다."
       }
@@ -474,7 +474,7 @@
       },
       "customOption": {
         "label": "사용자 지정 명령",
-        "description": "목록에 없는 CLI를 사용합니다. 공백으로 구분되며 셸 확장은 적용되지 않습니다."
+        "description": "이전 설정용 옵션입니다. 네이티브 AI 생성은 이제 기본 제공 provider만 사용합니다."
       },
       "ollamaModel": {
         "label": "Ollama 모델",
@@ -486,7 +486,7 @@
       },
       "customCommand": {
         "label": "사용자 지정 명령",
-        "hint": "대화형 세션과 일회성 AI 생성 모두에 사용됩니다. 비워 두면 Claude Code로 대체됩니다."
+        "hint": "기존 설정을 위해 보존됩니다. 네이티브 AI 생성에는 기본 제공 provider가 필요합니다."
       },
       "sessionTitles": {
         "label": "세션 제목",

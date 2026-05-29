@@ -291,7 +291,7 @@
     "editor": {
       "command": {
         "label": "Editor command",
-        "hint": "Leave blank for the OS default. Examples: \"code\", \"cursor --wait\", \"subl\", \"idea\". The file path is appended as the last argument.",
+        "hint": "Leave blank for the OS default. Known editor binaries only; examples: \"code\", \"cursor --wait\", \"subl\", \"idea\". The file path is appended as the last argument.",
         "placeholder": "(use OS default)",
         "description": "Used by the \"Open in editor\" right-click action on diff and staged file lists."
       }
@@ -474,7 +474,7 @@
       },
       "customOption": {
         "label": "Custom command",
-        "description": "Use any CLI not in the list. Whitespace-separated; no shell expansion."
+        "description": "Legacy option. Native AI generation now requires a built-in provider."
       },
       "ollamaModel": {
         "label": "Ollama model",
@@ -486,7 +486,7 @@
       },
       "customCommand": {
         "label": "Custom command",
-        "hint": "Used for both interactive sessions and one-shot AI generation. Falls back to Claude Code when blank."
+        "hint": "Kept for existing settings. Built-in providers are required for native AI generation."
       },
       "sessionTitles": {
         "label": "Session titles",

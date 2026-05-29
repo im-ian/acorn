@@ -9,8 +9,11 @@ const mocks = vi.hoisted(() => ({
   removeBackgroundImage: vi.fn<() => Promise<void>>(),
   previewSessionTitle: vi.fn<
     (
-      command: string,
-      args: string[],
+      ai: {
+        provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
+        ollamaModel?: string | null;
+        llmModel?: string | null;
+      },
       prompt: string,
       firstUserMessage: string,
     ) => Promise<string>
@@ -701,8 +704,7 @@ describe("SettingsModal font controls", () => {
     });
 
     expect(mockApi.previewSessionTitle).toHaveBeenCalledWith(
-      "claude",
-      ["-p", "--output-format", "text"],
+      { provider: "claude", ollamaModel: "", llmModel: "" },
       DEFAULT_SETTINGS.agents.sessionTitlePrompt,
       SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
     );

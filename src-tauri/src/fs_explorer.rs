@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use git2::{Repository, Status, StatusOptions};
@@ -244,11 +244,24 @@ struct FsScope {
 impl FsScope {
     fn from_state(state: &AppState) -> Self {
         let mut roots = Vec::new();
+        let mut project_roots = Vec::new();
         for project in state.projects.list() {
-            Self::push_root(&mut roots, project.repo_path);
+            if let Some(root) = Self::push_root(&mut roots, project.repo_path) {
+                project_roots.push(root);
+            }
         }
+        project_roots.sort();
+        project_roots.dedup();
         for session in state.sessions.list() {
-            Self::push_root(&mut roots, session.repo_path);
+            if session.project_scoped == false {
+                continue;
+            }
+            let Ok(repo) = session.repo_path.canonicalize() else {
+                continue;
+            };
+            if !project_roots.iter().any(|root| root == &repo) {
+                continue;
+            }
             Self::push_root(&mut roots, session.worktree_path);
         }
         roots.sort_by(|a, b| {
@@ -280,18 +293,22 @@ impl FsScope {
         Self { roots: out }
     }
 
-    fn push_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
+    fn push_root(roots: &mut Vec<PathBuf>, root: PathBuf) -> Option<PathBuf> {
         if root.as_os_str().is_empty() || !root.is_absolute() || !root.exists() {
-            return;
+            return None;
         }
         match root.canonicalize() {
-            Ok(canonical_root) => roots.push(canonical_root),
+            Ok(canonical_root) => {
+                roots.push(canonical_root.clone());
+                Some(canonical_root)
+            }
             Err(err) => {
                 tracing::debug!(
                     path = %root.display(),
                     error = %err,
                     "skipping filesystem scope root"
                 );
+                None
             }
         }
     }
@@ -1572,6 +1589,7 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acorn_session::{Session, SessionKind};
     use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use std::fs;
 
@@ -1581,6 +1599,65 @@ mod tests {
 
     fn scope_for(root: &Path) -> FsScope {
         FsScope::from_roots([root.to_path_buf()])
+    }
+
+    fn test_session(repo: &Path, worktree: &Path, project_scoped: bool) -> Session {
+        let mut session = Session::new(
+            "test".to_string(),
+            repo.to_path_buf(),
+            worktree.to_path_buf(),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.project_scoped = project_scoped;
+        session
+    }
+
+    #[test]
+    fn scope_from_state_ignores_local_session_roots() {
+        let state = AppState::new();
+        let local = tmpdir();
+        state
+            .sessions
+            .insert(test_session(local.path(), local.path(), false));
+
+        let scope = FsScope::from_state(&state);
+
+        assert!(scope.roots.is_empty());
+    }
+
+    #[test]
+    fn scope_from_state_requires_registered_project_for_session_worktree() {
+        let state = AppState::new();
+        let repo = tmpdir();
+        let worktree = tmpdir();
+        state
+            .sessions
+            .insert(test_session(repo.path(), worktree.path(), true));
+
+        let scope = FsScope::from_state(&state);
+
+        assert!(scope.roots.is_empty());
+    }
+
+    #[test]
+    fn scope_from_state_includes_registered_project_and_project_worktree() {
+        let state = AppState::new();
+        let repo = tmpdir();
+        let worktree = tmpdir();
+        state
+            .projects
+            .ensure(repo.path().to_path_buf(), "repo".to_string());
+        state
+            .sessions
+            .insert(test_session(repo.path(), worktree.path(), true));
+
+        let scope = FsScope::from_state(&state);
+        let roots = scope.roots;
+
+        assert!(roots.contains(&repo.path().canonicalize().unwrap()));
+        assert!(roots.contains(&worktree.path().canonicalize().unwrap()));
     }
 
     fn create_event(paths: Vec<PathBuf>) -> Event {
@@ -1818,9 +1895,10 @@ mod tests {
             .unwrap();
         assert!(!res.huge);
         assert_eq!(res.limit, 10_000);
-        assert!(res
-            .statuses
-            .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned()));
+        assert!(
+            res.statuses
+                .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned())
+        );
     }
 
     #[test]
@@ -1874,11 +1952,13 @@ mod tests {
 
         assert!(fs_file_exists_scoped(&scope, file.to_string_lossy().into_owned()).unwrap());
         assert!(!fs_file_exists_scoped(&scope, dir.to_string_lossy().into_owned()).unwrap());
-        assert!(!fs_file_exists_scoped(
-            &scope,
-            d.path().join("missing.txt").to_string_lossy().into_owned()
-        )
-        .unwrap());
+        assert!(
+            !fs_file_exists_scoped(
+                &scope,
+                d.path().join("missing.txt").to_string_lossy().into_owned()
+            )
+            .unwrap()
+        );
     }
 
     #[test]

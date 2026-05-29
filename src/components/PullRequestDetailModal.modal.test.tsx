@@ -528,8 +528,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
       "/r",
       999,
       "squash",
-      "claude",
-      ["-p", "--output-format", "text"],
+      { provider: "claude", ollamaModel: "", llmModel: "" },
       "프로젝트 규칙대로 PR title과 comment를 한국어 릴리즈 노트 스타일로 작성해.",
     );
 

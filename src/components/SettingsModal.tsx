@@ -49,7 +49,7 @@ import {
   NOTIFICATION_HISTORY_LIMIT_MAX,
   NOTIFICATION_HISTORY_LIMIT_MIN,
   PR_REFRESH_INTERVAL_OPTIONS,
-  resolveAiOneshotCommand,
+  resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
@@ -1868,12 +1868,11 @@ function SessionTitlePromptModal({
 
   async function handlePreviewSessionTitle() {
     setTitlePreview({ status: "loading" });
-    const { command, args } = resolveAiOneshotCommand(settings);
+    const ai = resolveAiExecutionRequest(settings);
     const prompt = resolveSessionTitlePrompt(settings);
     try {
       const title = await api.previewSessionTitle(
-        command,
-        args,
+        ai,
         prompt,
         SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
       );

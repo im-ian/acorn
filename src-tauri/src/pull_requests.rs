@@ -1673,26 +1673,16 @@ pub struct GeneratedCommitMessage {
 }
 
 /// Generate a squash/merge commit message by spawning a one-shot headless
-/// AI CLI invocation. The provider command + args are resolved on the
-/// frontend (so each provider's invocation conventions live in one place,
-/// alongside the Settings UI) and passed in here. The CLI is expected to
-/// follow the standard `stdin = prompt, stdout = response` convention —
-/// `claude -p --output-format text`, `agy -p`, `ollama run <model>`,
-/// `llm -m <model>`, or any user-supplied custom command all fit.
+/// AI CLI invocation. The renderer sends provider intent only; the backend
+/// resolves that intent to a known command/arg shape before spawning.
 pub fn generate_pr_commit_message(
     repo_path: &Path,
     number: u64,
     method: MergeMethod,
-    command: String,
-    args: Vec<String>,
+    ai: crate::ai::AiExecutionRequest,
     prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
-    if command.trim().is_empty() {
-        return Err(AppError::Other(
-            "No AI command configured. Open Settings → Commit message AI to pick a provider."
-                .to_string(),
-        ));
-    }
+    let resolved = ai.resolve()?;
 
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Err(AppError::Other(
@@ -1715,7 +1705,12 @@ pub fn generate_pr_commit_message(
 
     let (view, diff) = context;
     let prompt = build_commit_message_prompt(method, &prompt, &view, &diff);
-    let raw = crate::ai::run_oneshot(&command, &args, &prompt, "Settings → Agents")?;
+    let raw = crate::ai::run_oneshot(
+        resolved.command,
+        &resolved.args,
+        &prompt,
+        "Settings → Agents",
+    )?;
     Ok(parse_commit_message_response(&raw))
 }
 

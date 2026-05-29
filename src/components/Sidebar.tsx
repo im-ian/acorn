@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   DndContext,
   DragOverlay,
@@ -211,13 +210,7 @@ export function Sidebar() {
 
   async function onAddExistingProject() {
     try {
-      const repoPath = await open({
-        directory: true,
-        multiple: false,
-        title: sidebarText(t, "sidebar.dialog.selectExistingProject"),
-      });
-      if (!repoPath || typeof repoPath !== "string") return;
-      await addProject(repoPath);
+      await addProject(sidebarText(t, "sidebar.dialog.selectExistingProject"));
       const error = useAppStore.getState().consumeError();
       if (error) showToast(`${t("toasts.project.addFailed")} ${error}`);
     } catch (e) {
@@ -295,26 +288,38 @@ export function Sidebar() {
     scopeOverride?: SessionCreateScope,
   ) {
     try {
-      const pickedPath =
-        scopeOverride?.repoPath ??
-        (await open({
-          directory: true,
-          multiple: false,
-          title: isolated
+      if (!scopeOverride) {
+        const created = await api.createSessionFromDialog(
+          "",
+          isolated,
+          kind,
+          null,
+          true,
+          isolated
             ? sidebarText(t, "sidebar.dialog.selectIsolatedRepository")
             : kind === "control"
               ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
               : sidebarText(t, "sidebar.dialog.selectDirectory"),
-        }));
-      if (!pickedPath || typeof pickedPath !== "string") return;
+        );
+        if (!created) return;
+        await useAppStore.getState().refreshAll();
+        selectSession(created.id);
+        setCollapsed((prev) => {
+          if (!prev.has(created.repo_path)) return prev;
+          const next = new Set(prev);
+          next.delete(created.repo_path);
+          return next;
+        });
+        return;
+      }
       const request = buildSessionCreateRequest(
         { sessions, projects },
         {
-          repoPath: pickedPath,
+          repoPath: scopeOverride.repoPath,
           isolated,
           kind,
           projectScoped:
-            scopeOverride?.projectScoped ??
+            scopeOverride.projectScoped ??
             (isolated || kind === "control" ? true : undefined),
         },
       );
