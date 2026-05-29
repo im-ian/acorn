@@ -1,4 +1,4 @@
-export const CODEX_IMAGE_PASTE_CONTROL = "\x16";
+export const AGENT_IMAGE_PASTE_CONTROL = "\x16";
 
 type TerminalPasteInput = {
   text: string;
@@ -33,6 +33,7 @@ type ClipboardItemLike = {
 };
 
 export type TerminalPasteAction =
+  | { kind: "native" }
   | { kind: "deferImageAttachment" }
   | { kind: "pasteText"; text: string }
   | { kind: "handled" };
@@ -128,5 +129,5 @@ export function terminalPasteAction({
   if (hasImagePayload) {
     return { kind: "deferImageAttachment" };
   }
-  return { kind: "handled" };
+  return { kind: "native" };
 }

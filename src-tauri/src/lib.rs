@@ -5,6 +5,7 @@ mod agent_resume_persister;
 mod agent_wrappers;
 mod ai;
 mod cli_resolver;
+mod clipboard;
 mod commands;
 mod daemon_bridge;
 mod daemon_commands;
@@ -226,15 +227,22 @@ pub fn run() {
                 .separator()
                 .quit()
                 .build()?;
+            #[cfg(target_os = "macos")]
+            let paste_item = MenuItemBuilder::new("Paste")
+                .id("paste")
+                .accelerator("CmdOrCtrl+V")
+                .build(app)?;
             let edit_submenu = SubmenuBuilder::new(app, "Edit")
                 .undo()
                 .redo()
                 .separator()
                 .cut()
-                .copy()
-                .paste()
-                .select_all()
-                .build()?;
+                .copy();
+            #[cfg(target_os = "macos")]
+            let edit_submenu = edit_submenu.item(&paste_item);
+            #[cfg(not(target_os = "macos"))]
+            let edit_submenu = edit_submenu.paste();
+            let edit_submenu = edit_submenu.select_all().build()?;
             let multi_input_item = MenuItemBuilder::new("Toggle Multi Input")
                 .id("toggle-multi-input")
                 .accelerator("CmdOrCtrl+Alt+I")
@@ -285,6 +293,11 @@ pub fn run() {
                 if event.id() == "toggle-multi-input" {
                     if let Err(err) = handle.emit("acorn:toggle-multi-input", ()) {
                         tracing::warn!("failed to emit toggle-multi-input: {err}");
+                    }
+                }
+                if event.id() == "paste" {
+                    if let Err(err) = handle.emit("acorn:paste", ()) {
+                        tracing::warn!("failed to emit paste: {err}");
                     }
                 }
                 #[cfg(debug_assertions)]
@@ -558,6 +571,7 @@ pub fn run() {
             token_usage::get_agent_token_usage,
             commands::get_memory_usage,
             commands::get_acorn_ipc_status,
+            clipboard::clipboard_snapshot,
             commands::warm_macos_folder_permissions,
             commands::reset_macos_folder_permissions,
             commands::ipc_restart,

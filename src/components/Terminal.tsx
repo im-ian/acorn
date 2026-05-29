@@ -16,7 +16,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowDownToLine } from "lucide-react";
 import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "../lib/api";
+import { api, type ClipboardSnapshot } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
@@ -43,13 +43,17 @@ import {
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
+  TERMINAL_PASTE_EVENT,
+  type TerminalPasteEventDetail,
+} from "../lib/pasteEvents";
+import {
   prepareScrollbackForSave,
   RESTORE_MARKER_TEXT,
   shouldRestoreScrollback,
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
 import {
-  CODEX_IMAGE_PASTE_CONTROL,
+  AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
   terminalPasteAction,
@@ -392,6 +396,23 @@ function decodeBase64ToBytes(b64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function nativeClipboardImageFile(
+  snapshot: ClipboardSnapshot,
+): ClipboardImageFile | null {
+  if (!snapshot.hasImage || !snapshot.dataB64) return null;
+  const extension = snapshot.extension || "png";
+  return {
+    name: `clipboard-native.${extension}`,
+    type: snapshot.mimeType || "image/png",
+    arrayBuffer: async () => {
+      const bytes = decodeBase64ToBytes(snapshot.dataB64 ?? "");
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      return copy.buffer;
+    },
+  };
 }
 
 function decodePtyChannelPayload(payload: unknown): Uint8Array {
@@ -799,16 +820,20 @@ export function Terminal({
     let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
     let daemonSessionAliveAtMount = false;
-    let codexImagePasteFallbackActive =
-      pasteAgentProviderRef.current === "codex";
+    let agentImagePasteFallbackActive =
+      pasteAgentProviderRef.current === "codex" ||
+      pasteAgentProviderRef.current === "claude";
 
     const refreshAgentDetection = () => {
       void api
         .detectSessionAgent(sessionId)
         .then((agent) => {
           if (disposed) return;
-          codexImagePasteFallbackActive =
-            pasteAgentProviderRef.current === "codex" || Boolean(agent.codex);
+          agentImagePasteFallbackActive =
+            pasteAgentProviderRef.current === "codex" ||
+            pasteAgentProviderRef.current === "claude" ||
+            Boolean(agent.codex) ||
+            Boolean(agent.claude);
         })
         .catch((err: unknown) => {
           console.debug("[Terminal] agent detection failed", err);
@@ -1042,21 +1067,56 @@ export function Terminal({
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
     const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
-    const codexImagePasteFallbackIsActive = async (): Promise<boolean> => {
+    const agentImagePasteFallbackIsActive = async (): Promise<boolean> => {
       if (
-        codexImagePasteFallbackActive ||
-        pasteAgentProviderRef.current === "codex"
+        agentImagePasteFallbackActive ||
+        pasteAgentProviderRef.current === "codex" ||
+        pasteAgentProviderRef.current === "claude"
       ) {
         return true;
       }
       try {
         const agent = await api.detectSessionAgent(sessionId);
         if (disposed) return false;
-        codexImagePasteFallbackActive = Boolean(agent.codex);
-        return codexImagePasteFallbackActive;
+        agentImagePasteFallbackActive = Boolean(agent.codex) || Boolean(agent.claude);
+        return agentImagePasteFallbackActive;
       } catch (err: unknown) {
         console.debug("[Terminal] agent detection failed", err);
         return false;
+      }
+    };
+    const logNativeClipboardSnapshot = (snapshot: ClipboardSnapshot) => {
+      if (!snapshot.supported) return;
+      console.debug("[Terminal] native clipboard snapshot", {
+        hasImage: snapshot.hasImage,
+        hasText: Boolean(snapshot.text),
+        changeCount: snapshot.changeCount,
+        mimeType: snapshot.mimeType,
+        types: snapshot.types,
+      });
+    };
+    const readNativeClipboardImageFile =
+      async (): Promise<ClipboardImageFile | null> => {
+        try {
+          const snapshot = await api.clipboardSnapshot();
+          logNativeClipboardSnapshot(snapshot);
+          return nativeClipboardImageFile(snapshot);
+        } catch (err: unknown) {
+          console.debug("[Terminal] native clipboard image snapshot failed", err);
+          return null;
+        }
+      };
+    const pasteNativeClipboard = async () => {
+      const observedActivityVersion = terminalActivityVersion;
+      const snapshot = await api.clipboardSnapshot();
+      logNativeClipboardSnapshot(snapshot);
+      const imageFile = nativeClipboardImageFile(snapshot);
+      if (imageFile) {
+        scheduleClipboardImageFallback(imageFile, observedActivityVersion);
+        return;
+      }
+      if (snapshot.text) {
+        term.paste(snapshot.text);
       }
     };
     const scheduleClipboardImageFallback = (
@@ -1067,6 +1127,7 @@ export function Terminal({
         window.clearTimeout(imagePasteFallbackTimer);
       }
       const serial = ++imagePasteFallbackSerial;
+      let fallbackHadAttachment = Boolean(imageFile);
       imagePasteFallbackTimer = window.setTimeout(() => {
         imagePasteFallbackTimer = null;
         if (
@@ -1077,7 +1138,11 @@ export function Terminal({
           return;
         }
         void (async () => {
-          if (await codexImagePasteFallbackIsActive()) {
+          const attachmentSource =
+            imageFile ?? (await readNativeClipboardImageFile());
+          fallbackHadAttachment = Boolean(attachmentSource);
+          if (!attachmentSource) return;
+          if (await agentImagePasteFallbackIsActive()) {
             if (
               disposed ||
               serial !== imagePasteFallbackSerial ||
@@ -1085,11 +1150,10 @@ export function Terminal({
             ) {
               return;
             }
-            sendUserInputToPty(CODEX_IMAGE_PASTE_CONTROL);
+            sendUserInputToPty(AGENT_IMAGE_PASTE_CONTROL);
             return;
           }
-          if (!imageFile) return;
-          const attachment = await saveClipboardImageAttachment(imageFile);
+          const attachment = await saveClipboardImageAttachment(attachmentSource);
           if (
             disposed ||
             serial !== imagePasteFallbackSerial ||
@@ -1100,7 +1164,7 @@ export function Terminal({
           sendUserInputToPty(formatTerminalFileMention(attachment.path, cwd));
           term.focus();
         })().catch((err: unknown) => {
-          if (imageFile) {
+          if (fallbackHadAttachment) {
             console.warn("[Terminal] clipboard image attachment failed", err);
           } else {
             console.debug("[Terminal] clipboard image fallback skipped", err);
@@ -1272,7 +1336,6 @@ export function Terminal({
     };
 
     const onInput = (e: Event) => {
-      terminalActivityVersion += 1;
       const ev = e as InputEvent;
       const ta = container.querySelector<HTMLTextAreaElement>(
         ".xterm-helper-textarea",
@@ -1507,11 +1570,24 @@ export function Terminal({
         scheduleClipboardImageFallback(imageFile, terminalActivityVersion);
         return;
       }
+      if (action.kind === "native") {
+        scheduleClipboardImageFallback(null, terminalActivityVersion);
+        return;
+      }
       if (action.kind === "pasteText") term.paste(action.text);
       ev.preventDefault();
       ev.stopImmediatePropagation();
     };
     container.addEventListener("paste", onPaste, true);
+
+    const onTerminalPaste = (e: Event) => {
+      const detail = (e as CustomEvent<TerminalPasteEventDetail>).detail;
+      if (detail?.sessionId !== sessionId) return;
+      void pasteNativeClipboard().catch((err: unknown) => {
+        console.debug("[Terminal] native paste failed", err);
+      });
+    };
+    window.addEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
 
     const onDragOver = (e: DragEvent) => {
       if (!getCurrentFilePayload()) return;
@@ -1945,7 +2021,7 @@ export function Terminal({
           if (disposed) return;
           ptyReady = false;
           lastPtyResize = null;
-          codexImagePasteFallbackActive = false;
+          agentImagePasteFallbackActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
           // linked worktree. Plain user `exit` must not adopt unrelated
@@ -2230,6 +2306,7 @@ export function Terminal({
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("paste", onPaste, true);
+      window.removeEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
       container.removeEventListener("dragover", onDragOver);
       container.removeEventListener("drop", onDrop);
       container.removeEventListener("compositionstart", swallowComposition, true);

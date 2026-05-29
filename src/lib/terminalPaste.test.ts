@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  CODEX_IMAGE_PASTE_CONTROL,
+  AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "./terminalPaste";
 
-it("keeps Codex fallback wired to Ctrl+V", () => {
-  expect(CODEX_IMAGE_PASTE_CONTROL).toBe("\x16");
+it("keeps agent image paste fallback wired to Ctrl+V", () => {
+  expect(AGENT_IMAGE_PASTE_CONTROL).toBe("\x16");
 });
 
 describe("terminalPasteAction", () => {
@@ -21,13 +21,13 @@ describe("terminalPasteAction", () => {
     ).toEqual({ kind: "deferImageAttachment" });
   });
 
-  it("handles empty non-image paste without touching the browser path", () => {
+  it("keeps empty unknown paste on the native path", () => {
     expect(
       terminalPasteAction({
         text: "",
         hasImagePayload: false,
       }),
-    ).toEqual({ kind: "handled" });
+    ).toEqual({ kind: "native" });
   });
 
   it("pastes text through xterm even when files are also present", () => {
