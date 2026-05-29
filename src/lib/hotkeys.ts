@@ -53,13 +53,13 @@ export const DEFAULT_HOTKEYS = {
   uiScaleDown: "$mod+-",
   uiScaleUp: "$mod+=",
   uiScaleReset: "$mod+0",
-  previousConversation: "$mod+ArrowLeft",
-  nextConversation: "$mod+ArrowRight",
+  previousConversation: "$mod+Alt+ArrowUp",
+  nextConversation: "$mod+Alt+ArrowDown",
   toggleMultiInput: "$mod+Alt+KeyI",
   focusPaneLeft: "$mod+Alt+ArrowLeft",
   focusPaneRight: "$mod+Alt+ArrowRight",
-  focusPaneUp: "$mod+Alt+ArrowUp",
-  focusPaneDown: "$mod+Alt+ArrowDown",
+  focusPaneUp: "$mod+Alt+Shift+ArrowUp",
+  focusPaneDown: "$mod+Alt+Shift+ArrowDown",
   splitVertical: "$mod+d",
   splitHorizontal: "$mod+Shift+d",
   equalizePanes: "$mod+Alt+KeyE",
@@ -83,6 +83,13 @@ export type HotkeyId = keyof typeof DEFAULT_HOTKEYS;
 export type HotkeyConfig = Record<HotkeyId, string>;
 
 export const HOTKEY_IDS = Object.keys(DEFAULT_HOTKEYS) as HotkeyId[];
+
+const LEGACY_DEFAULT_HOTKEYS: Partial<Record<HotkeyId, string[]>> = {
+  previousConversation: ["$mod+ArrowLeft"],
+  nextConversation: ["$mod+ArrowRight"],
+  focusPaneUp: ["$mod+Alt+ArrowUp"],
+  focusPaneDown: ["$mod+Alt+ArrowDown"],
+};
 
 const HOTKEY_ALIASES: Partial<Record<HotkeyId, string[]>> = {
   uiScaleDown: ["$mod+Shift+Minus"],
@@ -272,7 +279,11 @@ export function resolveHotkeys(
 
   for (const id of HOTKEY_IDS) {
     const candidate = canonicalizeHotkeyBinding(value?.[id]);
-    if (candidate && candidate !== DEFAULT_HOTKEYS[id]) {
+    if (
+      candidate &&
+      candidate !== DEFAULT_HOTKEYS[id] &&
+      !LEGACY_DEFAULT_HOTKEYS[id]?.includes(candidate)
+    ) {
       custom.set(id, candidate);
     }
   }
