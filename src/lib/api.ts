@@ -39,6 +39,17 @@ export interface AiExecutionRequest {
   llmModel?: string | null;
 }
 
+export interface ClipboardSnapshot {
+  supported: boolean;
+  changeCount: number | null;
+  types: string[];
+  text: string | null;
+  hasImage: boolean;
+  mimeType: string | null;
+  extension: string | null;
+  dataB64: string | null;
+}
+
 export const api = {
   loadStatus(): Promise<LoadStatus> {
     return invoke<LoadStatus>("load_status");
@@ -337,6 +348,9 @@ export const api = {
    */
   getAcornIpcStatus(): Promise<AcornIpcStatus> {
     return invoke<AcornIpcStatus>("get_acorn_ipc_status");
+  },
+  clipboardSnapshot(): Promise<ClipboardSnapshot> {
+    return invoke<ClipboardSnapshot>("clipboard_snapshot");
   },
   warmMacosFolderPermissions(): Promise<FolderPermissionWarmupResult[]> {
     return invoke<FolderPermissionWarmupResult[]>(

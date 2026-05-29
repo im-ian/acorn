@@ -1,13 +1,15 @@
-export const CODEX_IMAGE_PASTE_CONTROL = "\x16";
+export const AGENT_IMAGE_PASTE_CONTROL = "\x16";
 
 type TerminalPasteInput = {
   text: string;
-  hasFilePayload: boolean;
-  codexActive: boolean;
+  hasImagePayload: boolean;
 };
 
 type ClipboardFilePayloadInput = {
-  files?: { length: number } | null;
+  files?: {
+    length: number;
+    [index: number]: ClipboardImageFile | undefined;
+  } | null;
   items?: {
     length: number;
     [index: number]: ClipboardItemLike | undefined;
@@ -18,30 +20,91 @@ type ClipboardFilePayloadInput = {
     | null;
 };
 
+export type ClipboardImageFile = {
+  name?: string;
+  type?: string;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+};
+
 type ClipboardItemLike = {
   kind?: string;
   type?: string;
+  getAsFile?: () => ClipboardImageFile | null;
 };
 
 export type TerminalPasteAction =
   | { kind: "native" }
+  | { kind: "deferImageAttachment" }
   | { kind: "pasteText"; text: string }
-  | { kind: "send"; data: string }
   | { kind: "handled" };
 
-export function hasClipboardFilePayload(
+const IMAGE_FILE_EXTENSIONS = new Set([
+  "avif",
+  "bmp",
+  "gif",
+  "heic",
+  "heif",
+  "ico",
+  "jpg",
+  "jpeg",
+  "png",
+  "svg",
+  "tif",
+  "tiff",
+  "webp",
+]);
+
+function hasImageFileName(name: string | undefined): boolean {
+  const match = name?.match(/\.([a-zA-Z0-9]+)$/);
+  return match ? IMAGE_FILE_EXTENSIONS.has(match[1].toLowerCase()) : false;
+}
+
+function isImageFile(file: ClipboardImageFile | null | undefined): boolean {
+  return Boolean(
+    file &&
+      (file.type?.startsWith("image/") || hasImageFileName(file.name)) &&
+      typeof file.arrayBuffer === "function",
+  );
+}
+
+export function getClipboardImageFile(
   data: ClipboardFilePayloadInput | null | undefined,
-): boolean {
-  if (!data) return false;
-  if ((data.files?.length ?? 0) > 0) return true;
+): ClipboardImageFile | null {
+  if (!data) return null;
+
+  const files = data.files;
+  if (files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (isImageFile(file)) return file ?? null;
+    }
+  }
 
   const items = data.items;
   if (items) {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (item?.kind === "file" || item?.type?.startsWith("image/")) {
-        return true;
+      if (item?.type?.startsWith("image/")) {
+        const file = item.getAsFile?.();
+        if (isImageFile(file)) return file ?? null;
       }
+    }
+  }
+
+  return null;
+}
+
+export function hasClipboardImagePayload(
+  data: ClipboardFilePayloadInput | null | undefined,
+): boolean {
+  if (!data) return false;
+  if (getClipboardImageFile(data)) return true;
+
+  const items = data.items;
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item?.type?.startsWith("image/")) return true;
     }
   }
 
@@ -58,16 +121,13 @@ export function hasClipboardFilePayload(
 
 export function terminalPasteAction({
   text,
-  hasFilePayload,
-  codexActive,
+  hasImagePayload,
 }: TerminalPasteInput): TerminalPasteAction {
   if (text) {
     return { kind: "pasteText", text };
   }
-  if (hasFilePayload) {
-    return codexActive
-      ? { kind: "send", data: CODEX_IMAGE_PASTE_CONTROL }
-      : { kind: "native" };
+  if (hasImagePayload) {
+    return { kind: "deferImageAttachment" };
   }
-  return { kind: "handled" };
+  return { kind: "native" };
 }
