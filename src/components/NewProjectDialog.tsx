@@ -1,6 +1,6 @@
 import { FolderPlus } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { api } from "../lib/api";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { validateProjectName } from "../lib/projectName";
@@ -72,12 +72,10 @@ export function NewProjectDialog({
       (validation.kind === "safe" && ignoreSafeName));
 
   async function chooseLocation() {
-    const picked = await open({
-      directory: true,
-      multiple: false,
-      title: dt(t, "dialogs.newProject.selectParentFolder"),
-    });
-    if (!picked || typeof picked !== "string") return;
+    const picked = await api.selectProjectParentFolder(
+      dt(t, "dialogs.newProject.selectParentFolder"),
+    );
+    if (!picked) return;
     setParentPath(picked);
     setError(null);
   }

@@ -33,6 +33,12 @@ export interface LoadStatus {
   projectsClean: boolean;
 }
 
+export interface AiExecutionRequest {
+  provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
+  ollamaModel?: string | null;
+  llmModel?: string | null;
+}
+
 export const api = {
   loadStatus(): Promise<LoadStatus> {
     return invoke<LoadStatus>("load_status");
@@ -65,6 +71,23 @@ export const api = {
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
     return invoke<Session>("create_session", args);
   },
+  createSessionFromDialog(
+    name: string,
+    isolated = false,
+    kind: SessionKind = "regular",
+    agentProvider?: SessionAgentProvider | null,
+    projectScoped = true,
+    title?: string,
+  ): Promise<Session | null> {
+    return invoke<Session | null>("create_session_from_dialog", {
+      name,
+      isolated,
+      kind,
+      agentProvider,
+      projectScoped,
+      title,
+    });
+  },
   removeSession(id: string, removeWorktree = false): Promise<void> {
     return invoke<void>("remove_session", { id, removeWorktree });
   },
@@ -81,26 +104,22 @@ export const api = {
   },
   generateSessionTitle(
     id: string,
-    command: string,
-    args: string[],
+    ai: AiExecutionRequest,
     prompt: string,
   ): Promise<GenerateSessionTitleResult> {
     return invoke<GenerateSessionTitleResult>("generate_session_title", {
       id,
-      command,
-      args,
+      ai,
       prompt,
     });
   },
   previewSessionTitle(
-    command: string,
-    args: string[],
+    ai: AiExecutionRequest,
     prompt: string,
     firstUserMessage: string,
   ): Promise<string> {
     return invoke<string>("preview_session_title", {
-      command,
-      args,
+      ai,
       prompt,
       firstUserMessage,
     });
@@ -108,8 +127,11 @@ export const api = {
   listProjects(): Promise<Project[]> {
     return invoke<Project[]>("list_projects");
   },
-  addProject(repoPath: string): Promise<Project> {
-    return invoke<Project>("add_project", { repoPath });
+  addProject(title?: string): Promise<Project | null> {
+    return invoke<Project | null>("add_project", { title });
+  },
+  selectProjectParentFolder(title?: string): Promise<string | null> {
+    return invoke<string | null>("select_project_parent_folder", { title });
   },
   createNewProject(
     parentPath: string,
@@ -272,16 +294,14 @@ export const api = {
     repoPath: string,
     number: number,
     method: MergeMethod,
-    command: string,
-    args: string[],
+    ai: AiExecutionRequest,
     prompt: string,
   ): Promise<GeneratedCommitMessage> {
     return invoke<GeneratedCommitMessage>("generate_pr_commit_message", {
       repoPath,
       number,
       method,
-      command,
-      args,
+      ai,
       prompt,
     });
   },

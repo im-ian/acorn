@@ -14,7 +14,7 @@ import { loadLastMergeMethod, saveLastMergeMethod } from "../lib/merge-prefs";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import {
   aiCommitProviderLabel,
-  resolveAiCommitCommand,
+  resolveAiCommitRequest,
   useSettings,
 } from "../lib/settings";
 import { useToasts } from "../lib/toasts";
@@ -226,13 +226,12 @@ export function MergePullRequestDialog({
     setGenerating(true);
     setError(null);
     try {
-      const { command, args } = resolveAiCommitCommand(settings);
+      const ai = resolveAiCommitRequest(settings);
       const result = await api.generatePrCommitMessage(
         repoPath,
         detail.number,
         method,
-        command,
-        args,
+        ai,
         prompt,
       );
       // Dialog was closed (or reopened against another PR) while the

@@ -4,6 +4,7 @@ use acorn_session::{Session, SessionKind, SessionOwner, SessionTitleSource};
 
 use crate::agent_history::{self, AgentHistoryProvider};
 use crate::agent_resume;
+use crate::ai::AiExecutionRequest;
 use crate::error::{AppError, AppResult};
 use crate::todos;
 
@@ -82,18 +83,18 @@ pub fn normalize_generated_title(raw: &str) -> Option<String> {
 }
 
 pub fn generate_title(
-    command: &str,
-    args: &[String],
+    ai: &AiExecutionRequest,
     prompt: Option<&str>,
     first_user_message: &str,
 ) -> AppResult<String> {
-    if command.trim().is_empty() {
-        return Err(AppError::Other(
-            "No AI command configured. Open Settings → Agents to pick a provider.".to_string(),
-        ));
-    }
+    let resolved = ai.resolve()?;
     let prompt = build_prompt(prompt, first_user_message);
-    let raw = crate::ai::run_oneshot(command, args, &prompt, "Settings → Agents")?;
+    let raw = crate::ai::run_oneshot(
+        resolved.command,
+        &resolved.args,
+        &prompt,
+        "Settings → Agents",
+    )?;
     normalize_generated_title(&raw)
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
 }

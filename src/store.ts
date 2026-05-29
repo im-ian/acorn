@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { api } from "./lib/api";
+import { api, type AiExecutionRequest } from "./lib/api";
 import type {
   Project,
   Session,
@@ -195,8 +195,7 @@ interface AppStateModel {
   renameSession: (id: string, name: string) => Promise<void>;
   generateSessionTitle: (
     id: string,
-    command: string,
-    args: string[],
+    ai: AiExecutionRequest,
     prompt: string,
   ) => Promise<SessionTitleGenerationStatus>;
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
@@ -204,7 +203,7 @@ interface AppStateModel {
   clearPendingRemove: () => void;
   cycleTab: (direction: 1 | -1) => void;
   cycleProject: (direction: 1 | -1) => void;
-  addProject: (repoPath: string) => Promise<void>;
+  addProject: (title?: string) => Promise<void>;
   createNewProject: (
     parentPath: string,
     name: string,
@@ -1503,7 +1502,7 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
-  async generateSessionTitle(id, command, args, prompt) {
+  async generateSessionTitle(id, ai, prompt) {
     const startedAt = Date.now();
     let resultStatus: SessionTitleGenerationStatus = "skipped";
     set((s) => ({
@@ -1513,7 +1512,7 @@ export const useAppStore = create<AppStateModel>()(
       },
     }));
     try {
-      const result = await api.generateSessionTitle(id, command, args, prompt);
+      const result = await api.generateSessionTitle(id, ai, prompt);
       resultStatus = result.status;
       const updated = result.session;
       if (result.status === "generated" && updated?.id) {
@@ -1560,9 +1559,9 @@ export const useAppStore = create<AppStateModel>()(
     set({ pendingRemoveId: null });
   },
 
-  async addProject(repoPath) {
+  async addProject(title) {
     try {
-      await api.addProject(repoPath);
+      await api.addProject(title);
       await get().refreshProjects();
       set({ error: null });
     } catch (e) {

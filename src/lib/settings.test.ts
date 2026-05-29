@@ -4,8 +4,8 @@ import {
   DEFAULT_SETTINGS,
   DEFAULT_SESSION_TITLE_PROMPT,
   NOTIFICATION_HISTORY_LIMIT_MAX,
-  resolveAiCommitCommand,
-  resolveAiOneshotCommand,
+  resolveAiCommitRequest,
+  resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   SESSION_TITLE_PROMPT_MAX_CHARS,
 } from "./settings";
@@ -378,11 +378,11 @@ Rules:
 
   it("runs Codex through non-interactive exec mode", () => {
     expect(
-      resolveAiCommitCommand({
+      resolveAiCommitRequest({
         ...DEFAULT_SETTINGS,
         agents: { ...DEFAULT_SETTINGS.agents, selected: "codex" },
       }),
-    ).toEqual({ command: "codex", args: ["exec"] });
+    ).toEqual({ provider: "codex", ollamaModel: "", llmModel: "" });
   });
 
   it("describes the Codex one-shot invocation in settings", () => {
@@ -393,16 +393,16 @@ Rules:
 
   it("runs Antigravity through the AGY CLI one-shot mode", () => {
     expect(
-      resolveAiOneshotCommand({
+      resolveAiExecutionRequest({
         ...DEFAULT_SETTINGS,
         agents: { ...DEFAULT_SETTINGS.agents, selected: "antigravity" },
       }),
-    ).toEqual({ command: "agy", args: ["-p"] });
+    ).toEqual({ provider: "antigravity", ollamaModel: "", llmModel: "" });
   });
 
   it("uses the Settings Agents model for one-shot providers that take one", () => {
     expect(
-      resolveAiOneshotCommand({
+      resolveAiExecutionRequest({
         ...DEFAULT_SETTINGS,
         agents: {
           ...DEFAULT_SETTINGS.agents,
@@ -410,7 +410,11 @@ Rules:
           ollama: { model: "qwen2.5-coder" },
         },
       }),
-    ).toEqual({ command: "ollama", args: ["run", "qwen2.5-coder"] });
+    ).toEqual({
+      provider: "ollama",
+      ollamaModel: "qwen2.5-coder",
+      llmModel: "",
+    });
   });
 });
 

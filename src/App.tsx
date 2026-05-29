@@ -73,7 +73,7 @@ import {
 } from "./lib/permissionWarmup";
 import {
   normalizeUiScalePercent,
-  resolveAiOneshotCommand,
+  resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   UI_SCALE_PERCENT_STEP,
   useSettings,
@@ -653,20 +653,16 @@ function App() {
     };
 
     const now = Date.now();
-    const { command, args } = resolveAiOneshotCommand(settings);
+    const ai = resolveAiExecutionRequest(settings);
     const prompt = resolveSessionTitlePrompt(settings);
-    const configKey = JSON.stringify([command, args, prompt]);
+    const configKey = JSON.stringify([ai, prompt]);
     const inFlight = titleGenerationInFlightRef.current;
     const lastAttemptAt = titleGenerationLastAttemptAtRef.current;
     const latestTitleConfigMatches = () => {
       const latestSettings = useSettings.getState().settings;
-      const latestCommand = resolveAiOneshotCommand(latestSettings);
+      const latestAi = resolveAiExecutionRequest(latestSettings);
       const latestPrompt = resolveSessionTitlePrompt(latestSettings);
-      const latestConfigKey = JSON.stringify([
-        latestCommand.command,
-        latestCommand.args,
-        latestPrompt,
-      ]);
+      const latestConfigKey = JSON.stringify([latestAi, latestPrompt]);
       return (
         latestSettings.agents.autoGenerateSessionTitles &&
         latestConfigKey === configKey
@@ -710,7 +706,7 @@ function App() {
 
           const status = await useAppStore
             .getState()
-            .generateSessionTitle(sessionId, command, args, prompt);
+            .generateSessionTitle(sessionId, ai, prompt);
           if (!latestTitleConfigMatches()) return;
           if (status !== "generated") {
             scheduleAfterStatus(sessionId, status);
