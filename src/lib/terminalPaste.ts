@@ -111,7 +111,7 @@ export function hasClipboardImagePayload(
   if (types) {
     for (let i = 0; i < types.length; i++) {
       const type = types[i];
-      if (type?.startsWith("image/")) return true;
+      if (type === "Files" || type?.startsWith("image/")) return true;
     }
   }
 

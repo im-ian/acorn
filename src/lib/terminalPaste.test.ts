@@ -84,6 +84,16 @@ describe("clipboard image detection", () => {
     ).toBe(true);
   });
 
+  it("accepts file payloads exposed only through clipboard types", () => {
+    expect(
+      hasClipboardImagePayload({
+        files: { length: 0 },
+        items: { length: 0 },
+        types: { length: 1, 0: "Files" },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects plain text clipboard payloads", () => {
     expect(
       hasClipboardImagePayload({

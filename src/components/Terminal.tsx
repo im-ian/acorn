@@ -1042,8 +1042,25 @@ export function Terminal({
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
     const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
+    const codexImagePasteFallbackIsActive = async (): Promise<boolean> => {
+      if (
+        codexImagePasteFallbackActive ||
+        pasteAgentProviderRef.current === "codex"
+      ) {
+        return true;
+      }
+      try {
+        const agent = await api.detectSessionAgent(sessionId);
+        if (disposed) return false;
+        codexImagePasteFallbackActive = Boolean(agent.codex);
+        return codexImagePasteFallbackActive;
+      } catch (err: unknown) {
+        console.debug("[Terminal] agent detection failed", err);
+        return false;
+      }
+    };
     const scheduleClipboardImageFallback = (
-      imageFile: ClipboardImageFile,
+      imageFile: ClipboardImageFile | null,
       observedActivityVersion: number,
     ) => {
       if (imagePasteFallbackTimer !== null) {
@@ -1059,12 +1076,8 @@ export function Terminal({
         ) {
           return;
         }
-        if (codexImagePasteFallbackActive) {
-          sendUserInputToPty(CODEX_IMAGE_PASTE_CONTROL);
-          return;
-        }
-        void saveClipboardImageAttachment(imageFile)
-          .then((attachment) => {
+        void (async () => {
+          if (await codexImagePasteFallbackIsActive()) {
             if (
               disposed ||
               serial !== imagePasteFallbackSerial ||
@@ -1072,12 +1085,27 @@ export function Terminal({
             ) {
               return;
             }
-            sendUserInputToPty(formatTerminalFileMention(attachment.path, cwd));
-            term.focus();
-          })
-          .catch((err: unknown) => {
+            sendUserInputToPty(CODEX_IMAGE_PASTE_CONTROL);
+            return;
+          }
+          if (!imageFile) return;
+          const attachment = await saveClipboardImageAttachment(imageFile);
+          if (
+            disposed ||
+            serial !== imagePasteFallbackSerial ||
+            terminalActivityVersion !== observedActivityVersion
+          ) {
+            return;
+          }
+          sendUserInputToPty(formatTerminalFileMention(attachment.path, cwd));
+          term.focus();
+        })().catch((err: unknown) => {
+          if (imageFile) {
             console.warn("[Terminal] clipboard image attachment failed", err);
-          });
+          } else {
+            console.debug("[Terminal] clipboard image fallback skipped", err);
+          }
+        });
       }, IMAGE_PASTE_FALLBACK_DELAY_MS);
     };
     let conversationNavigationFromY: number | null = null;
@@ -1463,8 +1491,8 @@ export function Terminal({
     // blocks xterm's listener so the data emits exactly once.
     //
     // Image-only payloads first stay on the native path. If the paste
-    // produces no terminal input or output, save the image to app-local
-    // storage and insert an @file mention as the compatibility path.
+    // produces no terminal input or output, run the provider-specific
+    // compatibility path.
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
@@ -1476,9 +1504,7 @@ export function Terminal({
         hasImagePayload: Boolean(imageFile) || hasClipboardImagePayload(cd),
       });
       if (action.kind === "deferImageAttachment") {
-        if (imageFile) {
-          scheduleClipboardImageFallback(imageFile, terminalActivityVersion);
-        }
+        scheduleClipboardImageFallback(imageFile, terminalActivityVersion);
         return;
       }
       if (action.kind === "pasteText") term.paste(action.text);
