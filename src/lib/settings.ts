@@ -76,7 +76,7 @@ Rules:
 - No quotes, Markdown, trailing punctuation, or extra commentary.
 - Prefer the concrete task over generic words like "help" or "question".`;
 
-export const DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's first agent prompt.
+const PREVIOUS_DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's first agent prompt.
 
 Return only a concise title for the tab.
 Rules:
@@ -86,6 +86,18 @@ Rules:
 - Fewer than 30 characters.
 - No quotes, Markdown, trailing punctuation, or extra commentary.
 - Prefer the concrete task over generic words like "help" or "question".`;
+
+export const DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's entire first agent prompt.
+
+Return only a concise title for the tab.
+Rules:
+- 2 to 5 words.
+- Separate each word with hyphens.
+- Use lowercase words only.
+- Fewer than 30 characters.
+- No quotes, Markdown, trailing punctuation, or extra commentary.
+- Summarize the overall intent of the full request, not just the first line or first task.
+- Prefer the main user goal over setup steps and generic words like "help" or "question".`;
 
 export const SESSION_TITLE_PROMPT_MAX_CHARS = 1_000;
 
@@ -220,12 +232,12 @@ export interface AcornSettings {
     selected: SelectedAgent;
     /**
      * When enabled, new user-owned agent sessions can have their default tab
-     * name replaced by an AI-generated title from the first user prompt.
+     * name replaced by an AI-generated title from the entire first user prompt.
      * Default off: this can send prompt text to the configured AI CLI.
      */
     autoGenerateSessionTitles: boolean;
     /**
-     * Instructions prepended to the first user prompt when Acorn asks the
+     * Instructions prepended to the entire first user prompt when Acorn asks the
      * selected AI CLI to name a new session tab.
      */
     sessionTitlePrompt: string;
@@ -638,7 +650,12 @@ function normalizeSelectedAgent(
 
 function normalizeSessionTitlePrompt(v: unknown, fallback: string): string {
   if (typeof v !== "string") return fallback;
-  if (v.trim() === LEGACY_DEFAULT_SESSION_TITLE_PROMPT) {
+  if (
+    [
+      LEGACY_DEFAULT_SESSION_TITLE_PROMPT,
+      PREVIOUS_DEFAULT_SESSION_TITLE_PROMPT,
+    ].includes(v.trim())
+  ) {
     return DEFAULT_SESSION_TITLE_PROMPT;
   }
   return Array.from(v).slice(0, SESSION_TITLE_PROMPT_MAX_CHARS).join("");

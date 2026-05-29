@@ -306,6 +306,9 @@ describe("AI commit command resolution", () => {
       "Separate each word with hyphens.",
     );
     expect(DEFAULT_SESSION_TITLE_PROMPT).toContain("Use lowercase words only.");
+    expect(DEFAULT_SESSION_TITLE_PROMPT).toContain(
+      "Summarize the overall intent of the full request",
+    );
   });
 
   it("loads a persisted session title prompt", async () => {
@@ -334,6 +337,33 @@ describe("AI commit command resolution", () => {
 Return only a concise title for the tab.
 Rules:
 - 2 to 5 words.
+- Fewer than 30 characters.
+- No quotes, Markdown, trailing punctuation, or extra commentary.
+- Prefer the concrete task over generic words like "help" or "question".`,
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.agents.sessionTitlePrompt).toBe(
+      DEFAULT_SESSION_TITLE_PROMPT,
+    );
+  });
+
+  it("migrates the previous default session title prompt to the current default", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        agents: {
+          sessionTitlePrompt: `You are naming an Acorn terminal tab from the user's first agent prompt.
+
+Return only a concise title for the tab.
+Rules:
+- 2 to 5 words.
+- Separate each word with hyphens.
+- Use lowercase words only.
 - Fewer than 30 characters.
 - No quotes, Markdown, trailing punctuation, or extra commentary.
 - Prefer the concrete task over generic words like "help" or "question".`,

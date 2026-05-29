@@ -380,7 +380,7 @@ pub fn transcript_first_user_message(
     };
     state
         .title
-        .and_then(|title| collapse_preview(&title, max_chars))
+        .and_then(|title| truncate_preserving_lines(&title, max_chars))
 }
 
 fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
@@ -403,9 +403,10 @@ fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
         }
 
         let role = string_at(payload, "role");
-        let text = first_text(&value_texts(&value));
+        let texts = value_texts(&value);
+        let text = first_text(&texts);
         if state.title.is_none() && role.as_deref() == Some("user") {
-            state.title = text.clone();
+            state.title = joined_text(&texts);
         }
         if role.as_deref() == Some("assistant") {
             state.preview = text.clone().or(state.preview);
@@ -435,9 +436,10 @@ fn parse_claude_state(path: &Path) -> Option<ParsedAgentFile> {
             continue;
         }
         let ty = string_at(Some(&value), "type");
-        let text = first_claude_display_text(&value_texts(&value));
+        let texts = value_texts(&value);
+        let text = first_claude_display_text(&texts);
         if state.title.is_none() && ty.as_deref() == Some("user") {
-            state.title = text.clone();
+            state.title = joined_claude_display_text(&texts);
         }
         if ty.as_deref() == Some("assistant") {
             state.preview = text.clone().or(state.preview);
@@ -488,9 +490,9 @@ fn extract_antigravity_user_request(content: &str) -> Option<String> {
             .find(end_marker)
             .map(|offset| after + offset)
             .unwrap_or(content.len());
-        return collapse_preview(&content[after..end], PREVIEW_CHARS);
+        return nonempty_trimmed(&content[after..end]);
     }
-    collapse_preview(content, PREVIEW_CHARS)
+    nonempty_trimmed(content)
 }
 
 fn first_workspace_path(value: &Value) -> Option<String> {
@@ -586,6 +588,10 @@ fn first_text(texts: &[String]) -> Option<String> {
         .map(str::to_string)
 }
 
+fn joined_text(texts: &[String]) -> Option<String> {
+    join_display_texts(texts, |s| !looks_like_context_block(s))
+}
+
 fn first_claude_display_text(texts: &[String]) -> Option<String> {
     texts
         .iter()
@@ -594,6 +600,27 @@ fn first_claude_display_text(texts: &[String]) -> Option<String> {
             !s.is_empty() && !looks_like_context_block(s) && !looks_like_claude_control_text(s)
         })
         .map(str::to_string)
+}
+
+fn joined_claude_display_text(texts: &[String]) -> Option<String> {
+    join_display_texts(texts, |s| {
+        !looks_like_context_block(s) && !looks_like_claude_control_text(s)
+    })
+}
+
+fn join_display_texts(texts: &[String], include: impl Fn(&str) -> bool) -> Option<String> {
+    let mut parts = Vec::new();
+    for text in texts
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && include(s))
+    {
+        if parts.last().copied() != Some(text) {
+            parts.push(text);
+        }
+    }
+    let joined = parts.join("\n\n");
+    nonempty_trimmed(&joined)
 }
 
 fn is_claude_meta_event(value: &Value) -> bool {
@@ -778,6 +805,33 @@ fn collapse_preview(s: &str, max_chars: usize) -> Option<String> {
         out.push('…');
     }
     Some(out)
+}
+
+fn truncate_preserving_lines(s: &str, max_chars: usize) -> Option<String> {
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed_lines = normalized
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let trimmed = trimmed_lines.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        out.push('…');
+    }
+    Some(out)
+}
+
+fn nonempty_trimmed(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn path_is_within(cwd: &str, repo: &Path) -> bool {
@@ -1285,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_first_user_message_returns_collapsed_first_user_message() {
+    fn transcript_first_user_message_preserves_first_request_structure() {
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir
             .path()
@@ -1310,7 +1364,81 @@ mod tests {
         let title =
             transcript_first_user_message(AgentHistoryProvider::Claude, &transcript, 32).unwrap();
 
-        assert_eq!(title, "Please inspect the failing relea…");
+        assert_eq!(title, "Please inspect\n\n  the failing re…");
+    }
+
+    #[test]
+    fn transcript_first_user_message_joins_first_request_text_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "cwd": "/tmp/demo",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Create docs for html-in-canvas",
+                        },
+                        {
+                            "type": "text",
+                            "text": "Then build a gallery service around those examples.",
+                        },
+                    ],
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let title =
+            transcript_first_user_message(AgentHistoryProvider::Claude, &transcript, 200).unwrap();
+
+        assert_eq!(
+            title,
+            "Create docs for html-in-canvas\n\nThen build a gallery service around those examples."
+        );
+    }
+
+    #[test]
+    fn transcript_first_user_message_deduplicates_codex_payload_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("rollout-2026-05-21T10-13-44-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "id": "019e4818-7c15-7e60-9b3b-898a1c7803d6",
+                    "cwd": "/tmp/demo",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Document html-in-canvas",
+                        },
+                    ],
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let title =
+            transcript_first_user_message(AgentHistoryProvider::Codex, &transcript, 200).unwrap();
+
+        assert_eq!(title, "Document html-in-canvas");
     }
 
     #[test]
