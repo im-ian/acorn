@@ -27,10 +27,6 @@ import {
   unpatchTerminalCellMeasurements,
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
-  patchTerminalEmojiWidthMeasurements,
-  unpatchTerminalEmojiWidthMeasurements,
-} from "../lib/terminal-emoji-width-addon";
-import {
   createTerminalRepaintScheduler,
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
@@ -751,7 +747,6 @@ export function Terminal({
     // PTY mid-composition. The canvas/webgl addons are faster but mis-handle
     // composition events on macOS/Linux IMEs — we pick correctness over fps.
     term.open(container);
-    patchTerminalEmojiWidthMeasurements(term);
     const unpatchMouseCoordinateScale = patchTerminalMouseCoordinateScale(term);
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
@@ -2184,7 +2179,6 @@ export function Terminal({
       invoke("pty_kill", { sessionId }).catch(() => {
         // Backend may not implement pty_kill yet — safe to ignore.
       });
-      unpatchTerminalEmojiWidthMeasurements(term);
       unpatchMouseCoordinateScale();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;
