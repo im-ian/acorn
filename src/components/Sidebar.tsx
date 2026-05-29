@@ -16,7 +16,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { homeDir } from "@tauri-apps/api/path";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -45,6 +44,7 @@ import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
+import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -780,7 +780,7 @@ function ProjectGroupView({
 
   async function openInFinder(path: string) {
     try {
-      await openPath(path);
+      await api.fsReveal(path);
     } catch {
       // ignore
     }
@@ -1157,7 +1157,7 @@ function SessionRow({
       label: sidebarText(t, "sidebar.actions.revealInFinder"),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void openPath(session.worktree_path).catch((err: unknown) => {
+        void api.fsReveal(session.worktree_path).catch((err: unknown) => {
           console.error("[Sidebar] reveal failed", err);
         });
       },
@@ -1659,7 +1659,7 @@ function LocalSessionRow({
       label: sidebarText(t, "sidebar.actions.revealInFinder"),
       icon: <FolderOpen size={12} />,
       onClick: () => {
-        void openPath(session.worktree_path).catch((err: unknown) => {
+        void api.fsReveal(session.worktree_path).catch((err: unknown) => {
           console.error("[Sidebar] reveal failed", err);
         });
       },

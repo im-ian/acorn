@@ -6,16 +6,24 @@
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
-    "opener:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        { "path": "$APPLOCALDATA/themes" },
+        { "path": "$APPLOCALDATA/themes/*" },
+        { "path": "$APPLOCALDATA/themes/**/*" }
+      ]
     },
     "dialog:default",
     "shell:default",
-    "fs:default",
-    "fs:read-files",
-    "fs:write-files",
+    "fs:allow-exists",
+    "fs:allow-mkdir",
+    "fs:allow-read-dir",
+    "fs:allow-read-text-file",
+    "fs:allow-remove",
+    "fs:allow-write-file",
     {
       "identifier": "fs:scope",
       "allow": [
