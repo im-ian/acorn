@@ -9,8 +9,10 @@ import {
   vi,
 } from "vitest";
 import type {
+  DiffPayload,
   PullRequestDetail,
   PullRequestDetailListing,
+  PullRequestDiffListing,
 } from "../lib/types";
 
 vi.mock("../lib/api", () => {
@@ -18,6 +20,9 @@ vi.mock("../lib/api", () => {
     api: {
       getPullRequestDetail: vi.fn<
         (repoPath: string, n: number) => Promise<PullRequestDetailListing>
+      >(),
+      getPullRequestDiff: vi.fn<
+        (repoPath: string, n: number) => Promise<PullRequestDiffListing>
       >(),
       updatePullRequestBody: vi.fn<
         (repoPath: string, n: number, body: string) => Promise<void>
@@ -62,7 +67,19 @@ function fakeDetail(body: string): PullRequestDetail {
     reviews: [],
     checks: [],
     commits: [],
-    diff: { files: [] },
+  };
+}
+
+function fakeDiffPayload(): DiffPayload {
+  return {
+    files: [
+      {
+        old_path: "src/example.ts",
+        new_path: "src/example.ts",
+        patch: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+        is_image: false,
+      },
+    ],
   };
 }
 
@@ -82,6 +99,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockApi.getPullRequestDetail.mockReset();
+    mockApi.getPullRequestDiff.mockReset();
     mockApi.updatePullRequestBody.mockReset();
     mockApi.mergePullRequest.mockReset();
     mockApi.closePullRequest.mockReset();
@@ -362,6 +380,45 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
 
     expect(mockApi.getPullRequestDetail).toHaveBeenCalledTimes(2);
     expect(document.body.textContent).toContain("6s");
+  });
+
+  it("loads the PR diff only after the Files tab is selected", async () => {
+    mockApi.getPullRequestDetail.mockResolvedValueOnce({
+      kind: "ok",
+      account: "tester",
+      detail: { ...fakeDetail(""), changed_files: 1 },
+    });
+    mockApi.getPullRequestDiff.mockResolvedValueOnce({
+      kind: "ok",
+      account: "tester",
+      diff: fakeDiffPayload(),
+    });
+
+    await act(async () => {
+      root.render(
+        <PullRequestDetailModal
+          open={{ repoPath: "/r", number: 999 }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    expect(mockApi.getPullRequestDetail).toHaveBeenCalledWith("/r", 999);
+    expect(mockApi.getPullRequestDiff).not.toHaveBeenCalled();
+
+    const filesTab = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("Files"));
+    expect(filesTab).toBeDefined();
+
+    await act(async () => {
+      filesTab!.click();
+    });
+    await flushPromises();
+
+    expect(mockApi.getPullRequestDiff).toHaveBeenCalledWith("/r", 999);
+    expect(document.body.textContent).toContain("src/example.ts");
   });
 
   it("opens project settings from the hidden GEN prompt button", async () => {

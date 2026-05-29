@@ -357,11 +357,15 @@ export interface PullRequestDetail {
   reviews: PullRequestReview[];
   checks: PullRequestCheck[];
   commits: PullRequestCommit[];
-  diff: DiffPayload;
 }
 
 export type PullRequestDetailListing =
   | { kind: "ok"; account: string; detail: PullRequestDetail }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export type PullRequestDiffListing =
+  | { kind: "ok"; account: string; diff: DiffPayload }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
 
