@@ -28,6 +28,7 @@ use acorn_session::{
 };
 
 use serde::Serialize;
+use tauri_plugin_dialog::DialogExt;
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -37,6 +38,177 @@ where
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| AppError::Other(format!("{label} task failed: {e}")))?
+}
+
+fn canonical_existing_path(path: &Path) -> AppResult<PathBuf> {
+    if !path.is_absolute() {
+        return Err(AppError::InvalidPath("absolute path required".into()));
+    }
+    path.canonicalize().map_err(AppError::from)
+}
+
+fn path_is_inside(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
+}
+
+fn registered_project_roots(state: &AppState) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = state
+        .projects
+        .list()
+        .into_iter()
+        .filter_map(|project| project.repo_path.canonicalize().ok())
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn authorize_registered_project_root(state: &AppState, repo: &Path) -> AppResult<PathBuf> {
+    let repo = canonical_existing_path(repo)?;
+    registered_project_roots(state)
+        .into_iter()
+        .find(|root| root == &repo)
+        .ok_or_else(|| {
+            AppError::InvalidPath(format!("project is not registered: {}", repo.display()))
+        })
+}
+
+fn authorize_local_session_root(path: &Path) -> AppResult<PathBuf> {
+    let path = canonical_existing_path(path)?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| AppError::InvalidPath("HOME is not available".into()))?
+        .canonicalize()?;
+    if path == home {
+        Ok(path)
+    } else {
+        Err(AppError::InvalidPath(format!(
+            "local sessions may only start in HOME: {}",
+            path.display()
+        )))
+    }
+}
+
+fn authorize_session_cwd(state: &AppState, session: &Session, cwd: &Path) -> AppResult<PathBuf> {
+    let cwd = canonical_existing_path(cwd)?;
+    let session_root = canonical_existing_path(&session.worktree_path)?;
+    if session.project_scoped == false {
+        if path_is_inside(&cwd, &session_root) {
+            return Ok(cwd);
+        }
+        return Err(AppError::InvalidPath(format!(
+            "cwd is outside the local session root: {}",
+            cwd.display()
+        )));
+    }
+
+    let repo = authorize_registered_project_root(state, &session.repo_path)?;
+    if path_is_inside(&cwd, &repo) || path_is_inside(&cwd, &session_root) {
+        Ok(cwd)
+    } else {
+        Err(AppError::InvalidPath(format!(
+            "cwd is outside the session project roots: {}",
+            cwd.display()
+        )))
+    }
+}
+
+fn remember_folder_grant(state: &AppState, path: &Path) -> AppResult<PathBuf> {
+    let path = canonical_existing_path(path)?;
+    let mut grants = state.folder_grants.lock();
+    if !grants.iter().any(|granted| granted == &path) {
+        grants.push(path.clone());
+    }
+    Ok(path)
+}
+
+fn folder_granted(state: &AppState, path: &Path) -> AppResult<PathBuf> {
+    let path = canonical_existing_path(path)?;
+    if state
+        .folder_grants
+        .lock()
+        .iter()
+        .any(|granted| granted == &path)
+    {
+        Ok(path)
+    } else {
+        Err(AppError::InvalidPath(format!(
+            "folder was not selected through Acorn: {}",
+            path.display()
+        )))
+    }
+}
+
+fn pick_folder_path<R: Runtime>(
+    app: &AppHandle<R>,
+    title: Option<String>,
+) -> AppResult<Option<PathBuf>> {
+    let mut dialog = app.dialog().file();
+    if let Some(title) = title.and_then(|title| {
+        let title = title.trim().to_string();
+        if title.is_empty() { None } else { Some(title) }
+    }) {
+        dialog = dialog.set_title(title);
+    }
+    dialog
+        .blocking_pick_folder()
+        .map(|path| {
+            path.into_path()
+                .map_err(|err| AppError::Other(err.to_string()))
+        })
+        .transpose()
+}
+
+fn validate_editor_command(command: &str, args: &[String]) -> AppResult<String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Err(AppError::Other(
+            "editor command must not be empty".to_string(),
+        ));
+    }
+    if command.contains('/') || command.contains('\\') {
+        return Err(AppError::Other(
+            "editor command must be one of Acorn's known editor binaries".to_string(),
+        ));
+    }
+    let allowed = matches!(
+        command,
+        "code"
+            | "code-insiders"
+            | "cursor"
+            | "zed"
+            | "subl"
+            | "mate"
+            | "bbedit"
+            | "vim"
+            | "nvim"
+            | "nano"
+            | "emacs"
+            | "idea"
+            | "webstorm"
+            | "pycharm"
+            | "goland"
+            | "clion"
+            | "phpstorm"
+            | "rubymine"
+            | "rider"
+    );
+    if !allowed {
+        return Err(AppError::Other(format!(
+            "editor command is not allowed: {command}"
+        )));
+    }
+    for arg in args {
+        if !matches!(
+            arg.as_str(),
+            "--wait" | "-w" | "--reuse-window" | "--new-window" | "--goto" | "-n" | "--new"
+        ) {
+            return Err(AppError::Other(format!(
+                "editor argument is not allowed: {arg}"
+            )));
+        }
+    }
+    Ok(command.to_string())
 }
 
 fn inject_agent_hook_env(
@@ -898,42 +1070,88 @@ pub async fn create_session(
     agent_provider: Option<SessionAgentProvider>,
     project_scoped: Option<bool>,
 ) -> AppResult<Session> {
-    let selected_path = PathBuf::from(&repo_path);
-    if !selected_path.exists() {
-        return Err(AppError::InvalidPath(repo_path));
-    }
+    create_session_inner(
+        state.inner(),
+        name,
+        PathBuf::from(repo_path),
+        isolated.unwrap_or(false),
+        kind.unwrap_or_default(),
+        agent_provider,
+        project_scoped.unwrap_or(true),
+        false,
+    )
+}
 
-    let isolated = isolated.unwrap_or(false);
-    let project_scoped = project_scoped.unwrap_or(true);
-    let selected_path = selected_path.canonicalize()?;
+#[tauri::command]
+pub fn create_session_from_dialog<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    name: String,
+    isolated: Option<bool>,
+    kind: Option<SessionKind>,
+    agent_provider: Option<SessionAgentProvider>,
+    project_scoped: Option<bool>,
+    title: Option<String>,
+) -> AppResult<Option<Session>> {
+    let Some(selected_path) = pick_folder_path(&app, title)? else {
+        return Ok(None);
+    };
+    Ok(Some(create_session_inner(
+        state.inner(),
+        name,
+        selected_path,
+        isolated.unwrap_or(false),
+        kind.unwrap_or_default(),
+        agent_provider,
+        project_scoped.unwrap_or(true),
+        true,
+    )?))
+}
+
+fn create_session_inner(
+    state: &AppState,
+    mut name: String,
+    selected_path: PathBuf,
+    isolated: bool,
+    kind: SessionKind,
+    agent_provider: Option<SessionAgentProvider>,
+    project_scoped: bool,
+    allow_project_registration: bool,
+) -> AppResult<Session> {
+    let selected_path = canonical_existing_path(&selected_path)?;
     let repo = if project_scoped || isolated {
-        worktree::project_root_for_path(&selected_path)?
+        let repo = worktree::project_root_for_path(&selected_path)?;
+        if allow_project_registration {
+            state.projects.ensure(repo.clone(), project_basename(&repo));
+        } else {
+            authorize_registered_project_root(state, &repo)?;
+        }
+        repo
     } else {
-        selected_path.clone()
+        authorize_local_session_root(&selected_path)?
     };
     let worktree_path = if isolated {
+        if name.trim().is_empty() {
+            name = project_basename(&repo);
+        }
         let base = sanitize_worktree_name(&name);
         let (_safe_name, path) = create_unique_worktree(&repo, &base)?;
         path
     } else {
         selected_path
     };
+    if name.trim().is_empty() {
+        name = project_basename(&worktree_path);
+    }
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
-    let mut session = Session::new(
-        name,
-        repo.clone(),
-        worktree_path,
-        branch,
-        isolated,
-        kind.unwrap_or_default(),
-    );
+    let mut session = Session::new(name, repo.clone(), worktree_path, branch, isolated, kind);
     session.project_scoped = project_scoped;
     session.agent_provider = agent_provider;
     let inserted = state.sessions.insert(session);
     if project_scoped {
         state.projects.ensure(repo.clone(), project_basename(&repo));
     }
-    persist(&state);
+    persist(state);
     Ok(enrich_session(inserted))
 }
 
@@ -943,15 +1161,31 @@ pub fn list_projects(state: State<'_, AppState>) -> Vec<Project> {
 }
 
 #[tauri::command]
-pub fn add_project(state: State<'_, AppState>, repo_path: String) -> AppResult<Project> {
-    let path = PathBuf::from(&repo_path);
-    if !path.exists() {
-        return Err(AppError::InvalidPath(repo_path));
-    }
+pub fn add_project<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    title: Option<String>,
+) -> AppResult<Option<Project>> {
+    let Some(path) = pick_folder_path(&app, title)? else {
+        return Ok(None);
+    };
     let path = worktree::project_root_for_path(&path)?;
     let project = state.projects.ensure(path.clone(), project_basename(&path));
     persist(&state);
-    Ok(project)
+    Ok(Some(project))
+}
+
+#[tauri::command]
+pub fn select_project_parent_folder<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    title: Option<String>,
+) -> AppResult<Option<String>> {
+    let Some(path) = pick_folder_path(&app, title)? else {
+        return Ok(None);
+    };
+    let path = remember_folder_grant(state.inner(), &path)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -966,7 +1200,7 @@ pub fn create_new_project(
     if !parent.is_dir() {
         return Err(AppError::InvalidPath(parent_path));
     }
-    let parent = parent.canonicalize()?;
+    let parent = folder_granted(state.inner(), &parent)?;
     let target = parent.join(name);
     if target.exists() {
         return Err(AppError::Other(format!(
@@ -1231,13 +1465,12 @@ fn session_title_readiness_inner(
 pub async fn generate_session_title(
     state: State<'_, AppState>,
     id: String,
-    command: String,
-    args: Vec<String>,
+    ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
 ) -> AppResult<GenerateSessionTitleResult> {
     let state = state.inner().clone();
     run_blocking("generate_session_title", move || {
-        generate_session_title_inner(state, id, command, args, prompt)
+        generate_session_title_inner(state, id, ai, prompt)
     })
     .await
 }
@@ -1245,8 +1478,7 @@ pub async fn generate_session_title(
 fn generate_session_title_inner(
     state: AppState,
     id: String,
-    command: String,
-    args: Vec<String>,
+    ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
 ) -> AppResult<GenerateSessionTitleResult> {
     let id = parse_id(&id)?;
@@ -1263,12 +1495,8 @@ fn generate_session_title_inner(
             session: enrich_session(session),
         });
     };
-    let generated = crate::session_titles::generate_title(
-        &command,
-        &args,
-        prompt.as_deref(),
-        &first_user_message,
-    )?;
+    let generated =
+        crate::session_titles::generate_title(&ai, prompt.as_deref(), &first_user_message)?;
     let latest = state.sessions.get(&id)?;
     if !crate::session_titles::can_generate_title(&latest) {
         return Ok(GenerateSessionTitleResult {
@@ -1286,8 +1514,7 @@ fn generate_session_title_inner(
 
 #[tauri::command]
 pub async fn preview_session_title(
-    command: String,
-    args: Vec<String>,
+    ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
     first_user_message: String,
 ) -> AppResult<String> {
@@ -1298,12 +1525,7 @@ pub async fn preview_session_title(
                 "first user message must not be empty".to_string(),
             ));
         }
-        crate::session_titles::generate_title(
-            &command,
-            &args,
-            prompt.as_deref(),
-            &first_user_message,
-        )
+        crate::session_titles::generate_title(&ai, prompt.as_deref(), &first_user_message)
     })
     .await
 }
@@ -1321,8 +1543,23 @@ pub fn update_session_worktree(
 ) -> AppResult<Session> {
     let id = parse_id(&id)?;
     let path = PathBuf::from(worktree_path);
-    if !path.exists() {
-        return Err(AppError::InvalidPath(path.display().to_string()));
+    let session = state.sessions.get(&id)?;
+    if session.project_scoped == false {
+        return Err(AppError::InvalidPath(
+            "local sessions cannot adopt project worktrees".into(),
+        ));
+    }
+    authorize_registered_project_root(state.inner(), &session.repo_path)?;
+    let path = canonical_existing_path(&path)?;
+    let linked = worktree::list_worktree_paths(&session.repo_path)?
+        .into_iter()
+        .filter_map(|candidate| candidate.canonicalize().ok())
+        .any(|candidate| candidate == path);
+    if !linked {
+        return Err(AppError::InvalidPath(format!(
+            "worktree is not registered for the session project: {}",
+            path.display()
+        )));
     }
     let updated = state.sessions.update_worktree_path(&id, path)?;
     persist(&state);
@@ -1549,10 +1786,8 @@ pub async fn pty_spawn<R: Runtime>(
     replay_scrollback: Option<bool>,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    let cwd = PathBuf::from(cwd);
-    if !cwd.exists() {
-        return Err(AppError::InvalidPath(cwd.display().to_string()));
-    }
+    let session = state.sessions.get(&id)?;
+    let cwd = authorize_session_cwd(state.inner(), &session, &PathBuf::from(cwd))?;
     // Either an in-process PTY or a daemon-side stream attachment for
     // this session already exists — caller hit `pty_spawn` twice (e.g.
     // StrictMode double mount), nothing to do.
@@ -1699,42 +1934,40 @@ pub async fn pty_spawn<R: Runtime>(
         tracing::warn!(%id, "shell init dir setup failed; OSC 7 cwd tracking will fall back to focus-based refresh");
     }
 
-    if let Ok(session) = state.sessions.get(&id) {
-        let agent_hooks = state.agent_hooks.lock().clone();
-        inject_agent_hook_env(&mut effective_env, &session, agent_hooks.as_deref());
-        if session.kind == SessionKind::Control {
+    let agent_hooks = state.agent_hooks.lock().clone();
+    inject_agent_hook_env(&mut effective_env, &session, agent_hooks.as_deref());
+    if session.kind == SessionKind::Control {
+        effective_env
+            .entry("ACORN_SESSION_ID".to_string())
+            .or_insert_with(|| session.id.to_string());
+        // Daemon socket for the `acornd` CLI. Coexists with
+        // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
+        // the in-process server, while `acornd <subcommand>`
+        // reaches the daemon. The two transports manage different
+        // session graphs today (daemon vs in-process); they
+        // converge when `pty_spawn` itself routes through the
+        // daemon.
+        if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
             effective_env
-                .entry("ACORN_SESSION_ID".to_string())
-                .or_insert_with(|| session.id.to_string());
-            // Daemon socket for the `acornd` CLI. Coexists with
-            // `ACORN_IPC_SOCKET`: scripts that call `acorn-ipc` reach
-            // the in-process server, while `acornd <subcommand>`
-            // reaches the daemon. The two transports manage different
-            // session graphs today (daemon vs in-process); they
-            // converge when `pty_spawn` itself routes through the
-            // daemon.
-            if let Ok(daemon_sock) = acorn_daemon::paths::control_socket_path() {
-                effective_env
-                    .entry("ACORN_DAEMON_SOCKET".to_string())
-                    .or_insert_with(|| daemon_sock.display().to_string());
-            }
-            // Drop the primer in a worktree-local marker file so whichever
-            // agent the user invokes inside the shell can read the IPC
-            // protocol. `inject_primer_args` is a no-op while `$SHELL` is
-            // an ordinary shell (`AgentFlavor::Unknown`) and only takes
-            // effect on the rare configuration where `$SHELL` itself
-            // resolves to a recognised agent binary.
-            let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
-            let primer = acorn_ipc::primer::primer_for(
-                &session.id.to_string(),
-                &session.repo_path,
-                &ipc_socket,
-                daemon_socket.as_deref(),
-            );
-            let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);
-            primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, &primer);
-            write_control_marker(&cwd, &primer);
+                .entry("ACORN_DAEMON_SOCKET".to_string())
+                .or_insert_with(|| daemon_sock.display().to_string());
         }
+        // Drop the primer in a worktree-local marker file so whichever
+        // agent the user invokes inside the shell can read the IPC
+        // protocol. `inject_primer_args` is a no-op while `$SHELL` is
+        // an ordinary shell (`AgentFlavor::Unknown`) and only takes
+        // effect on the rare configuration where `$SHELL` itself
+        // resolves to a recognised agent binary.
+        let daemon_socket = acorn_daemon::paths::control_socket_path().ok();
+        let primer = acorn_ipc::primer::primer_for(
+            &session.id.to_string(),
+            &session.repo_path,
+            &ipc_socket,
+            daemon_socket.as_deref(),
+        );
+        let flavor = acorn_ipc::primer::AgentFlavor::detect(&resolved_command);
+        primed_args = acorn_ipc::primer::inject_primer_args(flavor, primed_args, &primer);
+        write_control_marker(&cwd, &primer);
     }
 
     // Daemon path — when the killswitch is on, route through `acornd`
@@ -2661,13 +2894,9 @@ pub async fn is_git_repository(repo_path: String) -> AppResult<bool> {
 /// would defeat the configurability.
 #[tauri::command]
 pub async fn open_in_editor(command: String, args: Vec<String>, path: String) -> AppResult<()> {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::Other(
-            "editor command must not be empty".to_string(),
-        ));
-    }
-    std::process::Command::new(trimmed)
+    let command = validate_editor_command(&command, &args)?;
+    let path = canonical_existing_path(&PathBuf::from(path))?;
+    std::process::Command::new(&command)
         .args(args)
         .arg(path)
         .spawn()
@@ -2807,18 +3036,10 @@ pub async fn generate_pr_commit_message(
     repo_path: String,
     number: u64,
     method: MergeMethod,
-    command: String,
-    args: Vec<String>,
+    ai: crate::ai::AiExecutionRequest,
     prompt: String,
 ) -> AppResult<GeneratedCommitMessage> {
-    pull_requests::generate_pr_commit_message(
-        &PathBuf::from(repo_path),
-        number,
-        method,
-        command,
-        args,
-        prompt,
-    )
+    pull_requests::generate_pr_commit_message(&PathBuf::from(repo_path), number, method, ai, prompt)
 }
 
 pub(crate) fn create_unique_worktree(
@@ -3052,10 +3273,10 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
-        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
-        validate_new_project_name, ProcessMemorySnapshot,
+        ProcessMemorySnapshot, collect_memory_usage_from_roots, create_unique_worktree,
+        daemon_spawn_name_for_session, font_name_from_path, infer_acornd_root_from_session_pids,
+        inject_agent_hook_env, memory_root_pids, remove_linked_worktree_at_path,
+        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
     };
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
     use std::collections::HashMap;
@@ -3105,6 +3326,27 @@ mod tests {
         assert!(validate_new_project_name("../fresh-app", false).is_err());
         assert!(validate_new_project_name("parent/fresh-app", false).is_err());
         assert!(validate_new_project_name(".", false).is_err());
+    }
+
+    #[test]
+    fn validate_editor_command_accepts_known_editors_and_safe_args() {
+        assert_eq!(
+            validate_editor_command("code-insiders", &["--wait".to_string()]).unwrap(),
+            "code-insiders"
+        );
+        assert_eq!(
+            validate_editor_command("idea", &["--new-window".to_string()]).unwrap(),
+            "idea"
+        );
+    }
+
+    #[test]
+    fn validate_editor_command_rejects_paths_and_unknown_args() {
+        assert!(validate_editor_command("/tmp/editor", &[]).is_err());
+        assert!(validate_editor_command("open", &[]).is_err());
+        assert!(
+            validate_editor_command("code", &["--user-data-dir=/tmp/acorn".to_string()]).is_err()
+        );
     }
 
     #[test]

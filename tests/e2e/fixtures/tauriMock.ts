@@ -44,6 +44,20 @@ export const tauriMockSource = `
     }
     if (cmd === 'list_sessions') return Promise.resolve([]);
     if (cmd === 'list_projects') return Promise.resolve([]);
+    if (cmd === 'add_project') {
+      return Promise.resolve({
+        repo_path: '/tmp/picked',
+        name: 'picked',
+        created_at: '2026-01-01T00:00:00Z',
+        position: 0,
+      });
+    }
+    if (cmd === 'select_project_parent_folder') {
+      return Promise.resolve('/tmp');
+    }
+    if (cmd === 'create_session_from_dialog') {
+      return Promise.resolve(null);
+    }
     if (cmd === 'get_project_settings') {
       return Promise.resolve({
         key: 'path:' + (args?.repoPath || '/tmp/project'),

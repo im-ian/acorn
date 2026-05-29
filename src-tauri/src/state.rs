@@ -1,5 +1,6 @@
-use std::sync::atomic::AtomicBool;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use parking_lot::Mutex;
 
@@ -56,6 +57,10 @@ pub struct AppState {
     /// lifecycle events back into Acorn. `None` means bind failed; PTY
     /// spawning still works and falls back to existing polling.
     pub agent_hooks: Arc<Mutex<Option<Arc<crate::agent_hooks::AgentHookServer>>>>,
+    /// Folder paths selected through a native backend dialog during this app
+    /// run. Commands that create new trust roots consult this before accepting
+    /// a renderer-supplied path.
+    pub folder_grants: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl AppState {
@@ -73,6 +78,7 @@ impl AppState {
             staged_rev_mismatch: Arc::new(Mutex::new(None)),
             fs_watcher: WatcherState::new(),
             agent_hooks: Arc::new(Mutex::new(None)),
+            folder_grants: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

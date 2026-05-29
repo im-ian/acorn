@@ -3,10 +3,106 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde::Deserialize;
+
 use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
 
 const ONESHOT_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiExecutionRequest {
+    pub provider: AiProvider,
+    #[serde(default)]
+    pub ollama_model: Option<String>,
+    #[serde(default)]
+    pub llm_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProvider {
+    Claude,
+    Antigravity,
+    Codex,
+    Ollama,
+    Llm,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAiCommand {
+    pub command: &'static str,
+    pub args: Vec<String>,
+}
+
+impl AiExecutionRequest {
+    pub fn resolve(&self) -> AppResult<ResolvedAiCommand> {
+        match self.provider {
+            AiProvider::Claude => Ok(ResolvedAiCommand {
+                command: "claude",
+                args: vec!["-p".into(), "--output-format".into(), "text".into()],
+            }),
+            AiProvider::Antigravity => Ok(ResolvedAiCommand {
+                command: "agy",
+                args: vec!["-p".into()],
+            }),
+            AiProvider::Codex => Ok(ResolvedAiCommand {
+                command: "codex",
+                args: vec!["exec".into()],
+            }),
+            AiProvider::Ollama => {
+                let model = normalize_model_arg(self.ollama_model.as_deref(), "llama3")?;
+                Ok(ResolvedAiCommand {
+                    command: "ollama",
+                    args: vec!["run".into(), model],
+                })
+            }
+            AiProvider::Llm => {
+                let model = normalize_optional_model_arg(self.llm_model.as_deref())?;
+                let args = match model {
+                    Some(model) => vec!["-m".into(), model],
+                    None => Vec::new(),
+                };
+                Ok(ResolvedAiCommand {
+                    command: "llm",
+                    args,
+                })
+            }
+            AiProvider::Custom => Err(AppError::Other(
+                "Custom AI commands are not available for native execution. Pick a built-in provider."
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+fn normalize_model_arg(raw: Option<&str>, default: &str) -> AppResult<String> {
+    normalize_optional_model_arg(raw).map(|model| model.unwrap_or_else(|| default.to_string()))
+}
+
+fn normalize_optional_model_arg(raw: Option<&str>) -> AppResult<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let model = raw.trim();
+    if model.is_empty() {
+        return Ok(None);
+    }
+    if model.len() > 128
+        || model.starts_with('-')
+        || !model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/'))
+    {
+        return Err(AppError::Other(
+            "AI model names may only contain letters, numbers, '.', '_', '-', ':', and '/'."
+                .to_string(),
+        ));
+    }
+    Ok(Some(model.to_string()))
+}
 
 pub fn run_oneshot(
     command: &str,
@@ -119,4 +215,48 @@ fn wait_with_timeout(
         stdout,
         stderr,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_known_ai_provider_commands() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Codex,
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert_eq!(
+            req.resolve().unwrap(),
+            ResolvedAiCommand {
+                command: "codex",
+                args: vec!["exec".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_custom_ai_commands() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Custom,
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert!(req.resolve().is_err());
+    }
+
+    #[test]
+    fn rejects_model_names_that_can_be_interpreted_as_options() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Ollama,
+            ollama_model: Some("--help".to_string()),
+            llm_model: None,
+        };
+
+        assert!(req.resolve().is_err());
+    }
 }

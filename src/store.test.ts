@@ -1280,15 +1280,15 @@ describe("generateSessionTitle", () => {
       },
     );
 
+    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
     const status = await useAppStore
       .getState()
-      .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+      .generateSessionTitle("a1", ai, "Title prompt");
 
     expect(status).toBe("generated");
     expect(mockApi.generateSessionTitle).toHaveBeenCalledWith(
       "a1",
-      "codex",
-      ["exec"],
+      ai,
       "Title prompt",
     );
     expect(mockApi.listSessions).toHaveBeenCalledTimes(1);
@@ -1308,9 +1308,11 @@ describe("generateSessionTitle", () => {
       }),
     });
 
-    const status = await useAppStore
-      .getState()
-      .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+    const status = await useAppStore.getState().generateSessionTitle(
+      "a1",
+      { provider: "codex", ollamaModel: "", llmModel: "" },
+      "Title prompt",
+    );
 
     expect(status).toBe("not_ready");
     expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
@@ -1330,9 +1332,11 @@ describe("generateSessionTitle", () => {
           }),
       );
 
-      const request = useAppStore
-        .getState()
-        .generateSessionTitle("a1", "codex", ["exec"], "Title prompt");
+      const request = useAppStore.getState().generateSessionTitle(
+        "a1",
+        { provider: "codex", ollamaModel: "", llmModel: "" },
+        "Title prompt",
+      );
 
       expect(useAppStore.getState().generatingSessionTitleIds).toEqual({
         a1: true,

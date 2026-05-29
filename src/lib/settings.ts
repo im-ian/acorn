@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { AiExecutionRequest } from "./api";
 import type { BackgroundFit, BackgroundState } from "./background";
 import {
   fontStackFromSlots,
@@ -30,8 +31,9 @@ export type AgentProvider =
   | "llm"
   | "codex";
 
-/** Agent selection accepts every catalogued agent plus an arbitrary custom
- *  command for tools that don't fit the catalog. */
+/** Agent selection accepts every catalogued agent plus the persisted legacy
+ *  custom option. Native execution rejects custom commands at the backend
+ *  boundary; keep the option readable so existing settings migrate cleanly. */
 export type SelectedAgent = AgentProvider | "custom";
 
 export const AGENT_OPTIONS: ReadonlyArray<{
@@ -242,9 +244,8 @@ export interface AcornSettings {
      */
     sessionTitlePrompt: string;
     /**
-     * Used when `selected === "custom"`. Whitespace-separated; no shell
-     * expansion. Powers the one-shot commit-message invocation; empty
-     * falls back to Claude Code.
+     * Legacy value from earlier builds. The backend no longer executes
+     * renderer-supplied custom commands.
      */
     customCommand: string;
     ollama: { model: string };
@@ -1205,59 +1206,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
 }));
 
-interface ResolvedCommand {
-  command: string;
-  args: string[];
-}
-
-/**
- * One-shot stdin → stdout invocation for an agent. Used by AI features that
- * need a single prompt/response round trip.
- */
-function agentOneshotCommand(
-  agent: AgentProvider,
-  agents: AcornSettings["agents"],
-): ResolvedCommand {
-  switch (agent) {
-    case "claude":
-      return { command: "claude", args: ["-p", "--output-format", "text"] };
-    case "antigravity":
-      return { command: "agy", args: ["-p"] };
-    case "codex":
-      return { command: "codex", args: ["exec"] };
-    case "ollama": {
-      const model = agents.ollama.model.trim() || "llama3";
-      return { command: "ollama", args: ["run", model] };
-    }
-    case "llm": {
-      const model = agents.llm.model.trim();
-      return model
-        ? { command: "llm", args: ["-m", model] }
-        : { command: "llm", args: [] };
-    }
-  }
-}
-
-function tokenizeCustom(raw: string): ResolvedCommand | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const parts = trimmed.split(/\s+/);
-  return { command: parts[0], args: parts.slice(1) };
-}
-
 /**
  * Resolve the AI CLI invocation selected under Settings → Agents. The
- * resolved value is sent to the Rust backend as `(command, args)` so the
- * backend stays provider-agnostic.
+ * renderer sends only this provider intent; the Rust backend owns the actual
+ * executable/arg allowlist.
  */
-export function resolveAiOneshotCommand(s: AcornSettings): ResolvedCommand {
-  if (s.agents.selected === "custom") {
-    return (
-      tokenizeCustom(s.agents.customCommand) ??
-      agentOneshotCommand("claude", s.agents)
-    );
-  }
-  return agentOneshotCommand(s.agents.selected, s.agents);
+export function resolveAiExecutionRequest(
+  s: AcornSettings,
+): AiExecutionRequest {
+  return {
+    provider: s.agents.selected,
+    ollamaModel: s.agents.ollama.model,
+    llmModel: s.agents.llm.model,
+  };
 }
 
 export function resolveSessionTitlePrompt(s: AcornSettings): string {
@@ -1267,7 +1228,7 @@ export function resolveSessionTitlePrompt(s: AcornSettings): string {
 }
 
 /** Backwards-compat alias for callers that still read this name. */
-export const resolveAiCommitCommand = resolveAiOneshotCommand;
+export const resolveAiCommitRequest = resolveAiExecutionRequest;
 
 /**
  * Human-friendly label for the global agent selection. Used by the merge
