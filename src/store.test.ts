@@ -1855,4 +1855,34 @@ describe("right panel groups", () => {
     useAppStore.getState().setRightGroup("github");
     expect(useAppStore.getState().rightTab).toBe("prs");
   });
+
+  it("keeps the selected tab and sub-tab memory per project", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+
+    useAppStore.getState().setActiveProject(REPO_A);
+    useAppStore.getState().setRightTab("actions");
+    useAppStore.getState().setRightTab("history");
+
+    useAppStore.getState().setActiveProject(REPO_B);
+    expect(useAppStore.getState().rightTab).toBe("commits");
+    useAppStore.getState().setRightTab("prs");
+    useAppStore.getState().setRightTab("todos");
+
+    useAppStore.getState().setActiveProject(REPO_A);
+    let s = useAppStore.getState();
+    expect(s.rightTab).toBe("history");
+    expect(s.rightTabByGroup.github).toBe("actions");
+    s.setRightGroup("github");
+    expect(useAppStore.getState().rightTab).toBe("actions");
+
+    useAppStore.getState().setActiveProject(REPO_B);
+    s = useAppStore.getState();
+    expect(s.rightTab).toBe("todos");
+    expect(s.rightTabByGroup.github).toBe("prs");
+    s.setRightGroup("github");
+    expect(useAppStore.getState().rightTab).toBe("prs");
+  });
 });
