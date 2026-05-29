@@ -490,12 +490,12 @@
       },
       "sessionTitles": {
         "label": "Session titles",
-        "hint": "When enabled, acorn sends the first user prompt in a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
+        "hint": "When enabled, acorn sends the entire first user prompt in a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
         "checkbox": "Auto-generate session titles"
       },
       "sessionTitlePrompt": {
         "label": "Session title prompt",
-        "hint": "Instructions sent before the first user prompt. Leave blank to use the default prompt.",
+        "hint": "Instructions sent before the entire first user prompt. Leave blank to use the default prompt.",
         "open": "Configure title prompt",
         "shortButton": "Prompt",
         "editorLabel": "Prompt",

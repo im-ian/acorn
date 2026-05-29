@@ -12,7 +12,7 @@ const GENERATED_TITLE_CHARS: usize = 29;
 const SESSION_TITLE_PROMPT_CHARS: usize = 1_000;
 
 pub const DEFAULT_SESSION_TITLE_PROMPT: &str = "\
-You are naming an Acorn terminal tab from the user's first agent prompt.
+You are naming an Acorn terminal tab from the user's entire first agent prompt.
 
 Return only a concise title for the tab.
 Rules:
@@ -21,7 +21,8 @@ Rules:
 - Use lowercase words only.
 - Fewer than 30 characters.
 - No quotes, Markdown, trailing punctuation, or extra commentary.
-- Prefer the concrete task over generic words like \"help\" or \"question\".
+- Summarize the overall intent of the full request, not just the first line or first task.
+- Prefer the main user goal over setup steps and generic words like \"help\" or \"question\".
 ";
 
 pub fn can_generate_title(session: &Session) -> bool {
@@ -126,6 +127,7 @@ mod tests {
         assert!(prompt.contains("2 to 5 words"));
         assert!(prompt.contains("Separate each word with hyphens"));
         assert!(prompt.contains("Use lowercase words only"));
+        assert!(prompt.contains("overall intent of the full request"));
         assert!(prompt.contains("Fix the release workflow failure"));
     }
 
