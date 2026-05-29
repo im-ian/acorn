@@ -49,9 +49,12 @@ import {
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
 import {
-  hasClipboardFilePayload,
+  getClipboardImageFile,
+  hasClipboardImagePayload,
   terminalPasteAction,
+  type ClipboardImageFile,
 } from "../lib/terminalPaste";
+import { saveClipboardImageAttachment } from "../lib/clipboardImageAttachment";
 import {
   createTerminalFileLinkProvider,
   resolveTerminalFilePathCandidates,
@@ -84,7 +87,6 @@ interface TerminalProps {
   repoPath: string;
   cwd: string;
   agentProvider?: SessionAgentProvider | null;
-  pasteAgentProvider?: SessionAgentProvider | null;
   /**
    * When the terminal is hidden behind another tab in the same pane and then
    * made visible again, the DOM renderer can leave the rows blank because it
@@ -442,7 +444,6 @@ export function Terminal({
   repoPath,
   cwd,
   agentProvider = null,
-  pasteAgentProvider = null,
   isActive = true,
   isFocusedPane = true,
 }: TerminalProps): ReactElement {
@@ -450,18 +451,12 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
-  const pasteAgentProviderRef =
-    useRef<SessionAgentProvider | null>(pasteAgentProvider);
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
     underlineRects: TooltipAnchorRect[];
     linkKey: string;
   } | null>(null);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
-
-  useEffect(() => {
-    pasteAgentProviderRef.current = pasteAgentProvider;
-  }, [pasteAgentProvider]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -792,38 +787,8 @@ export function Terminal({
     const unlistenFns: UnlistenFn[] = [];
     let observedLinkedWorktreePath: string | null = null;
     let liveCwdProbeTimer: number | null = null;
-    let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
     let daemonSessionAliveAtMount = false;
-    let agentImagePasteActive =
-      pasteAgentProviderRef.current === "claude" ||
-      pasteAgentProviderRef.current === "codex";
-
-    const refreshAgentDetection = () => {
-      void api
-        .detectSessionAgent(sessionId)
-        .then((agent) => {
-          if (disposed) return;
-          agentImagePasteActive =
-            pasteAgentProviderRef.current === "claude" ||
-            pasteAgentProviderRef.current === "codex" ||
-            Boolean(agent.claude) ||
-            Boolean(agent.codex);
-        })
-        .catch((err: unknown) => {
-          console.debug("[Terminal] agent detection failed", err);
-        });
-    };
-
-    const scheduleAgentDetection = () => {
-      if (disposed || agentProbeTimer !== null) return;
-      agentProbeTimer = window.setTimeout(() => {
-        agentProbeTimer = null;
-        if (disposed) return;
-        refreshAgentDetection();
-      }, 500);
-    };
-    refreshAgentDetection();
 
     const rememberLinkedWorktreeCwd = (path: string, source: string) => {
       void api
@@ -1038,6 +1003,44 @@ export function Terminal({
         writeToPty(targetId, data);
       }
     };
+    let terminalActivityVersion = 0;
+    let imagePasteFallbackTimer: number | null = null;
+    let imagePasteFallbackSerial = 0;
+    const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
+    const scheduleClipboardImageFallback = (
+      imageFile: ClipboardImageFile,
+      observedActivityVersion: number,
+    ) => {
+      if (imagePasteFallbackTimer !== null) {
+        window.clearTimeout(imagePasteFallbackTimer);
+      }
+      const serial = ++imagePasteFallbackSerial;
+      imagePasteFallbackTimer = window.setTimeout(() => {
+        imagePasteFallbackTimer = null;
+        if (
+          disposed ||
+          serial !== imagePasteFallbackSerial ||
+          terminalActivityVersion !== observedActivityVersion
+        ) {
+          return;
+        }
+        void saveClipboardImageAttachment(imageFile)
+          .then((attachment) => {
+            if (
+              disposed ||
+              serial !== imagePasteFallbackSerial ||
+              terminalActivityVersion !== observedActivityVersion
+            ) {
+              return;
+            }
+            sendUserInputToPty(formatTerminalFileMention(attachment.path, cwd));
+            term.focus();
+          })
+          .catch((err: unknown) => {
+            console.warn("[Terminal] clipboard image attachment failed", err);
+          });
+      }, IMAGE_PASTE_FALLBACK_DELAY_MS);
+    };
     let conversationNavigationFromY: number | null = null;
     const setConversationNavigationFromY = (line: number) => {
       conversationNavigationFromY = Math.max(0, Math.floor(line));
@@ -1202,6 +1205,7 @@ export function Terminal({
     };
 
     const onInput = (e: Event) => {
+      terminalActivityVersion += 1;
       const ev = e as InputEvent;
       const ta = container.querySelector<HTMLTextAreaElement>(
         ".xterm-helper-textarea",
@@ -1419,26 +1423,26 @@ export function Terminal({
     // blocks the browser reinsertion; `stopImmediatePropagation`
     // blocks xterm's listener so the data emits exactly once.
     //
-    // Image-only payloads stay on the native path unless the running
-    // agent handles image paste through Ctrl+V and NSPasteboard.
-    // WKWebView's default paste into xterm's hidden textarea does not
-    // wake that path up.
+    // Image-only payloads first stay on the native path. If the paste
+    // produces no terminal input or output, save the image to app-local
+    // storage and insert an @file mention as the compatibility path.
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
       if (!cd) return;
       const text = cd?.getData("text/plain") ?? "";
+      const imageFile = getClipboardImageFile(cd);
       const action = terminalPasteAction({
         text,
-        hasFilePayload: hasClipboardFilePayload(cd),
-        imagePasteShortcutActive:
-          agentImagePasteActive ||
-          pasteAgentProviderRef.current === "claude" ||
-          pasteAgentProviderRef.current === "codex",
+        hasImagePayload: Boolean(imageFile) || hasClipboardImagePayload(cd),
       });
-      if (action.kind === "native") return;
+      if (action.kind === "deferImageAttachment") {
+        if (imageFile) {
+          scheduleClipboardImageFallback(imageFile, terminalActivityVersion);
+        }
+        return;
+      }
       if (action.kind === "pasteText") term.paste(action.text);
-      if (action.kind === "send") sendUserInputToPty(action.data);
       ev.preventDefault();
       ev.stopImmediatePropagation();
     };
@@ -1527,6 +1531,7 @@ export function Terminal({
     );
 
     const inputDisposable = term.onData((data: string) => {
+      terminalActivityVersion += 1;
       sendUserInputToPty(data);
       if (data.includes("\r") || data.includes("\n")) {
         commandSizeSyncScheduler.schedule();
@@ -1790,6 +1795,7 @@ export function Terminal({
     // PTY to also exit (zsh prints "Saving session..." twice). Guard every
     // await resumption point so a disposed mount short-circuits cleanly.
     const handlePtyOutput = (bytes: Uint8Array) => {
+      terminalActivityVersion += 1;
       term.write(bytes, () => {
         if (disposed) return;
         // The parser has drained this chunk. Force a frame-bound
@@ -1812,7 +1818,6 @@ export function Terminal({
       // triggering our shell's OSC 7 prompt hook. Probe the live descendant
       // cwd on output bursts so exit adoption stays tied to this session.
       scheduleLiveCwdProbe();
-      scheduleAgentDetection();
     };
 
     (async () => {
@@ -1874,7 +1879,6 @@ export function Terminal({
           if (disposed) return;
           ptyReady = false;
           lastPtyResize = null;
-          agentImagePasteActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
           // linked worktree. Plain user `exit` must not adopt unrelated
@@ -2182,9 +2186,10 @@ export function Terminal({
       if (liveCwdProbeTimer !== null) {
         window.clearTimeout(liveCwdProbeTimer);
       }
-      if (agentProbeTimer !== null) {
-        window.clearTimeout(agentProbeTimer);
+      if (imagePasteFallbackTimer !== null) {
+        window.clearTimeout(imagePasteFallbackTimer);
       }
+      imagePasteFallbackSerial += 1;
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }

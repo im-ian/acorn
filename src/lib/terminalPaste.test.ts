@@ -1,50 +1,68 @@
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_IMAGE_PASTE_CONTROL,
-  hasClipboardFilePayload,
+  getClipboardImageFile,
+  hasClipboardImagePayload,
   terminalPasteAction,
+  type ClipboardImageFile,
 } from "./terminalPaste";
 
 describe("terminalPasteAction", () => {
-  it("routes image-only paste to the agent Ctrl+V image attachment path", () => {
+  it("defers image-only paste so the terminal can fallback after native paste", () => {
     expect(
       terminalPasteAction({
         text: "",
-        hasFilePayload: true,
-        imagePasteShortcutActive: true,
+        hasImagePayload: true,
       }),
-    ).toEqual({ kind: "send", data: AGENT_IMAGE_PASTE_CONTROL });
+    ).toEqual({ kind: "deferImageAttachment" });
   });
 
-  it("keeps non-agent image-only paste on the native path", () => {
+  it("handles empty non-image paste without touching the browser path", () => {
     expect(
       terminalPasteAction({
         text: "",
-        hasFilePayload: true,
-        imagePasteShortcutActive: false,
+        hasImagePayload: false,
       }),
-    ).toEqual({ kind: "native" });
+    ).toEqual({ kind: "handled" });
   });
 
   it("pastes text through xterm even when files are also present", () => {
     expect(
       terminalPasteAction({
         text: "hello",
-        hasFilePayload: true,
-        imagePasteShortcutActive: true,
+        hasImagePayload: true,
       }),
     ).toEqual({ kind: "pasteText", text: "hello" });
   });
 });
 
-describe("hasClipboardFilePayload", () => {
-  it("accepts file payloads exposed through files", () => {
-    expect(hasClipboardFilePayload({ files: { length: 1 } })).toBe(true);
+describe("clipboard image detection", () => {
+  const imageFile: ClipboardImageFile = {
+    name: "screenshot.png",
+    type: "image/png",
+    arrayBuffer: async () => new ArrayBuffer(0),
+  };
+
+  it("returns image files exposed through files", () => {
+    expect(getClipboardImageFile({ files: { length: 1, 0: imageFile } })).toBe(
+      imageFile,
+    );
+  });
+
+  it("returns image files exposed through clipboard items", () => {
+    expect(
+      getClipboardImageFile({
+        files: { length: 0 },
+        items: {
+          length: 1,
+          0: { kind: "file", type: "image/png", getAsFile: () => imageFile },
+        },
+      }),
+    ).toBe(imageFile);
   });
 
   it("accepts image payloads exposed only through clipboard items", () => {
     expect(
-      hasClipboardFilePayload({
+      hasClipboardImagePayload({
         files: { length: 0 },
         items: { length: 1, 0: { kind: "string", type: "image/png" } },
       }),
@@ -53,7 +71,7 @@ describe("hasClipboardFilePayload", () => {
 
   it("accepts image payloads exposed only through clipboard types", () => {
     expect(
-      hasClipboardFilePayload({
+      hasClipboardImagePayload({
         files: { length: 0 },
         items: { length: 0 },
         types: { length: 1, 0: "image/tiff" },
@@ -63,7 +81,7 @@ describe("hasClipboardFilePayload", () => {
 
   it("rejects plain text clipboard payloads", () => {
     expect(
-      hasClipboardFilePayload({
+      hasClipboardImagePayload({
         files: { length: 0 },
         items: { length: 1, 0: { kind: "string", type: "text/plain" } },
         types: { length: 1, 0: "text/plain" },

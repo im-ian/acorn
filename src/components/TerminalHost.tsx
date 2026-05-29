@@ -100,7 +100,6 @@ function PortaledTerminal({ session }: { session: Session }) {
       repoPath={session.repo_path}
       cwd={session.worktree_path}
       agentProvider={resolveSessionAgentProvider(session)}
-      pasteAgentProvider={session.agent_provider ?? null}
       isActive={visiblePaneId !== null}
       isFocusedPane={isFocusedPane}
     />,
