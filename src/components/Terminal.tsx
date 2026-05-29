@@ -49,6 +49,7 @@ import {
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
 import {
+  CODEX_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
   terminalPasteAction,
@@ -87,6 +88,7 @@ interface TerminalProps {
   repoPath: string;
   cwd: string;
   agentProvider?: SessionAgentProvider | null;
+  pasteAgentProvider?: SessionAgentProvider | null;
   /**
    * When the terminal is hidden behind another tab in the same pane and then
    * made visible again, the DOM renderer can leave the rows blank because it
@@ -444,6 +446,7 @@ export function Terminal({
   repoPath,
   cwd,
   agentProvider = null,
+  pasteAgentProvider = null,
   isActive = true,
   isFocusedPane = true,
 }: TerminalProps): ReactElement {
@@ -451,12 +454,18 @@ export function Terminal({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const pasteAgentProviderRef =
+    useRef<SessionAgentProvider | null>(pasteAgentProvider);
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
     underlineRects: TooltipAnchorRect[];
     linkKey: string;
   } | null>(null);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
+
+  useEffect(() => {
+    pasteAgentProviderRef.current = pasteAgentProvider;
+  }, [pasteAgentProvider]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -787,8 +796,34 @@ export function Terminal({
     const unlistenFns: UnlistenFn[] = [];
     let observedLinkedWorktreePath: string | null = null;
     let liveCwdProbeTimer: number | null = null;
+    let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
     let daemonSessionAliveAtMount = false;
+    let codexImagePasteFallbackActive =
+      pasteAgentProviderRef.current === "codex";
+
+    const refreshAgentDetection = () => {
+      void api
+        .detectSessionAgent(sessionId)
+        .then((agent) => {
+          if (disposed) return;
+          codexImagePasteFallbackActive =
+            pasteAgentProviderRef.current === "codex" || Boolean(agent.codex);
+        })
+        .catch((err: unknown) => {
+          console.debug("[Terminal] agent detection failed", err);
+        });
+    };
+
+    const scheduleAgentDetection = () => {
+      if (disposed || agentProbeTimer !== null) return;
+      agentProbeTimer = window.setTimeout(() => {
+        agentProbeTimer = null;
+        if (disposed) return;
+        refreshAgentDetection();
+      }, 500);
+    };
+    refreshAgentDetection();
 
     const rememberLinkedWorktreeCwd = (path: string, source: string) => {
       void api
@@ -1022,6 +1057,10 @@ export function Terminal({
           serial !== imagePasteFallbackSerial ||
           terminalActivityVersion !== observedActivityVersion
         ) {
+          return;
+        }
+        if (codexImagePasteFallbackActive) {
+          sendUserInputToPty(CODEX_IMAGE_PASTE_CONTROL);
           return;
         }
         void saveClipboardImageAttachment(imageFile)
@@ -1818,6 +1857,7 @@ export function Terminal({
       // triggering our shell's OSC 7 prompt hook. Probe the live descendant
       // cwd on output bursts so exit adoption stays tied to this session.
       scheduleLiveCwdProbe();
+      scheduleAgentDetection();
     };
 
     (async () => {
@@ -1879,6 +1919,7 @@ export function Terminal({
           if (disposed) return;
           ptyReady = false;
           lastPtyResize = null;
+          codexImagePasteFallbackActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
           // linked worktree. Plain user `exit` must not adopt unrelated
@@ -2185,6 +2226,9 @@ export function Terminal({
       resizeDisposable.dispose();
       if (liveCwdProbeTimer !== null) {
         window.clearTimeout(liveCwdProbeTimer);
+      }
+      if (agentProbeTimer !== null) {
+        window.clearTimeout(agentProbeTimer);
       }
       if (imagePasteFallbackTimer !== null) {
         window.clearTimeout(imagePasteFallbackTimer);

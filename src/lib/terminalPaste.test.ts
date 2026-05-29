@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
   hasClipboardImagePayload,
   terminalPasteAction,
   type ClipboardImageFile,
 } from "./terminalPaste";
+
+it("keeps Codex fallback wired to Ctrl+V", () => {
+  expect(CODEX_IMAGE_PASTE_CONTROL).toBe("\x16");
+});
 
 describe("terminalPasteAction", () => {
   it("defers image-only paste so the terminal can fallback after native paste", () => {

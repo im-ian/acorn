@@ -1,3 +1,5 @@
+export const CODEX_IMAGE_PASTE_CONTROL = "\x16";
+
 type TerminalPasteInput = {
   text: string;
   hasImagePayload: boolean;
