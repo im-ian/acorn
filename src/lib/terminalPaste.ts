@@ -1,9 +1,9 @@
-export const CODEX_IMAGE_PASTE_CONTROL = "\x16";
+export const AGENT_IMAGE_PASTE_CONTROL = "\x16";
 
 type TerminalPasteInput = {
   text: string;
   hasFilePayload: boolean;
-  codexActive: boolean;
+  imagePasteShortcutActive: boolean;
 };
 
 type ClipboardFilePayloadInput = {
@@ -59,14 +59,14 @@ export function hasClipboardFilePayload(
 export function terminalPasteAction({
   text,
   hasFilePayload,
-  codexActive,
+  imagePasteShortcutActive,
 }: TerminalPasteInput): TerminalPasteAction {
   if (text) {
     return { kind: "pasteText", text };
   }
   if (hasFilePayload) {
-    return codexActive
-      ? { kind: "send", data: CODEX_IMAGE_PASTE_CONTROL }
+    return imagePasteShortcutActive
+      ? { kind: "send", data: AGENT_IMAGE_PASTE_CONTROL }
       : { kind: "native" };
   }
   return { kind: "handled" };

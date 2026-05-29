@@ -1,27 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
-  CODEX_IMAGE_PASTE_CONTROL,
+  AGENT_IMAGE_PASTE_CONTROL,
   hasClipboardFilePayload,
   terminalPasteAction,
 } from "./terminalPaste";
 
 describe("terminalPasteAction", () => {
-  it("routes image-only paste to Codex's Ctrl+V image attachment path", () => {
+  it("routes image-only paste to the agent Ctrl+V image attachment path", () => {
     expect(
       terminalPasteAction({
         text: "",
         hasFilePayload: true,
-        codexActive: true,
+        imagePasteShortcutActive: true,
       }),
-    ).toEqual({ kind: "send", data: CODEX_IMAGE_PASTE_CONTROL });
+    ).toEqual({ kind: "send", data: AGENT_IMAGE_PASTE_CONTROL });
   });
 
-  it("keeps non-Codex image-only paste on the native path", () => {
+  it("keeps non-agent image-only paste on the native path", () => {
     expect(
       terminalPasteAction({
         text: "",
         hasFilePayload: true,
-        codexActive: false,
+        imagePasteShortcutActive: false,
       }),
     ).toEqual({ kind: "native" });
   });
@@ -31,7 +31,7 @@ describe("terminalPasteAction", () => {
       terminalPasteAction({
         text: "hello",
         hasFilePayload: true,
-        codexActive: true,
+        imagePasteShortcutActive: true,
       }),
     ).toEqual({ kind: "pasteText", text: "hello" });
   });

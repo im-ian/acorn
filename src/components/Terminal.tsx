@@ -795,15 +795,20 @@ export function Terminal({
     let agentProbeTimer: number | null = null;
     let restoredDiskScrollback = false;
     let daemonSessionAliveAtMount = false;
-    let codexImagePasteActive = pasteAgentProviderRef.current === "codex";
+    let agentImagePasteActive =
+      pasteAgentProviderRef.current === "claude" ||
+      pasteAgentProviderRef.current === "codex";
 
     const refreshAgentDetection = () => {
       void api
         .detectSessionAgent(sessionId)
         .then((agent) => {
           if (disposed) return;
-          codexImagePasteActive =
-            pasteAgentProviderRef.current === "codex" || Boolean(agent.codex);
+          agentImagePasteActive =
+            pasteAgentProviderRef.current === "claude" ||
+            pasteAgentProviderRef.current === "codex" ||
+            Boolean(agent.claude) ||
+            Boolean(agent.codex);
         })
         .catch((err: unknown) => {
           console.debug("[Terminal] agent detection failed", err);
@@ -1415,9 +1420,9 @@ export function Terminal({
     // blocks xterm's listener so the data emits exactly once.
     //
     // Image-only payloads stay on the native path unless the running
-    // agent is Codex. Codex handles image paste by receiving Ctrl+V
-    // and reading NSPasteboard itself; WKWebView's default paste into
-    // xterm's hidden textarea does not wake that path up.
+    // agent handles image paste through Ctrl+V and NSPasteboard.
+    // WKWebView's default paste into xterm's hidden textarea does not
+    // wake that path up.
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
@@ -1426,8 +1431,10 @@ export function Terminal({
       const action = terminalPasteAction({
         text,
         hasFilePayload: hasClipboardFilePayload(cd),
-        codexActive:
-          codexImagePasteActive || pasteAgentProviderRef.current === "codex",
+        imagePasteShortcutActive:
+          agentImagePasteActive ||
+          pasteAgentProviderRef.current === "claude" ||
+          pasteAgentProviderRef.current === "codex",
       });
       if (action.kind === "native") return;
       if (action.kind === "pasteText") term.paste(action.text);
@@ -1867,7 +1874,7 @@ export function Terminal({
           if (disposed) return;
           ptyReady = false;
           lastPtyResize = null;
-          codexImagePasteActive = false;
+          agentImagePasteActive = false;
           // Adopt only when Acorn queued an explicit worktree command, or
           // when this terminal itself was observed running inside a fresh
           // linked worktree. Plain user `exit` must not adopt unrelated
