@@ -142,7 +142,6 @@ async function terminalTextAndUnderlineRects(
 async function terminalEmojiTrailingOffsets(page: Page): Promise<{
   cellWidth: number;
   offsets: Record<string, number>;
-  emojiLetterSpacing: number[];
 }> {
   return page.evaluate(() => {
     const rows = Array.from(
@@ -206,19 +205,6 @@ async function terminalEmojiTrailingOffsets(page: Page): Promise<{
       }
       return characterRect(row, bStart).left - characterRect(row, aStart).left;
     };
-    const emojiLikePattern =
-      /[\u200d\u20e3\ufe0f\u2600-\u27bf\u{1f000}-\u{1faff}]/u;
-    const emojiLetterSpacing = rows.flatMap((row) =>
-      Array.from(row.querySelectorAll<HTMLElement>("span"))
-        .filter((span) => emojiLikePattern.test(span.textContent ?? ""))
-        .map((span) => {
-          const parsed = Number.parseFloat(
-            window.getComputedStyle(span).letterSpacing,
-          );
-          return Number.isFinite(parsed) ? parsed : 0;
-        }),
-    );
-
     const refRow = rowFor("R: AB");
     const refText = refRow.textContent ?? "";
     const refA = refText.indexOf("A");
@@ -233,9 +219,68 @@ async function terminalEmojiTrailingOffsets(page: Page): Promise<{
         skinTone: trailingOffset("S: "),
         zwj: trailingOffset("Z: "),
       },
-      emojiLetterSpacing,
     };
   });
+}
+
+async function installOversizedEmojiMeasurement(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetWidth",
+    );
+    const originalGet = descriptor?.get;
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        const element = this as HTMLElement;
+        if (
+          element.classList.contains("xterm-char-measure-element") &&
+          (element.textContent ?? "").includes("🦊")
+        ) {
+          return 32 * 24;
+        }
+        return originalGet?.call(this) ?? 0;
+      },
+    });
+  });
+}
+
+async function enableCjkCellWidthHeuristic(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        experiments: { cjkCellWidthHeuristic: true },
+      }),
+    );
+  });
+}
+
+async function terminalEmojiLetterSpacing(
+  page: Page,
+  marker: string,
+  emoji: string,
+): Promise<number> {
+  return page.evaluate(
+    ({ marker, emoji }) => {
+      const row = Array.from(
+        document.querySelectorAll<HTMLElement>(".xterm-rows > div"),
+      ).find((candidate) => (candidate.textContent ?? "").includes(marker));
+      if (!row) throw new Error(`missing terminal row: ${marker}`);
+
+      const span = Array.from(row.querySelectorAll<HTMLElement>("span")).find(
+        (candidate) => (candidate.textContent ?? "").includes(emoji),
+      );
+      if (!span) throw new Error(`missing emoji span: ${emoji}`);
+
+      const parsed = Number.parseFloat(
+        window.getComputedStyle(span).letterSpacing,
+      );
+      return Number.isFinite(parsed) ? parsed : 0;
+    },
+    { marker, emoji },
+  );
 }
 
 async function gotoWithAccent(page: Page): Promise<void> {
@@ -433,16 +478,136 @@ test.describe("terminal: spawn", () => {
     );
     await expect(page.locator(".xterm-rows")).toContainText("Z: A");
 
-    const { cellWidth, offsets, emojiLetterSpacing } =
-      await terminalEmojiTrailingOffsets(page);
+    const { cellWidth, offsets } = await terminalEmojiTrailingOffsets(page);
     const expected = cellWidth * 3;
     for (const offset of Object.values(offsets)) {
       expect(Math.abs(offset - expected)).toBeLessThan(cellWidth * 0.35);
     }
-    expect(emojiLetterSpacing.length).toBeGreaterThan(0);
-    for (const spacing of emojiLetterSpacing) {
-      expect(spacing).toBeGreaterThanOrEqual(0);
-    }
+  });
+
+  test("keeps oversized emoji font measurements on the terminal grid", async ({
+    page,
+    tauri,
+  }) => {
+    await installOversizedEmojiMeasurement(page);
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __emojiOverhangChannelId?: number;
+      };
+      w.__emojiOverhangChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __emojiOverhangChannelId?: number })
+              .__emojiOverhangChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__emojiOverhangChannelId",
+      "E: A🦊B\r\n",
+    );
+    await expect(page.locator(".xterm-rows")).toContainText("E: A");
+
+    const spacing = await terminalEmojiLetterSpacing(page, "E: A", "🦊");
+    expect(spacing).toBeLessThan(-1);
+  });
+
+  test("keeps oversized emoji measurements on the terminal grid with CJK width heuristic enabled", async ({
+    page,
+    tauri,
+  }) => {
+    await enableCjkCellWidthHeuristic(page);
+    await installOversizedEmojiMeasurement(page);
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __emojiOverhangCjkChannelId?: number;
+      };
+      w.__emojiOverhangCjkChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __emojiOverhangCjkChannelId?: number })
+              .__emojiOverhangCjkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__emojiOverhangCjkChannelId",
+      "E: A🦊B\r\n",
+    );
+    await expect(page.locator(".xterm-rows")).toContainText("E: A");
+
+    const spacing = await terminalEmojiLetterSpacing(page, "E: A", "🦊");
+    expect(spacing).toBeLessThan(-1);
   });
 
   test("opens file:line terminal links in the code viewer", async ({
