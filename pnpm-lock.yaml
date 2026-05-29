@@ -53,6 +53,9 @@ importers:
       '@xterm/addon-serialize':
         specifier: ^0.14.0
         version: 0.14.0
+      '@xterm/addon-unicode-graphemes':
+        specifier: ^0.4.0
+        version: 0.4.0
       '@xterm/addon-unicode11':
         specifier: ^0.9.0
         version: 0.9.0
@@ -1205,6 +1208,9 @@ packages:
 
   '@xterm/addon-serialize@0.14.0':
     resolution: {integrity: sha512-uteyTU1EkrQa2Ux6P/uFl2fzmXI46jy5uoQMKEOM0fKTyiW7cSn0WrFenHm5vO5uEXX/GpwW/FgILvv3r0WbkA==}
+
+  '@xterm/addon-unicode-graphemes@0.4.0':
+    resolution: {integrity: sha512-9+/CqwbKcnlkJU4d3wIgO+wjsL8f6vyz+UwUWLu6nADQz8Gr8ONqGCJfdDjIdI+yYZLABQqQy47FzEM6AWELjw==}
 
   '@xterm/addon-unicode11@0.9.0':
     resolution: {integrity: sha512-FxDnYcyuXhNl+XSqGZL/t0U9eiNb/q3EWT5rYkQT/zuig8Gz/VagnQANKHdDWFM2lTMk9ly0EFQxxxtZUoRetw==}
@@ -3221,6 +3227,8 @@ snapshots:
   '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/addon-serialize@0.14.0': {}
+
+  '@xterm/addon-unicode-graphemes@0.4.0': {}
 
   '@xterm/addon-unicode11@0.9.0': {}
 

@@ -139,6 +139,105 @@ async function terminalTextAndUnderlineRects(
   }, text);
 }
 
+async function terminalEmojiTrailingOffsets(page: Page): Promise<{
+  cellWidth: number;
+  offsets: Record<string, number>;
+  emojiLetterSpacing: number[];
+}> {
+  return page.evaluate(() => {
+    const rows = Array.from(
+      document.querySelectorAll<HTMLElement>(".xterm-rows > div"),
+    );
+    const rowFor = (marker: string) => {
+      const row = rows.find((candidate) =>
+        (candidate.textContent ?? "").includes(marker),
+      );
+      if (!row) throw new Error(`missing terminal row: ${marker}`);
+      return row;
+    };
+    const rangeRect = (
+      row: HTMLElement,
+      start: number,
+      end: number,
+    ): DOMRect => {
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let offset = 0;
+      let startSet = false;
+      let endSet = false;
+
+      for (
+        let node = walker.nextNode() as Text | null;
+        node;
+        node = walker.nextNode() as Text | null
+      ) {
+        const textLength = node.textContent?.length ?? 0;
+        const nextOffset = offset + textLength;
+        if (!startSet && start <= nextOffset) {
+          range.setStart(node, Math.max(0, start - offset));
+          startSet = true;
+        }
+        if (startSet && end <= nextOffset) {
+          range.setEnd(node, Math.max(0, end - offset));
+          endSet = true;
+          break;
+        }
+        offset = nextOffset;
+      }
+
+      if (!startSet || !endSet) {
+        range.detach();
+        throw new Error("missing terminal text range");
+      }
+      const rect = range.getBoundingClientRect();
+      range.detach();
+      return rect;
+    };
+    const characterRect = (row: HTMLElement, index: number) =>
+      rangeRect(row, index, index + 1);
+    const trailingOffset = (marker: string): number => {
+      const row = rowFor(marker);
+      const text = row.textContent ?? "";
+      const markerStart = text.indexOf(marker);
+      const aStart = markerStart + marker.length;
+      const bStart = text.indexOf("B", aStart + 1);
+      if (markerStart < 0 || bStart < 0) {
+        throw new Error(`missing A/B cells for ${marker}`);
+      }
+      return characterRect(row, bStart).left - characterRect(row, aStart).left;
+    };
+    const emojiLikePattern =
+      /[\u200d\u20e3\ufe0f\u2600-\u27bf\u{1f000}-\u{1faff}]/u;
+    const emojiLetterSpacing = rows.flatMap((row) =>
+      Array.from(row.querySelectorAll<HTMLElement>("span"))
+        .filter((span) => emojiLikePattern.test(span.textContent ?? ""))
+        .map((span) => {
+          const parsed = Number.parseFloat(
+            window.getComputedStyle(span).letterSpacing,
+          );
+          return Number.isFinite(parsed) ? parsed : 0;
+        }),
+    );
+
+    const refRow = rowFor("R: AB");
+    const refText = refRow.textContent ?? "";
+    const refA = refText.indexOf("A");
+    const refB = refText.indexOf("B", refA + 1);
+    if (refA < 0 || refB < 0) throw new Error("missing reference cells");
+
+    return {
+      cellWidth:
+        characterRect(refRow, refB).left - characterRect(refRow, refA).left,
+      offsets: {
+        heart: trailingOffset("H: "),
+        skinTone: trailingOffset("S: "),
+        zwj: trailingOffset("Z: "),
+      },
+      emojiLetterSpacing,
+    };
+  });
+}
+
 async function gotoWithAccent(page: Page): Promise<void> {
   await page.goto("/");
   await page.addStyleTag({
@@ -269,6 +368,81 @@ test.describe("terminal: spawn", () => {
     expect(first.cwd).toBe("/tmp/demo");
     expect(first.parentPane).not.toBeNull();
     expect(first.parentLimbo).toBeNull();
+  });
+
+  test("renders emoji grapheme clusters as two-cell terminal glyphs", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __emojiWidthChannelId?: number;
+      };
+      w.__emojiWidthChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __emojiWidthChannelId?: number })
+              .__emojiWidthChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__emojiWidthChannelId",
+      [
+        "R: AB",
+        'Q: "🦊🌪️⚡🎸🚀🐙🧻🎲🦕"Z',
+        "H: A\u2764\uFE0FB",
+        "S: A\u{1F44D}\u{1F3FD}B",
+        "Z: A\u{1F9D1}\u200D\u{1F4BB}B",
+      ].join("\r\n") + "\r\n",
+    );
+    await expect(page.locator(".xterm-rows")).toContainText("Z: A");
+
+    const { cellWidth, offsets, emojiLetterSpacing } =
+      await terminalEmojiTrailingOffsets(page);
+    const expected = cellWidth * 3;
+    for (const offset of Object.values(offsets)) {
+      expect(Math.abs(offset - expected)).toBeLessThan(cellWidth * 0.35);
+    }
+    expect(emojiLetterSpacing.length).toBeGreaterThan(0);
+    for (const spacing of emojiLetterSpacing) {
+      expect(spacing).toBeGreaterThanOrEqual(0);
+    }
   });
 
   test("opens file:line terminal links in the code viewer", async ({
