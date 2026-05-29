@@ -149,6 +149,38 @@ describe("recordHotkeyFromEvent", () => {
 });
 
 describe("resolveHotkeys", () => {
+  it("keeps every default binding unique", () => {
+    const bindingCounts = new Map<string, number>();
+    for (const binding of Object.values(DEFAULT_HOTKEYS)) {
+      bindingCounts.set(binding, (bindingCounts.get(binding) ?? 0) + 1);
+    }
+
+    expect(
+      [...bindingCounts.entries()].filter(([, count]) => count > 1),
+    ).toEqual([]);
+  });
+
+  it("uses vertical mod-option arrows for conversation navigation", () => {
+    expect(DEFAULT_HOTKEYS.previousConversation).toBe("$mod+Alt+ArrowUp");
+    expect(DEFAULT_HOTKEYS.nextConversation).toBe("$mod+Alt+ArrowDown");
+  });
+
+  it("migrates persisted legacy defaults to current defaults", () => {
+    const hotkeys = resolveHotkeys({
+      previousConversation: "$mod+ArrowLeft",
+      nextConversation: "$mod+ArrowRight",
+      focusPaneUp: "$mod+Alt+ArrowUp",
+      focusPaneDown: "$mod+Alt+ArrowDown",
+    });
+
+    expect(hotkeys.previousConversation).toBe(
+      DEFAULT_HOTKEYS.previousConversation,
+    );
+    expect(hotkeys.nextConversation).toBe(DEFAULT_HOTKEYS.nextConversation);
+    expect(hotkeys.focusPaneUp).toBe(DEFAULT_HOTKEYS.focusPaneUp);
+    expect(hotkeys.focusPaneDown).toBe(DEFAULT_HOTKEYS.focusPaneDown);
+  });
+
   it("merges custom bindings with defaults", () => {
     expect(resolveHotkeys({ openPalette: "$mod+Shift+o" })).toMatchObject({
       ...DEFAULT_HOTKEYS,
