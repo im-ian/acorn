@@ -82,6 +82,8 @@ export interface ProjectWorkspace {
   layout: LayoutNode;
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
+  rightTab?: RightTab;
+  rightTabByGroup?: Record<RightGroup, RightTab>;
 }
 
 export interface MoveTabArgs {
@@ -363,6 +365,31 @@ function emptyWorkspace(): ProjectWorkspace {
     layout: makePaneNode(ROOT_PANE_ID),
     panes: { [ROOT_PANE_ID]: emptyPane(ROOT_PANE_ID) },
     focusedPaneId: ROOT_PANE_ID,
+    rightTab: "commits",
+    rightTabByGroup: defaultTabByGroup(),
+  };
+}
+
+type PersistedWorkspaceState = Partial<ProjectWorkspace> & {
+  rightTab?: unknown;
+  rightTabByGroup?: Partial<Record<RightGroup, unknown>>;
+};
+
+function normalizeRightPanelState(
+  rightTab: unknown,
+  rightTabByGroup: Partial<Record<RightGroup, unknown>> | undefined,
+): Pick<ProjectWorkspace, "rightTab" | "rightTabByGroup"> {
+  const byGroup = defaultTabByGroup();
+  for (const group of Object.keys(byGroup) as RightGroup[]) {
+    const remembered = rightTabByGroup?.[group];
+    if (isRightTab(remembered) && groupOfTab(remembered) === group) {
+      byGroup[group] = remembered;
+    }
+  }
+  const active = isRightTab(rightTab) ? rightTab : "commits";
+  return {
+    rightTab: active,
+    rightTabByGroup: byGroup,
   };
 }
 
@@ -403,12 +430,14 @@ function mirrorActive(
   const ws = workspaces[activeProject];
   if (!ws) return fallbackEmptyMirror();
   const activeTabId = ws.panes[ws.focusedPaneId]?.activeTabId ?? null;
+  const rightPanel = normalizeRightPanelState(ws.rightTab, ws.rightTabByGroup);
   return {
     layout: ws.layout,
     panes: ws.panes,
     focusedPaneId: ws.focusedPaneId,
     activeTabId,
     activeSessionId: activeSessionIdFromTabId(activeTabId),
+    ...rightPanel,
   };
 }
 
@@ -501,6 +530,7 @@ function reconcileWorkspace(
   }
 
   return {
+    ...ws,
     layout: newLayout,
     panes: newPanes,
     focusedPaneId: newFocused,
@@ -1660,20 +1690,48 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   setRightTab(tab) {
-    set((s) => ({
-      rightTab: tab,
-      rightTabByGroup: {
+    set((s) => {
+      const rightTabByGroup = {
         ...s.rightTabByGroup,
         [groupOfTab(tab)]: tab,
-      },
-    }));
+      };
+      if (!s.activeProject || !s.workspaces[s.activeProject]) {
+        return { rightTab: tab, rightTabByGroup };
+      }
+      const ws = s.workspaces[s.activeProject];
+      return {
+        rightTab: tab,
+        rightTabByGroup,
+        workspaces: {
+          ...s.workspaces,
+          [s.activeProject]: {
+            ...ws,
+            rightTab: tab,
+            rightTabByGroup,
+          },
+        },
+      };
+    });
   },
 
   setRightGroup(group) {
     set((s) => {
       const remembered = s.rightTabByGroup[group] ?? defaultTabForGroup(group);
       if (s.rightTab === remembered) return s;
-      return { rightTab: remembered };
+      if (!s.activeProject || !s.workspaces[s.activeProject]) {
+        return { rightTab: remembered };
+      }
+      const ws = s.workspaces[s.activeProject];
+      return {
+        rightTab: remembered,
+        workspaces: {
+          ...s.workspaces,
+          [s.activeProject]: {
+            ...ws,
+            rightTab: remembered,
+          },
+        },
+      };
     });
   },
 
@@ -1944,7 +2002,7 @@ export const useAppStore = create<AppStateModel>()(
     {
       name: "acorn-workspaces",
       storage: createJSONStorage(() => localStorage),
-      version: 2,
+      version: 3,
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeProject: state.activeProject,
@@ -1958,11 +2016,6 @@ export const useAppStore = create<AppStateModel>()(
         ),
       }),
       migrate: (persisted, fromVersion) => {
-        // v1 → v2: rightTabByGroup did not exist. Seed it from the persisted
-        // rightTab so the group bar opens to whatever the user last looked at.
-        // An invalid/unknown persisted rightTab leaves rightTabByGroup at the
-        // defaults; the panel-level visibility guard then slides to the
-        // nearest valid tab on first render.
         if (
           persisted &&
           typeof persisted === "object" &&
@@ -1973,7 +2026,35 @@ export const useAppStore = create<AppStateModel>()(
           if (isRightTab(p.rightTab)) {
             seeded[groupOfTab(p.rightTab)] = p.rightTab;
           }
-          return { ...p, rightTabByGroup: seeded } as typeof persisted;
+          persisted = { ...p, rightTabByGroup: seeded };
+        }
+        if (
+          persisted &&
+          typeof persisted === "object" &&
+          fromVersion < 3
+        ) {
+          const p = persisted as {
+            rightTab?: unknown;
+            rightTabByGroup?: Partial<Record<RightGroup, unknown>>;
+            workspaces?: Record<string, PersistedWorkspaceState>;
+          };
+          const rightPanel = normalizeRightPanelState(
+            p.rightTab,
+            p.rightTabByGroup,
+          );
+          const workspaces = Object.fromEntries(
+            Object.entries(p.workspaces ?? {}).map(([repoPath, ws]) => [
+              repoPath,
+              {
+                ...ws,
+                ...normalizeRightPanelState(
+                  ws.rightTab ?? rightPanel.rightTab,
+                  ws.rightTabByGroup ?? rightPanel.rightTabByGroup,
+                ),
+              },
+            ]),
+          );
+          return { ...p, workspaces } as typeof persisted;
         }
         return persisted as typeof persisted;
       },
@@ -2013,7 +2094,15 @@ export const useAppStore = create<AppStateModel>()(
               activationHistory: activationHistoryFor(normalized, ids, active),
             };
           }
-          sanitized[key] = { ...ws, panes: newPanes };
+          sanitized[key] = {
+            ...ws,
+            panes: newPanes,
+            ...normalizeRightPanelState(
+              (ws as PersistedWorkspaceState).rightTab ?? state.rightTab,
+              (ws as PersistedWorkspaceState).rightTabByGroup ??
+                state.rightTabByGroup,
+            ),
+          };
         }
         state.workspaces = sanitized;
         state.workspaceTabs = restoredTabs;
