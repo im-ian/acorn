@@ -83,6 +83,7 @@ import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
 import { useAcornDragGlobalCleanup } from "./lib/dnd";
+import { useNativeFileDropTerminalBridge } from "./lib/nativeFileDrop";
 import {
   TERMINAL_PASTE_EVENT,
   type TerminalPasteEventDetail,
@@ -237,6 +238,7 @@ function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
 function App() {
   const t = useTranslation();
   useAcornDragGlobalCleanup();
+  useNativeFileDropTerminalBridge();
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);

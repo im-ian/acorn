@@ -25,6 +25,7 @@ export const tauriMockSource = `
     if (cmd === 'plugin:notification|notify') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|destroy') return Promise.resolve(undefined);
     if (cmd === 'plugin:window|close') return Promise.resolve(undefined);
+    if (cmd === 'plugin:window|scale_factor') return Promise.resolve(1);
     if (cmd === 'plugin:path|resolve_directory') return Promise.resolve('/Users/tester');
     if (cmd === 'plugin:path|app_local_data_dir') return Promise.resolve('/tmp/acorn-e2e');
     if (cmd === 'plugin:path|join') {
