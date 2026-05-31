@@ -139,24 +139,33 @@ fn folder_granted(state: &AppState, path: &Path) -> AppResult<PathBuf> {
     }
 }
 
-fn pick_folder_path<R: Runtime>(
+async fn pick_folder_path<R: Runtime>(
     app: &AppHandle<R>,
     title: Option<String>,
 ) -> AppResult<Option<PathBuf>> {
     let mut dialog = app.dialog().file();
     if let Some(title) = title.and_then(|title| {
         let title = title.trim().to_string();
-        if title.is_empty() { None } else { Some(title) }
+        if title.is_empty() {
+            None
+        } else {
+            Some(title)
+        }
     }) {
         dialog = dialog.set_title(title);
     }
-    dialog
-        .blocking_pick_folder()
-        .map(|path| {
-            path.into_path()
-                .map_err(|err| AppError::Other(err.to_string()))
-        })
-        .transpose()
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.pick_folder(move |path| {
+        let selected_path = path
+            .map(|path| {
+                path.into_path()
+                    .map_err(|err| AppError::Other(err.to_string()))
+            })
+            .transpose();
+        let _ = tx.send(selected_path);
+    });
+    rx.await
+        .map_err(|_| AppError::Other("folder picker closed before returning".to_string()))?
 }
 
 fn validate_editor_command(command: &str, args: &[String]) -> AppResult<String> {
@@ -1083,7 +1092,7 @@ pub async fn create_session(
 }
 
 #[tauri::command]
-pub fn create_session_from_dialog<R: Runtime>(
+pub async fn create_session_from_dialog<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     name: String,
@@ -1093,7 +1102,7 @@ pub fn create_session_from_dialog<R: Runtime>(
     project_scoped: Option<bool>,
     title: Option<String>,
 ) -> AppResult<Option<Session>> {
-    let Some(selected_path) = pick_folder_path(&app, title)? else {
+    let Some(selected_path) = pick_folder_path(&app, title).await? else {
         return Ok(None);
     };
     Ok(Some(create_session_inner(
@@ -1161,12 +1170,12 @@ pub fn list_projects(state: State<'_, AppState>) -> Vec<Project> {
 }
 
 #[tauri::command]
-pub fn add_project<R: Runtime>(
+pub async fn add_project<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     title: Option<String>,
 ) -> AppResult<Option<Project>> {
-    let Some(path) = pick_folder_path(&app, title)? else {
+    let Some(path) = pick_folder_path(&app, title).await? else {
         return Ok(None);
     };
     let path = worktree::project_root_for_path(&path)?;
@@ -1176,12 +1185,12 @@ pub fn add_project<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn select_project_parent_folder<R: Runtime>(
+pub async fn select_project_parent_folder<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     title: Option<String>,
 ) -> AppResult<Option<String>> {
-    let Some(path) = pick_folder_path(&app, title)? else {
+    let Some(path) = pick_folder_path(&app, title).await? else {
         return Ok(None);
     };
     let path = remember_folder_grant(state.inner(), &path)?;
