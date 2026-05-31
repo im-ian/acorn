@@ -43,6 +43,42 @@ async function seedAlphaBetaTerminals(tauri: TauriMock): Promise<void> {
   await tauri.handle("pty_spawn", () => null);
 }
 
+async function seedWritableTerminal(tauri: TauriMock): Promise<void> {
+  await tauri.handle("list_projects", () => [
+    {
+      repo_path: "/tmp/demo",
+      name: "demo",
+      created_at: "2026-01-01T00:00:00Z",
+      position: 0,
+    },
+  ]);
+  await tauri.handle("list_sessions", () => [
+    {
+      id: "s-term",
+      name: "shell",
+      repo_path: "/tmp/demo",
+      worktree_path: "/tmp/demo",
+      branch: "main",
+      isolated: false,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:05Z",
+      last_message: null,
+    },
+  ]);
+  await tauri.handle("pty_spawn", () => null);
+  await tauri.handle("pty_write", (args: unknown) => {
+    const w = window as unknown as { __ptyWrites?: string[] };
+    w.__ptyWrites = w.__ptyWrites ?? [];
+    const { data } = args as { data: string };
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    w.__ptyWrites.push(new TextDecoder().decode(bytes));
+    return null;
+  });
+}
+
 async function emitSubscribedPtyOutput(
   page: Page,
   channelIdKey: string,
@@ -413,6 +449,91 @@ test.describe("terminal: spawn", () => {
     expect(first.cwd).toBe("/tmp/demo");
     expect(first.parentPane).not.toBeNull();
     expect(first.parentLimbo).toBeNull();
+  });
+
+  test("drops desktop file paths into the focused terminal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("plugin:event|listen", (args: unknown) => {
+      const { event, handler } = args as { event: string; handler: number };
+      const w = window as unknown as {
+        __tauriEventHandlers?: Record<string, number>;
+      };
+      w.__tauriEventHandlers = w.__tauriEventHandlers ?? {};
+      w.__tauriEventHandlers[event] = handler;
+      return handler;
+    });
+    await tauri.handle("plugin:event|unlisten", () => undefined);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __tauriEventHandlers?: Record<string, number>;
+              }
+            ).__tauriEventHandlers?.["tauri://drag-drop"] ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const terminalBox = await page
+      .locator("[data-pane-body] .acorn-terminal")
+      .boundingBox();
+    expect(terminalBox).not.toBeNull();
+
+    await page.evaluate((box) => {
+      if (!box) throw new Error("missing terminal box");
+      const w = window as unknown as {
+        __tauriEventHandlers?: Record<string, number>;
+        [key: string]: unknown;
+      };
+      const id = w.__tauriEventHandlers?.["tauri://drag-drop"];
+      if (typeof id !== "number") throw new Error("missing drag-drop handler");
+      const callback = w[`_${id}`] as
+        | ((payload: {
+            event: string;
+            id: number;
+            payload: {
+              paths: string[];
+              position: { x: number; y: number };
+            };
+          }) => void)
+        | undefined;
+      if (!callback) throw new Error("missing drag-drop callback");
+      callback({
+        event: "tauri://drag-drop",
+        id,
+        payload: {
+          paths: ["/Users/tester/Desktop/PR notes.md"],
+          position: {
+            x: box.x + box.width / 2,
+            y: box.y + box.height / 2,
+          },
+        },
+      });
+    }, terminalBox);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual(["@/Users/tester/Desktop/PR\\ notes.md "]);
   });
 
   test("renders emoji grapheme clusters as two-cell terminal glyphs", async ({
