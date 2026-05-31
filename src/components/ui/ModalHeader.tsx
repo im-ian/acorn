@@ -39,9 +39,11 @@ export function ModalHeader({
   const hoverBg =
     variant === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated";
   return (
-    <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-      <div className="flex min-w-0 items-center gap-2">
-        {icon}
+    <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+      <div className="flex min-w-0 items-start gap-2">
+        {icon ? (
+          <span className="mt-0.5 flex shrink-0 items-center">{icon}</span>
+        ) : null}
         <div className="min-w-0">
           <h3
             id={titleId}

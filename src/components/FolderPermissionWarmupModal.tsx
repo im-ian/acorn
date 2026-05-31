@@ -138,11 +138,7 @@ export function FolderPermissionWarmupModal({
         title={dt(t, "dialogs.folderPermissionWarmup.title")}
         subtitle={dt(t, "dialogs.folderPermissionWarmup.subtitle")}
         titleId="acorn-folder-permission-warmup-title"
-        icon={
-          <span className="self-start pt-0.5">
-            <FolderCheck size={14} className="text-accent" />
-          </span>
-        }
+        icon={<FolderCheck size={14} className="text-accent" />}
         variant="dialog"
         onClose={onClose}
       />
