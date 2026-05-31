@@ -20,6 +20,10 @@ import { api } from "../lib/api";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
+import {
+  extractNativeFileDropPaths,
+  hasNativeFileDropData,
+} from "../lib/fileDrop";
 import { formatTerminalFileMention } from "../lib/fileMention";
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
@@ -1433,16 +1437,23 @@ export function Terminal({
     container.addEventListener("paste", onPaste, true);
 
     const onDragOver = (e: DragEvent) => {
-      if (!getCurrentFilePayload()) return;
+      if (!getCurrentFilePayload() && !hasNativeFileDropData(e.dataTransfer)) {
+        return;
+      }
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     };
     const onDrop = (e: DragEvent) => {
       const payload = getCurrentFilePayload();
-      if (!payload) return;
+      const paths = payload
+        ? [payload.path]
+        : extractNativeFileDropPaths(e.dataTransfer);
+      if (paths.length === 0) return;
       e.preventDefault();
       try {
-        sendUserInputToPty(formatTerminalFileMention(payload.path, cwd));
+        sendUserInputToPty(
+          paths.map((path) => formatTerminalFileMention(path, cwd)).join(""),
+        );
         term.focus();
       } finally {
         endAcornDrag();
