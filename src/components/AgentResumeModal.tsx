@@ -150,11 +150,7 @@ export function AgentResumeModal({
         title={dt(t, "dialogs.agentResume.title")}
         subtitle={lastActivityLabel}
         titleId={copy.ariaLabelledBy}
-        icon={
-          <span className="self-start pt-0.5">
-            <History size={14} className="text-accent" />
-          </span>
-        }
+        icon={<History size={14} className="text-accent" />}
         variant="dialog"
         onClose={dismiss}
       />
