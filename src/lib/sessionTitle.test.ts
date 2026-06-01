@@ -89,7 +89,7 @@ describe("session title helpers", () => {
     expect(canGenerateSessionTitle(session({ agent_provider: null }))).toBe(true);
   });
 
-  it("requires the global automatic title setting and an agent signal for background generation", () => {
+  it("uses the global automatic title setting for terminal sessions and always allows chat sessions", () => {
     expect(canAutoGenerateSessionTitle(session(), false)).toBe(false);
     expect(canAutoGenerateSessionTitle(session(), true)).toBe(true);
     expect(
@@ -115,6 +115,16 @@ describe("session title helpers", () => {
           status: "needs_input",
         }),
         true,
+      ),
+    ).toBe(true);
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          agent_provider: null,
+          mode: "chat",
+          status: "needs_input",
+        }),
+        false,
       ),
     ).toBe(true);
   });
@@ -163,6 +173,30 @@ describe("session title helpers", () => {
         "named-antigravity",
         "rotated-claude",
       ],
+      retryDelayMs: null,
+    });
+  });
+
+  it("plans chat title generation even when the terminal automatic title setting is disabled", () => {
+    expect(
+      planAutoGenerateSessionTitles({
+        sessions: [
+          session({ id: "terminal", agent_provider: null, status: "running" }),
+          session({
+            id: "chat",
+            agent_provider: null,
+            mode: "chat",
+            status: "needs_input",
+          }),
+        ],
+        enabled: false,
+        inFlightIds: new Set(),
+        lastAttemptAt: new Map(),
+        now: 1_000,
+        retryMs: 30_000,
+      }),
+    ).toEqual({
+      sessionIds: ["chat"],
       retryDelayMs: null,
     });
   });
