@@ -797,14 +797,15 @@ fn enrich_session(mut s: Session) -> Session {
         s.branch = branch;
     }
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
-    let live_provider =
-        crate::agent_resume::live_transcript(s.id).map(|transcript| match transcript.kind {
-            crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
-            crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
-            crate::agent_resume::AgentKind::Antigravity => {
-                acorn_session::SessionAgentProvider::Antigravity
-            }
-        });
+    let live = crate::agent_resume::live_transcript(s.id);
+    s.agent_transcript_id = live.as_ref().map(|transcript| transcript.id.clone());
+    let live_provider = live.as_ref().map(|transcript| match transcript.kind {
+        crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
+        crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
+        crate::agent_resume::AgentKind::Antigravity => {
+            acorn_session::SessionAgentProvider::Antigravity
+        }
+    });
     s.agent_provider = live_provider.or(s.agent_provider);
     s
 }
@@ -1452,13 +1453,17 @@ fn session_title_readiness_inner(
 ) -> AppResult<SessionTitleReadinessResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
-    if !crate::session_titles::can_generate_title(&session) {
+    let title_input = crate::session_titles::resolve_title_input(id);
+    let transcript_id = title_input
+        .as_ref()
+        .map(|input| input.transcript_id.as_str());
+    if !crate::session_titles::can_generate_title(&session, transcript_id) {
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::Skipped,
             session: enrich_session(session),
         });
     }
-    if crate::session_titles::resolve_first_user_message(id).is_none() {
+    if title_input.is_none() {
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::NotReady,
             session: enrich_session(session),
@@ -1492,28 +1497,38 @@ fn generate_session_title_inner(
 ) -> AppResult<GenerateSessionTitleResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
-    if !crate::session_titles::can_generate_title(&session) {
+    let title_input = crate::session_titles::resolve_title_input(id);
+    let transcript_id = title_input
+        .as_ref()
+        .map(|input| input.transcript_id.as_str());
+    if !crate::session_titles::can_generate_title(&session, transcript_id) {
         return Ok(GenerateSessionTitleResult {
             status: GenerateSessionTitleStatus::Skipped,
             session: enrich_session(session),
         });
     }
-    let Some(first_user_message) = crate::session_titles::resolve_first_user_message(id) else {
+    let Some(title_input) = title_input else {
         return Ok(GenerateSessionTitleResult {
             status: GenerateSessionTitleStatus::NotReady,
             session: enrich_session(session),
         });
     };
-    let generated =
-        crate::session_titles::generate_title(&ai, prompt.as_deref(), &first_user_message)?;
+    let generated = crate::session_titles::generate_title(
+        &ai,
+        prompt.as_deref(),
+        &title_input.first_user_message,
+    )?;
     let latest = state.sessions.get(&id)?;
-    if !crate::session_titles::can_generate_title(&latest) {
+    if !crate::session_titles::can_generate_title(&latest, Some(&title_input.transcript_id)) {
         return Ok(GenerateSessionTitleResult {
             status: GenerateSessionTitleStatus::Skipped,
             session: enrich_session(latest),
         });
     }
-    let updated = state.sessions.set_generated_title(&id, generated)?;
+    let transcript_id = title_input.transcript_id;
+    let updated = state
+        .sessions
+        .set_generated_title(&id, generated, Some(transcript_id))?;
     persist(&state);
     Ok(GenerateSessionTitleResult {
         status: GenerateSessionTitleStatus::Generated,
@@ -2525,6 +2540,7 @@ pub struct SessionStatusEntry {
     pub id: String,
     pub status: SessionStatus,
     pub agent_provider: Option<SessionAgentProvider>,
+    pub agent_transcript_id: Option<String>,
     /// Current branch read live from the session's worktree on each poll.
     /// `None` when the worktree has no readable HEAD (e.g. detached, or
     /// path was deleted out from under acorn). Lets the frontend reflect
@@ -2621,7 +2637,8 @@ pub async fn detect_session_statuses(
             // to the legacy Acorn-UUID-named JSONL so any direct claude
             // session-id caller keeps working.
             let live = parsed_id.and_then(agent_resume::live_transcript);
-            let transcript = match live {
+            let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
+            let transcript = match live.as_ref() {
                 Some(t) => {
                     let kind = match t.kind {
                         agent_resume::AgentKind::Claude => acorn_session::status::AgentKind::Claude,
@@ -2630,7 +2647,7 @@ pub async fn detect_session_statuses(
                             acorn_session::status::AgentKind::Antigravity
                         }
                     };
-                    Some((t.path, kind))
+                    Some((t.path.clone(), kind))
                 }
                 None => todos::locate_transcript_for(&id)
                     .ok()
@@ -2673,6 +2690,7 @@ pub async fn detect_session_statuses(
                 id,
                 status,
                 agent_provider,
+                agent_transcript_id,
                 branch,
             }
         })

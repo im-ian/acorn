@@ -121,6 +121,7 @@ pub fn antigravity_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option
 /// agent is writing instead of guessing from PTY descendant liveness.
 #[derive(Debug, Clone)]
 pub struct LiveTranscript {
+    pub id: String,
     pub path: PathBuf,
     pub kind: AgentKind,
 }
@@ -173,12 +174,12 @@ fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscr
             AgentKind::Codex => CODEX_ID_FILE,
             AgentKind::Antigravity => ANTIGRAVITY_ID_FILE,
         };
-        let uuid = fs::read_to_string(dir.join(file)).ok()?.trim().to_string();
-        if uuid.is_empty() {
+        let id = fs::read_to_string(dir.join(file)).ok()?.trim().to_string();
+        if id.is_empty() {
             return None;
         }
-        let path = locate_transcript(kind, &uuid)?;
-        Some(LiveTranscript { path, kind })
+        let path = locate_transcript(kind, &id)?;
+        Some(LiveTranscript { id, path, kind })
     };
     markers.into_iter().find_map(|(kind, _)| resolve(kind))
 }

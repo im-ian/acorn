@@ -116,6 +116,7 @@ export interface Session {
   updated_at: string;
   last_message: string | null;
   title_source: SessionTitleSource;
+  generated_title_transcript_id?: string | null;
   kind: SessionKind;
   owner: SessionOwner;
   position: number | null;
@@ -125,6 +126,8 @@ export interface Session {
   in_worktree: boolean;
   /** Most recently associated agent transcript for this Acorn session. */
   agent_provider?: SessionAgentProvider | null;
+  /** Current live agent transcript id, if Acorn has paired this tab to one. */
+  agent_transcript_id?: string | null;
 }
 
 export interface Project {

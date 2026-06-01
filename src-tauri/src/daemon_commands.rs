@@ -317,6 +317,7 @@ pub fn daemon_adopt_session(
         updated_at: now,
         last_message: None,
         title_source: acorn_session::SessionTitleSource::Manual,
+        generated_title_transcript_id: None,
         kind,
         owner: acorn_session::SessionOwner::User,
         position: None,
@@ -324,6 +325,7 @@ pub fn daemon_adopt_session(
         agent_resume_token: Some(id.to_string()),
         in_worktree: false,
         agent_provider: None,
+        agent_transcript_id: None,
     };
     state.sessions.insert(session);
 

@@ -1,4 +1,5 @@
 import type { Session } from "./types";
+import { inferAgentProvider } from "./agentProviderRegistry";
 
 export interface AutoSessionTitlePlanOptions {
   sessions: readonly Session[];
@@ -26,11 +27,26 @@ export function canRenameSession(
 }
 
 export function canGenerateSessionTitle(session: Session): boolean {
+  const titleSource = session.title_source ?? "manual";
+  const currentTranscriptId = session.agent_transcript_id?.trim();
   return (
     (session.kind ?? "regular") === "regular" &&
     (session.owner?.kind ?? "user") === "user" &&
-    (session.title_source ?? "manual") === "default" &&
-    session.agent_provider != null
+    (titleSource === "default" ||
+      (titleSource === "generated" &&
+        currentTranscriptId != null &&
+        currentTranscriptId.length > 0 &&
+        session.generated_title_transcript_id !== currentTranscriptId))
+  );
+}
+
+function hasSessionTitleAgentSignal(session: Session): boolean {
+  return (
+    session.agent_transcript_id != null ||
+    session.agent_provider != null ||
+    inferAgentProvider(session.name) != null ||
+    session.status === "running" ||
+    session.status === "needs_input"
   );
 }
 
@@ -38,7 +54,9 @@ export function canAutoGenerateSessionTitle(
   session: Session,
   enabled: boolean,
 ): boolean {
-  return enabled && canGenerateSessionTitle(session);
+  return (
+    enabled && canGenerateSessionTitle(session) && hasSessionTitleAgentSignal(session)
+  );
 }
 
 export function planAutoGenerateSessionTitles({

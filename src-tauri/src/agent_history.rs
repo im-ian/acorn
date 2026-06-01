@@ -1442,6 +1442,36 @@ mod tests {
     }
 
     #[test]
+    fn transcript_first_user_message_reads_antigravity_user_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("17f38e8c-3a7e-408b-8c79-aef7432c0fd2/.system_generated/logs/transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "content": "<USER_REQUEST>\nCheck whether Antigravity tab rename can miss transcripts\n</USER_REQUEST>",
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let title =
+            transcript_first_user_message(AgentHistoryProvider::Antigravity, &transcript, 200)
+                .unwrap();
+
+        assert_eq!(
+            title,
+            "Check whether Antigravity tab rename can miss transcripts"
+        );
+    }
+
+    #[test]
     fn unscoped_history_accepts_cwd_inside_unregistered_git_repo() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
