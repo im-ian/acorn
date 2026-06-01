@@ -104,8 +104,8 @@
 .acorn-session-title-indicator {
   position: relative;
   display: inline-flex;
-  width: 0.875rem;
-  height: 0.875rem;
+  width: 0.75rem;
+  height: 0.75rem;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;

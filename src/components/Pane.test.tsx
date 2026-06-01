@@ -362,9 +362,23 @@ describe("Pane empty state", () => {
       root.render(<Pane paneId="root" />);
     });
 
+    const dragHandle = container.querySelector(
+      `[data-tab-drag-handle="${active.id}"]`,
+    );
+    const indicator = container.querySelector(
+      '[aria-label="Generating session title"]',
+    );
+    const title = Array.from(dragHandle?.querySelectorAll("span") ?? []).find(
+      (el) => el.textContent === active.name,
+    );
+
+    expect(indicator).toBeInstanceOf(HTMLElement);
+    expect(title).toBeInstanceOf(HTMLElement);
+    expect(dragHandle?.firstElementChild?.contains(indicator)).toBe(true);
     expect(
-      container.querySelector('[aria-label="Generating session title"]'),
-    ).toBeInstanceOf(HTMLElement);
+      indicator!.compareDocumentPosition(title!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 
   it("does not enter tab rename while title generation is active", async () => {
