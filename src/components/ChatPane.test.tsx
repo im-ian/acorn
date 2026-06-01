@@ -239,6 +239,7 @@ describe("ChatPane", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     act(() => root.unmount());
     container.remove();
   });
@@ -832,6 +833,47 @@ describe("ChatPane", () => {
       "[data-chat-running-duration]",
     );
     expect(runningDuration?.textContent).toBe("2m 5s");
+  });
+
+  it("updates elapsed response time while an assistant message is pending", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "long running question",
+          created_at: "2026-01-01T00:00:00.000Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          created_at: "2026-01-01T00:00:00.000Z",
+          status: "pending",
+          metadata: { provider: "claude" },
+        },
+      ]),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+      await Promise.resolve();
+    });
+
+    const runningDuration = container.querySelector(
+      "[data-chat-running-duration]",
+    );
+    expect(runningDuration?.textContent).toBe("<1s");
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_500);
+    });
+
+    expect(runningDuration?.textContent).toBe("1.5s");
   });
 
   it("centers the composer until the first message appears", async () => {
