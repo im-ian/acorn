@@ -2389,12 +2389,7 @@ pub fn prepare_chat_session_worktree(
     if worktree::is_linked_worktree_root(&session.worktree_path) {
         return Ok(enrich_session(session));
     }
-    let base_name = if session.name.trim().is_empty() {
-        project_basename(&session.repo_path)
-    } else {
-        session.name.clone()
-    };
-    let base = sanitize_worktree_name(&base_name);
+    let base = new_chat_worktree_base_name(&session.repo_path);
     let (_safe_name, path) = create_unique_worktree(&session.repo_path, &base)?;
     let updated = state.sessions.update_worktree_path(&session.id, path)?;
     persist(&state);
@@ -4101,6 +4096,21 @@ pub(crate) fn sanitize_worktree_name(name: &str) -> String {
         .to_string()
 }
 
+fn new_chat_worktree_base_name(repo_path: &Path) -> String {
+    let suffix = Uuid::new_v4().simple().to_string();
+    chat_worktree_base_name_for_repo(repo_path, &suffix[..12])
+}
+
+fn chat_worktree_base_name_for_repo(repo_path: &Path, suffix: &str) -> String {
+    let repo = sanitize_worktree_name(&project_basename(repo_path));
+    let repo = if repo.is_empty() {
+        "worktree".to_string()
+    } else {
+        repo
+    };
+    format!("{repo}-worktree-{suffix}")
+}
+
 /// Returns the cached boot-time staged-rev reconcile result. `Some` if
 /// the daemon still holds PTYs spawned by an older build with different
 /// staged dotfile bodies; `None` when reconcile found everything in
@@ -4996,7 +5006,7 @@ mod tests {
         let repo = Path::new("/Users/ian/Documents/Works/momentry");
 
         assert_eq!(
-            chat_worktree_base_name_for_repo(repo, "123456789abc"),
+            super::chat_worktree_base_name_for_repo(repo, "123456789abc"),
             "momentry-worktree-123456789abc"
         );
     }
