@@ -34,6 +34,7 @@ vi.mock("./lib/api", () => {
           }) as GenerateSessionTitleResult,
       ),
       addProject: vi.fn(async () => ({}) as Project),
+      createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => undefined),
       reorderProjects: vi.fn(async (paths: string[]) =>
         paths.map<Project>((repo_path, i) => ({
@@ -1888,5 +1889,61 @@ describe("right panel groups", () => {
     expect(s.rightTabByGroup.github).toBe("prs");
     s.setRightGroup("github");
     expect(useAppStore.getState().rightTab).toBe("prs");
+  });
+});
+
+describe("auto initial session on first project add", () => {
+  it("spawns one regular session when an existing project is added", async () => {
+    mockApi.addProject.mockResolvedValueOnce(project(REPO_B, 1));
+    mockApi.listProjects.mockResolvedValue([project(REPO_B, 1)]);
+    mockApi.createSession.mockResolvedValueOnce(session("s-new", REPO_B));
+    mockApi.listSessions.mockResolvedValue([session("s-new", REPO_B)]);
+
+    await useAppStore.getState().addProject("Select project");
+
+    expect(mockApi.createSession).toHaveBeenCalledTimes(1);
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "repo-b",
+      REPO_B,
+      false,
+      "regular",
+      null,
+    );
+    expect(useAppStore.getState().activeProject).toBe(REPO_B);
+  });
+
+  it("spawns one regular session when a new project is created", async () => {
+    mockApi.createNewProject.mockResolvedValueOnce(project(REPO_B, 1));
+    mockApi.listProjects.mockResolvedValue([project(REPO_B, 1)]);
+    mockApi.createSession.mockResolvedValueOnce(session("s-new", REPO_B));
+    mockApi.listSessions.mockResolvedValue([session("s-new", REPO_B)]);
+
+    await useAppStore.getState().createNewProject("/Users/me", "repo-b");
+
+    expect(mockApi.createSession).toHaveBeenCalledTimes(1);
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "repo-b",
+      REPO_B,
+      false,
+      "regular",
+      null,
+    );
+  });
+
+  it("does not spawn a session when the folder picker is cancelled", async () => {
+    mockApi.addProject.mockResolvedValueOnce(null);
+
+    await useAppStore.getState().addProject("Select project");
+
+    expect(mockApi.createSession).not.toHaveBeenCalled();
+  });
+
+  it("does not pile on a session when re-adding a project that already has one", async () => {
+    await seed([project(REPO_A, 0)], [session("s1", REPO_A)]);
+    mockApi.addProject.mockResolvedValueOnce(project(REPO_A, 0));
+
+    await useAppStore.getState().addProject("Select project");
+
+    expect(mockApi.createSession).not.toHaveBeenCalled();
   });
 });

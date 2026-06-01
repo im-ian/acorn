@@ -41,6 +41,10 @@ import {
   type RightTab,
 } from "./lib/rightPanelGroups";
 import { useSettings } from "./lib/settings";
+import {
+  applySessionCreateRequest,
+  buildSessionCreateRequest,
+} from "./lib/sessionCreation";
 
 export type { RightGroup, RightTab };
 
@@ -782,6 +786,26 @@ function applyKnownSessionPlacementIntents(s: AppStateModel): AppStateModel {
     pruneSessionPlacementGroup(placement, next.sessions);
   }
   return next;
+}
+
+// When a project is first registered it starts with no terminal sessions, so
+// the workspace opens on the empty-state prompt. Spawn one regular session so a
+// freshly added project is immediately usable. Guarded on the project still
+// having zero sessions so re-adding a known repo never piles on duplicates.
+async function createInitialProjectSession(
+  get: () => AppStateModel,
+  repoPath: string,
+): Promise<void> {
+  const { sessions, projects } = get();
+  const alreadyHasSession = sessions.some(
+    (session) => session.repo_path === repoPath,
+  );
+  if (alreadyHasSession) return;
+  const request = buildSessionCreateRequest(
+    { sessions, projects },
+    { repoPath },
+  );
+  await applySessionCreateRequest(get().createSession, request);
 }
 
 export const useAppStore = create<AppStateModel>()(
@@ -1591,8 +1615,12 @@ export const useAppStore = create<AppStateModel>()(
 
   async addProject(title) {
     try {
-      await api.addProject(title);
+      const project = await api.addProject(title);
       await get().refreshProjects();
+      if (project) {
+        get().setActiveProject(project.repo_path);
+        await createInitialProjectSession(get, project.repo_path);
+      }
       set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
@@ -1608,6 +1636,7 @@ export const useAppStore = create<AppStateModel>()(
       );
       await get().refreshProjects();
       get().setActiveProject(project.repo_path);
+      await createInitialProjectSession(get, project.repo_path);
       set({ error: null });
       return project;
     } catch (e) {
