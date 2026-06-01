@@ -41,6 +41,8 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { ChatPane } from "./ChatPane";
 import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
+import { useAppStore } from "../store";
+import type { Session } from "../lib/types";
 
 function chatState(
   sessionId: string,
@@ -85,6 +87,54 @@ async function settle() {
   });
 }
 
+async function nextAnimationFrame() {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+}
+
+function mockScrollRegion(
+  element: HTMLElement,
+  {
+    clientHeight,
+    scrollHeight,
+    scrollTop,
+  }: { clientHeight: number; scrollHeight: number; scrollTop: number },
+) {
+  let currentScrollTop = scrollTop;
+  const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+    currentScrollTop =
+      typeof options === "number"
+        ? options
+        : Number(options?.top ?? currentScrollTop);
+  });
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    value: clientHeight,
+  });
+  Object.defineProperty(element, "scrollHeight", {
+    configurable: true,
+    value: scrollHeight,
+  });
+  Object.defineProperty(element, "scrollTop", {
+    configurable: true,
+    get: () => currentScrollTop,
+    set: (next) => {
+      currentScrollTop = Number(next);
+    },
+  });
+  Object.defineProperty(element, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+  return {
+    get scrollTop() {
+      return currentScrollTop;
+    },
+    scrollTo,
+  };
+}
+
 function changeTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(
     HTMLTextAreaElement.prototype,
@@ -102,6 +152,32 @@ function emitChatState(state: ChatSessionState) {
   }
 }
 
+function session(overrides: Partial<Session> = {}): Session {
+  return {
+    id: "s1",
+    name: "Chat",
+    repo_path: "/tmp/acorn",
+    worktree_path: "/tmp/acorn",
+    branch: "main",
+    isolated: false,
+    project_scoped: true,
+    status: "idle",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    last_message: null,
+    title_source: "default",
+    generated_title_transcript_id: null,
+    kind: "regular",
+    mode: "chat",
+    owner: { kind: "user" },
+    position: null,
+    in_worktree: false,
+    agent_provider: null,
+    agent_transcript_id: null,
+    ...overrides,
+  };
+}
+
 describe("ChatPane", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -114,6 +190,7 @@ describe("ChatPane", () => {
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
+    useAppStore.setState({ sessions: [] });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -260,6 +337,135 @@ describe("ChatPane", () => {
       expect.objectContaining({ provider: "claude" }),
       "hello",
     );
+  });
+
+  it("reflects chat send progress in the owning session status", async () => {
+    let resolveSend!: (state: ChatSessionState) => void;
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockReturnValueOnce(
+      new Promise<ChatSessionState>((resolve) => {
+        resolveSend = resolve;
+      }),
+    );
+    useAppStore.setState({ sessions: [session()] });
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    const scrollRegion = container.querySelector<HTMLElement>(
+      "[data-chat-scroll-region]",
+    );
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+    expect(scrollRegion).toBeTruthy();
+    const scroll = mockScrollRegion(scrollRegion!, {
+      clientHeight: 100,
+      scrollHeight: 420,
+      scrollTop: 0,
+    });
+
+    await act(async () => {
+      changeTextareaValue(textarea!, "hello");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+    await nextAnimationFrame();
+
+    expect(textarea!.value).toBe("");
+    expect(scroll.scrollTop).toBe(320);
+    expect(useAppStore.getState().sessions[0]?.status).toBe("running");
+
+    await act(async () => {
+      resolveSend(
+        chatState(
+          "s1",
+          [
+            {
+              id: "u1",
+              role: "user",
+              content: "hello",
+              created_at: "2026-01-01T00:00:00Z",
+              status: "complete",
+              metadata: null,
+            },
+            {
+              id: "a1",
+              role: "assistant",
+              content: "done",
+              created_at: "2026-01-01T00:00:01Z",
+              status: "complete",
+              metadata: null,
+            },
+          ],
+          "claude",
+        ),
+      );
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(useAppStore.getState().sessions[0]?.status).toBe("needs_input");
+  });
+
+  it("shows a scroll-to-bottom button when the chat is scrolled up", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "older question",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "older answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: null,
+        },
+      ]),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const scrollRegion = container.querySelector<HTMLElement>(
+      "[data-chat-scroll-region]",
+    );
+    expect(scrollRegion).toBeTruthy();
+    const scroll = mockScrollRegion(scrollRegion!, {
+      clientHeight: 100,
+      scrollHeight: 420,
+      scrollTop: 0,
+    });
+
+    await act(async () => {
+      scrollRegion!.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Scroll chat to bottom"]',
+    );
+    expect(button).toBeTruthy();
+
+    await act(async () => {
+      button!.click();
+    });
+
+    expect(scroll.scrollTop).toBe(320);
   });
 
   it("focuses the message input when Enter is pressed in the active chat pane", async () => {
@@ -504,6 +710,30 @@ describe("ChatPane", () => {
     expect(container.textContent).not.toContain("You");
     expect(container.textContent).toContain("Antigravity");
     expect(container.textContent).toContain("2.5s");
+    const timestamps = Array.from(
+      container.querySelectorAll("time[data-chat-message-timestamp]"),
+    );
+    expect(timestamps).toHaveLength(2);
+    expect(timestamps[0]?.getAttribute("dateTime")).toBe(
+      "2026-01-01T00:00:00.000Z",
+    );
+    expect(timestamps[0]?.getAttribute("title")).toBeNull();
+    expect(timestamps[1]?.getAttribute("dateTime")).toBe(
+      "2026-01-01T00:00:02.500Z",
+    );
+    expect(timestamps[1]?.getAttribute("title")).toBeNull();
+    expect(
+      container.querySelectorAll("[data-chat-timestamp-separator]"),
+    ).toHaveLength(2);
+    const duration = container.querySelector("[data-chat-response-duration]");
+    expect(duration).toBeTruthy();
+    expect(
+      timestamps[1]!.compareDocumentPosition(duration!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      container.querySelector("[data-chat-duration-separator]"),
+    ).toBeTruthy();
     expect(
       container.querySelector(
         '[data-chat-message-header] [role="img"][aria-label="Antigravity"]',
@@ -695,5 +925,27 @@ describe("ChatPane", () => {
 
     const selectable = container.querySelector(".acorn-selectable");
     expect(selectable?.textContent).toContain("drag-select this message");
+  });
+
+  it("applies the message entrance animation class", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "animated message",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+      ]),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    expect(container.querySelector(".acorn-chat-message-enter")).toBeTruthy();
   });
 });

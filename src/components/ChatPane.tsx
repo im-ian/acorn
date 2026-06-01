@@ -1,5 +1,11 @@
-import { Check, Copy, LoaderCircle, Send } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowDownToLine, Check, Copy, LoaderCircle, Send } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   api,
@@ -14,7 +20,8 @@ import {
   type AcornSettings,
 } from "../lib/settings";
 import { AgentProviderIcon } from "../lib/agentProvider";
-import type { SessionAgentProvider } from "../lib/types";
+import { useAppStore } from "../store";
+import type { SessionAgentProvider, SessionStatus } from "../lib/types";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
 import { Tooltip } from "./Tooltip";
 
@@ -25,6 +32,7 @@ interface ChatPaneProps {
 }
 
 type ChatProvider = SessionAgentProvider;
+const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 
 function providerFromString(
   value: string | null | undefined,
@@ -47,6 +55,55 @@ function chatAiRequest(
     ...resolveAiExecutionRequest(settings),
     provider,
   };
+}
+
+function setLocalChatSessionStatus(
+  sessionId: string,
+  status: SessionStatus,
+) {
+  useAppStore.setState((state) => {
+    let changed = false;
+    const sessions = state.sessions.map((session) => {
+      if (
+        session.id !== sessionId ||
+        session.mode !== "chat" ||
+        session.status === status
+      ) {
+        return session;
+      }
+      changed = true;
+      return { ...session, status };
+    });
+    return changed ? { sessions } : {};
+  });
+}
+
+function sessionStatusFromChatState(state: ChatSessionState): SessionStatus {
+  if (chatStateIsRunning(state)) return "running";
+  const lastMessage = state.messages[state.messages.length - 1];
+  const lastTurn = state.turns[state.turns.length - 1];
+  if (lastMessage?.status === "error" || lastTurn?.status === "error") {
+    return "failed";
+  }
+  return "needs_input";
+}
+
+function isChatScrolledBack(element: HTMLElement): boolean {
+  const remaining =
+    element.scrollHeight - element.scrollTop - element.clientHeight;
+  return remaining > CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function scrollChatElementToBottom(
+  element: HTMLElement,
+  behavior: ScrollBehavior,
+) {
+  const top = Math.max(0, element.scrollHeight - element.clientHeight);
+  try {
+    element.scrollTo({ top, behavior });
+  } catch {
+    element.scrollTop = top;
+  }
 }
 
 function emptyChatState(sessionId: string): ChatSessionState {
@@ -154,6 +211,37 @@ function formatResponseDuration(ms: number): string | null {
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
+function formatMessageTimestamp(value: string, nowMs = Date.now()): string | null {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const diffMs = date.getTime() - nowMs;
+  const absMs = Math.abs(diffMs);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (absMs < 45_000) return rtf.format(0, "second");
+  if (absMs < 60 * 60_000) {
+    return rtf.format(Math.round(diffMs / 60_000), "minute");
+  }
+  if (absMs < 24 * 60 * 60_000) {
+    return rtf.format(Math.round(diffMs / (60 * 60_000)), "hour");
+  }
+  if (absMs < 7 * 24 * 60 * 60_000) {
+    return rtf.format(Math.round(diffMs / (24 * 60 * 60_000)), "day");
+  }
+  if (absMs < 30 * 24 * 60 * 60_000) {
+    return rtf.format(Math.round(diffMs / (7 * 24 * 60 * 60_000)), "week");
+  }
+  if (absMs < 365 * 24 * 60 * 60_000) {
+    return rtf.format(Math.round(diffMs / (30 * 24 * 60 * 60_000)), "month");
+  }
+  return rtf.format(Math.round(diffMs / (365 * 24 * 60 * 60_000)), "year");
+}
+
+function formatMessageTimestampTitle(value: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toLocaleString();
+}
+
 function responseDurationLabel(
   messages: ChatSessionState["messages"],
   index: number,
@@ -181,8 +269,13 @@ export function ChatPane({
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [relativeNow, setRelativeNow] = useState(() => Date.now());
   const copyResetTimer = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const forceScrollToBottomRef = useRef(false);
+  const isScrolledBackRef = useRef(false);
+  const [isScrolledBack, setIsScrolledBack] = useState(false);
   const settings = useSettings((s) => s.settings);
   const [provider, setProvider] = useState<ChatProvider>(() =>
     defaultProvider(useSettings.getState().settings),
@@ -191,6 +284,22 @@ export function ChatPane({
   const stateProvider = state?.provider ?? null;
   const hasMessages = messages.length > 0;
   const composerIsCentered = !loading && !error && !hasMessages;
+
+  function syncScrollState() {
+    const element = scrollRef.current;
+    if (!element) return;
+    const next = isChatScrolledBack(element);
+    isScrolledBackRef.current = next;
+    setIsScrolledBack((current) => (current === next ? current : next));
+  }
+
+  function scrollToBottom(behavior: ScrollBehavior = "smooth") {
+    const element = scrollRef.current;
+    if (!element) return;
+    scrollChatElementToBottom(element, behavior);
+    isScrolledBackRef.current = false;
+    setIsScrolledBack(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -260,6 +369,11 @@ export function ChatPane({
   }, []);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!isActive) return;
 
     function focusDraftOnEnter(event: KeyboardEvent) {
@@ -284,6 +398,29 @@ export function ChatPane({
     return () => window.removeEventListener("keydown", focusDraftOnEnter);
   }, [isActive]);
 
+  const latestMessage = messages[messages.length - 1];
+  useLayoutEffect(() => {
+    if (loading || !hasMessages) {
+      isScrolledBackRef.current = false;
+      setIsScrolledBack(false);
+      return;
+    }
+    const shouldScroll =
+      forceScrollToBottomRef.current || !isScrolledBackRef.current;
+    forceScrollToBottomRef.current = false;
+    if (!shouldScroll) {
+      syncScrollState();
+      return;
+    }
+    scrollToBottom("auto");
+  }, [
+    hasMessages,
+    latestMessage?.content.length,
+    latestMessage?.id,
+    latestMessage?.status,
+    loading,
+  ]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = draft.trim();
@@ -291,6 +428,8 @@ export function ChatPane({
 
     const baseState = state ?? emptyChatState(sessionId);
     const now = new Date().toISOString();
+    forceScrollToBottomRef.current = true;
+    setDraft("");
     setState({
       ...baseState,
       provider,
@@ -321,6 +460,7 @@ export function ChatPane({
     });
     setSending(true);
     setError(null);
+    setLocalChatSessionStatus(sessionId, "running");
 
     try {
       const saved = await api.sendChatMessage(
@@ -330,9 +470,10 @@ export function ChatPane({
       );
       setState(saved);
       setProvider(providerFromString(saved.provider) ?? provider);
-      setDraft("");
+      setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
     } catch (err) {
       setError(String(err));
+      setLocalChatSessionStatus(sessionId, "failed");
     } finally {
       setSending(false);
     }
@@ -356,8 +497,11 @@ export function ChatPane({
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-bg text-fg">
+    <div className="relative flex h-full flex-col overflow-hidden bg-bg text-fg">
       <div
+        ref={scrollRef}
+        data-chat-scroll-region
+        onScroll={syncScrollState}
         className={`min-h-0 flex-1 overflow-auto px-4 py-3 transition-opacity duration-300 ease-out ${
           composerIsCentered ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
@@ -382,6 +526,13 @@ export function ChatPane({
                 messages,
                 index,
               );
+              const timestampLabel = formatMessageTimestamp(
+                message.created_at,
+                relativeNow,
+              );
+              const timestampTitle = formatMessageTimestampTitle(
+                message.created_at,
+              );
               const bubbleClass = isUser
                 ? "bg-accent/18 text-fg ring-accent/35"
                 : isError
@@ -391,7 +542,7 @@ export function ChatPane({
               return (
                 <div
                   key={message.id}
-                  className={`flex ${
+                  className={`acorn-chat-message-enter flex ${
                     isSystem
                       ? "justify-center"
                       : isUser
@@ -452,10 +603,41 @@ export function ChatPane({
                           isUser ? "justify-end" : "justify-start"
                         }`}
                       >
+                        {timestampLabel ? (
+                          <>
+                            <Tooltip
+                              label={timestampTitle ?? timestampLabel}
+                              side="bottom"
+                            >
+                              <time
+                                className="self-center font-mono text-[11px] text-fg-muted/75"
+                                dateTime={message.created_at}
+                                data-chat-message-timestamp
+                              >
+                                {timestampLabel}
+                              </time>
+                            </Tooltip>
+                            <span
+                              aria-hidden="true"
+                              className="mx-1 h-1 w-1 self-center rounded-full bg-fg-muted/40"
+                              data-chat-timestamp-separator
+                            />
+                          </>
+                        ) : null}
                         {durationLabel ? (
-                          <span className="mr-1 self-center font-mono text-[11px] text-fg-muted/75">
-                            {durationLabel}
-                          </span>
+                          <>
+                            <span
+                              className="self-center font-mono text-[11px] text-fg-muted/75"
+                              data-chat-response-duration
+                            >
+                              {durationLabel}
+                            </span>
+                            <span
+                              aria-hidden="true"
+                              className="mx-1 h-1 w-1 self-center rounded-full bg-fg-muted/40"
+                              data-chat-duration-separator
+                            />
+                          </>
                         ) : null}
                         <Tooltip label="Copy message" side="bottom">
                           <button
@@ -489,6 +671,18 @@ export function ChatPane({
           <div aria-hidden="true" className="h-full" />
         )}
       </div>
+      {hasMessages && isScrolledBack ? (
+        <Tooltip label="Scroll chat to bottom" side="top" delay={150}>
+          <button
+            type="button"
+            aria-label="Scroll chat to bottom"
+            onClick={() => scrollToBottom()}
+            className="absolute bottom-24 right-4 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-elevated/95 text-fg-muted shadow-lg backdrop-blur-sm transition hover:bg-bg-sidebar hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/60"
+          >
+            <ArrowDownToLine size={15} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      ) : null}
       <form
         data-chat-composer={composerIsCentered ? "centered" : "bottom"}
         className={`bg-bg px-3 py-2 transition-transform duration-300 ease-out will-change-transform ${
