@@ -1,4 +1,13 @@
-import { ArrowDownToLine, Check, Copy, LoaderCircle, Send } from "lucide-react";
+import {
+  ArrowDownToLine,
+  Check,
+  Copy,
+  GitFork,
+  LoaderCircle,
+  Paperclip,
+  Send,
+  X,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -7,6 +16,7 @@ import {
   type FormEvent,
 } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   api,
   CHAT_SESSION_STATE_CHANGED_EVENT,
@@ -20,19 +30,36 @@ import {
   type AcornSettings,
 } from "../lib/settings";
 import { AgentProviderIcon } from "../lib/agentProvider";
+import { pathRelativeToCwd } from "../lib/fileMention";
+import { useDialogShortcuts } from "../lib/dialog";
 import { useAppStore } from "../store";
-import type { SessionAgentProvider, SessionStatus } from "../lib/types";
+import type {
+  ChatMessage,
+  Session,
+  SessionAgentProvider,
+  SessionStatus,
+} from "../lib/types";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
 import { Tooltip } from "./Tooltip";
+import { Modal, ModalHeader } from "./ui";
 
 interface ChatPaneProps {
   sessionId: string;
   isActive?: boolean;
   repoPath?: string;
+  session?: Session;
 }
 
 type ChatProvider = SessionAgentProvider;
+type ChatWorktreeMode = "same" | "new";
+interface ChatAttachment {
+  id: string;
+  path: string;
+  name: string;
+}
+
 const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+const FORKED_CHAT_DEFAULT_TITLE = "Forked chat";
 
 function providerFromString(
   value: string | null | undefined,
@@ -104,6 +131,146 @@ function scrollChatElementToBottom(
   } catch {
     element.scrollTop = top;
   }
+}
+
+function createLocalId(prefix: string): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/u).filter(Boolean).pop() ?? path;
+}
+
+function escapeMentionPath(path: string): string {
+  return path.replace(/([\\\s])/gu, "\\$1");
+}
+
+function formatChatAttachmentMention(
+  path: string,
+  repoPath: string | undefined,
+): string {
+  const displayPath = repoPath ? pathRelativeToCwd(path, repoPath) : path;
+  return `@${escapeMentionPath(displayPath)}`;
+}
+
+function normalizePickedAttachments(
+  selection: string | string[] | null,
+): ChatAttachment[] {
+  const paths = Array.isArray(selection)
+    ? selection
+    : selection
+      ? [selection]
+      : [];
+  return paths.map((path) => ({
+    id: createLocalId("chat-attachment"),
+    path,
+    name: fileNameFromPath(path),
+  }));
+}
+
+function composeChatMessageContent(
+  draft: string,
+  attachments: ChatAttachment[],
+  repoPath: string | undefined,
+): string {
+  const body = draft.trim();
+  if (attachments.length === 0) return body;
+  const attachmentLines = attachments.map(
+    (attachment) =>
+      `- ${formatChatAttachmentMention(attachment.path, repoPath)}`,
+  );
+  const attachmentBlock = [`Attached files:`, ...attachmentLines].join("\n");
+  return body ? `${attachmentBlock}\n\n${body}` : attachmentBlock;
+}
+
+function clippedSingleLine(value: string, max = 48): string {
+  const compact = value.trim().replace(/\s+/g, " ");
+  if (!compact) return "";
+  return compact.length > max ? `${compact.slice(0, max - 1)}...` : compact;
+}
+
+function forkedChatName(
+  source: ChatSessionState,
+  messages: ChatMessage[],
+): string {
+  const sourceTitle = source.session.title?.trim();
+  if (sourceTitle) return sourceTitle;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    const label = clippedSingleLine(message.content);
+    if (label) return `Fork: ${label}`;
+  }
+  return FORKED_CHAT_DEFAULT_TITLE;
+}
+
+function cloneMessagesForFork(
+  messages: ChatMessage[],
+  sessionId: string,
+): ChatMessage[] {
+  return messages
+    .filter((message) => {
+      if (message.status === "pending" || message.status === "streaming") {
+        return false;
+      }
+      return message.role !== "assistant" || message.content.trim().length > 0;
+    })
+    .map((message) => ({
+      ...message,
+      id: createLocalId("fork-message"),
+      session_id: sessionId,
+      turn_id: null,
+    }));
+}
+
+function buildForkedChatState(
+  source: ChatSessionState,
+  session: Session,
+  messages: ChatMessage[],
+): ChatSessionState {
+  const now = new Date().toISOString();
+  return {
+    schema_version: source.schema_version,
+    session_id: session.id,
+    session: {
+      id: session.id,
+      workspace_path: session.worktree_path,
+      title: session.name,
+      active_provider: source.provider ?? source.session.active_provider ?? null,
+      active_model: source.model ?? source.session.active_model ?? null,
+      created_at: now,
+      updated_at: now,
+    },
+    provider: source.provider ?? source.session.active_provider ?? null,
+    model: source.model ?? source.session.active_model ?? null,
+    messages: cloneMessagesForFork(messages, session.id),
+    turns: [],
+    provider_threads: [],
+    context_snapshots: [],
+    memory: {
+      session_id: session.id,
+      summary: null,
+      important_decisions: [],
+      facts: [],
+      through_message_id: null,
+      updated_at: now,
+    },
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function shouldAdoptSourceWorktree(source: Session | undefined): boolean {
+  return Boolean(
+    source &&
+      source.project_scoped !== false &&
+      source.worktree_path &&
+      source.repo_path &&
+      source.worktree_path !== source.repo_path,
+  );
 }
 
 function emptyChatState(sessionId: string): ChatSessionState {
@@ -262,13 +429,19 @@ export function ChatPane({
   sessionId,
   isActive = true,
   repoPath,
+  session,
 }: ChatPaneProps) {
   const [state, setState] = useState<ChatSessionState | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [startupWorktreeMode, setStartupWorktreeMode] =
+    useState<ChatWorktreeMode>("same");
+  const [forkTargetIndex, setForkTargetIndex] = useState<number | null>(null);
+  const [forkBusy, setForkBusy] = useState(false);
   const [relativeNow, setRelativeNow] = useState(() => Date.now());
   const copyResetTimer = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -284,6 +457,14 @@ export function ChatPane({
   const stateProvider = state?.provider ?? null;
   const hasMessages = messages.length > 0;
   const composerIsCentered = !loading && !error && !hasMessages;
+  const sourceRepoPath = session?.repo_path ?? repoPath;
+  const sourceWorktreePath = session?.worktree_path ?? repoPath;
+  const sourceProjectScoped = session?.project_scoped !== false;
+  const canUseNewWorktree = Boolean(sourceRepoPath && sourceProjectScoped);
+  const canChooseStartupWorktree =
+    composerIsCentered &&
+    canUseNewWorktree &&
+    !(session?.isolated || session?.in_worktree);
 
   function syncScrollState() {
     const element = scrollRef.current;
@@ -369,6 +550,11 @@ export function ChatPane({
   }, []);
 
   useEffect(() => {
+    setStartupWorktreeMode("same");
+    setForkTargetIndex(null);
+  }, [sessionId]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -421,48 +607,65 @@ export function ChatPane({
     loading,
   ]);
 
+  async function prepareStartupWorktreeIfNeeded() {
+    if (hasMessages || startupWorktreeMode !== "new") return;
+    if (!canChooseStartupWorktree) {
+      throw new Error("New worktree is only available for project chat sessions");
+    }
+    await api.prepareChatSessionWorktree(sessionId);
+    await useAppStore.getState().refreshAll();
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const content = draft.trim();
-    if (!content || sending) return;
+    if (sending) return;
+    const submittedAttachments = attachments;
+    const content = composeChatMessageContent(
+      draft,
+      submittedAttachments,
+      repoPath,
+    );
+    if (!content) return;
 
     const baseState = state ?? emptyChatState(sessionId);
     const now = new Date().toISOString();
     forceScrollToBottomRef.current = true;
     setDraft("");
-    setState({
-      ...baseState,
-      provider,
-      messages: [
-        ...baseState.messages,
-        {
-          id: `local-user-${now}`,
-          session_id: sessionId,
-          turn_id: `local-turn-${now}`,
-          role: "user",
-          content,
-          created_at: now,
-          status: "complete",
-          metadata: null,
-        },
-        {
-          id: `local-assistant-${now}`,
-          session_id: sessionId,
-          turn_id: `local-turn-${now}`,
-          role: "assistant",
-          content: "",
-          created_at: now,
-          status: "pending",
-          metadata: { provider },
-        },
-      ],
-      updated_at: now,
-    });
+    setAttachments([]);
     setSending(true);
     setError(null);
-    setLocalChatSessionStatus(sessionId, "running");
 
     try {
+      await prepareStartupWorktreeIfNeeded();
+      setState({
+        ...baseState,
+        provider,
+        messages: [
+          ...baseState.messages,
+          {
+            id: `local-user-${now}`,
+            session_id: sessionId,
+            turn_id: `local-turn-${now}`,
+            role: "user",
+            content,
+            created_at: now,
+            status: "complete",
+            metadata: null,
+          },
+          {
+            id: `local-assistant-${now}`,
+            session_id: sessionId,
+            turn_id: `local-turn-${now}`,
+            role: "assistant",
+            content: "",
+            created_at: now,
+            status: "pending",
+            metadata: { provider },
+          },
+        ],
+        updated_at: now,
+      });
+      setLocalChatSessionStatus(sessionId, "running");
       const saved = await api.sendChatMessage(
         sessionId,
         chatAiRequest(provider, settings),
@@ -479,6 +682,34 @@ export function ChatPane({
     }
   }
 
+  async function handlePickAttachments() {
+    if (sending) return;
+    setError(null);
+    try {
+      const selection = await open({
+        directory: false,
+        multiple: true,
+      });
+      const picked = normalizePickedAttachments(selection);
+      if (picked.length === 0) return;
+      setAttachments((current) => {
+        const seen = new Set(current.map((attachment) => attachment.path));
+        return [
+          ...current,
+          ...picked.filter((attachment) => !seen.has(attachment.path)),
+        ];
+      });
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((current) =>
+      current.filter((attachment) => attachment.id !== id),
+    );
+  }
+
   async function handleCopyMessage(messageId: string, content: string) {
     if (!content.trim()) return;
     try {
@@ -493,6 +724,68 @@ export function ChatPane({
       }, 1400);
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  function openForkDialog(index: number) {
+    setForkTargetIndex(index);
+  }
+
+  function closeForkDialog() {
+    if (forkBusy) return;
+    setForkTargetIndex(null);
+  }
+
+  async function handleForkBeforeMessage(
+    index: number,
+    worktreeMode: ChatWorktreeMode,
+  ) {
+    if (!state || !sourceRepoPath) return;
+    if (worktreeMode === "new" && !canUseNewWorktree) {
+      setError("New worktree is only available for project chat sessions");
+      return;
+    }
+    const forkMessages = state.messages.slice(0, index);
+    const name = forkedChatName(state, forkMessages);
+    const createPath =
+      sourceProjectScoped || worktreeMode === "new"
+        ? sourceRepoPath
+        : (sourceWorktreePath ?? sourceRepoPath);
+    const isolated = worktreeMode === "new";
+    setError(null);
+    setForkBusy(true);
+    try {
+      const store = useAppStore.getState();
+      const created = await store.createSession(
+        name,
+        createPath,
+        isolated,
+        "regular",
+        providerFromString(state.provider) ?? provider,
+        sourceProjectScoped,
+        "chat",
+      );
+      const createError = useAppStore.getState().consumeError();
+      if (!created) {
+        throw new Error(createError ?? "failed to fork chat session");
+      }
+      if (createError) {
+        throw new Error(createError);
+      }
+      const adopted =
+        worktreeMode === "same" && shouldAdoptSourceWorktree(session)
+          ? await api.updateSessionWorktree(created.id, session!.worktree_path)
+          : created;
+      const renamed = await api.renameSession(adopted.id, name);
+      const forkState = buildForkedChatState(state, renamed, forkMessages);
+      await api.saveChatSessionState(forkState);
+      await useAppStore.getState().refreshAll();
+      useAppStore.getState().selectSession(renamed.id);
+      setForkTargetIndex(null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setForkBusy(false);
     }
   }
 
@@ -517,6 +810,8 @@ export function ChatPane({
               const isSystem = message.role === "system";
               const isError = message.status === "error";
               const isPending = message.status === "pending";
+              const canForkBeforeMessage =
+                !isUser && index > 0 && Boolean(sourceRepoPath);
               const headerLabel = messageHeaderLabel(message, stateProvider);
               const messageProvider = providerFromMetadata(message.metadata);
               const agentProvider =
@@ -660,6 +955,23 @@ export function ChatPane({
                             )}
                           </button>
                         </Tooltip>
+                        {canForkBeforeMessage ? (
+                          <Tooltip
+                            label="Fork chat before this message"
+                            side="bottom"
+                          >
+                            <button
+                              aria-label={`Fork before ${
+                                headerLabel ?? message.role
+                              } message`}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                              type="button"
+                              onClick={() => openForkDialog(index)}
+                            >
+                              <GitFork size={12} />
+                            </button>
+                          </Tooltip>
+                        ) : null}
                       </div>
                     ) : null}
                   </article>
@@ -677,7 +989,7 @@ export function ChatPane({
             type="button"
             aria-label="Scroll chat to bottom"
             onClick={() => scrollToBottom()}
-            className="absolute bottom-24 right-4 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-elevated/95 text-fg-muted shadow-lg backdrop-blur-sm transition hover:bg-bg-sidebar hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/60"
+            className="absolute bottom-36 right-4 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-elevated/95 text-fg-muted shadow-lg backdrop-blur-sm transition hover:bg-bg-sidebar hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/60"
           >
             <ArrowDownToLine size={15} aria-hidden="true" />
           </button>
@@ -693,32 +1005,19 @@ export function ChatPane({
         onSubmit={handleSubmit}
       >
         <div
-          className={`mx-auto flex items-start gap-2 rounded-lg border border-border bg-bg-elevated/65 shadow-sm transition-[max-width,padding,box-shadow,border-color] duration-300 ease-out ${
+          className={`mx-auto flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated/65 shadow-sm transition-[max-width,padding,box-shadow,border-color] duration-300 ease-out ${
             composerIsCentered
               ? "max-w-3xl px-3 py-3 shadow-xl ring-1 ring-border/60"
               : "max-w-4xl px-2 py-2"
           }`}
         >
-          <select
-            aria-label="Chat provider"
-            className={`shrink-0 rounded bg-transparent px-2 text-xs text-fg outline-none transition focus:bg-bg disabled:opacity-60 ${
-              composerIsCentered ? "h-10" : "h-8"
-            }`}
-            disabled={sending}
-            value={provider}
-            onChange={(event) =>
-              setProvider(event.target.value as ChatProvider)
-            }
-          >
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
-            <option value="antigravity">Antigravity</option>
-          </select>
           <textarea
             ref={textareaRef}
             aria-label="Chat message"
-            className={`max-h-40 flex-1 resize-none bg-transparent px-1 py-1.5 leading-5 text-fg outline-none placeholder:text-fg-muted/70 disabled:opacity-60 ${
-              composerIsCentered ? "min-h-[4.75rem] text-base" : "min-h-16 text-sm"
+            className={`max-h-40 w-full resize-none bg-transparent px-1 py-1.5 leading-5 text-fg outline-none placeholder:text-fg-muted/70 disabled:opacity-60 ${
+              composerIsCentered
+                ? "min-h-[5.5rem] text-base"
+                : "min-h-16 text-sm"
             }`}
             disabled={sending}
             placeholder={providerPlaceholder(provider)}
@@ -737,22 +1036,200 @@ export function ChatPane({
               event.currentTarget.form?.requestSubmit();
             }}
           />
-          <button
-            aria-label="Send message"
-            className={`inline-flex shrink-0 items-center justify-center rounded bg-accent/20 text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-50 ${
-              composerIsCentered ? "h-10 w-10" : "h-8 w-8"
-            }`}
-            disabled={sending || draft.trim().length === 0}
-            type="submit"
+          <div
+            className="flex items-end justify-between gap-2"
+            data-chat-composer-actions
           >
-            {sending ? (
-              <LoaderCircle size={16} className="animate-spin" />
-            ) : (
-              <Send size={composerIsCentered ? 18 : 16} />
-            )}
-          </button>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <Tooltip label="Attach file" side="top">
+                <button
+                  aria-label="Attach file"
+                  className={`inline-flex shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    composerIsCentered ? "h-9 w-9" : "h-8 w-8"
+                  }`}
+                  disabled={sending}
+                  type="button"
+                  onClick={() => void handlePickAttachments()}
+                >
+                  <Paperclip size={composerIsCentered ? 17 : 15} />
+                </button>
+              </Tooltip>
+              {attachments.length > 0 ? (
+                <div className="flex min-w-0 flex-wrap items-center gap-1">
+                  {attachments.map((attachment) => (
+                    <span
+                      key={attachment.id}
+                      className="inline-flex max-w-40 items-center gap-1 rounded border border-border bg-bg/70 px-1.5 py-1 text-xs text-fg-muted"
+                      title={attachment.path}
+                    >
+                      <span className="truncate">{attachment.name}</span>
+                      <button
+                        aria-label={`Remove attachment ${attachment.name}`}
+                        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                        disabled={sending}
+                        type="button"
+                        onClick={() => removeAttachment(attachment.id)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {canChooseStartupWorktree ? (
+                <select
+                  aria-label="Chat worktree mode"
+                  className={`shrink-0 rounded bg-transparent px-2 text-xs text-fg outline-none transition focus:bg-bg disabled:opacity-60 ${
+                    composerIsCentered ? "h-9" : "h-8"
+                  }`}
+                  disabled={sending}
+                  value={startupWorktreeMode}
+                  onChange={(event) =>
+                    setStartupWorktreeMode(
+                      event.target.value as ChatWorktreeMode,
+                    )
+                  }
+                >
+                  <option value="same">Current directory</option>
+                  <option value="new">New worktree</option>
+                </select>
+              ) : null}
+              <select
+                aria-label="Chat provider"
+                className={`shrink-0 rounded bg-transparent px-2 text-xs text-fg outline-none transition focus:bg-bg disabled:opacity-60 ${
+                  composerIsCentered ? "h-9" : "h-8"
+                }`}
+                disabled={sending}
+                value={provider}
+                onChange={(event) =>
+                  setProvider(event.target.value as ChatProvider)
+                }
+              >
+                <option value="claude">Claude</option>
+                <option value="codex">Codex</option>
+                <option value="antigravity">Antigravity</option>
+              </select>
+              <button
+                aria-label="Send message"
+                className={`inline-flex shrink-0 items-center justify-center rounded bg-accent/20 text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  composerIsCentered ? "h-9 w-9" : "h-8 w-8"
+                }`}
+                disabled={
+                  sending ||
+                  (draft.trim().length === 0 && attachments.length === 0)
+                }
+                type="submit"
+              >
+                {sending ? (
+                  <LoaderCircle size={16} className="animate-spin" />
+                ) : (
+                  <Send size={composerIsCentered ? 18 : 16} />
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       </form>
+      <ForkWorktreeDialog
+        open={forkTargetIndex !== null}
+        busy={forkBusy}
+        canUseNewWorktree={canUseNewWorktree}
+        worktreePath={sourceWorktreePath ?? sourceRepoPath ?? null}
+        onClose={closeForkDialog}
+        onChoose={(mode) => {
+          if (forkTargetIndex === null) return;
+          void handleForkBeforeMessage(forkTargetIndex, mode);
+        }}
+      />
     </div>
+  );
+}
+
+interface ForkWorktreeDialogProps {
+  open: boolean;
+  busy: boolean;
+  canUseNewWorktree: boolean;
+  worktreePath: string | null;
+  onClose: () => void;
+  onChoose: (mode: ChatWorktreeMode) => void;
+}
+
+function ForkWorktreeDialog({
+  open,
+  busy,
+  canUseNewWorktree,
+  worktreePath,
+  onClose,
+  onChoose,
+}: ForkWorktreeDialogProps) {
+  useDialogShortcuts(open, {
+    onCancel: onClose,
+    onConfirm: () => {
+      if (!busy) onChoose("same");
+    },
+  });
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      variant="dialog"
+      size="md"
+      ariaLabel="Choose chat fork worktree"
+    >
+      <ModalHeader
+        title="Fork chat session"
+        subtitle="Choose where the fork should continue."
+        icon={<GitFork size={14} className="text-accent" />}
+        variant="dialog"
+        onClose={onClose}
+      />
+      <div className="space-y-3 px-4 py-4 text-xs text-fg-muted">
+        <p className="text-fg">
+          Start a new chat from the messages before this response.
+        </p>
+        {worktreePath ? (
+          <p>
+            <span className="opacity-70">Current directory</span>{" "}
+            <span className="font-mono text-fg">{worktreePath}</span>
+          </p>
+        ) : null}
+        {!canUseNewWorktree ? (
+          <p className="rounded-md border border-border bg-bg-sidebar/60 px-3 py-2 text-[11px]">
+            New worktree is only available for project chat sessions.
+          </p>
+        ) : null}
+      </div>
+      <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          aria-label="Fork in same directory"
+          onClick={() => onChoose("same")}
+          disabled={busy}
+          className="rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Same directory
+        </button>
+        <button
+          type="button"
+          aria-label="Fork in new worktree"
+          onClick={() => onChoose("new")}
+          disabled={busy || !canUseNewWorktree}
+          className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          New worktree
+        </button>
+      </footer>
+    </Modal>
   );
 }

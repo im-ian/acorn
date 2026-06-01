@@ -463,7 +463,8 @@ export function Pane({ paneId }: PaneProps) {
           <ChatPane
             sessionId={activeSession.id}
             isActive={isFocused}
-            repoPath={activeSession.repo_path}
+            repoPath={activeSession.worktree_path}
+            session={activeSession}
           />
         ) : null}
         {active?.kind === "code" ? (

@@ -6,6 +6,14 @@ import type { ChatMessage, ChatSessionState } from "../lib/types";
 const mocks = vi.hoisted(() => ({
   loadChatSessionState: vi.fn(),
   sendChatMessage: vi.fn(),
+  createSession: vi.fn(),
+  renameSession: vi.fn(),
+  updateSessionWorktree: vi.fn(),
+  prepareChatSessionWorktree: vi.fn(),
+  saveChatSessionState: vi.fn(),
+  listSessions: vi.fn(),
+  listProjects: vi.fn(),
+  ptyInWorktreeAll: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -23,16 +31,32 @@ const eventMocks = vi.hoisted(() => ({
   ),
 }));
 
+const dialogMocks = vi.hoisted(() => ({
+  open: vi.fn(),
+}));
+
 vi.mock("../lib/api", () => ({
   CHAT_SESSION_STATE_CHANGED_EVENT: "acorn:chat-session-state-changed",
   api: {
     loadChatSessionState: mocks.loadChatSessionState,
     sendChatMessage: mocks.sendChatMessage,
+    createSession: mocks.createSession,
+    renameSession: mocks.renameSession,
+    updateSessionWorktree: mocks.updateSessionWorktree,
+    prepareChatSessionWorktree: mocks.prepareChatSessionWorktree,
+    saveChatSessionState: mocks.saveChatSessionState,
+    listSessions: mocks.listSessions,
+    listProjects: mocks.listProjects,
+    ptyInWorktreeAll: mocks.ptyInWorktreeAll,
   },
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: eventMocks.listen,
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: dialogMocks.open,
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -191,6 +215,24 @@ describe("ChatPane", () => {
     });
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
     useAppStore.setState({ sessions: [] });
+    mocks.listSessions.mockResolvedValue([]);
+    mocks.listProjects.mockResolvedValue([]);
+    mocks.ptyInWorktreeAll.mockResolvedValue({});
+    mocks.renameSession.mockImplementation(async (_id, name) =>
+      session({ name }),
+    );
+    mocks.updateSessionWorktree.mockImplementation(async (id, worktreePath) =>
+      session({ id, worktree_path: worktreePath, isolated: true }),
+    );
+    mocks.prepareChatSessionWorktree.mockResolvedValue(
+      session({
+        id: "s1",
+        worktree_path: "/tmp/acorn/.acorn/worktrees/chat",
+        isolated: true,
+        in_worktree: true,
+      }),
+    );
+    dialogMocks.open.mockResolvedValue(null);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -239,10 +281,20 @@ describe("ChatPane", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Chat message"]',
     );
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send message"]',
+    );
+    const actions = container.querySelector<HTMLElement>(
+      "[data-chat-composer-actions]",
+    );
     const form = container.querySelector("form");
 
     expect(select).toBeTruthy();
     expect(textarea).toBeTruthy();
+    expect(sendButton).toBeTruthy();
+    expect(actions).toBeTruthy();
+    expect(actions!.contains(select)).toBe(true);
+    expect(actions!.contains(sendButton)).toBe(true);
     expect(form).toBeTruthy();
 
     await act(async () => {
@@ -265,6 +317,80 @@ describe("ChatPane", () => {
       "hello",
     );
     expect(container.textContent).toContain("hi from codex");
+  });
+
+  it("can prepare a new worktree before the first chat message", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockResolvedValueOnce(
+      chatState(
+        "s1",
+        [
+          {
+            id: "u1",
+            role: "user",
+            content: "start isolated",
+            created_at: "2026-01-01T00:00:00Z",
+            status: "complete",
+            metadata: null,
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "ready",
+            created_at: "2026-01-01T00:00:01Z",
+            status: "complete",
+            metadata: { provider: "claude" },
+          },
+        ],
+        "claude",
+      ),
+    );
+
+    await act(async () => {
+      root.render(
+        <ChatPane
+          sessionId="s1"
+          repoPath="/tmp/acorn"
+          session={session()}
+        />,
+      );
+    });
+    await settle();
+
+    const worktreeSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Chat worktree mode"]',
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    expect(worktreeSelect).toBeTruthy();
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      worktreeSelect!.value = "new";
+      worktreeSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      changeTextareaValue(textarea!, "start isolated");
+    });
+    await settle();
+
+    await act(async () => {
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    expect(mocks.prepareChatSessionWorktree).toHaveBeenCalledWith("s1");
+    expect(mocks.sendChatMessage).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ provider: "claude" }),
+      "start isolated",
+    );
+    expect(
+      mocks.prepareChatSessionWorktree.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.sendChatMessage.mock.invocationCallOrder[0]);
   });
 
   it("submits on Enter and leaves Shift Enter for multiline input", async () => {
@@ -337,6 +463,85 @@ describe("ChatPane", () => {
       expect.objectContaining({ provider: "claude" }),
       "hello",
     );
+  });
+
+  it("adds picked file attachments to outgoing chat messages", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockResolvedValueOnce(
+      chatState(
+        "s1",
+        [
+          {
+            id: "u1",
+            role: "user",
+            content:
+              "Attached files:\n- @docs/spec.md\n- @assets/mock.png\n\nreview these",
+            created_at: "2026-01-01T00:00:00Z",
+            status: "complete",
+            metadata: null,
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "reviewed",
+            created_at: "2026-01-01T00:00:01Z",
+            status: "complete",
+            metadata: null,
+          },
+        ],
+        "claude",
+      ),
+    );
+    dialogMocks.open.mockResolvedValueOnce([
+      "/tmp/acorn/docs/spec.md",
+      "/tmp/acorn/assets/mock.png",
+    ]);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" repoPath="/tmp/acorn" />);
+    });
+    await settle();
+
+    const attach = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Attach file"]',
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    expect(attach).toBeTruthy();
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      attach!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(dialogMocks.open).toHaveBeenCalledWith({
+      directory: false,
+      multiple: true,
+    });
+    expect(container.textContent).toContain("spec.md");
+    expect(container.textContent).toContain("mock.png");
+
+    await act(async () => {
+      changeTextareaValue(textarea!, "review these");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    expect(mocks.sendChatMessage).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ provider: "claude" }),
+      "Attached files:\n- @docs/spec.md\n- @assets/mock.png\n\nreview these",
+    );
+    expect(
+      container.querySelector('button[aria-label="Remove attachment spec.md"]'),
+    ).toBeNull();
   });
 
   it("reflects chat send progress in the owning session status", async () => {
@@ -673,6 +878,414 @@ describe("ChatPane", () => {
     });
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       "copy agent message",
+    );
+  });
+
+  it("does not show fork actions on user messages", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "first user message",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "assistant answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+        {
+          id: "u2",
+          role: "user",
+          content: "second user message",
+          created_at: "2026-01-01T00:00:02Z",
+          status: "complete",
+          metadata: null,
+        },
+      ]),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" repoPath="/tmp/acorn" />);
+    });
+    await settle();
+
+    expect(
+      container.querySelector('button[aria-label="Fork before user message"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Fork before Claude message"]'),
+    ).toBeTruthy();
+  });
+
+  it("forks a new chat session with the source chat title and disables auto rename", async () => {
+    const before = session({
+      id: "before",
+      name: "Before",
+    });
+    const current = session({
+      id: "s1",
+      name: "Exploring chat runtime",
+    });
+    const after = session({
+      id: "after",
+      name: "After",
+    });
+    const created = session({
+      id: "fork1",
+      name: "Exploring chat runtime",
+    });
+    const renamed = session({
+      id: "fork1",
+      name: "Exploring chat runtime",
+      title_source: "manual",
+    });
+    const rootPane = {
+      id: "root",
+      tabIds: ["before", "s1", "after"],
+      activeTabId: "s1",
+      activationHistory: ["before", "after", "s1"],
+    };
+    useAppStore.setState({
+      sessions: [before, current, after],
+      projects: [
+        {
+          repo_path: "/tmp/acorn",
+          name: "acorn",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+        },
+      ],
+      activeProject: "/tmp/acorn",
+      activeSessionId: "s1",
+      activeTabId: "s1",
+      workspaces: {
+        "/tmp/acorn": {
+          layout: { kind: "pane", id: "root" },
+          panes: { root: rootPane },
+          focusedPaneId: "root",
+        },
+      },
+      layout: { kind: "pane", id: "root" },
+      panes: { root: rootPane },
+      focusedPaneId: "root",
+    });
+    const sourceState = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "original prompt",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "answer to branch away from",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    sourceState.session.title = "Exploring chat runtime";
+    mocks.loadChatSessionState.mockResolvedValueOnce(sourceState);
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.renameSession.mockResolvedValueOnce(renamed);
+    mocks.saveChatSessionState.mockImplementationOnce(async (state) => state);
+    mocks.listSessions
+      .mockResolvedValueOnce([before, current, after, created])
+      .mockResolvedValueOnce([before, current, after, renamed]);
+    mocks.listProjects.mockResolvedValue([
+      {
+        repo_path: "/tmp/acorn",
+        name: "acorn",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" repoPath="/tmp/acorn" />);
+    });
+    await settle();
+
+    const fork = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fork before Claude message"]',
+    );
+    const copy = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy Claude message"]',
+    );
+    expect(fork).toBeTruthy();
+    expect(copy).toBeTruthy();
+    expect(
+      copy!.compareDocumentPosition(fork!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await act(async () => {
+      fork!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    const sameDirectory = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fork in same directory"]',
+    );
+    expect(sameDirectory).toBeTruthy();
+
+    await act(async () => {
+      sameDirectory!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "Exploring chat runtime",
+      "/tmp/acorn",
+      false,
+      "regular",
+      "claude",
+      true,
+      "chat",
+    );
+    expect(mocks.renameSession).toHaveBeenCalledWith(
+      "fork1",
+      "Exploring chat runtime",
+    );
+    const saved = mocks.saveChatSessionState.mock.calls[0]?.[0] as
+      | ChatSessionState
+      | undefined;
+    expect(saved?.session_id).toBe("fork1");
+    expect(saved?.session.title).toBe("Exploring chat runtime");
+    expect(saved?.provider).toBe("claude");
+    expect(saved?.messages).toHaveLength(1);
+    expect(saved?.messages[0]?.content).toBe("original prompt");
+    expect(saved?.messages[0]?.session_id).toBe("fork1");
+    expect(saved?.messages[0]?.turn_id).toBeNull();
+    expect(saved?.turns).toHaveLength(0);
+    expect(saved?.provider_threads).toHaveLength(0);
+    expect(saved?.context_snapshots).toHaveLength(0);
+    expect(useAppStore.getState().activeSessionId).toBe("fork1");
+    expect(useAppStore.getState().panes.root.tabIds).toEqual([
+      "before",
+      "s1",
+      "fork1",
+      "after",
+    ]);
+  });
+
+  it("lets a chat fork start in a new worktree", async () => {
+    const created = session({
+      id: "fork-new",
+      name: "Branch me",
+      isolated: true,
+      worktree_path: "/tmp/acorn/.acorn/worktrees/branch-me",
+      in_worktree: true,
+    });
+    const renamed = session({
+      id: "fork-new",
+      name: "Branch me",
+      isolated: true,
+      worktree_path: "/tmp/acorn/.acorn/worktrees/branch-me",
+      title_source: "manual",
+      in_worktree: true,
+    });
+    const sourceState = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "original prompt",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    sourceState.session.title = "Branch me";
+    mocks.loadChatSessionState.mockResolvedValueOnce(sourceState);
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.renameSession.mockResolvedValueOnce(renamed);
+    mocks.saveChatSessionState.mockImplementationOnce(async (state) => state);
+    mocks.listSessions.mockResolvedValue([created, renamed]);
+
+    await act(async () => {
+      root.render(
+        <ChatPane
+          sessionId="s1"
+          repoPath="/tmp/acorn"
+          session={session()}
+        />,
+      );
+    });
+    await settle();
+
+    const fork = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fork before Claude message"]',
+    );
+    expect(fork).toBeTruthy();
+
+    await act(async () => {
+      fork!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    const newWorktree = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fork in new worktree"]',
+    );
+    expect(newWorktree).toBeTruthy();
+
+    await act(async () => {
+      newWorktree!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "Branch me",
+      "/tmp/acorn",
+      true,
+      "regular",
+      "claude",
+      true,
+      "chat",
+    );
+    expect(mocks.updateSessionWorktree).not.toHaveBeenCalled();
+    const saved = mocks.saveChatSessionState.mock.calls[0]?.[0] as
+      | ChatSessionState
+      | undefined;
+    expect(saved?.session_id).toBe("fork-new");
+    expect(saved?.messages).toHaveLength(1);
+  });
+
+  it("keeps a chat fork in the source worktree when same directory is chosen", async () => {
+    const sourceSession = session({
+      id: "s1",
+      name: "Worktree chat",
+      worktree_path: "/tmp/acorn/.acorn/worktrees/source-chat",
+      isolated: true,
+      in_worktree: true,
+    });
+    const created = session({
+      id: "fork-same",
+      name: "Worktree chat",
+    });
+    const adopted = session({
+      id: "fork-same",
+      name: "Worktree chat",
+      worktree_path: "/tmp/acorn/.acorn/worktrees/source-chat",
+      isolated: true,
+      in_worktree: true,
+    });
+    const renamed = session({
+      ...adopted,
+      title_source: "manual",
+    });
+    const sourceState = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "original prompt",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    sourceState.session.title = "Worktree chat";
+    mocks.loadChatSessionState.mockResolvedValueOnce(sourceState);
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.updateSessionWorktree.mockResolvedValueOnce(adopted);
+    mocks.renameSession.mockResolvedValueOnce(renamed);
+    mocks.saveChatSessionState.mockImplementationOnce(async (state) => state);
+    mocks.listSessions.mockResolvedValue([created, adopted, renamed]);
+
+    await act(async () => {
+      root.render(
+        <ChatPane
+          sessionId="s1"
+          repoPath="/tmp/acorn/.acorn/worktrees/source-chat"
+          session={sourceSession}
+        />,
+      );
+    });
+    await settle();
+
+    const fork = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fork before Claude message"]',
+    );
+    expect(fork).toBeTruthy();
+
+    await act(async () => {
+      fork!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    const sameDirectory = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fork in same directory"]',
+    );
+    expect(sameDirectory).toBeTruthy();
+
+    await act(async () => {
+      sameDirectory!.click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "Worktree chat",
+      "/tmp/acorn",
+      false,
+      "regular",
+      "claude",
+      true,
+      "chat",
+    );
+    expect(mocks.updateSessionWorktree).toHaveBeenCalledWith(
+      "fork-same",
+      "/tmp/acorn/.acorn/worktrees/source-chat",
+    );
+    const saved = mocks.saveChatSessionState.mock.calls[0]?.[0] as
+      | ChatSessionState
+      | undefined;
+    expect(saved?.session_id).toBe("fork-same");
+    expect(saved?.session.workspace_path).toBe(
+      "/tmp/acorn/.acorn/worktrees/source-chat",
     );
   });
 
