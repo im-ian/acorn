@@ -799,6 +799,41 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("response after tab switch");
   });
 
+  it("shows elapsed response time while an assistant message is running", async () => {
+    const startedAt = new Date(Date.now() - 125_000).toISOString();
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "long running question",
+          created_at: startedAt,
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          created_at: startedAt,
+          status: "pending",
+          metadata: { provider: "claude" },
+        },
+      ]),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    expect(container.textContent).toContain("Running Claude");
+    const runningDuration = container.querySelector(
+      "[data-chat-running-duration]",
+    );
+    expect(runningDuration?.textContent).toBe("2m 5s");
+  });
+
   it("centers the composer until the first message appears", async () => {
     mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
 
