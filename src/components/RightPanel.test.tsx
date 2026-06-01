@@ -443,6 +443,53 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).toContain("Claude plan");
   });
 
+  it("shows native chat sessions in agent history", async () => {
+    useAppStore.setState({
+      rightTab: "history",
+      sessions: [
+        {
+          id: "chat-1",
+          name: "Exploring chat runtime",
+          repo_path: REPO,
+          worktree_path: REPO,
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "needs_input",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:02Z",
+          last_message: null,
+          title_source: "generated",
+          generated_title_transcript_id: "chat:u1",
+          kind: "regular",
+          mode: "chat",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+          agent_provider: "claude",
+          agent_transcript_id: null,
+        },
+      ],
+    });
+    mockApi.listAgentHistory.mockResolvedValue([]);
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain("Exploring chat runtime");
+    expect(container.textContent).toContain("Acorn chat");
+
+    const select = selectWithAria(container, "Filter by agent");
+    await act(async () => {
+      select.value = "acorn";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("Exploring chat runtime");
+  });
+
   it("reprobes GitHub visibility when git metadata changes", async () => {
     mockApi.isGitRepository.mockResolvedValueOnce(false);
 

@@ -251,7 +251,11 @@ export interface ProjectSettingsRecord {
   settings: ProjectSettings;
 }
 
-export type AgentHistoryProvider = "claude" | "codex" | "antigravity";
+export type AgentHistoryProvider =
+  | "claude"
+  | "codex"
+  | "antigravity"
+  | "acorn";
 
 export interface AgentHistoryWorktree {
   name: string;
@@ -269,6 +273,7 @@ export interface AgentHistoryItem {
   transcript_path: string;
   updated_at: number;
   resume_command: string | null;
+  native_chat_session_id?: string | null;
 }
 
 export interface CommitInfo {

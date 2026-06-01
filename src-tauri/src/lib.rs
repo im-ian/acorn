@@ -563,6 +563,7 @@ pub fn run() {
             commands::is_path_linked_worktree,
             commands::linked_worktree_root,
             commands::update_session_worktree,
+            commands::prepare_chat_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,
             commands::scrollback_load,

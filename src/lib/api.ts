@@ -592,6 +592,13 @@ export const api = {
     return invoke<Session>("update_session_worktree", { id, worktreePath });
   },
   /**
+   * Create a fresh linked worktree for an existing native chat session and
+   * adopt it as the session working directory before the first chat turn.
+   */
+  prepareChatSessionWorktree(sessionId: string): Promise<Session> {
+    return invoke<Session>("prepare_chat_session_worktree", { sessionId });
+  },
+  /**
    * List absolute paths of every *linked* git worktree of the repo
    * containing `repoPath`. Used to snapshot before a PTY command runs and
    * diff after it exits, so we can detect a freshly-created worktree.

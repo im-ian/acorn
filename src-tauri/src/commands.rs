@@ -148,11 +148,7 @@ async fn pick_folder_path<R: Runtime>(
     let mut dialog = app.dialog().file();
     if let Some(title) = title.and_then(|title| {
         let title = title.trim().to_string();
-        if title.is_empty() {
-            None
-        } else {
-            Some(title)
-        }
+        if title.is_empty() { None } else { Some(title) }
     }) {
         dialog = dialog.set_title(title);
     }
@@ -336,11 +332,7 @@ fn chat_model_label(ai: &crate::ai::AiExecutionRequest) -> Option<String> {
     }
     .and_then(|model| {
         let model = model.trim().to_string();
-        if model.is_empty() {
-            None
-        } else {
-            Some(model)
-        }
+        if model.is_empty() { None } else { Some(model) }
     })
 }
 
@@ -562,7 +554,7 @@ The compact context was truncated to fit the execution budget.\n\n{}",
 
 fn apply_acorn_session_metadata(chat_state: &mut persistence::ChatSessionState, session: &Session) {
     chat_state.session.id = session.id.to_string();
-    chat_state.session.workspace_path = Some(session.repo_path.to_string_lossy().into_owned());
+    chat_state.session.workspace_path = Some(session.worktree_path.to_string_lossy().into_owned());
     chat_state.session.title = Some(session.name.clone());
 }
 
@@ -2225,7 +2217,7 @@ fn session_title_readiness_inner(
 ) -> AppResult<SessionTitleReadinessResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
-    let title_input = crate::session_titles::resolve_title_input(id);
+    let title_input = resolve_title_input_for_session(&session, id);
     let transcript_id = title_input
         .as_ref()
         .map(|input| input.transcript_id.as_str());
@@ -2269,7 +2261,7 @@ fn generate_session_title_inner(
 ) -> AppResult<GenerateSessionTitleResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
-    let title_input = crate::session_titles::resolve_title_input(id);
+    let title_input = resolve_title_input_for_session(&session, id);
     let transcript_id = title_input
         .as_ref()
         .map(|input| input.transcript_id.as_str());
@@ -2306,6 +2298,17 @@ fn generate_session_title_inner(
         status: GenerateSessionTitleStatus::Generated,
         session: enrich_session(updated),
     })
+}
+
+fn resolve_title_input_for_session(
+    session: &Session,
+    id: Uuid,
+) -> Option<crate::session_titles::ResolvedTitleInput> {
+    if session.mode == SessionMode::Chat {
+        crate::session_titles::resolve_chat_title_input(id)
+    } else {
+        crate::session_titles::resolve_title_input(id)
+    }
 }
 
 #[tauri::command]
@@ -2358,6 +2361,37 @@ pub fn update_session_worktree(
         )));
     }
     let updated = state.sessions.update_worktree_path(&id, path)?;
+    persist(&state);
+    Ok(enrich_session(updated))
+}
+
+/// Create and adopt a fresh linked worktree for an existing chat session.
+/// Chat sessions are created before the first prompt is sent, so the
+/// composer uses this to switch an empty native chat from the project root
+/// into an isolated worktree without creating another tab.
+#[tauri::command]
+pub fn prepare_chat_session_worktree(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Session> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    if session.project_scoped == false {
+        return Err(AppError::InvalidPath(
+            "local chat sessions cannot create project worktrees".into(),
+        ));
+    }
+    authorize_registered_project_root(state.inner(), &session.repo_path)?;
+    if worktree::is_linked_worktree_root(&session.worktree_path) {
+        return Ok(enrich_session(session));
+    }
+    let base_name = if session.name.trim().is_empty() {
+        project_basename(&session.repo_path)
+    } else {
+        session.name.clone()
+    };
+    let base = sanitize_worktree_name(&base_name);
+    let (_safe_name, path) = create_unique_worktree(&session.repo_path, &base)?;
+    let updated = state.sessions.update_worktree_path(&session.id, path)?;
     persist(&state);
     Ok(enrich_session(updated))
 }
@@ -4086,10 +4120,10 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
-        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
-        validate_editor_command, validate_new_project_name, ProcessMemorySnapshot,
+        ProcessMemorySnapshot, collect_memory_usage_from_roots, create_unique_worktree,
+        daemon_spawn_name_for_session, font_name_from_path, infer_acornd_root_from_session_pids,
+        inject_agent_hook_env, memory_root_pids, remove_linked_worktree_at_path,
+        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
     };
     use crate::error::{AppError, AppResult};
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
@@ -4275,13 +4309,17 @@ mod tests {
         assert!(context.prompt.contains("Earlier summary"));
         assert!(context.prompt.contains("Use adapters"));
         assert!(context.prompt.contains("current question"));
-        assert!(context
-            .included_message_ids
-            .contains(&"current-user".to_string()));
+        assert!(
+            context
+                .included_message_ids
+                .contains(&"current-user".to_string())
+        );
         assert!(!context.prompt.contains("old user content"));
-        assert!(!context
-            .included_message_ids
-            .contains(&"old-user".to_string()));
+        assert!(
+            !context
+                .included_message_ids
+                .contains(&"old-user".to_string())
+        );
     }
 
     #[test]
@@ -4427,22 +4465,28 @@ mod tests {
         let inputs = adapter.inputs.lock().unwrap();
 
         assert!(inputs[0].context.is_some());
-        assert!(inputs[0]
-            .thread
-            .as_ref()
-            .unwrap()
-            .native_thread_id
-            .is_none());
-        assert!(result
-            .final_state
-            .provider_threads
-            .iter()
-            .any(|thread| thread.provider == "codex"));
-        assert!(result
-            .final_state
-            .provider_threads
-            .iter()
-            .any(|thread| thread.provider == "claude"));
+        assert!(
+            inputs[0]
+                .thread
+                .as_ref()
+                .unwrap()
+                .native_thread_id
+                .is_none()
+        );
+        assert!(
+            result
+                .final_state
+                .provider_threads
+                .iter()
+                .any(|thread| thread.provider == "codex")
+        );
+        assert!(
+            result
+                .final_state
+                .provider_threads
+                .iter()
+                .any(|thread| thread.provider == "claude")
+        );
         assert_eq!(
             result.final_state.context_snapshots[0].mode,
             crate::persistence::ContextSnapshotMode::CompiledContext
