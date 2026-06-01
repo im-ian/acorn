@@ -4992,6 +4992,16 @@ mod tests {
     }
 
     #[test]
+    fn chat_worktree_base_uses_internal_namespace() {
+        let repo = Path::new("/Users/ian/Documents/Works/momentry");
+
+        assert_eq!(
+            chat_worktree_base_name_for_repo(repo, "123456789abc"),
+            "momentry-worktree-123456789abc"
+        );
+    }
+
+    #[test]
     fn memory_can_infer_daemon_root_from_session_pid() {
         let snapshots = [
             ProcessMemorySnapshot::new(20, Some(1), "acornd", 70),
