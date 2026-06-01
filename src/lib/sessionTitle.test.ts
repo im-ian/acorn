@@ -107,6 +107,16 @@ describe("session title helpers", () => {
         true,
       ),
     ).toBe(true);
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          agent_provider: null,
+          mode: "chat",
+          status: "needs_input",
+        }),
+        true,
+      ),
+    ).toBe(true);
   });
 
   it("plans immediate generation for eligible sessions only", () => {
