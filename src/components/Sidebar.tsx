@@ -80,6 +80,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionKind,
+  SessionMode,
   SessionStatus,
 } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -229,6 +230,7 @@ export function Sidebar() {
       isolated: boolean,
       kind: SessionKind,
       scopeOverride?: SessionCreateScope,
+      mode?: SessionMode,
     ) => Promise<void>
   >(async () => {});
   const onNewLocalSessionRef = useRef<() => Promise<void>>(async () => {});
@@ -267,6 +269,9 @@ export function Sidebar() {
         scope?.projectScoped === false ? undefined : (scope ?? undefined),
       );
     };
+    const newChat = () => {
+      void onNewSessionRef.current(false, "regular", activeScope() ?? undefined, "chat");
+    };
     const newProject = () => {
       setNewProjectOpen(true);
     };
@@ -276,12 +281,14 @@ export function Sidebar() {
     window.addEventListener("acorn:new-session", newSession);
     window.addEventListener("acorn:new-isolated-session", newIsolated);
     window.addEventListener("acorn:new-control-session", newControl);
+    window.addEventListener("acorn:new-chat-session", newChat);
     window.addEventListener("acorn:new-project", newProject);
     window.addEventListener("acorn:add-project", addProj);
     return () => {
       window.removeEventListener("acorn:new-session", newSession);
       window.removeEventListener("acorn:new-isolated-session", newIsolated);
       window.removeEventListener("acorn:new-control-session", newControl);
+      window.removeEventListener("acorn:new-chat-session", newChat);
       window.removeEventListener("acorn:new-project", newProject);
       window.removeEventListener("acorn:add-project", addProj);
     };
@@ -291,20 +298,23 @@ export function Sidebar() {
     isolated: boolean,
     kind: SessionKind,
     scopeOverride?: SessionCreateScope,
+    mode: SessionMode = "terminal",
   ) {
     try {
       if (!scopeOverride) {
+        const title = isolated
+          ? sidebarText(t, "sidebar.dialog.selectIsolatedRepository")
+          : kind === "control"
+            ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
+            : sidebarText(t, "sidebar.dialog.selectDirectory");
         const created = await api.createSessionFromDialog(
           "",
           isolated,
           kind,
           null,
           true,
-          isolated
-            ? sidebarText(t, "sidebar.dialog.selectIsolatedRepository")
-            : kind === "control"
-              ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
-              : sidebarText(t, "sidebar.dialog.selectDirectory"),
+          title,
+          mode,
         );
         if (!created) return;
         await useAppStore.getState().refreshAll();
@@ -323,6 +333,7 @@ export function Sidebar() {
           repoPath: scopeOverride.repoPath,
           isolated,
           kind,
+          mode,
           projectScoped:
             scopeOverride.projectScoped ??
             (isolated || kind === "control" ? true : undefined),

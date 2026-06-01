@@ -13,6 +13,39 @@ export const tauriMockSource = `
   let nextCallbackId = 0;
   const standardPrGenerationPrompt = 'Use a standard GitHub-style pull request merge message.\\n- First line: Conventional Commit subject when the type is clear, e.g. feat(scope): concise summary. Keep it imperative/present tense and <=72 chars.\\n- Body: 1-2 concise paragraphs explaining why the change matters, user-visible impact, and key implementation notes when useful.\\n- Keep the wording specific to the PR. Avoid boilerplate, markdown headings, labels, and prompt explanations.';
 
+  function chatState(sessionId, provider, messages) {
+    const now = '2026-01-01T00:00:00Z';
+    return {
+      schema_version: 1,
+      session_id: sessionId || '',
+      session: {
+        id: sessionId || '',
+        workspace_path: null,
+        title: null,
+        active_provider: provider || null,
+        active_model: null,
+        created_at: now,
+        updated_at: now,
+      },
+      provider: provider || null,
+      model: null,
+      messages: messages || [],
+      turns: [],
+      provider_threads: [],
+      context_snapshots: [],
+      memory: {
+        session_id: sessionId || '',
+        summary: null,
+        important_decisions: [],
+        facts: [],
+        through_message_id: null,
+        updated_at: now,
+      },
+      created_at: now,
+      updated_at: now,
+    };
+  }
+
   function pluginDefault(cmd, args) {
     if (cmd === 'plugin:event|listen') return Promise.resolve(nextCallbackId++);
     if (cmd === 'plugin:event|unlisten') return Promise.resolve(undefined);
@@ -93,6 +126,44 @@ export const tauriMockSource = `
     }
     if (cmd === 'generate_session_title') {
       return Promise.resolve({ status: 'skipped', session: {} });
+    }
+    if (cmd === 'load_chat_session_state') {
+      return Promise.resolve(chatState(args?.sessionId, null, []));
+    }
+    if (cmd === 'save_chat_session_state') {
+      return Promise.resolve(args?.chatState || null);
+    }
+    if (cmd === 'append_chat_message') {
+      return Promise.resolve(chatState(args?.sessionId, null, args?.message ? [args.message] : []));
+    }
+    if (cmd === 'update_chat_message') {
+      return Promise.resolve(chatState(args?.sessionId, null, []));
+    }
+    if (cmd === 'send_chat_message') {
+      const now = '2026-01-01T00:00:00Z';
+      const provider = args?.ai?.provider || 'claude';
+      return Promise.resolve(chatState(args?.sessionId, provider, [
+          {
+            id: 'mock-user-message',
+            session_id: args?.sessionId || '',
+            turn_id: 'mock-turn',
+            role: 'user',
+            content: args?.content || '',
+            created_at: now,
+            status: 'complete',
+            metadata: null,
+          },
+          {
+            id: 'mock-assistant-message',
+            session_id: args?.sessionId || '',
+            turn_id: 'mock-turn',
+            role: 'assistant',
+            content: 'Mock ' + provider + ' response',
+            created_at: now,
+            status: 'complete',
+            metadata: { provider, turn_id: 'mock-turn', context_mode: 'compiled_context' },
+          },
+        ]));
     }
     if (cmd === 'detect_session_agent') {
       return Promise.resolve({ claude: null, codex: null, antigravity: null });

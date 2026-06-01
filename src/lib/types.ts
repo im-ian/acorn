@@ -32,6 +32,8 @@ export interface SessionNotification {
  */
 export type SessionKind = "regular" | "control";
 
+export type SessionMode = "terminal" | "chat";
+
 export type SessionOwner =
   | { kind: "user" }
   | { kind: "control"; session_id: string };
@@ -118,6 +120,7 @@ export interface Session {
   title_source: SessionTitleSource;
   generated_title_transcript_id?: string | null;
   kind: SessionKind;
+  mode?: SessionMode;
   owner: SessionOwner;
   position: number | null;
   /** Derived backend-side from `worktree_path`'s `.git` being a file (linked
@@ -128,6 +131,103 @@ export interface Session {
   agent_provider?: SessionAgentProvider | null;
   /** Current live agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
+}
+
+export type ChatRole = "system" | "user" | "assistant" | "tool";
+
+export type ChatMessageStatus =
+  | "pending"
+  | "streaming"
+  | "complete"
+  | "error";
+
+export interface ChatMessage {
+  id: string;
+  session_id?: string | null;
+  turn_id?: string | null;
+  role: ChatRole;
+  content: string;
+  created_at: string;
+  status?: ChatMessageStatus | null;
+  metadata?: unknown;
+}
+
+export interface ChatSession {
+  id: string;
+  workspace_path?: string | null;
+  title?: string | null;
+  active_provider?: string | null;
+  active_model?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ChatTurnStatus = "pending" | "running" | "complete" | "error";
+
+export interface ChatTurn {
+  id: string;
+  session_id: string;
+  provider: string;
+  model?: string | null;
+  status: ChatTurnStatus;
+  user_message_id: string;
+  assistant_message_id?: string | null;
+  started_at: string;
+  completed_at?: string | null;
+  error?: string | null;
+}
+
+export interface ProviderThread {
+  session_id: string;
+  provider: string;
+  model?: string | null;
+  native_thread_id?: string | null;
+  resume_token?: string | null;
+  last_response_id?: string | null;
+  updated_at: string;
+}
+
+export type ContextSnapshotMode = "native_thread" | "compiled_context";
+
+export interface ContextSnapshot {
+  turn_id: string;
+  session_id: string;
+  provider: string;
+  mode: ContextSnapshotMode;
+  included_message_ids: string[];
+  summary_id?: string | null;
+  prompt_or_payload: string;
+  created_at: string;
+}
+
+export interface SessionMemory {
+  session_id: string;
+  summary?: string | null;
+  important_decisions: string[];
+  facts: string[];
+  through_message_id?: string | null;
+  updated_at: string;
+}
+
+export interface ChatSessionState {
+  schema_version: number;
+  session_id: string;
+  session: ChatSession;
+  provider?: string | null;
+  model?: string | null;
+  messages: ChatMessage[];
+  turns: ChatTurn[];
+  provider_threads: ProviderThread[];
+  context_snapshots: ContextSnapshot[];
+  memory: SessionMemory;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessagePatch {
+  content?: string;
+  status?: ChatMessageStatus;
+  metadata?: unknown;
 }
 
 export interface Project {

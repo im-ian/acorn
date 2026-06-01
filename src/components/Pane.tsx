@@ -27,6 +27,7 @@ import {
 import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
+import { ChatPane } from "./ChatPane";
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
@@ -206,6 +207,7 @@ export function Pane({ paneId }: PaneProps) {
 
   const isFocused = focusedPaneId === paneId;
   const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
+  const activeSession = active?.kind === "session" ? active.session : null;
 
   function scopeForTab(tab: PaneTab): SessionCreateScope {
     if (tab.kind === "session") return scopeForSession(tab.session);
@@ -456,6 +458,13 @@ export function Pane({ paneId }: PaneProps) {
           no-active-session case — or a CodeViewer when the active tab is
           a frontend-owned code tab instead of a PTY session.
         */}
+        {activeSession?.mode === "chat" ? (
+          <ChatPane
+            sessionId={activeSession.id}
+            isActive={isFocused}
+            repoPath={activeSession.repo_path}
+          />
+        ) : null}
         {active?.kind === "code" ? (
           <CodeViewer
             path={active.path}
@@ -490,7 +499,7 @@ export function Pane({ paneId }: PaneProps) {
         onClose={() => setPaneMenu(null)}
         items={buildPaneMenuItems({
           t,
-          activeSession: active?.kind === "session" ? active.session : null,
+          activeSession,
           totalPanes,
           paneId,
           onNewTab: () => void handleNewTabFromEmpty(),

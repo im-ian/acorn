@@ -44,6 +44,96 @@ test.describe("command palette", () => {
     await expect(palette).toHaveCount(0);
   });
 
+  test("New chat session creates a chat-mode session in the active project", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __chatSessionCreated?: boolean };
+      return w.__chatSessionCreated
+        ? [
+            {
+              id: "chat-1",
+              name: "demo",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo",
+              branch: "main",
+              isolated: false,
+              project_scoped: true,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              last_message: null,
+              title_source: "default",
+              kind: "regular",
+              mode: "chat",
+              owner: { kind: "user" },
+              position: null,
+              in_worktree: false,
+            },
+          ]
+        : [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __chatSessionCreated?: boolean;
+        __createSessionCalls?: unknown[];
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      w.__chatSessionCreated = true;
+      return {
+        id: "chat-1",
+        name: "demo",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        mode: "chat",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+    });
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "p" });
+    await page.getByRole("option", { name: /New chat session/i }).click();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      repoPath: string;
+      kind: string;
+      mode: string;
+      projectScoped: boolean;
+    }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      repoPath: "/tmp/demo",
+      kind: "regular",
+      mode: "chat",
+      projectScoped: true,
+    });
+  });
+
   test("shows seeded sessions under Switch session", async ({
     page,
     tauri,

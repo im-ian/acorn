@@ -1354,6 +1354,7 @@
       "newSession": "새 세션",
       "newIsolatedSession": "새 격리 세션",
       "newControlSession": "새 제어 세션",
+      "newChatSession": "새 채팅 세션",
       "newProject": "새 프로젝트",
       "addExistingProject": "기존 프로젝트 추가",
       "refreshSessions": "세션 새로고침",

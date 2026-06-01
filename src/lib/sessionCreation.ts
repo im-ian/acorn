@@ -4,6 +4,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionKind,
+  SessionMode,
 } from "./types";
 
 export interface SessionCreationContext {
@@ -25,6 +26,7 @@ export interface SessionCreateRequest {
   kind: SessionKind;
   agentProvider: SessionAgentProvider | null;
   projectScoped: boolean;
+  mode: SessionMode;
 }
 
 export interface BuildSessionCreateOptions {
@@ -33,6 +35,7 @@ export interface BuildSessionCreateOptions {
   kind?: SessionKind;
   agentProvider?: SessionAgentProvider | null;
   projectScoped?: boolean;
+  mode?: SessionMode;
   name?: string;
 }
 
@@ -98,6 +101,7 @@ export function buildSessionCreateRequest(
     kind,
     agentProvider: options.agentProvider ?? null,
     projectScoped,
+    mode: options.mode ?? "terminal",
   };
 }
 
@@ -131,9 +135,21 @@ export function applySessionCreateRequest(
     kind?: SessionKind,
     agentProvider?: SessionAgentProvider | null,
     projectScoped?: boolean,
+    mode?: SessionMode,
   ) => Promise<Session | null>,
   request: SessionCreateRequest,
 ): Promise<Session | null> {
+  if (request.mode !== "terminal") {
+    return createSession(
+      request.name,
+      request.repoPath,
+      request.isolated,
+      request.kind,
+      request.agentProvider,
+      request.projectScoped,
+      request.mode,
+    );
+  }
   return createSession(
     request.name,
     request.repoPath,

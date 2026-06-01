@@ -1354,6 +1354,7 @@
       "newSession": "New session",
       "newIsolatedSession": "New isolated session",
       "newControlSession": "New control session",
+      "newChatSession": "New chat session",
       "newProject": "New project",
       "addExistingProject": "Add existing project",
       "refreshSessions": "Refresh sessions",

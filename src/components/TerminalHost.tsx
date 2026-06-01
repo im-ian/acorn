@@ -21,7 +21,7 @@ export function TerminalHost() {
   const sessions = useAppStore((s) => s.sessions);
   return (
     <>
-      {sessions.map((s) => (
+      {sessions.filter((s) => s.mode !== "chat").map((s) => (
         <PortaledTerminal key={s.id} session={s} />
       ))}
     </>
