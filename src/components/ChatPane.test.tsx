@@ -800,6 +800,72 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("response after tab switch");
   });
 
+  it("ignores stale pending chat state updates after a completed response", async () => {
+    const completed = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "complete response",
+          created_at: "2026-01-01T00:00:02Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    completed.updated_at = "2026-01-01T00:00:02Z";
+    completed.session.updated_at = completed.updated_at;
+    const stalePending = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "pending",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    stalePending.updated_at = "2026-01-01T00:00:01Z";
+    stalePending.session.updated_at = stalePending.updated_at;
+    mocks.loadChatSessionState.mockResolvedValueOnce(completed);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    expect(container.textContent).toContain("complete response");
+
+    await act(async () => {
+      emitChatState(stalePending);
+    });
+
+    expect(container.textContent).toContain("complete response");
+    expect(container.textContent).not.toContain("Running Claude");
+  });
+
   it("shows elapsed response time while an assistant message is running", async () => {
     const startedAt = new Date(Date.now() - 125_000).toISOString();
     mocks.loadChatSessionState.mockResolvedValueOnce(
