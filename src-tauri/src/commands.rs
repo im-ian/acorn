@@ -375,6 +375,7 @@ pub(crate) trait ChatProviderAdapter {
 
 struct CliChatProviderAdapter {
     ai: crate::ai::AiExecutionRequest,
+    cwd: PathBuf,
 }
 
 impl ChatProviderAdapter for CliChatProviderAdapter {
@@ -398,11 +399,12 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
             .map(|context| context.prompt.as_str())
             .unwrap_or(message.content.as_str());
         let resolved = self.ai.resolve()?;
-        let raw = crate::ai::run_oneshot(
+        let raw = crate::ai::run_oneshot_in_dir(
             resolved.command,
             &resolved.args,
             prompt,
             "Settings → Agents",
+            Some(&self.cwd),
         )?;
         Ok(ProviderResponse {
             content: raw.trim().to_string(),
@@ -1895,7 +1897,10 @@ fn send_chat_message_inner<R: Runtime>(
     content: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
-    let adapter = CliChatProviderAdapter { ai: ai.clone() };
+    let adapter = CliChatProviderAdapter {
+        ai: ai.clone(),
+        cwd: session.worktree_path.clone(),
+    };
     let _provider = adapter.provider();
     let mut started = start_chat_turn(
         chat_state,

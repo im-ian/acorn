@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -110,27 +111,40 @@ pub fn run_oneshot(
     prompt: &str,
     settings_label: &str,
 ) -> AppResult<String> {
+    run_oneshot_in_dir(command, args, prompt, settings_label, None)
+}
+
+pub fn run_oneshot_in_dir(
+    command: &str,
+    args: &[String],
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+) -> AppResult<String> {
     let resolved = cli_resolver::resolve(command).map_err(|_| {
         AppError::Other(format!(
             "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
         ))
     })?;
-    let mut child = Command::new(&resolved)
+    let mut command_builder = Command::new(&resolved);
+    command_builder
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                cli_resolver::invalidate(command);
-                AppError::Other(format!(
-                    "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
-                ))
-            } else {
-                AppError::Other(format!("failed to invoke {command}: {e}"))
-            }
-        })?;
+        .stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        command_builder.current_dir(cwd);
+    }
+    let mut child = command_builder.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            cli_resolver::invalidate(command);
+            AppError::Other(format!(
+                "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
+            ))
+        } else {
+            AppError::Other(format!("failed to invoke {command}: {e}"))
+        }
+    })?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
@@ -263,9 +277,12 @@ mod tests {
     #[test]
     fn runs_oneshot_in_requested_working_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let output =
-            run_oneshot_in_dir("pwd", &[], "", "test settings", Some(dir.path())).unwrap();
+        let output = run_oneshot_in_dir("pwd", &[], "", "test settings", Some(dir.path())).unwrap();
+        let observed = std::path::PathBuf::from(output.trim())
+            .canonicalize()
+            .unwrap();
+        let expected = dir.path().canonicalize().unwrap();
 
-        assert_eq!(output.trim(), dir.path().to_string_lossy());
+        assert_eq!(observed, expected);
     }
 }
