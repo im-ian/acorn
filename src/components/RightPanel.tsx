@@ -30,7 +30,6 @@ import {
   Loader2,
   ListTodo,
   Maximize2,
-  MessageSquareText,
   MinusCircle,
   Play,
   Search,
@@ -78,7 +77,6 @@ import type {
   SessionNotification,
   SessionNotificationKind,
   SessionAgentProvider,
-  Session,
   StagedFile,
   TodoItem,
   WorkflowJob,
@@ -1398,45 +1396,6 @@ function isAgentProvider(
   );
 }
 
-function isNativeChatHistoryItem(item: AgentHistoryItem): boolean {
-  return Boolean(item.native_chat_session_id);
-}
-
-function sessionUpdatedAtSeconds(session: Session): number {
-  const timestamp = Date.parse(session.updated_at || session.created_at);
-  if (Number.isNaN(timestamp)) return 0;
-  return Math.round(timestamp / 1000);
-}
-
-function nativeChatHistoryItems({
-  sessions,
-  scope,
-  repoPath,
-}: {
-  sessions: readonly Session[];
-  scope: "project" | "unscoped";
-  repoPath: string | null;
-}): AgentHistoryItem[] {
-  return sessions
-    .filter((session) => {
-      if ((session.mode ?? "terminal") !== "chat") return false;
-      if (scope === "unscoped") return session.project_scoped === false;
-      return Boolean(repoPath) && session.repo_path === repoPath;
-    })
-    .map((session) => ({
-      provider: "acorn" as const,
-      id: session.id,
-      title: session.name.trim() || "Acorn chat",
-      preview: "Acorn chat",
-      cwd: session.repo_path || session.worktree_path || null,
-      worktree: null,
-      transcript_path: `chat:${session.id}`,
-      updated_at: sessionUpdatedAtSeconds(session),
-      resume_command: null,
-      native_chat_session_id: session.id,
-    }));
-}
-
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1453,7 +1412,6 @@ function AgentHistoryTab({
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
   const createSession = useAppStore((s) => s.createSession);
-  const selectSession = useAppStore((s) => s.selectSession);
   const adoptSessionWorktree = useAppStore((s) => s.adoptSessionWorktree);
   const setPendingTerminalInput = useAppStore((s) => s.setPendingTerminalInput);
   const showAgentProviderIcons = useSettings(
@@ -1522,16 +1480,12 @@ function AgentHistoryTab({
     void fetchHistory();
   }, [fetchHistory]);
 
-  const nativeChatItems = useMemo(
-    () => nativeChatHistoryItems({ sessions, scope, repoPath }),
-    [repoPath, scope, sessions],
-  );
   const historyItems = useMemo(() => {
     if (!items) return null;
-    return [...nativeChatItems, ...items]
+    return [...items]
       .sort((a, b) => b.updated_at - a.updated_at)
       .slice(0, historyLimit);
-  }, [items, nativeChatItems]);
+  }, [items]);
   const visibleItems = useMemo(() => {
     if (!historyItems) return [];
     return providerFilter === ALL_AGENT_HISTORY_PROVIDERS
@@ -1551,10 +1505,6 @@ function AgentHistoryTab({
     item: AgentHistoryItem,
     mode: "auto" | "repo" | "worktree" = "auto",
   ) {
-    if (item.native_chat_session_id) {
-      selectSession(item.native_chat_session_id);
-      return;
-    }
     if (!isAgentProvider(item.provider)) return;
     const agentProvider = item.provider;
     if (!item.resume_command) return;
@@ -1620,7 +1570,6 @@ function AgentHistoryTab({
   }
 
   async function moveTranscriptToTrash(item: AgentHistoryItem) {
-    if (isNativeChatHistoryItem(item)) return;
     setError(null);
     try {
       await api.trashAgentHistoryTranscript(item);
@@ -1668,7 +1617,6 @@ function AgentHistoryTab({
           <option value="antigravity">
             {rt(t, "rightPanel.history.antigravity")}
           </option>
-          <option value="acorn">{rt(t, "rightPanel.history.acornChat")}</option>
         </Select>
         <RefreshButton
           onClick={() => void fetchHistory({ force: true })}
@@ -1701,9 +1649,7 @@ function AgentHistoryTab({
           <div className="divide-y divide-border/50">
             {visibleItems.map((item) => {
               const providerTone =
-                item.provider === "acorn"
-                  ? "bg-accent/15 text-accent"
-                  : item.provider === "codex"
+                item.provider === "codex"
                   ? "bg-[#3867ff]/15 text-[#5f7dff]"
                   : item.provider === "antigravity"
                     ? "bg-[#19a974]/15 text-[#22b47e]"
@@ -1727,17 +1673,10 @@ function AgentHistoryTab({
                         )}
                       >
                         <Tooltip label={item.provider} side="right">
-                          {isAgentProvider(item.provider) ? (
-                            <AgentProviderIcon
-                              provider={item.provider}
-                              className="size-3"
-                            />
-                          ) : (
-                            <MessageSquareText
-                              size={12}
-                              aria-hidden="true"
-                            />
-                          )}
+                          <AgentProviderIcon
+                            provider={item.provider}
+                            className="size-3"
+                          />
                         </Tooltip>
                       </span>
                     ) : (
@@ -1747,9 +1686,7 @@ function AgentHistoryTab({
                           providerTone,
                         )}
                       >
-                        {item.provider === "acorn"
-                          ? rt(t, "rightPanel.history.acornChatShort")
-                          : item.provider}
+                        {item.provider}
                       </span>
                     )}
                     <div className="min-w-0 flex-1">
@@ -1825,24 +1762,15 @@ function AgentHistoryTab({
           menu
             ? ([
                 {
-                  label: isNativeChatHistoryItem(menu.item)
-                    ? rt(t, "rightPanel.history.openChat")
-                    : rt(t, "rightPanel.history.runSession"),
-                  icon: isNativeChatHistoryItem(menu.item) ? (
-                    <MessageSquareText size={12} />
-                  ) : (
-                    <Play size={12} />
-                  ),
-                  disabled:
-                    !isNativeChatHistoryItem(menu.item) &&
-                    !menu.item.resume_command,
+                  label: rt(t, "rightPanel.history.runSession"),
+                  icon: <Play size={12} />,
+                  disabled: !menu.item.resume_command,
                   onClick: () => void runSession(menu.item, "repo"),
                 },
                 {
                   label: rt(t, "rightPanel.history.runInWorktree"),
                   icon: <GitBranch size={12} />,
                   disabled:
-                    isNativeChatHistoryItem(menu.item) ||
                     !menu.item.resume_command || !menu.item.worktree?.exists,
                   onClick: () => void runSession(menu.item, "worktree"),
                 },
@@ -1850,9 +1778,7 @@ function AgentHistoryTab({
                 {
                   label: rt(t, "rightPanel.history.copyResume"),
                   icon: <Copy size={12} />,
-                  disabled:
-                    isNativeChatHistoryItem(menu.item) ||
-                    !menu.item.resume_command,
+                  disabled: !menu.item.resume_command,
                   onClick: () => void copy(menu.item.resume_command ?? ""),
                 },
                 {
@@ -1865,7 +1791,6 @@ function AgentHistoryTab({
                 {
                   label: rt(t, "rightPanel.history.moveTranscriptToTrash"),
                   icon: <Trash2 size={12} />,
-                  disabled: isNativeChatHistoryItem(menu.item),
                   onClick: () => setTrashCandidate(menu.item),
                 },
               ] satisfies ContextMenuItem[])
