@@ -412,6 +412,7 @@ function formatMessageTimestampTitle(value: string): string | undefined {
 function responseDurationLabel(
   messages: ChatSessionState["messages"],
   index: number,
+  nowMs = Date.now(),
 ): string | null {
   const message = messages[index];
   if (!message || message.role !== "assistant") return null;
@@ -419,7 +420,10 @@ function responseDurationLabel(
     const previous = messages[i];
     if (previous.role !== "user") continue;
     const started = Date.parse(previous.created_at);
-    const completed = Date.parse(message.created_at);
+    const completed =
+      message.status === "pending" || message.status === "streaming"
+        ? nowMs
+        : Date.parse(message.created_at);
     return formatResponseDuration(completed - started);
   }
   return null;
@@ -820,6 +824,7 @@ export function ChatPane({
               const durationLabel = responseDurationLabel(
                 messages,
                 index,
+                relativeNow,
               );
               const timestampLabel = formatMessageTimestamp(
                 message.created_at,
@@ -880,9 +885,25 @@ export function ChatPane({
                       {isPending ? (
                         <div className="flex items-center gap-2 text-fg-muted">
                           <LoaderCircle size={14} className="animate-spin" />
-                          Running {providerLabel(
-                            messageProvider ?? stateProvider ?? provider,
-                          )}
+                          <span>
+                            Running {providerLabel(
+                              messageProvider ?? stateProvider ?? provider,
+                            )}
+                          </span>
+                          {durationLabel ? (
+                            <>
+                              <span
+                                aria-hidden="true"
+                                className="h-1 w-1 rounded-full bg-fg-muted/40"
+                              />
+                              <span
+                                className="font-mono text-xs"
+                                data-chat-running-duration
+                              >
+                                {durationLabel}
+                              </span>
+                            </>
+                          ) : null}
                         </div>
                       ) : (
                         <ChatMessageBody
