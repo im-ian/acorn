@@ -1295,6 +1295,13 @@ describe("ChatPane", () => {
       'button[aria-label="Fork in same directory"]',
     );
     expect(sameDirectory).toBeTruthy();
+    const currentDirectory = document.querySelector<HTMLElement>(
+      "[data-chat-fork-current-directory]",
+    );
+    expect(currentDirectory?.getAttribute("title")).toBe(
+      "/tmp/acorn/.acorn/worktrees/source-chat",
+    );
+    expect(currentDirectory?.className).toContain("truncate");
 
     await act(async () => {
       sameDirectory!.click();
