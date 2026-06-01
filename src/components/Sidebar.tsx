@@ -73,6 +73,10 @@ import {
   type SessionCreateScope,
 } from "../lib/sessionCreation";
 import {
+  PROJECT_SESSION_CREATE_MENU,
+  type ProjectSessionCreateAction,
+} from "../lib/projectSessionCreateActions";
+import {
   planChevronClick,
   planTitleClick,
   type ProjectClickPlan,
@@ -549,11 +553,16 @@ export function Sidebar() {
                     }}
                     onSelectSession={selectSession}
                     onRemoveSession={(s) => requestRemoveSession(s.id)}
-                    onAddSession={(isolated, kind) =>
-                      onNewSession(isolated, kind, {
-                        repoPath: project.repoPath,
-                        projectScoped: true,
-                      })
+                    onAddSession={(isolated, kind, mode = "terminal") =>
+                      onNewSession(
+                        isolated,
+                        kind,
+                        {
+                          repoPath: project.repoPath,
+                          projectScoped: true,
+                        },
+                        mode,
+                      )
                     }
                     onRemoveProject={() =>
                       requestRemoveProject(project.repoPath)
@@ -727,6 +736,19 @@ function pickSessionToActivate(
   return projectSessions[0]?.id ?? null;
 }
 
+function projectSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
+  switch (id) {
+    case "terminal":
+      return <Plus size={12} />;
+    case "isolated":
+      return <GitBranch size={12} />;
+    case "chat":
+      return <MessageSquareText size={12} />;
+    case "control":
+      return <Bot size={12} />;
+  }
+}
+
 interface ProjectGroupViewProps {
   project: ProjectGroup;
   collapsed: boolean;
@@ -740,7 +762,11 @@ interface ProjectGroupViewProps {
   onActivate: () => void;
   onSelectSession: (id: string) => void;
   onRemoveSession: (s: Session) => void;
-  onAddSession: (isolated: boolean, kind: SessionKind) => void;
+  onAddSession: (
+    isolated: boolean,
+    kind: SessionKind,
+    mode?: SessionMode,
+  ) => void;
   onRemoveProject: () => void;
   onOpenSettings: () => void;
 }
@@ -761,6 +787,10 @@ function ProjectGroupView({
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [createMenu, setCreateMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const {
     attributes,
     listeners,
@@ -779,6 +809,19 @@ function ProjectGroupView({
   const sessionIds = useMemo(
     () => project.sessions.map((s) => sessionDragId(s.id)),
     [project.sessions],
+  );
+  const createMenuItems = useMemo<ContextMenuItem[]>(
+    () =>
+      PROJECT_SESSION_CREATE_MENU.map((item) => {
+        if (item.type === "separator") return { type: "separator" };
+        const action = item.action;
+        return {
+          label: sidebarText(t, action.labelKey),
+          icon: projectSessionCreateIcon(action.id),
+          onClick: () => onAddSession(action.isolated, action.kind, action.mode),
+        };
+      }),
+    [onAddSession, t],
   );
 
   async function copyText(text: string) {
@@ -823,6 +866,7 @@ function ProjectGroupView({
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
+          setCreateMenu(null);
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         aria-label={`${sidebarText(t, "sidebar.aria.project")} ${project.name}`}
@@ -859,63 +903,25 @@ function ProjectGroupView({
             {project.sessions.length}
           </span>
         </span>
-        <Tooltip
-          label={sidebarText(t, "sidebar.actions.newSession")}
-          side="bottom"
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setMenu(null);
+            setCreateMenu((current) =>
+              current === null ? { x: rect.left, y: rect.bottom + 4 } : null,
+            );
+          }}
+          className="invisible flex h-5 w-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+          aria-label={sidebarText(t, "sidebar.aria.newSessionMenuInProject")}
+          aria-haspopup="menu"
+          aria-expanded={createMenu !== null}
         >
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onAddSession(false, "regular");
-            }}
-            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-            aria-label={sidebarText(t, "sidebar.aria.newSessionInProject")}
-          >
-            <Plus size={12} />
-          </button>
-        </Tooltip>
-        <Tooltip
-          label={sidebarText(t, "sidebar.actions.newIsolatedSessionWorktree")}
-          side="bottom"
-        >
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onAddSession(true, "regular");
-            }}
-            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-            aria-label={sidebarText(
-              t,
-              "sidebar.actions.newIsolatedSessionWorktree",
-            )}
-          >
-            <GitBranch size={12} />
-          </button>
-        </Tooltip>
-        <Tooltip
-          label={sidebarText(t, "sidebar.actions.newControlSession")}
-          side="bottom"
-        >
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onAddSession(false, "control");
-            }}
-            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-            aria-label={sidebarText(
-              t,
-              "sidebar.aria.newControlSessionInProject",
-            )}
-          >
-            <Bot size={12} />
-          </button>
-        </Tooltip>
+          <Plus size={12} />
+          <ChevronRight size={10} className="rotate-90" />
+        </button>
         <Tooltip
           label={sidebarText(t, "sidebar.actions.closeProject")}
           side="bottom"
@@ -935,26 +941,19 @@ function ProjectGroupView({
         </Tooltip>
       </div>
       <ContextMenu
+        open={createMenu !== null}
+        x={createMenu?.x ?? 0}
+        y={createMenu?.y ?? 0}
+        onClose={() => setCreateMenu(null)}
+        items={createMenuItems}
+      />
+      <ContextMenu
         open={menu !== null}
         x={menu?.x ?? 0}
         y={menu?.y ?? 0}
         onClose={() => setMenu(null)}
         items={[
-          {
-            label: sidebarText(t, "sidebar.actions.newSession"),
-            icon: <Plus size={12} />,
-            onClick: () => onAddSession(false, "regular"),
-          },
-          {
-            label: sidebarText(t, "sidebar.actions.newIsolatedSession"),
-            icon: <GitBranch size={12} />,
-            onClick: () => onAddSession(true, "regular"),
-          },
-          {
-            label: sidebarText(t, "sidebar.actions.newControlSession"),
-            icon: <Bot size={12} />,
-            onClick: () => onAddSession(false, "control"),
-          },
+          ...createMenuItems,
           { type: "separator" },
           {
             label: sidebarText(t, "sidebar.actions.projectSettings"),

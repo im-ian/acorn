@@ -755,6 +755,7 @@
       "newSession": "새 세션",
       "newIsolatedSession": "새 격리 세션",
       "newIsolatedSessionWorktree": "새 격리 세션 (worktree)",
+      "newChatSession": "새 채팅 세션",
       "newControlSession": "새 컨트롤 세션",
       "projectSettings": "프로젝트 설정",
       "closeProject": "프로젝트 닫기",
@@ -776,7 +777,10 @@
     "aria": {
       "project": "프로젝트",
       "dragToReorderProject": "프로젝트 순서를 바꾸려면 드래그",
+      "newSessionMenuInProject": "이 프로젝트에 세션 만들기",
       "newSessionInProject": "이 프로젝트에 새 세션 만들기",
+      "newIsolatedSessionInProject": "이 프로젝트에 새 격리 세션 만들기",
+      "newChatSessionInProject": "이 프로젝트에 새 채팅 세션 만들기",
       "newControlSessionInProject": "이 프로젝트에 새 컨트롤 세션 만들기",
       "dragToReorderSession": "세션 순서를 바꾸려면 드래그",
       "localTerminalSessions": "로컬 터미널 세션",

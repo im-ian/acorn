@@ -755,6 +755,7 @@
       "newSession": "New session",
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New isolated session (worktree)",
+      "newChatSession": "New chat session",
       "newControlSession": "New control session",
       "projectSettings": "Project Settings",
       "closeProject": "Close project",
@@ -776,7 +777,10 @@
     "aria": {
       "project": "Project",
       "dragToReorderProject": "Drag to reorder project",
+      "newSessionMenuInProject": "Create session in this project",
       "newSessionInProject": "New session in this project",
+      "newIsolatedSessionInProject": "New isolated session in this project",
+      "newChatSessionInProject": "New chat session in this project",
       "newControlSessionInProject": "New control session in this project",
       "dragToReorderSession": "Drag to reorder session",
       "localTerminalSessions": "Local terminal sessions",
