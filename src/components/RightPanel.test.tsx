@@ -443,7 +443,7 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).toContain("Claude plan");
   });
 
-  it("shows native chat sessions in agent history", async () => {
+  it("does not show native chat sessions in agent history", async () => {
     useAppStore.setState({
       rightTab: "history",
       sessions: [
@@ -478,16 +478,17 @@ describe("RightPanel background tab loading", () => {
     });
     await flushPromises();
 
-    expect(container.textContent).toContain("Exploring chat runtime");
-    expect(container.textContent).toContain("Acorn chat");
+    expect(container.textContent).not.toContain("Exploring chat runtime");
+    expect(container.textContent).not.toContain("Acorn chat");
+    expect(container.textContent).toContain("No Claude, Codex, or Antigravity sessions found");
 
     const select = selectWithAria(container, "Filter by agent");
     await act(async () => {
-      select.value = "acorn";
+      select.value = "codex";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
-    expect(container.textContent).toContain("Exploring chat runtime");
+    expect(container.textContent).not.toContain("Exploring chat runtime");
   });
 
   it("reprobes GitHub visibility when git metadata changes", async () => {
