@@ -313,6 +313,15 @@ function chatStateIsRunning(state: ChatSessionState): boolean {
   );
 }
 
+function chatStateUpdatedAtMs(state: ChatSessionState): number | null {
+  const candidates = [state.updated_at, state.session.updated_at];
+  for (const candidate of candidates) {
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 function providerLabel(provider: string | null | undefined): string {
   switch (provider) {
     case "antigravity":
@@ -447,6 +456,7 @@ export function ChatPane({
   const [forkTargetIndex, setForkTargetIndex] = useState<number | null>(null);
   const [forkBusy, setForkBusy] = useState(false);
   const [relativeNow, setRelativeNow] = useState(() => Date.now());
+  const latestChatStateUpdatedAtRef = useRef<number | null>(null);
   const copyResetTimer = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -489,18 +499,26 @@ export function ChatPane({
     setIsScrolledBack(false);
   }
 
+  function applyChatState(loaded: ChatSessionState) {
+    const loadedAt = chatStateUpdatedAtMs(loaded);
+    const currentAt = latestChatStateUpdatedAtRef.current;
+    if (loadedAt !== null && currentAt !== null && loadedAt < currentAt) {
+      return false;
+    }
+    latestChatStateUpdatedAtRef.current = loadedAt ?? currentAt;
+    setState(loaded);
+    setProvider(
+      providerFromString(loaded.provider) ??
+        defaultProvider(useSettings.getState().settings),
+    );
+    setSending(chatStateIsRunning(loaded));
+    return true;
+  }
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
-
-    function applyLoadedState(loaded: ChatSessionState) {
-      setState(loaded);
-      setProvider(
-        providerFromString(loaded.provider) ??
-          defaultProvider(useSettings.getState().settings),
-      );
-      setSending(chatStateIsRunning(loaded));
-    }
+    latestChatStateUpdatedAtRef.current = null;
 
     async function loadState(showLoading: boolean) {
       if (showLoading) setLoading(true);
@@ -508,7 +526,7 @@ export function ChatPane({
       setError(null);
       try {
         const loaded = await api.loadChatSessionState(sessionId);
-        if (!cancelled) applyLoadedState(loaded);
+        if (!cancelled) applyChatState(loaded);
       } catch (err) {
         if (!cancelled) setError(String(err));
       } finally {
@@ -523,7 +541,7 @@ export function ChatPane({
         if (cancelled || event.payload.session_id !== sessionId) return;
         setError(null);
         setLoading(false);
-        applyLoadedState(event.payload.state);
+        applyChatState(event.payload.state);
       },
     ).then((dispose) => {
       if (cancelled) {
@@ -683,8 +701,7 @@ export function ChatPane({
         chatAiRequest(provider, settings),
         content,
       );
-      setState(saved);
-      setProvider(providerFromString(saved.provider) ?? provider);
+      applyChatState(saved);
       setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
     } catch (err) {
       setError(String(err));
