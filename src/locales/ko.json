@@ -782,6 +782,7 @@
       "localTerminalSessions": "로컬 터미널 세션",
       "worktree": "worktree",
       "controlSession": "컨트롤 세션",
+      "chatSession": "채팅 세션",
       "generatingSessionTitle": "세션 제목 생성 중"
     },
     "localTerminals": {
@@ -814,6 +815,7 @@
     "aria": {
       "worktree": "워크트리",
       "controlSession": "컨트롤 세션",
+      "chatSession": "채팅 세션",
       "generatingSessionTitle": "세션 제목 생성 중",
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"

@@ -782,6 +782,7 @@
       "localTerminalSessions": "Local terminal sessions",
       "worktree": "worktree",
       "controlSession": "control session",
+      "chatSession": "chat session",
       "generatingSessionTitle": "Generating session title"
     },
     "localTerminals": {
@@ -814,6 +815,7 @@
     "aria": {
       "worktree": "worktree",
       "controlSession": "control session",
+      "chatSession": "chat session",
       "generatingSessionTitle": "Generating session title",
       "closeSession": "Close session",
       "closeTab": "Close tab"

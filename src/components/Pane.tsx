@@ -8,6 +8,7 @@ import {
   FolderPlus,
   GitBranch,
   GitFork,
+  MessageSquareText,
   Pencil,
   PencilLine,
   SplitSquareHorizontal,
@@ -1246,6 +1247,16 @@ function TabItem({
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
             />
+          ) : session?.mode === "chat" ? (
+            <Tooltip label={paneT(t, "pane.aria.chatSession")} side="bottom">
+              <MessageSquareText
+                size={12}
+                className={cn(
+                  "pointer-events-none shrink-0",
+                  session && STATUS_ICON[session.status],
+                )}
+              />
+            </Tooltip>
           ) : agentProvider ? (
             <Tooltip label={agentProvider} side="bottom">
               <AgentProviderIcon
@@ -1390,6 +1401,14 @@ function WorkspaceTabDragGhost({
     >
       {isGeneratingTitle ? (
         <SessionTitleGeneratingIndicator label={generatingLabel} />
+      ) : session?.mode === "chat" ? (
+        <MessageSquareText
+          size={12}
+          className={cn(
+            "pointer-events-none shrink-0",
+            session && STATUS_ICON[session.status],
+          )}
+        />
       ) : agentProvider ? (
         <AgentProviderIcon
           provider={agentProvider}

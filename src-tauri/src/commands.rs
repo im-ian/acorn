@@ -840,6 +840,16 @@ fn finish_chat_turn(
     started.state
 }
 
+fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus) -> SessionStatus {
+    match status {
+        persistence::ChatMessageStatus::Pending | persistence::ChatMessageStatus::Streaming => {
+            SessionStatus::Running
+        }
+        persistence::ChatMessageStatus::Complete => SessionStatus::NeedsInput,
+        persistence::ChatMessageStatus::Error => SessionStatus::Failed,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn run_chat_turn_for_test(
     state: persistence::ChatSessionState,
@@ -1878,14 +1888,16 @@ pub async fn send_chat_message<R: Runtime>(
     content: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let session = authorize_chat_session(state.inner(), &session_id)?;
+    let app_state = state.inner().clone();
     run_blocking("send chat message", move || {
-        send_chat_message_inner(&app, session, ai, content)
+        send_chat_message_inner(&app, &app_state, session, ai, content)
     })
     .await
 }
 
 fn send_chat_message_inner<R: Runtime>(
     app: &AppHandle<R>,
+    state: &AppState,
     session: Session,
     ai: crate::ai::AiExecutionRequest,
     content: String,
@@ -1902,11 +1914,25 @@ fn send_chat_message_inner<R: Runtime>(
         ChatContextOptions::default(),
     )?;
     started.state = persistence::save_chat_session_state(started.state)?;
+    state.sessions.update_status(
+        &session.id,
+        chat_session_status_for_message_status(persistence::ChatMessageStatus::Pending),
+    )?;
+    persist(state);
     emit_chat_session_state_changed(app, &started.state);
 
     let provider_result = adapter.send_message(started.input.clone());
+    let final_session_status = chat_session_status_for_message_status(if provider_result.is_ok() {
+        persistence::ChatMessageStatus::Complete
+    } else {
+        persistence::ChatMessageStatus::Error
+    });
     let chat_state = finish_chat_turn(started, provider_result);
     let chat_state = persistence::save_chat_session_state(chat_state)?;
+    state
+        .sessions
+        .update_status(&session.id, final_session_status)?;
+    persist(state);
     emit_chat_session_state_changed(app, &chat_state);
     Ok(chat_state)
 }
@@ -3347,6 +3373,20 @@ pub async fn detect_session_statuses(
                 .as_ref()
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
+            if matches!(session.as_ref().map(|s| s.mode), Some(SessionMode::Chat)) {
+                let branch = session
+                    .as_ref()
+                    .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
+                return SessionStatusEntry {
+                    id,
+                    status: previous,
+                    agent_provider: session.as_ref().and_then(|s| s.agent_provider),
+                    agent_transcript_id: session
+                        .as_ref()
+                        .and_then(|s| s.agent_transcript_id.clone()),
+                    branch,
+                };
+            }
             // Routing-aware pid lookup. Daemon-managed sessions live
             // in `stream_registry` (their root pid was captured from
             // the daemon at spawn / attach); legacy in-process sessions
@@ -4160,6 +4200,34 @@ mod tests {
                     metadata: None,
                 }))
         }
+    }
+
+    #[test]
+    fn chat_message_status_maps_to_session_status() {
+        assert_eq!(
+            super::chat_session_status_for_message_status(
+                crate::persistence::ChatMessageStatus::Pending
+            ),
+            acorn_session::SessionStatus::Running
+        );
+        assert_eq!(
+            super::chat_session_status_for_message_status(
+                crate::persistence::ChatMessageStatus::Streaming
+            ),
+            acorn_session::SessionStatus::Running
+        );
+        assert_eq!(
+            super::chat_session_status_for_message_status(
+                crate::persistence::ChatMessageStatus::Complete
+            ),
+            acorn_session::SessionStatus::NeedsInput
+        );
+        assert_eq!(
+            super::chat_session_status_for_message_status(
+                crate::persistence::ChatMessageStatus::Error
+            ),
+            acorn_session::SessionStatus::Failed
+        );
     }
 
     #[test]

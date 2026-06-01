@@ -8,6 +8,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  MessageSquareText,
   Pencil,
   PencilLine,
   Plus,
@@ -681,6 +682,7 @@ function SessionRowPreview({
           agentProvider={agentProvider}
           isGeneratingTitle={false}
           generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
         />
       ) : null}
       <SessionRowLabel
@@ -1263,6 +1265,7 @@ function SessionRow({
           agentProvider={agentProvider}
           isGeneratingTitle={isGeneratingTitle}
           generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
         />
       ) : null}
       <SessionRowLabel
@@ -1397,16 +1400,25 @@ function SessionStatusMarker({
   agentProvider,
   isGeneratingTitle,
   generatingLabel,
+  chatLabel,
 }: {
   session: Session;
   agentProvider: SessionAgentProvider | null;
   isGeneratingTitle: boolean;
   generatingLabel: string;
+  chatLabel: string;
 }) {
   return (
     <span className="flex h-5 w-3 shrink-0 items-center justify-center">
       {isGeneratingTitle ? (
         <SessionTitleGeneratingIndicator label={generatingLabel} side="right" />
+      ) : session.mode === "chat" ? (
+        <Tooltip label={chatLabel} side="right">
+          <MessageSquareText
+            size={12}
+            className={cn("shrink-0", STATUS_ICON[session.status])}
+          />
+        </Tooltip>
       ) : agentProvider ? (
         <Tooltip label={agentProvider} side="right">
           <AgentProviderIcon
@@ -1741,6 +1753,7 @@ function LocalSessionRow({
           agentProvider={agentProvider}
           isGeneratingTitle={isGeneratingTitle}
           generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
         />
       ) : null}
       <SessionRowLabel
