@@ -76,7 +76,12 @@ import {
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
-import type { Session, SessionKind, SessionStatus } from "../lib/types";
+import type {
+  Session,
+  SessionAgentProvider,
+  SessionKind,
+  SessionStatus,
+} from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
@@ -660,23 +665,12 @@ function SessionRowPreview({
   return (
     <div className="flex w-full items-start gap-1.5 rounded-md bg-bg-elevated/95 px-2 py-1 shadow-lg ring-1 ring-border/60">
       {sessionDisplay.icons.statusDot ? (
-        <span className="flex h-5 w-3 shrink-0 items-center justify-center">
-          {agentProvider ? (
-            <Tooltip label={agentProvider} side="right">
-              <AgentProviderIcon
-                provider={agentProvider}
-                className={cn("size-3", STATUS_ICON[session.status])}
-              />
-            </Tooltip>
-          ) : (
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                STATUS_DOT[session.status],
-              )}
-            />
-          )}
-        </span>
+        <SessionStatusMarker
+          session={session}
+          agentProvider={agentProvider}
+          isGeneratingTitle={false}
+          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+        />
       ) : null}
       <SessionRowLabel
         editing={false}
@@ -684,7 +678,6 @@ function SessionRowPreview({
         titleText={titleText}
         metadataText={metadataText}
         showKindIcons={sessionDisplay.icons.sessionKind}
-        isGeneratingTitle={false}
         t={t}
         onSubmitRename={() => undefined}
         onCancelRename={() => undefined}
@@ -1253,24 +1246,13 @@ function SessionRow({
         isDragging && "opacity-40",
       )}
     >
-      {sessionDisplay.icons.statusDot ? (
-        <span className="flex h-5 w-3 shrink-0 items-center justify-center">
-          {agentProvider ? (
-            <Tooltip label={agentProvider} side="right">
-              <AgentProviderIcon
-                provider={agentProvider}
-                className={cn("size-3", STATUS_ICON[session.status])}
-              />
-            </Tooltip>
-          ) : (
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                STATUS_DOT[session.status],
-              )}
-            />
-          )}
-        </span>
+      {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
+        <SessionStatusMarker
+          session={session}
+          agentProvider={agentProvider}
+          isGeneratingTitle={isGeneratingTitle}
+          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+        />
       ) : null}
       <SessionRowLabel
         editing={editing}
@@ -1278,7 +1260,6 @@ function SessionRow({
         titleText={titleText}
         metadataText={metadataText}
         showKindIcons={sessionDisplay.icons.sessionKind}
-        isGeneratingTitle={isGeneratingTitle}
         t={t}
         onSubmitRename={async (next) => {
           setEditing(false);
@@ -1339,7 +1320,6 @@ interface SessionRowLabelProps {
   titleText: string;
   metadataText: string;
   showKindIcons: boolean;
-  isGeneratingTitle: boolean;
   t: Translator;
   onSubmitRename: (value: string) => void | Promise<void>;
   onCancelRename: () => void;
@@ -1351,7 +1331,6 @@ function SessionRowLabel({
   titleText,
   metadataText,
   showKindIcons,
-  isGeneratingTitle,
   t,
   onSubmitRename,
   onCancelRename,
@@ -1376,12 +1355,6 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
-        {isGeneratingTitle && !editing ? (
-          <SessionTitleGeneratingIndicator
-            label={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
-            side="right"
-          />
-        ) : null}
         {showKindIcons && inWorktree ? (
           <GitBranch
             size={10}
@@ -1406,6 +1379,37 @@ function SessionRowLabel({
   );
 
   return body;
+}
+
+function SessionStatusMarker({
+  session,
+  agentProvider,
+  isGeneratingTitle,
+  generatingLabel,
+}: {
+  session: Session;
+  agentProvider: SessionAgentProvider | null;
+  isGeneratingTitle: boolean;
+  generatingLabel: string;
+}) {
+  return (
+    <span className="flex h-5 w-3 shrink-0 items-center justify-center">
+      {isGeneratingTitle ? (
+        <SessionTitleGeneratingIndicator label={generatingLabel} side="right" />
+      ) : agentProvider ? (
+        <Tooltip label={agentProvider} side="right">
+          <AgentProviderIcon
+            provider={agentProvider}
+            className={cn("size-3", STATUS_ICON[session.status])}
+          />
+        </Tooltip>
+      ) : (
+        <span
+          className={cn("size-1.5 rounded-full", STATUS_DOT[session.status])}
+        />
+      )}
+    </span>
+  );
 }
 
 async function copyToClipboard(text: string): Promise<void> {
@@ -1720,24 +1724,13 @@ function LocalSessionRow({
         isDragging && "opacity-40",
       )}
     >
-      {sessionDisplay.icons.statusDot ? (
-        <span className="flex h-5 w-3 shrink-0 items-center justify-center">
-          {agentProvider ? (
-            <Tooltip label={agentProvider} side="right">
-              <AgentProviderIcon
-                provider={agentProvider}
-                className={cn("size-3", STATUS_ICON[session.status])}
-              />
-            </Tooltip>
-          ) : (
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                STATUS_DOT[session.status],
-              )}
-            />
-          )}
-        </span>
+      {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
+        <SessionStatusMarker
+          session={session}
+          agentProvider={agentProvider}
+          isGeneratingTitle={isGeneratingTitle}
+          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+        />
       ) : null}
       <SessionRowLabel
         editing={editing}
@@ -1745,7 +1738,6 @@ function LocalSessionRow({
         titleText={titleText}
         metadataText={metadataText}
         showKindIcons={sessionDisplay.icons.sessionKind}
-        isGeneratingTitle={isGeneratingTitle}
         t={t}
         onSubmitRename={async (next) => {
           setEditing(false);
