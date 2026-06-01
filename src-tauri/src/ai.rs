@@ -259,4 +259,13 @@ mod tests {
 
         assert!(req.resolve().is_err());
     }
+
+    #[test]
+    fn runs_oneshot_in_requested_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let output =
+            run_oneshot_in_dir("pwd", &[], "", "test settings", Some(dir.path())).unwrap();
+
+        assert_eq!(output.trim(), dir.path().to_string_lossy());
+    }
 }
