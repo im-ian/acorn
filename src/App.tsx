@@ -78,7 +78,10 @@ import {
   UI_SCALE_PERCENT_STEP,
   useSettings,
 } from "./lib/settings";
-import { planAutoGenerateSessionTitles } from "./lib/sessionTitle";
+import {
+  autoTitleGenerationEnabledForSession,
+  planAutoGenerateSessionTitles,
+} from "./lib/sessionTitle";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
@@ -746,7 +749,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!settings.agents.autoGenerateSessionTitles) return;
+    if (
+      !sessions.some((session) =>
+        autoTitleGenerationEnabledForSession(
+          session,
+          settings.agents.autoGenerateSessionTitles,
+        ),
+      )
+    ) {
+      return;
+    }
 
     let cancelled = false;
     const retryTimers = new Set<ReturnType<typeof window.setTimeout>>();
@@ -768,13 +780,20 @@ function App() {
     const configKey = JSON.stringify([ai, prompt]);
     const inFlight = titleGenerationInFlightRef.current;
     const lastAttemptAt = titleGenerationLastAttemptAtRef.current;
-    const latestTitleConfigMatches = () => {
+    const latestTitleConfigMatches = (sessionId: string) => {
       const latestSettings = useSettings.getState().settings;
       const latestAi = resolveAiExecutionRequest(latestSettings);
       const latestPrompt = resolveSessionTitlePrompt(latestSettings);
       const latestConfigKey = JSON.stringify([latestAi, latestPrompt]);
+      const latestSession = useAppStore
+        .getState()
+        .sessions.find((session) => session.id === sessionId);
       return (
-        latestSettings.agents.autoGenerateSessionTitles &&
+        latestSession != null &&
+        autoTitleGenerationEnabledForSession(
+          latestSession,
+          latestSettings.agents.autoGenerateSessionTitles,
+        ) &&
         latestConfigKey === configKey
       );
     };
@@ -808,7 +827,7 @@ function App() {
       void api
         .sessionTitleReadiness(sessionId)
         .then(async (readiness) => {
-          if (!latestTitleConfigMatches()) return;
+          if (!latestTitleConfigMatches(sessionId)) return;
           if (readiness.status !== "ready") {
             retryDelayAfterCompletion = retryDelayForStatus(
               sessionId,
@@ -820,14 +839,14 @@ function App() {
           const status = await useAppStore
             .getState()
             .generateSessionTitle(sessionId, ai, prompt);
-          if (!latestTitleConfigMatches()) return;
+          if (!latestTitleConfigMatches(sessionId)) return;
           if (status !== "generated") {
             retryDelayAfterCompletion = retryDelayForStatus(sessionId, status);
           }
         })
         .catch((err) => {
           console.warn("[acorn] session title readiness failed", err);
-          if (!latestTitleConfigMatches()) return;
+          if (!latestTitleConfigMatches(sessionId)) return;
           retryDelayAfterCompletion = retryDelayForStatus(sessionId, "skipped");
         })
         .finally(() => {
@@ -837,7 +856,7 @@ function App() {
           // before the session leaves the in-flight set.
           if (
             retryDelayAfterCompletion !== null &&
-            latestTitleConfigMatches()
+            latestTitleConfigMatches(sessionId)
           ) {
             scheduleRetryTick(retryDelayAfterCompletion, true);
           }
