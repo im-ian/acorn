@@ -1298,7 +1298,7 @@ describe("ChatPane", () => {
     const currentDirectory = document.querySelector<HTMLElement>(
       "[data-chat-fork-current-directory]",
     );
-    expect(currentDirectory?.getAttribute("title")).toBe(
+    expect(currentDirectory?.getAttribute("aria-label")).toBe(
       "/tmp/acorn/.acorn/worktrees/source-chat",
     );
     expect(currentDirectory?.className).toContain("truncate");

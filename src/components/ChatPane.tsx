@@ -1212,10 +1212,24 @@ function ForkWorktreeDialog({
           Start a new chat from the messages before this response.
         </p>
         {worktreePath ? (
-          <p>
-            <span className="opacity-70">Current directory</span>{" "}
-            <span className="font-mono text-fg">{worktreePath}</span>
-          </p>
+          <div className="rounded border border-border bg-bg-sidebar/70 px-3 py-2">
+            <div className="text-[11px] text-fg-muted">Current directory</div>
+            <Tooltip
+              label={worktreePath}
+              side="bottom"
+              multiline
+              className="mt-1 flex min-w-0 max-w-full"
+            >
+              <span
+                aria-label={worktreePath}
+                className="min-w-0 max-w-full flex-1 truncate font-mono text-[11px] leading-5 text-fg"
+                data-chat-fork-current-directory
+                dir="ltr"
+              >
+                {worktreePath}
+              </span>
+            </Tooltip>
+          </div>
         ) : null}
         {!canUseNewWorktree ? (
           <p className="rounded-md border border-border bg-bg-sidebar/60 px-3 py-2 text-[11px]">
