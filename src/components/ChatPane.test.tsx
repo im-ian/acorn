@@ -870,10 +870,10 @@ describe("ChatPane", () => {
     expect(runningDuration?.textContent).toBe("<1s");
 
     await act(async () => {
-      vi.advanceTimersByTime(1_500);
+      vi.advanceTimersByTime(1_000);
     });
 
-    expect(runningDuration?.textContent).toBe("1.5s");
+    expect(runningDuration?.textContent).toBe("1.0s");
   });
 
   it("centers the composer until the first message appears", async () => {

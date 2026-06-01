@@ -460,6 +460,9 @@ export function ChatPane({
   const messages = state?.messages ?? [];
   const stateProvider = state?.provider ?? null;
   const hasMessages = messages.length > 0;
+  const hasRunningMessages = messages.some(
+    (message) => message.status === "pending" || message.status === "streaming",
+  );
   const composerIsCentered = !loading && !error && !hasMessages;
   const sourceRepoPath = session?.repo_path ?? repoPath;
   const sourceWorktreePath = session?.worktree_path ?? repoPath;
@@ -559,9 +562,14 @@ export function ChatPane({
   }, [sessionId]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
+    setRelativeNow(Date.now());
+    const intervalMs = hasRunningMessages ? 1_000 : 60_000;
+    const timer = window.setInterval(
+      () => setRelativeNow(Date.now()),
+      intervalMs,
+    );
     return () => window.clearInterval(timer);
-  }, []);
+  }, [hasRunningMessages]);
 
   useEffect(() => {
     if (!isActive) return;
