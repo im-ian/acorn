@@ -979,10 +979,17 @@ export const useAppStore = create<AppStateModel>()(
                 const nextBranch = update.branch ?? sess.branch;
                 const nextAgentProvider =
                   update.agent_provider ?? sess.agent_provider ?? null;
+                const nextAgentTranscriptId = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "agent_transcript_id",
+                )
+                  ? (update.agent_transcript_id ?? null)
+                  : (sess.agent_transcript_id ?? null);
                 if (
                   nextStatus !== sess.status ||
                   nextBranch !== sess.branch ||
-                  nextAgentProvider !== (sess.agent_provider ?? null)
+                  nextAgentProvider !== (sess.agent_provider ?? null) ||
+                  nextAgentTranscriptId !== (sess.agent_transcript_id ?? null)
                 ) {
                   changed = true;
                   return {
@@ -990,6 +997,7 @@ export const useAppStore = create<AppStateModel>()(
                     status: nextStatus,
                     branch: nextBranch,
                     agent_provider: nextAgentProvider,
+                    agent_transcript_id: nextAgentTranscriptId,
                   };
                 }
                 return sess;

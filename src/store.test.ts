@@ -1140,6 +1140,33 @@ describe("pollSessionStatuses", () => {
     expect(sessions.find((s) => s.id === "a2")?.branch).toBe("feat/a2-live");
   });
 
+  it("merges live agent transcript ids from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_provider: "claude",
+          agent_transcript_id: "claude-old",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        agent_provider: "claude",
+        agent_transcript_id: "claude-new",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_transcript_id).toBe(
+      "claude-new",
+    );
+  });
+
   it("does not call the backend when the requested ids are absent", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
 

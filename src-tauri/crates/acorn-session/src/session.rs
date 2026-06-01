@@ -238,6 +238,12 @@ pub struct Session {
     pub last_message: Option<String>,
     #[serde(default = "default_title_source_for_existing_sessions")]
     pub title_source: SessionTitleSource,
+    /// Transcript id used when Acorn last generated this tab title. Manual
+    /// renames clear this value; generated titles keep it so a later agent
+    /// session rotation (for example Claude `/clear`) can generate a fresh
+    /// title without touching user-named tabs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_title_transcript_id: Option<String>,
     #[serde(default)]
     pub kind: SessionKind,
     #[serde(default)]
@@ -282,6 +288,10 @@ pub struct Session {
     /// persisted in sessions.json.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub agent_provider: Option<SessionAgentProvider>,
+    /// Derived from Acorn's per-session agent-state markers. This is the
+    /// current live transcript id and is not persisted in sessions.json.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub agent_transcript_id: Option<String>,
 }
 
 impl Session {
@@ -307,6 +317,7 @@ impl Session {
             updated_at: now,
             last_message: None,
             title_source: SessionTitleSource::Default,
+            generated_title_transcript_id: None,
             kind,
             owner: SessionOwner::User,
             position: None,
@@ -314,6 +325,7 @@ impl Session {
             agent_resume_token: None,
             in_worktree: false,
             agent_provider: None,
+            agent_transcript_id: None,
         }
     }
 }
@@ -424,17 +436,25 @@ impl SessionStore {
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.name = name;
         entry.title_source = SessionTitleSource::Manual;
+        entry.generated_title_transcript_id = None;
         entry.updated_at = Utc::now();
         Ok(entry.clone())
     }
 
-    pub fn set_generated_title(&self, id: &Uuid, name: String) -> SessionResult<Session> {
+    pub fn set_generated_title(
+        &self,
+        id: &Uuid,
+        name: String,
+        transcript_id: Option<String>,
+    ) -> SessionResult<Session> {
         let mut entry = self
             .inner
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         entry.name = name;
         entry.title_source = SessionTitleSource::Generated;
+        entry.generated_title_transcript_id =
+            transcript_id.filter(|value| !value.trim().is_empty());
         Ok(entry.clone())
     }
 
@@ -561,6 +581,13 @@ mod tests {
     fn manual_rename_marks_title_source_as_manual() {
         let store = SessionStore::new();
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        store
+            .set_generated_title(
+                &session.id,
+                "generated title".to_string(),
+                Some("transcript-1".to_string()),
+            )
+            .expect("session exists");
 
         let updated = store
             .rename(&session.id, "manual title".to_string())
@@ -568,6 +595,7 @@ mod tests {
 
         assert_eq!(updated.name, "manual title");
         assert_eq!(updated.title_source, SessionTitleSource::Manual);
+        assert_eq!(updated.generated_title_transcript_id, None);
     }
 
     #[test]
@@ -619,11 +647,19 @@ mod tests {
         let original_updated_at = session.updated_at;
 
         let updated = store
-            .set_generated_title(&session.id, "generated title".to_string())
+            .set_generated_title(
+                &session.id,
+                "generated title".to_string(),
+                Some("transcript-1".to_string()),
+            )
             .expect("session exists");
 
         assert_eq!(updated.name, "generated title");
         assert_eq!(updated.title_source, SessionTitleSource::Generated);
+        assert_eq!(
+            updated.generated_title_transcript_id.as_deref(),
+            Some("transcript-1")
+        );
         assert_eq!(updated.updated_at, original_updated_at);
     }
 

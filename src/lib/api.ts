@@ -400,6 +400,7 @@ export const api = {
       id: string;
       status: SessionStatus;
       agent_provider?: SessionAgentProvider | null;
+      agent_transcript_id?: string | null;
       branch: string | null;
     }[]
   > {
@@ -408,6 +409,7 @@ export const api = {
         id: string;
         status: SessionStatus;
         agent_provider?: SessionAgentProvider | null;
+        agent_transcript_id?: string | null;
         branch: string | null;
       }[]
     >("detect_session_statuses", { ids });

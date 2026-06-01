@@ -26,10 +26,21 @@ Rules:
 - Prefer the main user goal over setup steps and generic words like \"help\" or \"question\".
 ";
 
-pub fn can_generate_title(session: &Session) -> bool {
-    session.kind == SessionKind::Regular
-        && matches!(session.owner, SessionOwner::User)
-        && session.title_source == SessionTitleSource::Default
+pub struct ResolvedTitleInput {
+    pub transcript_id: String,
+    pub first_user_message: String,
+}
+
+pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> bool {
+    if session.kind != SessionKind::Regular || !matches!(session.owner, SessionOwner::User) {
+        return false;
+    }
+    match session.title_source {
+        SessionTitleSource::Default => true,
+        SessionTitleSource::Generated => transcript_id
+            .is_some_and(|id| session.generated_title_transcript_id.as_deref() != Some(id)),
+        SessionTitleSource::Manual => false,
+    }
 }
 
 pub fn build_prompt(prompt: Option<&str>, first_user_message: &str) -> String {
@@ -47,9 +58,14 @@ fn effective_prompt(prompt: Option<&str>) -> String {
     prompt.chars().take(SESSION_TITLE_PROMPT_CHARS).collect()
 }
 
-pub fn resolve_first_user_message(session_id: uuid::Uuid) -> Option<String> {
-    let (path, provider) = resolve_transcript(session_id)?;
-    agent_history::transcript_first_user_message(provider, &path, TITLE_INPUT_CHARS)
+pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput> {
+    let (path, provider, transcript_id) = resolve_transcript(session_id)?;
+    let first_user_message =
+        agent_history::transcript_first_user_message(provider, &path, TITLE_INPUT_CHARS)?;
+    Some(ResolvedTitleInput {
+        transcript_id,
+        first_user_message,
+    })
 }
 
 pub fn normalize_generated_title(raw: &str) -> Option<String> {
@@ -100,20 +116,20 @@ pub fn generate_title(
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
 }
 
-fn resolve_transcript(session_id: uuid::Uuid) -> Option<(PathBuf, AgentHistoryProvider)> {
+fn resolve_transcript(session_id: uuid::Uuid) -> Option<(PathBuf, AgentHistoryProvider, String)> {
     if let Some(live) = agent_resume::live_transcript(session_id) {
         let provider = match live.kind {
             agent_resume::AgentKind::Claude => AgentHistoryProvider::Claude,
             agent_resume::AgentKind::Codex => AgentHistoryProvider::Codex,
             agent_resume::AgentKind::Antigravity => AgentHistoryProvider::Antigravity,
         };
-        return Some((live.path, provider));
+        return Some((live.path, provider, live.id));
     }
 
     todos::locate_transcript_for(&session_id.to_string())
         .ok()
         .flatten()
-        .map(|path| (path, AgentHistoryProvider::Claude))
+        .map(|path| (path, AgentHistoryProvider::Claude, session_id.to_string()))
 }
 
 #[cfg(test)]
@@ -181,13 +197,31 @@ mod tests {
             false,
             SessionKind::Regular,
         );
-        assert!(can_generate_title(&session));
+        assert!(can_generate_title(&session, None));
 
         session.title_source = SessionTitleSource::Manual;
-        assert!(!can_generate_title(&session));
+        assert!(!can_generate_title(&session, Some("transcript-1")));
 
         session.title_source = SessionTitleSource::Default;
         session.owner = SessionOwner::control(uuid::Uuid::new_v4());
-        assert!(!can_generate_title(&session));
+        assert!(!can_generate_title(&session, Some("transcript-1")));
+    }
+
+    #[test]
+    fn generated_titles_can_regenerate_after_transcript_rotation() {
+        let mut session = Session::new(
+            "repo".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.title_source = SessionTitleSource::Generated;
+        session.generated_title_transcript_id = Some("old-transcript".to_string());
+
+        assert!(!can_generate_title(&session, Some("old-transcript")));
+        assert!(can_generate_title(&session, Some("new-transcript")));
+        assert!(!can_generate_title(&session, None));
     }
 }
