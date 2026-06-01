@@ -97,6 +97,20 @@ describe("terminal file links", () => {
     ]);
   });
 
+  it("finds file references with non-ASCII path segments", () => {
+    expect(
+      findTerminalFileReferences(
+        "문서 docs/guides/한국어/설정가이드.md",
+      ),
+    ).toEqual([
+      {
+        path: "docs/guides/한국어/설정가이드.md",
+        text: "docs/guides/한국어/설정가이드.md",
+        startIndex: 3,
+      },
+    ]);
+  });
+
   it("finds Acorn worktree-relative file references", () => {
     expect(
       findTerminalFileReferences(
@@ -229,6 +243,30 @@ describe("terminal file links", () => {
       "/repo/app/.acorn/worktrees/current/src/.acorn/worktrees/other/src/components/RightPanel.tsx",
       "/repo/app/.acorn/worktrees/current/.acorn/worktrees/other/src/components/RightPanel.tsx",
       "/repo/app/.acorn/worktrees/other/src/components/RightPanel.tsx",
+    ]);
+  });
+
+  it("returns ancestor-prefixed candidates when paths include the current folder name", () => {
+    expect(
+      resolveTerminalFilePathCandidates(
+        "/Users/me/works/folder_a",
+        "folder_a/b/c/test.md",
+      ),
+    ).toEqual([
+      "/Users/me/works/folder_a/folder_a/b/c/test.md",
+      "/Users/me/works/folder_a/b/c/test.md",
+    ]);
+  });
+
+  it("returns ancestor-prefixed candidates from deeper cwd suffixes", () => {
+    expect(
+      resolveTerminalFilePathCandidates(
+        "/Users/me/works/folder_a/b",
+        "folder_a/b/c/test.md",
+      ),
+    ).toEqual([
+      "/Users/me/works/folder_a/b/folder_a/b/c/test.md",
+      "/Users/me/works/folder_a/b/c/test.md",
     ]);
   });
 

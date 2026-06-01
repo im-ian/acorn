@@ -28,9 +28,9 @@ export interface TerminalFileLinkProviderOptions {
 }
 
 const FILE_REF_RE =
-  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z0-9._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))/g;
+  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[\p{L}\p{N}._@+-]+\/)+[\p{L}\p{N}._@+-]+|[\p{L}\p{N}._@+-]*\.[\p{L}\p{N}._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))/gu;
 const FILE_PATH_RE =
-  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[A-Za-z0-9._@+-]+\/)+[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+|[A-Za-z0-9._@+-]*\.[A-Za-z][A-Za-z0-9_@+-]+))(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))/g;
+  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[\p{L}\p{N}._@+-]+\/)+[\p{L}\p{N}._@+-]*\.[\p{L}][\p{L}\p{N}_@+-]+|[\p{L}\p{N}._@+-]*\.[\p{L}][\p{L}\p{N}_@+-]+))(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))/gu;
 
 export function createTerminalFileLinkProvider(
   terminal: XTerm,
@@ -202,10 +202,45 @@ export function resolveTerminalFilePathCandidates(
       ),
     ];
   }
-  const candidates = [cwd, ...(options.basePaths ?? [])].map((base) =>
-    normalizePosixPath(`${base.replace(/\/+$/u, "")}/${referencePath}`),
-  );
+  const candidates = [cwd, ...(options.basePaths ?? [])].flatMap((base) => {
+    const basePath = base.replace(/\/+$/u, "");
+    return [
+      normalizePosixPath(`${basePath}/${referencePath}`),
+      ...resolveAncestorPrefixedPathCandidates(basePath, referencePath),
+    ];
+  });
   return Array.from(new Set(candidates));
+}
+
+function resolveAncestorPrefixedPathCandidates(
+  base: string,
+  referencePath: string,
+): string[] {
+  if (referencePath.startsWith("./") || referencePath.startsWith("../")) {
+    return [];
+  }
+  const normalizedBase = normalizePosixPath(base);
+  const absolute = normalizedBase.startsWith("/");
+  const baseParts = normalizedBase.split("/").filter(Boolean);
+  const referenceParts = referencePath.split("/").filter(Boolean);
+  const maxMatchLength = Math.min(baseParts.length, referenceParts.length - 1);
+  const candidates: string[] = [];
+  for (let matchLength = maxMatchLength; matchLength >= 1; matchLength -= 1) {
+    const baseSuffix = baseParts.slice(baseParts.length - matchLength);
+    const referencePrefix = referenceParts.slice(0, matchLength);
+    if (!samePathParts(baseSuffix, referencePrefix)) continue;
+    const candidateParts = [
+      ...baseParts.slice(0, baseParts.length - matchLength),
+      ...referenceParts,
+    ];
+    const candidate = candidateParts.join("/");
+    candidates.push(normalizePosixPath(absolute ? `/${candidate}` : candidate));
+  }
+  return candidates;
+}
+
+function samePathParts(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((part, index) => part === b[index]);
 }
 
 function normalizePosixPath(path: string): string {
