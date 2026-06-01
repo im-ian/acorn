@@ -10,7 +10,6 @@ import {
   GitFork,
   Pencil,
   PencilLine,
-  Sparkles,
   SplitSquareHorizontal,
   SplitSquareVertical,
   SquareX,
@@ -1234,7 +1233,11 @@ function TabItem({
           className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-3"
           data-tab-drag-handle={tab.id}
         >
-          {agentProvider ? (
+          {isGeneratingTitle ? (
+            <SessionTitleGeneratingIndicator
+              label={paneT(t, "pane.aria.generatingSessionTitle")}
+            />
+          ) : agentProvider ? (
             <Tooltip label={agentProvider} side="bottom">
               <AgentProviderIcon
                 provider={agentProvider}
@@ -1274,11 +1277,6 @@ function TabItem({
               {tab.title}
             </span>
           )}
-          {isGeneratingTitle && !editing ? (
-            <SessionTitleGeneratingIndicator
-              label={paneT(t, "pane.aria.generatingSessionTitle")}
-            />
-          ) : null}
           {showWorktreeIcon ? (
             <GitBranch
               size={10}
@@ -1337,6 +1335,7 @@ function TabItem({
             session={session}
             agentProvider={agentProvider}
             isGeneratingTitle={isGeneratingTitle}
+            generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
             showWorktreeIcon={showWorktreeIcon}
           />
         ) : null}
@@ -1358,6 +1357,7 @@ function WorkspaceTabDragGhost({
   session,
   agentProvider,
   isGeneratingTitle,
+  generatingLabel,
   showWorktreeIcon,
 }: {
   drag: WorkspaceTabDragSession;
@@ -1365,6 +1365,7 @@ function WorkspaceTabDragGhost({
   session: Session | null;
   agentProvider: SessionAgentProvider | null;
   isGeneratingTitle: boolean;
+  generatingLabel: string;
   showWorktreeIcon: boolean;
 }) {
   return createPortal(
@@ -1378,7 +1379,9 @@ function WorkspaceTabDragGhost({
         height: drag.sourceRect.height,
       }}
     >
-      {agentProvider ? (
+      {isGeneratingTitle ? (
+        <SessionTitleGeneratingIndicator label={generatingLabel} />
+      ) : agentProvider ? (
         <AgentProviderIcon
           provider={agentProvider}
           className={cn(
@@ -1400,12 +1403,6 @@ function WorkspaceTabDragGhost({
         />
       )}
       <span className="min-w-0 truncate">{drag.title}</span>
-      {isGeneratingTitle ? (
-        <Sparkles
-          size={9}
-          className="pointer-events-none shrink-0 text-accent"
-        />
-      ) : null}
       {showWorktreeIcon ? (
         <GitBranch
           size={10}
