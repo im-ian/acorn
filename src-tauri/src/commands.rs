@@ -4274,7 +4274,8 @@ mod tests {
         collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
         memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
-        validate_editor_command, validate_new_project_name, ProcessMemorySnapshot,
+        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
+        ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
@@ -4567,6 +4568,79 @@ mod tests {
                 .last_response_id
                 .as_deref(),
             Some("response-2")
+        );
+    }
+
+    #[test]
+    fn cli_chat_provider_advertises_native_threads_for_resume_capable_clis() {
+        for provider in [
+            crate::ai::AiProvider::Claude,
+            crate::ai::AiProvider::Codex,
+            crate::ai::AiProvider::Antigravity,
+        ] {
+            let adapter = super::CliChatProviderAdapter {
+                ai: crate::ai::AiExecutionRequest {
+                    provider,
+                    ollama_model: None,
+                    llm_model: None,
+                },
+                cwd: PathBuf::from("/tmp/acorn"),
+                cancellation: None,
+            };
+
+            assert!(
+                adapter.capabilities().native_thread,
+                "{provider:?} should support provider-native chat continuation"
+            );
+        }
+    }
+
+    #[test]
+    fn chat_cli_invocation_resumes_existing_provider_thread() {
+        let input = super::ChatProviderInput {
+            thread: Some(crate::persistence::ProviderThread {
+                session_id: Uuid::new_v4().to_string(),
+                provider: "claude".to_string(),
+                model: None,
+                native_thread_id: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string()),
+                resume_token: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            }),
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "continue in provider state",
+            ),
+            context: None,
+            model: None,
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Claude,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(invocation.command, "claude");
+        assert_eq!(
+            invocation.args,
+            vec![
+                "-p",
+                "--output-format",
+                "text",
+                "--resume",
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            ]
+        );
+        assert_eq!(invocation.prompt, "continue in provider state");
+        assert_eq!(
+            invocation.native_thread_id.as_deref(),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         );
     }
 
