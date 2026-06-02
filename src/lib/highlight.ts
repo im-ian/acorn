@@ -1,5 +1,6 @@
 import {
   createHighlighter,
+  createJavaScriptRegexEngine,
   type BundledLanguage,
   type BundledTheme,
   type Highlighter,
@@ -70,6 +71,12 @@ const FILENAME_LANG: Record<string, BundledLanguage> = {
   "CMakeLists.txt": "cmake",
 };
 
+// Use the pure-JS regex engine instead of shiki's default oniguruma WASM
+// engine: the hardened renderer CSP (script-src 'self', no wasm-unsafe-eval)
+// blocks WebAssembly instantiation in the WKWebView, which would otherwise
+// make createHighlighter reject and silently drop all highlighting.
+const jsEngine = createJavaScriptRegexEngine({ forgiving: true });
+
 let highlighterPromise: Promise<Highlighter> | null = null;
 const loadedLangs = new Set<BundledLanguage>();
 const loadingLang = new Map<BundledLanguage, Promise<void>>();
@@ -79,6 +86,7 @@ function getHighlighter(): Promise<Highlighter> {
     highlighterPromise = createHighlighter({
       themes: THEMES,
       langs: [],
+      engine: jsEngine,
     });
   }
   return highlighterPromise;
