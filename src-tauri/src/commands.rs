@@ -4776,6 +4776,33 @@ mod tests {
     }
 
     #[test]
+    fn chat_state_running_check_detects_running_turn_without_pending_message() {
+        let now = chrono::Utc::now();
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "running prompt"),
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                "not marked pending yet",
+            ),
+        ]);
+        state.turns.push(crate::persistence::ChatTurn {
+            id: "turn-1".to_string(),
+            session_id: state.session_id.clone(),
+            provider: "codex".to_string(),
+            model: None,
+            status: crate::persistence::ChatTurnStatus::Running,
+            user_message_id: "u1".to_string(),
+            assistant_message_id: Some("a1".to_string()),
+            started_at: now,
+            completed_at: None,
+            error: None,
+        });
+
+        assert!(super::chat_state_has_running_message(&state));
+    }
+
+    #[test]
     fn compiled_context_omits_full_transcript_once_over_threshold() {
         let messages = vec![
             chat_message(
@@ -5196,6 +5223,39 @@ mod tests {
     }
 
     #[test]
+    fn chat_runtime_records_provider_metadata_on_user_messages() {
+        let state = chat_state_for_runtime(Vec::new());
+        let adapter = RecordingChatProviderAdapter::default();
+
+        let result = super::run_chat_turn_for_test(
+            state,
+            crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                ollama_model: None,
+                llm_model: None,
+            },
+            "remember my provider".to_string(),
+            &adapter,
+        )
+        .unwrap();
+
+        let user_message = result
+            .pending_state
+            .messages
+            .iter()
+            .find(|message| message.role == crate::persistence::ChatRole::User)
+            .unwrap();
+        assert_eq!(
+            user_message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("provider"))
+                .and_then(serde_json::Value::as_str),
+            Some("codex")
+        );
+    }
+
+    #[test]
     fn cancel_chat_turn_marks_running_turn_and_pending_assistant_message() {
         let now = chrono::Utc::now();
         let mut state = chat_state_for_runtime(vec![crate::persistence::ChatMessage {
@@ -5293,7 +5353,34 @@ mod tests {
     }
 
     #[test]
-    fn delete_chat_branch_removes_selected_message_and_following_context() {
+    fn retry_chat_branch_rejects_non_last_message() {
+        let state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "first"),
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                "first answer",
+            ),
+            chat_message("u2", crate::persistence::ChatRole::User, "second"),
+            chat_message(
+                "a2",
+                crate::persistence::ChatRole::Assistant,
+                "second answer",
+            ),
+        ]);
+
+        let err = match super::prepare_chat_retry_branch(state, "u2", Some("edit".to_string())) {
+            Ok(_) => panic!("retrying a non-last message should be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("only the last chat message"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn delete_chat_branch_removes_last_message_and_resets_hidden_context() {
         let mut state = chat_state_for_runtime(vec![
             chat_message("u1", crate::persistence::ChatRole::User, "first"),
             chat_message(
@@ -5321,7 +5408,7 @@ mod tests {
             });
         state.memory.summary = Some("stale summary".to_string());
 
-        let pruned = super::delete_chat_branch_from_message(state, "u2").unwrap();
+        let pruned = super::delete_chat_branch_from_message(state, "a2").unwrap();
 
         assert_eq!(
             pruned
@@ -5329,10 +5416,30 @@ mod tests {
                 .iter()
                 .map(|m| m.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["u1", "a1"]
+            vec!["u1", "a1", "u2"]
         );
         assert!(pruned.provider_threads.is_empty());
         assert!(pruned.memory.summary.is_none());
+    }
+
+    #[test]
+    fn delete_chat_branch_rejects_non_last_message() {
+        let state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "first"),
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                "first answer",
+            ),
+            chat_message("u2", crate::persistence::ChatRole::User, "second"),
+        ]);
+
+        let err = super::delete_chat_branch_from_message(state, "a1")
+            .expect_err("deleting a non-last message should be rejected");
+        assert!(
+            err.to_string().contains("only the last chat message"),
+            "{err}"
+        );
     }
 
     #[test]

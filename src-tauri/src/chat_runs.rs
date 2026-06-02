@@ -110,3 +110,25 @@ impl ChatRunRegistry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ChatRunRegistry;
+    use uuid::Uuid;
+
+    #[test]
+    fn registry_reports_active_sessions() {
+        let registry = ChatRunRegistry::default();
+        let session_id = Uuid::new_v4();
+
+        assert!(!registry.is_active(&session_id));
+        let cancellation = registry
+            .start(session_id, "turn-1".to_string())
+            .expect("start chat run");
+        assert!(registry.is_active(&session_id));
+
+        registry.finish(&session_id, cancellation.turn_id());
+
+        assert!(!registry.is_active(&session_id));
+    }
+}

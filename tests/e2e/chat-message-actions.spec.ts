@@ -183,7 +183,7 @@ test.describe("chat message actions", () => {
             content: "original prompt",
             created_at: now,
             status: "complete",
-            metadata: null,
+            metadata: { provider: "claude" },
           },
           {
             id: "a1",
@@ -273,6 +273,9 @@ test.describe("chat message actions", () => {
     await page.getByRole("button", { name: "Regenerate Claude message" }).click();
     await expect(page.getByText("regenerated answer")).toBeVisible();
 
+    await page.getByRole("button", { name: "Delete Claude message" }).click();
+    await expect(page.getByText("regenerated answer")).toHaveCount(0);
+
     await page.getByRole("button", { name: "Edit user message" }).click();
     await page.getByLabel("Edit user message content").fill("edited prompt");
     await page.getByRole("button", { name: "Save edited user message" }).click();
@@ -287,6 +290,6 @@ test.describe("chat message actions", () => {
       remove: (window as unknown as { __deleteCalls?: unknown[] }).__deleteCalls,
     }));
     expect(calls.retry).toHaveLength(2);
-    expect(calls.remove).toHaveLength(1);
+    expect(calls.remove).toHaveLength(2);
   });
 });

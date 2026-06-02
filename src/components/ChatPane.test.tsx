@@ -69,7 +69,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
 }));
 
-import { ChatPane } from "./ChatPane";
+import { ChatPane, resolveMessageActionProvider } from "./ChatPane";
 import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
@@ -1148,6 +1148,36 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("new answer");
   });
 
+  it("resolves user message action providers from the following assistant", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "u1",
+        role: "user",
+        content: "old prompt",
+        created_at: "2026-01-01T00:00:00Z",
+        status: "complete",
+        metadata: null,
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "codex answer",
+        created_at: "2026-01-01T00:00:01Z",
+        status: "complete",
+        metadata: { provider: "codex" },
+      },
+    ];
+
+    expect(
+      resolveMessageActionProvider({
+        messages,
+        message: messages[0],
+        stateProvider: "claude",
+        fallbackProvider: "claude",
+      }),
+    ).toBe("codex");
+  });
+
   it("edits a user message and resends the chat branch", async () => {
     const initial = chatState(
       "s1",
@@ -1158,18 +1188,10 @@ describe("ChatPane", () => {
           content: "old prompt",
           created_at: "2026-01-01T00:00:00Z",
           status: "complete",
-          metadata: null,
-        },
-        {
-          id: "a1",
-          role: "assistant",
-          content: "old answer",
-          created_at: "2026-01-01T00:00:01Z",
-          status: "complete",
           metadata: { provider: "codex" },
         },
       ],
-      "codex",
+      "claude",
     );
     const edited = chatState(
       "s1",
@@ -1178,12 +1200,8 @@ describe("ChatPane", () => {
           ...initial.messages[0],
           content: "edited prompt",
         },
-        {
-          ...initial.messages[1],
-          content: "edited answer",
-        },
       ],
-      "codex",
+      "claude",
     );
     mocks.loadChatSessionState.mockResolvedValueOnce(initial);
     mocks.retryChatMessage.mockResolvedValueOnce(edited);
@@ -1223,7 +1241,57 @@ describe("ChatPane", () => {
       "u1",
       "edited prompt",
     );
-    expect(container.textContent).toContain("edited answer");
+    expect(container.textContent).toContain("edited prompt");
+  });
+
+  it("hides recreate edit and delete actions for non-last messages", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState(
+        "s1",
+        [
+          {
+            id: "u1",
+            role: "user",
+            content: "older prompt",
+            created_at: "2026-01-01T00:00:00Z",
+            status: "complete",
+            metadata: null,
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "older answer",
+            created_at: "2026-01-01T00:00:01Z",
+            status: "complete",
+            metadata: { provider: "claude" },
+          },
+          {
+            id: "u2",
+            role: "user",
+            content: "latest prompt",
+            created_at: "2026-01-01T00:00:02Z",
+            status: "complete",
+            metadata: null,
+          },
+        ],
+        "claude",
+      ),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    expect(
+      container.querySelectorAll('button[aria-label="Edit user message"]'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelectorAll('button[aria-label^="Delete "]'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector('button[aria-label="Regenerate Claude message"]'),
+    ).toBeNull();
   });
 
   it("deletes a message branch from the message actions", async () => {
