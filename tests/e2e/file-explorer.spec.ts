@@ -125,6 +125,127 @@ test.describe("file explorer", () => {
     ).toBeVisible();
   });
 
+  test("keeps expanded folders when the live repo root carries a trailing slash", async ({
+    page,
+    tauri,
+  }) => {
+    // libgit2's `Repository::workdir()` — what `pty_repo_root` returns — always
+    // carries a trailing slash. Recorded paths (project/session) never do. If
+    // the slashed form reaches the panel it fails to match any retained repo
+    // path, so the expansion cache silently drops writes and folders collapse
+    // on the next remount. This drives a project switch (which remounts the
+    // File Explorer) to prove the expansion survives.
+    const repoA = "/tmp/alpha";
+    const repoB = "/tmp/beta";
+    const worktreeA = "/tmp/alpha/.worktrees/a-session";
+    const worktreeB = "/tmp/beta/.worktrees/b-session";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repoA,
+        name: "alpha",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+      {
+        repo_path: repoB,
+        name: "beta",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 1,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "a-session",
+        name: "a-session",
+        repo_path: repoA,
+        worktree_path: worktreeA,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+      {
+        id: "b-session",
+        name: "b-session",
+        repo_path: repoB,
+        worktree_path: worktreeB,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    // Mirror real libgit2 behavior: hand the frontend a trailing-slash workdir.
+    await tauri.handle("pty_repo_root", (args) => {
+      const { sessionId } = args as { sessionId: string };
+      if (sessionId === "a-session") return "/tmp/alpha/.worktrees/a-session/";
+      if (sessionId === "b-session") return "/tmp/beta/.worktrees/b-session/";
+      return null;
+    });
+    await tauri.handle("fs_list_dir", (args) => {
+      // The backend tolerates either form; normalize so the tree still renders
+      // pre-fix (the bug is purely about persistence, not initial listing).
+      const { path } = args as { path: string };
+      const normalized = path.replace(/\/+$/, "");
+      const wt = "/tmp/alpha/.worktrees/a-session";
+      const src = `${wt}/src`;
+      if (normalized === wt) {
+        return {
+          repo_root: wt,
+          entries: [
+            {
+              name: "src",
+              path: src,
+              is_dir: true,
+              is_symlink: false,
+              size: 0,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
+      if (normalized === src) {
+        return {
+          repo_root: wt,
+          entries: [
+            {
+              name: "App.tsx",
+              path: `${src}/App.tsx`,
+              is_dir: false,
+              is_symlink: false,
+              size: 42,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
+      return { repo_root: normalized, entries: [] };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+
+    await page.getByRole("button", { name: "src" }).click();
+    await expect(page.getByRole("button", { name: "App.tsx" })).toBeVisible();
+
+    // Switch to the other project and back — this remounts the File Explorer.
+    await page.getByRole("button", { name: "Project beta" }).click();
+    await page.getByRole("button", { name: "Project alpha" }).click();
+
+    // The expansion must survive the remount.
+    await expect(
+      page.getByRole("button", { name: "App.tsx", exact: true }),
+    ).toBeVisible();
+  });
+
   test("previews markdown files from a code viewer tab", async ({
     page,
     tauri,
