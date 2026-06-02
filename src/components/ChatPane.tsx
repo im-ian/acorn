@@ -5,8 +5,11 @@ import {
   GitFork,
   LoaderCircle,
   Paperclip,
+  Pencil,
+  RotateCcw,
   Send,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -453,6 +456,11 @@ export function ChatPane({
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(
+    null,
+  );
   const [startupWorktreeMode, setStartupWorktreeMode] =
     useState<ChatWorktreeMode>("same");
   const [forkTargetIndex, setForkTargetIndex] = useState<number | null>(null);
@@ -579,6 +587,9 @@ export function ChatPane({
   useEffect(() => {
     setStartupWorktreeMode("same");
     setForkTargetIndex(null);
+    setEditingMessageId(null);
+    setEditDraft("");
+    setMessageActionBusyId(null);
   }, [sessionId]);
 
   useEffect(() => {
@@ -777,6 +788,80 @@ export function ChatPane({
     }
   }
 
+  function providerForMessage(message: ChatMessage): ChatProvider {
+    return (
+      providerFromString(providerFromMetadata(message.metadata) ?? stateProvider) ??
+      provider
+    );
+  }
+
+  async function handleRetryMessage(
+    message: ChatMessage,
+    replacementContent?: string,
+  ) {
+    if (sending || hasRunningMessages || messageActionBusyId) return;
+    const content =
+      replacementContent === undefined ? undefined : replacementContent.trim();
+    if (content !== undefined && !content) return;
+    forceScrollToBottomRef.current = true;
+    setMessageActionBusyId(message.id);
+    setSending(true);
+    setError(null);
+    setLocalChatSessionStatus(sessionId, "running");
+    try {
+      const saved = await api.retryChatMessage(
+        sessionId,
+        chatAiRequest(providerForMessage(message), settings),
+        message.id,
+        content,
+      );
+      applyChatState(saved);
+      setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
+      setEditingMessageId(null);
+      setEditDraft("");
+    } catch (err) {
+      setError(String(err));
+      setLocalChatSessionStatus(sessionId, "failed");
+    } finally {
+      setSending(false);
+      setMessageActionBusyId(null);
+    }
+  }
+
+  function beginEditingMessage(message: ChatMessage) {
+    if (sending || hasRunningMessages || messageActionBusyId) return;
+    setEditingMessageId(message.id);
+    setEditDraft(message.content);
+  }
+
+  function cancelEditingMessage() {
+    setEditingMessageId(null);
+    setEditDraft("");
+  }
+
+  async function handleSaveEditedMessage(message: ChatMessage) {
+    await handleRetryMessage(message, editDraft);
+  }
+
+  async function handleDeleteMessage(message: ChatMessage) {
+    if (sending || hasRunningMessages || messageActionBusyId) return;
+    setMessageActionBusyId(message.id);
+    setError(null);
+    try {
+      const saved = await api.deleteChatMessage(sessionId, message.id);
+      applyChatState(saved);
+      setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
+      if (editingMessageId === message.id) {
+        setEditingMessageId(null);
+        setEditDraft("");
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setMessageActionBusyId(null);
+    }
+  }
+
   function openForkDialog(index: number) {
     setForkTargetIndex(index);
   }
@@ -880,6 +965,17 @@ export function ChatPane({
               const timestampTitle = formatMessageTimestampTitle(
                 message.created_at,
               );
+              const isEditing = editingMessageId === message.id;
+              const isActionBusy = messageActionBusyId === message.id;
+              const actionDisabled =
+                sending ||
+                cancelling ||
+                hasRunningMessages ||
+                messageActionBusyId !== null;
+              const canEditMessage = isUser && !isPending;
+              const canRegenerateMessage = message.role === "assistant" && !isPending;
+              const canDeleteMessage = !isSystem && !isPending;
+              const actionLabel = headerLabel ?? message.role;
               const bubbleClass = isUser
                 ? "bg-accent/18 text-fg ring-accent/35"
                 : isError
@@ -955,6 +1051,52 @@ export function ChatPane({
                             </>
                           ) : null}
                         </div>
+                      ) : isEditing ? (
+                        <div className="flex min-w-0 flex-col gap-2">
+                          <textarea
+                            aria-label="Edit user message content"
+                            className="min-h-24 w-full min-w-[18rem] resize-y rounded border border-border bg-bg px-2 py-1.5 text-sm leading-5 text-fg outline-none focus:border-accent/70 disabled:opacity-60"
+                            disabled={isActionBusy}
+                            value={editDraft}
+                            onChange={(event) => setEditDraft(event.target.value)}
+                          />
+                          <div className="flex justify-end gap-1">
+                            <Tooltip label="Cancel edit" side="bottom">
+                              <button
+                                aria-label="Cancel edited user message"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={isActionBusy}
+                                type="button"
+                                onClick={cancelEditingMessage}
+                              >
+                                <X size={13} />
+                              </button>
+                            </Tooltip>
+                            <Tooltip
+                              label="Save edit and regenerate"
+                              side="bottom"
+                            >
+                              <button
+                                aria-label="Save edited user message"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded text-accent transition hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={isActionBusy || !editDraft.trim()}
+                                type="button"
+                                onClick={() =>
+                                  void handleSaveEditedMessage(message)
+                                }
+                              >
+                                {isActionBusy ? (
+                                  <LoaderCircle
+                                    size={13}
+                                    className="animate-spin"
+                                  />
+                                ) : (
+                                  <Check size={13} />
+                                )}
+                              </button>
+                            </Tooltip>
+                          </div>
+                        </div>
                       ) : (
                         <ChatMessageBody
                           content={message.content}
@@ -1026,6 +1168,59 @@ export function ChatPane({
                             )}
                           </button>
                         </Tooltip>
+                        {canRegenerateMessage ? (
+                          <Tooltip label="Regenerate response" side="bottom">
+                            <button
+                              aria-label={`Regenerate ${actionLabel} message`}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={actionDisabled}
+                              type="button"
+                              onClick={() => void handleRetryMessage(message)}
+                            >
+                              {isActionBusy ? (
+                                <LoaderCircle
+                                  size={12}
+                                  className="animate-spin"
+                                />
+                              ) : (
+                                <RotateCcw size={12} />
+                              )}
+                            </button>
+                          </Tooltip>
+                        ) : null}
+                        {canEditMessage ? (
+                          <Tooltip label="Edit message" side="bottom">
+                            <button
+                              aria-label={`Edit ${actionLabel} message`}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={actionDisabled}
+                              type="button"
+                              onClick={() => beginEditingMessage(message)}
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          </Tooltip>
+                        ) : null}
+                        {canDeleteMessage ? (
+                          <Tooltip label="Delete from here" side="bottom">
+                            <button
+                              aria-label={`Delete ${actionLabel} message`}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-danger/10 hover:text-danger focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-danger/50 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={actionDisabled}
+                              type="button"
+                              onClick={() => void handleDeleteMessage(message)}
+                            >
+                              {isActionBusy ? (
+                                <LoaderCircle
+                                  size={12}
+                                  className="animate-spin"
+                                />
+                              ) : (
+                                <Trash2 size={12} />
+                              )}
+                            </button>
+                          </Tooltip>
+                        ) : null}
                         {canForkBeforeMessage ? (
                           <Tooltip
                             label="Fork chat before this message"

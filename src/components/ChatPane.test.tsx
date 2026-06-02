@@ -1141,7 +1141,7 @@ describe("ChatPane", () => {
 
     expect(mocks.retryChatMessage).toHaveBeenCalledWith(
       "s1",
-      { provider: "claude" },
+      expect.objectContaining({ provider: "claude" }),
       "a1",
       undefined,
     );
@@ -1219,7 +1219,7 @@ describe("ChatPane", () => {
 
     expect(mocks.retryChatMessage).toHaveBeenCalledWith(
       "s1",
-      { provider: "codex" },
+      expect.objectContaining({ provider: "codex" }),
       "u1",
       "edited prompt",
     );

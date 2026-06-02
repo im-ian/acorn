@@ -168,6 +168,12 @@ export const tauriMockSource = `
     if (cmd === 'cancel_chat_message') {
       return Promise.resolve(chatState(args?.sessionId, null, []));
     }
+    if (cmd === 'retry_chat_message') {
+      return Promise.resolve(chatState(args?.sessionId, args?.ai?.provider || 'claude', []));
+    }
+    if (cmd === 'delete_chat_message') {
+      return Promise.resolve(chatState(args?.sessionId, null, []));
+    }
     if (cmd === 'detect_session_agent') {
       return Promise.resolve({ claude: null, codex: null, antigravity: null });
     }

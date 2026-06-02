@@ -208,6 +208,28 @@ export const api = {
       content,
     });
   },
+  retryChatMessage(
+    sessionId: string,
+    ai: AiExecutionRequest,
+    messageId: string,
+    content?: string,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("retry_chat_message", {
+      sessionId,
+      ai,
+      messageId,
+      content,
+    });
+  },
+  deleteChatMessage(
+    sessionId: string,
+    messageId: string,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("delete_chat_message", {
+      sessionId,
+      messageId,
+    });
+  },
   cancelChatMessage(sessionId: string): Promise<ChatSessionState> {
     return invoke<ChatSessionState>("cancel_chat_message", {
       sessionId,

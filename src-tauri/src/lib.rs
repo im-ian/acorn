@@ -522,6 +522,8 @@ pub fn run() {
             commands::append_chat_message,
             commands::update_chat_message,
             commands::send_chat_message,
+            commands::retry_chat_message,
+            commands::delete_chat_message,
             commands::cancel_chat_message,
             commands::list_projects,
             commands::add_project,

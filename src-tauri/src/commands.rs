@@ -781,6 +781,11 @@ enum ChatTurnFinish {
     Cancelled,
 }
 
+struct ChatRetryBranch {
+    state: persistence::ChatSessionState,
+    content: String,
+}
+
 fn start_chat_turn(
     mut chat_state: persistence::ChatSessionState,
     session: Option<&Session>,
@@ -1045,6 +1050,128 @@ fn cancel_chat_turn_in_state(
     (chat_state, changed)
 }
 
+fn chat_state_has_running_message(chat_state: &persistence::ChatSessionState) -> bool {
+    chat_state.messages.iter().any(|message| {
+        matches!(
+            message.status,
+            Some(persistence::ChatMessageStatus::Pending)
+                | Some(persistence::ChatMessageStatus::Streaming)
+        )
+    })
+}
+
+fn reset_chat_branch_hidden_context(chat_state: &mut persistence::ChatSessionState) {
+    let remaining_message_ids = chat_state
+        .messages
+        .iter()
+        .map(|message| message.id.clone())
+        .collect::<HashSet<_>>();
+    chat_state.turns.retain(|turn| {
+        remaining_message_ids.contains(&turn.user_message_id)
+            && turn
+                .assistant_message_id
+                .as_ref()
+                .is_none_or(|id| remaining_message_ids.contains(id))
+    });
+    let remaining_turn_ids = chat_state
+        .turns
+        .iter()
+        .map(|turn| turn.id.clone())
+        .collect::<HashSet<_>>();
+    chat_state
+        .context_snapshots
+        .retain(|snapshot| remaining_turn_ids.contains(&snapshot.turn_id));
+    chat_state.provider_threads.clear();
+    chat_state.memory = persistence::SessionMemory {
+        session_id: chat_state.session_id.clone(),
+        summary: None,
+        important_decisions: Vec::new(),
+        facts: Vec::new(),
+        through_message_id: None,
+        updated_at: chrono::Utc::now(),
+    };
+}
+
+fn truncate_chat_state_before_message_index(
+    mut chat_state: persistence::ChatSessionState,
+    index: usize,
+) -> persistence::ChatSessionState {
+    chat_state.messages.truncate(index);
+    reset_chat_branch_hidden_context(&mut chat_state);
+    let now = chrono::Utc::now();
+    chat_state.session.updated_at = now;
+    chat_state.updated_at = now;
+    chat_state
+}
+
+fn delete_chat_branch_from_message(
+    chat_state: persistence::ChatSessionState,
+    message_id: &str,
+) -> AppResult<persistence::ChatSessionState> {
+    if chat_state_has_running_message(&chat_state) {
+        return Err(AppError::Other(
+            "cannot delete chat messages while a response is running".to_string(),
+        ));
+    }
+    let index = chat_state
+        .messages
+        .iter()
+        .position(|message| message.id == message_id)
+        .ok_or_else(|| AppError::Other(format!("chat message not found: {message_id}")))?;
+    Ok(truncate_chat_state_before_message_index(chat_state, index))
+}
+
+fn retry_anchor_index(
+    chat_state: &persistence::ChatSessionState,
+    message_id: &str,
+) -> AppResult<usize> {
+    let index = chat_state
+        .messages
+        .iter()
+        .position(|message| message.id == message_id)
+        .ok_or_else(|| AppError::Other(format!("chat message not found: {message_id}")))?;
+    match chat_state.messages[index].role {
+        persistence::ChatRole::User => Ok(index),
+        persistence::ChatRole::Assistant => chat_state.messages[..index]
+            .iter()
+            .rposition(|message| message.role == persistence::ChatRole::User)
+            .ok_or_else(|| {
+                AppError::Other(format!(
+                    "assistant message has no user message to retry: {message_id}"
+                ))
+            }),
+        _ => Err(AppError::Other(
+            "only user and assistant messages can be retried".to_string(),
+        )),
+    }
+}
+
+fn prepare_chat_retry_branch(
+    chat_state: persistence::ChatSessionState,
+    message_id: &str,
+    replacement_content: Option<String>,
+) -> AppResult<ChatRetryBranch> {
+    if chat_state_has_running_message(&chat_state) {
+        return Err(AppError::Other(
+            "cannot retry chat messages while a response is running".to_string(),
+        ));
+    }
+    let anchor_index = retry_anchor_index(&chat_state, message_id)?;
+    let content = replacement_content
+        .unwrap_or_else(|| chat_state.messages[anchor_index].content.clone())
+        .trim()
+        .to_string();
+    if content.is_empty() {
+        return Err(AppError::Other(
+            "chat message must not be empty".to_string(),
+        ));
+    }
+    Ok(ChatRetryBranch {
+        state: truncate_chat_state_before_message_index(chat_state, anchor_index),
+        content,
+    })
+}
+
 fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus) -> SessionStatus {
     match status {
         persistence::ChatMessageStatus::Pending | persistence::ChatMessageStatus::Streaming => {
@@ -1054,6 +1181,23 @@ fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus
             SessionStatus::NeedsInput
         }
         persistence::ChatMessageStatus::Error => SessionStatus::Failed,
+    }
+}
+
+fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> SessionStatus {
+    if chat_state_has_running_message(chat_state) {
+        return SessionStatus::Running;
+    }
+    let last_message = chat_state.messages.last();
+    let last_turn = chat_state.turns.last();
+    if last_message
+        .and_then(|message| message.status)
+        .is_some_and(|status| status == persistence::ChatMessageStatus::Error)
+        || last_turn.is_some_and(|turn| turn.status == persistence::ChatTurnStatus::Error)
+    {
+        SessionStatus::Failed
+    } else {
+        SessionStatus::NeedsInput
     }
 }
 
@@ -2112,6 +2256,17 @@ fn send_chat_message_inner<R: Runtime>(
     content: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+    send_chat_message_from_state_inner(app, state, session, ai, content, chat_state)
+}
+
+fn send_chat_message_from_state_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session: Session,
+    ai: crate::ai::AiExecutionRequest,
+    content: String,
+    chat_state: persistence::ChatSessionState,
+) -> AppResult<persistence::ChatSessionState> {
     let mut adapter = CliChatProviderAdapter {
         ai: ai.clone(),
         cwd: session.worktree_path.clone(),
@@ -2161,6 +2316,69 @@ fn send_chat_message_inner<R: Runtime>(
     state
         .sessions
         .update_status(&session.id, final_session_status)?;
+    persist(state);
+    emit_chat_session_state_changed(app, &chat_state);
+    Ok(chat_state)
+}
+
+#[tauri::command]
+pub async fn retry_chat_message<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    ai: crate::ai::AiExecutionRequest,
+    message_id: String,
+    content: Option<String>,
+) -> AppResult<persistence::ChatSessionState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let app_state = state.inner().clone();
+    run_blocking("retry chat message", move || {
+        retry_chat_message_inner(&app, &app_state, session, ai, message_id, content)
+    })
+    .await
+}
+
+fn retry_chat_message_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session: Session,
+    ai: crate::ai::AiExecutionRequest,
+    message_id: String,
+    content: Option<String>,
+) -> AppResult<persistence::ChatSessionState> {
+    let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+    let branch = prepare_chat_retry_branch(chat_state, &message_id, content)?;
+    send_chat_message_from_state_inner(app, state, session, ai, branch.content, branch.state)
+}
+
+#[tauri::command]
+pub async fn delete_chat_message<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+    message_id: String,
+) -> AppResult<persistence::ChatSessionState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let app_state = state.inner().clone();
+    run_blocking("delete chat message", move || {
+        delete_chat_message_inner(&app, &app_state, session, message_id)
+    })
+    .await
+}
+
+fn delete_chat_message_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session: Session,
+    message_id: String,
+) -> AppResult<persistence::ChatSessionState> {
+    let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+    let mut chat_state = delete_chat_branch_from_message(chat_state, &message_id)?;
+    apply_acorn_session_metadata(&mut chat_state, &session);
+    let chat_state = persistence::save_chat_session_state(chat_state)?;
+    state
+        .sessions
+        .update_status(&session.id, chat_session_status_for_state(&chat_state))?;
     persist(state);
     emit_chat_session_state_changed(app, &chat_state);
     Ok(chat_state)
