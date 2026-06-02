@@ -6,6 +6,7 @@ import type { ChatMessage, ChatSessionState } from "../lib/types";
 const mocks = vi.hoisted(() => ({
   loadChatSessionState: vi.fn(),
   sendChatMessage: vi.fn(),
+  cancelChatMessage: vi.fn(),
   createSession: vi.fn(),
   renameSession: vi.fn(),
   updateSessionWorktree: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("../lib/api", () => ({
   api: {
     loadChatSessionState: mocks.loadChatSessionState,
     sendChatMessage: mocks.sendChatMessage,
+    cancelChatMessage: mocks.cancelChatMessage,
     createSession: mocks.createSession,
     renameSession: mocks.renameSession,
     updateSessionWorktree: mocks.updateSessionWorktree,
@@ -940,6 +942,63 @@ describe("ChatPane", () => {
     });
 
     expect(runningDuration?.textContent).toBe("1.0s");
+  });
+
+  it("lets the user stop a running chat response", async () => {
+    const running = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "please work",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "pending",
+          metadata: { provider: "codex" },
+        },
+      ],
+      "codex",
+    );
+    const cancelled = chatState(
+      "s1",
+      [
+        running.messages[0],
+        {
+          ...running.messages[1],
+          content: "Cancelled",
+          status: "cancelled",
+        } as ChatMessage,
+      ],
+      "codex",
+    );
+    mocks.loadChatSessionState.mockResolvedValueOnce(running);
+    mocks.cancelChatMessage.mockResolvedValueOnce(cancelled);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const stop = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Stop response"]',
+    );
+    expect(stop).toBeTruthy();
+
+    await act(async () => {
+      stop!.click();
+      await Promise.resolve();
+    });
+
+    expect(mocks.cancelChatMessage).toHaveBeenCalledWith("s1");
+    expect(container.textContent).toContain("Cancelled");
   });
 
   it("centers the composer until the first message appears", async () => {

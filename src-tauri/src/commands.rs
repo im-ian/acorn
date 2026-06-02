@@ -4277,6 +4277,12 @@ mod tests {
             ),
             acorn_session::SessionStatus::Failed
         );
+        assert_eq!(
+            super::chat_session_status_for_message_status(
+                crate::persistence::ChatMessageStatus::Cancelled
+            ),
+            acorn_session::SessionStatus::NeedsInput
+        );
     }
 
     #[test]
