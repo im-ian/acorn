@@ -8,6 +8,7 @@ import {
   FolderPlus,
   GitBranch,
   GitFork,
+  MessageSquareText,
   Pencil,
   PencilLine,
   SplitSquareHorizontal,
@@ -27,6 +28,7 @@ import {
 import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { CodeViewer } from "./CodeViewer";
+import { ChatPane } from "./ChatPane";
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
@@ -206,6 +208,7 @@ export function Pane({ paneId }: PaneProps) {
 
   const isFocused = focusedPaneId === paneId;
   const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
+  const activeSession = active?.kind === "session" ? active.session : null;
 
   function scopeForTab(tab: PaneTab): SessionCreateScope {
     if (tab.kind === "session") return scopeForSession(tab.session);
@@ -456,6 +459,14 @@ export function Pane({ paneId }: PaneProps) {
           no-active-session case — or a CodeViewer when the active tab is
           a frontend-owned code tab instead of a PTY session.
         */}
+        {activeSession?.mode === "chat" ? (
+          <ChatPane
+            sessionId={activeSession.id}
+            isActive={isFocused}
+            repoPath={activeSession.worktree_path}
+            session={activeSession}
+          />
+        ) : null}
         {active?.kind === "code" ? (
           <CodeViewer
             path={active.path}
@@ -490,7 +501,7 @@ export function Pane({ paneId }: PaneProps) {
         onClose={() => setPaneMenu(null)}
         items={buildPaneMenuItems({
           t,
-          activeSession: active?.kind === "session" ? active.session : null,
+          activeSession,
           totalPanes,
           paneId,
           onNewTab: () => void handleNewTabFromEmpty(),
@@ -1237,6 +1248,16 @@ function TabItem({
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
             />
+          ) : session?.mode === "chat" ? (
+            <Tooltip label={paneT(t, "pane.aria.chatSession")} side="bottom">
+              <MessageSquareText
+                size={12}
+                className={cn(
+                  "pointer-events-none shrink-0",
+                  session && STATUS_ICON[session.status],
+                )}
+              />
+            </Tooltip>
           ) : agentProvider ? (
             <Tooltip label={agentProvider} side="bottom">
               <AgentProviderIcon
@@ -1381,6 +1402,14 @@ function WorkspaceTabDragGhost({
     >
       {isGeneratingTitle ? (
         <SessionTitleGeneratingIndicator label={generatingLabel} />
+      ) : session?.mode === "chat" ? (
+        <MessageSquareText
+          size={12}
+          className={cn(
+            "pointer-events-none shrink-0",
+            session && STATUS_ICON[session.status],
+          )}
+        />
       ) : agentProvider ? (
         <AgentProviderIcon
           provider={agentProvider}

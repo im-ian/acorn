@@ -6,6 +6,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionKind,
+  SessionMode,
   SessionTitleGenerationStatus,
   SessionNotification,
 } from "./lib/types";
@@ -196,6 +197,7 @@ interface AppStateModel {
     kind?: SessionKind,
     agentProvider?: SessionAgentProvider | null,
     projectScoped?: boolean,
+    mode?: SessionMode,
   ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
@@ -1415,6 +1417,7 @@ export const useAppStore = create<AppStateModel>()(
     kind = "regular",
     agentProvider = null,
     projectScoped = true,
+    mode = "terminal",
   ) {
     set({ loading: true, error: null });
     // Capture the user's intended insertion point before the backend call.
@@ -1425,23 +1428,41 @@ export const useAppStore = create<AppStateModel>()(
     if (placement) activeSessionPlacementIntents.add(placement);
     let createdId: string | null = null;
     try {
-      const created =
-        projectScoped === false
-          ? await api.createSession(
-              name,
-              repoPath,
-              isolated,
-              kind,
-              agentProvider,
-              false,
-            )
-          : await api.createSession(
-              name,
-              repoPath,
-              isolated,
-              kind,
-              agentProvider,
-            );
+      let created: Session;
+      if (projectScoped === false) {
+        created =
+          mode === "terminal"
+            ? await api.createSession(
+                name,
+                repoPath,
+                isolated,
+                kind,
+                agentProvider,
+                false,
+              )
+            : await api.createSession(
+                name,
+                repoPath,
+                isolated,
+                kind,
+                agentProvider,
+                false,
+                mode,
+              );
+      } else {
+        created =
+          mode === "terminal"
+            ? await api.createSession(name, repoPath, isolated, kind, agentProvider)
+            : await api.createSession(
+                name,
+                repoPath,
+                isolated,
+                kind,
+                agentProvider,
+                projectScoped,
+                mode,
+              );
+      }
       createdId = created.id;
       await get().refreshAll();
 

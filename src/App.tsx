@@ -78,7 +78,10 @@ import {
   UI_SCALE_PERCENT_STEP,
   useSettings,
 } from "./lib/settings";
-import { planAutoGenerateSessionTitles } from "./lib/sessionTitle";
+import {
+  autoTitleGenerationEnabledForSession,
+  planAutoGenerateSessionTitles,
+} from "./lib/sessionTitle";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
@@ -746,7 +749,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!settings.agents.autoGenerateSessionTitles) return;
+    if (
+      !sessions.some((session) =>
+        autoTitleGenerationEnabledForSession(
+          session,
+          settings.agents.autoGenerateSessionTitles,
+        ),
+      )
+    ) {
+      return;
+    }
 
     let cancelled = false;
     const retryTimers = new Set<ReturnType<typeof window.setTimeout>>();
@@ -768,27 +780,33 @@ function App() {
     const configKey = JSON.stringify([ai, prompt]);
     const inFlight = titleGenerationInFlightRef.current;
     const lastAttemptAt = titleGenerationLastAttemptAtRef.current;
-    const latestTitleConfigMatches = () => {
+    const latestTitleConfigMatches = (sessionId: string) => {
       const latestSettings = useSettings.getState().settings;
       const latestAi = resolveAiExecutionRequest(latestSettings);
       const latestPrompt = resolveSessionTitlePrompt(latestSettings);
       const latestConfigKey = JSON.stringify([latestAi, latestPrompt]);
+      const latestSession = useAppStore
+        .getState()
+        .sessions.find((session) => session.id === sessionId);
       return (
-        latestSettings.agents.autoGenerateSessionTitles &&
+        latestSession != null &&
+        autoTitleGenerationEnabledForSession(
+          latestSession,
+          latestSettings.agents.autoGenerateSessionTitles,
+        ) &&
         latestConfigKey === configKey
       );
     };
-    const scheduleAfterStatus = (
+    const retryDelayForStatus = (
       sessionId: string,
       status: "not_ready" | "skipped",
-    ) => {
+    ): number => {
       if (status === "not_ready") {
         lastAttemptAt.delete(sessionId);
-        scheduleRetryTick(SESSION_TITLE_NOT_READY_RETRY_MS, true);
-        return;
+        return SESSION_TITLE_NOT_READY_RETRY_MS;
       }
       lastAttemptAt.set(sessionId, Date.now());
-      scheduleRetryTick(SESSION_TITLE_RETRY_MS, true);
+      return SESSION_TITLE_RETRY_MS;
     };
     if (titleGenerationConfigKeyRef.current !== configKey) {
       titleGenerationConfigKeyRef.current = configKey;
@@ -804,31 +822,44 @@ function App() {
     });
 
     for (const sessionId of plan.sessionIds) {
+      let retryDelayAfterCompletion: number | null = null;
       inFlight.add(sessionId);
       void api
         .sessionTitleReadiness(sessionId)
         .then(async (readiness) => {
-          if (!latestTitleConfigMatches()) return;
+          if (!latestTitleConfigMatches(sessionId)) return;
           if (readiness.status !== "ready") {
-            scheduleAfterStatus(sessionId, readiness.status);
+            retryDelayAfterCompletion = retryDelayForStatus(
+              sessionId,
+              readiness.status,
+            );
             return;
           }
 
           const status = await useAppStore
             .getState()
             .generateSessionTitle(sessionId, ai, prompt);
-          if (!latestTitleConfigMatches()) return;
+          if (!latestTitleConfigMatches(sessionId)) return;
           if (status !== "generated") {
-            scheduleAfterStatus(sessionId, status);
+            retryDelayAfterCompletion = retryDelayForStatus(sessionId, status);
           }
         })
         .catch((err) => {
           console.warn("[acorn] session title readiness failed", err);
-          if (!latestTitleConfigMatches()) return;
-          scheduleAfterStatus(sessionId, "skipped");
+          if (!latestTitleConfigMatches(sessionId)) return;
+          retryDelayAfterCompletion = retryDelayForStatus(sessionId, "skipped");
         })
         .finally(() => {
           inFlight.delete(sessionId);
+          // State changes can clean up this effect while readiness is still
+          // in-flight. Schedule after completion so the retry is not erased
+          // before the session leaves the in-flight set.
+          if (
+            retryDelayAfterCompletion !== null &&
+            latestTitleConfigMatches(sessionId)
+          ) {
+            scheduleRetryTick(retryDelayAfterCompletion, true);
+          }
         });
     }
 

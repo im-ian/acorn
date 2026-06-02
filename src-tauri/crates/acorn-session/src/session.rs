@@ -151,6 +151,16 @@ pub enum SessionKind {
     Control,
 }
 
+/// High-level surface a session should render. Existing persisted sessions
+/// predate this field and load as terminal sessions.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionMode {
+    #[default]
+    Terminal,
+    Chat,
+}
+
 /// Ownership boundary for control-session-created worker sessions.
 ///
 /// User-created and legacy sessions default to `User`. Sessions created through
@@ -247,6 +257,8 @@ pub struct Session {
     #[serde(default)]
     pub kind: SessionKind,
     #[serde(default)]
+    pub mode: SessionMode,
+    #[serde(default)]
     pub owner: SessionOwner,
     /// User-defined display order within the project group. `None` means the
     /// session has never been reordered — the frontend falls back to
@@ -319,6 +331,7 @@ impl Session {
             title_source: SessionTitleSource::Default,
             generated_title_transcript_id: None,
             kind,
+            mode: SessionMode::Terminal,
             owner: SessionOwner::User,
             position: None,
             daemon_session_id: None,
@@ -575,6 +588,20 @@ mod tests {
         let restored: Session = serde_json::from_value(json).expect("session deserializes");
 
         assert_eq!(restored.title_source, SessionTitleSource::Manual);
+    }
+
+    #[test]
+    fn persisted_sessions_without_mode_load_as_terminal() {
+        let mut json =
+            serde_json::to_value(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false))
+                .expect("session serializes");
+        json.as_object_mut()
+            .expect("session json is an object")
+            .remove("mode");
+
+        let restored: Session = serde_json::from_value(json).expect("session deserializes");
+
+        assert_eq!(restored.mode, SessionMode::Terminal);
     }
 
     #[test]

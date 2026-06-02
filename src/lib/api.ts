@@ -4,6 +4,9 @@ import type {
   AgentTokenUsageSnapshot,
   AgentHistoryItem,
   CommitInfo,
+  ChatMessage,
+  ChatMessagePatch,
+  ChatSessionState,
   DiffPayload,
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
@@ -19,6 +22,7 @@ import type {
   Session,
   SessionAgentProvider,
   SessionKind,
+  SessionMode,
   SessionStatus,
   SessionTitleReadinessResult,
   StagedFile,
@@ -27,6 +31,21 @@ import type {
   WorkflowRunsListing,
 } from "./types";
 import type { FolderPermissionWarmupResult } from "./permissionWarmup";
+
+export type {
+  ChatMessage,
+  ChatMessagePatch,
+  ChatMessageStatus,
+  ChatRole,
+  ChatSession,
+  ChatSessionState,
+  ChatTurn,
+  ChatTurnStatus,
+  ContextSnapshot,
+  ContextSnapshotMode,
+  ProviderThread,
+  SessionMemory,
+} from "./types";
 
 export interface LoadStatus {
   sessionsClean: boolean;
@@ -50,6 +69,14 @@ export interface ClipboardSnapshot {
   dataB64: string | null;
 }
 
+export interface ChatSessionStateChangedPayload {
+  session_id: string;
+  state: ChatSessionState;
+}
+
+export const CHAT_SESSION_STATE_CHANGED_EVENT =
+  "acorn:chat-session-state-changed";
+
 export const api = {
   loadStatus(): Promise<LoadStatus> {
     return invoke<LoadStatus>("load_status");
@@ -64,6 +91,7 @@ export const api = {
     kind: SessionKind = "regular",
     agentProvider?: SessionAgentProvider | null,
     projectScoped?: boolean,
+    mode: SessionMode = "terminal",
   ): Promise<Session> {
     const args: {
       name: string;
@@ -72,12 +100,14 @@ export const api = {
       kind: SessionKind;
       agentProvider?: SessionAgentProvider | null;
       projectScoped?: boolean;
+      mode: SessionMode;
     } = {
       name,
       repoPath,
       isolated,
       kind,
       agentProvider,
+      mode,
     };
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
     return invoke<Session>("create_session", args);
@@ -89,6 +119,7 @@ export const api = {
     agentProvider?: SessionAgentProvider | null,
     projectScoped = true,
     title?: string,
+    mode: SessionMode = "terminal",
   ): Promise<Session | null> {
     return invoke<Session | null>("create_session_from_dialog", {
       name,
@@ -97,6 +128,7 @@ export const api = {
       agentProvider,
       projectScoped,
       title,
+      mode,
     });
   },
   removeSession(id: string, removeWorktree = false): Promise<void> {
@@ -133,6 +165,74 @@ export const api = {
       ai,
       prompt,
       firstUserMessage,
+    });
+  },
+  loadChatSessionState(sessionId: string): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("load_chat_session_state", {
+      sessionId,
+    });
+  },
+  saveChatSessionState(state: ChatSessionState): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("save_chat_session_state", {
+      chatState: state,
+    });
+  },
+  appendChatMessage(
+    sessionId: string,
+    message: ChatMessage,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("append_chat_message", {
+      sessionId,
+      message,
+    });
+  },
+  updateChatMessage(
+    sessionId: string,
+    messageId: string,
+    patch: ChatMessagePatch,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("update_chat_message", {
+      sessionId,
+      messageId,
+      patch,
+    });
+  },
+  sendChatMessage(
+    sessionId: string,
+    ai: AiExecutionRequest,
+    content: string,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("send_chat_message", {
+      sessionId,
+      ai,
+      content,
+    });
+  },
+  retryChatMessage(
+    sessionId: string,
+    ai: AiExecutionRequest,
+    messageId: string,
+    content?: string,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("retry_chat_message", {
+      sessionId,
+      ai,
+      messageId,
+      content,
+    });
+  },
+  deleteChatMessage(
+    sessionId: string,
+    messageId: string,
+  ): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("delete_chat_message", {
+      sessionId,
+      messageId,
+    });
+  },
+  cancelChatMessage(sessionId: string): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("cancel_chat_message", {
+      sessionId,
     });
   },
   listProjects(): Promise<Project[]> {
@@ -517,6 +617,13 @@ export const api = {
    */
   updateSessionWorktree(id: string, worktreePath: string): Promise<Session> {
     return invoke<Session>("update_session_worktree", { id, worktreePath });
+  },
+  /**
+   * Create a fresh linked worktree for an existing native chat session and
+   * adopt it as the session working directory before the first chat turn.
+   */
+  prepareChatSessionWorktree(sessionId: string): Promise<Session> {
+    return invoke<Session>("prepare_chat_session_worktree", { sessionId });
   },
   /**
    * List absolute paths of every *linked* git worktree of the repo

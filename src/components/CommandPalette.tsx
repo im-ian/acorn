@@ -10,6 +10,7 @@ import {
   LayoutTemplate,
   ListChecks,
   ListPlus,
+  MessageSquareText,
   Plus,
   RefreshCw,
   Sparkles,
@@ -22,6 +23,10 @@ import { useAppStore } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import {
+  buildSessionCreateRequest,
+  resolveActiveSessionScope,
+} from "../lib/sessionCreation";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 
@@ -51,11 +56,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     onOpenChange(false);
   }
 
-  // Session-creation actions delegate to Sidebar via window events so the
+  // Terminal session actions delegate to Sidebar via window events so the
   // palette matches the hotkey path: when a project is active, Sidebar reuses
-  // its repoPath and skips the directory picker. Duplicating the dialog/create
-  // logic here previously made these items ignore activeProject and always
-  // prompt for a directory, which felt like a project-import flow.
+  // its repoPath and skips the directory picker.
   function handleNewSession() {
     window.dispatchEvent(new CustomEvent("acorn:new-session"));
     close();
@@ -69,6 +72,62 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   function handleNewControlSession() {
     window.dispatchEvent(new CustomEvent("acorn:new-control-session"));
     close();
+  }
+
+  async function handleNewChatSession() {
+    const show = useToasts.getState().show;
+    try {
+      const state = useAppStore.getState();
+      const scope = resolveActiveSessionScope({
+        sessions: state.sessions,
+        projects: state.projects,
+        activeSessionId: state.activeSessionId,
+        activeWorkspaceRepoPath: state.activeProject,
+      });
+
+      if (!scope) {
+        const created = await api.createSessionFromDialog(
+          "",
+          false,
+          "regular",
+          null,
+          true,
+          undefined,
+          "chat",
+        );
+        if (!created) return;
+        await useAppStore.getState().refreshAll();
+        useAppStore.getState().selectSession(created.id);
+        return;
+      }
+
+      const request = buildSessionCreateRequest(
+        { sessions: state.sessions, projects: state.projects },
+        {
+          repoPath: scope.repoPath,
+          projectScoped: scope.projectScoped,
+          mode: "chat",
+        },
+      );
+      const created = await state.createSession(
+        request.name,
+        request.repoPath,
+        request.isolated,
+        request.kind,
+        request.agentProvider,
+        request.projectScoped,
+        request.mode,
+      );
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        show(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+      }
+    } catch (err) {
+      console.error("[CommandPalette] create chat session failed", err);
+      show(`${t("toasts.session.createFailed")} ${String(err)}`);
+    } finally {
+      close();
+    }
   }
 
   function handleAddProject() {
@@ -225,6 +284,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <span className="ml-auto truncate text-xs text-fg-muted/80">
               ⌥⇧⌘T
             </span>
+          </Command.Item>
+          <Command.Item
+            value="new-chat-session"
+            onSelect={handleNewChatSession}
+            keywords={["chat", "conversation", "messages"]}
+          >
+            <MessageSquareText size={14} className="text-accent" />
+            <span>{cpt(t, "commandPalette.commands.newChatSession")}</span>
           </Command.Item>
           <Command.Item
             value="new-project"

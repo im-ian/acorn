@@ -40,8 +40,16 @@ export function canGenerateSessionTitle(session: Session): boolean {
   );
 }
 
+export function autoTitleGenerationEnabledForSession(
+  session: Session,
+  enabled: boolean,
+): boolean {
+  return enabled || session.mode === "chat";
+}
+
 function hasSessionTitleAgentSignal(session: Session): boolean {
   return (
+    session.mode === "chat" ||
     session.agent_transcript_id != null ||
     session.agent_provider != null ||
     inferAgentProvider(session.name) != null ||
@@ -55,7 +63,9 @@ export function canAutoGenerateSessionTitle(
   enabled: boolean,
 ): boolean {
   return (
-    enabled && canGenerateSessionTitle(session) && hasSessionTitleAgentSignal(session)
+    autoTitleGenerationEnabledForSession(session, enabled) &&
+    canGenerateSessionTitle(session) &&
+    hasSessionTitleAgentSignal(session)
   );
 }
 
@@ -67,8 +77,6 @@ export function planAutoGenerateSessionTitles({
   now,
   retryMs,
 }: AutoSessionTitlePlanOptions): AutoSessionTitlePlan {
-  if (!enabled) return { sessionIds: [], retryDelayMs: null };
-
   const sessionIds: string[] = [];
   let retryDelayMs: number | null = null;
 
