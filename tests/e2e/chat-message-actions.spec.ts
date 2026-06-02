@@ -221,19 +221,33 @@ test.describe("chat message actions", () => {
       return (window as unknown as { __chatState: unknown }).__chatState;
     });
     await tauri.handle("retry_chat_message", (args) => {
-      const now = "2026-01-01T00:00:02Z";
       const w = window as unknown as {
         __chatState: { messages: Array<Record<string, unknown>> };
         __retryCalls?: unknown[];
       };
       w.__retryCalls = w.__retryCalls ?? [];
       w.__retryCalls.push(args);
+      const messageId = args?.messageId ?? args?.message_id;
+      const content =
+        typeof args?.content === "string" ? args.content : undefined;
       const prompt =
-        args?.messageId === "u1" && typeof args?.content === "string"
-          ? args.content
+        messageId === "u1" && content !== undefined
+          ? content
           : "original prompt";
+      const now =
+        messageId === "u1"
+          ? "2026-01-01T00:00:04Z"
+          : "2026-01-01T00:00:02Z";
       const answer =
-        args?.messageId === "u1" ? "edited answer" : "regenerated answer";
+        messageId === "u1" ? "edited answer" : "regenerated answer";
+      const assistantMessage = w.__chatState.messages[1] ?? {
+        id: "a1",
+        session_id: "chat-actions",
+        turn_id: "t1",
+        role: "assistant",
+        status: "complete",
+        metadata: { provider: args?.ai?.provider ?? "claude" },
+      };
       w.__chatState = {
         ...w.__chatState,
         messages: [
@@ -243,7 +257,7 @@ test.describe("chat message actions", () => {
             created_at: now,
           },
           {
-            ...w.__chatState.messages[1],
+            ...assistantMessage,
             content: answer,
             created_at: now,
           },
@@ -262,7 +276,10 @@ test.describe("chat message actions", () => {
       w.__chatState = {
         ...w.__chatState,
         messages: [w.__chatState.messages[0]],
-        updated_at: "2026-01-01T00:00:03Z",
+        updated_at:
+          w.__deleteCalls.length > 1
+            ? "2026-01-01T00:00:05Z"
+            : "2026-01-01T00:00:03Z",
       };
       return w.__chatState;
     });

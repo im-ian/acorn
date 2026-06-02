@@ -355,6 +355,39 @@ function providerFromMetadata(metadata: unknown): string | null {
   return typeof provider === "string" && provider.trim() ? provider : null;
 }
 
+export function resolveMessageActionProvider({
+  messages,
+  message,
+  stateProvider,
+  fallbackProvider,
+}: {
+  messages: ChatMessage[];
+  message: ChatMessage;
+  stateProvider: string | null | undefined;
+  fallbackProvider: ChatProvider;
+}): ChatProvider {
+  const messageProvider = providerFromString(
+    providerFromMetadata(message.metadata),
+  );
+  if (messageProvider) return messageProvider;
+
+  if (message.role === "user") {
+    const index = messages.findIndex((candidate) => candidate.id === message.id);
+    const nextAssistant =
+      index >= 0
+        ? messages
+            .slice(index + 1)
+            .find((candidate) => candidate.role === "assistant")
+        : undefined;
+    const nextProvider = providerFromString(
+      providerFromMetadata(nextAssistant?.metadata),
+    );
+    if (nextProvider) return nextProvider;
+  }
+
+  return providerFromString(stateProvider) ?? fallbackProvider;
+}
+
 function agentProviderFromMetadata(
   metadata: unknown,
 ): SessionAgentProvider | null {
@@ -789,10 +822,12 @@ export function ChatPane({
   }
 
   function providerForMessage(message: ChatMessage): ChatProvider {
-    return (
-      providerFromString(providerFromMetadata(message.metadata) ?? stateProvider) ??
-      provider
-    );
+    return resolveMessageActionProvider({
+      messages,
+      message,
+      stateProvider,
+      fallbackProvider: provider,
+    });
   }
 
   async function handleRetryMessage(
@@ -967,14 +1002,16 @@ export function ChatPane({
               );
               const isEditing = editingMessageId === message.id;
               const isActionBusy = messageActionBusyId === message.id;
+              const isLastMessage = index === messages.length - 1;
               const actionDisabled =
                 sending ||
                 cancelling ||
                 hasRunningMessages ||
                 messageActionBusyId !== null;
-              const canEditMessage = isUser && !isPending;
-              const canRegenerateMessage = message.role === "assistant" && !isPending;
-              const canDeleteMessage = !isSystem && !isPending;
+              const canEditMessage = isUser && !isPending && isLastMessage;
+              const canRegenerateMessage =
+                message.role === "assistant" && !isPending && isLastMessage;
+              const canDeleteMessage = !isSystem && !isPending && isLastMessage;
               const actionLabel = headerLabel ?? message.role;
               const bubbleClass = isUser
                 ? "bg-accent/18 text-fg ring-accent/35"

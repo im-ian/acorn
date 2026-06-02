@@ -99,6 +99,10 @@ impl ChatRunRegistry {
         Some(cancellation)
     }
 
+    pub fn is_active(&self, session_id: &Uuid) -> bool {
+        self.active.lock().contains_key(session_id)
+    }
+
     pub fn finish(&self, session_id: &Uuid, turn_id: &str) {
         let mut active = self.active.lock();
         let should_remove = active

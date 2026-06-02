@@ -827,7 +827,7 @@ fn start_chat_turn(
         content,
         created_at: now,
         status: Some(persistence::ChatMessageStatus::Complete),
-        metadata: None,
+        metadata: Some(chat_provider_metadata(&provider)),
     };
     chat_state.messages.push(user_message.clone());
 
@@ -1057,7 +1057,21 @@ fn chat_state_has_running_message(chat_state: &persistence::ChatSessionState) ->
             Some(persistence::ChatMessageStatus::Pending)
                 | Some(persistence::ChatMessageStatus::Streaming)
         )
+    }) || chat_state.turns.iter().any(|turn| {
+        matches!(
+            turn.status,
+            persistence::ChatTurnStatus::Pending | persistence::ChatTurnStatus::Running
+        )
     })
+}
+
+fn ensure_chat_session_has_no_active_run(state: &AppState, session_id: &Uuid) -> AppResult<()> {
+    if state.chat_runs.is_active(session_id) {
+        return Err(AppError::Other(
+            "cannot modify chat messages while a response is running".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn reset_chat_branch_hidden_context(chat_state: &mut persistence::ChatSessionState) {
@@ -1104,6 +1118,31 @@ fn truncate_chat_state_before_message_index(
     chat_state
 }
 
+fn chat_message_index(
+    chat_state: &persistence::ChatSessionState,
+    message_id: &str,
+) -> AppResult<usize> {
+    chat_state
+        .messages
+        .iter()
+        .position(|message| message.id == message_id)
+        .ok_or_else(|| AppError::Other(format!("chat message not found: {message_id}")))
+}
+
+fn ensure_last_chat_message(
+    chat_state: &persistence::ChatSessionState,
+    message_id: &str,
+    action: &str,
+) -> AppResult<usize> {
+    let index = chat_message_index(chat_state, message_id)?;
+    if index + 1 != chat_state.messages.len() {
+        return Err(AppError::Other(format!(
+            "can {action} only the last chat message"
+        )));
+    }
+    Ok(index)
+}
+
 fn delete_chat_branch_from_message(
     chat_state: persistence::ChatSessionState,
     message_id: &str,
@@ -1113,11 +1152,7 @@ fn delete_chat_branch_from_message(
             "cannot delete chat messages while a response is running".to_string(),
         ));
     }
-    let index = chat_state
-        .messages
-        .iter()
-        .position(|message| message.id == message_id)
-        .ok_or_else(|| AppError::Other(format!("chat message not found: {message_id}")))?;
+    let index = ensure_last_chat_message(&chat_state, message_id, "delete")?;
     Ok(truncate_chat_state_before_message_index(chat_state, index))
 }
 
@@ -1156,6 +1191,7 @@ fn prepare_chat_retry_branch(
             "cannot retry chat messages while a response is running".to_string(),
         ));
     }
+    ensure_last_chat_message(&chat_state, message_id, "retry")?;
     let anchor_index = retry_anchor_index(&chat_state, message_id)?;
     let content = replacement_content
         .unwrap_or_else(|| chat_state.messages[anchor_index].content.clone())
@@ -2346,6 +2382,7 @@ fn retry_chat_message_inner<R: Runtime>(
     message_id: String,
     content: Option<String>,
 ) -> AppResult<persistence::ChatSessionState> {
+    ensure_chat_session_has_no_active_run(state, &session.id)?;
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
     let branch = prepare_chat_retry_branch(chat_state, &message_id, content)?;
     send_chat_message_from_state_inner(app, state, session, ai, branch.content, branch.state)
@@ -2372,6 +2409,7 @@ fn delete_chat_message_inner<R: Runtime>(
     session: Session,
     message_id: String,
 ) -> AppResult<persistence::ChatSessionState> {
+    ensure_chat_session_has_no_active_run(state, &session.id)?;
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
     let mut chat_state = delete_chat_branch_from_message(chat_state, &message_id)?;
     apply_acorn_session_metadata(&mut chat_state, &session);
