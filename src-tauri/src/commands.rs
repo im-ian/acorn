@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -376,7 +377,6 @@ pub(crate) struct ProviderResponse {
 }
 
 pub(crate) trait ChatProviderAdapter {
-    #[cfg(test)]
     fn capabilities(&self) -> ChatProviderCapabilities;
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse>;
 }
@@ -388,38 +388,176 @@ struct CliChatProviderAdapter {
 }
 
 impl ChatProviderAdapter for CliChatProviderAdapter {
-    #[cfg(test)]
     fn capabilities(&self) -> ChatProviderCapabilities {
-        ChatProviderCapabilities::default()
+        ChatProviderCapabilities {
+            native_thread: matches!(
+                self.ai.provider,
+                crate::ai::AiProvider::Claude
+                    | crate::ai::AiProvider::Codex
+                    | crate::ai::AiProvider::Antigravity
+            ),
+            streaming: false,
+            attachments: false,
+        }
     }
 
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse> {
-        let ChatProviderInput {
-            thread: _thread,
-            message,
-            context,
-            model: _model,
-        } = input;
-        let prompt = context
-            .as_ref()
-            .map(|context| context.prompt.as_str())
-            .unwrap_or(message.content.as_str());
-        let resolved = self.ai.resolve()?;
+        let invocation = resolve_chat_cli_invocation(&self.ai, &input)?;
+        let started_at = SystemTime::now();
         let raw = crate::ai::run_oneshot_in_dir_cancellable(
-            resolved.command,
-            &resolved.args,
-            prompt,
+            invocation.command,
+            &invocation.args,
+            &invocation.prompt,
             "Settings → Agents",
             Some(&self.cwd),
             self.cancellation.clone(),
         )?;
+        let discovered_thread_id = invocation.transcript_discovery.and_then(|kind| {
+            acorn_transcript::find_completed_agent_run(&self.cwd, kind, started_at)
+        });
+        let native_thread_id = invocation.native_thread_id.or(discovered_thread_id);
+        let resume_token = invocation.resume_token.or_else(|| native_thread_id.clone());
         Ok(ProviderResponse {
             content: raw.trim().to_string(),
-            native_thread_id: None,
-            resume_token: None,
+            native_thread_id,
+            resume_token,
             last_response_id: None,
             metadata: None,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ChatCliInvocation {
+    command: &'static str,
+    args: Vec<String>,
+    prompt: String,
+    native_thread_id: Option<String>,
+    resume_token: Option<String>,
+    transcript_discovery: Option<acorn_transcript::AgentKind>,
+}
+
+fn provider_thread_resume_cursor(thread: Option<&persistence::ProviderThread>) -> Option<String> {
+    thread.and_then(|thread| {
+        thread
+            .resume_token
+            .as_deref()
+            .or(thread.native_thread_id.as_deref())
+            .or(thread.last_response_id.as_deref())
+            .map(str::trim)
+            .filter(|cursor| !cursor.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn chat_prompt_for_provider_input(input: &ChatProviderInput) -> String {
+    input
+        .context
+        .as_ref()
+        .map(|context| context.prompt.clone())
+        .unwrap_or_else(|| input.message.content.clone())
+}
+
+fn resolve_chat_cli_invocation(
+    ai: &crate::ai::AiExecutionRequest,
+    input: &ChatProviderInput,
+) -> AppResult<ChatCliInvocation> {
+    let _requested_model = input.model.as_deref();
+    let prompt = chat_prompt_for_provider_input(input);
+    let cursor = provider_thread_resume_cursor(input.thread.as_ref());
+    match ai.provider {
+        crate::ai::AiProvider::Claude => {
+            let mut args = vec![
+                "-p".to_string(),
+                "--output-format".to_string(),
+                "text".to_string(),
+            ];
+            let thread_id = match cursor {
+                Some(cursor) => {
+                    args.push("--resume".to_string());
+                    args.push(cursor.clone());
+                    cursor
+                }
+                None => {
+                    let thread_id = Uuid::new_v4().to_string();
+                    args.push("--session-id".to_string());
+                    args.push(thread_id.clone());
+                    thread_id
+                }
+            };
+            Ok(ChatCliInvocation {
+                command: "claude",
+                args,
+                prompt,
+                native_thread_id: Some(thread_id.clone()),
+                resume_token: Some(thread_id),
+                transcript_discovery: None,
+            })
+        }
+        crate::ai::AiProvider::Codex => {
+            if let Some(cursor) = cursor {
+                Ok(ChatCliInvocation {
+                    command: "codex",
+                    args: vec![
+                        "exec".to_string(),
+                        "resume".to_string(),
+                        cursor.clone(),
+                        "-".to_string(),
+                    ],
+                    prompt,
+                    native_thread_id: Some(cursor.clone()),
+                    resume_token: Some(cursor),
+                    transcript_discovery: None,
+                })
+            } else {
+                let resolved = ai.resolve()?;
+                Ok(ChatCliInvocation {
+                    command: resolved.command,
+                    args: resolved.args,
+                    prompt,
+                    native_thread_id: None,
+                    resume_token: None,
+                    transcript_discovery: Some(acorn_transcript::AgentKind::Codex),
+                })
+            }
+        }
+        crate::ai::AiProvider::Antigravity => {
+            if let Some(cursor) = cursor {
+                Ok(ChatCliInvocation {
+                    command: "agy",
+                    args: vec![
+                        "-p".to_string(),
+                        "--conversation".to_string(),
+                        cursor.clone(),
+                    ],
+                    prompt,
+                    native_thread_id: Some(cursor.clone()),
+                    resume_token: Some(cursor),
+                    transcript_discovery: None,
+                })
+            } else {
+                let resolved = ai.resolve()?;
+                Ok(ChatCliInvocation {
+                    command: resolved.command,
+                    args: resolved.args,
+                    prompt,
+                    native_thread_id: None,
+                    resume_token: None,
+                    transcript_discovery: Some(acorn_transcript::AgentKind::Antigravity),
+                })
+            }
+        }
+        _ => {
+            let resolved = ai.resolve()?;
+            Ok(ChatCliInvocation {
+                command: resolved.command,
+                args: resolved.args,
+                prompt,
+                native_thread_id: None,
+                resume_token: None,
+                transcript_discovery: None,
+            })
+        }
     }
 }
 
@@ -1974,15 +2112,21 @@ fn send_chat_message_inner<R: Runtime>(
     content: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
+    let mut adapter = CliChatProviderAdapter {
+        ai: ai.clone(),
+        cwd: session.worktree_path.clone(),
+        cancellation: None,
+    };
     let mut started = start_chat_turn(
         chat_state,
         Some(&session),
         &ai,
         content,
-        ChatProviderCapabilities::default(),
+        adapter.capabilities(),
         ChatContextOptions::default(),
     )?;
     let cancellation = state.chat_runs.start(session.id, started.turn_id.clone())?;
+    adapter.cancellation = Some(cancellation.clone());
     match persistence::save_chat_session_state(started.state) {
         Ok(saved) => {
             started.state = saved;
@@ -1999,11 +2143,6 @@ fn send_chat_message_inner<R: Runtime>(
     persist(state);
     emit_chat_session_state_changed(app, &started.state);
 
-    let adapter = CliChatProviderAdapter {
-        ai: ai.clone(),
-        cwd: session.worktree_path.clone(),
-        cancellation: Some(cancellation.clone()),
-    };
     let provider_result = adapter.send_message(started.input.clone());
     let was_cancelled = cancellation.is_cancelled();
     state.chat_runs.finish(&session.id, &started.turn_id);
@@ -4642,6 +4781,95 @@ mod tests {
             invocation.native_thread_id.as_deref(),
             Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         );
+    }
+
+    #[test]
+    fn chat_cli_invocation_seeds_claude_session_id_without_cursor() {
+        let input = super::ChatProviderInput {
+            thread: Some(crate::persistence::ProviderThread {
+                session_id: Uuid::new_v4().to_string(),
+                provider: "claude".to_string(),
+                model: None,
+                native_thread_id: None,
+                resume_token: None,
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            }),
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "first message",
+            ),
+            context: Some(super::CompiledContext {
+                included_message_ids: vec!["current-user".to_string()],
+                summary_id: None,
+                prompt: "compiled first message".to_string(),
+            }),
+            model: None,
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Claude,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(invocation.command, "claude");
+        assert_eq!(invocation.args[0..3], ["-p", "--output-format", "text"]);
+        assert_eq!(invocation.args[3], "--session-id");
+        let seeded_id = invocation.args[4].as_str();
+        Uuid::parse_str(seeded_id).expect("seeded Claude id should be a UUID");
+        assert_eq!(invocation.prompt, "compiled first message");
+        assert_eq!(invocation.native_thread_id.as_deref(), Some(seeded_id));
+        assert_eq!(invocation.resume_token.as_deref(), Some(seeded_id));
+    }
+
+    #[test]
+    fn chat_cli_invocation_resumes_codex_thread_from_stdin() {
+        let input = super::ChatProviderInput {
+            thread: Some(crate::persistence::ProviderThread {
+                session_id: Uuid::new_v4().to_string(),
+                provider: "codex".to_string(),
+                model: None,
+                native_thread_id: Some("019e2001-3250-76b0-8410-2e073b38a2c1".to_string()),
+                resume_token: Some("019e2001-3250-76b0-8410-2e073b38a2c1".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            }),
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "continue codex",
+            ),
+            context: None,
+            model: None,
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(invocation.command, "codex");
+        assert_eq!(
+            invocation.args,
+            vec![
+                "exec",
+                "resume",
+                "019e2001-3250-76b0-8410-2e073b38a2c1",
+                "-"
+            ]
+        );
+        assert_eq!(invocation.prompt, "continue codex");
     }
 
     #[test]
