@@ -139,7 +139,8 @@ export type ChatMessageStatus =
   | "pending"
   | "streaming"
   | "complete"
-  | "error";
+  | "error"
+  | "cancelled";
 
 export interface ChatMessage {
   id: string;
@@ -162,7 +163,12 @@ export interface ChatSession {
   updated_at: string;
 }
 
-export type ChatTurnStatus = "pending" | "running" | "complete" | "error";
+export type ChatTurnStatus =
+  | "pending"
+  | "running"
+  | "complete"
+  | "error"
+  | "cancelled";
 
 export interface ChatTurn {
   id: string;

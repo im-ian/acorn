@@ -148,7 +148,11 @@ async fn pick_folder_path<R: Runtime>(
     let mut dialog = app.dialog().file();
     if let Some(title) = title.and_then(|title| {
         let title = title.trim().to_string();
-        if title.is_empty() { None } else { Some(title) }
+        if title.is_empty() {
+            None
+        } else {
+            Some(title)
+        }
     }) {
         dialog = dialog.set_title(title);
     }
@@ -332,7 +336,11 @@ fn chat_model_label(ai: &crate::ai::AiExecutionRequest) -> Option<String> {
     }
     .and_then(|model| {
         let model = model.trim().to_string();
-        if model.is_empty() { None } else { Some(model) }
+        if model.is_empty() {
+            None
+        } else {
+            Some(model)
+        }
     })
 }
 
@@ -368,7 +376,7 @@ pub(crate) struct ProviderResponse {
 }
 
 pub(crate) trait ChatProviderAdapter {
-    fn provider(&self) -> &'static str;
+    #[cfg(test)]
     fn capabilities(&self) -> ChatProviderCapabilities;
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse>;
 }
@@ -376,13 +384,11 @@ pub(crate) trait ChatProviderAdapter {
 struct CliChatProviderAdapter {
     ai: crate::ai::AiExecutionRequest,
     cwd: PathBuf,
+    cancellation: Option<crate::chat_runs::ChatCancellation>,
 }
 
 impl ChatProviderAdapter for CliChatProviderAdapter {
-    fn provider(&self) -> &'static str {
-        chat_provider_label(&self.ai)
-    }
-
+    #[cfg(test)]
     fn capabilities(&self) -> ChatProviderCapabilities {
         ChatProviderCapabilities::default()
     }
@@ -399,12 +405,13 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
             .map(|context| context.prompt.as_str())
             .unwrap_or(message.content.as_str());
         let resolved = self.ai.resolve()?;
-        let raw = crate::ai::run_oneshot_in_dir(
+        let raw = crate::ai::run_oneshot_in_dir_cancellable(
             resolved.command,
             &resolved.args,
             prompt,
             "Settings → Agents",
             Some(&self.cwd),
+            self.cancellation.clone(),
         )?;
         Ok(ProviderResponse {
             content: raw.trim().to_string(),
@@ -630,6 +637,12 @@ pub(crate) struct ChatTurnRunResult {
     pub final_state: persistence::ChatSessionState,
 }
 
+enum ChatTurnFinish {
+    Response(ProviderResponse),
+    Error(String),
+    Cancelled,
+}
+
 fn start_chat_turn(
     mut chat_state: persistence::ChatSessionState,
     session: Option<&Session>,
@@ -755,25 +768,31 @@ fn start_chat_turn(
 
 fn finish_chat_turn(
     mut started: StartedChatTurn,
-    provider_result: AppResult<ProviderResponse>,
+    finish: ChatTurnFinish,
 ) -> persistence::ChatSessionState {
     let completed_at = chrono::Utc::now();
-    let (content, status, response, error) = match provider_result {
-        Ok(response) => (
+    let (content, message_status, turn_status, response, error) = match finish {
+        ChatTurnFinish::Response(response) => (
             response.content.trim().to_string(),
             persistence::ChatMessageStatus::Complete,
+            persistence::ChatTurnStatus::Complete,
             Some(response),
             None,
         ),
-        Err(err) => {
-            let message = err.to_string();
-            (
-                message.clone(),
-                persistence::ChatMessageStatus::Error,
-                None,
-                Some(message),
-            )
-        }
+        ChatTurnFinish::Error(message) => (
+            message.clone(),
+            persistence::ChatMessageStatus::Error,
+            persistence::ChatTurnStatus::Error,
+            None,
+            Some(message),
+        ),
+        ChatTurnFinish::Cancelled => (
+            "Cancelled".to_string(),
+            persistence::ChatMessageStatus::Cancelled,
+            persistence::ChatTurnStatus::Cancelled,
+            None,
+            None,
+        ),
     };
 
     if let Some(message) = started
@@ -784,7 +803,7 @@ fn finish_chat_turn(
     {
         message.content = content;
         message.created_at = completed_at;
-        message.status = Some(status);
+        message.status = Some(message_status);
         if let Some(metadata) = message
             .metadata
             .as_mut()
@@ -804,11 +823,7 @@ fn finish_chat_turn(
         .iter_mut()
         .find(|turn| turn.id == started.turn_id)
     {
-        turn.status = if status == persistence::ChatMessageStatus::Complete {
-            persistence::ChatTurnStatus::Complete
-        } else {
-            persistence::ChatTurnStatus::Error
-        };
+        turn.status = turn_status;
         turn.completed_at = Some(completed_at);
         turn.error = error;
     }
@@ -834,12 +849,72 @@ fn finish_chat_turn(
     started.state
 }
 
+fn chat_turn_finish_from_result(
+    provider_result: AppResult<ProviderResponse>,
+    was_cancelled: bool,
+) -> ChatTurnFinish {
+    if was_cancelled {
+        return ChatTurnFinish::Cancelled;
+    }
+    match provider_result {
+        Ok(response) => ChatTurnFinish::Response(response),
+        Err(err) => ChatTurnFinish::Error(err.to_string()),
+    }
+}
+
+fn cancel_chat_turn_in_state(
+    mut chat_state: persistence::ChatSessionState,
+    turn_id: &str,
+) -> (persistence::ChatSessionState, bool) {
+    let completed_at = chrono::Utc::now();
+    let mut changed = false;
+
+    if let Some(turn) = chat_state.turns.iter_mut().find(|turn| turn.id == turn_id) {
+        if matches!(
+            turn.status,
+            persistence::ChatTurnStatus::Pending | persistence::ChatTurnStatus::Running
+        ) {
+            turn.status = persistence::ChatTurnStatus::Cancelled;
+            turn.completed_at = Some(completed_at);
+            turn.error = None;
+            changed = true;
+        }
+    }
+
+    for message in &mut chat_state.messages {
+        if message.turn_id.as_deref() != Some(turn_id)
+            || message.role != persistence::ChatRole::Assistant
+        {
+            continue;
+        }
+        if matches!(
+            message.status,
+            Some(persistence::ChatMessageStatus::Pending)
+                | Some(persistence::ChatMessageStatus::Streaming)
+        ) {
+            message.content = "Cancelled".to_string();
+            message.created_at = completed_at;
+            message.status = Some(persistence::ChatMessageStatus::Cancelled);
+            changed = true;
+        }
+    }
+
+    if changed {
+        chat_state.session.updated_at = completed_at;
+        chat_state.updated_at = completed_at;
+    }
+
+    (chat_state, changed)
+}
+
 fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus) -> SessionStatus {
     match status {
         persistence::ChatMessageStatus::Pending | persistence::ChatMessageStatus::Streaming => {
             SessionStatus::Running
         }
-        persistence::ChatMessageStatus::Complete => SessionStatus::NeedsInput,
+        persistence::ChatMessageStatus::Complete | persistence::ChatMessageStatus::Cancelled => {
+            SessionStatus::NeedsInput
+        }
         persistence::ChatMessageStatus::Error => SessionStatus::Failed,
     }
 }
@@ -851,7 +926,6 @@ pub(crate) fn run_chat_turn_for_test(
     content: String,
     adapter: &dyn ChatProviderAdapter,
 ) -> AppResult<ChatTurnRunResult> {
-    let _provider = adapter.provider();
     let started = start_chat_turn(
         state,
         None,
@@ -862,7 +936,10 @@ pub(crate) fn run_chat_turn_for_test(
     )?;
     let pending_state = started.state.clone();
     let provider_result = adapter.send_message(started.input.clone());
-    let final_state = finish_chat_turn(started, provider_result);
+    let final_state = finish_chat_turn(
+        started,
+        chat_turn_finish_from_result(provider_result, false),
+    );
     Ok(ChatTurnRunResult {
         pending_state,
         final_state,
@@ -1897,20 +1974,24 @@ fn send_chat_message_inner<R: Runtime>(
     content: String,
 ) -> AppResult<persistence::ChatSessionState> {
     let chat_state = persistence::load_chat_session_state(&session.id.to_string())?;
-    let adapter = CliChatProviderAdapter {
-        ai: ai.clone(),
-        cwd: session.worktree_path.clone(),
-    };
-    let _provider = adapter.provider();
     let mut started = start_chat_turn(
         chat_state,
         Some(&session),
         &ai,
         content,
-        adapter.capabilities(),
+        ChatProviderCapabilities::default(),
         ChatContextOptions::default(),
     )?;
-    started.state = persistence::save_chat_session_state(started.state)?;
+    let cancellation = state.chat_runs.start(session.id, started.turn_id.clone())?;
+    match persistence::save_chat_session_state(started.state) {
+        Ok(saved) => {
+            started.state = saved;
+        }
+        Err(err) => {
+            state.chat_runs.finish(&session.id, &started.turn_id);
+            return Err(err);
+        }
+    }
     state.sessions.update_status(
         &session.id,
         chat_session_status_for_message_status(persistence::ChatMessageStatus::Pending),
@@ -1918,17 +1999,72 @@ fn send_chat_message_inner<R: Runtime>(
     persist(state);
     emit_chat_session_state_changed(app, &started.state);
 
+    let adapter = CliChatProviderAdapter {
+        ai: ai.clone(),
+        cwd: session.worktree_path.clone(),
+        cancellation: Some(cancellation.clone()),
+    };
     let provider_result = adapter.send_message(started.input.clone());
-    let final_session_status = chat_session_status_for_message_status(if provider_result.is_ok() {
+    let was_cancelled = cancellation.is_cancelled();
+    state.chat_runs.finish(&session.id, &started.turn_id);
+    let final_session_status = chat_session_status_for_message_status(if was_cancelled {
+        persistence::ChatMessageStatus::Cancelled
+    } else if provider_result.is_ok() {
         persistence::ChatMessageStatus::Complete
     } else {
         persistence::ChatMessageStatus::Error
     });
-    let chat_state = finish_chat_turn(started, provider_result);
+    let chat_state = finish_chat_turn(
+        started,
+        chat_turn_finish_from_result(provider_result, was_cancelled),
+    );
     let chat_state = persistence::save_chat_session_state(chat_state)?;
     state
         .sessions
         .update_status(&session.id, final_session_status)?;
+    persist(state);
+    emit_chat_session_state_changed(app, &chat_state);
+    Ok(chat_state)
+}
+
+#[tauri::command]
+pub async fn cancel_chat_message<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<persistence::ChatSessionState> {
+    let session = authorize_chat_session(state.inner(), &session_id)?;
+    let app_state = state.inner().clone();
+    run_blocking("cancel chat message", move || {
+        cancel_chat_message_inner(&app, &app_state, session)
+    })
+    .await
+}
+
+fn cancel_chat_message_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    session: Session,
+) -> AppResult<persistence::ChatSessionState> {
+    let session_id = session.id.to_string();
+    let Some(cancellation) = state.chat_runs.cancel(&session.id) else {
+        let mut chat_state = persistence::load_chat_session_state(&session_id)?;
+        apply_acorn_session_metadata(&mut chat_state, &session);
+        return Ok(chat_state);
+    };
+
+    let chat_state = persistence::load_chat_session_state(&session_id)?;
+    let (mut chat_state, changed) = cancel_chat_turn_in_state(chat_state, cancellation.turn_id());
+    apply_acorn_session_metadata(&mut chat_state, &session);
+    if !changed {
+        return Ok(chat_state);
+    }
+
+    let chat_state = persistence::save_chat_session_state(chat_state)?;
+    state.sessions.update_status(
+        &session.id,
+        chat_session_status_for_message_status(persistence::ChatMessageStatus::Cancelled),
+    )?;
     persist(state);
     emit_chat_session_state_changed(app, &chat_state);
     Ok(chat_state)
@@ -4135,10 +4271,10 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessMemorySnapshot, collect_memory_usage_from_roots, create_unique_worktree,
-        daemon_spawn_name_for_session, font_name_from_path, infer_acornd_root_from_session_pids,
-        inject_agent_hook_env, memory_root_pids, remove_linked_worktree_at_path,
-        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
+        collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
+        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        validate_editor_command, validate_new_project_name, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use acorn_session::{Session, SessionAgentProvider, SessionKind};
@@ -4222,10 +4358,6 @@ mod tests {
     }
 
     impl super::ChatProviderAdapter for RecordingChatProviderAdapter {
-        fn provider(&self) -> &'static str {
-            "test"
-        }
-
         fn capabilities(&self) -> super::ChatProviderCapabilities {
             self.capabilities
         }
@@ -4330,17 +4462,13 @@ mod tests {
         assert!(context.prompt.contains("Earlier summary"));
         assert!(context.prompt.contains("Use adapters"));
         assert!(context.prompt.contains("current question"));
-        assert!(
-            context
-                .included_message_ids
-                .contains(&"current-user".to_string())
-        );
+        assert!(context
+            .included_message_ids
+            .contains(&"current-user".to_string()));
         assert!(!context.prompt.contains("old user content"));
-        assert!(
-            !context
-                .included_message_ids
-                .contains(&"old-user".to_string())
-        );
+        assert!(!context
+            .included_message_ids
+            .contains(&"old-user".to_string()));
     }
 
     #[test]
@@ -4486,28 +4614,22 @@ mod tests {
         let inputs = adapter.inputs.lock().unwrap();
 
         assert!(inputs[0].context.is_some());
-        assert!(
-            inputs[0]
-                .thread
-                .as_ref()
-                .unwrap()
-                .native_thread_id
-                .is_none()
-        );
-        assert!(
-            result
-                .final_state
-                .provider_threads
-                .iter()
-                .any(|thread| thread.provider == "codex")
-        );
-        assert!(
-            result
-                .final_state
-                .provider_threads
-                .iter()
-                .any(|thread| thread.provider == "claude")
-        );
+        assert!(inputs[0]
+            .thread
+            .as_ref()
+            .unwrap()
+            .native_thread_id
+            .is_none());
+        assert!(result
+            .final_state
+            .provider_threads
+            .iter()
+            .any(|thread| thread.provider == "codex"));
+        assert!(result
+            .final_state
+            .provider_threads
+            .iter()
+            .any(|thread| thread.provider == "claude"));
         assert_eq!(
             result.final_state.context_snapshots[0].mode,
             crate::persistence::ContextSnapshotMode::CompiledContext
@@ -4550,6 +4672,58 @@ mod tests {
         assert_eq!(
             result.final_state.turns[0].error.as_deref(),
             Some("provider failed")
+        );
+    }
+
+    #[test]
+    fn cancel_chat_turn_marks_running_turn_and_pending_assistant_message() {
+        let now = chrono::Utc::now();
+        let mut state = chat_state_for_runtime(vec![crate::persistence::ChatMessage {
+            id: "u1".to_string(),
+            session_id: None,
+            turn_id: Some("turn-1".to_string()),
+            role: crate::persistence::ChatRole::User,
+            content: "stop this".to_string(),
+            created_at: now,
+            status: Some(crate::persistence::ChatMessageStatus::Complete),
+            metadata: None,
+        }]);
+        state.turns.push(crate::persistence::ChatTurn {
+            id: "turn-1".to_string(),
+            session_id: state.session_id.clone(),
+            provider: "codex".to_string(),
+            model: None,
+            status: crate::persistence::ChatTurnStatus::Running,
+            user_message_id: "u1".to_string(),
+            assistant_message_id: Some("a1".to_string()),
+            started_at: now,
+            completed_at: None,
+            error: None,
+        });
+        state.messages.push(crate::persistence::ChatMessage {
+            id: "a1".to_string(),
+            session_id: Some(state.session_id.clone()),
+            turn_id: Some("turn-1".to_string()),
+            role: crate::persistence::ChatRole::Assistant,
+            content: String::new(),
+            created_at: now,
+            status: Some(crate::persistence::ChatMessageStatus::Pending),
+            metadata: Some(serde_json::json!({ "provider": "codex" })),
+        });
+
+        let (state, changed) = super::cancel_chat_turn_in_state(state, "turn-1");
+
+        assert!(changed);
+        assert_eq!(
+            state.turns[0].status,
+            crate::persistence::ChatTurnStatus::Cancelled
+        );
+        assert!(state.turns[0].completed_at.is_some());
+        assert_eq!(state.turns[0].error, None);
+        assert_eq!(state.messages[1].content, "Cancelled");
+        assert_eq!(
+            state.messages[1].status,
+            Some(crate::persistence::ChatMessageStatus::Cancelled)
         );
     }
 

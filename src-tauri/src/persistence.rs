@@ -143,6 +143,7 @@ pub enum ChatMessageStatus {
     Streaming,
     Complete,
     Error,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -170,6 +171,7 @@ pub enum ChatTurnStatus {
     Running,
     Complete,
     Error,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

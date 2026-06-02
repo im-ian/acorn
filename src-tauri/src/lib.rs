@@ -4,6 +4,7 @@ mod agent_resume;
 mod agent_resume_persister;
 mod agent_wrappers;
 mod ai;
+mod chat_runs;
 mod cli_resolver;
 mod clipboard;
 mod commands;
@@ -521,6 +522,7 @@ pub fn run() {
             commands::append_chat_message,
             commands::update_chat_message,
             commands::send_chat_message,
+            commands::cancel_chat_message,
             commands::list_projects,
             commands::add_project,
             commands::select_project_parent_folder,

@@ -208,6 +208,11 @@ export const api = {
       content,
     });
   },
+  cancelChatMessage(sessionId: string): Promise<ChatSessionState> {
+    return invoke<ChatSessionState>("cancel_chat_message", {
+      sessionId,
+    });
+  },
   listProjects(): Promise<Project[]> {
     return invoke<Project[]>("list_projects");
   },

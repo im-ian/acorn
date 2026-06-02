@@ -6,6 +6,7 @@ import {
   LoaderCircle,
   Paperclip,
   Send,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -447,6 +448,7 @@ export function ChatPane({
   const [state, setState] = useState<ChatSessionState | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -733,6 +735,25 @@ export function ChatPane({
     }
   }
 
+  async function handleCancelResponse() {
+    if (cancelling || (!sending && !hasRunningMessages)) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      const cancelled = await api.cancelChatMessage(sessionId);
+      applyChatState(cancelled);
+      setLocalChatSessionStatus(
+        sessionId,
+        sessionStatusFromChatState(cancelled),
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSending(false);
+      setCancelling(false);
+    }
+  }
+
   function removeAttachment(id: string) {
     setAttachments((current) =>
       current.filter((attachment) => attachment.id !== id),
@@ -839,6 +860,7 @@ export function ChatPane({
               const isSystem = message.role === "system";
               const isError = message.status === "error";
               const isPending = message.status === "pending";
+              const isCancelled = message.status === "cancelled";
               const canForkBeforeMessage =
                 !isUser && index > 0 && Boolean(sourceRepoPath);
               const headerLabel = messageHeaderLabel(message, stateProvider);
@@ -862,6 +884,8 @@ export function ChatPane({
                 ? "bg-accent/18 text-fg ring-accent/35"
                 : isError
                   ? "bg-danger/10 text-danger ring-danger/35"
+                  : isCancelled
+                    ? "bg-bg-sidebar/70 text-fg-muted ring-border/70"
                   : "bg-bg-elevated/85 text-fg ring-border/80";
 
               return (
@@ -897,6 +921,7 @@ export function ChatPane({
                           {headerLabel}
                           {isPending ? " - pending" : ""}
                           {isError ? " - error" : ""}
+                          {isCancelled ? " - cancelled" : ""}
                         </span>
                       </div>
                     ) : null}
@@ -1157,23 +1182,36 @@ export function ChatPane({
                 <option value="codex">Codex</option>
                 <option value="antigravity">Antigravity</option>
               </select>
-              <button
-                aria-label="Send message"
-                className={`inline-flex shrink-0 items-center justify-center rounded bg-accent/20 text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-50 ${
-                  composerIsCentered ? "h-9 w-9" : "h-8 w-8"
-                }`}
-                disabled={
-                  sending ||
-                  (draft.trim().length === 0 && attachments.length === 0)
-                }
-                type="submit"
-              >
-                {sending ? (
-                  <LoaderCircle size={16} className="animate-spin" />
-                ) : (
+              {sending || hasRunningMessages ? (
+                <Tooltip label="Stop response" side="top">
+                  <button
+                    aria-label="Stop response"
+                    className={`inline-flex shrink-0 items-center justify-center rounded bg-danger/15 text-danger transition hover:bg-danger/25 disabled:cursor-not-allowed disabled:opacity-50 ${
+                      composerIsCentered ? "h-9 w-9" : "h-8 w-8"
+                    }`}
+                    disabled={cancelling}
+                    type="button"
+                    onClick={() => void handleCancelResponse()}
+                  >
+                    {cancelling ? (
+                      <LoaderCircle size={16} className="animate-spin" />
+                    ) : (
+                      <Square size={composerIsCentered ? 16 : 14} />
+                    )}
+                  </button>
+                </Tooltip>
+              ) : (
+                <button
+                  aria-label="Send message"
+                  className={`inline-flex shrink-0 items-center justify-center rounded bg-accent/20 text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    composerIsCentered ? "h-9 w-9" : "h-8 w-8"
+                  }`}
+                  disabled={draft.trim().length === 0 && attachments.length === 0}
+                  type="submit"
+                >
                   <Send size={composerIsCentered ? 18 : 16} />
-                )}
-              </button>
+                </button>
+              )}
             </div>
           </div>
         </div>
