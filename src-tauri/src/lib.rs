@@ -4,6 +4,7 @@ mod agent_resume;
 mod agent_resume_persister;
 mod agent_wrappers;
 mod ai;
+mod chat_runs;
 mod cli_resolver;
 mod clipboard;
 mod commands;
@@ -516,6 +517,14 @@ pub fn run() {
             commands::session_title_readiness,
             commands::generate_session_title,
             commands::preview_session_title,
+            commands::load_chat_session_state,
+            commands::save_chat_session_state,
+            commands::append_chat_message,
+            commands::update_chat_message,
+            commands::send_chat_message,
+            commands::retry_chat_message,
+            commands::delete_chat_message,
+            commands::cancel_chat_message,
             commands::list_projects,
             commands::add_project,
             commands::select_project_parent_folder,
@@ -558,6 +567,7 @@ pub fn run() {
             commands::is_path_linked_worktree,
             commands::linked_worktree_root,
             commands::update_session_worktree,
+            commands::prepare_chat_session_worktree,
             commands::git_worktrees,
             commands::scrollback_save,
             commands::scrollback_load,

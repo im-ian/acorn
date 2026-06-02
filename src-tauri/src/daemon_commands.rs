@@ -319,6 +319,7 @@ pub fn daemon_adopt_session(
         title_source: acorn_session::SessionTitleSource::Manual,
         generated_title_transcript_id: None,
         kind,
+        mode: acorn_session::SessionMode::Terminal,
         owner: acorn_session::SessionOwner::User,
         position: None,
         daemon_session_id: Some(id),

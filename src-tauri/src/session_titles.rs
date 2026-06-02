@@ -13,7 +13,7 @@ const GENERATED_TITLE_CHARS: usize = 29;
 const SESSION_TITLE_PROMPT_CHARS: usize = 1_000;
 
 pub const DEFAULT_SESSION_TITLE_PROMPT: &str = "\
-You are naming an Acorn terminal tab from the user's entire first agent prompt.
+You are naming an Acorn session tab from the user's first prompt.
 
 Return only a concise title for the tab.
 Rules:
@@ -68,6 +68,27 @@ pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput>
     })
 }
 
+pub fn resolve_chat_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput> {
+    let state = crate::persistence::load_chat_session_state(&session_id.to_string()).ok()?;
+    chat_title_input_from_state(&state)
+}
+
+pub fn chat_title_input_from_state(
+    state: &crate::persistence::ChatSessionState,
+) -> Option<ResolvedTitleInput> {
+    let first_user_message = state.messages.iter().find(|message| {
+        message.role == crate::persistence::ChatRole::User && !message.content.trim().is_empty()
+    })?;
+    Some(ResolvedTitleInput {
+        transcript_id: format!("chat:{}", first_user_message.id),
+        first_user_message: first_user_message
+            .content
+            .chars()
+            .take(TITLE_INPUT_CHARS)
+            .collect(),
+    })
+}
+
 pub fn normalize_generated_title(raw: &str) -> Option<String> {
     let line = raw
         .lines()
@@ -92,11 +113,7 @@ pub fn normalize_generated_title(raw: &str) -> Option<String> {
         .trim()
         .trim_end_matches(['.', '!', '?', ':'])
         .to_string();
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 pub fn generate_title(
@@ -223,5 +240,50 @@ mod tests {
         assert!(!can_generate_title(&session, Some("old-transcript")));
         assert!(can_generate_title(&session, Some("new-transcript")));
         assert!(!can_generate_title(&session, None));
+    }
+
+    #[test]
+    fn chat_title_input_uses_first_user_message() {
+        let now = chrono::Utc::now();
+        let state = crate::persistence::ChatSessionState {
+            schema_version: crate::persistence::CHAT_SESSION_SCHEMA_VERSION,
+            session_id: uuid::Uuid::new_v4().to_string(),
+            session: crate::persistence::ChatSession::default(),
+            provider: Some("claude".to_string()),
+            model: None,
+            messages: vec![
+                crate::persistence::ChatMessage {
+                    id: "assistant-first".to_string(),
+                    session_id: None,
+                    turn_id: None,
+                    role: crate::persistence::ChatRole::Assistant,
+                    content: "assistant content".to_string(),
+                    created_at: now,
+                    status: Some(crate::persistence::ChatMessageStatus::Complete),
+                    metadata: None,
+                },
+                crate::persistence::ChatMessage {
+                    id: "user-first".to_string(),
+                    session_id: None,
+                    turn_id: None,
+                    role: crate::persistence::ChatRole::User,
+                    content: "Build Acorn native chat history".to_string(),
+                    created_at: now,
+                    status: Some(crate::persistence::ChatMessageStatus::Complete),
+                    metadata: None,
+                },
+            ],
+            turns: Vec::new(),
+            provider_threads: Vec::new(),
+            context_snapshots: Vec::new(),
+            memory: crate::persistence::SessionMemory::default(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let input = chat_title_input_from_state(&state).unwrap();
+
+        assert_eq!(input.transcript_id, "chat:user-first");
+        assert_eq!(input.first_user_message, "Build Acorn native chat history");
     }
 }

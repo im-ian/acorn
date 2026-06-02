@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 
@@ -61,6 +61,10 @@ pub struct AppState {
     /// run. Commands that create new trust roots consult this before accepting
     /// a renderer-supplied path.
     pub folder_grants: Arc<Mutex<Vec<PathBuf>>>,
+    /// Running native chat provider processes, keyed by Acorn session id.
+    /// The cancel command uses this to kill the one-shot provider child and
+    /// let the running turn settle as cancelled.
+    pub chat_runs: Arc<crate::chat_runs::ChatRunRegistry>,
 }
 
 impl AppState {
@@ -79,6 +83,7 @@ impl AppState {
             fs_watcher: WatcherState::new(),
             agent_hooks: Arc::new(Mutex::new(None)),
             folder_grants: Arc::new(Mutex::new(Vec::new())),
+            chat_runs: crate::chat_runs::ChatRunRegistry::new(),
         }
     }
 }

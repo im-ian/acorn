@@ -1,10 +1,12 @@
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
+use crate::chat_runs::ChatCancellation;
 use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
 
@@ -110,27 +112,51 @@ pub fn run_oneshot(
     prompt: &str,
     settings_label: &str,
 ) -> AppResult<String> {
+    run_oneshot_in_dir(command, args, prompt, settings_label, None)
+}
+
+pub fn run_oneshot_in_dir(
+    command: &str,
+    args: &[String],
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+) -> AppResult<String> {
+    run_oneshot_in_dir_cancellable(command, args, prompt, settings_label, cwd, None)
+}
+
+pub fn run_oneshot_in_dir_cancellable(
+    command: &str,
+    args: &[String],
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+    cancellation: Option<ChatCancellation>,
+) -> AppResult<String> {
     let resolved = cli_resolver::resolve(command).map_err(|_| {
         AppError::Other(format!(
             "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
         ))
     })?;
-    let mut child = Command::new(&resolved)
+    let mut command_builder = Command::new(&resolved);
+    command_builder
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                cli_resolver::invalidate(command);
-                AppError::Other(format!(
-                    "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
-                ))
-            } else {
-                AppError::Other(format!("failed to invoke {command}: {e}"))
-            }
-        })?;
+        .stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        command_builder.current_dir(cwd);
+    }
+    let mut child = command_builder.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            cli_resolver::invalidate(command);
+            AppError::Other(format!(
+                "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
+            ))
+        } else {
+            AppError::Other(format!("failed to invoke {command}: {e}"))
+        }
+    })?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
@@ -140,7 +166,7 @@ pub fn run_oneshot(
         return Err(AppError::Other(format!("{command} stdin missing")));
     }
 
-    let output = wait_with_timeout(command, child, ONESHOT_TIMEOUT)?;
+    let output = wait_with_timeout(command, child, ONESHOT_TIMEOUT, cancellation)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -159,6 +185,7 @@ fn wait_with_timeout(
     command: &str,
     mut child: std::process::Child,
     timeout: Duration,
+    cancellation: Option<ChatCancellation>,
 ) -> AppResult<Output> {
     let stdout = child
         .stdout
@@ -181,23 +208,52 @@ fn wait_with_timeout(
     });
 
     let started = Instant::now();
-    let status = loop {
-        match child
-            .try_wait()
-            .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?
-        {
-            Some(status) => break status,
-            None if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+    let status = if let Some(cancellation) = cancellation {
+        cancellation.set_child(child);
+        let status = loop {
+            if cancellation.is_cancelled() {
+                cancellation.kill_and_wait();
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
-                return Err(AppError::Other(format!(
-                    "{command} timed out after {} seconds",
-                    timeout.as_secs()
-                )));
+                cancellation.clear_child();
+                return Err(AppError::Other(format!("{command} cancelled")));
             }
-            None => thread::sleep(Duration::from_millis(50)),
+            match cancellation.try_wait(command)? {
+                Some(status) => break status,
+                None if started.elapsed() >= timeout => {
+                    cancellation.kill_and_wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    cancellation.clear_child();
+                    return Err(AppError::Other(format!(
+                        "{command} timed out after {} seconds",
+                        timeout.as_secs()
+                    )));
+                }
+                None => thread::sleep(Duration::from_millis(50)),
+            }
+        };
+        cancellation.clear_child();
+        status
+    } else {
+        loop {
+            match child
+                .try_wait()
+                .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?
+            {
+                Some(status) => break status,
+                None if started.elapsed() >= timeout => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(AppError::Other(format!(
+                        "{command} timed out after {} seconds",
+                        timeout.as_secs()
+                    )));
+                }
+                None => thread::sleep(Duration::from_millis(50)),
+            }
         }
     };
 
@@ -258,5 +314,17 @@ mod tests {
         };
 
         assert!(req.resolve().is_err());
+    }
+
+    #[test]
+    fn runs_oneshot_in_requested_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run_oneshot_in_dir("pwd", &[], "", "test settings", Some(dir.path())).unwrap();
+        let observed = std::path::PathBuf::from(output.trim())
+            .canonicalize()
+            .unwrap();
+        let expected = dir.path().canonicalize().unwrap();
+
+        assert_eq!(observed, expected);
     }
 }

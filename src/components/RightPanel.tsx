@@ -76,6 +76,7 @@ import type {
   PullRequestListing,
   SessionNotification,
   SessionNotificationKind,
+  SessionAgentProvider,
   StagedFile,
   TodoItem,
   WorkflowJob,
@@ -1385,6 +1386,16 @@ type AgentHistoryProviderFilter =
   | typeof ALL_AGENT_HISTORY_PROVIDERS
   | AgentHistoryProvider;
 
+function isAgentProvider(
+  provider: AgentHistoryProvider,
+): provider is SessionAgentProvider {
+  return (
+    provider === "claude" ||
+    provider === "codex" ||
+    provider === "antigravity"
+  );
+}
+
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1469,12 +1480,18 @@ function AgentHistoryTab({
     void fetchHistory();
   }, [fetchHistory]);
 
+  const historyItems = useMemo(() => {
+    if (!items) return null;
+    return [...items]
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .slice(0, historyLimit);
+  }, [items]);
   const visibleItems = useMemo(() => {
-    if (!items) return [];
+    if (!historyItems) return [];
     return providerFilter === ALL_AGENT_HISTORY_PROVIDERS
-      ? items
-      : items.filter((item) => item.provider === providerFilter);
-  }, [items, providerFilter]);
+      ? historyItems
+      : historyItems.filter((item) => item.provider === providerFilter);
+  }, [historyItems, providerFilter]);
 
   async function copy(text: string) {
     try {
@@ -1488,6 +1505,8 @@ function AgentHistoryTab({
     item: AgentHistoryItem,
     mode: "auto" | "repo" | "worktree" = "auto",
   ) {
+    if (!isAgentProvider(item.provider)) return;
+    const agentProvider = item.provider;
     if (!item.resume_command) return;
     setError(null);
     const shouldUseWorktree =
@@ -1509,7 +1528,7 @@ function AgentHistoryTab({
           {
             name: `${item.provider} ${rt(t, "rightPanel.history.resumeSessionName")}`,
             repoPath: targetRepoPath,
-            agentProvider: item.provider,
+            agentProvider,
             projectScoped: sessionHostProjectScoped,
           },
         ),
@@ -1538,7 +1557,7 @@ function AgentHistoryTab({
         }
       }
       setPendingTerminalInput(created.id, item.resume_command, {
-        agentProvider: item.provider,
+        agentProvider,
       });
       if (shouldUseWorktree && item.worktree) {
         setWorktreeNotice(item.worktree);
@@ -1587,7 +1606,7 @@ function AgentHistoryTab({
             setProviderFilter(e.target.value as AgentHistoryProviderFilter)
           }
           aria-label={rt(t, "rightPanel.history.filterByAgent")}
-          disabled={!items || items.length === 0}
+          disabled={!historyItems || historyItems.length === 0}
           className="min-w-0 max-w-full flex-1 truncate"
         >
           <option value={ALL_AGENT_HISTORY_PROVIDERS}>
@@ -1608,7 +1627,7 @@ function AgentHistoryTab({
       <div className="acorn-no-scrollbar flex-1 overflow-x-hidden overflow-y-auto">
         {error ? (
           <div className="p-3 text-xs text-danger">{error}</div>
-        ) : !items ? (
+        ) : !historyItems ? (
           <div
             role="status"
             aria-busy="true"
@@ -1622,7 +1641,7 @@ function AgentHistoryTab({
               />
             ))}
           </div>
-        ) : items.length === 0 ? (
+        ) : historyItems.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.empty")} />
         ) : visibleItems.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.emptyForFilter")} />

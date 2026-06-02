@@ -118,6 +118,48 @@ pub fn collect_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentK
     mappings
 }
 
+/// Resolve the provider conversation id created by a completed one-shot
+/// agent run. Native chat uses this after non-interactive CLI calls that
+/// create provider-side transcripts but do not print their id on stdout.
+///
+/// The helper intentionally returns `None` for ambiguous matches instead
+/// of guessing. A wrong provider cursor would silently resume another chat,
+/// while `None` only falls back to Acorn's compiled context on the next turn.
+pub fn find_completed_agent_run(
+    cwd: &Path,
+    kind: AgentKind,
+    process_start: SystemTime,
+) -> Option<String> {
+    let now = SystemTime::now();
+    let recency_cutoff = now
+        .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    match kind {
+        AgentKind::Claude => find_recent_claude_jsonl(
+            cwd,
+            claude_projects_root().as_deref(),
+            recency_cutoff,
+            process_start,
+            &HashSet::new(),
+        )
+        .map(|(_, id)| id),
+        AgentKind::Codex => find_completed_codex_jsonl(
+            cwd,
+            codex_sessions_root().as_deref(),
+            recency_cutoff,
+            process_start,
+        )
+        .map(|(_, id)| id),
+        AgentKind::Antigravity => find_completed_antigravity_jsonl(
+            cwd,
+            &antigravity_brain_roots(),
+            recency_cutoff,
+            process_start,
+        )
+        .map(|(_, id)| id),
+    }
+}
+
 fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
     let mut out = Vec::new();
     let refresh = ProcessRefreshKind::new()
@@ -125,11 +167,7 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
         .with_exe(UpdateKind::Always)
         .with_cmd(UpdateKind::Always);
     let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        refresh,
-    );
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
     let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
     for (pid, proc) in sys.processes() {
@@ -380,6 +418,46 @@ fn find_recent_codex_jsonl(
     None
 }
 
+fn find_completed_codex_jsonl(
+    cwd: &Path,
+    sessions_root: Option<&Path>,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    let root = sessions_root?;
+    let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
+    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        if mtime < recency_cutoff || mtime < process_start {
+            continue;
+        }
+        let Some(transcript_cwd) = read_codex_transcript_cwd(&path) else {
+            continue;
+        };
+        if transcript_cwd != cwd {
+            continue;
+        }
+        let Some(uuid) = extract_uuid_from_path(&path) else {
+            continue;
+        };
+        let created = meta.created().unwrap_or(mtime);
+        candidates.push((path, created, uuid));
+    }
+    candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
+    if candidates.len() == 1 {
+        let (path, _, id) = candidates.pop()?;
+        Some((path, id))
+    } else {
+        None
+    }
+}
+
 fn find_recent_antigravity_jsonl(
     brain_roots: &[PathBuf],
     recency_cutoff: SystemTime,
@@ -430,6 +508,58 @@ fn find_recent_antigravity_jsonl(
     None
 }
 
+fn find_completed_antigravity_jsonl(
+    cwd: &Path,
+    brain_roots: &[PathBuf],
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
+    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    for root in brain_roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let session_dir = entry.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let path = session_dir
+                .join(".system_generated")
+                .join("logs")
+                .join("transcript.jsonl");
+            if !path.is_file() {
+                continue;
+            }
+            let Some(id) = antigravity_uuid_from_transcript_path(&path) else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff || mtime < process_start {
+                continue;
+            }
+            let Some(transcript_cwd) = read_agent_transcript_cwd(&path) else {
+                continue;
+            };
+            if transcript_cwd != cwd {
+                continue;
+            }
+            let created = meta.created().unwrap_or(mtime);
+            candidates.push((path, created, id));
+        }
+    }
+    candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
+    if candidates.len() == 1 {
+        let (path, _, id) = candidates.pop()?;
+        Some((path, id))
+    } else {
+        None
+    }
+}
+
 /// Read codex rollout's first non-empty JSONL line and pull `payload.cwd`.
 /// The first event is a `SessionMeta` with cwd nested under `payload`.
 fn read_codex_transcript_cwd(path: &Path) -> Option<PathBuf> {
@@ -452,6 +582,33 @@ fn read_codex_transcript_cwd(path: &Path) -> Option<PathBuf> {
             .and_then(|c| c.as_str())
         {
             return Some(PathBuf::from(cwd));
+        }
+    }
+    None
+}
+
+fn read_agent_transcript_cwd(path: &Path) -> Option<PathBuf> {
+    use std::io::{BufRead, BufReader};
+    let f = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(f);
+    for line in reader.lines().map_while(Result::ok).take(50) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        for key in ["cwd", "project"] {
+            if let Some(path) = v.get(key).and_then(|c| c.as_str()) {
+                return Some(PathBuf::from(path));
+            }
+            if let Some(path) = v
+                .get("payload")
+                .and_then(|p| p.get(key))
+                .and_then(|c| c.as_str())
+            {
+                return Some(PathBuf::from(path));
+            }
         }
     }
     None
@@ -682,5 +839,75 @@ mod tests {
             "transcript predating the process must be excluded"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn completed_codex_run_requires_one_matching_cwd() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-codex-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("02");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let matching_id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let matching = day.join(format!("rollout-2026-06-02T10-00-00-{matching_id}.jsonl"));
+        let mut file = File::create(&matching).unwrap();
+        writeln!(file, "{{\"payload\":{{\"cwd\":\"{}\"}}}}", cwd.display()).unwrap();
+
+        let found = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+        );
+        assert_eq!(found.map(|(_, id)| id).as_deref(), Some(matching_id));
+
+        let other_id = "019e2001-3250-76b0-8410-2e073b38a2c2";
+        let other = day.join(format!("rollout-2026-06-02T10-00-01-{other_id}.jsonl"));
+        let mut file = File::create(&other).unwrap();
+        writeln!(file, "{{\"payload\":{{\"cwd\":\"{}\"}}}}", cwd.display()).unwrap();
+        let ambiguous = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+        );
+        assert!(ambiguous.is_none());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn completed_antigravity_run_requires_matching_cwd() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-antigravity-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let brain = root.join("brain");
+        let cwd = root.join("repo");
+        let id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let transcript = brain
+            .join(id)
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut file = File::create(&transcript).unwrap();
+        writeln!(file, "{{\"cwd\":\"{}\"}}", cwd.display()).unwrap();
+
+        let found = find_completed_antigravity_jsonl(
+            &cwd,
+            &[brain],
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+        );
+        assert_eq!(found.map(|(_, id)| id).as_deref(), Some(id));
+
+        fs::remove_dir_all(&root).unwrap();
     }
 }
