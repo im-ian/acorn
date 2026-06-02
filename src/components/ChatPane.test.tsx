@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   loadChatSessionState: vi.fn(),
   sendChatMessage: vi.fn(),
   cancelChatMessage: vi.fn(),
+  retryChatMessage: vi.fn(),
+  deleteChatMessage: vi.fn(),
   createSession: vi.fn(),
   renameSession: vi.fn(),
   updateSessionWorktree: vi.fn(),
@@ -42,6 +44,8 @@ vi.mock("../lib/api", () => ({
     loadChatSessionState: mocks.loadChatSessionState,
     sendChatMessage: mocks.sendChatMessage,
     cancelChatMessage: mocks.cancelChatMessage,
+    retryChatMessage: mocks.retryChatMessage,
+    deleteChatMessage: mocks.deleteChatMessage,
     createSession: mocks.createSession,
     renameSession: mocks.renameSession,
     updateSessionWorktree: mocks.updateSessionWorktree,
@@ -1081,6 +1085,191 @@ describe("ChatPane", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       "copy agent message",
     );
+  });
+
+  it("regenerates an assistant message from the message actions", async () => {
+    const initial = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "try this",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "old answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    const regenerated = chatState(
+      "s1",
+      [
+        initial.messages[0],
+        {
+          ...initial.messages[1],
+          content: "new answer",
+        },
+      ],
+      "claude",
+    );
+    mocks.loadChatSessionState.mockResolvedValueOnce(initial);
+    mocks.retryChatMessage.mockResolvedValueOnce(regenerated);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const regenerate = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Regenerate Claude message"]',
+    );
+    expect(regenerate).toBeTruthy();
+
+    await act(async () => {
+      regenerate!.click();
+      await Promise.resolve();
+    });
+
+    expect(mocks.retryChatMessage).toHaveBeenCalledWith(
+      "s1",
+      { provider: "claude" },
+      "a1",
+      undefined,
+    );
+    expect(container.textContent).toContain("new answer");
+  });
+
+  it("edits a user message and resends the chat branch", async () => {
+    const initial = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "old prompt",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "old answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "codex" },
+        },
+      ],
+      "codex",
+    );
+    const edited = chatState(
+      "s1",
+      [
+        {
+          ...initial.messages[0],
+          content: "edited prompt",
+        },
+        {
+          ...initial.messages[1],
+          content: "edited answer",
+        },
+      ],
+      "codex",
+    );
+    mocks.loadChatSessionState.mockResolvedValueOnce(initial);
+    mocks.retryChatMessage.mockResolvedValueOnce(edited);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const edit = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit user message"]',
+    );
+    expect(edit).toBeTruthy();
+
+    await act(async () => {
+      edit!.click();
+      await Promise.resolve();
+    });
+
+    const editInput = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Edit user message content"]',
+    );
+    expect(editInput).toBeTruthy();
+
+    await act(async () => {
+      changeTextareaValue(editInput!, "edited prompt");
+      const save = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Save edited user message"]',
+      );
+      save!.click();
+      await Promise.resolve();
+    });
+
+    expect(mocks.retryChatMessage).toHaveBeenCalledWith(
+      "s1",
+      { provider: "codex" },
+      "u1",
+      "edited prompt",
+    );
+    expect(container.textContent).toContain("edited answer");
+  });
+
+  it("deletes a message branch from the message actions", async () => {
+    const initial = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "keep",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "remove",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    const deleted = chatState("s1", [initial.messages[0]], "claude");
+    mocks.loadChatSessionState.mockResolvedValueOnce(initial);
+    mocks.deleteChatMessage.mockResolvedValueOnce(deleted);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Delete Claude message"]',
+    );
+    expect(remove).toBeTruthy();
+
+    await act(async () => {
+      remove!.click();
+      await Promise.resolve();
+    });
+
+    expect(mocks.deleteChatMessage).toHaveBeenCalledWith("s1", "a1");
+    expect(container.textContent).not.toContain("remove");
   });
 
   it("does not show fork actions on user messages", async () => {

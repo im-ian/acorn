@@ -5030,6 +5030,94 @@ mod tests {
     }
 
     #[test]
+    fn retry_chat_branch_prunes_from_anchor_and_resets_hidden_context() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "first"),
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                "first answer",
+            ),
+            chat_message("u2", crate::persistence::ChatRole::User, "second"),
+            chat_message(
+                "a2",
+                crate::persistence::ChatRole::Assistant,
+                "second answer",
+            ),
+        ]);
+        state
+            .provider_threads
+            .push(crate::persistence::ProviderThread {
+                session_id: state.session_id.clone(),
+                provider: "claude".to_string(),
+                model: None,
+                native_thread_id: Some("thread-1".to_string()),
+                resume_token: Some("thread-1".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            });
+        state.memory.summary = Some("stale summary".to_string());
+
+        let branch = super::prepare_chat_retry_branch(state, "a2", None).unwrap();
+
+        assert_eq!(branch.content, "second");
+        assert_eq!(
+            branch
+                .state
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["u1", "a1"]
+        );
+        assert!(branch.state.provider_threads.is_empty());
+        assert!(branch.state.memory.summary.is_none());
+    }
+
+    #[test]
+    fn delete_chat_branch_removes_selected_message_and_following_context() {
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "first"),
+            chat_message(
+                "a1",
+                crate::persistence::ChatRole::Assistant,
+                "first answer",
+            ),
+            chat_message("u2", crate::persistence::ChatRole::User, "second"),
+            chat_message(
+                "a2",
+                crate::persistence::ChatRole::Assistant,
+                "second answer",
+            ),
+        ]);
+        state
+            .provider_threads
+            .push(crate::persistence::ProviderThread {
+                session_id: state.session_id.clone(),
+                provider: "codex".to_string(),
+                model: None,
+                native_thread_id: Some("thread-1".to_string()),
+                resume_token: Some("thread-1".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            });
+        state.memory.summary = Some("stale summary".to_string());
+
+        let pruned = super::delete_chat_branch_from_message(state, "u2").unwrap();
+
+        assert_eq!(
+            pruned
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["u1", "a1"]
+        );
+        assert!(pruned.provider_threads.is_empty());
+        assert!(pruned.memory.summary.is_none());
+    }
+
+    #[test]
     fn chat_provider_metadata_backfill_preserves_existing_agent_labels() {
         let now = chrono::Utc::now();
         let mut state = crate::persistence::ChatSessionState {
