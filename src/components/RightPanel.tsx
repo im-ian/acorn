@@ -1011,6 +1011,22 @@ function useRightPanelInvalidations(
 }
 
 /**
+ * Strip a trailing slash so a backend-resolved repo path byte-matches the
+ * slash-free paths Acorn records (project `repo_path`, session
+ * `worktree_path`). `pty_repo_root` returns libgit2's `Repository::workdir()`,
+ * which always carries a trailing slash (e.g. `/repo/.acorn/worktrees/wt/`).
+ * If that slashed form reaches the right panel as `repoPath`, it never matches
+ * a retained repo path, so `rightPanelCache.canStore` silently drops File
+ * Explorer expansion writes — collapsing every expanded folder on the next
+ * remount (tab switch). Preserve a bare root `/`.
+ */
+function normalizeRepoPath(path: string | null): string | null {
+  if (path === null) return null;
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed;
+}
+
+/**
  * Resolve the live working directory of a session's PTY tree to the git
  * repo it sits inside, with the recorded `fallback` path as the immediate
  * (and final) fallback. Backed by `pty_repo_root`, which does the
@@ -1037,7 +1053,13 @@ function useLiveRepoPath(
     api
       .ptyRepoRoot(sessionId)
       .then((repoPath) => {
-        if (!cancelled) setLiveRepo({ sessionId, fallbackPath, repoPath });
+        if (!cancelled) {
+          setLiveRepo({
+            sessionId,
+            fallbackPath,
+            repoPath: normalizeRepoPath(repoPath),
+          });
+        }
       })
       .catch((err: unknown) => {
         // Don't blow away a previously resolved path on a transient backend
