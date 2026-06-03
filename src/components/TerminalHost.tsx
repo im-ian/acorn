@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { resolveSessionAgentProvider } from "../lib/agentProvider";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
@@ -8,8 +8,11 @@ import type { Session } from "../lib/types";
 import { Terminal } from "./Terminal";
 
 /**
- * Renders one `<Terminal>` per session at the App level so the xterm + PTY
- * survive pane and project switches.
+ * Lazily renders terminals at the App level so xterm + PTY state survives
+ * pane and project switches after a session has been shown once. Persisted
+ * sessions that are not visible stay unmounted at boot; mounting every saved
+ * tab would otherwise respawn every shell and restore every scrollback file at
+ * the same time.
  *
  * Each terminal is portaled into a per-session "target div" that we
  * `appendChild`-move between pane bodies (when a pane is showing the
@@ -19,13 +22,73 @@ import { Terminal } from "./Terminal";
  */
 export function TerminalHost() {
   const sessions = useAppStore((s) => s.sessions);
+  const visibleSessionIdKey = useAppStore(visibleTerminalSessionIdKey);
+  const visibleSessionIds = useMemo(
+    () => parseSessionIdKey(visibleSessionIdKey),
+    [visibleSessionIdKey],
+  );
+  const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(
+    () => visibleSessionIds,
+  );
+  const terminalSessionIds = useMemo(
+    () =>
+      new Set(sessions.filter((s) => s.mode !== "chat").map((s) => s.id)),
+    [sessions],
+  );
+
+  useEffect(() => {
+    setMountedSessionIds((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of current) {
+        if (terminalSessionIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      for (const id of visibleSessionIds) {
+        if (!terminalSessionIds.has(id)) continue;
+        if (!next.has(id)) changed = true;
+        next.add(id);
+      }
+      return changed || next.size !== current.size ? next : current;
+    });
+  }, [terminalSessionIds, visibleSessionIds]);
+
   return (
     <>
-      {sessions.filter((s) => s.mode !== "chat").map((s) => (
-        <PortaledTerminal key={s.id} session={s} />
-      ))}
+      {sessions
+        .filter(
+          (s) =>
+            s.mode !== "chat" &&
+            (mountedSessionIds.has(s.id) || visibleSessionIds.has(s.id)),
+        )
+        .map((s) => (
+          <PortaledTerminal key={s.id} session={s} />
+        ))}
     </>
   );
+}
+
+const SESSION_ID_KEY_SEPARATOR = "\u0000";
+
+type AppStateSnapshot = ReturnType<typeof useAppStore.getState>;
+
+function visibleTerminalSessionIdKey(state: AppStateSnapshot): string {
+  if (!state.activeProject) return "";
+  const ws = state.workspaces[state.activeProject];
+  if (!ws) return "";
+  return Object.values(ws.panes)
+    .map((pane) => pane.activeTabId)
+    .filter((id): id is string => Boolean(id))
+    .sort()
+    .join(SESSION_ID_KEY_SEPARATOR);
+}
+
+function parseSessionIdKey(key: string): Set<string> {
+  if (!key) return new Set();
+  return new Set(key.split(SESSION_ID_KEY_SEPARATOR));
 }
 
 function PortaledTerminal({ session }: { session: Session }) {
