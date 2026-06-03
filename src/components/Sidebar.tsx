@@ -9,6 +9,7 @@ import {
   FolderPlus,
   GitBranch,
   MessageSquareText,
+  MoreHorizontal,
   Pencil,
   PencilLine,
   Plus,
@@ -73,6 +74,7 @@ import {
   type SessionCreateScope,
 } from "../lib/sessionCreation";
 import {
+  PROJECT_SESSION_CREATE_ACTIONS,
   PROJECT_SESSION_CREATE_MENU,
   type ProjectSessionCreateAction,
 } from "../lib/projectSessionCreateActions";
@@ -749,6 +751,25 @@ function projectSessionCreateIcon(id: ProjectSessionCreateAction["id"]) {
   }
 }
 
+const PROJECT_SESSION_PRIMARY_CREATE_ACTION_IDS = new Set<
+  ProjectSessionCreateAction["id"]
+>(["terminal", "isolated"]);
+
+function isPrimaryProjectSessionCreateAction(
+  action: ProjectSessionCreateAction,
+): boolean {
+  return PROJECT_SESSION_PRIMARY_CREATE_ACTION_IDS.has(action.id);
+}
+
+const PROJECT_SESSION_PRIMARY_CREATE_ACTIONS =
+  PROJECT_SESSION_CREATE_ACTIONS.filter(isPrimaryProjectSessionCreateAction);
+
+const PROJECT_SESSION_OVERFLOW_CREATE_MENU = PROJECT_SESSION_CREATE_MENU.filter(
+  (item) =>
+    item.type === "separator" ||
+    !isPrimaryProjectSessionCreateAction(item.action),
+);
+
 interface ProjectGroupViewProps {
   project: ProjectGroup;
   collapsed: boolean;
@@ -813,6 +834,19 @@ function ProjectGroupView({
   const createMenuItems = useMemo<ContextMenuItem[]>(
     () =>
       PROJECT_SESSION_CREATE_MENU.map((item) => {
+        if (item.type === "separator") return { type: "separator" };
+        const action = item.action;
+        return {
+          label: sidebarText(t, action.labelKey),
+          icon: projectSessionCreateIcon(action.id),
+          onClick: () => onAddSession(action.isolated, action.kind, action.mode),
+        };
+      }),
+    [onAddSession, t],
+  );
+  const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
+    () =>
+      PROJECT_SESSION_OVERFLOW_CREATE_MENU.map((item) => {
         if (item.type === "separator") return { type: "separator" };
         const action = item.action;
         return {
@@ -899,10 +933,29 @@ function ProjectGroupView({
           <span className="truncate text-sm font-medium leading-5 text-fg">
             {project.name}
           </span>
-          <span className="ml-1 flex h-4 shrink-0 items-center rounded bg-bg-elevated/80 px-1 text-[10px] leading-none text-fg-muted">
-            {project.sessions.length}
-          </span>
         </span>
+        {PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
+          <Tooltip
+            key={action.id}
+            label={sidebarText(t, action.labelKey)}
+            side="bottom"
+          >
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenu(null);
+                setCreateMenu(null);
+                onAddSession(action.isolated, action.kind, action.mode);
+              }}
+              className="invisible flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+              aria-label={sidebarText(t, action.ariaKey)}
+            >
+              {projectSessionCreateIcon(action.id)}
+            </button>
+          </Tooltip>
+        ))}
         <button
           type="button"
           onPointerDown={(e) => e.stopPropagation()}
@@ -914,13 +967,12 @@ function ProjectGroupView({
               current === null ? { x: rect.left, y: rect.bottom + 4 } : null,
             );
           }}
-          className="invisible flex h-5 w-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+          className="invisible flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
           aria-label={sidebarText(t, "sidebar.aria.newSessionMenuInProject")}
           aria-haspopup="menu"
           aria-expanded={createMenu !== null}
         >
-          <Plus size={12} />
-          <ChevronRight size={10} className="rotate-90" />
+          <MoreHorizontal size={13} />
         </button>
         <Tooltip
           label={sidebarText(t, "sidebar.actions.closeProject")}
@@ -945,7 +997,7 @@ function ProjectGroupView({
         x={createMenu?.x ?? 0}
         y={createMenu?.y ?? 0}
         onClose={() => setCreateMenu(null)}
-        items={createMenuItems}
+        items={overflowCreateMenuItems}
       />
       <ContextMenu
         open={menu !== null}
