@@ -905,6 +905,9 @@ describe("ChatPane", () => {
       "[data-chat-running-duration]",
     );
     expect(runningDuration?.textContent).toBe("2m 5s");
+    expect(
+      runningDuration?.parentElement?.hasAttribute("data-chat-message-meta"),
+    ).toBe(true);
   });
 
   it("updates elapsed response time while an assistant message is pending", async () => {

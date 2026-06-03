@@ -64,6 +64,23 @@ interface ChatAttachment {
 
 const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 const FORKED_CHAT_DEFAULT_TITLE = "Forked chat";
+const EMPTY_COMPOSER_TITLES = [
+  "어떤 작업을 진행할까요?",
+  "지금 바로 구현해보세요.",
+  "아이디어를 현실로",
+  "무엇부터 만들어볼까요?",
+  "작게 시작해서 빠르게 확인해보세요.",
+  "다음 변경을 설명해주세요.",
+  "고치고 싶은 부분을 알려주세요.",
+  "새로운 흐름을 설계해볼까요?",
+  "오늘 만들 기능은 무엇인가요?",
+  "생각한 방향을 코드로 옮겨보세요.",
+];
+
+function pickEmptyComposerTitle(): string {
+  const index = Math.floor(Math.random() * EMPTY_COMPOSER_TITLES.length);
+  return EMPTY_COMPOSER_TITLES[index] ?? EMPTY_COMPOSER_TITLES[0];
+}
 
 function providerFromString(
   value: string | null | undefined,
@@ -499,6 +516,7 @@ export function ChatPane({
   const [forkTargetIndex, setForkTargetIndex] = useState<number | null>(null);
   const [forkBusy, setForkBusy] = useState(false);
   const [relativeNow, setRelativeNow] = useState(() => Date.now());
+  const [emptyComposerTitle] = useState(pickEmptyComposerTitle);
   const latestChatStateUpdatedAtRef = useRef<number | null>(null);
   const copyResetTimer = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -517,6 +535,8 @@ export function ChatPane({
     (message) => message.status === "pending" || message.status === "streaming",
   );
   const composerIsCentered = !loading && !error && !hasMessages;
+  const showEmptyComposerTitle =
+    composerIsCentered && !sending && !hasRunningMessages;
   const sourceRepoPath = session?.repo_path ?? repoPath;
   const sourceWorktreePath = session?.worktree_path ?? repoPath;
   const sourceProjectScoped = session?.project_scoped !== false;
@@ -982,7 +1002,7 @@ export function ChatPane({
               const isPending = message.status === "pending";
               const isCancelled = message.status === "cancelled";
               const canForkBeforeMessage =
-                !isUser && index > 0 && Boolean(sourceRepoPath);
+                !isPending && !isUser && index > 0 && Boolean(sourceRepoPath);
               const headerLabel = messageHeaderLabel(message, stateProvider);
               const messageProvider = providerFromMetadata(message.metadata);
               const agentProvider =
@@ -1012,6 +1032,10 @@ export function ChatPane({
               const canRegenerateMessage =
                 message.role === "assistant" && !isPending && isLastMessage;
               const canDeleteMessage = !isSystem && !isPending && isLastMessage;
+              const showMessageMeta =
+                !isSystem &&
+                ((isPending && Boolean(durationLabel)) ||
+                  (!isPending && message.content.trim().length > 0));
               const actionLabel = headerLabel ?? message.role;
               const bubbleClass = isUser
                 ? "bg-accent/18 text-fg ring-accent/35"
@@ -1073,20 +1097,6 @@ export function ChatPane({
                               messageProvider ?? stateProvider ?? provider,
                             )}
                           </span>
-                          {durationLabel ? (
-                            <>
-                              <span
-                                aria-hidden="true"
-                                className="h-1 w-1 rounded-full bg-fg-muted/40"
-                              />
-                              <span
-                                className="font-mono text-xs"
-                                data-chat-running-duration
-                              >
-                                {durationLabel}
-                              </span>
-                            </>
-                          ) : null}
                         </div>
                       ) : isEditing ? (
                         <div className="flex min-w-0 flex-col gap-2">
@@ -1142,13 +1152,22 @@ export function ChatPane({
                         />
                       )}
                     </div>
-                    {!isSystem && !isPending && message.content.trim() ? (
+                    {showMessageMeta ? (
                       <div
+                        data-chat-message-meta
                         className={`mt-1 flex px-1 ${
                           isUser ? "justify-end" : "justify-start"
                         }`}
                       >
-                        {timestampLabel ? (
+                        {isPending && durationLabel ? (
+                          <span
+                            className="self-center font-mono text-[11px] text-fg-muted/75"
+                            data-chat-running-duration
+                          >
+                            {durationLabel}
+                          </span>
+                        ) : null}
+                        {!isPending && timestampLabel ? (
                           <>
                             <Tooltip
                               label={timestampTitle ?? timestampLabel}
@@ -1169,7 +1188,7 @@ export function ChatPane({
                             />
                           </>
                         ) : null}
-                        {durationLabel ? (
+                        {!isPending && durationLabel ? (
                           <>
                             <span
                               className="self-center font-mono text-[11px] text-fg-muted/75"
@@ -1184,46 +1203,50 @@ export function ChatPane({
                             />
                           </>
                         ) : null}
-                        <Tooltip label="Copy message" side="bottom">
-                          <button
-                            aria-label={`Copy ${
-                              headerLabel ?? message.role
-                            } message`}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
-                            type="button"
-                            onClick={() =>
-                              void handleCopyMessage(
-                                message.id,
-                                message.content,
-                              )
-                            }
-                          >
-                            {copiedMessageId === message.id ? (
-                              <Check size={12} />
-                            ) : (
-                              <Copy size={12} />
-                            )}
-                          </button>
-                        </Tooltip>
-                        {canRegenerateMessage ? (
-                          <Tooltip label="Regenerate response" side="bottom">
-                            <button
-                              aria-label={`Regenerate ${actionLabel} message`}
-                              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={actionDisabled}
-                              type="button"
-                              onClick={() => void handleRetryMessage(message)}
-                            >
-                              {isActionBusy ? (
-                                <LoaderCircle
-                                  size={12}
-                                  className="animate-spin"
-                                />
-                              ) : (
-                                <RotateCcw size={12} />
-                              )}
-                            </button>
-                          </Tooltip>
+                        {!isPending ? (
+                          <>
+                            <Tooltip label="Copy message" side="bottom">
+                              <button
+                                aria-label={`Copy ${
+                                  headerLabel ?? message.role
+                                } message`}
+                                className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                                type="button"
+                                onClick={() =>
+                                  void handleCopyMessage(
+                                    message.id,
+                                    message.content,
+                                  )
+                                }
+                              >
+                                {copiedMessageId === message.id ? (
+                                  <Check size={12} />
+                                ) : (
+                                  <Copy size={12} />
+                                )}
+                              </button>
+                            </Tooltip>
+                            {canRegenerateMessage ? (
+                              <Tooltip label="Regenerate response" side="bottom">
+                                <button
+                                  aria-label={`Regenerate ${actionLabel} message`}
+                                  className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={actionDisabled}
+                                  type="button"
+                                  onClick={() => void handleRetryMessage(message)}
+                                >
+                                  {isActionBusy ? (
+                                    <LoaderCircle
+                                      size={12}
+                                      className="animate-spin"
+                                    />
+                                  ) : (
+                                    <RotateCcw size={12} />
+                                  )}
+                                </button>
+                              </Tooltip>
+                            ) : null}
+                          </>
                         ) : null}
                         {canEditMessage ? (
                           <Tooltip label="Edit message" side="bottom">
@@ -1300,17 +1323,28 @@ export function ChatPane({
       ) : null}
       <form
         data-chat-composer={composerIsCentered ? "centered" : "bottom"}
-        className={`bg-bg px-3 py-2 transition-transform duration-300 ease-out will-change-transform ${
+        className={`relative bg-bg px-2 py-2 transition-opacity duration-200 ease-out will-change-opacity ${
           composerIsCentered
             ? "-translate-y-[max(0px,calc(50vh-120px))]"
             : "translate-y-0"
-        }`}
+        } ${loading ? "pointer-events-none opacity-0" : "opacity-100"}`}
         onSubmit={handleSubmit}
       >
         <div
-          className={`mx-auto flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated/65 shadow-sm transition-[max-width,padding,box-shadow,border-color] duration-300 ease-out ${
+          aria-hidden={!showEmptyComposerTitle}
+          className={`pointer-events-none absolute inset-x-2 bottom-full mb-4 flex justify-center transition-opacity duration-200 ease-out ${
+            showEmptyComposerTitle ? "opacity-100" : "opacity-0"
+          }`}
+          data-chat-empty-composer-title
+        >
+          <p className="w-[90%] max-w-none text-center text-xl font-medium leading-8 tracking-normal text-fg">
+            {emptyComposerTitle}
+          </p>
+        </div>
+        <div
+          className={`mx-auto flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated/65 shadow-sm transition-[width,max-width,padding,box-shadow,border-color] duration-300 ease-out ${
             composerIsCentered
-              ? "max-w-3xl px-3 py-3 shadow-xl ring-1 ring-border/60"
+              ? "w-[90%] max-w-none px-3 py-3 shadow-xl ring-1 ring-border/60"
               : "max-w-4xl px-2 py-2"
           }`}
         >
