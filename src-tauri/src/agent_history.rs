@@ -11,7 +11,10 @@ use crate::error::{AppError, AppResult};
 use crate::fs_explorer::move_to_trash;
 use crate::worktree;
 
-const MAX_SCAN_FILES_PER_PROVIDER: usize = 5_000;
+const MAX_DISCOVERED_FILES_PER_PROVIDER: usize = 5_000;
+const MIN_PARSED_FILES_PER_PROVIDER: usize = 100;
+const MAX_PARSED_FILES_PER_PROVIDER: usize = 500;
+const PARSED_FILES_PER_RESULT: usize = 5;
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 const READ_HEAD_INITIAL_BYTES: u64 = 256 * 1024;
@@ -59,9 +62,9 @@ pub fn list_agent_history(
 
     let mut items = Vec::new();
     let scope = HistoryScope::Project(&repo);
-    items.extend(scan_codex(scope));
-    items.extend(scan_claude(scope));
-    items.extend(scan_antigravity(scope));
+    items.extend(scan_codex(scope, limit));
+    items.extend(scan_claude(scope, limit));
+    items.extend(scan_antigravity(scope, limit));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -82,9 +85,9 @@ pub fn list_unscoped_agent_history(
     let scope = HistoryScope::Unscoped {
         projects: &projects,
     };
-    items.extend(scan_codex(scope));
-    items.extend(scan_claude(scope));
-    items.extend(scan_antigravity(scope));
+    items.extend(scan_codex(scope, limit));
+    items.extend(scan_claude(scope, limit));
+    items.extend(scan_antigravity(scope, limit));
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
@@ -205,39 +208,30 @@ impl HistoryScope<'_> {
     }
 }
 
-fn scan_codex(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
+fn scan_codex(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let Some(root) = codex_sessions_root() else {
         return Vec::new();
     };
     let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
-    files
-        .into_iter()
-        .filter_map(|path| parse_codex_file(&path, scope))
-        .collect()
+    parse_recent_files(files, limit, |path| parse_codex_file(path, scope))
 }
 
-fn scan_claude(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
+fn scan_claude(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let Some(root) = claude_projects_root() else {
         return Vec::new();
     };
     let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
-    files
-        .into_iter()
-        .filter_map(|path| parse_claude_file(&path, scope))
-        .collect()
+    parse_recent_files(files, limit, |path| parse_claude_file(path, scope))
 }
 
-fn scan_antigravity(scope: HistoryScope<'_>) -> Vec<AgentHistoryItem> {
+fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryItem> {
     let mut files = Vec::new();
     for root in antigravity_brain_roots() {
         files.extend(collect_files(&root, is_antigravity_transcript_path));
     }
     files.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
-    files.truncate(MAX_SCAN_FILES_PER_PROVIDER);
-    files
-        .into_iter()
-        .filter_map(|path| parse_antigravity_file(&path, scope))
-        .collect()
+    files.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
+    parse_recent_files(files, limit, |path| parse_antigravity_file(path, scope))
 }
 
 fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
@@ -265,8 +259,34 @@ fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     }
 
     out.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
-    out.truncate(MAX_SCAN_FILES_PER_PROVIDER);
+    out.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
     out
+}
+
+fn parse_recent_files<T>(
+    files: Vec<PathBuf>,
+    limit: usize,
+    mut parse: impl FnMut(&Path) -> Option<T>,
+) -> Vec<T> {
+    let mut out = Vec::new();
+    for path in files.into_iter().take(parse_file_budget(limit)) {
+        if let Some(item) = parse(&path) {
+            out.push(item);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn parse_file_budget(limit: usize) -> usize {
+    if limit == 0 {
+        return 0;
+    }
+    limit
+        .saturating_mul(PARSED_FILES_PER_RESULT)
+        .clamp(MIN_PARSED_FILES_PER_PROVIDER, MAX_PARSED_FILES_PER_PROVIDER)
 }
 
 fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
@@ -1259,6 +1279,42 @@ mod tests {
     }
 
     #[test]
+    fn parse_file_budget_scales_with_requested_limit() {
+        assert_eq!(parse_file_budget(0), 0);
+        assert_eq!(parse_file_budget(1), MIN_PARSED_FILES_PER_PROVIDER);
+        assert_eq!(parse_file_budget(100), 500);
+        assert_eq!(parse_file_budget(MAX_LIMIT), MAX_PARSED_FILES_PER_PROVIDER);
+    }
+
+    #[test]
+    fn parse_recent_files_stops_after_requested_items() {
+        let paths = fake_paths(100);
+        let mut attempted = 0;
+
+        let items = parse_recent_files(paths, 3, |_| {
+            attempted += 1;
+            Some(attempted)
+        });
+
+        assert_eq!(items, vec![1, 2, 3]);
+        assert_eq!(attempted, 3);
+    }
+
+    #[test]
+    fn parse_recent_files_stops_at_budget_when_candidates_do_not_match() {
+        let paths = fake_paths(100);
+        let mut attempted = 0;
+
+        let items: Vec<()> = parse_recent_files(paths, 2, |_| {
+            attempted += 1;
+            None
+        });
+
+        assert!(items.is_empty());
+        assert_eq!(attempted, parse_file_budget(2));
+    }
+
+    #[test]
     fn claude_history_uses_first_real_user_message_for_title() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
@@ -1514,5 +1570,11 @@ mod tests {
         };
 
         assert!(scope.accepts_cwd(local.to_str().unwrap()));
+    }
+
+    fn fake_paths(count: usize) -> Vec<PathBuf> {
+        (0..count)
+            .map(|idx| PathBuf::from(format!("/tmp/acorn-history-{idx}.jsonl")))
+            .collect()
     }
 }
