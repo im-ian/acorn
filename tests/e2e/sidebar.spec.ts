@@ -42,10 +42,140 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(
       page.getByRole("listitem").filter({ hasText: "demo" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Project demo" }),
+    ).toHaveText("demo");
     await expect(page.getByText(/Click to open a project/i)).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Double-click to start a session." }),
     ).toBeVisible();
+  });
+
+  test("project header exposes regular and isolated session buttons outside the menu", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      return (
+        (window as unknown as { __createdSessions?: unknown[] })
+          .__createdSessions ?? []
+      );
+    });
+    await tauri.handle("create_session", (args) => {
+      const input = (args ?? {}) as {
+        name?: string;
+        repoPath?: string;
+        isolated?: boolean;
+        kind?: string;
+        mode?: string;
+        projectScoped?: boolean;
+      };
+      const w = window as unknown as {
+        __createSessionCalls?: unknown[];
+        __createdSessions?: unknown[];
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createdSessions = w.__createdSessions ?? [];
+      w.__createSessionCalls.push(args);
+      const repoPath = input.repoPath ?? "/tmp/demo";
+      const id = `created-${w.__createdSessions.length + 1}`;
+      const created = {
+        id,
+        name: input.name ?? id,
+        repo_path: repoPath,
+        worktree_path: input.isolated
+          ? `${repoPath}/.acorn/worktrees/${id}`
+          : repoPath,
+        branch: "main",
+        isolated: Boolean(input.isolated),
+        project_scoped: input.projectScoped ?? true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "default",
+        kind: input.kind ?? "regular",
+        mode: input.mode ?? "terminal",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: Boolean(input.isolated),
+      };
+      w.__createdSessions.push(created);
+      return created;
+    });
+
+    await page.goto("/");
+
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.hover();
+    await expect(
+      page.getByRole("button", { name: "New session in this project" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: "New isolated session in this project",
+      }),
+    ).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "Create session in this project" })
+      .click();
+    await expect(
+      page.getByRole("menuitem", { name: "New session" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("menuitem", { name: /New isolated session/i }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("menuitem", { name: "New chat session" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "New control session" }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await projectRow.hover();
+    await page
+      .getByRole("button", { name: "New session in this project" })
+      .click();
+    await projectRow.hover();
+    await page
+      .getByRole("button", {
+        name: "New isolated session in this project",
+      })
+      .click();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      repoPath: string;
+      isolated: boolean;
+      kind: string;
+      mode: string;
+    }>;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+      kind: "regular",
+      mode: "terminal",
+    });
+    expect(calls[1]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: true,
+      kind: "regular",
+      mode: "terminal",
+    });
   });
 
   test("instant sessions area stays compact when projects are present", async ({
