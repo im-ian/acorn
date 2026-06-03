@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,6 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 const CODEX_SESSION_SCAN_LIMIT: usize = 20;
+const CODEX_SESSION_TAIL_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -148,29 +150,34 @@ fn read_codex_rate_limits_from_latest_sessions() -> Option<ProviderRateLimits> {
     let files = latest_jsonl_files(&sessions, CODEX_SESSION_SCAN_LIMIT);
 
     for file in files {
-        let Ok(text) = fs::read_to_string(&file) else {
-            continue;
-        };
-        for line in text.lines().rev() {
-            if !line.contains("\"rate_limits\"") {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            let Some(rate_limits) = value
-                .get("payload")
-                .and_then(|payload| payload.get("rate_limits"))
-            else {
-                continue;
-            };
-            let parsed = parse_codex_rate_limits(rate_limits, "~/.codex/sessions rate_limits");
-            if parsed.five_hour.is_some() || parsed.weekly.is_some() {
-                return Some(parsed);
-            }
+        if let Some(parsed) = read_codex_rate_limits_from_session_file(&file) {
+            return Some(parsed);
         }
     }
 
+    None
+}
+
+fn read_codex_rate_limits_from_session_file(file: &Path) -> Option<ProviderRateLimits> {
+    let text = read_tail_lossy(file, CODEX_SESSION_TAIL_BYTES).ok()?;
+    for line in text.lines().rev() {
+        if !line.contains("\"rate_limits\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(rate_limits) = value
+            .get("payload")
+            .and_then(|payload| payload.get("rate_limits"))
+        else {
+            continue;
+        };
+        let parsed = parse_codex_rate_limits(rate_limits, "~/.codex/sessions rate_limits");
+        if parsed.five_hour.is_some() || parsed.weekly.is_some() {
+            return Some(parsed);
+        }
+    }
     None
 }
 
@@ -342,6 +349,19 @@ fn collect_jsonl_files(root: &Path, files: &mut Vec<(PathBuf, SystemTime)>) {
     }
 }
 
+fn read_tail_lossy(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    if max_bytes == 0 {
+        return Ok(String::new());
+    }
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::with_capacity(max_bytes.min(len) as usize);
+    file.read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 fn render_source_path(path: &Path) -> String {
     let Some(home) = home_dir() else {
         return path.display().to_string();
@@ -370,6 +390,7 @@ fn clamp_percent(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn parses_codex_primary_and_secondary_windows() {
@@ -399,6 +420,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_codex_rate_limits_from_large_session_tail() {
+        let path = temp_file_path("codex-rate-limit-tail");
+        let mut file = File::create(&path).expect("create temp file");
+        file.write_all(&vec![b'x'; CODEX_SESSION_TAIL_BYTES as usize + 1024])
+            .expect("write prefix");
+        writeln!(file).expect("end prefix line");
+        writeln!(
+            file,
+            r#"{{"payload":{{"type":"event_msg","rate_limits":{{"primary":{{"used_percent":42,"resets_at":1779860400}}}}}}}}"#
+        )
+        .expect("write rate limit event");
+        drop(file);
+
+        let parsed = read_codex_rate_limits_from_session_file(&path).expect("rate limits");
+
+        assert_eq!(parsed.five_hour.unwrap().used_percent, 42.0);
+        assert_eq!(parsed.weekly, None);
+        let tail = read_tail_lossy(&path, CODEX_SESSION_TAIL_BYTES).expect("read tail");
+        assert_eq!(tail.len(), CODEX_SESSION_TAIL_BYTES as usize);
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn parses_string_percentages() {
         let value: Value = serde_json::json!({
             "used_percentage": "10.5",
@@ -411,5 +455,13 @@ mod tests {
 
         assert_eq!(window.used_percent, 10.5);
         assert_eq!(window.reset_at, Some(1779860400.0));
+    }
+
+    fn temp_file_path(label: &str) -> PathBuf {
+        let ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("acorn-token-usage-{label}-{ns}.jsonl"))
     }
 }
