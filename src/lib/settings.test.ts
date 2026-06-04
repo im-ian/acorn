@@ -421,6 +421,26 @@ Rules:
     );
   });
 
+  it("shows only the supported built-in agents in Settings order", () => {
+    expect(AGENT_OPTIONS.map((o) => [o.value, o.label])).toEqual([
+      ["claude", "Claude Code"],
+      ["codex", "Codex"],
+      ["antigravity", "Antigravity"],
+    ]);
+  });
+
+  it("falls back from persisted hidden agents to the default agent", async () => {
+    localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({ agents: { selected: "ollama" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.agents.selected).toBe("claude");
+  });
+
   it("runs Antigravity through the AGY CLI one-shot mode", () => {
     expect(
       resolveAiExecutionRequest({
