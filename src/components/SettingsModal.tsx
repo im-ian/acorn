@@ -1743,32 +1743,6 @@ function AgentSettings({
           />
         </div>
       </Field>
-      {selected === "ollama" ? (
-        <Field
-          label={st(t, "settings.agents.ollamaModel.label")}
-          hint={st(t, "settings.agents.ollamaModel.hint")}
-        >
-          <TextInput
-            value={settings.agents.ollama.model}
-            onChange={(e) =>
-              patchAgents({ ollama: { model: e.target.value } })
-            }
-            placeholder="e.g. llama3:8b"
-          />
-        </Field>
-      ) : null}
-      {selected === "llm" ? (
-        <Field
-          label={st(t, "settings.agents.llmModel.label")}
-          hint={st(t, "settings.agents.llmModel.hint")}
-        >
-          <TextInput
-            value={settings.agents.llm.model}
-            onChange={(e) => patchAgents({ llm: { model: e.target.value } })}
-            placeholder="e.g. gpt-4o-mini"
-          />
-        </Field>
-      ) : null}
       {selected === "custom" ? (
         <Field
           label={st(t, "settings.agents.customCommand.label")}

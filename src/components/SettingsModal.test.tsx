@@ -245,6 +245,35 @@ describe("SettingsModal font controls", () => {
     document.body.appendChild(container);
   });
 
+  it("shows only supported agents in the requested order", async () => {
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAgentsTab();
+
+    const radios = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[name="acorn-agent"]'),
+    );
+    expect(radios.map((radio) => radio.value)).toEqual([
+      "claude",
+      "codex",
+      "antigravity",
+      "custom",
+    ]);
+    expect(document.body.textContent).toContain("Claude Code");
+    expect(document.body.textContent).toContain("Codex");
+    expect(document.body.textContent).toContain("Antigravity");
+    expect(document.body.textContent).toContain("Custom Command");
+    expect(document.body.textContent).not.toContain("Ollama");
+    expect(document.body.textContent).not.toContain("llm CLI");
+  });
+
   afterEach(() => {
     if (root) {
       act(() => root?.unmount());
