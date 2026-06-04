@@ -473,7 +473,7 @@
         "hint": "Choose which AI CLI acorn uses."
       },
       "customOption": {
-        "label": "Custom command",
+        "label": "Custom Command",
         "description": "Legacy option. Native AI generation now requires a built-in provider."
       },
       "ollamaModel": {
@@ -485,7 +485,7 @@
         "hint": "Passed via `llm -m <model>` (and `llm chat -m <model>` for sessions). Blank uses the llm-configured default."
       },
       "customCommand": {
-        "label": "Custom command",
+        "label": "Custom Command",
         "hint": "Kept for existing settings. Built-in providers are required for native AI generation."
       },
       "sessionTitles": {

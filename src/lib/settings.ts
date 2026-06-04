@@ -48,24 +48,14 @@ export const AGENT_OPTIONS: ReadonlyArray<{
     oneshotHint: "claude -p --output-format text",
   },
   {
-    value: "antigravity",
-    label: "Antigravity CLI",
-    oneshotHint: "agy -p",
-  },
-  {
-    value: "ollama",
-    label: "Ollama (local)",
-    oneshotHint: "ollama run <model>",
-  },
-  {
-    value: "llm",
-    label: "llm CLI",
-    oneshotHint: "llm [-m <model>]",
-  },
-  {
     value: "codex",
-    label: "OpenAI Codex CLI",
+    label: "Codex",
     oneshotHint: "codex exec",
+  },
+  {
+    value: "antigravity",
+    label: "Antigravity",
+    oneshotHint: "agy -p",
   },
 ];
 
@@ -498,8 +488,6 @@ const VALID_WEIGHTS = new Set<TerminalFontWeight>([
 const VALID_AGENTS = new Set<AgentProvider>([
   "claude",
   "antigravity",
-  "ollama",
-  "llm",
   "codex",
 ]);
 
@@ -1236,7 +1224,7 @@ export const resolveAiCommitRequest = resolveAiExecutionRequest;
  * Generate.
  */
 export function selectedAgentLabel(s: AcornSettings): string {
-  if (s.agents.selected === "custom") return "Custom command";
+  if (s.agents.selected === "custom") return "Custom Command";
   return (
     AGENT_OPTIONS.find((o) => o.value === s.agents.selected)?.label ?? "AI"
   );

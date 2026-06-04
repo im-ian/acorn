@@ -30,6 +30,7 @@ export function RadioCard<T extends string>({
       <input
         type="radio"
         name={name}
+        value={value}
         checked={active}
         onChange={() => onSelect(value)}
         className="mt-0.5 accent-[var(--color-accent)]"
