@@ -139,6 +139,7 @@ pub fn run_oneshot_in_dir_cancellable(
         ))
     })?;
     let mut command_builder = Command::new(&resolved);
+    crate::shell_env::apply_to_command(&mut command_builder);
     command_builder
         .args(args)
         .stdin(Stdio::piped())

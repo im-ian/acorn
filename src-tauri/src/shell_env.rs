@@ -1,7 +1,8 @@
 //! Capture a small whitelist of environment variables out of the user's
-//! login+interactive shell so PTY children we spawn see the same locale,
-//! editor, pager, etc. that the user gets in Terminal.app — without acorn
-//! having to know each shell's rc-file conventions.
+//! login+interactive shell so PTY children and native one-shot CLI runs see
+//! the same PATH, locale, editor, pager, etc. that the user gets in
+//! Terminal.app — without acorn having to know each shell's rc-file
+//! conventions.
 //!
 //! ## Why
 //!
@@ -50,17 +51,21 @@ use base64::Engine;
 use crate::shell_util::shell_quote;
 
 /// Environment variables we propagate from the user's shell into PTY
-/// children. Restricted to a known-safe set so we don't accidentally leak
-/// shell-internal bookkeeping (`SHLVL`, `OLDPWD`, …) or sensitive secrets
-/// the user might keep in their shell.
+/// children and native one-shot CLI runs. Restricted to a known-safe set so
+/// we don't accidentally leak shell-internal bookkeeping (`SHLVL`, `OLDPWD`,
+/// …) or sensitive secrets the user might keep in their shell.
 ///
 /// Categories:
+///   * Command lookup — `PATH`, so npm/Homebrew/asdf/mise CLIs whose
+///     shebangs use `/usr/bin/env node` can find their runtime even when
+///     Acorn was launched by Finder/Dock/Spotlight.
 ///   * Locale family — what zsh's ZLE and tools use to interpret bytes,
 ///     pick message languages, and sort.
 ///   * Tool prefs — what editor / pager / man pager subcommands honor.
 ///   * Misc — `TZ` for time-aware tools, `HISTFILE` so the user's expected
 ///     history file location is honored.
 const CAPTURED_VARS: &[&str] = &[
+    "PATH",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
@@ -108,6 +113,18 @@ pub fn resolve() -> HashMap<String, String> {
 /// capture.
 pub fn invalidate() {
     *cache().lock().unwrap() = None;
+}
+
+/// Apply the captured login-shell environment to a native command spawn.
+///
+/// This is intentionally narrower than spawning through `$SHELL -l -i -c`:
+/// the target command still executes directly, but child interpreters looked
+/// up via shebangs such as `/usr/bin/env node` see the same PATH the user's
+/// terminal would provide.
+pub fn apply_to_command(cmd: &mut Command) {
+    for (k, v) in resolve() {
+        cmd.env(k, v);
+    }
 }
 
 /// macOS-only: read the system preferred locale and turn it into a `LANG`
@@ -302,9 +319,10 @@ mod tests {
 
     #[test]
     fn build_capture_script_includes_each_var() {
-        let script = build_capture_script(&["LANG", "EDITOR"]);
+        let script = build_capture_script(&["PATH", "LANG", "EDITOR"]);
         assert!(script.contains(ENV_BEGIN));
         assert!(script.contains(ENV_END));
+        assert!(script.contains("PATH"));
         assert!(script.contains("LANG"));
         assert!(script.contains("EDITOR"));
         assert!(script.contains("printenv"));
@@ -319,6 +337,35 @@ mod tests {
 
         let resolved = resolve();
         assert_eq!(resolved.get("LANG").unwrap(), "ko_KR.UTF-8");
+    }
+
+    #[test]
+    fn apply_to_command_layers_cached_path() {
+        let mut seeded = HashMap::new();
+        seeded.insert(
+            "PATH".to_string(),
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin".to_string(),
+        );
+        seeded.insert("LANG".to_string(), "ko_KR.UTF-8".to_string());
+        seed_cache(seeded);
+
+        let mut cmd = Command::new("/bin/sh");
+        apply_to_command(&mut cmd);
+
+        assert_eq!(
+            cmd.get_envs()
+                .find(|(k, _)| k.to_str() == Some("PATH"))
+                .and_then(|(_, v)| v)
+                .and_then(|v| v.to_str()),
+            Some("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"),
+        );
+        assert_eq!(
+            cmd.get_envs()
+                .find(|(k, _)| k.to_str() == Some("LANG"))
+                .and_then(|(_, v)| v)
+                .and_then(|v| v.to_str()),
+            Some("ko_KR.UTF-8"),
+        );
     }
 
     /// End-to-end smoke test: actually invoke the user's shell, capture
