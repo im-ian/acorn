@@ -60,7 +60,7 @@ strip = "debuginfo"
 
 [package]
 name = "acorn"
-version = "1.13.0"
+version = "1.13.1"
 description = "Acorn — parallel AI coding agent sessions across isolated git worktrees"
 authors = ["im-ian"]
 edition = "2021"
