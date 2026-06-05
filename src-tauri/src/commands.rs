@@ -3040,10 +3040,18 @@ pub fn prepare_claude_fork(parent_uuid: String, new_cwd: String) -> AppResult<()
 /// the user right-clicks but absent from the last cache, or vice-versa.
 /// An on-demand scan locks the answer to "what's true right now."
 #[tauri::command]
-pub fn detect_session_agent(
+pub async fn detect_session_agent(
     state: State<'_, AppState>,
     session_id: String,
 ) -> AppResult<AgentDetection> {
+    let state = state.inner().clone();
+    run_blocking("detect_session_agent", move || {
+        detect_session_agent_inner(state, session_id)
+    })
+    .await
+}
+
+fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<AgentDetection> {
     let parsed = parse_id(&session_id)?;
     let session_pids = crate::agent_resume_persister::collect_session_pids(&state);
     let mappings = acorn_transcript::collect_live_mappings(&session_pids);
@@ -3630,7 +3638,12 @@ pub fn pty_reload_shell_env() {
 /// already exited). The frontend then falls back to the session's recorded
 /// `worktree_path`.
 #[tauri::command]
-pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
+pub async fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Option<String>> {
+    let state = state.inner().clone();
+    run_blocking("pty_cwd", move || pty_cwd_inner(state, session_id)).await
+}
+
+fn pty_cwd_inner(state: AppState, session_id: String) -> AppResult<Option<String>> {
     let id = parse_id(&session_id)?;
     let Some(root_pid) = session_root_pid(&state, &id) else {
         return Ok(None);
@@ -3650,7 +3663,7 @@ pub fn pty_cwd(state: State<'_, AppState>, session_id: String) -> AppResult<Opti
     Ok(deepest_descendant_cwd(&sys, Pid::from_u32(root_pid)))
 }
 
-fn session_root_pid(state: &State<'_, AppState>, id: &Uuid) -> Option<u32> {
+fn session_root_pid(state: &AppState, id: &Uuid) -> Option<u32> {
     state
         .stream_registry
         .pid(id)
@@ -3675,7 +3688,7 @@ pub async fn pty_repo_root(
     session_id: String,
 ) -> AppResult<Option<String>> {
     let id = parse_id(&session_id)?;
-    let Some(root_pid) = session_root_pid(&state, &id) else {
+    let Some(root_pid) = session_root_pid(state.inner(), &id) else {
         return Ok(None);
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -3767,7 +3780,15 @@ pub fn linked_worktree_root(path: String) -> Option<String> {
 /// signal override the fresh live one (e.g. user `cd`s out of an adopted
 /// worktree).
 #[tauri::command]
-pub fn pty_in_worktree_all(state: State<'_, AppState>) -> HashMap<String, bool> {
+pub async fn pty_in_worktree_all(state: State<'_, AppState>) -> AppResult<HashMap<String, bool>> {
+    let state = state.inner().clone();
+    run_blocking("pty_in_worktree_all", move || {
+        Ok(pty_in_worktree_all_inner(state))
+    })
+    .await
+}
+
+fn pty_in_worktree_all_inner(state: AppState) -> HashMap<String, bool> {
     let sessions = state.sessions.list();
     let pids: Vec<(Uuid, u32)> = sessions
         .iter()
