@@ -21,6 +21,7 @@ import type { TauriMock } from "./support";
 interface ImeKeydown {
   type: "keydown";
   key: string;
+  code?: string;
   keyCode?: number;
   shift?: boolean;
   meta?: boolean;
@@ -106,6 +107,7 @@ async function runIme(page: Page, steps: ImeStep[]): Promise<void> {
         ta.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: ev.key,
+            code: ev.code,
             keyCode: ev.keyCode,
             which: ev.keyCode,
             shiftKey: !!ev.shift,
@@ -304,6 +306,22 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     const writes = await getWrites(page);
     expect(writes).toContain("\n");
     expect(writes.join("")).not.toContain("\r");
+  });
+
+  test("Plain physical Space that surfaces as NBSP sends ASCII space", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "\u00a0", code: "Space", keyCode: 32 },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes).toContain(" ");
+    expect(writes).not.toContain("\u00a0");
   });
 
   test("Cmd+ArrowLeft sends \\x01 (start-of-line)", async ({
