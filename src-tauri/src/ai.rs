@@ -52,7 +52,7 @@ impl AiExecutionRequest {
             }),
             AiProvider::Codex => Ok(ResolvedAiCommand {
                 command: "codex",
-                args: vec!["exec".into()],
+                args: vec!["exec".into(), "--skip-git-repo-check".into()],
             }),
             AiProvider::Ollama => {
                 let model = normalize_model_arg(self.ollama_model.as_deref(), "llama3")?;
@@ -290,7 +290,10 @@ mod tests {
             req.resolve().unwrap(),
             ResolvedAiCommand {
                 command: "codex",
-                args: vec!["exec".to_string()],
+                args: vec![
+                    "exec".to_string(),
+                    "--skip-git-repo-check".to_string(),
+                ],
             }
         );
     }

@@ -417,7 +417,7 @@ Rules:
 
   it("describes the Codex one-shot invocation in settings", () => {
     expect(AGENT_OPTIONS.find((o) => o.value === "codex")?.oneshotHint).toBe(
-      "codex exec",
+      "codex exec --skip-git-repo-check",
     );
   });
 
