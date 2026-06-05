@@ -115,7 +115,10 @@ export function attachTerminalInputController({
   let sentPrefix = "";
   let lastKeyCode229 = false;
   let composing = false;
+  let composingText = "";
   let pendingDirectSpaceInputEvents = 0;
+  let suppressNextPlainSpaceKeydown = false;
+  let suppressNextPlainSpaceKeydownTimer: number | null = null;
 
   const readUnsentTail = (ta: HTMLTextAreaElement | null): string =>
     ta && ta.value.length > sentPrefix.length
@@ -126,15 +129,50 @@ export function attachTerminalInputController({
     if (ta) sentPrefix = ta.value;
   };
 
+  const showComposing = (text: string) => {
+    composingText = text;
+    preview.show(text);
+  };
+
+  const hideComposing = () => {
+    composingText = "";
+    preview.hide();
+  };
+
+  const splitTrailingPlainSpace = (text: string) => {
+    const last = text.slice(-1);
+    if (!isPlainSpaceText(last)) {
+      return { beforeSpace: text, hadSpace: false };
+    }
+    return { beforeSpace: text.slice(0, -1), hadSpace: true };
+  };
+
+  const clearSuppressedSpaceKeydown = () => {
+    suppressNextPlainSpaceKeydown = false;
+    if (suppressNextPlainSpaceKeydownTimer !== null) {
+      window.clearTimeout(suppressNextPlainSpaceKeydownTimer);
+      suppressNextPlainSpaceKeydownTimer = null;
+    }
+  };
+
+  const suppressMatchingSpaceKeydown = () => {
+    clearSuppressedSpaceKeydown();
+    suppressNextPlainSpaceKeydown = true;
+    suppressNextPlainSpaceKeydownTimer = window.setTimeout(() => {
+      suppressNextPlainSpaceKeydown = false;
+      suppressNextPlainSpaceKeydownTimer = null;
+    }, 250);
+  };
+
   const commitComposition = (explicit?: string) => {
     if (!composing) return;
     const ta = getHelperTextarea(container);
-    const data = readUnsentTail(ta) || explicit || "";
+    const data = readUnsentTail(ta) || explicit || composingText || "";
     if (data) sendUserInputToPty(data);
     if (ta) ta.value = "";
     sentPrefix = "";
     composing = false;
-    preview.hide();
+    hideComposing();
   };
 
   const consumePendingDirectSpaceInput = (
@@ -155,9 +193,40 @@ export function attachTerminalInputController({
     }
 
     pendingDirectSpaceInputEvents -= 1;
-    preview.hide();
+    hideComposing();
     composing = false;
     syncSentPrefix(ta);
+    ev.stopImmediatePropagation();
+    return true;
+  };
+
+  const consumePreKeydownTerminatorSpaceInput = (
+    ev: InputEvent,
+    ta: HTMLTextAreaElement | null,
+  ): boolean => {
+    if (
+      ev.inputType !== "insertText" ||
+      !lastKeyCode229 ||
+      !composing
+    ) {
+      return false;
+    }
+
+    const tail = readUnsentTail(ta);
+    const { beforeSpace, hadSpace } = splitTrailingPlainSpace(tail);
+    if (!isPlainSpaceText(ev.data ?? "") && !hadSpace) {
+      return false;
+    }
+
+    const composed = beforeSpace || composingText;
+    if (composed) sendUserInputToPty(composed);
+    sendKeyboardInputToPty(" ");
+    if (ta) ta.value = "";
+    sentPrefix = "";
+    lastKeyCode229 = false;
+    composing = false;
+    hideComposing();
+    suppressMatchingSpaceKeydown();
     ev.stopImmediatePropagation();
     return true;
   };
@@ -166,7 +235,7 @@ export function attachTerminalInputController({
     switch (ev.inputType) {
       case "insertCompositionText":
         composing = true;
-        preview.show(ev.data ?? "");
+        showComposing(ev.data ?? "");
         ev.stopImmediatePropagation();
         return;
 
@@ -178,7 +247,7 @@ export function attachTerminalInputController({
         composing = true;
         if (ta) {
           if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
-          preview.show(ta.value.slice(sentPrefix.length));
+          showComposing(ta.value.slice(sentPrefix.length));
         }
         ev.stopImmediatePropagation();
         return;
@@ -187,7 +256,7 @@ export function attachTerminalInputController({
       case "insertText": {
         const isIme = lastKeyCode229 || isImeTextData(ev.data);
         if (!isIme) {
-          preview.hide();
+          hideComposing();
           composing = false;
           syncSentPrefix(ta);
           return;
@@ -205,7 +274,7 @@ export function attachTerminalInputController({
           sendUserInputToPty(value.slice(sentPrefix.length, committedEnd));
           sentPrefix = value.slice(0, committedEnd);
         }
-        preview.show(value.slice(sentPrefix.length));
+        showComposing(value.slice(sentPrefix.length));
         ev.stopImmediatePropagation();
         return;
       }
@@ -216,7 +285,7 @@ export function attachTerminalInputController({
         return;
 
       default:
-        preview.hide();
+        hideComposing();
         return;
     }
   };
@@ -225,6 +294,7 @@ export function attachTerminalInputController({
     const ev = e as InputEvent;
     const ta = getHelperTextarea(container);
     if (consumePendingDirectSpaceInput(ev, ta)) return;
+    if (consumePreKeydownTerminatorSpaceInput(ev, ta)) return;
     handleInput(ev, ta);
   };
 
@@ -236,7 +306,7 @@ export function attachTerminalInputController({
 
     const hasComposition = !!ta?.value;
     if (ev.key === "Backspace" && hasComposition) {
-      preview.show(ta.value.slice(sentPrefix.length));
+      showComposing(ta.value.slice(sentPrefix.length));
       lastKeyCode229 = true;
       ev.stopImmediatePropagation();
       return true;
@@ -255,6 +325,17 @@ export function attachTerminalInputController({
     const ev = e as KeyboardEvent;
     pendingDirectSpaceInputEvents = 0;
     const ta = getHelperTextarea(container);
+
+    if (suppressNextPlainSpaceKeydown) {
+      if (isPlainSpaceKeydown(ev)) {
+        clearSuppressedSpaceKeydown();
+        syncSentPrefix(ta);
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        return;
+      }
+      clearSuppressedSpaceKeydown();
+    }
 
     if (handleImeKeydown(ev, ta)) return;
     if (isModifierOnlyKeydown(ev)) return;
@@ -309,6 +390,7 @@ export function attachTerminalInputController({
       renderDisposable.dispose();
       scrollDisposable.dispose();
       cursorMoveDisposable.dispose();
+      clearSuppressedSpaceKeydown();
     },
   };
 }

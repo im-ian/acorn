@@ -392,6 +392,37 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes.filter((w) => w === " ")).toHaveLength(1);
   });
 
+  test("Korean terminator Space writes one separator when input echo precedes keydown", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "input", inputType: "insertText", data: "한", taValue: "한" },
+      {
+        type: "input",
+        inputType: "insertText",
+        data: " ",
+        taValue: "한 ",
+      },
+      { type: "keydown", key: "Process", code: "Space", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertFromComposition",
+        data: "한",
+        taValue: "",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    const joined = writes.join("");
+    expect(joined).toBe("한 ");
+    expect(writes.filter((w) => w === " ")).toHaveLength(1);
+  });
+
   test("Cmd+ArrowLeft sends \\x01 (start-of-line)", async ({
     page,
     tauri,
