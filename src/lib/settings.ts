@@ -50,7 +50,7 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   {
     value: "codex",
     label: "Codex",
-    oneshotHint: "codex exec",
+    oneshotHint: "codex exec --skip-git-repo-check",
   },
   {
     value: "antigravity",
