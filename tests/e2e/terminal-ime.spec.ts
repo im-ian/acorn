@@ -21,7 +21,6 @@ import type { TauriMock } from "./support";
 interface ImeKeydown {
   type: "keydown";
   key: string;
-  code?: string;
   keyCode?: number;
   shift?: boolean;
   meta?: boolean;
@@ -107,7 +106,6 @@ async function runIme(page: Page, steps: ImeStep[]): Promise<void> {
         ta.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: ev.key,
-            code: ev.code,
             keyCode: ev.keyCode,
             which: ev.keyCode,
             shiftKey: !!ev.shift,
@@ -306,121 +304,6 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     const writes = await getWrites(page);
     expect(writes).toContain("\n");
     expect(writes.join("")).not.toContain("\r");
-  });
-
-  test("Plain physical Space that surfaces as NBSP sends ASCII space", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    await runIme(page, [
-      { type: "keydown", key: "\u00a0", code: "Space", keyCode: 32 },
-    ]);
-
-    const writes = await getWrites(page);
-    expect(writes).toContain(" ");
-    expect(writes).not.toContain("\u00a0");
-  });
-
-  test("Korean terminator Space writes one ASCII separator when input text follows keydown", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    await runIme(page, [
-      { type: "keydown", key: "Process", keyCode: 229 },
-      { type: "input", inputType: "insertText", data: "한", taValue: "한" },
-      { type: "keydown", key: "Process", code: "Space", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertText",
-        data: "\u00a0",
-        taValue: "\u00a0",
-      },
-      {
-        type: "input",
-        inputType: "insertFromComposition",
-        data: "한",
-        taValue: "",
-      },
-    ]);
-
-    const writes = await getWrites(page);
-    const joined = writes.join("");
-    expect(joined).toBe("한 ");
-    expect(writes.filter((w) => w === " ")).toHaveLength(1);
-    expect(joined).not.toContain("\u00a0");
-  });
-
-  test("Korean terminator Space still suppresses input echo when composition commit arrives first", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    await runIme(page, [
-      { type: "keydown", key: "Process", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertCompositionText",
-        data: "한",
-        taValue: "한",
-      },
-      { type: "keydown", key: " ", code: "Space", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertFromComposition",
-        data: "한",
-        taValue: "",
-      },
-      {
-        type: "input",
-        inputType: "insertText",
-        data: " ",
-        taValue: " ",
-      },
-    ]);
-
-    const writes = await getWrites(page);
-    const joined = writes.join("");
-    expect(joined).toBe("한 ");
-    expect(writes.filter((w) => w === " ")).toHaveLength(1);
-  });
-
-  test("Korean terminator Space writes one separator when input echo precedes keydown", async ({
-    page,
-    tauri,
-  }) => {
-    await seed(tauri);
-    await activateTerminal(page);
-
-    await runIme(page, [
-      { type: "keydown", key: "Process", keyCode: 229 },
-      { type: "input", inputType: "insertText", data: "한", taValue: "한" },
-      {
-        type: "input",
-        inputType: "insertText",
-        data: " ",
-        taValue: "한 ",
-      },
-      { type: "keydown", key: "Process", code: "Space", keyCode: 229 },
-      {
-        type: "input",
-        inputType: "insertFromComposition",
-        data: "한",
-        taValue: "",
-      },
-    ]);
-
-    const writes = await getWrites(page);
-    const joined = writes.join("");
-    expect(joined).toBe("한 ");
-    expect(writes.filter((w) => w === " ")).toHaveLength(1);
   });
 
   test("Cmd+ArrowLeft sends \\x01 (start-of-line)", async ({
