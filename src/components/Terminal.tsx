@@ -40,8 +40,8 @@ import {
   TERMINAL_CONVERSATION_NAV_EVENT,
   type ConversationNavigationDirection,
 } from "../lib/terminalConversation";
+import { attachTerminalInputController } from "../lib/terminalInputController";
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
-import { isPlainSpaceKeydown } from "../lib/terminalInput";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   TERMINAL_PASTE_EVENT,
@@ -1228,329 +1228,13 @@ export function Terminal({
       );
     };
 
-    // CJK IME path. xterm.js's built-in handler only processes plain
-    // `insertText`, so Korean/Japanese/Chinese commits delivered as
-    // W3C composition InputEvents on the helper textarea never reach
-    // the PTY. We intercept those events ourselves and render the
-    // live preview through xterm's hidden `.composition-view` element.
-    const compositionView = container.querySelector<HTMLElement>(
-      ".composition-view",
-    );
-    const getCellDims = (): { width: number; height: number } | null => {
-      // xterm v6 exposes render dimensions only via internals.
-      const core = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } } })
-        ._core;
-      const cell = core?._renderService?.dimensions?.css?.cell;
-      return cell ? { width: cell.width, height: cell.height } : null;
-    };
-    const showComposing = (text: string) => {
-      if (!compositionView) return;
-      if (text.length === 0) {
-        compositionView.classList.remove("active");
-        compositionView.textContent = "";
-        return;
-      }
-      const cell = getCellDims();
-      compositionView.textContent = text;
-      if (cell) {
-        const buf = term.buffer.active;
-        // xterm's visible cursor row = `baseY + cursorY - viewportY`
-        // (mirrors xterm's own `Buffer.ts`: `absoluteY = ybase + y;
-        // relativeY = absoluteY - ydisp`). `cursorY` is the cursor's
-        // offset within the current page (0..rows-1), `baseY` is the
-        // buffer line where that page starts, and `viewportY` is the
-        // buffer line currently shown at the top of the viewport (they
-        // diverge when the user scrolls into scrollback). Subtracting
-        // `viewportY` alone — without adding `baseY` — leaves a session
-        // with non-empty scrollback computing `cursorY - viewportY ≈
-        // -ybase`, parking the overlay thousands of pixels above the
-        // visible terminal so the preview vanishes off-screen.
-        const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
-        compositionView.style.left = `${buf.cursorX * cell.width}px`;
-        compositionView.style.top = `${cursorViewportY * cell.height}px`;
-        compositionView.style.minHeight = `${cell.height}px`;
-        compositionView.style.lineHeight = `${cell.height}px`;
-      }
-      // Sync font with the current xterm options so the preview uses the
-      // user's configured terminal font/size, not the default sans inherited
-      // from the parent.
-      const fontFamily = term.options.fontFamily;
-      const fontSize = term.options.fontSize;
-      const fontWeight = term.options.fontWeight;
-      if (typeof fontFamily === "string") {
-        compositionView.style.fontFamily = fontFamily;
-      }
-      if (typeof fontSize === "number") {
-        compositionView.style.fontSize = `${fontSize}px`;
-      }
-      if (typeof fontWeight === "number" || typeof fontWeight === "string") {
-        compositionView.style.fontWeight = String(fontWeight);
-      }
-      compositionView.classList.add("active");
-    };
-    const hideComposing = () => {
-      if (!compositionView) return;
-      compositionView.classList.remove("active");
-      compositionView.textContent = "";
-    };
-
-    // WKWebView delivers a single Korean syllable across a mix of
-    // input types within one composition:
-    //
-    //   insertCompositionText   preview (ev.data = composed text)
-    //   insertReplacementText   preview when trailing char recomposes
-    //   insertText  (IME flag)  preview + per-syllable diff-commit
-    //   insertFromComposition   final commit (ev.data = full syllable)
-    //
-    // Terminator keys (space/Enter/…) may finalize without firing
-    // `insertFromComposition` at all. To stay correct under any
-    // delivery, one `composing` flag routes every commit
-    // (terminator-keydown OR insertFromComposition) through a single
-    // idempotent `commitComposition()` — a second call for the same
-    // syllable becomes a no-op.
-    let sentPrefix = "";
-    let lastKeyCode229 = false;
-    let composing = false;
-    // Hangul jamo, Hangul syllables, Hiragana, Katakana, CJK ideographs.
-    // Used to recognise IME-driven `insertText` events even when the
-    // accompanying `keydown` (with keyCode 229) hasn't fired yet — on
-    // WKWebView the `input` event sometimes arrives BEFORE its keydown.
-    const CJK_DATA_RE =
-      /[ᄀ-ᇿ㄰-㆏가-힯぀-ゟ゠-ヿ一-鿿]/;
-
-    // Idempotent commit. Sends whatever sits past `sentPrefix` in the
-    // helper textarea (the unflushed trailing syllable), then resets state.
-    // `explicit` overrides the textarea slice — used by
-    // `insertFromComposition` when WKWebView delivers the syllable as
-    // `ev.data` rather than leaving it in the textarea.
-    const commitComposition = (explicit?: string) => {
-      if (!composing) return;
-      const ta = container.querySelector<HTMLTextAreaElement>(
-        ".xterm-helper-textarea",
-      );
-      const tail = ta && ta.value.length > sentPrefix.length
-        ? ta.value.slice(sentPrefix.length)
-        : "";
-      const data = tail || explicit || "";
-      if (data) sendUserInputToPty(data);
-      if (ta) ta.value = "";
-      sentPrefix = "";
-      composing = false;
-      hideComposing();
-    };
-
-    const onInput = (e: Event) => {
-      const ev = e as InputEvent;
-      const ta = container.querySelector<HTMLTextAreaElement>(
-        ".xterm-helper-textarea",
-      );
-      switch (ev.inputType) {
-        case "insertCompositionText":
-          composing = true;
-          showComposing(ev.data ?? "");
-          ev.stopImmediatePropagation();
-          return;
-
-        case "deleteCompositionText":
-          // Preview clear preceding a commit. No-op.
-          ev.stopImmediatePropagation();
-          return;
-
-        case "insertReplacementText": {
-          // Trailing char being recomposed in place. Preview only — never
-          // commit here, the next insertText / insertFromComposition /
-          // terminator-keydown carries the commit.
-          composing = true;
-          if (ta) {
-            // Stale sentPrefix detection: if textarea no longer starts
-            // with the prefix we tracked, a non-IME keystroke (Space,
-            // Ctrl+C, …) reset the textarea between compositions.
-            if (!ta.value.startsWith(sentPrefix)) sentPrefix = "";
-            showComposing(ta.value.slice(sentPrefix.length));
-          }
-          ev.stopImmediatePropagation();
-          return;
-        }
-
-        case "insertText": {
-          // Distinguish plain ASCII from an IME first-jamo: treat as
-          // IME when a keyCode-229 keydown was just observed OR
-          // `ev.data` is a CJK character. The data check covers the
-          // first jamo of a session when WKWebView fires `input`
-          // before the corresponding keydown.
-          const isIme =
-            lastKeyCode229 || (!!ev.data && CJK_DATA_RE.test(ev.data));
-          if (!isIme) {
-            // Plain ASCII. xterm's keypress already emitted it; we
-            // only advance `sentPrefix` so the next IME insertText
-            // diff doesn't re-emit it as part of its committed prefix.
-            hideComposing();
-            composing = false;
-            if (ta) sentPrefix = ta.value;
-            return;
-          }
-          composing = true;
-          if (!ta) return;
-          const value = ta.value;
-          const newCharLen = ev.data?.length ?? 0;
-          // If textarea no longer starts with our tracked prefix, a
-          // non-IME keystroke (Space, Ctrl+C, …) reset the textarea
-          // between compositions. Reset so the slice below doesn't
-          // drop the first jamo of the fresh composition.
-          if (!value.startsWith(sentPrefix)) {
-            sentPrefix = value.slice(0, Math.max(0, value.length - newCharLen));
-          }
-          const committedEnd = value.length - newCharLen;
-          if (committedEnd > sentPrefix.length) {
-            sendUserInputToPty(value.slice(sentPrefix.length, committedEnd));
-            sentPrefix = value.slice(0, committedEnd);
-          }
-          showComposing(value.slice(sentPrefix.length));
-          ev.stopImmediatePropagation();
-          return;
-        }
-
-        case "insertFromComposition":
-          // Final commit from composition-clean IME path. Idempotent —
-          // if a terminator-keydown already flushed this syllable,
-          // `composing` is false and this is a no-op.
-          commitComposition(ev.data ?? undefined);
-          ev.stopImmediatePropagation();
-          return;
-
-        default:
-          hideComposing();
-          return;
-      }
-    };
-
-    const onKeydown = (e: Event) => {
-      const ev = e as KeyboardEvent;
-      // keyCode 229 = IME composing key. xterm's keydown reacts to
-      // 229 with a `_handleAnyTextareaChanges` setTimeout that would
-      // emit duplicate text — swallow at capture, and remember the
-      // flag so a following `insertText` is recognised as an IME
-      // jamo when its CJK-data check is ambiguous.
-      //
-      // macOS reports 229 even for the terminator keystroke that
-      // finalizes the composition (space, Enter, …) when IME state
-      // is uncommitted. Those must NOT take the IME path or the
-      // follow-up `input` event re-emits the terminator on top of
-      // xterm's keypress emit. Detect named non-printable keys +
-      // actual whitespace as terminators and fall through to the
-      // plain path. Letter/digit/punctuation keys keep the IME
-      // path because the Korean 2-set IME reports them with
-      // `ev.key` set to underlying ASCII (e.g. shift+ㅅ → key="T"),
-      // and treating those as terminators flushes mid-syllable.
-      if (ev.keyCode === 229) {
-        const ta229 = container.querySelector<HTMLTextAreaElement>(
-          ".xterm-helper-textarea",
-        );
-        const hasComposition = !!ta229?.value;
-        // Backspace inside active composition is internal IME
-        // editing (e.g. "있" → "이"); the `input` event already
-        // updated the preview. Suppress xterm's \x7f emit so the
-        // committed glyph doesn't race the backspace into the line.
-        // Backspace WITHOUT composition falls through to the plain
-        // path via TERMINATOR_KEYS below.
-        if (ev.key === "Backspace" && hasComposition) {
-          if (ta229) showComposing(ta229.value.slice(sentPrefix.length));
-          lastKeyCode229 = true;
-          ev.stopImmediatePropagation();
-          return;
-        }
-        const TERMINATOR_KEYS = new Set([
-          "Enter", "Tab", "Escape", "Backspace", " ", "Spacebar",
-        ]);
-        const isTerminator = TERMINATOR_KEYS.has(ev.key);
-        if (!isTerminator) {
-          lastKeyCode229 = true;
-          ev.stopImmediatePropagation();
-          return;
-        }
-        // Terminator under IME falls through; the prior syllable
-        // still needs flushing, which happens below because
-        // `lastKeyCode229` remains true from the real IME keydown.
-      }
-      // Modifier-only keystrokes are part of a chord, not a real
-      // key. Must NOT flush mid-composition or clear lastKeyCode229
-      // — Korean 2-set IME emits Shift before the second jamo of
-      // a double consonant, and flushing here would commit the
-      // prior syllable before the second jamo can combine.
-      const MODIFIER_KEYS = new Set([
-        "Shift", "Control", "Alt", "Meta", "CapsLock",
-      ]);
-      if (MODIFIER_KEYS.has(ev.key)) {
-        return;
-      }
-      // Non-IME key after IME activity. Commit any mid-composition
-      // syllable so it lands in the PTY before this key's effect
-      // (space, Enter, English letter, …). Idempotent — a follow-up
-      // `insertFromComposition` for the same syllable hits the
-      // composing===false guard and is a no-op.
-      if (lastKeyCode229 && composing) {
-        commitComposition();
-      }
-      lastKeyCode229 = false;
-      const ta = container.querySelector<HTMLTextAreaElement>(
-        ".xterm-helper-textarea",
-      );
-      if (ta) sentPrefix = ta.value;
-
-      // WKWebView can report an unmodified physical Space as NBSP through
-      // the xterm input path. Shells do not treat NBSP as a separator, so
-      // send ASCII space directly for the plain-space key.
-      if (isPlainSpaceKeydown(ev)) {
-        sendKeyboardInputToPty(" ");
-        ev.preventDefault();
-        ev.stopImmediatePropagation();
-        return;
-      }
-
-      // Shift+Enter: insert newline (LF) instead of submitting (CR). xterm
-      // by default emits \r for both Enter and Shift+Enter, so TUIs like
-      // Claude CLI cannot tell them apart. Send a literal LF and stop the
-      // event so xterm does not emit its own \r on top.
-      if (ev.key === "Enter" && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        sendUserInputToPty("\n");
-        ev.preventDefault();
-        ev.stopImmediatePropagation();
-        return;
-      }
-      // macOS line-navigation conventions. Cmd+Left / Cmd+Right map to the
-      // emacs-style readline shortcuts that nearly every interactive shell
-      // honours: Ctrl+A (start of line) and Ctrl+E (end of line).
-      if (
-        ev.metaKey &&
-        !ev.ctrlKey &&
-        !ev.altKey &&
-        !ev.shiftKey
-      ) {
-        if (ev.key === "ArrowLeft") {
-          sendUserInputToPty("\x01");
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-          return;
-        }
-        if (ev.key === "ArrowRight") {
-          sendUserInputToPty("\x05");
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-          return;
-        }
-        if (ev.key === "ArrowDown") {
-          scrollToLiveTail();
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-          return;
-        }
-      }
-    };
-
-    // Register on `container` (ancestor of helperTextarea) with capture=true
-    // so we run before xterm's textarea-capture listeners.
-    container.addEventListener("input", onInput, true);
-    container.addEventListener("keydown", onKeydown, true);
+    const terminalInputController = attachTerminalInputController({
+      container,
+      term,
+      sendUserInputToPty,
+      sendKeyboardInputToPty,
+      scrollToLiveTail,
+    });
 
     // Own the paste path for text. xterm's built-in listener emits the
     // pasted text but only calls `stopPropagation()` — it never
@@ -1629,19 +1313,6 @@ export function Terminal({
     container.addEventListener("dragover", onDragOver);
     container.addEventListener("drop", onDrop);
 
-    // Swallow xterm's compositionstart/update/end. Its compositionend
-    // handler re-emits the entire textarea contents on top of the
-    // per-syllable PTY writes our `onInput` path already issued,
-    // duplicating the composed phrase. Our `onInput` covers preview,
-    // partial commits, and final commit through `commitComposition()`,
-    // so xterm's path is pure duplication.
-    const swallowComposition = (e: Event) => {
-      e.stopImmediatePropagation();
-    };
-    container.addEventListener("compositionstart", swallowComposition, true);
-    container.addEventListener("compositionupdate", swallowComposition, true);
-    container.addEventListener("compositionend", swallowComposition, true);
-
     let ptyReady = false;
     let lastPtyResize:
       | {
@@ -1699,34 +1370,6 @@ export function Terminal({
         commandSizeSyncScheduler.schedule();
       }
     });
-
-    // Re-anchor the composition preview to the cursor on every xterm render.
-    // The cursor advances asynchronously after a commit (PTY echo → emit →
-    // term.write); without this, the preview stays painted at the previous
-    // cursor cell and visually appears one column to the left of the new
-    // cursor until the user types again.
-    const repositionComposing = () => {
-      if (!compositionView || !compositionView.classList.contains("active")) {
-        return;
-      }
-      const cell = getCellDims();
-      if (!cell) return;
-      const buf = term.buffer.active;
-      // See `showComposing` for the full derivation of this formula.
-      const cursorViewportY = buf.baseY + buf.cursorY - buf.viewportY;
-      compositionView.style.left = `${buf.cursorX * cell.width}px`;
-      compositionView.style.top = `${cursorViewportY * cell.height}px`;
-    };
-    const renderDisposable = term.onRender(repositionComposing);
-    // PTY output that arrives while the user is mid-composition can scroll
-    // the viewport or move the prompt to a new row without producing an
-    // `onRender` event whose painted region overlaps the cursor cell — the
-    // overlay then stays pinned to the old screen coords and visually drifts
-    // away from the live prompt. `onScroll` fires on viewport shifts and
-    // `onCursorMove` fires when the shell redraws its prompt at a new row;
-    // both feed the same recompute so the overlay tracks the cursor.
-    const scrollDisposable = term.onScroll(repositionComposing);
-    const cursorMoveDisposable = term.onCursorMove(repositionComposing);
 
     // Sticky-prompt detection. The banner above the terminal pins the
     // most recent user-prompt line found in xterm's rendered buffer
@@ -2324,20 +1967,13 @@ export function Terminal({
       }
       resizeObserver.disconnect();
       commandSizeSyncScheduler.dispose();
-      container.removeEventListener("input", onInput, true);
-      container.removeEventListener("keydown", onKeydown, true);
+      terminalInputController.dispose();
       container.removeEventListener("paste", onPaste, true);
       window.removeEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
       container.removeEventListener("dragover", onDragOver);
       container.removeEventListener("drop", onDrop);
-      container.removeEventListener("compositionstart", swallowComposition, true);
-      container.removeEventListener("compositionupdate", swallowComposition, true);
-      container.removeEventListener("compositionend", swallowComposition, true);
       window.removeEventListener("acorn:terminal-clear", onClearRequested);
       inputDisposable.dispose();
-      renderDisposable.dispose();
-      scrollDisposable.dispose();
-      cursorMoveDisposable.dispose();
       contextScrollDisposable.dispose();
       conversationPositionDisposable.dispose();
       scrollbackStateDisposable.dispose();
