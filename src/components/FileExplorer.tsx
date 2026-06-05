@@ -581,20 +581,16 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   useEffect(() => {
     let cancelled = false;
     let unsub: (() => void) | null = null;
+    let lastSyncedSessionId: string | null | undefined = undefined;
     void import("../store").then(({ useAppStore }) => {
       if (cancelled) return;
       const sync = (sid: string | null) => {
+        if (sid === lastSyncedSessionId) return;
+        lastSyncedSessionId = sid;
         setActiveSessionIdLocal(sid);
         if (!sid) {
           setAgent({ claude: null, codex: null, antigravity: null });
-          return;
         }
-        api
-          .detectSessionAgent(sid)
-          .then((res) => {
-            if (!cancelled) setAgent(res);
-          })
-          .catch(() => {});
       };
       sync(useAppStore.getState().activeSessionId);
       unsub = useAppStore.subscribe((s) => {
@@ -606,6 +602,29 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       if (unsub) unsub();
     };
   }, []);
+
+  useEffect(() => {
+    if (!menu) return;
+    if (!activeSessionId) {
+      setAgent({ claude: null, codex: null, antigravity: null });
+      return;
+    }
+    setAgent({ claude: null, codex: null, antigravity: null });
+    let cancelled = false;
+    api
+      .detectSessionAgent(activeSessionId)
+      .then((res) => {
+        if (!cancelled) setAgent(res);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAgent({ claude: null, codex: null, antigravity: null });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, menu]);
 
   useEffect(() => {
     setLocalBool(SHOW_HIDDEN_KEY, showHidden);
