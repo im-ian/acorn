@@ -41,6 +41,7 @@ import {
   type ConversationNavigationDirection,
 } from "../lib/terminalConversation";
 import { patchTerminalMouseCoordinateScale } from "../lib/terminalMouseScale";
+import { isPlainSpaceKeydown } from "../lib/terminalInput";
 import { UI_SCALE_CHANGED_EVENT } from "../lib/layoutEvents";
 import {
   TERMINAL_PASTE_EVENT,
@@ -1063,6 +1064,10 @@ export function Terminal({
       }
     };
     let terminalActivityVersion = 0;
+    const sendKeyboardInputToPty = (data: string) => {
+      terminalActivityVersion += 1;
+      sendUserInputToPty(data);
+    };
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
     const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
@@ -1491,6 +1496,16 @@ export function Terminal({
         ".xterm-helper-textarea",
       );
       if (ta) sentPrefix = ta.value;
+
+      // WKWebView can report an unmodified physical Space as NBSP through
+      // the xterm input path. Shells do not treat NBSP as a separator, so
+      // send ASCII space directly for the plain-space key.
+      if (isPlainSpaceKeydown(ev)) {
+        sendKeyboardInputToPty(" ");
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        return;
+      }
 
       // Shift+Enter: insert newline (LF) instead of submitting (CR). xterm
       // by default emits \r for both Enter and Shift+Enter, so TUIs like
