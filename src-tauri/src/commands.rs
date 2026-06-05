@@ -500,6 +500,7 @@ fn resolve_chat_cli_invocation(
                     command: "codex",
                     args: vec![
                         "exec".to_string(),
+                        "--skip-git-repo-check".to_string(),
                         "resume".to_string(),
                         cursor.clone(),
                         "-".to_string(),
@@ -5168,6 +5169,7 @@ mod tests {
             invocation.args,
             vec![
                 "exec",
+                "--skip-git-repo-check",
                 "resume",
                 "019e2001-3250-76b0-8410-2e073b38a2c1",
                 "-"
