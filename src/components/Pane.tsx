@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   Pencil,
   PencilLine,
+  Sparkles,
   SplitSquareHorizontal,
   SplitSquareVertical,
   SquareX,
@@ -45,8 +46,15 @@ import {
 } from "../lib/editor";
 import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
-import { useSettings } from "../lib/settings";
-import { canRenameSession } from "../lib/sessionTitle";
+import {
+  useSettings,
+  resolveAiExecutionRequest,
+  resolveSessionTitlePrompt,
+} from "../lib/settings";
+import {
+  canForceGenerateSessionTitle,
+  canRenameSession,
+} from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -821,6 +829,7 @@ function TabItem({
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
+  const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const session = tab.kind === "session" ? tab.session : null;
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
@@ -828,6 +837,10 @@ function TabItem({
   const canRename = session
     ? canRenameSession(session, { isGeneratingTitle })
     : false;
+  const canRegenerateTitle =
+    session != null &&
+    canForceGenerateSessionTitle(session) &&
+    !isGeneratingTitle;
   const showAgentProviderIcons = useSettings(
     (s) => s.settings.sessionDisplay.icons.agentProvider,
   );
@@ -897,6 +910,22 @@ function TabItem({
       pendingDragCleanupRef.current = null;
     };
   }, []);
+
+  async function regenerateTitle() {
+    if (!session) return;
+    const settings = useSettings.getState().settings;
+    const status = await generateSessionTitle(
+      session.id,
+      resolveAiExecutionRequest(settings),
+      resolveSessionTitlePrompt(settings),
+      true,
+    );
+    if (status === "not_ready") {
+      showToast(t("toasts.session.titleNotReady"));
+    } else if (status !== "generated") {
+      showToast(t("toasts.session.titleRegenerateSkipped"));
+    }
+  }
 
   function onTabPointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
     if (
@@ -1076,6 +1105,12 @@ function TabItem({
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
       disabled: !canRename,
+    },
+    {
+      label: paneT(t, "pane.menu.regenerateName"),
+      icon: <Sparkles size={12} />,
+      onClick: () => void regenerateTitle(),
+      disabled: !canRegenerateTitle,
     },
     {
       label: paneT(t, "pane.menu.duplicateSession"),

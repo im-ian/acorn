@@ -8,6 +8,8 @@
       "worktreeRemoveFailed": "Failed to delete worktree:",
       "refreshFailed": "Failed to refresh sessions:",
       "renameFailed": "Failed to rename session:",
+      "titleNotReady": "No transcript is available for this session yet.",
+      "titleRegenerateSkipped": "Session name was not regenerated.",
       "worktreeAdopted": "Adopted new worktree: {name}",
       "worktreeAdoptFailed": "Failed to adopt worktree:"
     },
@@ -490,12 +492,12 @@
       },
       "sessionTitles": {
         "label": "Session titles",
-        "hint": "When enabled, acorn sends the entire first user prompt in a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
+        "hint": "When enabled, acorn sends transcript context from a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
         "checkbox": "Auto-generate session titles"
       },
       "sessionTitlePrompt": {
         "label": "Session title prompt",
-        "hint": "Instructions sent before the entire first user prompt. Leave blank to use the default prompt.",
+        "hint": "Instructions sent before the transcript context. Leave blank to use the default prompt.",
         "open": "Configure title prompt",
         "shortButton": "Prompt",
         "editorLabel": "Prompt",
@@ -762,6 +764,7 @@
       "revealInFinder": "Reveal in Finder",
       "copyPath": "Copy path",
       "rename": "Rename",
+      "regenerateName": "Regenerate Name",
       "duplicateSession": "Duplicate Session",
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
@@ -826,6 +829,7 @@
     },
     "menu": {
       "rename": "Rename",
+      "regenerateName": "Regenerate Name",
       "duplicateSession": "Duplicate Session",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
