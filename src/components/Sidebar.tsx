@@ -108,6 +108,7 @@ import type {
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
+import { RemoveProjectFolderDialog } from "./RemoveProjectFolderDialog";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 
@@ -180,6 +181,7 @@ export function Sidebar() {
   const createProjectFolder = useAppStore((s) => s.createProjectFolder);
   const renameProjectFolder = useAppStore((s) => s.renameProjectFolder);
   const removeProjectFolder = useAppStore((s) => s.removeProjectFolder);
+  const removeSession = useAppStore((s) => s.removeSession);
   const moveSessionToProjectFolder = useAppStore(
     (s) => s.moveSessionToProjectFolder,
   );
@@ -205,6 +207,8 @@ export function Sidebar() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsProject, setSettingsProject] =
     useState<ProjectFolderProjectGroup | null>(null);
+  const [pendingRemoveProjectFolderId, setPendingRemoveProjectFolderId] =
+    useState<string | null>(null);
 
   useEffect(() => {
     saveStringSet(COLLAPSED_KEY, collapsed);
@@ -228,6 +232,17 @@ export function Sidebar() {
       ),
     [projectFolders, projects, sessionFolderIds, sessions],
   );
+  const pendingRemoveProjectFolderGroup = useMemo(() => {
+    if (!pendingRemoveProjectFolderId) return null;
+    for (const project of projectGroups) {
+      const folderGroup = project.folders.find(
+        (candidate) =>
+          candidate.folder.id === pendingRemoveProjectFolderId,
+      );
+      if (folderGroup) return folderGroup;
+    }
+    return null;
+  }, [pendingRemoveProjectFolderId, projectGroups]);
   const localSessions = useMemo(
     () => buildLocalSessions(sessions),
     [sessions],
@@ -309,6 +324,25 @@ export function Sidebar() {
     } catch (e) {
       console.error("create project folder failed", e);
       showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
+    }
+  }
+
+  async function removeProjectFolderAndSessions(
+    folderGroup: ProjectFolderGroup,
+  ) {
+    try {
+      for (const session of folderGroup.sessions) {
+        await removeSession(session.id, false);
+        const error = useAppStore.getState().consumeError();
+        if (error) {
+          showToast(`${t("toasts.session.removeFailed")} ${error}`);
+          return;
+        }
+      }
+      removeProjectFolder(folderGroup.folder.id);
+    } catch (e) {
+      console.error("remove project folder failed", e);
+      showToast(`${t("toasts.session.removeFailed")} ${String(e)}`);
     }
   }
 
@@ -824,7 +858,7 @@ export function Sidebar() {
                       }
                       onAddFolder={() => onAddProjectFolder(project.repoPath)}
                       onRenameFolder={renameProjectFolder}
-                      onRemoveFolder={removeProjectFolder}
+                      onRemoveFolder={setPendingRemoveProjectFolderId}
                       onMoveSessionToFolder={moveSessionToProjectFolder}
                       onRemoveProject={() =>
                         requestRemoveProject(project.repoPath)
@@ -875,6 +909,20 @@ export function Sidebar() {
             : null
         }
         onClose={() => setSettingsProject(null)}
+      />
+      <RemoveProjectFolderDialog
+        folder={pendingRemoveProjectFolderGroup?.folder ?? null}
+        sessions={pendingRemoveProjectFolderGroup?.sessions ?? []}
+        onClose={(choice) => {
+          const target = pendingRemoveProjectFolderGroup;
+          setPendingRemoveProjectFolderId(null);
+          if (!target || choice === "cancel") return;
+          if (choice === "folder_only") {
+            removeProjectFolder(target.folder.id);
+            return;
+          }
+          void removeProjectFolderAndSessions(target);
+        }}
       />
     </aside>
   );
@@ -1268,15 +1316,16 @@ function ProjectGroupView({
     project.folders.find((folderGroup) =>
       isDefaultProjectFolder(folderGroup.folder),
     ) ?? project.folders[0] ?? null;
-  const sessionCreationFolder =
-    folderForActiveSession(project, activeSessionId) ??
-    (activeProjectFolderId
-      ? (project.folders.find(
-          (folderGroup) => folderGroup.folder.id === activeProjectFolderId,
-        )?.folder ?? null)
-      : null) ??
-    defaultFolderGroup?.folder ??
-    null;
+  let sessionCreationFolder = folderForActiveSession(project, activeSessionId);
+  if (!sessionCreationFolder && activeProjectFolderId) {
+    sessionCreationFolder =
+      project.folders.find(
+        (folderGroup) => folderGroup.folder.id === activeProjectFolderId,
+      )?.folder ?? null;
+  }
+  if (!sessionCreationFolder) {
+    sessionCreationFolder = defaultFolderGroup?.folder ?? null;
+  }
 
   const createMenuItems = useMemo<ContextMenuItem[]>(
     () =>
@@ -1636,7 +1685,8 @@ function folderForActiveSession(
 ): ProjectFolder | null {
   if (!activeSessionId) return null;
   const folderGroup = project.folders.find(
-    (candidate) => candidate.sessions.some((session) => session.id === activeSessionId),
+    (candidate) =>
+      candidate.sessions.some((session) => session.id === activeSessionId),
   );
   return folderGroup?.folder ?? null;
 }
