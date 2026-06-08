@@ -46,6 +46,7 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
 } from "./lib/sessionCreation";
+import { showProjectSession } from "./lib/hiddenProjectSessions";
 
 export type { RightGroup, RightTab };
 
@@ -1565,6 +1566,7 @@ export const useAppStore = create<AppStateModel>()(
 
     try {
       await api.removeSession(id, removeWorktree);
+      showProjectSession(id);
       await get().refreshAll();
       set({ error: null });
     } catch (e) {
