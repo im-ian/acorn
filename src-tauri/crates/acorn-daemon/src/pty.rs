@@ -9,11 +9,9 @@
 //!    once we lift the single-instance constraint) see the same output
 //!    in sync.
 //!
-//! 2. **Lifetime tied to the registry, not to a Tauri AppHandle.** When
-//!    the PTY exits, the wait thread marks the session dead in the
-//!    `SessionRegistry` but does NOT remove it. Whether to render a
-//!    ghost or hide the session is the app's choice; the daemon just
-//!    preserves the truth.
+//! 2. **Lifetime tied to the PTY child, not to a Tauri AppHandle.** When
+//!    the PTY exits, the wait thread detaches the session from both the
+//!    live handle map and the `SessionRegistry`.
 //!
 //! 3. **Argv augmentation hook.** For sessions with a known
 //!    `agent_kind`, the spawn helper rewrites argv to inject the
@@ -78,6 +76,15 @@ struct PtyHandle {
     /// `DaemonSession::scrollback`; both pointers are clones of the
     /// instance created during `spawn`.
     scrollback: Arc<RingBuffer>,
+    /// Exit code captured by the wait thread. Stored on the handle so
+    /// active stream subscribers can still emit the exit status after the
+    /// daemon registry row has detached.
+    exit_code: Arc<Mutex<Option<i32>>>,
+}
+
+pub struct PtySubscription {
+    pub rx: broadcast::Receiver<Vec<u8>>,
+    pub exit_code: Arc<Mutex<Option<i32>>>,
 }
 
 /// Caller-supplied policy for applying environment variables to the
@@ -189,6 +196,7 @@ impl PtyManager {
         let (output_tx, _output_rx) = broadcast::channel::<Vec<u8>>(BROADCAST_CAPACITY);
 
         let stop = Arc::new(AtomicBool::new(false));
+        let exit_code = Arc::new(Mutex::new(None));
         let handle = Arc::new(PtyHandle {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
@@ -196,6 +204,7 @@ impl PtyManager {
             stop: stop.clone(),
             output_tx: output_tx.clone(),
             scrollback: scrollback.clone(),
+            exit_code,
         });
 
         self.handles.insert(session_id, Arc::clone(&handle));
@@ -215,6 +224,7 @@ impl PtyManager {
         // app can detect, on boot, that this session was spawned by an
         // older build with different rc bodies and force-respawn it.
         session.staged_rev = spec.env.get("ACORN_STAGED_REV").cloned();
+        let created_at = session.created_at;
         registry.insert(session);
 
         let stop_reader = stop.clone();
@@ -227,11 +237,21 @@ impl PtyManager {
             })?;
 
         let handles_for_wait = Arc::clone(&self.handles);
+        let handle_for_wait = Arc::clone(&handle);
         let registry_for_wait = registry.clone();
         std::thread::Builder::new()
             .name(format!("acornd-pty-wait-{session_id}"))
             .spawn(move || {
-                wait_loop(child, session_id, handles_for_wait, registry_for_wait, stop);
+                wait_loop(
+                    child,
+                    session_id,
+                    handle_for_wait,
+                    pid,
+                    created_at,
+                    handles_for_wait,
+                    registry_for_wait,
+                    stop,
+                );
             })?;
 
         Ok(SpawnedSession { session_id, pid })
@@ -296,12 +316,15 @@ impl PtyManager {
     /// gets every byte chunk read from the PTY from this point on; for
     /// the pre-existing scrollback, the caller should also call
     /// `scrollback_snapshot`. Returns `None` if no live PTY is registered
-    /// for the session (the session may be dead — caller should fall
-    /// back to the registry's ring buffer if it still exists).
-    pub fn subscribe(&self, id: &Uuid) -> Option<broadcast::Receiver<Vec<u8>>> {
-        self.handles
-            .get(id)
-            .map(|r| r.value().output_tx.subscribe())
+    /// for the session.
+    pub fn subscribe(&self, id: &Uuid) -> Option<PtySubscription> {
+        self.handles.get(id).map(|r| {
+            let handle = r.value();
+            PtySubscription {
+                rx: handle.output_tx.subscribe(),
+                exit_code: Arc::clone(&handle.exit_code),
+            }
+        })
     }
 
     /// Snapshot the current scrollback ring without subscribing to live
@@ -397,6 +420,9 @@ fn read_loop(
 fn wait_loop(
     mut child: Box<dyn Child + Send + Sync>,
     session_id: Uuid,
+    expected_handle: Arc<PtyHandle>,
+    expected_pid: Option<u32>,
+    expected_created_at: chrono::DateTime<chrono::Utc>,
     handles: Arc<DashMap<Uuid, Arc<PtyHandle>>>,
     registry: Arc<SessionRegistry>,
     stop: Arc<AtomicBool>,
@@ -405,9 +431,12 @@ fn wait_loop(
         Ok(status) => Some(status.exit_code() as i32),
         Err(_) => None,
     };
+    *expected_handle.exit_code.lock() = code;
     stop.store(true, Ordering::SeqCst);
-    handles.remove(&session_id);
-    registry.mark_dead(&session_id, code);
+    handles.remove_if(&session_id, |_, current| {
+        Arc::ptr_eq(current, &expected_handle)
+    });
+    registry.detach_if_current(&session_id, expected_pid, expected_created_at);
 }
 
 #[cfg(test)]

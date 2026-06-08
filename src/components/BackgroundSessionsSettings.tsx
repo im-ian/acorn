@@ -48,7 +48,7 @@ export function BackgroundSessionsSettings() {
       if (snap.running) {
         try {
           const list = await api.daemonListSessions();
-          setSessions(list);
+          setSessions(list.filter((session) => session.alive));
         } catch (err) {
           // List failure is non-fatal — keep showing the status panel.
           // eslint-disable-next-line no-console
@@ -122,7 +122,34 @@ export function BackgroundSessionsSettings() {
     }
   }, [refresh, showToast, t]);
 
+  const handleForgetInactiveSessions = useCallback(async () => {
+    setBusy("forget-inactive");
+    setStatusError(null);
+    try {
+      const count = await api.daemonForgetInactiveSessions();
+      await refresh();
+      showToast(
+        count > 0
+          ? t("backgroundSessions.toasts.inactiveCleared")
+          : t("backgroundSessions.toasts.inactiveNone"),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setStatusError(message);
+      showToast(
+        `${t("backgroundSessions.toasts.inactiveClearFailed")} ${message}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh, showToast, t]);
+
   const running = status?.running ?? false;
+  const inactiveSessionCount =
+    typeof status?.session_count_total === "number" &&
+    typeof status?.session_count_alive === "number"
+      ? Math.max(0, status.session_count_total - status.session_count_alive)
+      : 0;
   const indicator = !enabled
     ? {
         label: t("backgroundSessions.status.disabled"),
@@ -218,6 +245,25 @@ export function BackgroundSessionsSettings() {
               <RefreshCcw size={12} />
             )}
             <span>{t("backgroundSessions.controls.restart")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleForgetInactiveSessions()}
+            disabled={
+              !enabled || !running || inactiveSessionCount === 0 || busy !== null
+            }
+            title={t("backgroundSessions.controls.clearInactiveTooltip")}
+            className={cn(
+              "flex items-center gap-1 rounded border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
+              "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
+            )}
+          >
+            {busy === "forget-inactive" ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Trash2 size={12} />
+            )}
+            <span>{t("backgroundSessions.controls.clearInactive")}</span>
           </button>
           {confirmShutdown ? (
             <div className="flex items-center gap-2 rounded border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
@@ -483,29 +529,6 @@ function SessionsList({
                     </RowButton>
                   </Tooltip>
                 ) : null}
-                <Tooltip
-                  label={
-                    s.alive
-                      ? t("backgroundSessions.actions.forgetDisabledTooltip")
-                      : t("backgroundSessions.actions.forgetTooltip")
-                  }
-                  side="top"
-                >
-                  <RowButton
-                    busy={busy}
-                    disabled={s.alive}
-                    onClick={() =>
-                      void runRowAction(
-                        s.id,
-                        () => api.daemonForgetSession(s.id),
-                        t("backgroundSessions.toasts.sessionForgotten"),
-                      )
-                    }
-                    aria-label={t("backgroundSessions.actions.forget")}
-                  >
-                    <Trash2 size={12} />
-                  </RowButton>
-                </Tooltip>
               </div>
             </li>
           );

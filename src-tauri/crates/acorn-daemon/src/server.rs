@@ -343,7 +343,6 @@ impl Daemon {
                 }
             }
             ControlPayload::ForgetSession { target_session_id } => {
-                // Only allow forget if the session is already dead.
                 let alive = self
                     .registry
                     .get(&target_session_id)
@@ -446,7 +445,7 @@ impl Daemon {
                 write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
             }
         }
-        let Some(mut rx) = self.pty.subscribe(&attach.session_id) else {
+        let Some(mut subscription) = self.pty.subscribe(&attach.session_id) else {
             let frame = StreamFrame::Exit { code: None };
             return write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap());
         };
@@ -490,7 +489,7 @@ impl Daemon {
 
         // Pump loop: forward broadcast output to the socket.
         loop {
-            match rx.blocking_recv() {
+            match subscription.rx.blocking_recv() {
                 Ok(chunk) => {
                     let frame = StreamFrame::Output {
                         data_b64: base64_encode(&chunk),
@@ -510,7 +509,7 @@ impl Daemon {
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     // PTY exited. Emit an Exit frame and close.
-                    let code = self.registry.get(&session_id).and_then(|s| s.exit_code);
+                    let code = *subscription.exit_code.lock();
                     let frame = StreamFrame::Exit { code };
                     let _ = write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap());
                     return Ok(());
@@ -689,13 +688,14 @@ mod tests {
     fn forget_dead_session_succeeds() {
         let d = Daemon::new(noop_env_applier());
         let id = uuid::Uuid::new_v4();
-        d.registry.insert(super::super::session::DaemonSession::new(
+        let mut session = super::super::session::DaemonSession::new(
             id,
             "test".into(),
             SessionKind::Regular,
             std::path::PathBuf::from("/tmp"),
-        ));
-        d.registry.mark_dead(&id, Some(0));
+        );
+        session.alive = false;
+        d.registry.insert(session);
         let req = ControlRequest {
             seq: 3,
             payload: ControlPayload::ForgetSession {

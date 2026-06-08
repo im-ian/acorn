@@ -6,8 +6,7 @@
 //!
 //! 1. Spawn a new PTY when asked.
 //! 2. Tell the app what PTYs it currently holds (so the app can reconcile
-//!    its DB on boot — orphans become "adopt?" prompts; ghosts become
-//!    "resume from disk?" prompts).
+//!    its DB on boot and offer adoption for daemon-owned live sessions).
 //! 3. Scope `acornd` CLI ops by project (a control session in project A
 //!    cannot see sessions from project B).
 //!
@@ -61,9 +60,8 @@ pub struct DaemonSession {
     /// shell-mode status detection (Running / NeedsInput / Idle) the
     /// same way the in-process `PtyManager` does for legacy sessions.
     pub pid: Option<u32>,
-    /// `true` while the PTY child is still alive. Flipped to `false` by
-    /// the wait thread on child exit; the metadata row stays in the
-    /// registry until `ForgetSession` is called (so ghost UI can render).
+    /// `true` while the PTY child is still alive. Rows with `false` are
+    /// cleanup-only metadata and are removable through `ForgetSession`.
     pub alive: bool,
     /// Exit code captured when `alive` flipped to `false`. `None` while
     /// alive or when the child exit could not be observed (wait error).
@@ -126,24 +124,27 @@ impl SessionRegistry {
         self.inner.read().get(id).cloned()
     }
 
-    /// Snapshot every session the daemon knows about, including dead
-    /// ones. Cloned so the caller does not hold the read lock for the
-    /// duration of any I/O it performs with the result.
+    /// Snapshot every session the daemon knows about. Cloned so the
+    /// caller does not hold the read lock for the duration of any I/O it
+    /// performs with the result.
     pub fn list(&self) -> Vec<DaemonSession> {
         self.inner.read().values().cloned().collect()
     }
 
-    /// Mark a session as dead with the given exit code. Idempotent: a
-    /// double-mark from racing read/wait paths is benign — the second
-    /// call leaves the existing exit_code in place if it is `Some`.
-    pub fn mark_dead(&self, id: &Uuid, exit_code: Option<i32>) {
+    /// Remove a session only if the registry row still belongs to the
+    /// PTY generation that just exited. This prevents an old wait thread
+    /// from detaching a newly spawned session that reused the same id.
+    pub fn detach_if_current(
+        &self,
+        id: &Uuid,
+        expected_pid: Option<u32>,
+        expected_created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<DaemonSession> {
         let mut map = self.inner.write();
-        if let Some(entry) = map.get_mut(id) {
-            entry.alive = false;
-            if entry.exit_code.is_none() {
-                entry.exit_code = exit_code;
-            }
-        }
+        let should_remove = map.get(id).is_some_and(|entry| {
+            entry.pid == expected_pid && entry.created_at == expected_created_at
+        });
+        should_remove.then(|| map.remove(id)).flatten()
     }
 
     /// Permanently remove a session. The caller must have killed the PTY
@@ -187,15 +188,16 @@ mod tests {
     }
 
     #[test]
-    fn mark_dead_leaves_session_in_registry() {
+    fn detach_current_removes_session() {
         let reg = SessionRegistry::new();
         let id = Uuid::new_v4();
-        reg.insert(mk(id));
-        reg.mark_dead(&id, Some(0));
-        let s = reg.get(&id).unwrap();
-        assert!(!s.alive);
-        assert_eq!(s.exit_code, Some(0));
-        assert_eq!(reg.count_total(), 1);
+        let mut session = mk(id);
+        session.pid = Some(42);
+        let created_at = session.created_at;
+        reg.insert(session);
+        let removed = reg.detach_if_current(&id, Some(42), created_at);
+        assert!(removed.is_some());
+        assert!(reg.get(&id).is_none());
         assert_eq!(reg.count_alive(), 0);
     }
 
@@ -210,12 +212,20 @@ mod tests {
     }
 
     #[test]
-    fn mark_dead_is_idempotent_on_exit_code() {
+    fn detach_current_does_not_remove_reused_session_id() {
         let reg = SessionRegistry::new();
         let id = Uuid::new_v4();
-        reg.insert(mk(id));
-        reg.mark_dead(&id, Some(7));
-        reg.mark_dead(&id, Some(99)); // racing second mark
-        assert_eq!(reg.get(&id).unwrap().exit_code, Some(7));
+        let mut old = mk(id);
+        old.pid = Some(7);
+        let old_created_at = old.created_at;
+        reg.insert(old);
+
+        let mut new = mk(id);
+        new.pid = Some(8);
+        reg.insert(new);
+
+        let removed = reg.detach_if_current(&id, Some(7), old_created_at);
+        assert!(removed.is_none());
+        assert_eq!(reg.get(&id).unwrap().pid, Some(8));
     }
 }

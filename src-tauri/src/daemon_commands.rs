@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::daemon_bridge::BridgeError;
 use crate::state::AppState;
-use acorn_daemon::protocol::{AgentKind, SessionKind};
+use acorn_daemon::protocol::{AgentKind, ErrorCode, SessionKind};
 
 /// JSON shape for `daemon_status` — what the StatusBar indicator and the
 /// Settings → Background sessions panel render.
@@ -147,6 +147,7 @@ pub fn daemon_list_sessions(
         .map_err(|e| e.to_string())?;
     Ok(sessions
         .into_iter()
+        .filter(|s| s.alive)
         .map(|s| DaemonSessionSummary {
             id: s.id.to_string(),
             name: s.name,
@@ -253,6 +254,32 @@ pub fn daemon_forget_session(
 ) -> Result<(), String> {
     let id = Uuid::parse_str(&target_session_id).map_err(|e| format!("invalid session id: {e}"))?;
     state.daemon_bridge.forget(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn daemon_forget_inactive_sessions(state: State<'_, AppState>) -> Result<usize, String> {
+    let inactive_ids: Vec<Uuid> = state
+        .daemon_bridge
+        .list_sessions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|s| !s.alive)
+        .map(|s| s.id)
+        .collect();
+
+    let mut forgotten = 0;
+    for id in inactive_ids {
+        match state.daemon_bridge.forget(id) {
+            Ok(()) => forgotten += 1,
+            Err(BridgeError::Daemon {
+                code: ErrorCode::NotFound,
+                ..
+            }) => {}
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+
+    Ok(forgotten)
 }
 
 /// Reconstruct an app-side `Session` row from a daemon-owned PTY the app

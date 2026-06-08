@@ -114,7 +114,7 @@ test.describe("background sessions settings", () => {
         id: "550e8400-e29b-41d4-a716-446655440000",
         name: "550e8400-e29b-41d4-a716-446655440000",
         kind: "regular",
-        alive: false,
+        alive: true,
         cwd: "/tmp/demo",
         repo_path: "/tmp/demo",
         branch: "main",
@@ -151,5 +151,84 @@ test.describe("background sessions settings", () => {
     expect(calls).toEqual([
       { targetSessionId: "550e8400-e29b-41d4-a716-446655440000" },
     ]);
+  });
+
+  test("hides inactive daemon sessions and clears them in bulk", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", []);
+    await tauri.handle("daemon_status", () => {
+      const w = window as unknown as { __inactiveCleared?: boolean };
+      const cleared = w.__inactiveCleared === true;
+      return {
+        running: true,
+        enabled: true,
+        daemon_version: "test",
+        uptime_seconds: 60,
+        session_count_total: cleared ? 1 : 2,
+        session_count_alive: 1,
+        log_path: "/tmp/acorn/daemon.log",
+        last_error: null,
+      };
+    });
+    await tauri.handle("daemon_list_sessions", () => {
+      const live = {
+        id: "550e8400-e29b-41d4-a716-446655440001",
+        name: "live session",
+        kind: "regular",
+        alive: true,
+        cwd: "/tmp/demo",
+        repo_path: "/tmp/demo",
+        branch: "main",
+        agent_kind: null,
+      };
+      const inactive = {
+        id: "550e8400-e29b-41d4-a716-446655440002",
+        name: "inactive session",
+        kind: "regular",
+        alive: false,
+        cwd: "/tmp/demo",
+        repo_path: "/tmp/demo",
+        branch: "main",
+        agent_kind: null,
+      };
+      const w = window as unknown as { __inactiveCleared?: boolean };
+      return w.__inactiveCleared === true ? [live] : [live, inactive];
+    });
+    await tauri.handle("daemon_forget_inactive_sessions", () => {
+      const w = window as unknown as {
+        __inactiveCleared?: boolean;
+        __forgetInactiveCalls?: number;
+      };
+      w.__forgetInactiveCalls = (w.__forgetInactiveCalls ?? 0) + 1;
+      w.__inactiveCleared = true;
+      return 1;
+    });
+
+    const modal = await openServicesSettings(page);
+
+    await expect(modal.getByText("live session", { exact: true })).toBeVisible();
+    await expect(
+      modal.getByText("inactive session", { exact: true }),
+    ).toHaveCount(0);
+
+    const clearInactive = modal.getByRole("button", {
+      name: "Clear inactive sessions",
+    });
+    await expect(clearInactive).toBeEnabled();
+    await clearInactive.click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __forgetInactiveCalls?: number })
+              .__forgetInactiveCalls ?? 0,
+        ),
+      )
+      .toBe(1);
+    await expect(clearInactive).toBeDisabled();
   });
 });

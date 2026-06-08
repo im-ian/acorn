@@ -269,6 +269,7 @@ export const tauriMockSource = `
     if (cmd === 'daemon_resize') return Promise.resolve(undefined);
     if (cmd === 'daemon_kill_session') return Promise.resolve(undefined);
     if (cmd === 'daemon_forget_session') return Promise.resolve(undefined);
+    if (cmd === 'daemon_forget_inactive_sessions') return Promise.resolve(0);
     if (cmd === 'daemon_adopt_session') return Promise.resolve(undefined);
     // Resume modal probes every session focus for all session agents.
     // Default to "no candidate" so non-resume E2Es never see the modal;

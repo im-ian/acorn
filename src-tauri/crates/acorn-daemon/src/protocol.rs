@@ -107,9 +107,8 @@ pub enum ControlPayload {
     /// Probe — daemon replies `Pong` with its version and uptime. Used by
     /// the app's `getDaemonStatus()` and by the StatusBar indicator.
     Ping,
-    /// Enumerate all sessions the daemon currently tracks. Returns both
-    /// live (PTY alive) and dead (process exited but metadata preserved)
-    /// sessions. UI can show both with appropriate visual treatment.
+    /// Enumerate sessions the daemon currently tracks. Normal PTY exit
+    /// detaches the session, so this is expected to contain live rows.
     ListSessions,
     /// Create a new PTY-backed session. The daemon allocates a UUID,
     /// records minimal metadata, spawns the PTY, and returns the new id.
@@ -135,12 +134,11 @@ pub enum ControlPayload {
         target_session_id: Uuid,
         max_bytes: Option<usize>,
     },
-    /// Kill a session. Drops the PTY child and marks the session as
-    /// `dead`. Metadata is retained so the app can render a ghost row
-    /// and offer "resume from disk" before the user opts to forget.
+    /// Kill a session. Drops the PTY child; the wait thread detaches the
+    /// session from the daemon registry once the child exits.
     KillSession { target_session_id: Uuid },
-    /// Permanently remove a dead session's metadata. The daemon refuses if
-    /// the session is still alive — caller must Kill first.
+    /// Permanently remove non-live session metadata. The daemon refuses if
+    /// the session is still alive.
     ForgetSession { target_session_id: Uuid },
     /// Status snapshot: version, uptime, session counts, RSS estimate.
     /// Backs the StatusBar daemon indicator + the "Background sessions"
@@ -156,8 +154,7 @@ pub enum ControlPayload {
 /// Spec for a new PTY session. Mirrors the shape of the Acorn app's
 /// `pty_spawn` Tauri command so the app hands the same payload to
 /// either path. The daemon copies these values into its own session
-/// metadata so the orphan/ghost reconcile logic can hand them back on
-/// next attach.
+/// metadata so live rows can be reattached or adopted by the app.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpawnSpec {
     /// Caller-suggested session id. If `None`, the daemon allocates a
@@ -219,8 +216,7 @@ pub enum SessionKind {
 
 /// Known agent runtimes the daemon can resume across crashes via their own
 /// session-history mechanism. `Unknown` is the catch-all for tools without
-/// a documented resume protocol — daemon does not attempt revival; ghost UI
-/// surfaces them as dead with manual delete only.
+/// a documented resume protocol.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentKind {
@@ -303,8 +299,8 @@ pub struct SessionSummary {
     pub id: Uuid,
     pub name: String,
     pub kind: SessionKind,
-    /// `true` while the PTY child is alive; `false` once it has exited.
-    /// Dead sessions remain in metadata until `ForgetSession`.
+    /// `true` while the PTY child is alive. `false` rows are cleanup-only
+    /// metadata and may be removed with `ForgetSession`.
     pub alive: bool,
     /// Working directory the PTY child was spawned in. The app uses this
     /// when reconstructing a daemon-owned session row so linked-worktree
@@ -314,10 +310,10 @@ pub struct SessionSummary {
     pub repo_path: Option<std::path::PathBuf>,
     pub branch: Option<String>,
     pub agent_kind: Option<AgentKind>,
-    /// OS process id of the immediate PTY child. `None` once the
-    /// process has exited (alive=false) or when the host could not
-    /// hand one back at spawn. The app uses this to walk descendants
-    /// for shell-mode status detection (Running / NeedsInput / Idle).
+    /// OS process id of the immediate PTY child. `None` when the host
+    /// could not hand one back at spawn. The app uses this to walk
+    /// descendants for shell-mode status detection (Running /
+    /// NeedsInput / Idle).
     #[serde(default)]
     pub pid: Option<u32>,
     /// `true` when the source of this `ListSessions` call is the same
