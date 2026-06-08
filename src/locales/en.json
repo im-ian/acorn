@@ -1137,6 +1137,19 @@
       "closeDeleteWorktrees": "Close · delete worktrees",
       "closeProject": "Close project"
     },
+    "removeProjectFolder": {
+      "title": "Remove folder",
+      "confirmPrefix": "Remove folder",
+      "sessionSingular": "session",
+      "sessionPlural": "sessions",
+      "canBeMovedOut": "can be moved out to the project before the folder is removed",
+      "removeSessionsHint": "You can also remove the sessions from Acorn with the folder.",
+      "emptyFolder": "This folder has no sessions.",
+      "filesWillNotBeTouched": "Files and worktrees on disk will not be deleted.",
+      "removeFolder": "Remove folder",
+      "moveSessionsOut": "Move sessions out",
+      "removeWithSessions": "Remove folder and sessions"
+    },
     "projectSettings": {
       "title": "Project Settings",
       "pullRequests": "Pull requests",

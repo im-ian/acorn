@@ -715,6 +715,226 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
+  test("project folder remove asks before removing sessions in the folder", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+        __removedIds?: string[];
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "root-session",
+          name: "root",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "idle",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 0,
+          in_worktree: false,
+        },
+        {
+          id: "child-session",
+          name: "child",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "idle",
+          created_at: "2026-01-01T00:00:01Z",
+          updated_at: "2026-01-01T00:00:01Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 1,
+          in_worktree: false,
+        },
+      ];
+      const removed = new Set(w.__removedIds ?? []);
+      return w.__sessions.filter(
+        (session) => !removed.has(String(session.id)),
+      );
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __removedIds?: string[];
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      const id = String(args?.id ?? "");
+      w.__removedIds = Array.from(new Set([...(w.__removedIds ?? []), id]));
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New project folder" }).click();
+    const folderRow = sidebar.getByRole("button", { name: /New folder/ }).first();
+    await folderRow.dblclick();
+    await sidebar.getByRole("textbox").fill("Frontend");
+    await sidebar.getByRole("textbox").press("Enter");
+
+    const frontend = sidebar.getByRole("button", { name: /Frontend/ }).first();
+    const root = sidebar
+      .getByRole("button", { name: /^root main · Idle/ })
+      .first();
+    const child = sidebar
+      .getByRole("button", { name: /^child main · Idle/ })
+      .first();
+    await child.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Move to folder: Frontend" })
+      .click();
+
+    await frontend.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove folder" }).click();
+    const dialog = page.getByRole("dialog", { name: "Remove folder" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("1 session");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(frontend).toBeVisible();
+    await expect(child).toBeVisible();
+
+    await frontend.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove folder" }).click();
+    await page
+      .getByRole("dialog", { name: "Remove folder" })
+      .getByRole("button", { name: "Remove folder and sessions" })
+      .click();
+
+    await expect(child).toHaveCount(0);
+    await expect(frontend).toHaveCount(0);
+    await expect(root).toBeVisible();
+
+    const calls = (await page.evaluate(
+      () => (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ id: string; removeWorktree: boolean }>;
+    expect(calls).toEqual([{ id: "child-session", removeWorktree: false }]);
+  });
+
+  test("project folder remove can keep sessions and move them out", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "root-session",
+        name: "root",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "child-session",
+        name: "child",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as { __removeCalls?: unknown[] };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New project folder" }).click();
+    const folderRow = sidebar.getByRole("button", { name: /New folder/ }).first();
+    await folderRow.dblclick();
+    await sidebar.getByRole("textbox").fill("Frontend");
+    await sidebar.getByRole("textbox").press("Enter");
+
+    const frontend = sidebar.getByRole("button", { name: /Frontend/ }).first();
+    const child = sidebar
+      .getByRole("button", { name: /^child main · Idle/ })
+      .first();
+    await child.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Move to folder: Frontend" })
+      .click();
+
+    await frontend.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove folder" }).click();
+    const dialog = page.getByRole("dialog", { name: "Remove folder" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("project before the folder is removed");
+    await dialog.getByRole("button", { name: "Move sessions out" }).click();
+
+    await expect(frontend).toHaveCount(0);
+    await expect(child).toBeVisible();
+    await child.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Remove from folder" }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    const calls = (await page.evaluate(
+      () => (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as unknown[] | undefined;
+    expect(calls ?? []).toEqual([]);
+  });
+
   test("project folders and sessions can move by drag and drop", async ({
     page,
     tauri,
