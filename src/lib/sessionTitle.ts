@@ -46,11 +46,28 @@ export function canForceGenerateSessionTitle(session: Session): boolean {
   );
 }
 
+export function canRegenerateSessionTitle(session: Session): boolean {
+  return canForceGenerateSessionTitle(session) && hasAgentChatWork(session);
+}
+
 export function autoTitleGenerationEnabledForSession(
   session: Session,
   enabled: boolean,
 ): boolean {
   return enabled || session.mode === "chat";
+}
+
+function hasAgentChatWork(session: Session): boolean {
+  const transcriptId = session.agent_transcript_id?.trim();
+  if (transcriptId) return true;
+
+  const hasWorkStatus =
+    session.status === "running" ||
+    session.status === "needs_input" ||
+    session.status === "failed";
+  if (!hasWorkStatus) return false;
+
+  return session.mode === "chat" || session.agent_provider != null;
 }
 
 function hasSessionTitleAgentSignal(session: Session): boolean {
