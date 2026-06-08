@@ -1137,6 +1137,19 @@
       "closeDeleteWorktrees": "닫기 · worktree 삭제",
       "closeProject": "프로젝트 닫기"
     },
+    "removeProjectFolder": {
+      "title": "폴더 제거",
+      "confirmPrefix": "폴더 제거",
+      "sessionSingular": "세션",
+      "sessionPlural": "세션",
+      "canBeMovedOut": "폴더를 제거하기 전에 프로젝트 상위 목록으로 이동할 수 있습니다",
+      "removeSessionsHint": "폴더와 함께 세션을 Acorn에서 제거할 수도 있습니다.",
+      "emptyFolder": "이 폴더에는 세션이 없습니다.",
+      "filesWillNotBeTouched": "디스크의 파일과 worktree는 삭제되지 않습니다.",
+      "removeFolder": "폴더 제거",
+      "moveSessionsOut": "세션 밖으로 이동",
+      "removeWithSessions": "폴더와 세션 제거"
+    },
     "projectSettings": {
       "title": "프로젝트 설정",
       "pullRequests": "Pull request",
