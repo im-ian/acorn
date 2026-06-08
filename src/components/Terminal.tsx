@@ -17,6 +17,7 @@ import { ArrowDownToLine } from "lucide-react";
 import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { api, type ClipboardSnapshot } from "../lib/api";
+import { consumeTerminalDetaching } from "../lib/terminalDetach";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
 import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
@@ -2346,9 +2347,24 @@ export function Terminal({
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }
-      invoke("pty_kill", { sessionId }).catch(() => {
-        // Backend may not implement pty_kill yet — safe to ignore.
-      });
+      if (consumeTerminalDetaching(sessionId)) {
+        // Evicted for memory, not deleted: detach so the daemon keeps the
+        // shell + scrollback ring alive and a later remount re-attaches and
+        // replays it. If the backend reports the session was not daemon-backed
+        // (and therefore cannot be re-attached), fall back to a kill rather
+        // than strand a headless in-process shell.
+        invoke<boolean>("pty_detach", { sessionId })
+          .then((detached) => {
+            if (!detached) return invoke("pty_kill", { sessionId });
+          })
+          .catch(() => {
+            // best effort
+          });
+      } else {
+        invoke("pty_kill", { sessionId }).catch(() => {
+          // Backend may not implement pty_kill yet — safe to ignore.
+        });
+      }
       unpatchMouseCoordinateScale();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;
