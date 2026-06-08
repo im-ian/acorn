@@ -293,6 +293,9 @@ fn parse_file_budget(limit: usize) -> usize {
 
 fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let state = parse_codex_state(path)?;
+    if state.internal_title_generation {
+        return None;
+    }
     let cwd = state.cwd.clone()?;
     if !scope.accepts_cwd(&cwd) {
         return None;
@@ -321,6 +324,9 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
 
 fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let state = parse_claude_state(path)?;
+    if state.internal_title_generation {
+        return None;
+    }
     let cwd = state.cwd.clone()?;
     if !scope.accepts_cwd(&cwd) {
         return None;
@@ -353,6 +359,9 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
 
 fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
     let state = parse_antigravity_state(path)?;
+    if state.internal_title_generation {
+        return None;
+    }
     let id = state.id.or_else(|| antigravity_id_from_path(path))?;
     let mut cwd_candidates = Vec::new();
     if let Some(cwd) = state.cwd.clone() {
@@ -451,8 +460,15 @@ fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
         let role = string_at(payload, "role");
         let texts = value_texts(&value);
         let text = first_text(&texts);
-        if state.title.is_none() && role.as_deref() == Some("user") {
-            state.title = joined_text(&texts);
+        if role.as_deref() == Some("user") {
+            if let Some(user_text) = joined_text(&texts) {
+                if looks_like_acorn_title_generation_prompt(&user_text) {
+                    state.internal_title_generation = true;
+                }
+                if state.title.is_none() {
+                    state.title = Some(user_text);
+                }
+            }
         }
         if role.as_deref() == Some("assistant") {
             state.preview = text.clone().or(state.preview);
@@ -484,8 +500,15 @@ fn parse_claude_state(path: &Path) -> Option<ParsedAgentFile> {
         let ty = string_at(Some(&value), "type");
         let texts = value_texts(&value);
         let text = first_claude_display_text(&texts);
-        if state.title.is_none() && ty.as_deref() == Some("user") {
-            state.title = joined_claude_display_text(&texts);
+        if ty.as_deref() == Some("user") {
+            if let Some(user_text) = joined_claude_display_text(&texts) {
+                if looks_like_acorn_title_generation_prompt(&user_text) {
+                    state.internal_title_generation = true;
+                }
+                if state.title.is_none() {
+                    state.title = Some(user_text);
+                }
+            }
         }
         if ty.as_deref() == Some("assistant") {
             state.preview = text.clone().or(state.preview);
@@ -513,8 +536,13 @@ fn parse_antigravity_state(path: &Path) -> Option<ParsedAgentFile> {
         }
         match ty.as_deref() {
             Some("USER_INPUT") => {
-                if state.title.is_none() {
-                    state.title = text.and_then(|s| extract_antigravity_user_request(&s));
+                if let Some(user_text) = text.and_then(|s| extract_antigravity_user_request(&s)) {
+                    if looks_like_acorn_title_generation_prompt(&user_text) {
+                        state.internal_title_generation = true;
+                    }
+                    if state.title.is_none() {
+                        state.title = Some(user_text);
+                    }
                 }
             }
             Some("PLANNER_RESPONSE") => {
@@ -703,6 +731,15 @@ struct ParsedAgentFile {
     title: Option<String>,
     preview: Option<String>,
     cwd: Option<String>,
+    internal_title_generation: bool,
+}
+
+fn looks_like_acorn_title_generation_prompt(text: &str) -> bool {
+    text.contains(crate::session_titles::INTERNAL_TITLE_PROMPT_MARKER)
+        || (text.contains("Conversation transcript context:")
+            && (text.contains("You are naming an Acorn session tab")
+                || text.contains("Return only a concise title for the tab")
+                || text.contains("Fewer than 30 characters.")))
 }
 
 fn sample_lines(path: &Path) -> std::io::Result<Vec<String>> {
@@ -1427,6 +1464,110 @@ mod tests {
         assert_eq!(
             item.resume_command.as_deref(),
             Some("agy --conversation 17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
+        );
+    }
+
+    #[test]
+    fn codex_history_skips_marked_acorn_title_generation_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let transcript = dir
+            .path()
+            .join("rollout-2026-06-08T00-00-00-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "id": "019e4818-7c15-7e60-9b3b-898a1c7803d6",
+                    "cwd": repo.display().to_string(),
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": crate::session_titles::build_prompt(None, "User: Fix release workflow"),
+                        },
+                    ],
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        assert!(
+            parse_codex_file(&transcript, HistoryScope::Project(&repo)).is_none(),
+            "Acorn-generated title prompts should not appear as History rows"
+        );
+    }
+
+    #[test]
+    fn claude_history_skips_unmarked_acorn_title_generation_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let transcript = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "cwd": repo.display().to_string(),
+                "message": {
+                    "role": "user",
+                    "content": "\
+            You are naming an Acorn session tab from the conversation transcript.\n\
+            \n\
+            Return only a concise title for the tab.\n\
+            Conversation transcript context:\n\
+            User: Fix release workflow\n",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        assert!(
+            parse_claude_file(&transcript, HistoryScope::Project(&repo)).is_none(),
+            "unmarked title prompts should be hidden"
+        );
+    }
+
+    #[test]
+    fn antigravity_history_skips_marked_acorn_title_generation_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let transcript = dir
+            .path()
+            .join("17f38e8c-3a7e-408b-8c79-aef7432c0fd2/.system_generated/logs/transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let prompt = crate::session_titles::build_prompt(
+            Some("Name this tab in Korean. Return only the title."),
+            "User: Fix release workflow",
+        );
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "workspacePaths": [repo.display().to_string()],
+                "content": format!("<USER_REQUEST>\n{prompt}\n</USER_REQUEST>"),
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        assert!(
+            parse_antigravity_file(&transcript, HistoryScope::Project(&repo)).is_none(),
+            "Antigravity title prompts should not appear as History rows"
         );
     }
 
