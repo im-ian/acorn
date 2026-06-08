@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use acorn_session::{Session, SessionKind, SessionOwner, SessionTitleSource};
 
@@ -150,19 +150,15 @@ pub fn normalize_generated_title(raw: &str) -> Option<String> {
     }
 }
 
-pub fn generate_title(
+pub fn generate_title_in_dir(
     ai: &AiExecutionRequest,
     prompt: Option<&str>,
     title_context: &str,
+    cwd: Option<&Path>,
 ) -> AppResult<String> {
     let resolved = ai.resolve()?;
     let prompt = build_prompt(prompt, title_context);
-    let raw = crate::ai::run_oneshot(
-        resolved.command,
-        &resolved.args,
-        &prompt,
-        "Settings → Agents",
-    )?;
+    let raw = crate::ai::run_resolved_oneshot_in_dir(&resolved, &prompt, "Settings → Agents", cwd)?;
     normalize_generated_title(&raw)
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
 }

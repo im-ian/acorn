@@ -67,6 +67,7 @@ import {
 import { revealThemesFolder, useThemes } from "../lib/themes";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
+import { useAppStore } from "../store";
 import {
   CheckboxRow,
   CommandHint,
@@ -1817,6 +1818,7 @@ function SessionTitlePromptModal({
 }: SessionTitlePromptModalProps) {
   const settings = useSettings((s) => s.settings);
   const patchAgents = useSettings((s) => s.patchAgents);
+  const activeProject = useAppStore((s) => s.activeProject);
   const t = useTranslation();
   const sessionTitlePromptLength = Array.from(
     settings.agents.sessionTitlePrompt,
@@ -1838,6 +1840,7 @@ function SessionTitlePromptModal({
     settings.agents.ollama.model,
     settings.agents.llm.model,
     settings.agents.sessionTitlePrompt,
+    activeProject,
   ]);
 
   async function handlePreviewSessionTitle() {
@@ -1849,6 +1852,7 @@ function SessionTitlePromptModal({
         ai,
         prompt,
         SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+        activeProject,
       );
       setTitlePreview({ status: "success", title });
     } catch (error) {

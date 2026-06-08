@@ -1705,12 +1705,7 @@ pub fn generate_pr_commit_message(
 
     let (view, diff) = context;
     let prompt = build_commit_message_prompt(method, &prompt, &view, &diff);
-    let raw = crate::ai::run_oneshot(
-        resolved.command,
-        &resolved.args,
-        &prompt,
-        "Settings → Agents",
-    )?;
+    let raw = crate::ai::run_resolved_oneshot(&resolved, &prompt, "Settings → Agents")?;
     Ok(parse_commit_message_response(&raw))
 }
 

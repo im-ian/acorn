@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
       },
       prompt: string,
       firstUserMessage: string,
+      repoPath?: string | null,
     ) => Promise<string>
   >(),
 }));
@@ -86,6 +87,7 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   useSettings,
 } from "../lib/settings";
+import { useAppStore } from "../store";
 import { SettingsModal } from "./SettingsModal";
 
 const mockApi = vi.mocked(api);
@@ -241,6 +243,7 @@ describe("SettingsModal font controls", () => {
       patchAppearance: vi.fn(),
       patchTerminal: vi.fn(),
     });
+    useAppStore.setState({ activeProject: null });
     container = document.createElement("div");
     document.body.appendChild(container);
   });
@@ -709,6 +712,7 @@ describe("SettingsModal font controls", () => {
 
   it("generates a session title prompt preview", async () => {
     mockApi.previewSessionTitle.mockResolvedValueOnce("Preview Tab Titles");
+    useAppStore.setState({ activeProject: "/repo/acorn" });
     useSettings.setState({
       settings: cloneSettings(),
       patchAgents: vi.fn(),
@@ -736,6 +740,7 @@ describe("SettingsModal font controls", () => {
       { provider: "claude", ollamaModel: "", llmModel: "" },
       DEFAULT_SETTINGS.agents.sessionTitlePrompt,
       SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
+      "/repo/acorn",
     );
     expect(document.body.textContent).toContain("Preview Tab Titles");
   });
