@@ -149,11 +149,13 @@ export const api = {
     id: string,
     ai: AiExecutionRequest,
     prompt: string,
+    force = false,
   ): Promise<GenerateSessionTitleResult> {
     return invoke<GenerateSessionTitleResult>("generate_session_title", {
       id,
       ai,
       prompt,
+      force,
     });
   },
   previewSessionTitle(

@@ -14,6 +14,7 @@ import {
   PencilLine,
   Plus,
   Settings as SettingsIcon,
+  Sparkles,
   SquareX,
   Trash2,
   X,
@@ -53,10 +54,15 @@ import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
+  resolveAiExecutionRequest,
+  resolveSessionTitlePrompt,
   type AcornSettings,
   type SessionTitleSource,
 } from "../lib/settings";
-import { canRenameSession } from "../lib/sessionTitle";
+import {
+  canForceGenerateSessionTitle,
+  canRenameSession,
+} from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -1093,6 +1099,7 @@ function SessionRow({
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
+  const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const shortcuts = useSettings((s) => s.settings.shortcuts);
@@ -1111,6 +1118,8 @@ function SessionRow({
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
   const canRename = canRenameSession(session, { isGeneratingTitle });
+  const canRegenerateTitle =
+    canForceGenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -1173,6 +1182,21 @@ function SessionRow({
     }
   }
 
+  async function regenerateTitle() {
+    const settings = useSettings.getState().settings;
+    const status = await generateSessionTitle(
+      session.id,
+      resolveAiExecutionRequest(settings),
+      resolveSessionTitlePrompt(settings),
+      true,
+    );
+    if (status === "not_ready") {
+      showToast(t("toasts.session.titleNotReady"));
+    } else if (status !== "generated") {
+      showToast(t("toasts.session.titleRegenerateSkipped"));
+    }
+  }
+
   const otherSiblings = useMemo(
     () => projectSessions.filter((s) => s.id !== session.id),
     [projectSessions, session.id],
@@ -1187,6 +1211,12 @@ function SessionRow({
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
       disabled: !canRename,
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.regenerateName"),
+      icon: <Sparkles size={12} />,
+      onClick: () => void regenerateTitle(),
+      disabled: !canRegenerateTitle,
     },
     {
       label: sidebarText(t, "sidebar.actions.duplicateSession"),
@@ -1663,6 +1693,7 @@ function LocalSessionRow({
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
+  const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
@@ -1680,6 +1711,8 @@ function LocalSessionRow({
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
   const canRename = canRenameSession(session, { isGeneratingTitle });
+  const canRegenerateTitle =
+    canForceGenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -1725,12 +1758,33 @@ function LocalSessionRow({
     }
   }
 
+  async function regenerateTitle() {
+    const settings = useSettings.getState().settings;
+    const status = await generateSessionTitle(
+      session.id,
+      resolveAiExecutionRequest(settings),
+      resolveSessionTitlePrompt(settings),
+      true,
+    );
+    if (status === "not_ready") {
+      showToast(t("toasts.session.titleNotReady"));
+    } else if (status !== "generated") {
+      showToast(t("toasts.session.titleRegenerateSkipped"));
+    }
+  }
+
   const menuItems: ContextMenuItem[] = [
     {
       label: sidebarText(t, "sidebar.actions.rename"),
       icon: <Pencil size={12} />,
       onClick: () => setEditing(true),
       disabled: !canRename,
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.regenerateName"),
+      icon: <Sparkles size={12} />,
+      onClick: () => void regenerateTitle(),
+      disabled: !canRegenerateTitle,
     },
     {
       label: sidebarText(t, "sidebar.actions.duplicateSession"),

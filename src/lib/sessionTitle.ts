@@ -30,13 +30,19 @@ export function canGenerateSessionTitle(session: Session): boolean {
   const titleSource = session.title_source ?? "manual";
   const currentTranscriptId = session.agent_transcript_id?.trim();
   return (
-    (session.kind ?? "regular") === "regular" &&
-    (session.owner?.kind ?? "user") === "user" &&
+    canForceGenerateSessionTitle(session) &&
     (titleSource === "default" ||
       (titleSource === "generated" &&
         currentTranscriptId != null &&
         currentTranscriptId.length > 0 &&
         session.generated_title_transcript_id !== currentTranscriptId))
+  );
+}
+
+export function canForceGenerateSessionTitle(session: Session): boolean {
+  return (
+    (session.kind ?? "regular") === "regular" &&
+    (session.owner?.kind ?? "user") === "user"
   );
 }
 

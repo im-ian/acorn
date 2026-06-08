@@ -1,6 +1,342 @@
+import { execFileSync } from "node:child_process";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test, expect, pressHotkey, seedSettingsLanguage } from "./support";
 
+function git(args: string[], cwd: string): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function createLinkedWorktreeFixture(): {
+  root: string;
+  repo: string;
+  alpha: string;
+  beta: string;
+  cleanup: () => void;
+} {
+  const root = mkdtempSync(join(tmpdir(), "acorn-title-worktrees-"));
+  const repo = join(root, "repo");
+  const alpha = join(root, "wt-alpha");
+  const beta = join(root, "wt-beta");
+  mkdirSync(repo, { recursive: true });
+  git(["init"], repo);
+  git(["config", "user.email", "acorn-test@example.com"], repo);
+  git(["config", "user.name", "Acorn Test"], repo);
+  writeFileSync(join(repo, "README.md"), "# worktree title test\n");
+  git(["add", "README.md"], repo);
+  git(["commit", "-m", "initial"], repo);
+  git(["worktree", "add", "-b", "feature/alpha", alpha], repo);
+  git(["worktree", "add", "-b", "feature/beta", beta], repo);
+
+  const realRepo = realpathSync(repo);
+  const realAlpha = realpathSync(alpha);
+  const realBeta = realpathSync(beta);
+  const list = git(["worktree", "list", "--porcelain"], repo);
+  expect(list).toContain(`worktree ${realAlpha}`);
+  expect(list).toContain(`worktree ${realBeta}`);
+
+  return {
+    root,
+    repo: realRepo,
+    alpha: realAlpha,
+    beta: realBeta,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
 test.describe("sidebar: project lifecycle", () => {
+  test("session context menu can regenerate a session name", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: unknown[];
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "session-1",
+          name: "demo-session",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "idle",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 0,
+          in_worktree: false,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.handle("generate_session_title", (args) => {
+      const w = window as unknown as {
+        __generateTitleCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__generateTitleCalls = w.__generateTitleCalls ?? [];
+      w.__generateTitleCalls.push(args);
+      const updated = {
+        id: "session-1",
+        name: "fresh-title",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "generated",
+        generated_title_transcript_id: "codex-1",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: "codex",
+        agent_transcript_id: "codex-1",
+      };
+      w.__sessions = [updated];
+      return { status: "generated", session: updated };
+    });
+
+    await page.goto("/");
+
+    await page.locator("aside").getByRole("button", { name: /demo-session/ }).click({
+      button: "right",
+    });
+    await page.getByRole("menuitem", { name: "Regenerate Name" }).click();
+
+    await expect(
+      page.locator("aside").getByRole("button", { name: /fresh-title/ }),
+    ).toBeVisible();
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __generateTitleCalls?: unknown[] })
+          .__generateTitleCalls,
+    )) as Array<{ id: string; force: boolean; ai: { provider: string } }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      id: "session-1",
+      force: true,
+      ai: { provider: "claude" },
+    });
+  });
+
+  test("tab context menu can regenerate a session name", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: unknown[];
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "session-1",
+          name: "demo-session",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "idle",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 0,
+          in_worktree: false,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.handle("generate_session_title", (args) => {
+      const w = window as unknown as {
+        __generateTitleCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__generateTitleCalls = w.__generateTitleCalls ?? [];
+      w.__generateTitleCalls.push(args);
+      const updated = {
+        id: "session-1",
+        name: "tab-title",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "generated",
+        generated_title_transcript_id: "codex-1",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: "codex",
+        agent_transcript_id: "codex-1",
+      };
+      w.__sessions = [updated];
+      return { status: "generated", session: updated };
+    });
+
+    await page.goto("/");
+
+    await page.locator('[data-tab-drag-handle="session-1"]').click({
+      button: "right",
+    });
+    await page.getByRole("menuitem", { name: "Regenerate Name" }).click();
+
+    await expect(page.locator('[data-tab-drag-handle="session-1"]')).toContainText(
+      "tab-title",
+    );
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __generateTitleCalls?: unknown[] })
+          .__generateTitleCalls,
+    )) as Array<{ id: string; force: boolean }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ id: "session-1", force: true });
+  });
+
+  test("regenerates a name for sessions backed by real git worktrees", async ({
+    page,
+    tauri,
+  }) => {
+    const fixture = createLinkedWorktreeFixture();
+    const alphaSession = {
+      id: "wt-alpha",
+      name: "alpha-session",
+      repo_path: fixture.repo,
+      worktree_path: fixture.alpha,
+      branch: "feature/alpha",
+      isolated: true,
+      project_scoped: true,
+      status: "idle",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      last_message: null,
+      title_source: "manual",
+      kind: "regular",
+      owner: { kind: "user" },
+      position: 0,
+      in_worktree: true,
+      agent_provider: "codex",
+      agent_transcript_id: "codex-alpha",
+    };
+    try {
+      await tauri.respond("list_projects", [
+        {
+          repo_path: fixture.repo,
+          name: "repo",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+        },
+      ]);
+      await tauri.respond("list_sessions", [
+        alphaSession,
+        {
+          id: "wt-beta",
+          name: "beta-session",
+          repo_path: fixture.repo,
+          worktree_path: fixture.beta,
+          branch: "feature/beta",
+          isolated: true,
+          project_scoped: true,
+          status: "idle",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: 1,
+          in_worktree: true,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-beta",
+        },
+      ]);
+      await tauri.respond("generate_session_title", {
+        status: "generated",
+        session: {
+          ...alphaSession,
+          name: "linked-worktree-title",
+          title_source: "generated",
+          generated_title_transcript_id: "codex-alpha",
+        },
+      });
+
+      await page.goto("/");
+
+      await expect(
+        page.locator("aside").getByRole("button", { name: /alpha-session/ }),
+      ).toBeVisible();
+      await expect(
+        page.locator("aside").getByRole("button", { name: /beta-session/ }),
+      ).toBeVisible();
+
+      await page
+        .locator("aside")
+        .getByRole("button", { name: /alpha-session/ })
+        .click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Regenerate Name" }).click();
+
+      await expect(
+        page
+          .locator("aside")
+          .getByRole("button", { name: /linked-worktree-title/ }),
+      ).toBeVisible();
+      await expect(page.locator('[data-tab-drag-handle="wt-alpha"]')).toContainText(
+        "linked-worktree-title",
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test("Korean mode localizes project chrome and empty state", async ({
     page,
   }) => {

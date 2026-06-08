@@ -1318,12 +1318,46 @@ describe("generateSessionTitle", () => {
       "a1",
       ai,
       "Title prompt",
+      false,
     );
     expect(mockApi.listSessions).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().sessions[0]?.name).toBe(
       "Fix Release Workflow",
     );
     expect(useAppStore.getState().sessions[0]?.title_source).toBe("generated");
+  });
+
+  it("passes force when manually regenerating a generated session title", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          name: "Manual title",
+          title_source: "manual",
+        }),
+      ],
+    );
+    mockApi.generateSessionTitle.mockResolvedValueOnce({
+      status: "generated",
+      session: session("a1", REPO_A, {
+        name: "fresh-title",
+        title_source: "generated",
+      }),
+    });
+
+    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", ai, "Title prompt", true);
+
+    expect(status).toBe("generated");
+    expect(mockApi.generateSessionTitle).toHaveBeenCalledWith(
+      "a1",
+      ai,
+      "Title prompt",
+      true,
+    );
+    expect(useAppStore.getState().sessions[0]?.name).toBe("fresh-title");
   });
 
   it("returns not_ready without replacing the session title", async () => {
