@@ -346,6 +346,18 @@ export function Sidebar() {
     }
   }
 
+  function requestRemoveProjectFolder(folderId: string) {
+    const folderGroup = projectGroups
+      .flatMap((project) => project.folders)
+      .find((candidate) => candidate.folder.id === folderId);
+    if (!folderGroup) return;
+    if (folderGroup.sessions.length === 0) {
+      removeProjectFolder(folderGroup.folder.id);
+      return;
+    }
+    setPendingRemoveProjectFolderId(folderGroup.folder.id);
+  }
+
   const onNewSessionRef = useRef<
     (
       isolated: boolean,
@@ -858,7 +870,7 @@ export function Sidebar() {
                       }
                       onAddFolder={() => onAddProjectFolder(project.repoPath)}
                       onRenameFolder={renameProjectFolder}
-                      onRemoveFolder={setPendingRemoveProjectFolderId}
+                      onRemoveFolder={requestRemoveProjectFolder}
                       onMoveSessionToFolder={moveSessionToProjectFolder}
                       onRemoveProject={() =>
                         requestRemoveProject(project.repoPath)
