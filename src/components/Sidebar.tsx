@@ -4,9 +4,8 @@ import {
   CircleX,
   Columns2,
   Copy,
-  Eye,
-  EyeOff,
   Files,
+  Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -22,13 +21,14 @@ import {
   X,
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
   closestCenter,
+  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -53,13 +53,6 @@ import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
-import {
-  hideProjectSession,
-  loadHiddenProjectSessionIds,
-  showProjectSession,
-  showProjectSessions,
-  subscribeHiddenProjectSessions,
-} from "../lib/hiddenProjectSessions";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
@@ -77,9 +70,16 @@ import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
   buildLocalSessions,
-  buildProjectGroups,
-  type ProjectGroup,
 } from "../lib/sessionGrouping";
+import {
+  buildProjectFolderGroups,
+  defaultProjectFolderId,
+  findProjectFolderById,
+  isDefaultProjectFolder,
+  type ProjectFolder,
+  type ProjectFolderGroup,
+  type ProjectFolderProjectGroup,
+} from "../lib/projectFolders";
 import {
   applySessionCreateRequest,
   buildLocalSessionCreateRequest,
@@ -128,9 +128,14 @@ const STATUS_ICON: Record<SessionStatus, string> = {
 };
 
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
+const FOLDER_COLLAPSED_KEY = "acorn:sidebar:collapsed-project-folders";
+const PROJECT_ITEM_ORDER_KEY = "acorn:sidebar:project-item-order";
 
 const PROJECT_DRAG_PREFIX = "project:";
+const FOLDER_DRAG_PREFIX = "folder:";
 const SESSION_DRAG_PREFIX = "session:";
+const SESSION_FOLDER_DROP_PREFIX = `${SESSION_DRAG_PREFIX}folder:`;
+const SESSION_PROJECT_DROP_PREFIX = `${SESSION_DRAG_PREFIX}project:`;
 const LOCAL_TERMINAL_AREA_SELECTOR = "[data-local-terminal-area='true']";
 
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
@@ -163,52 +168,65 @@ export function Sidebar() {
   const showToast = useToasts((s) => s.show);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
+  const projectFolders = useAppStore((s) => s.projectFolders);
+  const sessionFolderIds = useAppStore((s) => s.sessionFolderIds);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeProject = useAppStore((s) => s.activeProject);
+  const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
   const selectSession = useAppStore((s) => s.selectSession);
   const focusLocalSessions = useAppStore((s) => s.focusLocalSessions);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
+  const setActiveProjectFolder = useAppStore((s) => s.setActiveProjectFolder);
+  const createProjectFolder = useAppStore((s) => s.createProjectFolder);
+  const renameProjectFolder = useAppStore((s) => s.renameProjectFolder);
+  const removeProjectFolder = useAppStore((s) => s.removeProjectFolder);
+  const moveSessionToProjectFolder = useAppStore(
+    (s) => s.moveSessionToProjectFolder,
+  );
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const requestRemoveProject = useAppStore((s) => s.requestRemoveProject);
   const addProject = useAppStore((s) => s.addProject);
   const createNewProject = useAppStore((s) => s.createNewProject);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
+  const reorderProjectFolders = useAppStore((s) => s.reorderProjectFolders);
   const reorderSessions = useAppStore((s) => s.reorderSessions);
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     loadStringSet(COLLAPSED_KEY),
   );
-  const [hiddenSessionIds, setHiddenSessionIds] = useState<Set<string>>(() =>
-    loadHiddenProjectSessionIds(),
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() =>
+    loadStringSet(FOLDER_COLLAPSED_KEY),
   );
-  const [expandedHiddenProjects, setExpandedHiddenProjects] = useState<
-    Set<string>
-  >(new Set());
+  const [projectItemOrders, setProjectItemOrders] =
+    useState<Record<string, string[]>>(() =>
+      loadStringArrayRecord(PROJECT_ITEM_ORDER_KEY),
+    );
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
-  const [settingsProject, setSettingsProject] = useState<ProjectGroup | null>(
-    null,
-  );
+  const [settingsProject, setSettingsProject] =
+    useState<ProjectFolderProjectGroup | null>(null);
 
   useEffect(() => {
     saveStringSet(COLLAPSED_KEY, collapsed);
   }, [collapsed]);
 
-  useEffect(
-    () =>
-      subscribeHiddenProjectSessions(() =>
-        setHiddenSessionIds(loadHiddenProjectSessionIds()),
-      ),
-    [],
-  );
+  useEffect(() => {
+    saveStringSet(FOLDER_COLLAPSED_KEY, collapsedFolders);
+  }, [collapsedFolders]);
 
-  const allProjectGroups = useMemo(
-    () => buildProjectGroups(projects, sessions),
-    [projects, sessions],
-  );
+  useEffect(() => {
+    saveStringArrayRecord(PROJECT_ITEM_ORDER_KEY, projectItemOrders);
+  }, [projectItemOrders]);
+
   const projectGroups = useMemo(
-    () => buildProjectGroups(projects, sessions, hiddenSessionIds),
-    [hiddenSessionIds, projects, sessions],
+    () =>
+      buildProjectFolderGroups(
+        projects,
+        sessions,
+        projectFolders,
+        sessionFolderIds,
+      ),
+    [projectFolders, projects, sessionFolderIds, sessions],
   );
   const localSessions = useMemo(
     () => buildLocalSessions(sessions),
@@ -243,41 +261,22 @@ export function Sidebar() {
     });
   }
 
-  function hideSessionInProjects(session: Session) {
-    setHiddenSessionIds(hideProjectSession(session.id));
-    showToast(sidebarText(t, "sidebar.toasts.hiddenFromProjects"), {
-      action: () => showSessionInProjects(session.id),
-    });
-  }
-
-  function showSessionInProjects(sessionId: string) {
-    setHiddenSessionIds(showProjectSession(sessionId));
-  }
-
-  function showHiddenSessionsInProject(repoPath: string) {
-    const project = allProjectGroups.find(
-      (group) => group.repoPath === repoPath,
-    );
-    const hiddenIds = project?.sessions
-      .filter((session) => hiddenSessionIds.has(session.id))
-      .map((session) => session.id);
-    if (!hiddenIds || hiddenIds.length === 0) return;
-    setHiddenSessionIds(showProjectSessions(hiddenIds));
-  }
-
-  function toggleHiddenSessions(repoPath: string) {
-    setExpandedHiddenProjects((prev) => {
+  function toggleProjectFolder(folderId: string) {
+    setCollapsedFolders((prev) => {
       const next = new Set(prev);
-      if (next.has(repoPath)) {
-        next.delete(repoPath);
+      if (next.has(folderId)) {
+        next.delete(folderId);
       } else {
-        next.add(repoPath);
+        next.add(folderId);
       }
       return next;
     });
   }
 
-  function applyClickPlan(plan: ProjectClickPlan, project: ProjectGroup) {
+  function applyClickPlan(
+    plan: ProjectClickPlan,
+    project: ProjectFolderProjectGroup,
+  ) {
     if (plan.collapseChange === "expand") {
       expandProject(project.repoPath);
     } else if (plan.collapseChange === "collapse") {
@@ -301,6 +300,18 @@ export function Sidebar() {
     }
   }
 
+  async function onAddProjectFolder(repoPath: string) {
+    try {
+      const folder = createProjectFolder(repoPath);
+      if (!folder) return;
+      expandProject(repoPath);
+      setActiveProjectFolder(folder.id);
+    } catch (e) {
+      console.error("create project folder failed", e);
+      showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
+    }
+  }
+
   const onNewSessionRef = useRef<
     (
       isolated: boolean,
@@ -320,6 +331,12 @@ export function Sidebar() {
         projects: state.projects,
         activeSessionId: state.activeSessionId,
         activeWorkspaceRepoPath: state.activeProject,
+        activeWorkspaceCwdPath:
+          findProjectFolderById(
+            state.projectFolders,
+            state.activeProjectFolderId,
+          )?.cwdPath ?? null,
+        activeProjectFolderId: state.activeProjectFolderId,
       });
     };
     const newSession = () => {
@@ -407,12 +424,14 @@ export function Sidebar() {
         { sessions, projects },
         {
           repoPath: scopeOverride.repoPath,
+          cwdPath: scopeOverride.cwdPath,
           isolated,
           kind,
           mode,
           projectScoped:
             scopeOverride.projectScoped ??
             (isolated || kind === "control" ? true : undefined),
+          projectFolderId: scopeOverride.projectFolderId,
         },
       );
       const created = await applySessionCreateRequest(createSession, request);
@@ -458,24 +477,101 @@ export function Sidebar() {
     () => projectGroups.map((p) => projectDragId(p.repoPath)),
     [projectGroups],
   );
-
   // Scoped collision detection: only consider droppables sharing the active
   // item's namespace. Without this, dragging a project over an expanded
   // project's child session row makes `over.id` resolve to the session,
   // which gets dropped on the floor by onDragEnd.
   const scopedCollision: CollisionDetection = (args) => {
     const activeId = String(args.active.id);
-    const prefix = activeId.startsWith(PROJECT_DRAG_PREFIX)
-      ? PROJECT_DRAG_PREFIX
-      : SESSION_DRAG_PREFIX;
-    const filtered = args.droppableContainers.filter((c) =>
-      String(c.id).startsWith(prefix),
-    );
+    const filtered = args.droppableContainers.filter((c) => {
+      const id = String(c.id);
+      if (activeId.startsWith(PROJECT_DRAG_PREFIX)) {
+        return id.startsWith(PROJECT_DRAG_PREFIX);
+      }
+      if (activeId.startsWith(FOLDER_DRAG_PREFIX)) {
+        return id.startsWith(FOLDER_DRAG_PREFIX) || isSessionRowDragId(id);
+      }
+      return id.startsWith(SESSION_DRAG_PREFIX);
+    });
     return closestCenter({ ...args, droppableContainers: filtered });
   };
 
   function onDragStart(event: DragStartEvent) {
     setActiveDragId(String(event.active.id));
+  }
+
+  function applyProjectTopLevelOrder(
+    project: ProjectFolderProjectGroup,
+    activeItemId: string,
+    overItemId: string,
+  ): boolean {
+    const items = buildProjectTopLevelItems(
+      project,
+      projectItemOrders[project.repoPath] ?? [],
+    );
+    const ids = items.map((item) => item.id);
+    const fromIdx = ids.indexOf(activeItemId);
+    const toIdx = ids.indexOf(overItemId);
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return false;
+    const nextIds = arrayMove(ids, fromIdx, toIdx);
+    const nextItems = orderProjectTopLevelItems(items, nextIds);
+    setProjectItemOrders((prev) =>
+      stringArraysEqual(prev[project.repoPath] ?? [], nextIds)
+        ? prev
+        : { ...prev, [project.repoPath]: nextIds },
+    );
+    reorderProjectFolders(
+      project.repoPath,
+      nextItems
+        .filter(
+          (item): item is ProjectTopLevelFolderItem => item.type === "folder",
+        )
+        .map((item) => item.folderGroup.folder.id),
+    );
+    const sessionIds = nextItems
+      .filter(
+        (item): item is ProjectTopLevelSessionItem => item.type === "session",
+      )
+      .map((item) => item.session.id);
+    if (sessionIds.length > 1) {
+      void reorderSessions(project.repoPath, sessionIds);
+    }
+    return true;
+  }
+
+  function applySessionDropToProjectTopLevel(
+    project: ProjectFolderProjectGroup,
+    activeSession: Session,
+    overSessionId: string,
+  ): boolean {
+    const activeId = sessionDragId(activeSession.id);
+    const overId = sessionDragId(overSessionId);
+    const items = buildProjectTopLevelItems(
+      project,
+      projectItemOrders[project.repoPath] ?? [],
+    ).filter((item) => item.id !== activeId);
+    const overIdx = items.findIndex(
+      (item) => item.id === overId && item.type === "session",
+    );
+    if (overIdx < 0) return false;
+    const activeItem: ProjectTopLevelSessionItem = {
+      id: activeId,
+      type: "session",
+      session: activeSession,
+      folderId: defaultProjectFolderId(project.repoPath),
+    };
+    const nextItems = [
+      ...items.slice(0, overIdx),
+      activeItem,
+      ...items.slice(overIdx),
+    ];
+    const nextIds = nextItems.map((item) => item.id);
+    setProjectItemOrders((prev) =>
+      stringArraysEqual(prev[project.repoPath] ?? [], nextIds)
+        ? prev
+        : { ...prev, [project.repoPath]: nextIds },
+    );
+    return true;
   }
 
   function onDragEnd(event: DragEndEvent) {
@@ -502,6 +598,38 @@ export function Sidebar() {
       return;
     }
 
+    if (activeId.startsWith(FOLDER_DRAG_PREFIX)) {
+      const activeFolderId = activeId.slice(FOLDER_DRAG_PREFIX.length);
+      const project = projectGroups.find((group) =>
+        group.folders.some(
+          (folderGroup) => folderGroup.folder.id === activeFolderId,
+        ),
+      );
+      if (!project) return;
+      applyProjectTopLevelOrder(project, activeId, overId);
+      return;
+    }
+
+    if (activeId.startsWith(SESSION_DRAG_PREFIX)) {
+      const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
+      const activeSession = sessions.find((s) => s.id === activeSid);
+      if (!activeSession || activeSession.project_scoped === false) return;
+
+      if (overId.startsWith(SESSION_FOLDER_DROP_PREFIX)) {
+        const folderId = overId.slice(SESSION_FOLDER_DROP_PREFIX.length);
+        moveSessionToProjectFolder(activeSid, folderId);
+        return;
+      }
+
+      if (overId.startsWith(SESSION_PROJECT_DROP_PREFIX)) {
+        const repoPath = overId.slice(SESSION_PROJECT_DROP_PREFIX.length);
+        if (activeSession.repo_path === repoPath) {
+          moveSessionToProjectFolder(activeSid, null);
+        }
+        return;
+      }
+    }
+
     if (
       activeId.startsWith(SESSION_DRAG_PREFIX) &&
       overId.startsWith(SESSION_DRAG_PREFIX)
@@ -519,17 +647,67 @@ export function Sidebar() {
       }
       // Cross-project drops are not supported yet — silently ignore.
       if (activeSession.repo_path !== overSession.repo_path) return;
+      const activeFolderId = projectFolderIdForSession(projectGroups, activeSid);
+      const overFolderId = projectFolderIdForSession(projectGroups, overSid);
+      const project =
+        activeSession.project_scoped !== false
+          ? (projectGroups.find(
+              (group) => group.repoPath === activeSession.repo_path,
+            ) ?? null)
+          : null;
+      if (
+        activeSession.project_scoped !== false &&
+        project &&
+        overFolderId === defaultProjectFolderId(activeSession.repo_path) &&
+        activeFolderId !== overFolderId
+      ) {
+        const movedIntoTopLevel = applySessionDropToProjectTopLevel(
+          project,
+          activeSession,
+          overSid,
+        );
+        if (movedIntoTopLevel) {
+          moveSessionToProjectFolder(activeSid, null);
+          const next = orderedSessionIdsAfterDrop(
+            project.sessions,
+            activeSid,
+            overSid,
+          );
+          if (next) void reorderSessions(activeSession.repo_path, next);
+          return;
+        }
+      }
+      if (
+        activeSession.project_scoped !== false &&
+        activeFolderId === defaultProjectFolderId(activeSession.repo_path) &&
+        overFolderId === defaultProjectFolderId(activeSession.repo_path)
+      ) {
+        if (project && applyProjectTopLevelOrder(project, activeId, overId)) {
+          return;
+        }
+      }
+      if (
+        activeSession.project_scoped !== false &&
+        activeFolderId &&
+        overFolderId &&
+        activeFolderId !== overFolderId
+      ) {
+        moveSessionToProjectFolder(
+          activeSid,
+          sessionFolderAssignmentForDrop(activeSession, overFolderId),
+        );
+      }
       const orderedSessions =
         activeSession.project_scoped === false
           ? localSessions
           : (projectGroups.find((g) => g.repoPath === activeSession.repo_path)
               ?.sessions ?? []);
-      if (orderedSessions.length === 0) return;
-      const ids = orderedSessions.map((s) => s.id);
-      const fromIdx = ids.indexOf(activeSid);
-      const toIdx = ids.indexOf(overSid);
-      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
-      const next = arrayMove(ids, fromIdx, toIdx);
+      const next = orderedSessionIdsAfterDrop(
+        orderedSessions,
+        activeSid,
+        overSid,
+      );
+      if (!next) return;
       void reorderSessions(activeSession.repo_path, next);
     }
   }
@@ -589,23 +767,15 @@ export function Sidebar() {
             >
               <ul className="flex flex-col divide-y divide-border/40 [&>li]:py-1.5 [&>li:first-child]:pt-0.5 [&>li:last-child]:pb-0.5">
                 {projectGroups.map((project) => {
-                  const hiddenSessions =
-                    allProjectGroups
-                      .find((group) => group.repoPath === project.repoPath)
-                      ?.sessions.filter((session) =>
-                        hiddenSessionIds.has(session.id),
-                      ) ?? [];
                   return (
                     <ProjectGroupView
                       key={project.repoPath}
                       project={project}
                       collapsed={collapsed.has(project.repoPath)}
-                      hiddenSessions={hiddenSessions}
-                      hiddenExpanded={expandedHiddenProjects.has(
-                        project.repoPath,
-                      )}
                       activeSessionId={activeSessionId}
                       isActiveProject={activeProject === project.repoPath}
+                      activeProjectFolderId={activeProjectFolderId}
+                      topLevelOrder={projectItemOrders[project.repoPath] ?? []}
                       onTitleClick={() =>
                         applyClickPlan(
                           planTitleClick({
@@ -633,31 +803,35 @@ export function Sidebar() {
                         );
                         if (target) selectSession(target);
                       }}
-                      onSelectSession={selectSession}
+                      onSelectFolder={setActiveProjectFolder}
+                      onSelectSession={(folderId, sessionId) => {
+                        setActiveProjectFolder(folderId);
+                        selectSession(sessionId);
+                      }}
                       onRemoveSession={(s) => requestRemoveSession(s.id)}
-                      onAddSession={(isolated, kind, mode = "terminal") =>
+                      onAddSession={(folder, isolated, kind, mode = "terminal") =>
                         onNewSession(
                           isolated,
                           kind,
                           {
                             repoPath: project.repoPath,
+                            cwdPath: folder.cwdPath,
                             projectScoped: true,
+                            projectFolderId: folder.id,
                           },
                           mode,
                         )
                       }
+                      onAddFolder={() => onAddProjectFolder(project.repoPath)}
+                      onRenameFolder={renameProjectFolder}
+                      onRemoveFolder={removeProjectFolder}
+                      onMoveSessionToFolder={moveSessionToProjectFolder}
                       onRemoveProject={() =>
                         requestRemoveProject(project.repoPath)
                       }
                       onOpenSettings={() => setSettingsProject(project)}
-                      onHideSession={hideSessionInProjects}
-                      onShowSession={showSessionInProjects}
-                      onShowHiddenSessions={() =>
-                        showHiddenSessionsInProject(project.repoPath)
-                      }
-                      onToggleHiddenSessions={() =>
-                        toggleHiddenSessions(project.repoPath)
-                      }
+                      collapsedFolderIds={collapsedFolders}
+                      onToggleFolder={toggleProjectFolder}
                     />
                   );
                 })}
@@ -708,7 +882,7 @@ export function Sidebar() {
 
 function renderDragOverlay(
   activeDragId: string,
-  projectGroups: ProjectGroup[],
+  projectGroups: ProjectFolderProjectGroup[],
   sessions: Session[],
   t: Translator,
 ): React.ReactNode {
@@ -722,6 +896,14 @@ function renderDragOverlay(
         count={group.sessions.length}
       />
     );
+  }
+  if (activeDragId.startsWith(FOLDER_DRAG_PREFIX)) {
+    const folderId = activeDragId.slice(FOLDER_DRAG_PREFIX.length);
+    const folderGroup = projectGroups
+      .flatMap((group) => group.folders)
+      .find((group) => group.folder.id === folderId);
+    if (!folderGroup) return null;
+    return <ProjectFolderPreview name={folderGroup.folder.name} />;
   }
   if (activeDragId.startsWith(SESSION_DRAG_PREFIX)) {
     const sid = activeDragId.slice(SESSION_DRAG_PREFIX.length);
@@ -751,6 +933,19 @@ function ProjectHeaderPreview({
         <span className="ml-1 flex h-4 shrink-0 items-center rounded bg-bg-elevated/80 px-1 text-[10px] leading-none text-fg-muted">
           {count}
         </span>
+      </span>
+    </div>
+  );
+}
+
+function ProjectFolderPreview({ name }: { name: string }) {
+  return (
+    <div className="flex min-h-7 items-center gap-1 rounded-md bg-bg-elevated/95 px-1.5 py-1 shadow-lg ring-1 ring-border/60">
+      <span className="flex size-5 shrink-0 items-center justify-center text-fg-muted">
+        <Folder size={13} />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-fg">
+        {name}
       </span>
     </div>
   );
@@ -803,8 +998,132 @@ function projectDragId(repoPath: string): string {
   return `${PROJECT_DRAG_PREFIX}${repoPath}`;
 }
 
+function folderDragId(id: string): string {
+  return `${FOLDER_DRAG_PREFIX}${id}`;
+}
+
 function sessionDragId(id: string): string {
   return `${SESSION_DRAG_PREFIX}${id}`;
+}
+
+function sessionFolderDropId(folderId: string): string {
+  return `${SESSION_FOLDER_DROP_PREFIX}${folderId}`;
+}
+
+function sessionProjectDropId(repoPath: string): string {
+  return `${SESSION_PROJECT_DROP_PREFIX}${repoPath}`;
+}
+
+function projectFolderIdForSession(
+  projectGroups: ProjectFolderProjectGroup[],
+  sessionId: string,
+): string | null {
+  for (const project of projectGroups) {
+    for (const folderGroup of project.folders) {
+      if (folderGroup.sessions.some((session) => session.id === sessionId)) {
+        return folderGroup.folder.id;
+      }
+    }
+  }
+  return null;
+}
+
+interface ProjectTopLevelSessionItem {
+  id: string;
+  type: "session";
+  session: Session;
+  folderId: string;
+}
+
+interface ProjectTopLevelFolderItem {
+  id: string;
+  type: "folder";
+  folderGroup: ProjectFolderGroup;
+}
+
+type ProjectTopLevelItem =
+  | ProjectTopLevelSessionItem
+  | ProjectTopLevelFolderItem;
+
+function buildProjectTopLevelItems(
+  project: ProjectFolderProjectGroup,
+  order: readonly string[],
+): ProjectTopLevelItem[] {
+  const defaultFolderGroup =
+    project.folders.find((folderGroup) =>
+      isDefaultProjectFolder(folderGroup.folder),
+    ) ?? project.folders[0] ?? null;
+  const directSessions: ProjectTopLevelItem[] = (
+    defaultFolderGroup?.sessions ?? []
+  ).map((session) => ({
+    id: sessionDragId(session.id),
+    type: "session",
+    session,
+    folderId:
+      defaultFolderGroup?.folder.id ?? defaultProjectFolderId(project.repoPath),
+  }));
+  const folders: ProjectTopLevelItem[] = project.folders
+    .filter((folderGroup) => !isDefaultProjectFolder(folderGroup.folder))
+    .map((folderGroup) => ({
+      id: folderDragId(folderGroup.folder.id),
+      type: "folder",
+      folderGroup,
+    }));
+  return orderProjectTopLevelItems([...directSessions, ...folders], order);
+}
+
+function orderProjectTopLevelItems(
+  items: readonly ProjectTopLevelItem[],
+  order: readonly string[],
+): ProjectTopLevelItem[] {
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  const seen = new Set<string>();
+  const ordered: ProjectTopLevelItem[] = [];
+  for (const id of order) {
+    const item = itemById.get(id);
+    if (!item || seen.has(id)) continue;
+    ordered.push(item);
+    seen.add(id);
+  }
+  for (const item of items) {
+    if (!seen.has(item.id)) ordered.push(item);
+  }
+  return ordered;
+}
+
+function isSessionRowDragId(id: string): boolean {
+  return (
+    id.startsWith(SESSION_DRAG_PREFIX) &&
+    !id.startsWith(SESSION_FOLDER_DROP_PREFIX) &&
+    !id.startsWith(SESSION_PROJECT_DROP_PREFIX)
+  );
+}
+
+function sessionFolderAssignmentForDrop(
+  session: Session,
+  folderId: string,
+): string | null {
+  return folderId === defaultProjectFolderId(session.repo_path)
+    ? null
+    : folderId;
+}
+
+function orderedSessionIdsAfterDrop(
+  orderedSessions: readonly Session[],
+  activeSessionId: string,
+  overSessionId: string,
+): string[] | null {
+  if (orderedSessions.length === 0) return null;
+  const ids = orderedSessions.map((session) => session.id);
+  const overIdx = ids.indexOf(overSessionId);
+  if (overIdx < 0) return null;
+  const fromIdx = ids.indexOf(activeSessionId);
+  if (fromIdx >= 0) {
+    if (fromIdx === overIdx) return null;
+    return arrayMove(ids, fromIdx, overIdx);
+  }
+  ids.splice(overIdx, 0, activeSessionId);
+  return ids;
 }
 
 /**
@@ -860,52 +1179,59 @@ const PROJECT_SESSION_OVERFLOW_CREATE_MENU = PROJECT_SESSION_CREATE_MENU.filter(
 );
 
 interface ProjectGroupViewProps {
-  project: ProjectGroup;
+  project: ProjectFolderProjectGroup;
   collapsed: boolean;
-  hiddenSessions: Session[];
-  hiddenExpanded: boolean;
   activeSessionId: string | null;
   isActiveProject: boolean;
+  activeProjectFolderId: string | null;
+  topLevelOrder: readonly string[];
   /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
   onTitleClick: () => void;
   /** Chevron click: activate + toggle expand. */
   onChevronClick: () => void;
   /** Empty-state row click: activate + expand + select a session. */
   onActivate: () => void;
-  onSelectSession: (id: string) => void;
+  onSelectFolder: (folderId: string) => void;
+  onSelectSession: (folderId: string, sessionId: string) => void;
   onRemoveSession: (s: Session) => void;
   onAddSession: (
+    folder: ProjectFolder,
     isolated: boolean,
     kind: SessionKind,
     mode?: SessionMode,
   ) => void;
+  onAddFolder: () => void;
+  onRenameFolder: (folderId: string, name: string) => void;
+  onRemoveFolder: (folderId: string) => void;
+  onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
   onRemoveProject: () => void;
   onOpenSettings: () => void;
-  onHideSession: (session: Session) => void;
-  onShowSession: (sessionId: string) => void;
-  onShowHiddenSessions: () => void;
-  onToggleHiddenSessions: () => void;
+  collapsedFolderIds: ReadonlySet<string>;
+  onToggleFolder: (folderId: string) => void;
 }
 
 function ProjectGroupView({
   project,
   collapsed,
-  hiddenSessions,
-  hiddenExpanded,
   activeSessionId,
   isActiveProject,
+  activeProjectFolderId,
+  topLevelOrder,
   onTitleClick,
   onChevronClick,
   onActivate,
+  onSelectFolder,
   onSelectSession,
   onRemoveSession,
   onAddSession,
+  onAddFolder,
+  onRenameFolder,
+  onRemoveFolder,
+  onMoveSessionToFolder,
   onRemoveProject,
   onOpenSettings,
-  onHideSession,
-  onShowSession,
-  onShowHiddenSessions,
-  onToggleHiddenSessions,
+  collapsedFolderIds,
+  onToggleFolder,
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -922,16 +1248,36 @@ function ProjectGroupView({
     transition,
     isDragging,
   } = useSortable({ id: projectDragId(project.repoPath) });
+  const { setNodeRef: setProjectSessionDropNodeRef } = useDroppable({
+    id: sessionProjectDropId(project.repoPath),
+  });
+  const setProjectHeaderNodeRef = useCallback(
+    (node: HTMLElement | null) => {
+      setActivatorNodeRef(node);
+      setProjectSessionDropNodeRef(node);
+    },
+    [setActivatorNodeRef, setProjectSessionDropNodeRef],
+  );
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
 
-  const sessionIds = useMemo(
-    () => project.sessions.map((s) => sessionDragId(s.id)),
-    [project.sessions],
-  );
+  const defaultFolderGroup =
+    project.folders.find((folderGroup) =>
+      isDefaultProjectFolder(folderGroup.folder),
+    ) ?? project.folders[0] ?? null;
+  const sessionCreationFolder =
+    folderForActiveSession(project, activeSessionId) ??
+    (activeProjectFolderId
+      ? (project.folders.find(
+          (folderGroup) => folderGroup.folder.id === activeProjectFolderId,
+        )?.folder ?? null)
+      : null) ??
+    defaultFolderGroup?.folder ??
+    null;
+
   const createMenuItems = useMemo<ContextMenuItem[]>(
     () =>
       PROJECT_SESSION_CREATE_MENU.map((item) => {
@@ -940,23 +1286,51 @@ function ProjectGroupView({
         return {
           label: sidebarText(t, action.labelKey),
           icon: projectSessionCreateIcon(action.id),
-          onClick: () => onAddSession(action.isolated, action.kind, action.mode),
+          onClick: () =>
+            sessionCreationFolder
+              ? onAddSession(
+                  sessionCreationFolder,
+                  action.isolated,
+                  action.kind,
+                  action.mode,
+                )
+              : undefined,
         };
       }),
-    [onAddSession, t],
+    [onAddSession, sessionCreationFolder, t],
   );
   const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
-    () =>
-      PROJECT_SESSION_OVERFLOW_CREATE_MENU.map((item) => {
-        if (item.type === "separator") return { type: "separator" };
-        const action = item.action;
-        return {
-          label: sidebarText(t, action.labelKey),
-          icon: projectSessionCreateIcon(action.id),
-          onClick: () => onAddSession(action.isolated, action.kind, action.mode),
-        };
-      }),
-    [onAddSession, t],
+    () => {
+      const items: ContextMenuItem[] = PROJECT_SESSION_OVERFLOW_CREATE_MENU.map(
+        (item) => {
+          if (item.type === "separator") return { type: "separator" };
+          const action = item.action;
+          return {
+            label: sidebarText(t, action.labelKey),
+            icon: projectSessionCreateIcon(action.id),
+            onClick: () =>
+              sessionCreationFolder
+                ? onAddSession(
+                    sessionCreationFolder,
+                    action.isolated,
+                    action.kind,
+                    action.mode,
+                  )
+                : undefined,
+          };
+        },
+      );
+      return [
+        ...items,
+        { type: "separator" as const },
+        {
+          label: sidebarText(t, "sidebar.actions.newProjectFolder"),
+          icon: <FolderPlus size={12} />,
+          onClick: onAddFolder,
+        },
+      ];
+    },
+    [onAddFolder, onAddSession, sessionCreationFolder, t],
   );
 
   async function copyText(text: string) {
@@ -975,6 +1349,21 @@ function ProjectGroupView({
     }
   }
 
+  const namedFolderGroups = project.folders.filter(
+    (folderGroup) => !isDefaultProjectFolder(folderGroup.folder),
+  );
+  const projectFoldersForRows = project.folders.map(
+    (folderGroup) => folderGroup.folder,
+  );
+  const topLevelItems = useMemo(
+    () => buildProjectTopLevelItems(project, topLevelOrder),
+    [project, topLevelOrder],
+  );
+  const topLevelItemIds = useMemo(
+    () => topLevelItems.map((item) => item.id),
+    [topLevelItems],
+  );
+
   return (
     <li
       ref={setNodeRef}
@@ -982,7 +1371,7 @@ function ProjectGroupView({
       className={cn("relative", isDragging && "opacity-40")}
     >
       <div
-        ref={setActivatorNodeRef}
+        ref={setProjectHeaderNodeRef}
         {...attributes}
         role="button"
         tabIndex={0}
@@ -1006,7 +1395,7 @@ function ProjectGroupView({
         }}
         aria-label={`${sidebarText(t, "sidebar.aria.project")} ${project.name}`}
         className={cn(
-          "group flex min-h-8 items-center gap-1 rounded-md px-1 py-1.5 hover:bg-bg-elevated/40",
+          "group flex min-h-8 items-center gap-1 rounded-md px-1 py-1.5 transition hover:bg-bg-elevated/40",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
@@ -1048,7 +1437,14 @@ function ProjectGroupView({
                 e.stopPropagation();
                 setMenu(null);
                 setCreateMenu(null);
-                onAddSession(action.isolated, action.kind, action.mode);
+                if (sessionCreationFolder) {
+                  onAddSession(
+                    sessionCreationFolder,
+                    action.isolated,
+                    action.kind,
+                    action.mode,
+                  );
+                }
               }}
               className="invisible flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
               aria-label={sidebarText(t, action.ariaKey)}
@@ -1108,16 +1504,12 @@ function ProjectGroupView({
         items={[
           ...createMenuItems,
           { type: "separator" },
-          ...(hiddenSessions.length > 0
-            ? [
-                {
-                  label: sidebarText(t, "sidebar.actions.showHiddenSessions"),
-                  icon: <Eye size={12} />,
-                  onClick: onShowHiddenSessions,
-                },
-                { type: "separator" as const },
-              ]
-            : []),
+          {
+            label: sidebarText(t, "sidebar.actions.newProjectFolder"),
+            icon: <FolderPlus size={12} />,
+            onClick: onAddFolder,
+          },
+          { type: "separator" },
           {
             label: sidebarText(t, "sidebar.actions.projectSettings"),
             icon: <SettingsIcon size={12} />,
@@ -1146,21 +1538,25 @@ function ProjectGroupView({
         ]}
       />
       {!collapsed ? (
-        <SortableContext
-          items={sessionIds}
-          strategy={verticalListSortingStrategy}
-        >
-          <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
-            {project.sessions.length === 0 && hiddenSessions.length === 0 ? (
+        <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
+          <SortableContext
+            items={topLevelItemIds}
+            strategy={verticalListSortingStrategy}
+          >
+            {defaultFolderGroup &&
+            defaultFolderGroup.sessions.length === 0 &&
+            namedFolderGroups.length === 0 ? (
               <li
                 role="button"
                 tabIndex={0}
                 onClick={onActivate}
-                onDoubleClick={() => onAddSession(false, "regular")}
+                onDoubleClick={() =>
+                  onAddSession(defaultFolderGroup.folder, false, "regular")
+                }
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    onAddSession(false, "regular");
+                    onAddSession(defaultFolderGroup.folder, false, "regular");
                   }
                 }}
                 className="flex cursor-pointer items-center justify-center rounded px-3 py-3 text-center text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
@@ -1168,217 +1564,322 @@ function ProjectGroupView({
                 {sidebarText(t, "sidebar.emptyProject.createSession")}
               </li>
             ) : (
-              project.sessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  projectSessions={project.sessions}
-                  active={session.id === activeSessionId}
-                  onSelect={() => onSelectSession(session.id)}
-                  onRemove={() => onRemoveSession(session)}
-                  onHide={() => onHideSession(session)}
-                />
-              ))
+              topLevelItems.map((item) =>
+                item.type === "session" ? (
+                  <SessionRow
+                    key={item.id}
+                    session={item.session}
+                    projectSessions={project.sessions}
+                    active={item.session.id === activeSessionId}
+                    onSelect={() =>
+                      onSelectSession(item.folderId, item.session.id)
+                    }
+                    onRemove={() => onRemoveSession(item.session)}
+                    projectFolders={projectFoldersForRows}
+                    currentProjectFolderId={item.folderId}
+                    onMoveToProjectFolder={onMoveSessionToFolder}
+                  />
+                ) : (
+                  <ProjectFolderView
+                    key={item.id}
+                    folderGroup={item.folderGroup}
+                    projectFolders={projectFoldersForRows}
+                    projectSessions={project.sessions}
+                    activeSessionId={activeSessionId}
+                    active={activeProjectFolderId === item.folderGroup.folder.id}
+                    collapsed={collapsedFolderIds.has(
+                      item.folderGroup.folder.id,
+                    )}
+                    onToggleFolder={() =>
+                      onToggleFolder(item.folderGroup.folder.id)
+                    }
+                    onActivate={() => onSelectFolder(item.folderGroup.folder.id)}
+                    onSelectSession={(sessionId) =>
+                      onSelectSession(item.folderGroup.folder.id, sessionId)
+                    }
+                    onRemoveSession={onRemoveSession}
+                    onRenameFolder={onRenameFolder}
+                    onRemoveFolder={onRemoveFolder}
+                    onAddSession={(isolated, kind, mode) =>
+                      onAddSession(
+                        item.folderGroup.folder,
+                        isolated,
+                        kind,
+                        mode,
+                      )
+                    }
+                    onMoveSessionToFolder={onMoveSessionToFolder}
+                  />
+                ),
+              )
             )}
-            {hiddenSessions.length > 0 ? (
-              <HiddenSessionsSection
-                sessions={hiddenSessions}
-                expanded={hiddenExpanded}
-                activeSessionId={activeSessionId}
-                onToggle={onToggleHiddenSessions}
-                onSelectSession={onSelectSession}
-                onShowSession={onShowSession}
-                onRemoveSession={onRemoveSession}
-                t={t}
-              />
-            ) : null}
-          </ul>
-        </SortableContext>
+          </SortableContext>
+          {!defaultFolderGroup && namedFolderGroups.length === 0 ? (
+            <li
+              role="button"
+              tabIndex={0}
+              onClick={onActivate}
+              className="flex cursor-pointer items-center justify-center rounded px-3 py-3 text-center text-[11px] text-fg-muted transition select-none hover:bg-bg-elevated/40 hover:text-fg"
+            >
+              {sidebarText(t, "sidebar.emptyProject.createSession")}
+            </li>
+          ) : null}
+        </ul>
       ) : null}
     </li>
   );
 }
 
-function hiddenSessionsLabel(t: Translator, count: number): string {
-  return `${sidebarText(t, "sidebar.hiddenSessions.title")} ${count}${sidebarText(
-    t,
-    "sidebar.hiddenSessions.countSuffix",
-  )}`;
+function folderForActiveSession(
+  project: ProjectFolderProjectGroup,
+  activeSessionId: string | null,
+): ProjectFolder | null {
+  if (!activeSessionId) return null;
+  const folderGroup = project.folders.find(
+    (candidate) => candidate.sessions.some((session) => session.id === activeSessionId),
+  );
+  return folderGroup?.folder ?? null;
 }
 
-function HiddenSessionsSection({
-  sessions,
-  expanded,
-  activeSessionId,
-  onToggle,
-  onSelectSession,
-  onShowSession,
-  onRemoveSession,
-  t,
-}: {
-  sessions: Session[];
-  expanded: boolean;
+interface ProjectFolderViewProps {
+  folderGroup: ProjectFolderGroup;
+  projectFolders: ProjectFolder[];
+  projectSessions: Session[];
   activeSessionId: string | null;
-  onToggle: () => void;
-  onSelectSession: (id: string) => void;
-  onShowSession: (sessionId: string) => void;
+  active: boolean;
+  collapsed: boolean;
+  onToggleFolder: () => void;
+  onActivate: () => void;
+  onSelectSession: (sessionId: string) => void;
   onRemoveSession: (session: Session) => void;
-  t: Translator;
-}) {
-  const label = hiddenSessionsLabel(t, sessions.length);
+  onRenameFolder: (folderId: string, name: string) => void;
+  onRemoveFolder: (folderId: string) => void;
+  onAddSession: (
+    isolated: boolean,
+    kind: SessionKind,
+    mode: SessionMode,
+  ) => void;
+  onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
+}
+
+function ProjectFolderView({
+  folderGroup,
+  projectFolders,
+  projectSessions,
+  activeSessionId,
+  active,
+  collapsed,
+  onToggleFolder,
+  onActivate,
+  onSelectSession,
+  onRemoveSession,
+  onRenameFolder,
+  onRemoveFolder,
+  onAddSession,
+  onMoveSessionToFolder,
+}: ProjectFolderViewProps) {
+  const t = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const folder = folderGroup.folder;
+  const removable = !isDefaultProjectFolder(folder);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: folderDragId(folder.id) });
+  const { setNodeRef: setFolderSessionDropNodeRef } = useDroppable({
+    id: sessionFolderDropId(folder.id),
+  });
+  const setFolderHeaderNodeRef = useCallback(
+    (node: HTMLElement | null) => {
+      setActivatorNodeRef(node);
+      setFolderSessionDropNodeRef(node);
+    },
+    [setActivatorNodeRef, setFolderSessionDropNodeRef],
+  );
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+  const sessionIds = useMemo(
+    () => folderGroup.sessions.map((s) => sessionDragId(s.id)),
+    [folderGroup.sessions],
+  );
+  const folderCreateMenuItems = useMemo<ContextMenuItem[]>(
+    () =>
+      PROJECT_SESSION_CREATE_MENU.map((item) => {
+        if (item.type === "separator") return { type: "separator" };
+        const action = item.action;
+        return {
+          label: sidebarText(t, action.labelKey),
+          icon: projectSessionCreateIcon(action.id),
+          onClick: () =>
+            onAddSession(action.isolated, action.kind, action.mode),
+        };
+      }),
+    [onAddSession, t],
+  );
+
+  function submitRename(next: string) {
+    setEditing(false);
+    onRenameFolder(folder.id, next);
+  }
 
   return (
-    <>
-      <li>
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={label}
-          aria-expanded={expanded}
-          className="group mt-0.5 flex min-h-7 w-full items-center gap-1 rounded-md px-2 py-1 text-left text-[11px] text-fg-muted transition hover:bg-bg-elevated/40 hover:text-fg"
-        >
-          <ChevronRight
-            size={12}
-            className={cn(
-              "shrink-0 transition-transform",
-              expanded && "rotate-90",
-            )}
-          />
-          <span className="min-w-0 flex-1 truncate">
-            {sidebarText(t, "sidebar.hiddenSessions.title")}
-          </span>
-          <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-bg-elevated/70 px-1 text-[10px] leading-none text-fg-muted">
-            {sessions.length}
-          </span>
-        </button>
-      </li>
-      {expanded
-        ? sessions.map((session) => (
-            <HiddenSessionRow
-              key={session.id}
-              session={session}
-              active={session.id === activeSessionId}
-              onSelect={() => onSelectSession(session.id)}
-              onShow={() => onShowSession(session.id)}
-              onRemove={() => onRemoveSession(session)}
-              t={t}
-            />
-          ))
-        : null}
-    </>
-  );
-}
-
-function HiddenSessionRow({
-  session,
-  active,
-  onSelect,
-  onShow,
-  onRemove,
-  t,
-}: {
-  session: Session;
-  active: boolean;
-  onSelect: () => void;
-  onShow: () => void;
-  onRemove: () => void;
-  t: Translator;
-}) {
-  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
-  const titleText = resolveSessionTitle(session, sessionDisplay.title);
-  const metadataText = composeSessionMetadata(
-    t,
-    session,
-    sessionDisplay.metadata,
-  );
-  const isGeneratingTitle = useAppStore((s) =>
-    Boolean(s.generatingSessionTitleIds[session.id]),
-  );
-  const agentProvider = sessionDisplay.icons.agentProvider
-    ? resolveSessionAgentProvider(session)
-    : null;
-
-  const row = (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      className={cn(
-        "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left opacity-70 transition hover:bg-bg-elevated/40 hover:opacity-100",
-        active && "bg-bg-elevated/70 opacity-100",
-      )}
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={cn(isDragging && "opacity-40")}
     >
-      {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
-        <SessionStatusMarker
-          session={session}
-          agentProvider={agentProvider}
-          isGeneratingTitle={isGeneratingTitle}
-          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
-          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
-        />
-      ) : null}
-      <SessionRowLabel
-        editing={false}
-        session={session}
-        titleText={titleText}
-        metadataText={metadataText}
-        showKindIcons={sessionDisplay.icons.sessionKind}
-        t={t}
-        onSubmitRename={() => undefined}
-        onCancelRename={() => undefined}
-      />
-      <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <Tooltip label={sidebarText(t, "sidebar.actions.showSessionInProjects")}>
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onShow();
-            }}
-            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-            aria-label={sidebarText(t, "sidebar.actions.showSessionInProjects")}
-          >
-            <Eye size={12} />
-          </button>
-        </Tooltip>
+      <div
+        ref={setFolderHeaderNodeRef}
+        {...attributes}
+        role="button"
+        tabIndex={0}
+        onClick={editing ? undefined : onActivate}
+        onPointerDown={(e) => {
+          if (editing) return;
+          listeners?.onPointerDown?.(e);
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setEditing(true);
+        }}
+        onKeyDown={(e) => {
+          if (editing) return;
+          listeners?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onActivate();
+          } else if (e.key === "F2") {
+            e.preventDefault();
+            setEditing(true);
+          }
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        className={cn(
+          "group/project-folder flex min-h-7 w-full items-center gap-1 rounded-md px-1.5 py-1 text-left transition",
+          active ? "bg-bg-elevated/70" : "hover:bg-bg-elevated/40",
+        )}
+      >
         <button
           type="button"
-          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            onRemove();
+            onToggleFolder();
           }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+          aria-label={sidebarText(
+            t,
+            collapsed
+              ? "sidebar.actions.expandProjectFolder"
+              : "sidebar.actions.collapseProjectFolder",
+          )}
+          aria-expanded={!collapsed}
+          className="group/folder-toggle relative flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:bg-bg-elevated focus-visible:text-fg focus-visible:outline-none"
         >
-          <Trash2 size={12} />
+          <Folder
+            size={13}
+            className="transition-opacity group-hover/project-folder:opacity-0 group-focus-visible/folder-toggle:opacity-0"
+          />
+          <ChevronRight
+            size={12}
+            className={cn(
+              "absolute opacity-0 transition-[opacity,transform] group-hover/project-folder:opacity-100 group-focus-visible/folder-toggle:opacity-100",
+              !collapsed && "rotate-90",
+            )}
+          />
         </button>
+        <span className="min-w-0 flex-1">
+          {editing ? (
+            <RenameInput
+              initial={folder.name}
+              onSubmit={submitRename}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <span className="block truncate text-[12px] font-medium leading-5 text-fg">
+              {folder.name}
+            </span>
+          )}
+        </span>
       </div>
-    </div>
-  );
-
-  return (
-    <li>
-      {sessionDisplay.showDetailsOnHover ? (
-        <Tooltip
-          label={buildSessionHoverDetails(t, session)}
-          side="right"
-          multiline
-          className="w-full"
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={[
+          ...folderCreateMenuItems,
+          { type: "separator" },
+          {
+            label: sidebarText(t, "sidebar.actions.renameProjectFolder"),
+            icon: <Pencil size={12} />,
+            onClick: () => setEditing(true),
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.revealInFinder"),
+            icon: <FolderOpen size={12} />,
+            onClick: () => {
+              void api.fsReveal(folder.cwdPath);
+            },
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.copyPath"),
+            icon: <Copy size={12} />,
+            onClick: () => {
+              void copyToClipboard(folder.cwdPath);
+            },
+          },
+          { type: "separator" },
+          {
+            label: sidebarText(t, "sidebar.actions.removeProjectFolder"),
+            icon: <Trash2 size={12} />,
+            onClick: () => onRemoveFolder(folder.id),
+            disabled: !removable,
+          },
+        ]}
+      />
+      {!collapsed ? (
+        <SortableContext
+          items={sessionIds}
+          strategy={verticalListSortingStrategy}
         >
-          {row}
-        </Tooltip>
-      ) : (
-        row
-      )}
+          <ul className="ml-4 flex flex-col gap-0.5 pt-0.5">
+            {folderGroup.sessions.length === 0 ? (
+              <li
+                className="flex items-center justify-center rounded px-3 py-2 text-center text-[11px] text-fg-muted select-none"
+              >
+                {sidebarText(t, "sidebar.emptyProjectFolder.noSessions")}
+              </li>
+            ) : (
+              folderGroup.sessions.map((session) => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  projectSessions={projectSessions}
+                  active={session.id === activeSessionId}
+                  onSelect={() => onSelectSession(session.id)}
+                  onRemove={() => onRemoveSession(session)}
+                  projectFolders={projectFolders}
+                  currentProjectFolderId={folder.id}
+                  onMoveToProjectFolder={onMoveSessionToFolder}
+                />
+              ))
+            )}
+          </ul>
+        </SortableContext>
+      ) : null}
     </li>
   );
 }
@@ -1389,7 +1890,12 @@ interface SessionRowProps {
   active: boolean;
   onSelect: () => void;
   onRemove: () => void;
-  onHide: () => void;
+  projectFolders?: readonly ProjectFolder[];
+  currentProjectFolderId?: string;
+  onMoveToProjectFolder?: (
+    sessionId: string,
+    folderId: string | null,
+  ) => void;
 }
 
 function SessionRow({
@@ -1398,7 +1904,9 @@ function SessionRow({
   active,
   onSelect,
   onRemove,
-  onHide,
+  projectFolders = [],
+  currentProjectFolderId,
+  onMoveToProjectFolder,
 }: SessionRowProps) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
@@ -1473,6 +1981,11 @@ function SessionRow({
             name: next,
             isolated: session.isolated,
             kind: session.kind,
+            projectFolderId:
+              currentProjectFolder &&
+              !isDefaultProjectFolder(currentProjectFolder)
+                ? currentProjectFolder.id
+                : undefined,
           },
         ),
       );
@@ -1508,6 +2021,32 @@ function SessionRow({
   const agentProvider = showAgentProviderIcons
     ? resolveSessionAgentProvider(session)
     : null;
+  const namedProjectFolders = projectFolders.filter(
+    (folder) => !isDefaultProjectFolder(folder),
+  );
+  const currentProjectFolder = projectFolders.find(
+    (folder) => folder.id === currentProjectFolderId,
+  );
+  const folderMoveMenuItems: ContextMenuItem[] = [];
+  if (onMoveToProjectFolder) {
+    if (currentProjectFolder && !isDefaultProjectFolder(currentProjectFolder)) {
+      folderMoveMenuItems.push({
+        label: sidebarText(t, "sidebar.actions.removeFromProjectFolder"),
+        icon: <FolderOpen size={12} />,
+        onClick: () => onMoveToProjectFolder(session.id, null),
+      });
+    }
+    for (const folder of namedProjectFolders) {
+      if (folder.id === currentProjectFolderId) continue;
+      folderMoveMenuItems.push({
+        label: `${sidebarText(t, "sidebar.actions.moveToProjectFolder")}: ${
+          folder.name
+        }`,
+        icon: <Folder size={12} />,
+        onClick: () => onMoveToProjectFolder(session.id, folder.id),
+      });
+    }
+  }
 
   const sessionMenuItems: ContextMenuItem[] = [
     {
@@ -1527,11 +2066,9 @@ function SessionRow({
       icon: <Files size={12} />,
       onClick: () => void duplicate(),
     },
-    {
-      label: sidebarText(t, "sidebar.actions.hideSessionFromProjects"),
-      icon: <EyeOff size={12} />,
-      onClick: onHide,
-    },
+    ...(folderMoveMenuItems.length > 0
+      ? [{ type: "separator" as const }, ...folderMoveMenuItems]
+      : []),
     { type: "separator" },
     {
       label: sidebarText(t, "sidebar.actions.equalizePaneSizes"),
@@ -1676,24 +2213,6 @@ function SessionRow({
         onCancelRename={() => setEditing(false)}
       />
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <Tooltip
-          label={sidebarText(t, "sidebar.actions.hideSessionFromProjects")}
-          side="right"
-        >
-          <button
-            type="button"
-            aria-label={sidebarText(t, "sidebar.actions.hideSessionFromProjects")}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onHide();
-            }}
-            onKeyDown={(e) => e.stopPropagation()}
-            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-          >
-            <EyeOff size={12} />
-          </button>
-        </Tooltip>
         <button
           type="button"
           aria-label={sidebarText(t, "sidebar.actions.removeSession")}
@@ -1876,7 +2395,7 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
         }
       }}
       onBlur={() => onSubmit(value.trim())}
-      className="min-w-0 flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-[13px] font-medium text-fg outline-none focus:border-accent"
+      className="min-w-0 w-full flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-[13px] font-medium text-fg outline-none focus:border-accent"
     />
   );
 }
@@ -2325,4 +2844,43 @@ function saveStringSet(key: string, set: Set<string>): void {
   } catch {
     // ignore
   }
+}
+
+function loadStringArrayRecord(key: string): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const record: Record<string, string[]> = {};
+    for (const [recordKey, value] of Object.entries(parsed)) {
+      if (!Array.isArray(value)) continue;
+      const ids = value.filter((x): x is string => typeof x === "string");
+      if (ids.length > 0) record[recordKey] = Array.from(new Set(ids));
+    }
+    return record;
+  } catch {
+    return {};
+  }
+}
+
+function saveStringArrayRecord(
+  key: string,
+  record: Record<string, string[]>,
+): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(record));
+  } catch {
+    // ignore
+  }
+}
+
+function stringArraysEqual(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
 }

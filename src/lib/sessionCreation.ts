@@ -12,36 +12,45 @@ export interface SessionCreationContext {
   projects: Project[];
   activeSessionId?: string | null;
   activeWorkspaceRepoPath?: string | null;
+  activeWorkspaceCwdPath?: string | null;
+  activeProjectFolderId?: string | null;
 }
 
 export interface SessionCreateScope {
   repoPath: string;
+  cwdPath?: string;
   projectScoped: boolean;
+  projectFolderId?: string;
 }
 
 export interface SessionCreateRequest {
   name: string;
   repoPath: string;
+  cwdPath: string;
   isolated: boolean;
   kind: SessionKind;
   agentProvider: SessionAgentProvider | null;
   projectScoped: boolean;
   mode: SessionMode;
+  projectFolderId?: string;
 }
 
 export interface BuildSessionCreateOptions {
   repoPath: string;
+  cwdPath?: string;
   isolated?: boolean;
   kind?: SessionKind;
   agentProvider?: SessionAgentProvider | null;
   projectScoped?: boolean;
   mode?: SessionMode;
   name?: string;
+  projectFolderId?: string;
 }
 
 export function scopeForSession(session: Session): SessionCreateScope {
   return {
     repoPath: session.repo_path,
+    cwdPath: session.isolated ? session.repo_path : session.worktree_path,
     projectScoped: session.project_scoped !== false,
   };
 }
@@ -56,10 +65,12 @@ export function resolveActiveSessionScope(
   if (!context.activeWorkspaceRepoPath) return null;
   return {
     repoPath: context.activeWorkspaceRepoPath,
+    cwdPath: context.activeWorkspaceCwdPath ?? context.activeWorkspaceRepoPath,
     projectScoped: resolveProjectScopedForRepoPath(
       context,
       context.activeWorkspaceRepoPath,
     ),
+    projectFolderId: context.activeProjectFolderId ?? undefined,
   };
 }
 
@@ -88,6 +99,7 @@ export function buildSessionCreateRequest(
   const projectScoped =
     options.projectScoped ??
     resolveProjectScopedForRepoPath(context, options.repoPath);
+  const cwdPath = options.cwdPath ?? options.repoPath;
   const name =
     options.name ??
     (projectScoped
@@ -97,11 +109,15 @@ export function buildSessionCreateRequest(
   return {
     name,
     repoPath: options.repoPath,
+    cwdPath,
     isolated,
     kind,
     agentProvider: options.agentProvider ?? null,
     projectScoped,
     mode: options.mode ?? "terminal",
+    ...(options.projectFolderId
+      ? { projectFolderId: options.projectFolderId }
+      : {}),
   };
 }
 
@@ -123,7 +139,9 @@ export function buildSessionCreateRequestFromScope(
   return buildSessionCreateRequest(context, {
     ...options,
     repoPath: scope.repoPath,
+    cwdPath: options.cwdPath ?? scope.cwdPath,
     projectScoped: scope.projectScoped,
+    projectFolderId: options.projectFolderId ?? scope.projectFolderId,
   });
 }
 
@@ -136,26 +154,30 @@ export function applySessionCreateRequest(
     agentProvider?: SessionAgentProvider | null,
     projectScoped?: boolean,
     mode?: SessionMode,
+    projectFolderId?: string,
   ) => Promise<Session | null>,
   request: SessionCreateRequest,
 ): Promise<Session | null> {
   if (request.mode !== "terminal") {
     return createSession(
       request.name,
-      request.repoPath,
+      request.cwdPath,
       request.isolated,
       request.kind,
       request.agentProvider,
       request.projectScoped,
       request.mode,
+      request.projectFolderId,
     );
   }
   return createSession(
     request.name,
-    request.repoPath,
+    request.cwdPath,
     request.isolated,
     request.kind,
     request.agentProvider,
     request.projectScoped,
+    undefined,
+    request.projectFolderId,
   );
 }

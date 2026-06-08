@@ -3,7 +3,6 @@ import {
   CircleX,
   Columns2,
   Copy,
-  EyeOff,
   Files,
   FolderOpen,
   FolderPlus,
@@ -46,10 +45,6 @@ import {
   openInConfiguredEditor,
 } from "../lib/editor";
 import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
-import {
-  hideProjectSession,
-  showProjectSession,
-} from "../lib/hiddenProjectSessions";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
@@ -258,11 +253,13 @@ export function Pane({ paneId }: PaneProps) {
     );
     await createSession(
       request.name,
-      request.repoPath,
+      request.cwdPath,
       request.isolated,
       request.kind,
       request.agentProvider,
       request.projectScoped,
+      request.mode,
+      request.projectFolderId,
     );
     const error = useAppStore.getState().consumeError();
     if (error) showToast(`${t("toasts.session.createFailed")} ${error}`);
@@ -291,14 +288,17 @@ export function Pane({ paneId }: PaneProps) {
       { isolated, kind: "regular", agentProvider: kind },
     );
     try {
-      const created = await api.createSession(
+      const created = await useAppStore.getState().createSession(
         request.name,
-        request.repoPath,
+        request.cwdPath,
         request.isolated,
         request.kind,
         request.agentProvider,
         request.projectScoped,
+        request.mode,
+        request.projectFolderId,
       );
+      if (!created) return;
       // Claude resolves `--resume <uuid>` by looking under
       // `~/.claude/projects/<slug-of-cwd>/<uuid>.jsonl`.
       //
@@ -344,9 +344,14 @@ export function Pane({ paneId }: PaneProps) {
     // Prefer the pane's project if any tabs exist (shouldn't here), else use
     // the globally active project. With no project at all, do nothing.
     const anchor = active ?? tabs[0] ?? null;
-    const repoPath =
-      anchor?.repoPath ?? useAppStore.getState().activeProject ?? null;
+    const state = useAppStore.getState();
+    const repoPath = anchor?.repoPath ?? state.activeProject ?? null;
     if (!repoPath) return;
+    const activeFolder = state.activeProjectFolderId
+      ? Object.values(state.projectFolders)
+          .flat()
+          .find((folder) => folder.id === state.activeProjectFolderId)
+      : null;
     await spawnSession(
       repoPath,
       "regular",
@@ -354,10 +359,12 @@ export function Pane({ paneId }: PaneProps) {
         ? scopeForTab(anchor)
         : {
             repoPath,
+            cwdPath: activeFolder?.cwdPath ?? repoPath,
             projectScoped: resolveProjectScopedForRepoPath(
               { sessions, projects },
               repoPath,
             ),
+            projectFolderId: activeFolder?.id,
           },
     );
   }
@@ -1044,16 +1051,6 @@ function TabItem({
     window.addEventListener("blur", onWindowBlur);
   }
 
-  function hideFromProjects(): void {
-    if (!session) return;
-    hideProjectSession(session.id);
-    showToast(t("sidebar.toasts.hiddenFromProjects"), {
-      action: () => {
-        showProjectSession(session.id);
-      },
-    });
-  }
-
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
     const items: ContextMenuItem[] = [];
@@ -1133,15 +1130,6 @@ function TabItem({
       onClick: () => onDuplicate?.(),
       disabled: !onDuplicate,
     },
-    ...(session
-      ? [
-          {
-            label: t("sidebar.actions.hideSessionFromProjects"),
-            icon: <EyeOff size={12} />,
-            onClick: hideFromProjects,
-          },
-        ]
-      : []),
     { type: "separator" },
     ...forkItems,
     {

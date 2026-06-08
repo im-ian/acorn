@@ -76,8 +76,9 @@ const SESSION_ID_KEY_SEPARATOR = "\u0000";
 type AppStateSnapshot = ReturnType<typeof useAppStore.getState>;
 
 function visibleTerminalSessionIdKey(state: AppStateSnapshot): string {
-  if (!state.activeProject) return "";
-  const ws = state.workspaces[state.activeProject];
+  const workspaceId = activeWorkspaceId(state);
+  if (!workspaceId) return "";
+  const ws = state.workspaces[workspaceId];
   if (!ws) return "";
   return Object.values(ws.panes)
     .map((pane) => pane.activeTabId)
@@ -106,8 +107,9 @@ function PortaledTerminal({ session }: { session: Session }) {
   // Which pane (in the active workspace) is currently displaying this
   // session as its active tab? null when this session is not visible.
   const visiblePaneId = useAppStore((state) => {
-    if (!state.activeProject) return null;
-    const ws = state.workspaces[state.activeProject];
+    const workspaceId = activeWorkspaceId(state);
+    if (!workspaceId) return null;
+    const ws = state.workspaces[workspaceId];
     if (!ws) return null;
     for (const pane of Object.values(ws.panes)) {
       if (pane.activeTabId === session.id) return pane.id;
@@ -120,8 +122,8 @@ function PortaledTerminal({ session }: { session: Session }) {
   // `visiblePaneId` is unchanged. Without this dep the reattach effect skips
   // re-running and the terminal target stays detached from the new pane body.
   const layoutRef = useAppStore((state) =>
-    state.activeProject
-      ? state.workspaces[state.activeProject]?.layout ?? null
+    activeWorkspaceId(state)
+      ? state.workspaces[activeWorkspaceId(state)!]?.layout ?? null
       : null,
   );
   const isFocusedPane = useAppStore((state) =>
@@ -176,4 +178,8 @@ function cssEscape(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/(["\\\]\[])/g, "\\$1");
+}
+
+function activeWorkspaceId(state: AppStateSnapshot): string | null {
+  return state.activeProjectFolderId ?? state.activeProject;
 }

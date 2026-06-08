@@ -754,11 +754,18 @@
       "dragToReorder": "순서를 바꾸려면 드래그",
       "expandProject": "프로젝트 펼치기",
       "collapseProject": "프로젝트 접기",
+      "expandProjectFolder": "폴더 펼치기",
+      "collapseProjectFolder": "폴더 접기",
       "newSession": "새 세션",
       "newIsolatedSession": "새 격리 세션",
       "newIsolatedSessionWorktree": "새 격리 세션 (worktree)",
       "newChatSession": "새 채팅 세션",
       "newControlSession": "새 컨트롤 세션",
+      "newProjectFolder": "새 프로젝트 폴더",
+      "renameProjectFolder": "폴더 이름 변경",
+      "removeProjectFolder": "폴더 제거",
+      "moveToProjectFolder": "폴더로 이동",
+      "removeFromProjectFolder": "폴더에서 빼기",
       "projectSettings": "프로젝트 설정",
       "closeProject": "프로젝트 닫기",
       "revealInFinder": "Finder에서 보기",
@@ -766,9 +773,6 @@
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
       "duplicateSession": "세션 복제",
-      "hideSessionFromProjects": "Projects에서 숨기기",
-      "showSessionInProjects": "Projects에 다시 표시",
-      "showHiddenSessions": "숨긴 세션 모두 다시 표시",
       "equalizePaneSizes": "Pane 크기 균등화",
       "openWorktreeInEditor": "편집기에서 worktree 열기",
       "copyWorktreePath": "Worktree 경로 복사",
@@ -800,15 +804,11 @@
       "newSession": "새 인스턴트 세션",
       "empty": "더블클릭하면 인스턴트 세션을 시작할 수 있습니다."
     },
-    "hiddenSessions": {
-      "title": "숨긴 세션",
-      "countSuffix": "개"
-    },
-    "toasts": {
-      "hiddenFromProjects": "Projects에서 숨겼습니다. 클릭하면 되돌립니다."
-    },
     "emptyProject": {
       "createSession": "더블클릭하면 세션을 시작할 수 있습니다."
+    },
+    "emptyProjectFolder": {
+      "noSessions": "세션 없음"
     },
     "emptyProjects": {
       "openProject": "클릭하면 프로젝트를 열 수 있습니다."

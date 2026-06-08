@@ -83,6 +83,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         projects: state.projects,
         activeSessionId: state.activeSessionId,
         activeWorkspaceRepoPath: state.activeProject,
+        activeWorkspaceCwdPath: activeProjectFolderCwdPath(state),
+        activeProjectFolderId: state.activeProjectFolderId,
       });
 
       if (!scope) {
@@ -105,18 +107,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         { sessions: state.sessions, projects: state.projects },
         {
           repoPath: scope.repoPath,
+          cwdPath: scope.cwdPath,
           projectScoped: scope.projectScoped,
           mode: "chat",
+          projectFolderId: scope.projectFolderId,
         },
       );
       const created = await state.createSession(
         request.name,
-        request.repoPath,
+        request.cwdPath,
         request.isolated,
         request.kind,
         request.agentProvider,
         request.projectScoped,
         request.mode,
+        request.projectFolderId,
       );
       const error = useAppStore.getState().consumeError();
       if (!created || error) {
@@ -448,6 +453,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       </Command.List>
     </Command.Dialog>
   );
+}
+
+function activeProjectFolderCwdPath(
+  state: ReturnType<typeof useAppStore.getState>,
+): string | null {
+  const folderId = state.activeProjectFolderId;
+  if (!folderId) return null;
+  for (const folders of Object.values(state.projectFolders)) {
+    const folder = folders.find((candidate) => candidate.id === folderId);
+    if (folder) return folder.cwdPath;
+  }
+  return null;
 }
 // Hidden palette entry. Only renders when the user has typed at least 2
 // characters and the query matches one of the easter-egg trigger words.

@@ -78,7 +78,24 @@ describe("session creation policy", () => {
         activeSessionId: "local",
         activeWorkspaceRepoPath: "/repo/app",
       }),
-    ).toEqual({ repoPath: "/Users/me", projectScoped: false });
+    ).toMatchObject({ repoPath: "/Users/me", projectScoped: false });
+  });
+
+  it("preserves active workspace folder cwd and id when there is no active session", () => {
+    expect(
+      resolveActiveSessionScope({
+        sessions: [],
+        projects: [project("/repo/app")],
+        activeWorkspaceRepoPath: "/repo/app",
+        activeWorkspaceCwdPath: "/repo/app/apps/web",
+        activeProjectFolderId: "frontend",
+      }),
+    ).toEqual({
+      repoPath: "/repo/app",
+      cwdPath: "/repo/app/apps/web",
+      projectScoped: true,
+      projectFolderId: "frontend",
+    });
   });
 
   it("builds local session requests with local naming", () => {
@@ -97,6 +114,7 @@ describe("session creation policy", () => {
     ).toMatchObject({
       name: "terminal-2",
       repoPath: "/Users/me",
+      cwdPath: "/Users/me",
       projectScoped: false,
     });
   });
@@ -111,6 +129,7 @@ describe("session creation policy", () => {
     ).toMatchObject({
       name: "codex-copy",
       repoPath: "/Users/me",
+      cwdPath: "/Users/me",
       agentProvider: "codex",
       projectScoped: false,
     });

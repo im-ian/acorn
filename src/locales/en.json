@@ -754,11 +754,18 @@
       "dragToReorder": "Drag to reorder",
       "expandProject": "Expand project",
       "collapseProject": "Collapse project",
+      "expandProjectFolder": "Expand folder",
+      "collapseProjectFolder": "Collapse folder",
       "newSession": "New session",
       "newIsolatedSession": "New isolated session",
       "newIsolatedSessionWorktree": "New isolated session (worktree)",
       "newChatSession": "New chat session",
       "newControlSession": "New control session",
+      "newProjectFolder": "New project folder",
+      "renameProjectFolder": "Rename folder",
+      "removeProjectFolder": "Remove folder",
+      "moveToProjectFolder": "Move to folder",
+      "removeFromProjectFolder": "Remove from folder",
       "projectSettings": "Project Settings",
       "closeProject": "Close project",
       "revealInFinder": "Reveal in Finder",
@@ -766,9 +773,6 @@
       "rename": "Rename",
       "regenerateName": "Regenerate Name",
       "duplicateSession": "Duplicate Session",
-      "hideSessionFromProjects": "Hide from Projects",
-      "showSessionInProjects": "Show in Projects",
-      "showHiddenSessions": "Show all hidden sessions",
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
       "copyWorktreePath": "Copy Worktree Path",
@@ -800,15 +804,11 @@
       "newSession": "New instant session",
       "empty": "Double-click to start an instant session."
     },
-    "hiddenSessions": {
-      "title": "Hidden sessions",
-      "countSuffix": ""
-    },
-    "toasts": {
-      "hiddenFromProjects": "Hidden from Projects. Click to undo."
-    },
     "emptyProject": {
       "createSession": "Double-click to start a session."
+    },
+    "emptyProjectFolder": {
+      "noSessions": "No sessions"
     },
     "emptyProjects": {
       "openProject": "Click to open a project."
