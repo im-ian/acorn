@@ -8,6 +8,8 @@
       "worktreeRemoveFailed": "Failed to delete worktree:",
       "refreshFailed": "Failed to refresh sessions:",
       "renameFailed": "Failed to rename session:",
+      "titleNotReady": "No transcript is available for this session yet.",
+      "titleRegenerateSkipped": "Session name was not regenerated.",
       "worktreeAdopted": "Adopted new worktree: {name}",
       "worktreeAdoptFailed": "Failed to adopt worktree:"
     },
@@ -490,12 +492,12 @@
       },
       "sessionTitles": {
         "label": "Session titles",
-        "hint": "When enabled, acorn sends the entire first user prompt in a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
+        "hint": "When enabled, acorn sends transcript context from a new agent session to the selected AI CLI and replaces the default tab name with a concise title.",
         "checkbox": "Auto-generate session titles"
       },
       "sessionTitlePrompt": {
         "label": "Session title prompt",
-        "hint": "Instructions sent before the entire first user prompt. Leave blank to use the default prompt.",
+        "hint": "Instructions sent before the transcript context. Leave blank to use the default prompt.",
         "open": "Configure title prompt",
         "shortButton": "Prompt",
         "editorLabel": "Prompt",
@@ -762,6 +764,7 @@
       "revealInFinder": "Reveal in Finder",
       "copyPath": "Copy path",
       "rename": "Rename",
+      "regenerateName": "Regenerate Name",
       "duplicateSession": "Duplicate Session",
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
@@ -826,6 +829,7 @@
     },
     "menu": {
       "rename": "Rename",
+      "regenerateName": "Regenerate Name",
       "duplicateSession": "Duplicate Session",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
@@ -1402,8 +1406,10 @@
     },
     "controls": {
       "label": "Controls",
-      "hint": "Restart reconnects the bridge - useful after killing the daemon from a terminal. Quit kills every running PTY and exits the daemon.",
+      "hint": "Restart reconnects the bridge - useful after killing the daemon from a terminal. Clear inactive removes non-live daemon metadata. Quit kills every running PTY and exits the daemon.",
       "restart": "Restart daemon",
+      "clearInactive": "Clear inactive sessions",
+      "clearInactiveTooltip": "Remove every non-live session row from the daemon registry",
       "confirmShutdownPrompt": "Kill every PTY?",
       "confirm": "Confirm",
       "cancel": "Cancel",
@@ -1411,11 +1417,11 @@
     },
     "sessions": {
       "label": "Sessions",
-      "hint": "Every PTY the daemon currently tracks. Dead rows can be forgotten from the daemon side; their app metadata stays so you can resume from disk if the agent supports it.",
+      "hint": "Live PTYs the daemon currently tracks. Inactive daemon metadata stays hidden and can be cleared from Controls.",
       "disabled": "Daemon disabled - sessions are managed by the legacy in-process path.",
       "notRunning": "Daemon is not running.",
       "loading": "Loading...",
-      "empty": "No sessions tracked.",
+      "empty": "No live sessions tracked.",
       "controlSession": "Control session"
     },
     "actions": {
@@ -1450,6 +1456,9 @@
       "sessionKilled": "PTY killed.",
       "sessionRestored": "Session restored.",
       "sessionForgotten": "Session forgotten.",
+      "inactiveCleared": "Inactive daemon sessions cleared.",
+      "inactiveNone": "No inactive daemon sessions to clear.",
+      "inactiveClearFailed": "Failed to clear inactive daemon sessions:",
       "sessionActionFailed": "Daemon session action failed:"
     }
   }

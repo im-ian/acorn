@@ -8,12 +8,12 @@ use crate::ai::AiExecutionRequest;
 use crate::error::{AppError, AppResult};
 use crate::todos;
 
-const TITLE_INPUT_CHARS: usize = 2_000;
+const TITLE_CONTEXT_CHARS: usize = 8_000;
 const GENERATED_TITLE_CHARS: usize = 29;
 const SESSION_TITLE_PROMPT_CHARS: usize = 1_000;
 
 pub const DEFAULT_SESSION_TITLE_PROMPT: &str = "\
-You are naming an Acorn session tab from the user's first prompt.
+You are naming an Acorn session tab from the conversation transcript.
 
 Return only a concise title for the tab.
 Rules:
@@ -28,11 +28,11 @@ Rules:
 
 pub struct ResolvedTitleInput {
     pub transcript_id: String,
-    pub first_user_message: String,
+    pub title_context: String,
 }
 
 pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> bool {
-    if session.kind != SessionKind::Regular || !matches!(session.owner, SessionOwner::User) {
+    if !can_force_generate_title(session) {
         return false;
     }
     match session.title_source {
@@ -43,9 +43,13 @@ pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> boo
     }
 }
 
-pub fn build_prompt(prompt: Option<&str>, first_user_message: &str) -> String {
+pub fn can_force_generate_title(session: &Session) -> bool {
+    session.kind == SessionKind::Regular && matches!(session.owner, SessionOwner::User)
+}
+
+pub fn build_prompt(prompt: Option<&str>, title_context: &str) -> String {
     let header = effective_prompt(prompt);
-    format!("{header}\nFirst user prompt:\n{first_user_message}\n")
+    format!("{header}\nConversation transcript context:\n{title_context}\n")
 }
 
 fn effective_prompt(prompt: Option<&str>) -> String {
@@ -60,11 +64,11 @@ fn effective_prompt(prompt: Option<&str>) -> String {
 
 pub fn resolve_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleInput> {
     let (path, provider, transcript_id) = resolve_transcript(session_id)?;
-    let first_user_message =
-        agent_history::transcript_first_user_message(provider, &path, TITLE_INPUT_CHARS)?;
+    let title_context =
+        agent_history::transcript_title_context(provider, &path, TITLE_CONTEXT_CHARS)?;
     Some(ResolvedTitleInput {
         transcript_id,
-        first_user_message,
+        title_context,
     })
 }
 
@@ -76,17 +80,43 @@ pub fn resolve_chat_title_input(session_id: uuid::Uuid) -> Option<ResolvedTitleI
 pub fn chat_title_input_from_state(
     state: &crate::persistence::ChatSessionState,
 ) -> Option<ResolvedTitleInput> {
-    let first_user_message = state.messages.iter().find(|message| {
+    let first_user_index = state.messages.iter().position(|message| {
         message.role == crate::persistence::ChatRole::User && !message.content.trim().is_empty()
     })?;
+    let first_user_message = &state.messages[first_user_index];
+    let title_context = state
+        .messages
+        .iter()
+        .skip(first_user_index)
+        .filter_map(|message| {
+            let content = truncate_chat_message_for_title(&message.content)?;
+            let role = match message.role {
+                crate::persistence::ChatRole::User => "User",
+                crate::persistence::ChatRole::Assistant => "Assistant",
+                crate::persistence::ChatRole::System => "System",
+                crate::persistence::ChatRole::Tool => "Tool",
+            };
+            Some(format!("{role}: {content}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     Some(ResolvedTitleInput {
         transcript_id: format!("chat:{}", first_user_message.id),
-        first_user_message: first_user_message
-            .content
-            .chars()
-            .take(TITLE_INPUT_CHARS)
-            .collect(),
+        title_context: title_context.chars().take(TITLE_CONTEXT_CHARS).collect(),
     })
+}
+
+fn truncate_chat_message_for_title(content: &str) -> Option<String> {
+    let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    let max_chars = 700;
+    let mut out = collapsed.chars().take(max_chars).collect::<String>();
+    if collapsed.chars().count() > max_chars {
+        out.push('…');
+    }
+    Some(out)
 }
 
 pub fn normalize_generated_title(raw: &str) -> Option<String> {
@@ -123,11 +153,11 @@ pub fn normalize_generated_title(raw: &str) -> Option<String> {
 pub fn generate_title_in_dir(
     ai: &AiExecutionRequest,
     prompt: Option<&str>,
-    first_user_message: &str,
+    title_context: &str,
     cwd: Option<&Path>,
 ) -> AppResult<String> {
     let resolved = ai.resolve()?;
-    let prompt = build_prompt(prompt, first_user_message);
+    let prompt = build_prompt(prompt, title_context);
     let raw = crate::ai::run_resolved_oneshot_in_dir(&resolved, &prompt, "Settings → Agents", cwd)?;
     normalize_generated_title(&raw)
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
@@ -155,13 +185,14 @@ mod tests {
     use acorn_session::{Session, SessionKind};
 
     #[test]
-    fn prompt_contains_first_user_message_and_rules() {
+    fn prompt_contains_transcript_context_and_rules() {
         let prompt = build_prompt(None, "Fix the release workflow failure");
 
         assert!(prompt.contains("2 to 5 words"));
         assert!(prompt.contains("Separate each word with hyphens"));
         assert!(prompt.contains("Use lowercase words only"));
         assert!(prompt.contains("overall intent of the full request"));
+        assert!(prompt.contains("Conversation transcript context:"));
         assert!(prompt.contains("Fix the release workflow failure"));
     }
 
@@ -225,6 +256,29 @@ mod tests {
     }
 
     #[test]
+    fn forced_generation_allows_manual_and_same_transcript_titles() {
+        let mut session = Session::new(
+            "repo".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.title_source = SessionTitleSource::Manual;
+        assert!(!can_generate_title(&session, Some("transcript-1")));
+        assert!(can_force_generate_title(&session));
+
+        session.title_source = SessionTitleSource::Generated;
+        session.generated_title_transcript_id = Some("transcript-1".to_string());
+        assert!(!can_generate_title(&session, Some("transcript-1")));
+        assert!(can_force_generate_title(&session));
+
+        session.kind = SessionKind::Control;
+        assert!(!can_force_generate_title(&session));
+    }
+
+    #[test]
     fn generated_titles_can_regenerate_after_transcript_rotation() {
         let mut session = Session::new(
             "repo".to_string(),
@@ -284,6 +338,63 @@ mod tests {
         let input = chat_title_input_from_state(&state).unwrap();
 
         assert_eq!(input.transcript_id, "chat:user-first");
-        assert_eq!(input.first_user_message, "Build Acorn native chat history");
+        assert_eq!(input.title_context, "User: Build Acorn native chat history");
+    }
+
+    #[test]
+    fn chat_title_input_uses_full_chat_context() {
+        let now = chrono::Utc::now();
+        let state = crate::persistence::ChatSessionState {
+            schema_version: crate::persistence::CHAT_SESSION_SCHEMA_VERSION,
+            session_id: uuid::Uuid::new_v4().to_string(),
+            session: crate::persistence::ChatSession::default(),
+            provider: Some("claude".to_string()),
+            model: None,
+            messages: vec![
+                crate::persistence::ChatMessage {
+                    id: "user-first".to_string(),
+                    session_id: None,
+                    turn_id: None,
+                    role: crate::persistence::ChatRole::User,
+                    content: "Investigate the release failure".to_string(),
+                    created_at: now,
+                    status: Some(crate::persistence::ChatMessageStatus::Complete),
+                    metadata: None,
+                },
+                crate::persistence::ChatMessage {
+                    id: "assistant-first".to_string(),
+                    session_id: None,
+                    turn_id: None,
+                    role: crate::persistence::ChatRole::Assistant,
+                    content: "The failing job is release-ci.".to_string(),
+                    created_at: now,
+                    status: Some(crate::persistence::ChatMessageStatus::Complete),
+                    metadata: None,
+                },
+                crate::persistence::ChatMessage {
+                    id: "user-second".to_string(),
+                    session_id: None,
+                    turn_id: None,
+                    role: crate::persistence::ChatRole::User,
+                    content: "Rename the tab from the final diagnosis.".to_string(),
+                    created_at: now,
+                    status: Some(crate::persistence::ChatMessageStatus::Complete),
+                    metadata: None,
+                },
+            ],
+            turns: Vec::new(),
+            provider_threads: Vec::new(),
+            context_snapshots: Vec::new(),
+            memory: crate::persistence::SessionMemory::default(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let input = chat_title_input_from_state(&state).unwrap();
+
+        assert_eq!(
+            input.title_context,
+            "User: Investigate the release failure\nAssistant: The failing job is release-ci.\nUser: Rename the tab from the final diagnosis."
+        );
     }
 }

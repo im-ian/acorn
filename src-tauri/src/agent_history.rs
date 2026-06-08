@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -21,6 +22,7 @@ const READ_HEAD_INITIAL_BYTES: u64 = 256 * 1024;
 const READ_HEAD_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const READ_TAIL_BYTES: u64 = 256 * 1024;
 const PREVIEW_CHARS: usize = 160;
+const TITLE_CONTEXT_ENTRY_CHARS: usize = 700;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -388,6 +390,7 @@ fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentH
     })
 }
 
+#[cfg(test)]
 pub fn transcript_first_user_message(
     provider: AgentHistoryProvider,
     path: &Path,
@@ -401,6 +404,29 @@ pub fn transcript_first_user_message(
     state
         .title
         .and_then(|title| truncate_preserving_lines(&title, max_chars))
+}
+
+pub fn transcript_title_context(
+    provider: AgentHistoryProvider,
+    path: &Path,
+    max_chars: usize,
+) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut builder = TitleContextBuilder::new(max_chars);
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(entry) = title_context_entry(&provider, &value) else {
+            continue;
+        };
+        builder.push(entry);
+    }
+    builder.finish()
 }
 
 fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
@@ -499,6 +525,153 @@ fn parse_antigravity_state(path: &Path) -> Option<ParsedAgentFile> {
     }
 
     Some(state)
+}
+
+struct TitleContextEntry {
+    role: &'static str,
+    text: String,
+}
+
+fn title_context_entry(
+    provider: &AgentHistoryProvider,
+    value: &Value,
+) -> Option<TitleContextEntry> {
+    match provider {
+        AgentHistoryProvider::Codex => codex_title_context_entry(value),
+        AgentHistoryProvider::Claude => claude_title_context_entry(value),
+        AgentHistoryProvider::Antigravity => antigravity_title_context_entry(value),
+    }
+}
+
+fn codex_title_context_entry(value: &Value) -> Option<TitleContextEntry> {
+    let payload = value.get("payload");
+    let role = string_at(payload, "role").or_else(|| string_at(Some(value), "role"))?;
+    let texts = value_texts(value);
+    match role.as_str() {
+        "user" => joined_text(&texts).map(|text| TitleContextEntry { role: "User", text }),
+        "assistant" => first_text(&texts)
+            .or_else(|| response_text(value))
+            .map(|text| TitleContextEntry {
+                role: "Assistant",
+                text,
+            }),
+        _ => None,
+    }
+}
+
+fn claude_title_context_entry(value: &Value) -> Option<TitleContextEntry> {
+    if is_claude_meta_event(value) {
+        return None;
+    }
+    let ty = string_at(Some(value), "type")?;
+    let texts = value_texts(value);
+    match ty.as_str() {
+        "user" => {
+            joined_claude_display_text(&texts).map(|text| TitleContextEntry { role: "User", text })
+        }
+        "assistant" => first_claude_display_text(&texts).map(|text| TitleContextEntry {
+            role: "Assistant",
+            text,
+        }),
+        _ => None,
+    }
+}
+
+fn antigravity_title_context_entry(value: &Value) -> Option<TitleContextEntry> {
+    let ty = string_at(Some(value), "type")?;
+    let text = string_at(Some(value), "content").or_else(|| first_text(&value_texts(value)));
+    match ty.as_str() {
+        "USER_INPUT" => text
+            .and_then(|s| extract_antigravity_user_request(&s))
+            .map(|text| TitleContextEntry { role: "User", text }),
+        "PLANNER_RESPONSE" => text.map(|text| TitleContextEntry {
+            role: "Assistant",
+            text,
+        }),
+        _ => None,
+    }
+}
+
+struct TitleContextBuilder {
+    max_chars: usize,
+    head_limit: usize,
+    tail_limit: usize,
+    head: String,
+    head_chars: usize,
+    tail: VecDeque<(String, usize)>,
+    tail_chars: usize,
+    omitted: bool,
+    last_line: Option<String>,
+}
+
+impl TitleContextBuilder {
+    fn new(max_chars: usize) -> Self {
+        let max_chars = max_chars.max(1);
+        let head_limit = (max_chars / 2).max(1);
+        let tail_limit = (max_chars - head_limit).max(1);
+        Self {
+            max_chars,
+            head_limit,
+            tail_limit,
+            head: String::new(),
+            head_chars: 0,
+            tail: VecDeque::new(),
+            tail_chars: 0,
+            omitted: false,
+            last_line: None,
+        }
+    }
+
+    fn push(&mut self, entry: TitleContextEntry) {
+        let Some(text) = collapse_preview(&entry.text, TITLE_CONTEXT_ENTRY_CHARS) else {
+            return;
+        };
+        let line = format!("{}: {}", entry.role, text);
+        if self.last_line.as_deref() == Some(line.as_str()) {
+            return;
+        }
+        self.last_line = Some(line.clone());
+        let line_chars = line.chars().count() + usize::from(!self.head.is_empty());
+        if !self.omitted && self.head_chars + line_chars <= self.head_limit {
+            if !self.head.is_empty() {
+                self.head.push('\n');
+            }
+            self.head.push_str(&line);
+            self.head_chars += line_chars;
+            return;
+        }
+
+        self.omitted = true;
+        let tail_line_chars = line.chars().count() + 1;
+        self.tail.push_back((line, tail_line_chars));
+        self.tail_chars += tail_line_chars;
+        while self.tail_chars > self.tail_limit {
+            let Some((_, chars)) = self.tail.pop_front() else {
+                break;
+            };
+            self.tail_chars = self.tail_chars.saturating_sub(chars);
+        }
+    }
+
+    fn finish(self) -> Option<String> {
+        if self.head.is_empty() && self.tail.is_empty() {
+            return None;
+        }
+        let mut out = self.head;
+        if self.omitted && !self.tail.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("[...]\n");
+            for (idx, (line, _)) in self.tail.into_iter().enumerate() {
+                if idx > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&line);
+            }
+        }
+        truncate_preserving_lines(&out, self.max_chars)
+    }
 }
 
 fn extract_antigravity_user_request(content: &str) -> Option<String> {
@@ -1525,6 +1698,92 @@ mod tests {
             title,
             "Check whether Antigravity tab rename can miss transcripts"
         );
+    }
+
+    #[test]
+    fn transcript_title_context_includes_later_claude_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "cwd": "/tmp/demo",
+                "message": {
+                    "role": "user",
+                    "content": "Investigate the failing release workflow",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": "The release job is failing before sidecar staging.",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "Use the final diagnosis to regenerate the tab name.",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let context =
+            transcript_title_context(AgentHistoryProvider::Claude, &transcript, 1_000).unwrap();
+
+        assert!(context.contains("User: Investigate the failing release workflow"));
+        assert!(context.contains("Assistant: The release job is failing"));
+        assert!(context.contains("User: Use the final diagnosis"));
+    }
+
+    #[test]
+    fn transcript_title_context_keeps_tail_when_budget_is_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        for idx in 0..20 {
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": format!("Turn {idx}: investigate release workflow detail {idx}"),
+                    },
+                })
+            )
+            .unwrap();
+        }
+        drop(file);
+
+        let context =
+            transcript_title_context(AgentHistoryProvider::Claude, &transcript, 260).unwrap();
+
+        assert!(context.contains("Turn 0"));
+        assert!(context.contains("[...]"));
+        assert!(context.contains("Turn 19"));
     }
 
     #[test]

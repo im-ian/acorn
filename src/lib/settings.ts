@@ -79,7 +79,7 @@ Rules:
 - No quotes, Markdown, trailing punctuation, or extra commentary.
 - Prefer the concrete task over generic words like "help" or "question".`;
 
-export const DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's entire first agent prompt.
+export const DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the conversation transcript.
 
 Return only a concise title for the tab.
 Rules:
@@ -224,12 +224,12 @@ export interface AcornSettings {
     selected: SelectedAgent;
     /**
      * When enabled, new user-owned agent sessions can have their default tab
-     * name replaced by an AI-generated title from the entire first user prompt.
+     * name replaced by an AI-generated title from transcript context.
      * Default off: this can send prompt text to the configured AI CLI.
      */
     autoGenerateSessionTitles: boolean;
     /**
-     * Instructions prepended to the entire first user prompt when Acorn asks the
+     * Instructions prepended to transcript context when Acorn asks the
      * selected AI CLI to name a new session tab.
      */
     sessionTitlePrompt: string;

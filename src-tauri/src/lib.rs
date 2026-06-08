@@ -607,6 +607,7 @@ pub fn run() {
             daemon_commands::daemon_resize,
             daemon_commands::daemon_kill_session,
             daemon_commands::daemon_forget_session,
+            daemon_commands::daemon_forget_inactive_sessions,
             daemon_commands::daemon_adopt_session,
             fs_explorer::fs_list_dir,
             fs_explorer::fs_rename,
