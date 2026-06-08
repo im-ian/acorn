@@ -404,9 +404,8 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse> {
         let invocation = resolve_chat_cli_invocation(&self.ai, &input)?;
         let started_at = SystemTime::now();
-        let raw = crate::ai::run_oneshot_in_dir_cancellable(
-            invocation.command,
-            &invocation.args,
+        let raw = crate::ai::run_resolved_oneshot_in_dir_cancellable(
+            &invocation.cli,
             &invocation.prompt,
             "Settings → Agents",
             Some(&self.cwd),
@@ -429,8 +428,7 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
 
 #[derive(Debug, Clone)]
 struct ChatCliInvocation {
-    command: &'static str,
-    args: Vec<String>,
+    cli: crate::ai::ResolvedAiCommand,
     prompt: String,
     native_thread_id: Option<String>,
     resume_token: Option<String>,
@@ -486,8 +484,11 @@ fn resolve_chat_cli_invocation(
                 }
             };
             Ok(ChatCliInvocation {
-                command: "claude",
-                args,
+                cli: crate::ai::ResolvedAiCommand {
+                    command: "claude",
+                    args,
+                    prompt_transport: crate::ai::PromptTransport::Stdin,
+                },
                 prompt,
                 native_thread_id: Some(thread_id.clone()),
                 resume_token: Some(thread_id),
@@ -497,14 +498,17 @@ fn resolve_chat_cli_invocation(
         crate::ai::AiProvider::Codex => {
             if let Some(cursor) = cursor {
                 Ok(ChatCliInvocation {
-                    command: "codex",
-                    args: vec![
-                        "exec".to_string(),
-                        "--skip-git-repo-check".to_string(),
-                        "resume".to_string(),
-                        cursor.clone(),
-                        "-".to_string(),
-                    ],
+                    cli: crate::ai::ResolvedAiCommand {
+                        command: "codex",
+                        args: vec![
+                            "exec".to_string(),
+                            "--skip-git-repo-check".to_string(),
+                            "resume".to_string(),
+                            cursor.clone(),
+                            "-".to_string(),
+                        ],
+                        prompt_transport: crate::ai::PromptTransport::Stdin,
+                    },
                     prompt,
                     native_thread_id: Some(cursor.clone()),
                     resume_token: Some(cursor),
@@ -513,8 +517,7 @@ fn resolve_chat_cli_invocation(
             } else {
                 let resolved = ai.resolve()?;
                 Ok(ChatCliInvocation {
-                    command: resolved.command,
-                    args: resolved.args,
+                    cli: resolved,
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
@@ -525,12 +528,15 @@ fn resolve_chat_cli_invocation(
         crate::ai::AiProvider::Antigravity => {
             if let Some(cursor) = cursor {
                 Ok(ChatCliInvocation {
-                    command: "agy",
-                    args: vec![
-                        "-p".to_string(),
-                        "--conversation".to_string(),
-                        cursor.clone(),
-                    ],
+                    cli: crate::ai::ResolvedAiCommand {
+                        command: "agy",
+                        args: vec![
+                            "--conversation".to_string(),
+                            cursor.clone(),
+                            "-p".to_string(),
+                        ],
+                        prompt_transport: crate::ai::PromptTransport::Argument,
+                    },
                     prompt,
                     native_thread_id: Some(cursor.clone()),
                     resume_token: Some(cursor),
@@ -539,8 +545,7 @@ fn resolve_chat_cli_invocation(
             } else {
                 let resolved = ai.resolve()?;
                 Ok(ChatCliInvocation {
-                    command: resolved.command,
-                    args: resolved.args,
+                    cli: resolved,
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
@@ -551,8 +556,7 @@ fn resolve_chat_cli_invocation(
         _ => {
             let resolved = ai.resolve()?;
             Ok(ChatCliInvocation {
-                command: resolved.command,
-                args: resolved.args,
+                cli: resolved,
                 prompt,
                 native_thread_id: None,
                 resume_token: None,
@@ -2821,8 +2825,12 @@ fn generate_session_title_inner(
             session: enrich_session(session),
         });
     };
-    let generated =
-        crate::session_titles::generate_title(&ai, prompt.as_deref(), &title_input.title_context)?;
+    let generated = crate::session_titles::generate_title_in_dir(
+        &ai,
+        prompt.as_deref(),
+        &title_input.title_context,
+        Some(&session.worktree_path),
+    )?;
     let latest = state.sessions.get(&id)?;
     let can_store = if force {
         crate::session_titles::can_force_generate_title(&latest)
@@ -2859,10 +2867,13 @@ fn resolve_title_input_for_session(
 
 #[tauri::command]
 pub async fn preview_session_title(
+    state: State<'_, AppState>,
     ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
     first_user_message: String,
+    repo_path: Option<String>,
 ) -> AppResult<String> {
+    let state = state.inner().clone();
     run_blocking("preview_session_title", move || {
         let first_user_message = first_user_message.trim().to_string();
         if first_user_message.is_empty() {
@@ -2870,7 +2881,16 @@ pub async fn preview_session_title(
                 "first user message must not be empty".to_string(),
             ));
         }
-        crate::session_titles::generate_title(&ai, prompt.as_deref(), &first_user_message)
+        let cwd = repo_path
+            .as_deref()
+            .map(|path| authorize_registered_project_root(&state, Path::new(path)))
+            .transpose()?;
+        crate::session_titles::generate_title_in_dir(
+            &ai,
+            prompt.as_deref(),
+            &first_user_message,
+            cwd.as_deref(),
+        )
     })
     .await
 }
@@ -5079,9 +5099,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(invocation.command, "claude");
+        assert_eq!(invocation.cli.command, "claude");
         assert_eq!(
-            invocation.args,
+            invocation.cli.args,
             vec![
                 "-p",
                 "--output-format",
@@ -5089,6 +5109,10 @@ mod tests {
                 "--resume",
                 "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
             ]
+        );
+        assert_eq!(
+            invocation.cli.prompt_transport,
+            crate::ai::PromptTransport::Stdin
         );
         assert_eq!(invocation.prompt, "continue in provider state");
         assert_eq!(
@@ -5132,10 +5156,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(invocation.command, "claude");
-        assert_eq!(invocation.args[0..3], ["-p", "--output-format", "text"]);
-        assert_eq!(invocation.args[3], "--session-id");
-        let seeded_id = invocation.args[4].as_str();
+        assert_eq!(invocation.cli.command, "claude");
+        assert_eq!(invocation.cli.args[0..3], ["-p", "--output-format", "text"]);
+        assert_eq!(invocation.cli.args[3], "--session-id");
+        let seeded_id = invocation.cli.args[4].as_str();
         Uuid::parse_str(seeded_id).expect("seeded Claude id should be a UUID");
         assert_eq!(invocation.prompt, "compiled first message");
         assert_eq!(invocation.native_thread_id.as_deref(), Some(seeded_id));
@@ -5173,9 +5197,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(invocation.command, "codex");
+        assert_eq!(invocation.cli.command, "codex");
         assert_eq!(
-            invocation.args,
+            invocation.cli.args,
             vec![
                 "exec",
                 "--skip-git-repo-check",
@@ -5184,7 +5208,86 @@ mod tests {
                 "-"
             ]
         );
+        assert_eq!(
+            invocation.cli.prompt_transport,
+            crate::ai::PromptTransport::Stdin
+        );
         assert_eq!(invocation.prompt, "continue codex");
+    }
+
+    #[test]
+    fn chat_cli_invocation_passes_antigravity_prompt_as_print_argument() {
+        let input = super::ChatProviderInput {
+            thread: None,
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "run antigravity",
+            ),
+            context: None,
+            model: None,
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Antigravity,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(invocation.cli.command, "agy");
+        assert_eq!(invocation.cli.args, vec!["-p"]);
+        assert_eq!(
+            invocation.cli.prompt_transport,
+            crate::ai::PromptTransport::Argument
+        );
+        assert_eq!(invocation.prompt, "run antigravity");
+    }
+
+    #[test]
+    fn chat_cli_invocation_resumes_antigravity_with_prompt_argument_last() {
+        let input = super::ChatProviderInput {
+            thread: Some(crate::persistence::ProviderThread {
+                session_id: Uuid::new_v4().to_string(),
+                provider: "antigravity".to_string(),
+                model: None,
+                native_thread_id: Some("agy-conversation".to_string()),
+                resume_token: Some("agy-conversation".to_string()),
+                last_response_id: None,
+                updated_at: chrono::Utc::now(),
+            }),
+            message: chat_message(
+                "current-user",
+                crate::persistence::ChatRole::User,
+                "continue antigravity",
+            ),
+            context: None,
+            model: None,
+        };
+
+        let invocation = super::resolve_chat_cli_invocation(
+            &crate::ai::AiExecutionRequest {
+                provider: crate::ai::AiProvider::Antigravity,
+                ollama_model: None,
+                llm_model: None,
+            },
+            &input,
+        )
+        .unwrap();
+
+        assert_eq!(invocation.cli.command, "agy");
+        assert_eq!(
+            invocation.cli.args,
+            vec!["--conversation", "agy-conversation", "-p"]
+        );
+        assert_eq!(
+            invocation.cli.prompt_transport,
+            crate::ai::PromptTransport::Argument
+        );
+        assert_eq!(invocation.prompt, "continue antigravity");
     }
 
     #[test]

@@ -421,6 +421,12 @@ Rules:
     );
   });
 
+  it("describes the Antigravity print prompt argument in settings", () => {
+    expect(
+      AGENT_OPTIONS.find((o) => o.value === "antigravity")?.oneshotHint,
+    ).toBe("agy -p <prompt>");
+  });
+
   it("shows only the supported built-in agents in Settings order", () => {
     expect(AGENT_OPTIONS.map((o) => [o.value, o.label])).toEqual([
       ["claude", "Claude Code"],

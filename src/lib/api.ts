@@ -162,11 +162,13 @@ export const api = {
     ai: AiExecutionRequest,
     prompt: string,
     firstUserMessage: string,
+    repoPath?: string | null,
   ): Promise<string> {
     return invoke<string>("preview_session_title", {
       ai,
       prompt,
       firstUserMessage,
+      repoPath,
     });
   },
   loadChatSessionState(sessionId: string): Promise<ChatSessionState> {
