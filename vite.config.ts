@@ -9,6 +9,8 @@ import { consoleForwardPlugin } from "vite-console-forward-plugin";
 const host = process.env.TAURI_DEV_HOST;
 // @ts-expect-error process is a nodejs global
 const projectRoot: string = process.cwd();
+// @ts-expect-error process is a nodejs global
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 1420);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -29,7 +31,7 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    port,
     strictPort: true,
     host: host || false,
     hmr: host

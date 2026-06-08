@@ -2782,10 +2782,11 @@ pub async fn generate_session_title(
     id: String,
     ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
+    force: Option<bool>,
 ) -> AppResult<GenerateSessionTitleResult> {
     let state = state.inner().clone();
     run_blocking("generate_session_title", move || {
-        generate_session_title_inner(state, id, ai, prompt)
+        generate_session_title_inner(state, id, ai, prompt, force.unwrap_or(false))
     })
     .await
 }
@@ -2795,6 +2796,7 @@ fn generate_session_title_inner(
     id: String,
     ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
+    force: bool,
 ) -> AppResult<GenerateSessionTitleResult> {
     let id = parse_id(&id)?;
     let session = state.sessions.get(&id)?;
@@ -2802,7 +2804,12 @@ fn generate_session_title_inner(
     let transcript_id = title_input
         .as_ref()
         .map(|input| input.transcript_id.as_str());
-    if !crate::session_titles::can_generate_title(&session, transcript_id) {
+    let can_generate = if force {
+        crate::session_titles::can_force_generate_title(&session)
+    } else {
+        crate::session_titles::can_generate_title(&session, transcript_id)
+    };
+    if !can_generate {
         return Ok(GenerateSessionTitleResult {
             status: GenerateSessionTitleStatus::Skipped,
             session: enrich_session(session),
@@ -2814,13 +2821,15 @@ fn generate_session_title_inner(
             session: enrich_session(session),
         });
     };
-    let generated = crate::session_titles::generate_title(
-        &ai,
-        prompt.as_deref(),
-        &title_input.first_user_message,
-    )?;
+    let generated =
+        crate::session_titles::generate_title(&ai, prompt.as_deref(), &title_input.title_context)?;
     let latest = state.sessions.get(&id)?;
-    if !crate::session_titles::can_generate_title(&latest, Some(&title_input.transcript_id)) {
+    let can_store = if force {
+        crate::session_titles::can_force_generate_title(&latest)
+    } else {
+        crate::session_titles::can_generate_title(&latest, Some(&title_input.transcript_id))
+    };
+    if !can_store {
         return Ok(GenerateSessionTitleResult {
             status: GenerateSessionTitleStatus::Skipped,
             session: enrich_session(latest),

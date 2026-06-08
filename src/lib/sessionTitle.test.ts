@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "./types";
 import {
   canAutoGenerateSessionTitle,
+  canForceGenerateSessionTitle,
   canGenerateSessionTitle,
   canRenameSession,
   planAutoGenerateSessionTitles,
@@ -87,6 +88,29 @@ describe("session title helpers", () => {
       ),
     ).toBe(false);
     expect(canGenerateSessionTitle(session({ agent_provider: null }))).toBe(true);
+  });
+
+  it("allows manual title regeneration for user-owned regular sessions", () => {
+    expect(
+      canForceGenerateSessionTitle(session({ title_source: "manual" })),
+    ).toBe(true);
+    expect(
+      canForceGenerateSessionTitle(
+        session({
+          title_source: "generated",
+          generated_title_transcript_id: "claude-1",
+          agent_transcript_id: "claude-1",
+        }),
+      ),
+    ).toBe(true);
+    expect(canForceGenerateSessionTitle(session({ kind: "control" }))).toBe(
+      false,
+    );
+    expect(
+      canForceGenerateSessionTitle(
+        session({ owner: { kind: "control", session_id: "control-1" } }),
+      ),
+    ).toBe(false);
   });
 
   it("uses the global automatic title setting for terminal sessions and always allows chat sessions", () => {

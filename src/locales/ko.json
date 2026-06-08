@@ -8,6 +8,8 @@
       "worktreeRemoveFailed": "worktree를 삭제하지 못했습니다:",
       "refreshFailed": "세션을 새로고침하지 못했습니다:",
       "renameFailed": "세션 이름을 변경하지 못했습니다:",
+      "titleNotReady": "아직 이 세션에서 사용할 transcript가 없습니다.",
+      "titleRegenerateSkipped": "세션 이름을 다시 생성하지 못했습니다.",
       "worktreeAdopted": "새 worktree를 가져왔습니다: {name}",
       "worktreeAdoptFailed": "worktree를 가져오지 못했습니다:"
     },
@@ -490,12 +492,12 @@
       },
       "sessionTitles": {
         "label": "세션 제목",
-        "hint": "켜면 새 에이전트 세션의 첫 사용자 프롬프트 전체를 선택한 AI CLI로 보내고 기본 탭 이름을 간결한 제목으로 바꿉니다.",
+        "hint": "켜면 새 에이전트 세션의 transcript context를 선택한 AI CLI로 보내고 기본 탭 이름을 간결한 제목으로 바꿉니다.",
         "checkbox": "세션 제목 자동 생성"
       },
       "sessionTitlePrompt": {
         "label": "세션 제목 프롬프트",
-        "hint": "첫 사용자 프롬프트 전체 앞에 함께 보낼 지시문입니다. 비워 두면 기본 프롬프트를 사용합니다.",
+        "hint": "transcript context 앞에 함께 보낼 지시문입니다. 비워 두면 기본 프롬프트를 사용합니다.",
         "open": "제목 프롬프트 설정",
         "shortButton": "프롬프트",
         "editorLabel": "프롬프트",
@@ -762,6 +764,7 @@
       "revealInFinder": "Finder에서 보기",
       "copyPath": "경로 복사",
       "rename": "이름 변경",
+      "regenerateName": "이름 다시 생성",
       "duplicateSession": "세션 복제",
       "equalizePaneSizes": "Pane 크기 균등화",
       "openWorktreeInEditor": "편집기에서 worktree 열기",
@@ -826,6 +829,7 @@
     },
     "menu": {
       "rename": "이름 변경",
+      "regenerateName": "이름 다시 생성",
       "duplicateSession": "세션 복제",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",

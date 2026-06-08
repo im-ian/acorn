@@ -205,6 +205,7 @@ interface AppStateModel {
     id: string,
     ai: AiExecutionRequest,
     prompt: string,
+    force?: boolean,
   ) => Promise<SessionTitleGenerationStatus>;
   adoptSessionWorktree: (id: string, worktreePath: string) => Promise<void>;
   requestRemoveSession: (id: string) => void;
@@ -1585,7 +1586,7 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
-  async generateSessionTitle(id, ai, prompt) {
+  async generateSessionTitle(id, ai, prompt, force = false) {
     const startedAt = Date.now();
     let resultStatus: SessionTitleGenerationStatus = "skipped";
     set((s) => ({
@@ -1595,7 +1596,7 @@ export const useAppStore = create<AppStateModel>()(
       },
     }));
     try {
-      const result = await api.generateSessionTitle(id, ai, prompt);
+      const result = await api.generateSessionTitle(id, ai, prompt, force);
       resultStatus = result.status;
       const updated = result.session;
       if (result.status === "generated" && updated?.id) {
