@@ -157,11 +157,34 @@ pub fn generate_title_in_dir(
     title_context: &str,
     cwd: Option<&Path>,
 ) -> AppResult<String> {
-    let resolved = title_generation_command(ai.resolve()?);
+    let base = ai.resolve()?;
     let prompt = build_prompt(prompt, title_context);
-    let raw = crate::ai::run_resolved_oneshot_in_dir(&resolved, &prompt, "Settings → Agents", cwd)?;
+    let raw = run_title_generation(&base, |resolved| {
+        crate::ai::run_resolved_oneshot_in_dir(resolved, &prompt, "Settings → Agents", cwd)
+    })?;
     normalize_generated_title(&raw)
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
+}
+
+/// Run title generation with the provider's non-persistence flag, falling back to
+/// the unflagged command when the flagged invocation fails.
+///
+/// Older `claude` / `codex` CLIs may reject `--no-session-persistence` / `--ephemeral`
+/// and exit non-zero, which would otherwise break title generation entirely. The
+/// internal prompt marker keeps any transcript persisted by the fallback out of
+/// Agents → History, so degrading to the unflagged command stays safe.
+fn run_title_generation(
+    base: &ResolvedAiCommand,
+    run: impl Fn(&ResolvedAiCommand) -> AppResult<String>,
+) -> AppResult<String> {
+    let flagged = title_generation_command(base.clone());
+    if flagged == *base {
+        return run(base);
+    }
+    match run(&flagged) {
+        Ok(raw) => Ok(raw),
+        Err(_) => run(base),
+    }
 }
 
 fn title_generation_command(mut resolved: ResolvedAiCommand) -> ResolvedAiCommand {
@@ -271,6 +294,82 @@ mod tests {
             .unwrap(),
         );
         assert!(codex.args.contains(&"--ephemeral".to_string()));
+    }
+
+    #[test]
+    fn title_generation_falls_back_to_unflagged_command_when_flag_rejected() {
+        use std::cell::Cell;
+
+        let base = AiExecutionRequest {
+            provider: crate::ai::AiProvider::Codex,
+            ollama_model: None,
+            llm_model: None,
+        }
+        .resolve()
+        .unwrap();
+
+        let calls = Cell::new(0);
+        let result = run_title_generation(&base, |resolved| {
+            calls.set(calls.get() + 1);
+            if resolved.args.contains(&"--ephemeral".to_string()) {
+                Err(AppError::Other(
+                    "error: unexpected argument '--ephemeral' found".to_string(),
+                ))
+            } else {
+                Ok("release-workflow-fix".to_string())
+            }
+        });
+
+        assert_eq!(result.unwrap(), "release-workflow-fix");
+        assert_eq!(calls.get(), 2, "should retry once without the flag");
+    }
+
+    #[test]
+    fn title_generation_runs_once_when_flag_supported() {
+        use std::cell::Cell;
+
+        let base = AiExecutionRequest {
+            provider: crate::ai::AiProvider::Claude,
+            ollama_model: None,
+            llm_model: None,
+        }
+        .resolve()
+        .unwrap();
+
+        let calls = Cell::new(0);
+        let result = run_title_generation(&base, |_| {
+            calls.set(calls.get() + 1);
+            Ok("release-workflow-fix".to_string())
+        });
+
+        assert_eq!(result.unwrap(), "release-workflow-fix");
+        assert_eq!(calls.get(), 1, "no retry when the flagged command succeeds");
+    }
+
+    #[test]
+    fn title_generation_does_not_retry_for_providers_without_flag() {
+        use std::cell::Cell;
+
+        let base = AiExecutionRequest {
+            provider: crate::ai::AiProvider::Ollama,
+            ollama_model: Some("llama3".to_string()),
+            llm_model: None,
+        }
+        .resolve()
+        .unwrap();
+
+        let calls = Cell::new(0);
+        let result = run_title_generation(&base, |_| {
+            calls.set(calls.get() + 1);
+            Err(AppError::Other("model run failed".to_string()))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            calls.get(),
+            1,
+            "providers without a non-persistence flag must not double-run on failure"
+        );
     }
 
     #[test]
