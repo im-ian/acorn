@@ -3,6 +3,7 @@ import {
   CircleX,
   Columns2,
   Copy,
+  EyeOff,
   Files,
   FolderOpen,
   FolderPlus,
@@ -45,6 +46,10 @@ import {
   openInConfiguredEditor,
 } from "../lib/editor";
 import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
+import {
+  hideProjectSession,
+  showProjectSession,
+} from "../lib/hiddenProjectSessions";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
@@ -1039,6 +1044,16 @@ function TabItem({
     window.addEventListener("blur", onWindowBlur);
   }
 
+  function hideFromProjects(): void {
+    if (!session) return;
+    hideProjectSession(session.id);
+    showToast(t("sidebar.toasts.hiddenFromProjects"), {
+      action: () => {
+        showProjectSession(session.id);
+      },
+    });
+  }
+
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
     const items: ContextMenuItem[] = [];
@@ -1118,6 +1133,15 @@ function TabItem({
       onClick: () => onDuplicate?.(),
       disabled: !onDuplicate,
     },
+    ...(session
+      ? [
+          {
+            label: t("sidebar.actions.hideSessionFromProjects"),
+            icon: <EyeOff size={12} />,
+            onClick: hideFromProjects,
+          },
+        ]
+      : []),
     { type: "separator" },
     ...forkItems,
     {
