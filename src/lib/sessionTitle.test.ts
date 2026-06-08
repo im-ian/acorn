@@ -5,6 +5,7 @@ import {
   canForceGenerateSessionTitle,
   canGenerateSessionTitle,
   canRenameSession,
+  canRegenerateSessionTitle,
   planAutoGenerateSessionTitles,
 } from "./sessionTitle";
 
@@ -90,7 +91,7 @@ describe("session title helpers", () => {
     expect(canGenerateSessionTitle(session({ agent_provider: null }))).toBe(true);
   });
 
-  it("allows manual title regeneration for user-owned regular sessions", () => {
+  it("allows forced title generation for user-owned regular sessions", () => {
     expect(
       canForceGenerateSessionTitle(session({ title_source: "manual" })),
     ).toBe(true);
@@ -111,6 +112,59 @@ describe("session title helpers", () => {
         session({ owner: { kind: "control", session_id: "control-1" } }),
       ),
     ).toBe(false);
+  });
+
+  it("allows manual title regeneration only for sessions with agent chat work", () => {
+    expect(
+      canRegenerateSessionTitle(
+        session({
+          title_source: "manual",
+          agent_provider: null,
+          agent_transcript_id: null,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      canRegenerateSessionTitle(
+        session({
+          title_source: "manual",
+          agent_provider: null,
+          agent_transcript_id: "codex-1",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canRegenerateSessionTitle(
+        session({
+          title_source: "generated",
+          generated_title_transcript_id: "codex-1",
+          agent_transcript_id: "codex-1",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canRegenerateSessionTitle(
+        session({
+          title_source: "manual",
+          mode: "chat",
+          status: "needs_input",
+          agent_provider: null,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canRegenerateSessionTitle(
+        session({
+          title_source: "manual",
+          mode: "chat",
+          status: "idle",
+          agent_provider: null,
+        }),
+      ),
+    ).toBe(false);
+    expect(canRegenerateSessionTitle(session({ kind: "control" }))).toBe(
+      false,
+    );
   });
 
   it("uses the global automatic title setting for terminal sessions and always allows chat sessions", () => {

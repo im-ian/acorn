@@ -52,7 +52,7 @@ import {
   resolveSessionTitlePrompt,
 } from "../lib/settings";
 import {
-  canForceGenerateSessionTitle,
+  canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
@@ -851,7 +851,7 @@ function TabItem({
     : false;
   const canRegenerateTitle =
     session != null &&
-    canForceGenerateSessionTitle(session) &&
+    canRegenerateSessionTitle(session) &&
     !isGeneratingTitle;
   const showAgentProviderIcons = useSettings(
     (s) => s.settings.sessionDisplay.icons.agentProvider,

@@ -62,7 +62,7 @@ import {
   type SessionTitleSource,
 } from "../lib/settings";
 import {
-  canForceGenerateSessionTitle,
+  canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
@@ -1981,7 +1981,7 @@ function SessionRow({
   );
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
-    canForceGenerateSessionTitle(session) && !isGeneratingTitle;
+    canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -2603,7 +2603,7 @@ function LocalSessionRow({
   );
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
-    canForceGenerateSessionTitle(session) && !isGeneratingTitle;
+    canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {

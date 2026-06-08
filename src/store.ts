@@ -61,6 +61,7 @@ import {
   type ProjectFoldersByRepo,
   type SessionFolderAssignments,
 } from "./lib/projectFolders";
+import { canRegenerateSessionTitle } from "./lib/sessionTitle";
 
 export type { RightGroup, RightTab };
 
@@ -2013,6 +2014,11 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async generateSessionTitle(id, ai, prompt, force = false) {
+    if (force) {
+      const session = get().sessions.find((candidate) => candidate.id === id);
+      if (!session || !canRegenerateSessionTitle(session)) return "skipped";
+    }
+
     const startedAt = Date.now();
     let resultStatus: SessionTitleGenerationStatus = "skipped";
     set((s) => ({

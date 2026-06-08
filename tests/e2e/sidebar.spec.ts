@@ -110,7 +110,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "needs_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -140,7 +140,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "needs_input",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -205,7 +205,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "needs_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -235,7 +235,7 @@ test.describe("sidebar: project lifecycle", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "needs_input",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -271,6 +271,67 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toMatchObject({ id: "session-1", force: true });
   });
 
+  test("ordinary terminal sessions cannot regenerate a session name", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "plain-terminal",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: null,
+        agent_transcript_id: null,
+      },
+    ]);
+    await tauri.handle("generate_session_title", (args) => {
+      const w = window as unknown as { __generateTitleCalls?: unknown[] };
+      w.__generateTitleCalls = w.__generateTitleCalls ?? [];
+      w.__generateTitleCalls.push(args);
+      return { status: "skipped", session: null };
+    });
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /plain-terminal/ })
+      .click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Regenerate Name" }),
+    ).toBeDisabled();
+    await expect(
+      page.locator('[data-tab-drag-handle="session-1"]'),
+    ).toContainText("plain-terminal");
+    const calls = await page.evaluate(
+      () =>
+        (window as unknown as { __generateTitleCalls?: unknown[] })
+          .__generateTitleCalls ?? [],
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   test("regenerates a name for sessions backed by real git worktrees", async ({
     page,
     tauri,
@@ -284,7 +345,7 @@ test.describe("sidebar: project lifecycle", () => {
       branch: "feature/alpha",
       isolated: true,
       project_scoped: true,
-      status: "idle",
+      status: "needs_input",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       last_message: null,
@@ -315,7 +376,7 @@ test.describe("sidebar: project lifecycle", () => {
           branch: "feature/beta",
           isolated: true,
           project_scoped: true,
-          status: "idle",
+          status: "needs_input",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,

@@ -1427,6 +1427,8 @@ describe("generateSessionTitle", () => {
         session("a1", REPO_A, {
           name: "Manual title",
           title_source: "manual",
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
         }),
       ],
     );
@@ -1451,6 +1453,30 @@ describe("generateSessionTitle", () => {
       true,
     );
     expect(useAppStore.getState().sessions[0]?.name).toBe("fresh-title");
+  });
+
+  it("skips forced title generation for sessions without agent chat work", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          name: "Manual title",
+          title_source: "manual",
+          agent_provider: null,
+          agent_transcript_id: null,
+        }),
+      ],
+    );
+
+    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", ai, "Title prompt", true);
+
+    expect(status).toBe("skipped");
+    expect(mockApi.generateSessionTitle).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions[0]?.name).toBe("Manual title");
+    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
   });
 
   it("returns not_ready without replacing the session title", async () => {
