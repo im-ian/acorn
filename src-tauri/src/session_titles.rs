@@ -4,13 +4,14 @@ use acorn_session::{Session, SessionKind, SessionOwner, SessionTitleSource};
 
 use crate::agent_history::{self, AgentHistoryProvider};
 use crate::agent_resume;
-use crate::ai::AiExecutionRequest;
+use crate::ai::{AiExecutionRequest, ResolvedAiCommand};
 use crate::error::{AppError, AppResult};
 use crate::todos;
 
 const TITLE_CONTEXT_CHARS: usize = 8_000;
 const GENERATED_TITLE_CHARS: usize = 29;
 const SESSION_TITLE_PROMPT_CHARS: usize = 1_000;
+pub const INTERNAL_TITLE_PROMPT_MARKER: &str = "<ACORN_INTERNAL_SESSION_TITLE_GENERATION>";
 
 pub const DEFAULT_SESSION_TITLE_PROMPT: &str = "\
 You are naming an Acorn session tab from the conversation transcript.
@@ -49,7 +50,7 @@ pub fn can_force_generate_title(session: &Session) -> bool {
 
 pub fn build_prompt(prompt: Option<&str>, title_context: &str) -> String {
     let header = effective_prompt(prompt);
-    format!("{header}\nConversation transcript context:\n{title_context}\n")
+    format!("{header}\n{INTERNAL_TITLE_PROMPT_MARKER}\nConversation transcript context:\n{title_context}\n")
 }
 
 fn effective_prompt(prompt: Option<&str>) -> String {
@@ -156,11 +157,43 @@ pub fn generate_title_in_dir(
     title_context: &str,
     cwd: Option<&Path>,
 ) -> AppResult<String> {
-    let resolved = ai.resolve()?;
+    let base = ai.resolve()?;
     let prompt = build_prompt(prompt, title_context);
-    let raw = crate::ai::run_resolved_oneshot_in_dir(&resolved, &prompt, "Settings → Agents", cwd)?;
+    let raw = run_title_generation(&base, |resolved| {
+        crate::ai::run_resolved_oneshot_in_dir(resolved, &prompt, "Settings → Agents", cwd)
+    })?;
     normalize_generated_title(&raw)
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
+}
+
+/// Run title generation with the provider's non-persistence flag, falling back to
+/// the unflagged command when the flagged invocation fails.
+///
+/// Older `claude` / `codex` CLIs may reject `--no-session-persistence` / `--ephemeral`
+/// and exit non-zero, which would otherwise break title generation entirely. The
+/// internal prompt marker keeps any transcript persisted by the fallback out of
+/// Agents → History, so degrading to the unflagged command stays safe.
+fn run_title_generation(
+    base: &ResolvedAiCommand,
+    run: impl Fn(&ResolvedAiCommand) -> AppResult<String>,
+) -> AppResult<String> {
+    let flagged = title_generation_command(base.clone());
+    if flagged == *base {
+        return run(base);
+    }
+    match run(&flagged) {
+        Ok(raw) => Ok(raw),
+        Err(_) => run(base),
+    }
+}
+
+fn title_generation_command(mut resolved: ResolvedAiCommand) -> ResolvedAiCommand {
+    match resolved.command {
+        "claude" => resolved.args.push("--no-session-persistence".to_string()),
+        "codex" => resolved.args.push("--ephemeral".to_string()),
+        _ => {}
+    }
+    resolved
 }
 
 fn resolve_transcript(session_id: uuid::Uuid) -> Option<(PathBuf, AgentHistoryProvider, String)> {
@@ -192,6 +225,7 @@ mod tests {
         assert!(prompt.contains("Separate each word with hyphens"));
         assert!(prompt.contains("Use lowercase words only"));
         assert!(prompt.contains("overall intent of the full request"));
+        assert!(prompt.contains(INTERNAL_TITLE_PROMPT_MARKER));
         assert!(prompt.contains("Conversation transcript context:"));
         assert!(prompt.contains("Fix the release workflow failure"));
     }
@@ -232,6 +266,109 @@ mod tests {
         assert_eq!(
             normalize_generated_title("### Investigate Codex Resume\nextra").as_deref(),
             Some("Investigate Codex Resume")
+        );
+    }
+
+    #[test]
+    fn title_generation_uses_non_persistent_provider_flags() {
+        let claude = title_generation_command(
+            (AiExecutionRequest {
+                provider: crate::ai::AiProvider::Claude,
+                ollama_model: None,
+                llm_model: None,
+            })
+            .resolve()
+            .unwrap(),
+        );
+        assert!(claude
+            .args
+            .contains(&"--no-session-persistence".to_string()));
+
+        let codex = title_generation_command(
+            (AiExecutionRequest {
+                provider: crate::ai::AiProvider::Codex,
+                ollama_model: None,
+                llm_model: None,
+            })
+            .resolve()
+            .unwrap(),
+        );
+        assert!(codex.args.contains(&"--ephemeral".to_string()));
+    }
+
+    #[test]
+    fn title_generation_falls_back_to_unflagged_command_when_flag_rejected() {
+        use std::cell::Cell;
+
+        let base = AiExecutionRequest {
+            provider: crate::ai::AiProvider::Codex,
+            ollama_model: None,
+            llm_model: None,
+        }
+        .resolve()
+        .unwrap();
+
+        let calls = Cell::new(0);
+        let result = run_title_generation(&base, |resolved| {
+            calls.set(calls.get() + 1);
+            if resolved.args.contains(&"--ephemeral".to_string()) {
+                Err(AppError::Other(
+                    "error: unexpected argument '--ephemeral' found".to_string(),
+                ))
+            } else {
+                Ok("release-workflow-fix".to_string())
+            }
+        });
+
+        assert_eq!(result.unwrap(), "release-workflow-fix");
+        assert_eq!(calls.get(), 2, "should retry once without the flag");
+    }
+
+    #[test]
+    fn title_generation_runs_once_when_flag_supported() {
+        use std::cell::Cell;
+
+        let base = AiExecutionRequest {
+            provider: crate::ai::AiProvider::Claude,
+            ollama_model: None,
+            llm_model: None,
+        }
+        .resolve()
+        .unwrap();
+
+        let calls = Cell::new(0);
+        let result = run_title_generation(&base, |_| {
+            calls.set(calls.get() + 1);
+            Ok("release-workflow-fix".to_string())
+        });
+
+        assert_eq!(result.unwrap(), "release-workflow-fix");
+        assert_eq!(calls.get(), 1, "no retry when the flagged command succeeds");
+    }
+
+    #[test]
+    fn title_generation_does_not_retry_for_providers_without_flag() {
+        use std::cell::Cell;
+
+        let base = AiExecutionRequest {
+            provider: crate::ai::AiProvider::Ollama,
+            ollama_model: Some("llama3".to_string()),
+            llm_model: None,
+        }
+        .resolve()
+        .unwrap();
+
+        let calls = Cell::new(0);
+        let result = run_title_generation(&base, |_| {
+            calls.set(calls.get() + 1);
+            Err(AppError::Other("model run failed".to_string()))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            calls.get(),
+            1,
+            "providers without a non-persistence flag must not double-run on failure"
         );
     }
 
