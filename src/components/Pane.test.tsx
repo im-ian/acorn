@@ -80,6 +80,18 @@ function resetStore(): void {
     {
       sessions: [],
       projects: [project(REPO)],
+      projectFolders: {
+        [REPO]: [
+          {
+            id: REPO,
+            repoPath: REPO,
+            name: "Default",
+            cwdPath: REPO,
+            position: 0,
+          },
+        ],
+      },
+      sessionFolderIds: {},
       workspaces: {
         [REPO]: {
           layout: { kind: "pane", id: "root" },
@@ -88,6 +100,7 @@ function resetStore(): void {
         },
       },
       activeProject: REPO,
+      activeProjectFolderId: REPO,
       layout: { kind: "pane", id: "root" },
       panes: { root: { id: "root", tabIds: [], activeTabId: null } },
       focusedPaneId: "root",
@@ -131,6 +144,8 @@ function seedInactivePaneWithTab(tab: Session): void {
   useAppStore.setState((s) => ({
     ...s,
     sessions: [tab],
+    activeProject: REPO,
+    activeProjectFolderId: REPO,
     workspaces: {
       [REPO]: {
         layout,
@@ -161,6 +176,7 @@ function seedActivePaneWithTabs(tabs: Session[], activeTabId: string): void {
     ...s,
     sessions: tabs,
     activeProject: REPO,
+    activeProjectFolderId: REPO,
     activeSessionId: activeTabId,
     activeTabId,
     workspaces: {

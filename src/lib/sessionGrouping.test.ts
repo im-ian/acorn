@@ -134,33 +134,6 @@ describe("buildProjectGroups", () => {
     ]);
   });
 
-  it("omits hidden session rows without dropping their project group", () => {
-    const groups = buildProjectGroups(
-      [project("/repo/app", 0)],
-      [session("visible", "/repo/app"), session("hidden", "/repo/app")],
-      new Set(["hidden"]),
-    );
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].repoPath).toBe("/repo/app");
-    expect(groups[0].sessions.map((s) => s.id)).toEqual(["visible"]);
-  });
-
-  it("keeps a backfilled hidden-only group available for restoration", () => {
-    const groups = buildProjectGroups(
-      [],
-      [session("hidden", "/repo/missing")],
-      new Set(["hidden"]),
-    );
-
-    expect(groups).toEqual([
-      {
-        repoPath: "/repo/missing",
-        name: "missing",
-        sessions: [],
-      },
-    ]);
-  });
 });
 
 describe("buildLocalSessions", () => {

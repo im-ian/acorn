@@ -123,7 +123,10 @@ function resetStore(): void {
       sessions: [],
       projects: [],
       workspaces: {},
+      projectFolders: {},
+      sessionFolderIds: {},
       activeProject: null,
+      activeProjectFolderId: null,
       layout: { kind: "pane", id: "root" },
       panes: { root: { id: "root", tabIds: [], activeTabId: null } },
       focusedPaneId: "root",
@@ -362,6 +365,96 @@ describe("setActiveProject", () => {
     expect(s.workspaces[REPO_A]).toBeDefined();
     expect(s.activeTabId).toBeNull();
     expect(s.activeSessionId).toBeNull();
+  });
+});
+
+describe("project folders", () => {
+  it("creates a named conceptual folder and moves sessions into it explicitly", async () => {
+    const root = session("root", REPO_A, { worktree_path: REPO_A });
+    const web = session("web", REPO_A, {
+      worktree_path: `${REPO_A}/apps/web`,
+    });
+    await seed([project(REPO_A, 0)], [root, web]);
+
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend");
+
+    expect(folder).toMatchObject({
+      repoPath: REPO_A,
+      name: "Frontend",
+      cwdPath: REPO_A,
+    });
+    const createdState = useAppStore.getState();
+    expect(createdState.activeProject).toBe(REPO_A);
+    expect(createdState.activeProjectFolderId).toBe(folder!.id);
+    expect(createdState.workspaces[folder!.id].panes.root.tabIds).toEqual([]);
+    expect(createdState.workspaces[REPO_A].panes.root.tabIds).toEqual([
+      "root",
+      "web",
+    ]);
+
+    useAppStore.getState().moveSessionToProjectFolder("web", folder!.id);
+
+    const movedState = useAppStore.getState();
+    expect(movedState.sessionFolderIds.web).toBe(folder!.id);
+    expect(movedState.workspaces[folder!.id].panes.root.tabIds).toEqual(["web"]);
+    expect(movedState.workspaces[REPO_A].panes.root.tabIds).toEqual(["root"]);
+  });
+
+  it("creates a session from the project root and assigns it to the folder", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    const created = session("web1", REPO_A, { worktree_path: REPO_A });
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore
+      .getState()
+      .createSession(
+        "web",
+        folder.cwdPath,
+        false,
+        "regular",
+        null,
+        true,
+        "terminal",
+        folder.id,
+      );
+
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "web",
+      REPO_A,
+      false,
+      "regular",
+      null,
+    );
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.web1).toBe(folder.id);
+    expect(s.activeProject).toBe(REPO_A);
+    expect(s.activeProjectFolderId).toBe(folder.id);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["web1"]);
+  });
+
+  it("reorders named project folders without moving the default folder", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const frontend = useAppStore
+      .getState()
+      .createProjectFolder(REPO_A, "Frontend")!;
+    const backend = useAppStore
+      .getState()
+      .createProjectFolder(REPO_A, "Backend")!;
+
+    useAppStore
+      .getState()
+      .reorderProjectFolders(REPO_A, [backend.id, frontend.id]);
+
+    const folders = useAppStore.getState().projectFolders[REPO_A];
+    expect(folders.map((folder) => folder.id)).toEqual([
+      REPO_A,
+      backend.id,
+      frontend.id,
+    ]);
+    expect(folders.map((folder) => folder.position)).toEqual([0, 1, 2]);
   });
 });
 

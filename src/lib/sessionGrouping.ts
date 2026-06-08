@@ -9,7 +9,6 @@ export interface ProjectGroup {
 export function buildProjectGroups(
   projects: Project[],
   sessions: Session[],
-  hiddenSessionIds: ReadonlySet<string> = new Set(),
 ): ProjectGroup[] {
   const map = new Map<string, ProjectGroup>();
   const projectSessions = sessions.filter(isProjectSession);
@@ -49,7 +48,6 @@ export function buildProjectGroups(
       };
       map.set(session.repo_path, group);
     }
-    if (hiddenSessionIds.has(session.id)) continue;
     group.sessions.push(session);
   }
   for (const group of map.values()) {
