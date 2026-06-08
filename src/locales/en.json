@@ -1402,8 +1402,10 @@
     },
     "controls": {
       "label": "Controls",
-      "hint": "Restart reconnects the bridge - useful after killing the daemon from a terminal. Quit kills every running PTY and exits the daemon.",
+      "hint": "Restart reconnects the bridge - useful after killing the daemon from a terminal. Clear inactive removes non-live daemon metadata. Quit kills every running PTY and exits the daemon.",
       "restart": "Restart daemon",
+      "clearInactive": "Clear inactive sessions",
+      "clearInactiveTooltip": "Remove every non-live session row from the daemon registry",
       "confirmShutdownPrompt": "Kill every PTY?",
       "confirm": "Confirm",
       "cancel": "Cancel",
@@ -1411,11 +1413,11 @@
     },
     "sessions": {
       "label": "Sessions",
-      "hint": "Every PTY the daemon currently tracks. Dead rows can be forgotten from the daemon side; their app metadata stays so you can resume from disk if the agent supports it.",
+      "hint": "Live PTYs the daemon currently tracks. Inactive daemon metadata stays hidden and can be cleared from Controls.",
       "disabled": "Daemon disabled - sessions are managed by the legacy in-process path.",
       "notRunning": "Daemon is not running.",
       "loading": "Loading...",
-      "empty": "No sessions tracked.",
+      "empty": "No live sessions tracked.",
       "controlSession": "Control session"
     },
     "actions": {
@@ -1450,6 +1452,9 @@
       "sessionKilled": "PTY killed.",
       "sessionRestored": "Session restored.",
       "sessionForgotten": "Session forgotten.",
+      "inactiveCleared": "Inactive daemon sessions cleared.",
+      "inactiveNone": "No inactive daemon sessions to clear.",
+      "inactiveClearFailed": "Failed to clear inactive daemon sessions:",
       "sessionActionFailed": "Daemon session action failed:"
     }
   }
