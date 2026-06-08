@@ -2814,10 +2814,11 @@ fn generate_session_title_inner(
             session: enrich_session(session),
         });
     };
-    let generated = crate::session_titles::generate_title(
+    let generated = crate::session_titles::generate_title_in_dir(
         &ai,
         prompt.as_deref(),
         &title_input.first_user_message,
+        Some(&session.worktree_path),
     )?;
     let latest = state.sessions.get(&id)?;
     if !crate::session_titles::can_generate_title(&latest, Some(&title_input.transcript_id)) {
@@ -2850,10 +2851,13 @@ fn resolve_title_input_for_session(
 
 #[tauri::command]
 pub async fn preview_session_title(
+    state: State<'_, AppState>,
     ai: crate::ai::AiExecutionRequest,
     prompt: Option<String>,
     first_user_message: String,
+    repo_path: Option<String>,
 ) -> AppResult<String> {
+    let state = state.inner().clone();
     run_blocking("preview_session_title", move || {
         let first_user_message = first_user_message.trim().to_string();
         if first_user_message.is_empty() {
@@ -2861,7 +2865,16 @@ pub async fn preview_session_title(
                 "first user message must not be empty".to_string(),
             ));
         }
-        crate::session_titles::generate_title(&ai, prompt.as_deref(), &first_user_message)
+        let cwd = repo_path
+            .as_deref()
+            .map(|path| authorize_registered_project_root(&state, Path::new(path)))
+            .transpose()?;
+        crate::session_titles::generate_title_in_dir(
+            &ai,
+            prompt.as_deref(),
+            &first_user_message,
+            cwd.as_deref(),
+        )
     })
     .await
 }
