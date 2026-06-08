@@ -763,6 +763,9 @@
       "copyPath": "경로 복사",
       "rename": "이름 변경",
       "duplicateSession": "세션 복제",
+      "hideSessionFromProjects": "Projects에서 숨기기",
+      "showSessionInProjects": "Projects에 다시 표시",
+      "showHiddenSessions": "숨긴 세션 모두 다시 표시",
       "equalizePaneSizes": "Pane 크기 균등화",
       "openWorktreeInEditor": "편집기에서 worktree 열기",
       "copyWorktreePath": "Worktree 경로 복사",
@@ -793,6 +796,13 @@
       "title": "인스턴트 세션",
       "newSession": "새 인스턴트 세션",
       "empty": "더블클릭하면 인스턴트 세션을 시작할 수 있습니다."
+    },
+    "hiddenSessions": {
+      "title": "숨긴 세션",
+      "countSuffix": "개"
+    },
+    "toasts": {
+      "hiddenFromProjects": "Projects에서 숨겼습니다. 클릭하면 되돌립니다."
     },
     "emptyProject": {
       "createSession": "더블클릭하면 세션을 시작할 수 있습니다."

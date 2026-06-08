@@ -763,6 +763,9 @@
       "copyPath": "Copy path",
       "rename": "Rename",
       "duplicateSession": "Duplicate Session",
+      "hideSessionFromProjects": "Hide from Projects",
+      "showSessionInProjects": "Show in Projects",
+      "showHiddenSessions": "Show all hidden sessions",
       "equalizePaneSizes": "Equalize Pane Sizes",
       "openWorktreeInEditor": "Open Worktree in Editor",
       "copyWorktreePath": "Copy Worktree Path",
@@ -793,6 +796,13 @@
       "title": "Instant sessions",
       "newSession": "New instant session",
       "empty": "Double-click to start an instant session."
+    },
+    "hiddenSessions": {
+      "title": "Hidden sessions",
+      "countSuffix": ""
+    },
+    "toasts": {
+      "hiddenFromProjects": "Hidden from Projects. Click to undo."
     },
     "emptyProject": {
       "createSession": "Double-click to start a session."

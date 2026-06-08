@@ -51,6 +51,320 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
   });
 
+  test("project session rows can be hidden from Projects and restored inline", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "work-session",
+        name: "work",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "dev-server-session",
+        name: "npm run dev",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const workRow = sidebar
+      .getByRole("button", { name: /^work main · Idle/ })
+      .first();
+    const devRow = sidebar
+      .getByRole("button", { name: /^npm run dev main · Running/ })
+      .first();
+
+    await expect(workRow).toBeVisible();
+    await expect(devRow).toBeVisible();
+
+    await devRow.hover();
+    await sidebar
+      .getByRole("button", { name: "Hide from Projects", exact: true })
+      .click();
+
+    await expect(workRow).toBeVisible();
+    await expect(devRow).toHaveCount(0);
+    const hiddenToggle = sidebar.getByRole("button", {
+      name: "Hidden sessions 1",
+    });
+    await expect(hiddenToggle).toBeVisible();
+
+    await page.reload();
+
+    await expect(workRow).toBeVisible();
+    await expect(devRow).toHaveCount(0);
+    await expect(hiddenToggle).toBeVisible();
+    await hiddenToggle.click();
+    await expect(devRow).toBeVisible();
+
+    await sidebar
+      .getByRole("button", { name: "Show in Projects", exact: true })
+      .click();
+
+    await expect(devRow).toBeVisible();
+    await expect(hiddenToggle).toHaveCount(0);
+    const hiddenIds = await page.evaluate(() =>
+      JSON.parse(
+        window.localStorage.getItem("acorn:sidebar:hidden-sessions") ?? "[]",
+      ),
+    );
+    expect(hiddenIds).toEqual([]);
+  });
+
+  test("restored project sessions honor persisted hidden Projects state on boot", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:sidebar:hidden-sessions",
+        JSON.stringify(["dev-server-session"]),
+      );
+    });
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "work-session",
+        name: "work",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "dev-server-session",
+        name: "npm run dev",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    await expect(
+      sidebar.getByRole("button", { name: /^work main · Idle/ }).first(),
+    ).toBeVisible();
+    await expect(
+      sidebar
+        .getByRole("button", { name: /^npm run dev main · Running/ })
+        .first(),
+    ).toHaveCount(0);
+    await expect(
+      sidebar.getByRole("button", { name: "Hidden sessions 1" }),
+    ).toBeVisible();
+  });
+
+  test("hidden project sessions can be removed from the hidden section", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:sidebar:hidden-sessions",
+        JSON.stringify(["dev-server-session"]),
+      );
+    });
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      return w.__sessionRemoved
+        ? []
+        : [
+            {
+              id: "dev-server-session",
+              name: "npm run dev",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo",
+              branch: "main",
+              isolated: false,
+              status: "running",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              last_message: null,
+              title_source: "manual",
+              kind: "regular",
+              owner: { kind: "user" },
+              position: 0,
+              in_worktree: false,
+            },
+          ];
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __sessionRemoved?: boolean;
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      w.__sessionRemoved = true;
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const hiddenToggle = sidebar.getByRole("button", {
+      name: "Hidden sessions 1",
+    });
+    await hiddenToggle.click();
+
+    await sidebar
+      .getByRole("button", { name: "Remove session", exact: true })
+      .click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("heading", { name: "Remove session" }),
+    ).toBeVisible();
+    await dialog.getByRole("button", { name: /^Remove$/ }).click();
+
+    await expect(hiddenToggle).toHaveCount(0);
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ id: string; removeWorktree: boolean }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      id: "dev-server-session",
+      removeWorktree: false,
+    });
+    const hiddenIds = await page.evaluate(() =>
+      JSON.parse(
+        window.localStorage.getItem("acorn:sidebar:hidden-sessions") ?? "[]",
+      ),
+    );
+    expect(hiddenIds).toEqual([]);
+  });
+
+  test("session tab context menu can hide a session from Projects", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "dev-server-session",
+        name: "npm run dev",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const devRow = sidebar
+      .getByRole("button", { name: /^npm run dev main · Running/ })
+      .first();
+
+    await devRow.click();
+    await expect(
+      page.locator('[data-tab-drag-handle="dev-server-session"]'),
+    ).toBeVisible();
+
+    await page
+      .locator('[data-tab-drag-handle="dev-server-session"]')
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Hide from Projects" }).click();
+
+    await expect(devRow).toHaveCount(0);
+    await expect(
+      sidebar.getByRole("button", { name: "Hidden sessions 1" }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-tab-drag-handle="dev-server-session"]'),
+    ).toBeVisible();
+  });
+
   test("project header exposes regular and isolated session buttons outside the menu", async ({
     page,
     tauri,

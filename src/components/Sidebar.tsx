@@ -4,6 +4,8 @@ import {
   CircleX,
   Columns2,
   Copy,
+  Eye,
+  EyeOff,
   Files,
   FolderOpen,
   FolderPlus,
@@ -50,6 +52,13 @@ import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
+import {
+  hideProjectSession,
+  loadHiddenProjectSessionIds,
+  showProjectSession,
+  showProjectSessions,
+  subscribeHiddenProjectSessions,
+} from "../lib/hiddenProjectSessions";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
@@ -160,7 +169,15 @@ export function Sidebar() {
   const createNewProject = useAppStore((s) => s.createNewProject);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
   const reorderSessions = useAppStore((s) => s.reorderSessions);
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
+  const [collapsed, setCollapsed] = useState<Set<string>>(() =>
+    loadStringSet(COLLAPSED_KEY),
+  );
+  const [hiddenSessionIds, setHiddenSessionIds] = useState<Set<string>>(() =>
+    loadHiddenProjectSessionIds(),
+  );
+  const [expandedHiddenProjects, setExpandedHiddenProjects] = useState<
+    Set<string>
+  >(new Set());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsProject, setSettingsProject] = useState<ProjectGroup | null>(
@@ -168,12 +185,24 @@ export function Sidebar() {
   );
 
   useEffect(() => {
-    saveCollapsed(collapsed);
+    saveStringSet(COLLAPSED_KEY, collapsed);
   }, [collapsed]);
 
-  const projectGroups = useMemo(
+  useEffect(
+    () =>
+      subscribeHiddenProjectSessions(() =>
+        setHiddenSessionIds(loadHiddenProjectSessionIds()),
+      ),
+    [],
+  );
+
+  const allProjectGroups = useMemo(
     () => buildProjectGroups(projects, sessions),
     [projects, sessions],
+  );
+  const projectGroups = useMemo(
+    () => buildProjectGroups(projects, sessions, hiddenSessionIds),
+    [hiddenSessionIds, projects, sessions],
   );
   const localSessions = useMemo(
     () => buildLocalSessions(sessions),
@@ -204,6 +233,40 @@ export function Sidebar() {
       if (prev.has(repoPath)) return prev;
       const next = new Set(prev);
       next.add(repoPath);
+      return next;
+    });
+  }
+
+  function hideSessionInProjects(session: Session) {
+    setHiddenSessionIds(hideProjectSession(session.id));
+    showToast(sidebarText(t, "sidebar.toasts.hiddenFromProjects"), {
+      action: () => showSessionInProjects(session.id),
+    });
+  }
+
+  function showSessionInProjects(sessionId: string) {
+    setHiddenSessionIds(showProjectSession(sessionId));
+  }
+
+  function showHiddenSessionsInProject(repoPath: string) {
+    const project = allProjectGroups.find(
+      (group) => group.repoPath === repoPath,
+    );
+    const hiddenIds = project?.sessions
+      .filter((session) => hiddenSessionIds.has(session.id))
+      .map((session) => session.id);
+    if (!hiddenIds || hiddenIds.length === 0) return;
+    setHiddenSessionIds(showProjectSessions(hiddenIds));
+  }
+
+  function toggleHiddenSessions(repoPath: string) {
+    setExpandedHiddenProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(repoPath)) {
+        next.delete(repoPath);
+      } else {
+        next.add(repoPath);
+      }
       return next;
     });
   }
@@ -519,59 +582,79 @@ export function Sidebar() {
               strategy={verticalListSortingStrategy}
             >
               <ul className="flex flex-col divide-y divide-border/40 [&>li]:py-1.5 [&>li:first-child]:pt-0.5 [&>li:last-child]:pb-0.5">
-                {projectGroups.map((project) => (
-                  <ProjectGroupView
-                    key={project.repoPath}
-                    project={project}
-                    collapsed={collapsed.has(project.repoPath)}
-                    activeSessionId={activeSessionId}
-                    isActiveProject={activeProject === project.repoPath}
-                    onTitleClick={() =>
-                      applyClickPlan(
-                        planTitleClick({
-                          wasActive: activeProject === project.repoPath,
-                          wasCollapsed: collapsed.has(project.repoPath),
-                        }),
-                        project,
-                      )
-                    }
-                    onChevronClick={() =>
-                      applyClickPlan(
-                        planChevronClick({
-                          wasActive: activeProject === project.repoPath,
-                          wasCollapsed: collapsed.has(project.repoPath),
-                        }),
-                        project,
-                      )
-                    }
-                    onActivate={() => {
-                      setActiveProject(project.repoPath);
-                      expandProject(project.repoPath);
-                      const target = pickSessionToActivate(
-                        project.sessions,
-                        activeSessionId,
-                      );
-                      if (target) selectSession(target);
-                    }}
-                    onSelectSession={selectSession}
-                    onRemoveSession={(s) => requestRemoveSession(s.id)}
-                    onAddSession={(isolated, kind, mode = "terminal") =>
-                      onNewSession(
-                        isolated,
-                        kind,
-                        {
-                          repoPath: project.repoPath,
-                          projectScoped: true,
-                        },
-                        mode,
-                      )
-                    }
-                    onRemoveProject={() =>
-                      requestRemoveProject(project.repoPath)
-                    }
-                    onOpenSettings={() => setSettingsProject(project)}
-                  />
-                ))}
+                {projectGroups.map((project) => {
+                  const hiddenSessions =
+                    allProjectGroups
+                      .find((group) => group.repoPath === project.repoPath)
+                      ?.sessions.filter((session) =>
+                        hiddenSessionIds.has(session.id),
+                      ) ?? [];
+                  return (
+                    <ProjectGroupView
+                      key={project.repoPath}
+                      project={project}
+                      collapsed={collapsed.has(project.repoPath)}
+                      hiddenSessions={hiddenSessions}
+                      hiddenExpanded={expandedHiddenProjects.has(
+                        project.repoPath,
+                      )}
+                      activeSessionId={activeSessionId}
+                      isActiveProject={activeProject === project.repoPath}
+                      onTitleClick={() =>
+                        applyClickPlan(
+                          planTitleClick({
+                            wasActive: activeProject === project.repoPath,
+                            wasCollapsed: collapsed.has(project.repoPath),
+                          }),
+                          project,
+                        )
+                      }
+                      onChevronClick={() =>
+                        applyClickPlan(
+                          planChevronClick({
+                            wasActive: activeProject === project.repoPath,
+                            wasCollapsed: collapsed.has(project.repoPath),
+                          }),
+                          project,
+                        )
+                      }
+                      onActivate={() => {
+                        setActiveProject(project.repoPath);
+                        expandProject(project.repoPath);
+                        const target = pickSessionToActivate(
+                          project.sessions,
+                          activeSessionId,
+                        );
+                        if (target) selectSession(target);
+                      }}
+                      onSelectSession={selectSession}
+                      onRemoveSession={(s) => requestRemoveSession(s.id)}
+                      onAddSession={(isolated, kind, mode = "terminal") =>
+                        onNewSession(
+                          isolated,
+                          kind,
+                          {
+                            repoPath: project.repoPath,
+                            projectScoped: true,
+                          },
+                          mode,
+                        )
+                      }
+                      onRemoveProject={() =>
+                        requestRemoveProject(project.repoPath)
+                      }
+                      onOpenSettings={() => setSettingsProject(project)}
+                      onHideSession={hideSessionInProjects}
+                      onShowSession={showSessionInProjects}
+                      onShowHiddenSessions={() =>
+                        showHiddenSessionsInProject(project.repoPath)
+                      }
+                      onToggleHiddenSessions={() =>
+                        toggleHiddenSessions(project.repoPath)
+                      }
+                    />
+                  );
+                })}
               </ul>
             </SortableContext>
           )}
@@ -773,6 +856,8 @@ const PROJECT_SESSION_OVERFLOW_CREATE_MENU = PROJECT_SESSION_CREATE_MENU.filter(
 interface ProjectGroupViewProps {
   project: ProjectGroup;
   collapsed: boolean;
+  hiddenSessions: Session[];
+  hiddenExpanded: boolean;
   activeSessionId: string | null;
   isActiveProject: boolean;
   /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
@@ -790,11 +875,17 @@ interface ProjectGroupViewProps {
   ) => void;
   onRemoveProject: () => void;
   onOpenSettings: () => void;
+  onHideSession: (session: Session) => void;
+  onShowSession: (sessionId: string) => void;
+  onShowHiddenSessions: () => void;
+  onToggleHiddenSessions: () => void;
 }
 
 function ProjectGroupView({
   project,
   collapsed,
+  hiddenSessions,
+  hiddenExpanded,
   activeSessionId,
   isActiveProject,
   onTitleClick,
@@ -805,6 +896,10 @@ function ProjectGroupView({
   onAddSession,
   onRemoveProject,
   onOpenSettings,
+  onHideSession,
+  onShowSession,
+  onShowHiddenSessions,
+  onToggleHiddenSessions,
 }: ProjectGroupViewProps) {
   const t = useTranslation();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -1007,6 +1102,16 @@ function ProjectGroupView({
         items={[
           ...createMenuItems,
           { type: "separator" },
+          ...(hiddenSessions.length > 0
+            ? [
+                {
+                  label: sidebarText(t, "sidebar.actions.showHiddenSessions"),
+                  icon: <Eye size={12} />,
+                  onClick: onShowHiddenSessions,
+                },
+                { type: "separator" as const },
+              ]
+            : []),
           {
             label: sidebarText(t, "sidebar.actions.projectSettings"),
             icon: <SettingsIcon size={12} />,
@@ -1040,7 +1145,7 @@ function ProjectGroupView({
           strategy={verticalListSortingStrategy}
         >
           <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
-            {project.sessions.length === 0 ? (
+            {project.sessions.length === 0 && hiddenSessions.length === 0 ? (
               <li
                 role="button"
                 tabIndex={0}
@@ -1065,12 +1170,209 @@ function ProjectGroupView({
                   active={session.id === activeSessionId}
                   onSelect={() => onSelectSession(session.id)}
                   onRemove={() => onRemoveSession(session)}
+                  onHide={() => onHideSession(session)}
                 />
               ))
             )}
+            {hiddenSessions.length > 0 ? (
+              <HiddenSessionsSection
+                sessions={hiddenSessions}
+                expanded={hiddenExpanded}
+                activeSessionId={activeSessionId}
+                onToggle={onToggleHiddenSessions}
+                onSelectSession={onSelectSession}
+                onShowSession={onShowSession}
+                onRemoveSession={onRemoveSession}
+                t={t}
+              />
+            ) : null}
           </ul>
         </SortableContext>
       ) : null}
+    </li>
+  );
+}
+
+function hiddenSessionsLabel(t: Translator, count: number): string {
+  return `${sidebarText(t, "sidebar.hiddenSessions.title")} ${count}${sidebarText(
+    t,
+    "sidebar.hiddenSessions.countSuffix",
+  )}`;
+}
+
+function HiddenSessionsSection({
+  sessions,
+  expanded,
+  activeSessionId,
+  onToggle,
+  onSelectSession,
+  onShowSession,
+  onRemoveSession,
+  t,
+}: {
+  sessions: Session[];
+  expanded: boolean;
+  activeSessionId: string | null;
+  onToggle: () => void;
+  onSelectSession: (id: string) => void;
+  onShowSession: (sessionId: string) => void;
+  onRemoveSession: (session: Session) => void;
+  t: Translator;
+}) {
+  const label = hiddenSessionsLabel(t, sessions.length);
+
+  return (
+    <>
+      <li>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={label}
+          aria-expanded={expanded}
+          className="group mt-0.5 flex min-h-7 w-full items-center gap-1 rounded-md px-2 py-1 text-left text-[11px] text-fg-muted transition hover:bg-bg-elevated/40 hover:text-fg"
+        >
+          <ChevronRight
+            size={12}
+            className={cn(
+              "shrink-0 transition-transform",
+              expanded && "rotate-90",
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate">
+            {sidebarText(t, "sidebar.hiddenSessions.title")}
+          </span>
+          <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-bg-elevated/70 px-1 text-[10px] leading-none text-fg-muted">
+            {sessions.length}
+          </span>
+        </button>
+      </li>
+      {expanded
+        ? sessions.map((session) => (
+            <HiddenSessionRow
+              key={session.id}
+              session={session}
+              active={session.id === activeSessionId}
+              onSelect={() => onSelectSession(session.id)}
+              onShow={() => onShowSession(session.id)}
+              onRemove={() => onRemoveSession(session)}
+              t={t}
+            />
+          ))
+        : null}
+    </>
+  );
+}
+
+function HiddenSessionRow({
+  session,
+  active,
+  onSelect,
+  onShow,
+  onRemove,
+  t,
+}: {
+  session: Session;
+  active: boolean;
+  onSelect: () => void;
+  onShow: () => void;
+  onRemove: () => void;
+  t: Translator;
+}) {
+  const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const titleText = resolveSessionTitle(session, sessionDisplay.title);
+  const metadataText = composeSessionMetadata(
+    t,
+    session,
+    sessionDisplay.metadata,
+  );
+  const isGeneratingTitle = useAppStore((s) =>
+    Boolean(s.generatingSessionTitleIds[session.id]),
+  );
+  const agentProvider = sessionDisplay.icons.agentProvider
+    ? resolveSessionAgentProvider(session)
+    : null;
+
+  const row = (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left opacity-70 transition hover:bg-bg-elevated/40 hover:opacity-100",
+        active && "bg-bg-elevated/70 opacity-100",
+      )}
+    >
+      {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
+        <SessionStatusMarker
+          session={session}
+          agentProvider={agentProvider}
+          isGeneratingTitle={isGeneratingTitle}
+          generatingLabel={sidebarText(t, "sidebar.aria.generatingSessionTitle")}
+          chatLabel={sidebarText(t, "sidebar.aria.chatSession")}
+        />
+      ) : null}
+      <SessionRowLabel
+        editing={false}
+        session={session}
+        titleText={titleText}
+        metadataText={metadataText}
+        showKindIcons={sessionDisplay.icons.sessionKind}
+        t={t}
+        onSubmitRename={() => undefined}
+        onCancelRename={() => undefined}
+      />
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <Tooltip label={sidebarText(t, "sidebar.actions.showSessionInProjects")}>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onShow();
+            }}
+            className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            aria-label={sidebarText(t, "sidebar.actions.showSessionInProjects")}
+          >
+            <Eye size={12} />
+          </button>
+        </Tooltip>
+        <button
+          type="button"
+          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <li>
+      {sessionDisplay.showDetailsOnHover ? (
+        <Tooltip
+          label={buildSessionHoverDetails(t, session)}
+          side="right"
+          multiline
+          className="w-full"
+        >
+          {row}
+        </Tooltip>
+      ) : (
+        row
+      )}
     </li>
   );
 }
@@ -1081,6 +1383,7 @@ interface SessionRowProps {
   active: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  onHide: () => void;
 }
 
 function SessionRow({
@@ -1089,6 +1392,7 @@ function SessionRow({
   active,
   onSelect,
   onRemove,
+  onHide,
 }: SessionRowProps) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
@@ -1192,6 +1496,11 @@ function SessionRow({
       label: sidebarText(t, "sidebar.actions.duplicateSession"),
       icon: <Files size={12} />,
       onClick: () => void duplicate(),
+    },
+    {
+      label: sidebarText(t, "sidebar.actions.hideSessionFromProjects"),
+      icon: <EyeOff size={12} />,
+      onClick: onHide,
     },
     { type: "separator" },
     {
@@ -1336,26 +1645,39 @@ function SessionRow({
         }}
         onCancelRename={() => setEditing(false)}
       />
-      <span
-        role="button"
-        aria-label={sidebarText(t, "sidebar.actions.removeSession")}
-        tabIndex={0}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.hideSessionFromProjects")}
+          side="right"
+        >
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.hideSessionFromProjects")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onHide();
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
+          >
+            <EyeOff size={12} />
+          </button>
+        </Tooltip>
+        <button
+          type="button"
+          aria-label={sidebarText(t, "sidebar.actions.removeSession")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
             e.stopPropagation();
             onRemove();
-          }
-        }}
-        className="invisible rounded p-1 text-fg-muted transition hover:text-danger group-hover:visible"
-      >
-        <Trash2 size={12} />
-      </span>
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover:visible"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
     </div>
   );
 
@@ -1929,9 +2251,9 @@ function buildSessionHoverDetails(t: Translator, session: Session): string {
   return lines.join("\n");
 }
 
-function loadCollapsed(): Set<string> {
+function loadStringSet(key: string): Set<string> {
   try {
-    const raw = localStorage.getItem(COLLAPSED_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
@@ -1943,9 +2265,9 @@ function loadCollapsed(): Set<string> {
   return new Set();
 }
 
-function saveCollapsed(set: Set<string>): void {
+function saveStringSet(key: string, set: Set<string>): void {
   try {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(set)));
+    localStorage.setItem(key, JSON.stringify(Array.from(set)));
   } catch {
     // ignore
   }
