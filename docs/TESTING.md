@@ -79,7 +79,7 @@ expect(calls[0].sessionId).toBe("s-term");
 **Logic stuck inside a component**
 If a `Foo.tsx` defines a pure helper (sorting, grouping, predicate building), extract it to `src/lib/foo.ts` and Vitest-test it there. Don't try to test the helper through the component.
 
-Example: `Sidebar.tsx` defines `buildProjectGroups(projects, sessions)` — that should live (and is tested) at the lib layer, not via a Playwright assertion on the rendered list.
+Example: `Sidebar.tsx` project folder grouping should live in `src/lib/projectFolders.ts` and be covered with Vitest there, not via a Playwright assertion on the rendered list.
 
 **Custom hooks**
 - Pure logic only → Vitest with `renderHook` (jsdom)
