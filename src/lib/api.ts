@@ -686,16 +686,16 @@ export const api = {
     return invoke<void>("daemon_shutdown");
   },
   /**
-   * Enumerate sessions tracked by the daemon (alive + dead). Backs the
-   * Settings → Background sessions list view.
+   * Enumerate live sessions tracked by the daemon. Backs the Settings →
+   * Background sessions list view; inactive daemon metadata is handled by
+   * `daemonForgetInactiveSessions`.
    */
   daemonListSessions(): Promise<DaemonSessionSummary[]> {
     return invoke<DaemonSessionSummary[]>("daemon_list_sessions");
   },
   /**
    * Kill a daemon-owned PTY. Equivalent to closing the shell inside the
-   * session — the row stays in the daemon registry (with `alive=false`)
-   * until `daemonForgetSession` is also called.
+   * session; the daemon detaches the row once the PTY child exits.
    */
   daemonKillSession(targetSessionId: string): Promise<void> {
     return invoke<void>("daemon_kill_session", {
@@ -703,13 +703,20 @@ export const api = {
     });
   },
   /**
-   * Remove a dead session row from the daemon registry. The daemon
+   * Remove an inactive session row from the daemon registry. The daemon
    * rejects this for sessions still alive — caller must kill first.
    */
   daemonForgetSession(targetSessionId: string): Promise<void> {
     return invoke<void>("daemon_forget_session", {
       targetSessionId,
     });
+  },
+  /**
+   * Remove every inactive session row from the daemon registry. Live PTYs
+   * are left untouched. Returns the number of rows forgotten.
+   */
+  daemonForgetInactiveSessions(): Promise<number> {
+    return invoke<number>("daemon_forget_inactive_sessions");
   },
   /**
    * Reconstruct an app-side session row from a daemon-owned PTY the

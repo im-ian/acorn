@@ -51,7 +51,7 @@ enum Command {
     },
     /// Probe a running daemon. Exits non-zero if no daemon answered.
     Status,
-    /// List sessions tracked by the daemon (alive + dead).
+    /// List sessions currently tracked by the daemon.
     ListSessions,
     /// Forward keystrokes to a target session's PTY stdin. The `<DATA>`
     /// is sent byte-for-byte; the terminal's line discipline handles
@@ -84,15 +84,14 @@ enum Command {
         #[arg(long, default_value_t = 65_536)]
         max_bytes: usize,
     },
-    /// Kill a target session's PTY child. The session metadata stays
-    /// in the daemon registry until `forget`; ghost UI lets the user
-    /// resume the agent (e.g. claude `--resume`) or delete.
+    /// Kill a target session's PTY child. The daemon detaches the
+    /// session registry row once the child exits.
     KillSession {
         /// Target session UUID.
         #[arg(short = 't', long = "target")]
         target: String,
     },
-    /// Permanently drop a (dead) session's daemon-side metadata. The
+    /// Permanently drop a non-live session's daemon-side metadata. The
     /// daemon refuses if the session is still alive — kill it first.
     ForgetSession {
         /// Target session UUID.
