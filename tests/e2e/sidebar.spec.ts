@@ -898,6 +898,39 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls).toEqual([{ id: "child-session", removeWorktree: false }]);
   });
 
+  test("project folder remove skips confirmation for empty folders", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => []);
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New project folder" }).click();
+
+    const folderRows = sidebar.getByRole("button", { name: /New folder/ });
+    await expect(folderRows).toHaveCount(1);
+    await folderRows.first().click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove folder" }).click();
+
+    await expect(page.getByRole("dialog", { name: "Remove folder" })).toHaveCount(
+      0,
+    );
+    await expect(folderRows).toHaveCount(0);
+    await expect(projectRow).toBeVisible();
+  });
+
   test("project folder remove can keep sessions and move them out", async ({
     page,
     tauri,
