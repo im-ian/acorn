@@ -46,7 +46,21 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
 } from "./lib/sessionCreation";
-import { showProjectSession } from "./lib/hiddenProjectSessions";
+import {
+  DEFAULT_PROJECT_FOLDER_NAME,
+  basenamePath,
+  defaultProjectFolderId,
+  ensureProjectFolders,
+  isDefaultProjectFolder,
+  isPathInsideOrEqual,
+  makeProjectFolderId,
+  pruneSessionFolderAssignments,
+  resolveProjectFolderIdForSession,
+  sortProjectFolders,
+  type ProjectFolder,
+  type ProjectFoldersByRepo,
+  type SessionFolderAssignments,
+} from "./lib/projectFolders";
 
 export type { RightGroup, RightTab };
 
@@ -63,7 +77,7 @@ let refreshSessionsSeq = 0;
 let sessionPlacementSeq = 0;
 
 interface SessionPlacementIntent {
-  repoPath: string;
+  projectFolderId: string;
   paneId: PaneId;
   anchorTabId: string | null;
   sequence: number;
@@ -105,11 +119,14 @@ interface AppStateModel {
   sessions: Session[];
   projects: Project[];
 
-  // Per-project workspace state. Each project has independent layout/panes/focus.
+  // Per-project-folder workspace state. The default folder id is the repo path.
   workspaces: Record<string, ProjectWorkspace>;
+  projectFolders: ProjectFoldersByRepo;
+  sessionFolderIds: SessionFolderAssignments;
   activeProject: string | null;
+  activeProjectFolderId: string | null;
 
-  // Mirrors of `workspaces[activeProject]` for consumers; recomputed on every change.
+  // Mirrors of the active project folder workspace for consumers.
   layout: LayoutNode;
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
@@ -184,6 +201,17 @@ interface AppStateModel {
   selectSession: (id: string | null) => void;
   focusLocalSessions: () => void;
   setActiveProject: (repoPath: string) => void;
+  setActiveProjectFolder: (folderId: string) => void;
+  createProjectFolder: (
+    repoPath: string,
+    name?: string,
+  ) => ProjectFolder | null;
+  renameProjectFolder: (folderId: string, name: string) => void;
+  removeProjectFolder: (folderId: string) => void;
+  moveSessionToProjectFolder: (
+    sessionId: string,
+    folderId: string | null,
+  ) => void;
   setFocusedPane: (paneId: PaneId) => void;
   focusAdjacentPane: (direction: PaneFocusDirection) => void;
   setPaneSplitSizes: (splitId: string, sizes: readonly number[]) => void;
@@ -199,6 +227,7 @@ interface AppStateModel {
     agentProvider?: SessionAgentProvider | null,
     projectScoped?: boolean,
     mode?: SessionMode,
+    projectFolderId?: string,
   ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
@@ -225,6 +254,10 @@ interface AppStateModel {
     removeSettings?: boolean,
   ) => Promise<void>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
+  reorderProjectFolders: (
+    repoPath: string,
+    orderedFolderIds: string[],
+  ) => void;
   reorderSessions: (repoPath: string, orderedIds: string[]) => Promise<void>;
   requestRemoveProject: (repoPath: string) => void;
   clearPendingRemoveProject: () => void;
@@ -431,10 +464,10 @@ function fallbackEmptyMirror() {
 
 function mirrorActive(
   workspaces: Record<string, ProjectWorkspace>,
-  activeProject: string | null,
+  activeWorkspaceId: string | null,
 ) {
-  if (!activeProject) return fallbackEmptyMirror();
-  const ws = workspaces[activeProject];
+  if (!activeWorkspaceId) return fallbackEmptyMirror();
+  const ws = workspaces[activeWorkspaceId];
   if (!ws) return fallbackEmptyMirror();
   const activeTabId = ws.panes[ws.focusedPaneId]?.activeTabId ?? null;
   const rightPanel = normalizeRightPanelState(ws.rightTab, ws.rightTabByGroup);
@@ -547,47 +580,106 @@ function reconcileWorkspace(
 function reconcileWorkspaces(
   sessions: Session[],
   projects: Project[],
+  projectFolders: ProjectFoldersByRepo,
+  sessionFolderIds: SessionFolderAssignments,
   workspaces: Record<string, ProjectWorkspace>,
   activeProject: string | null,
+  activeProjectFolderId: string | null,
   allowEmptyWipe = true,
 ): {
   workspaces: Record<string, ProjectWorkspace>;
+  projectFolders: ProjectFoldersByRepo;
+  sessionFolderIds: SessionFolderAssignments;
   activeProject: string | null;
+  activeProjectFolderId: string | null;
 } {
-  // Group sessions per project repo path. Include known projects even if empty.
-  const byProject: Record<string, Session[]> = {};
-  for (const p of projects) byProject[p.repo_path] = [];
-  for (const s of sessions) {
-    if (!byProject[s.repo_path]) byProject[s.repo_path] = [];
-    byProject[s.repo_path].push(s);
+  const nextProjectFolders = ensureProjectFolders(
+    projects,
+    sessions,
+    projectFolders,
+  );
+  const nextSessionFolderIds = pruneSessionFolderAssignments(
+    sessionFolderIds,
+    sessions,
+    nextProjectFolders,
+  );
+  const byFolder: Record<string, Session[]> = {};
+  const folderById = new Map<string, ProjectFolder>();
+  for (const folders of Object.values(nextProjectFolders)) {
+    for (const folder of folders) {
+      folderById.set(folder.id, folder);
+      byFolder[folder.id] = [];
+    }
+  }
+  for (const session of sessions) {
+    if (session.project_scoped === false) {
+      if (!byFolder[session.repo_path]) byFolder[session.repo_path] = [];
+      byFolder[session.repo_path].push(session);
+      continue;
+    }
+    const folders = nextProjectFolders[session.repo_path] ?? [];
+    if (folders.length === 0) continue;
+    const folderId = resolveProjectFolderIdForSession(
+      folders,
+      session,
+      nextSessionFolderIds,
+    );
+    if (!byFolder[folderId]) byFolder[folderId] = [];
+    byFolder[folderId].push(session);
   }
 
   const newWorkspaces: Record<string, ProjectWorkspace> = {};
-  for (const [repoPath, projSessions] of Object.entries(byProject)) {
-    const existing = workspaces[repoPath] ?? emptyWorkspace();
-    newWorkspaces[repoPath] = reconcileWorkspace(
+  for (const [folderId, folderSessions] of Object.entries(byFolder)) {
+    const existing = workspaces[folderId] ?? emptyWorkspace();
+    newWorkspaces[folderId] = reconcileWorkspace(
       existing,
-      projSessions,
+      folderSessions,
       allowEmptyWipe,
     );
   }
 
-  // Resolve active project: keep current if still valid; else first project
-  // with a session; else first project; else null.
   let newActive = activeProject;
-  if (newActive && !newWorkspaces[newActive]) newActive = null;
+  const knownRepos = new Set(Object.keys(nextProjectFolders));
+  for (const session of sessions) {
+    if (session.project_scoped === false) knownRepos.add(session.repo_path);
+  }
+  if (newActive && !knownRepos.has(newActive)) newActive = null;
   if (!newActive) {
-    const withSession = projects.find(
-      (p) => (byProject[p.repo_path]?.length ?? 0) > 0,
+    const projectSessions = sessions.filter(
+      (session) => session.project_scoped !== false,
+    );
+    const localSessions = sessions.filter(
+      (session) => session.project_scoped === false,
+    );
+    const withSession = projects.find((p) =>
+      projectSessions.some((session) => session.repo_path === p.repo_path),
     );
     newActive =
       withSession?.repo_path ??
       projects[0]?.repo_path ??
-      sessions[0]?.repo_path ??
+      projectSessions[0]?.repo_path ??
+      localSessions[0]?.repo_path ??
       null;
   }
 
-  return { workspaces: newWorkspaces, activeProject: newActive };
+  let newActiveFolderId = activeProjectFolderId;
+  const activeFolder = newActiveFolderId
+    ? folderById.get(newActiveFolderId)
+    : undefined;
+  if (!newActive || !activeFolder || activeFolder.repoPath !== newActive) {
+    newActiveFolderId = newActive ? defaultProjectFolderId(newActive) : null;
+  }
+  if (newActiveFolderId && !newWorkspaces[newActiveFolderId]) {
+    newActiveFolderId = newActive ? defaultProjectFolderId(newActive) : null;
+  }
+
+  return {
+    workspaces: newWorkspaces,
+    projectFolders: nextProjectFolders,
+    sessionFolderIds: nextSessionFolderIds,
+    activeProject: newActive,
+    activeProjectFolderId: newActiveFolderId,
+  };
 }
 
 function findPaneContainingTab(
@@ -603,40 +695,94 @@ function findPaneContainingTab(
 function findTabOwner(
   state: AppStateModel,
   id: string,
-): { repoPath: string; paneId: PaneId } | null {
-  for (const [repoPath, ws] of Object.entries(state.workspaces)) {
+): { projectFolderId: string; repoPath: string | null; paneId: PaneId } | null {
+  for (const [projectFolderId, ws] of Object.entries(state.workspaces)) {
     const paneId = findPaneContainingTab(ws.panes, id);
-    if (paneId) return { repoPath, paneId };
+    if (paneId) {
+      return {
+        projectFolderId,
+        repoPath: repoPathForProjectFolderId(state, projectFolderId),
+        paneId,
+      };
+    }
   }
   return null;
+}
+
+function activeWorkspaceId(
+  s: Pick<AppStateModel, "activeProject" | "activeProjectFolderId">,
+): string | null {
+  return s.activeProjectFolderId ?? s.activeProject;
+}
+
+function repoPathForProjectFolderId(
+  state: Pick<AppStateModel, "projectFolders">,
+  folderId: string,
+): string | null {
+  for (const folders of Object.values(state.projectFolders ?? {})) {
+    const folder = folders.find((candidate) => candidate.id === folderId);
+    if (folder) return folder.repoPath;
+  }
+  return folderId.startsWith("project-folder:") ? null : folderId;
+}
+
+function findProjectFolder(
+  state: Pick<AppStateModel, "projectFolders">,
+  folderId: string,
+): ProjectFolder | null {
+  for (const folders of Object.values(state.projectFolders ?? {})) {
+    const folder = folders.find((candidate) => candidate.id === folderId);
+    if (folder) return folder;
+  }
+  return null;
+}
+
+function resolvePlacementProjectFolderId(
+  state: AppStateModel,
+  selectedPath: string,
+  requestedFolderId?: string,
+): string | null {
+  if (requestedFolderId && findProjectFolder(state, requestedFolderId)) {
+    return requestedFolderId;
+  }
+  const activeId = activeWorkspaceId(state);
+  const activeFolder = activeId ? findProjectFolder(state, activeId) : null;
+  if (activeFolder && isPathInsideOrEqual(selectedPath, activeFolder.repoPath)) {
+    return activeFolder.id;
+  }
+  if (state.workspaces[selectedPath]) return selectedPath;
+  const defaultId = defaultProjectFolderId(selectedPath);
+  return state.workspaces[defaultId] ? defaultId : null;
 }
 
 function updateActiveWorkspace(
   s: AppStateModel,
   updater: (ws: ProjectWorkspace) => ProjectWorkspace,
 ): Partial<AppStateModel> | null {
-  if (!s.activeProject) return null;
-  const ws = s.workspaces[s.activeProject];
+  const workspaceId = activeWorkspaceId(s);
+  if (!workspaceId) return null;
+  const ws = s.workspaces[workspaceId];
   if (!ws) return null;
   const next = updater(ws);
   if (next === ws) return null;
-  const workspaces = { ...s.workspaces, [s.activeProject]: next };
+  const workspaces = { ...s.workspaces, [workspaceId]: next };
   return {
     workspaces,
-    ...mirrorActive(workspaces, s.activeProject),
+    ...mirrorActive(workspaces, workspaceId),
   };
 }
 
 function captureSessionPlacementIntent(
   s: AppStateModel,
-  repoPath: string,
+  projectFolderId: string | null,
 ): SessionPlacementIntent | null {
-  const ws = s.workspaces[repoPath];
+  if (!projectFolderId) return null;
+  const ws = s.workspaces[projectFolderId];
   if (!ws) return null;
   const pane = ws.panes[ws.focusedPaneId];
   if (!pane) return null;
   return {
-    repoPath,
+    projectFolderId,
     paneId: ws.focusedPaneId,
     anchorTabId: pane.activeTabId,
     sequence: ++sessionPlacementSeq,
@@ -648,7 +794,7 @@ function samePlacementGroup(
   b: SessionPlacementIntent,
 ): boolean {
   return (
-    a.repoPath === b.repoPath &&
+    a.projectFolderId === b.projectFolderId &&
     a.paneId === b.paneId &&
     a.anchorTabId === b.anchorTabId
   );
@@ -721,7 +867,7 @@ function applySessionPlacementIntent(
   if (!placement) return s;
   if (!s.sessions.some((session) => session.id === sessionId)) return s;
 
-  const ws = s.workspaces[placement.repoPath];
+  const ws = s.workspaces[placement.projectFolderId];
   const targetPane = ws?.panes[placement.paneId];
   if (!ws || !targetPane) return s;
 
@@ -765,11 +911,11 @@ function applySessionPlacementIntent(
       },
     },
   };
-  const workspaces = { ...s.workspaces, [placement.repoPath]: newWs };
+  const workspaces = { ...s.workspaces, [placement.projectFolderId]: newWs };
   return {
     workspaces,
-    ...(s.activeProject === placement.repoPath
-      ? mirrorActive(workspaces, placement.repoPath)
+    ...(activeWorkspaceId(s) === placement.projectFolderId
+      ? mirrorActive(workspaces, placement.projectFolderId)
       : {}),
   };
 }
@@ -819,7 +965,10 @@ export const useAppStore = create<AppStateModel>()(
   projects: [],
 
   workspaces: {},
+  projectFolders: {},
+  sessionFolderIds: {},
   activeProject: null,
+  activeProjectFolderId: null,
 
   layout: makePaneNode(ROOT_PANE_ID),
   panes: { [ROOT_PANE_ID]: emptyPane(ROOT_PANE_ID) },
@@ -876,8 +1025,11 @@ export const useAppStore = create<AppStateModel>()(
         const reconciled = reconcileWorkspaces(
           sessions,
           s.projects,
+          s.projectFolders,
+          s.sessionFolderIds,
           s.workspaces,
           s.activeProject,
+          s.activeProjectFolderId,
           allowEmptyWipe,
         );
         // Once the backend returns any sessions we trust subsequent empty
@@ -899,8 +1051,14 @@ export const useAppStore = create<AppStateModel>()(
               )
             : s.sessionNotifications,
           workspaces: reconciled.workspaces,
+          projectFolders: reconciled.projectFolders,
+          sessionFolderIds: reconciled.sessionFolderIds,
           activeProject: reconciled.activeProject,
-          ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
+          activeProjectFolderId: reconciled.activeProjectFolderId,
+          ...mirrorActive(
+            reconciled.workspaces,
+            reconciled.activeProjectFolderId,
+          ),
         };
         return applyKnownSessionPlacementIntents(nextState);
       });
@@ -932,15 +1090,24 @@ export const useAppStore = create<AppStateModel>()(
         const reconciled = reconcileWorkspaces(
           s.sessions,
           projects,
+          s.projectFolders,
+          s.sessionFolderIds,
           s.workspaces,
           s.activeProject,
+          s.activeProjectFolderId,
           allowEmptyWipe,
         );
         return {
           projects,
           workspaces: reconciled.workspaces,
+          projectFolders: reconciled.projectFolders,
+          sessionFolderIds: reconciled.sessionFolderIds,
           activeProject: reconciled.activeProject,
-          ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
+          activeProjectFolderId: reconciled.activeProjectFolderId,
+          ...mirrorActive(
+            reconciled.workspaces,
+            reconciled.activeProjectFolderId,
+          ),
         };
       });
     } catch (e) {
@@ -1073,7 +1240,7 @@ export const useAppStore = create<AppStateModel>()(
         const tab = s.workspaceTabs[id];
         const owner = findTabOwner(s, id);
         if (!tab || !owner) return s;
-        const ws = s.workspaces[owner.repoPath];
+        const ws = s.workspaces[owner.projectFolderId];
         if (!ws) return s;
         const pane = ws.panes[owner.paneId];
         if (!pane) return s;
@@ -1085,11 +1252,13 @@ export const useAppStore = create<AppStateModel>()(
           },
           focusedPaneId: owner.paneId,
         };
-        const workspaces = { ...s.workspaces, [owner.repoPath]: nextWs };
+        const workspaces = { ...s.workspaces, [owner.projectFolderId]: nextWs };
+        const activeProject = owner.repoPath ?? s.activeProject;
         return {
           workspaces,
-          activeProject: owner.repoPath,
-          ...mirrorActive(workspaces, owner.repoPath),
+          activeProject,
+          activeProjectFolderId: owner.projectFolderId,
+          ...mirrorActive(workspaces, owner.projectFolderId),
         };
       }
 
@@ -1097,9 +1266,19 @@ export const useAppStore = create<AppStateModel>()(
       const session = s.sessions.find((x) => x.id === id);
       if (!session) return s;
 
-      const targetProject = session.repo_path;
-      const ws = s.workspaces[targetProject];
+      const folders = s.projectFolders[session.repo_path] ?? [];
+      const targetProjectFolderId = resolveProjectFolderIdForSession(
+        folders,
+        session,
+        s.sessionFolderIds,
+      );
+      const ws =
+        s.workspaces[targetProjectFolderId] ??
+        s.workspaces[defaultProjectFolderId(session.repo_path)];
       if (!ws) return s;
+      const workspaceId = s.workspaces[targetProjectFolderId]
+        ? targetProjectFolderId
+        : defaultProjectFolderId(session.repo_path);
 
       const containing = findPaneContainingTab(ws.panes, id);
       const targetPaneId = containing ?? ws.focusedPaneId;
@@ -1119,11 +1298,12 @@ export const useAppStore = create<AppStateModel>()(
         },
         focusedPaneId: targetPaneId,
       };
-      const workspaces = { ...s.workspaces, [targetProject]: newWs };
+      const workspaces = { ...s.workspaces, [workspaceId]: newWs };
       return {
         workspaces,
-        activeProject: targetProject,
-        ...mirrorActive(workspaces, targetProject),
+        activeProject: session.repo_path,
+        activeProjectFolderId: workspaceId,
+        ...mirrorActive(workspaces, workspaceId),
       };
     });
   },
@@ -1152,6 +1332,7 @@ export const useAppStore = create<AppStateModel>()(
       if (s.activeProject === null && s.activeTabId === null) return s;
       return {
         activeProject: null,
+        activeProjectFolderId: null,
         ...fallbackEmptyMirror(),
       };
     });
@@ -1159,20 +1340,232 @@ export const useAppStore = create<AppStateModel>()(
 
   setActiveProject(repoPath) {
     set((s) => {
-      const hasWorkspace = s.workspaces[repoPath] !== undefined;
+      const folderId = defaultProjectFolderId(repoPath);
+      const hasWorkspace = s.workspaces[folderId] !== undefined;
       const knownRepo =
         hasWorkspace ||
         s.projects.some((project) => project.repo_path === repoPath) ||
         s.sessions.some((session) => session.repo_path === repoPath);
       if (!knownRepo) return s;
-      if (s.activeProject === repoPath && hasWorkspace) return s;
+      if (
+        s.activeProject === repoPath &&
+        s.activeProjectFolderId === folderId &&
+        hasWorkspace
+      ) {
+        return s;
+      }
+      const existingFolders = s.projectFolders[repoPath] ?? [];
+      const projectFolders = existingFolders.some((folder) => folder.id === folderId)
+        ? s.projectFolders
+        : {
+            ...s.projectFolders,
+            [repoPath]: sortProjectFolders([
+              ...existingFolders,
+              {
+                id: folderId,
+                repoPath,
+                name: DEFAULT_PROJECT_FOLDER_NAME,
+                cwdPath: repoPath,
+                position: 0,
+              },
+            ]),
+          };
       const workspaces = hasWorkspace
         ? s.workspaces
-        : { ...s.workspaces, [repoPath]: emptyWorkspace() };
+        : { ...s.workspaces, [folderId]: emptyWorkspace() };
       return {
         workspaces,
+        projectFolders,
         activeProject: repoPath,
-        ...mirrorActive(workspaces, repoPath),
+        activeProjectFolderId: folderId,
+        ...mirrorActive(workspaces, folderId),
+      };
+    });
+  },
+
+  setActiveProjectFolder(folderId) {
+    set((s) => {
+      const folder = findProjectFolder(s, folderId);
+      if (!folder) return s;
+      const workspaces = s.workspaces[folder.id]
+        ? s.workspaces
+        : { ...s.workspaces, [folder.id]: emptyWorkspace() };
+      return {
+        workspaces,
+        activeProject: folder.repoPath,
+        activeProjectFolderId: folder.id,
+        ...mirrorActive(workspaces, folder.id),
+      };
+    });
+  },
+
+  createProjectFolder(repoPath, name) {
+    let created: ProjectFolder | null = null;
+    set((s) => {
+      const knownRepo =
+        s.projects.some((project) => project.repo_path === repoPath) ||
+        s.sessions.some((session) => session.repo_path === repoPath);
+      if (!knownRepo) return s;
+      const current = s.projectFolders[repoPath] ?? [
+        {
+          id: defaultProjectFolderId(repoPath),
+          repoPath,
+          name: DEFAULT_PROJECT_FOLDER_NAME,
+          cwdPath: repoPath,
+          position: 0,
+        },
+      ];
+      const baseName = (name ?? "New folder").trim() || "New folder";
+      const taken = new Set(current.map((folder) => folder.name));
+      let nextName = baseName;
+      let suffix = 2;
+      while (taken.has(nextName)) {
+        nextName = `${baseName} ${suffix}`;
+        suffix += 1;
+      }
+      created = {
+        id: makeProjectFolderId(repoPath),
+        repoPath,
+        name: nextName,
+        cwdPath: repoPath,
+        position:
+          Math.max(0, ...current.map((folder) => folder.position ?? 0)) + 1,
+      };
+      const projectFolders = {
+        ...s.projectFolders,
+        [repoPath]: sortProjectFolders([...current, created]),
+      };
+      const workspaces = {
+        ...s.workspaces,
+        [created.id]: emptyWorkspace(),
+      };
+      const reconciled = reconcileWorkspaces(
+        s.sessions,
+        s.projects,
+        projectFolders,
+        s.sessionFolderIds,
+        workspaces,
+        repoPath,
+        created.id,
+        true,
+      );
+      return {
+        projectFolders: reconciled.projectFolders,
+        sessionFolderIds: reconciled.sessionFolderIds,
+        workspaces: reconciled.workspaces,
+        activeProject: reconciled.activeProject,
+        activeProjectFolderId: reconciled.activeProjectFolderId,
+        ...mirrorActive(
+          reconciled.workspaces,
+          reconciled.activeProjectFolderId,
+        ),
+      };
+    });
+    return created;
+  },
+
+  renameProjectFolder(folderId, name) {
+    const nextName = name.trim();
+    if (!nextName) return;
+    set((s) => {
+      const folder = findProjectFolder(s, folderId);
+      if (!folder || folder.name === nextName) return s;
+      const folders = s.projectFolders[folder.repoPath] ?? [];
+      return {
+        projectFolders: {
+          ...s.projectFolders,
+          [folder.repoPath]: sortProjectFolders(
+            folders.map((candidate) =>
+              candidate.id === folderId
+                ? { ...candidate, name: nextName }
+                : candidate,
+            ),
+          ),
+        },
+      };
+    });
+  },
+
+  removeProjectFolder(folderId) {
+    set((s) => {
+      const folder = findProjectFolder(s, folderId);
+      if (!folder || isDefaultProjectFolder(folder)) return s;
+      const folders = (s.projectFolders[folder.repoPath] ?? []).filter(
+        (candidate) => candidate.id !== folderId,
+      );
+      const { [folderId]: _, ...workspaces } = s.workspaces;
+      const sessionFolderIds = Object.fromEntries(
+        Object.entries(s.sessionFolderIds).filter(
+          ([, assignedFolderId]) => assignedFolderId !== folderId,
+        ),
+      );
+      const activeProjectFolderId =
+        s.activeProjectFolderId === folderId
+          ? defaultProjectFolderId(folder.repoPath)
+          : s.activeProjectFolderId;
+      const projectFolders = {
+        ...s.projectFolders,
+        [folder.repoPath]: sortProjectFolders(folders),
+      };
+      const reconciled = reconcileWorkspaces(
+        s.sessions,
+        s.projects,
+        projectFolders,
+        sessionFolderIds,
+        workspaces,
+        folder.repoPath,
+        activeProjectFolderId,
+        true,
+      );
+      return {
+        projectFolders: reconciled.projectFolders,
+        workspaces: reconciled.workspaces,
+        sessionFolderIds: reconciled.sessionFolderIds,
+        activeProject: reconciled.activeProject,
+        activeProjectFolderId: reconciled.activeProjectFolderId,
+        ...mirrorActive(
+          reconciled.workspaces,
+          reconciled.activeProjectFolderId,
+        ),
+      };
+    });
+  },
+
+  moveSessionToProjectFolder(sessionId, folderId) {
+    set((s) => {
+      const session = s.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session || session.project_scoped === false) return s;
+      const nextSessionFolderIds = { ...s.sessionFolderIds };
+      if (
+        folderId === null ||
+        folderId === defaultProjectFolderId(session.repo_path)
+      ) {
+        delete nextSessionFolderIds[sessionId];
+      } else {
+        const folder = findProjectFolder(s, folderId);
+        if (!folder || folder.repoPath !== session.repo_path) return s;
+        nextSessionFolderIds[sessionId] = folder.id;
+      }
+      const reconciled = reconcileWorkspaces(
+        s.sessions,
+        s.projects,
+        s.projectFolders,
+        nextSessionFolderIds,
+        s.workspaces,
+        s.activeProject,
+        s.activeProjectFolderId,
+        true,
+      );
+      return {
+        projectFolders: reconciled.projectFolders,
+        workspaces: reconciled.workspaces,
+        sessionFolderIds: reconciled.sessionFolderIds,
+        activeProject: reconciled.activeProject,
+        activeProjectFolderId: reconciled.activeProjectFolderId,
+        ...mirrorActive(
+          reconciled.workspaces,
+          reconciled.activeProjectFolderId,
+        ),
       };
     });
   },
@@ -1414,19 +1807,23 @@ export const useAppStore = create<AppStateModel>()(
 
   async createSession(
     name,
-    repoPath,
+    selectedPath,
     isolated = false,
     kind = "regular",
     agentProvider = null,
     projectScoped = true,
     mode = "terminal",
+    projectFolderId,
   ) {
     set({ loading: true, error: null });
     // Capture the user's intended insertion point before the backend call.
     // Multiple creates can be in flight at once, so the intent records the
     // anchor tab id plus a client-side sequence instead of a numeric index
     // that may be stale by the time the session is returned.
-    const placement = captureSessionPlacementIntent(get(), repoPath);
+    const placement = captureSessionPlacementIntent(
+      get(),
+      resolvePlacementProjectFolderId(get(), selectedPath, projectFolderId),
+    );
     if (placement) activeSessionPlacementIntents.add(placement);
     let createdId: string | null = null;
     try {
@@ -1436,7 +1833,7 @@ export const useAppStore = create<AppStateModel>()(
           mode === "terminal"
             ? await api.createSession(
                 name,
-                repoPath,
+                selectedPath,
                 isolated,
                 kind,
                 agentProvider,
@@ -1444,7 +1841,7 @@ export const useAppStore = create<AppStateModel>()(
               )
             : await api.createSession(
                 name,
-                repoPath,
+                selectedPath,
                 isolated,
                 kind,
                 agentProvider,
@@ -1454,10 +1851,16 @@ export const useAppStore = create<AppStateModel>()(
       } else {
         created =
           mode === "terminal"
-            ? await api.createSession(name, repoPath, isolated, kind, agentProvider)
+            ? await api.createSession(
+                name,
+                selectedPath,
+                isolated,
+                kind,
+                agentProvider,
+              )
             : await api.createSession(
                 name,
-                repoPath,
+                selectedPath,
                 isolated,
                 kind,
                 agentProvider,
@@ -1466,6 +1869,19 @@ export const useAppStore = create<AppStateModel>()(
               );
       }
       createdId = created.id;
+      const assignedFolderId = placement?.projectFolderId;
+      if (
+        assignedFolderId &&
+        projectScoped !== false &&
+        repoPathForProjectFolderId(get(), assignedFolderId) === created.repo_path
+      ) {
+        set((s) => ({
+          sessionFolderIds: {
+            ...s.sessionFolderIds,
+            [created.id]: assignedFolderId,
+          },
+        }));
+      }
       await get().refreshAll();
 
       if (placement) {
@@ -1525,8 +1941,11 @@ export const useAppStore = create<AppStateModel>()(
       const reconciled = reconcileWorkspaces(
         sessions,
         s.projects,
+        s.projectFolders,
+        s.sessionFolderIds,
         s.workspaces,
         s.activeProject,
+        s.activeProjectFolderId,
         true,
       );
       const liveInWorktree = { ...s.liveInWorktree };
@@ -1544,21 +1963,27 @@ export const useAppStore = create<AppStateModel>()(
           (notification) => notification.sessionId !== id,
         ),
         workspaces: reconciled.workspaces,
+        projectFolders: reconciled.projectFolders,
+        sessionFolderIds: reconciled.sessionFolderIds,
         activeProject: reconciled.activeProject,
-        ...mirrorActive(reconciled.workspaces, reconciled.activeProject),
+        activeProjectFolderId: reconciled.activeProjectFolderId,
+        ...mirrorActive(
+          reconciled.workspaces,
+          reconciled.activeProjectFolderId,
+        ),
       };
     });
 
     if (owning) {
       const after = get();
-      const ws = after.workspaces[owning.repoPath];
+      const ws = after.workspaces[owning.projectFolderId];
       const pane = ws?.panes[owning.paneId];
       if (
         ws &&
         pane &&
         pane.tabIds.length === 0 &&
         Object.keys(ws.panes).length > 1 &&
-        after.activeProject === owning.repoPath
+        activeWorkspaceId(after) === owning.projectFolderId
       ) {
         get().closePane(owning.paneId);
       }
@@ -1566,7 +1991,6 @@ export const useAppStore = create<AppStateModel>()(
 
     try {
       await api.removeSession(id, removeWorktree);
-      showProjectSession(id);
       await get().refreshAll();
       set({ error: null });
     } catch (e) {
@@ -1683,13 +2107,39 @@ export const useAppStore = create<AppStateModel>()(
       // Drop the project's workspace from local state explicitly — refreshAll
       // also reconciles, but pre-clearing avoids a flash of stale state.
       set((s) => {
-        const { [repoPath]: _, ...rest } = s.workspaces;
+        const folders = s.projectFolders[repoPath] ?? [
+        {
+          id: defaultProjectFolderId(repoPath),
+          repoPath,
+          name: DEFAULT_PROJECT_FOLDER_NAME,
+          cwdPath: repoPath,
+          position: 0,
+        },
+      ];
+        const folderIds = new Set(folders.map((folder) => folder.id));
+        const rest = Object.fromEntries(
+          Object.entries(s.workspaces).filter(
+            ([workspaceId]) => !folderIds.has(workspaceId),
+          ),
+        );
+        const { [repoPath]: _folders, ...projectFolders } = s.projectFolders;
+        const sessionFolderIds = Object.fromEntries(
+          Object.entries(s.sessionFolderIds).filter(
+            ([, folderId]) => !folderIds.has(folderId),
+          ),
+        );
         const nextActive =
           s.activeProject === repoPath ? null : s.activeProject;
+        const nextActiveFolderId = folderIds.has(s.activeProjectFolderId ?? "")
+          ? null
+          : s.activeProjectFolderId;
         return {
           workspaces: rest,
+          projectFolders,
+          sessionFolderIds,
           activeProject: nextActive,
-          ...mirrorActive(rest, nextActive),
+          activeProjectFolderId: nextActiveFolderId,
+          ...mirrorActive(rest, nextActiveFolderId),
         };
       });
       await get().refreshAll();
@@ -1716,6 +2166,51 @@ export const useAppStore = create<AppStateModel>()(
     } catch (e) {
       set({ projects: previous, error: errorMessage(e) });
     }
+  },
+
+  reorderProjectFolders(repoPath, orderedFolderIds) {
+    set((s) => {
+      const folders = s.projectFolders[repoPath] ?? [];
+      const defaultFolders = folders.filter(isDefaultProjectFolder);
+      const namedFolders = folders.filter(
+        (folder) => !isDefaultProjectFolder(folder),
+      );
+      if (namedFolders.length === 0) return s;
+
+      const remaining = new Map(
+        namedFolders.map((folder) => [folder.id, folder]),
+      );
+      const ordered: ProjectFolder[] = [];
+      for (const folderId of orderedFolderIds) {
+        const folder = remaining.get(folderId);
+        if (!folder) continue;
+        ordered.push(folder);
+        remaining.delete(folderId);
+      }
+      const nextNamed = [
+        ...ordered,
+        ...sortProjectFolders(Array.from(remaining.values())),
+      ].map((folder, index) => ({
+        ...folder,
+        position: index + 1,
+      }));
+      const nextFolders = sortProjectFolders([
+        ...defaultFolders.map((folder) => ({ ...folder, position: 0 })),
+        ...nextNamed,
+      ]);
+      if (
+        folders.map((folder) => folder.id).join("\0") ===
+        nextFolders.map((folder) => folder.id).join("\0")
+      ) {
+        return s;
+      }
+      return {
+        projectFolders: {
+          ...s.projectFolders,
+          [repoPath]: nextFolders,
+        },
+      };
+    });
   },
 
   async reorderSessions(repoPath, orderedIds) {
@@ -1755,16 +2250,17 @@ export const useAppStore = create<AppStateModel>()(
         ...s.rightTabByGroup,
         [groupOfTab(tab)]: tab,
       };
-      if (!s.activeProject || !s.workspaces[s.activeProject]) {
+      const workspaceId = activeWorkspaceId(s);
+      if (!workspaceId || !s.workspaces[workspaceId]) {
         return { rightTab: tab, rightTabByGroup };
       }
-      const ws = s.workspaces[s.activeProject];
+      const ws = s.workspaces[workspaceId];
       return {
         rightTab: tab,
         rightTabByGroup,
         workspaces: {
           ...s.workspaces,
-          [s.activeProject]: {
+          [workspaceId]: {
             ...ws,
             rightTab: tab,
             rightTabByGroup,
@@ -1778,15 +2274,16 @@ export const useAppStore = create<AppStateModel>()(
     set((s) => {
       const remembered = s.rightTabByGroup[group] ?? defaultTabForGroup(group);
       if (s.rightTab === remembered) return s;
-      if (!s.activeProject || !s.workspaces[s.activeProject]) {
+      const workspaceId = activeWorkspaceId(s);
+      if (!workspaceId || !s.workspaces[workspaceId]) {
         return { rightTab: remembered };
       }
-      const ws = s.workspaces[s.activeProject];
+      const ws = s.workspaces[workspaceId];
       return {
         rightTab: remembered,
         workspaces: {
           ...s.workspaces,
-          [s.activeProject]: {
+          [workspaceId]: {
             ...ws,
             rightTab: remembered,
           },
@@ -1954,8 +2451,9 @@ export const useAppStore = create<AppStateModel>()(
 
   openCodeViewerTab(path, repoPath, target) {
     set((s) => {
-      if (!s.activeProject) return s;
-      const ws = s.workspaces[s.activeProject];
+      const workspaceId = activeWorkspaceId(s);
+      if (!workspaceId || !s.activeProject) return s;
+      const ws = s.workspaces[workspaceId];
       if (!ws) return s;
       const focused = ws.focusedPaneId;
       const pane = ws.panes[focused];
@@ -2010,14 +2508,14 @@ export const useAppStore = create<AppStateModel>()(
       };
       const newWorkspaces = {
         ...s.workspaces,
-        [s.activeProject]: newWs,
+        [workspaceId]: newWs,
       };
       return {
         workspaceTabs: existing
           ? { ...s.workspaceTabs, [existing.id]: tab }
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, s.activeProject),
+        ...mirrorActive(newWorkspaces, workspaceId),
       };
     });
   },
@@ -2053,7 +2551,7 @@ export const useAppStore = create<AppStateModel>()(
       return {
         workspaceTabs: rest,
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, s.activeProject),
+        ...mirrorActive(newWorkspaces, activeWorkspaceId(s)),
       };
     });
   },
@@ -2062,10 +2560,13 @@ export const useAppStore = create<AppStateModel>()(
     {
       name: "acorn-workspaces",
       storage: createJSONStorage(() => localStorage),
-      version: 3,
+      version: 4,
       partialize: (state) => ({
         workspaces: state.workspaces,
+        projectFolders: state.projectFolders,
+        sessionFolderIds: state.sessionFolderIds,
         activeProject: state.activeProject,
+        activeProjectFolderId: state.activeProjectFolderId,
         rightTab: state.rightTab,
         rightTabByGroup: state.rightTabByGroup,
         sessionNotifications: state.sessionNotifications,
@@ -2116,6 +2617,37 @@ export const useAppStore = create<AppStateModel>()(
           );
           return { ...p, workspaces } as typeof persisted;
         }
+        if (
+          persisted &&
+          typeof persisted === "object" &&
+          fromVersion < 4
+        ) {
+          const p = persisted as {
+            workspaces?: Record<string, PersistedWorkspaceState>;
+            activeProject?: unknown;
+            activeProjectFolderId?: unknown;
+            projectFolders?: unknown;
+            sessionFolderIds?: unknown;
+          };
+          const projectFolders = normalizePersistedProjectFolders(
+            p.projectFolders,
+            p.workspaces ?? {},
+          );
+          const activeProject =
+            typeof p.activeProject === "string" ? p.activeProject : null;
+          const activeProjectFolderId =
+            typeof p.activeProjectFolderId === "string"
+              ? p.activeProjectFolderId
+              : activeProject
+                ? defaultProjectFolderId(activeProject)
+                : null;
+          return {
+            ...p,
+            projectFolders,
+            activeProjectFolderId,
+            sessionFolderIds: normalizeStringRecord(p.sessionFolderIds),
+          } as typeof persisted;
+        }
         return persisted as typeof persisted;
       },
       // Recompute the active-workspace mirror after hydration so consumers
@@ -2165,10 +2697,20 @@ export const useAppStore = create<AppStateModel>()(
           };
         }
         state.workspaces = sanitized;
+        state.projectFolders = normalizePersistedProjectFolders(
+          state.projectFolders,
+          sanitized,
+        );
+        state.sessionFolderIds = normalizeStringRecord(state.sessionFolderIds);
+        state.activeProjectFolderId =
+          state.activeProjectFolderId ??
+          (state.activeProject
+            ? defaultProjectFolderId(state.activeProject)
+            : null);
         state.workspaceTabs = restoredTabs;
         Object.assign(
           state,
-          mirrorActive(state.workspaces, state.activeProject),
+          mirrorActive(state.workspaces, activeWorkspaceId(state)),
         );
       },
     },
@@ -2179,4 +2721,79 @@ function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
   return JSON.stringify(e);
+}
+
+function normalizePersistedProjectFolders(
+  value: unknown,
+  workspaces: Record<string, unknown>,
+): ProjectFoldersByRepo {
+  const next: ProjectFoldersByRepo = {};
+  if (value && typeof value === "object") {
+    for (const [repoPath, rawFolders] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      if (!Array.isArray(rawFolders)) continue;
+      const folders = rawFolders
+        .map((raw) => normalizePersistedProjectFolder(raw, repoPath))
+        .filter((folder): folder is ProjectFolder => folder !== null);
+      if (folders.length > 0) next[repoPath] = sortProjectFolders(folders);
+    }
+  }
+  for (const workspaceId of Object.keys(workspaces)) {
+    if (workspaceId.startsWith("project-folder:")) continue;
+    const repoPath = workspaceId;
+    const folders = next[repoPath] ?? [];
+    if (!folders.some((folder) => folder.id === defaultProjectFolderId(repoPath))) {
+      next[repoPath] = sortProjectFolders([
+        ...folders,
+        {
+          id: defaultProjectFolderId(repoPath),
+          repoPath,
+          name: DEFAULT_PROJECT_FOLDER_NAME,
+          cwdPath: repoPath,
+          position: 0,
+        },
+      ]);
+    }
+  }
+  return next;
+}
+
+function normalizePersistedProjectFolder(
+  raw: unknown,
+  repoPath: string,
+): ProjectFolder | null {
+  if (!raw || typeof raw !== "object") return null;
+  const folder = raw as Partial<ProjectFolder>;
+  if (typeof folder.id !== "string" || folder.id.trim().length === 0) {
+    return null;
+  }
+  const cwdPath =
+    typeof folder.cwdPath === "string" && folder.cwdPath.trim().length > 0
+      ? folder.cwdPath
+      : repoPath;
+  return {
+    id: folder.id,
+    repoPath,
+    name:
+      typeof folder.name === "string" && folder.name.trim().length > 0
+        ? folder.name.trim()
+        : basenamePath(cwdPath),
+    cwdPath,
+    position:
+      typeof folder.position === "number" && Number.isFinite(folder.position)
+        ? folder.position
+        : folder.id === defaultProjectFolderId(repoPath)
+          ? 0
+          : Number.MAX_SAFE_INTEGER,
+  };
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
 }

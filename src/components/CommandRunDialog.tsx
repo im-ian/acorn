@@ -12,6 +12,7 @@ import {
   resolveActiveSessionScope,
   resolveProjectScopedForRepoPath,
 } from "../lib/sessionCreation";
+import { findProjectFolderById } from "../lib/projectFolders";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -67,6 +68,8 @@ export function CommandRunDialog({
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeProject = useAppStore((s) => s.activeProject);
+  const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
+  const projectFolders = useAppStore((s) => s.projectFolders);
   const createSession = useAppStore((s) => s.createSession);
   const setPendingTerminalInput = useAppStore(
     (s) => s.setPendingTerminalInput,
@@ -84,9 +87,13 @@ export function CommandRunDialog({
     : (resolveActiveSessionScope({
         sessions,
         projects,
-        activeSessionId,
-        activeWorkspaceRepoPath: activeProject,
-      }) ??
+      activeSessionId,
+      activeWorkspaceRepoPath: activeProject,
+      activeWorkspaceCwdPath:
+        findProjectFolderById(projectFolders, activeProjectFolderId)?.cwdPath ??
+        null,
+      activeProjectFolderId,
+    }) ??
       (projects[0]
         ? { repoPath: projects[0].repo_path, projectScoped: true }
         : null));

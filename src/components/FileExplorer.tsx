@@ -44,6 +44,7 @@ import {
   buildSessionCreateRequestFromScope,
   resolveActiveSessionScope,
 } from "../lib/sessionCreation";
+import { findProjectFolderById } from "../lib/projectFolders";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
@@ -1022,6 +1023,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         projects: state.projects,
         activeSessionId: state.activeSessionId,
         activeWorkspaceRepoPath: state.activeProject,
+        activeWorkspaceCwdPath:
+          findProjectFolderById(
+            state.projectFolders,
+            state.activeProjectFolderId,
+          )?.cwdPath ?? null,
+        activeProjectFolderId: state.activeProjectFolderId,
       });
       if (!scope) {
         setError(fileExplorerText(t, "fileExplorer.errors.noActiveProject"));
