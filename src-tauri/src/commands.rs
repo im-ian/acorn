@@ -2619,6 +2619,23 @@ pub fn reorder_sessions(
         .collect())
 }
 
+/// Best-effort terminate a session's PTY regardless of where it is hosted.
+///
+/// In-process PTYs live in `state.pty`; daemon-managed sessions live behind
+/// `stream_registry` + `daemon_bridge`. The session/project removal paths must
+/// route the kill the same way [`pty_kill`] does — otherwise removing a
+/// daemon-backed session is a no-op against `state.pty`, leaving its child
+/// process and stream pump thread running and leaking its `stream_registry`
+/// entry.
+fn terminate_session_pty(state: &AppState, id: &Uuid) {
+    if state.stream_registry.contains(id) {
+        state.daemon_bridge.kill(*id).ok();
+        state.stream_registry.drop_attachment(id);
+    } else {
+        state.pty.kill(id).ok();
+    }
+}
+
 #[tauri::command]
 pub async fn remove_project(
     state: State<'_, AppState>,
@@ -2638,7 +2655,7 @@ pub async fn remove_project(
             .filter(|s| s.repo_path == path)
             .collect();
         for session in session_ids {
-            state.pty.kill(&session.id).ok();
+            terminate_session_pty(state.inner(), &session.id);
             if drop_worktrees {
                 remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
             }
@@ -2665,7 +2682,7 @@ pub async fn remove_session(
 ) -> AppResult<()> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
-    state.pty.kill(&id).ok();
+    terminate_session_pty(state.inner(), &id);
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
