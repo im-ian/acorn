@@ -128,13 +128,7 @@ pub fn generate_title_in_dir(
 ) -> AppResult<String> {
     let resolved = ai.resolve()?;
     let prompt = build_prompt(prompt, first_user_message);
-    let raw = crate::ai::run_oneshot_in_dir(
-        resolved.command,
-        &resolved.args,
-        &prompt,
-        "Settings → Agents",
-        cwd,
-    )?;
+    let raw = crate::ai::run_resolved_oneshot_in_dir(&resolved, &prompt, "Settings → Agents", cwd)?;
     normalize_generated_title(&raw)
         .ok_or_else(|| AppError::Other("AI returned an empty session title.".to_string()))
 }

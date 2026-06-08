@@ -33,10 +33,17 @@ pub enum AiProvider {
     Custom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptTransport {
+    Stdin,
+    Argument,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedAiCommand {
     pub command: &'static str,
     pub args: Vec<String>,
+    pub prompt_transport: PromptTransport,
 }
 
 impl AiExecutionRequest {
@@ -45,20 +52,24 @@ impl AiExecutionRequest {
             AiProvider::Claude => Ok(ResolvedAiCommand {
                 command: "claude",
                 args: vec!["-p".into(), "--output-format".into(), "text".into()],
+                prompt_transport: PromptTransport::Stdin,
             }),
             AiProvider::Antigravity => Ok(ResolvedAiCommand {
                 command: "agy",
                 args: vec!["-p".into()],
+                prompt_transport: PromptTransport::Argument,
             }),
             AiProvider::Codex => Ok(ResolvedAiCommand {
                 command: "codex",
                 args: vec!["exec".into(), "--skip-git-repo-check".into()],
+                prompt_transport: PromptTransport::Stdin,
             }),
             AiProvider::Ollama => {
                 let model = normalize_model_arg(self.ollama_model.as_deref(), "llama3")?;
                 Ok(ResolvedAiCommand {
                     command: "ollama",
                     args: vec!["run".into(), model],
+                    prompt_transport: PromptTransport::Stdin,
                 })
             }
             AiProvider::Llm => {
@@ -70,6 +81,7 @@ impl AiExecutionRequest {
                 Ok(ResolvedAiCommand {
                     command: "llm",
                     args,
+                    prompt_transport: PromptTransport::Stdin,
                 })
             }
             AiProvider::Custom => Err(AppError::Other(
@@ -106,43 +118,67 @@ fn normalize_optional_model_arg(raw: Option<&str>) -> AppResult<Option<String>> 
     Ok(Some(model.to_string()))
 }
 
-pub fn run_oneshot(
-    command: &str,
-    args: &[String],
+pub fn run_resolved_oneshot(
+    resolved: &ResolvedAiCommand,
     prompt: &str,
     settings_label: &str,
 ) -> AppResult<String> {
-    run_oneshot_in_dir(command, args, prompt, settings_label, None)
+    run_resolved_oneshot_in_dir(resolved, prompt, settings_label, None)
 }
 
-pub fn run_oneshot_in_dir(
-    command: &str,
-    args: &[String],
+pub fn run_resolved_oneshot_in_dir(
+    resolved: &ResolvedAiCommand,
     prompt: &str,
     settings_label: &str,
     cwd: Option<&Path>,
 ) -> AppResult<String> {
-    run_oneshot_in_dir_cancellable(command, args, prompt, settings_label, cwd, None)
+    run_resolved_oneshot_in_dir_cancellable(resolved, prompt, settings_label, cwd, None)
 }
 
-pub fn run_oneshot_in_dir_cancellable(
+pub fn run_resolved_oneshot_in_dir_cancellable(
+    resolved: &ResolvedAiCommand,
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+    cancellation: Option<ChatCancellation>,
+) -> AppResult<String> {
+    run_oneshot_in_dir_cancellable_with_transport(
+        resolved.command,
+        &resolved.args,
+        prompt,
+        settings_label,
+        cwd,
+        cancellation,
+        resolved.prompt_transport,
+    )
+}
+
+fn run_oneshot_in_dir_cancellable_with_transport(
     command: &str,
     args: &[String],
     prompt: &str,
     settings_label: &str,
     cwd: Option<&Path>,
     cancellation: Option<ChatCancellation>,
+    prompt_transport: PromptTransport,
 ) -> AppResult<String> {
     let resolved = cli_resolver::resolve(command).map_err(|_| {
         AppError::Other(format!(
             "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
         ))
     })?;
+    let mut command_args = args.to_vec();
+    if prompt_transport == PromptTransport::Argument {
+        command_args.push(prompt.to_string());
+    }
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
     command_builder
-        .args(args)
-        .stdin(Stdio::piped())
+        .args(&command_args)
+        .stdin(match prompt_transport {
+            PromptTransport::Stdin => Stdio::piped(),
+            PromptTransport::Argument => Stdio::null(),
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
@@ -159,12 +195,14 @@ pub fn run_oneshot_in_dir_cancellable(
         }
     })?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .map_err(|e| AppError::Other(format!("failed to write to {command}: {e}")))?;
-    } else {
-        return Err(AppError::Other(format!("{command} stdin missing")));
+    if prompt_transport == PromptTransport::Stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(prompt.as_bytes())
+                .map_err(|e| AppError::Other(format!("failed to write to {command}: {e}")))?;
+        } else {
+            return Err(AppError::Other(format!("{command} stdin missing")));
+        }
     }
 
     let output = wait_with_timeout(command, child, ONESHOT_TIMEOUT, cancellation)?;
@@ -290,10 +328,26 @@ mod tests {
             req.resolve().unwrap(),
             ResolvedAiCommand {
                 command: "codex",
-                args: vec![
-                    "exec".to_string(),
-                    "--skip-git-repo-check".to_string(),
-                ],
+                args: vec!["exec".to_string(), "--skip-git-repo-check".to_string(),],
+                prompt_transport: PromptTransport::Stdin,
+            }
+        );
+    }
+
+    #[test]
+    fn resolves_antigravity_prompt_as_print_argument() {
+        let req = AiExecutionRequest {
+            provider: AiProvider::Antigravity,
+            ollama_model: None,
+            llm_model: None,
+        };
+
+        assert_eq!(
+            req.resolve().unwrap(),
+            ResolvedAiCommand {
+                command: "agy",
+                args: vec!["-p".to_string()],
+                prompt_transport: PromptTransport::Argument,
             }
         );
     }
@@ -323,12 +377,63 @@ mod tests {
     #[test]
     fn runs_oneshot_in_requested_working_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let output = run_oneshot_in_dir("pwd", &[], "", "test settings", Some(dir.path())).unwrap();
+        let output = run_oneshot_in_dir_cancellable_with_transport(
+            "pwd",
+            &[],
+            "",
+            "test settings",
+            Some(dir.path()),
+            None,
+            PromptTransport::Stdin,
+        )
+        .unwrap();
         let observed = std::path::PathBuf::from(output.trim())
             .canonicalize()
             .unwrap();
         let expected = dir.path().canonicalize().unwrap();
 
         assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn runs_prompt_as_argument_when_requested() {
+        let args = vec![
+            "-c".to_string(),
+            "printf 'arg=%s stdin=%s' \"$1\" \"$(cat)\"".to_string(),
+            "sh".to_string(),
+        ];
+        let output = run_oneshot_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "hello",
+            "test settings",
+            None,
+            None,
+            PromptTransport::Argument,
+        )
+        .unwrap();
+
+        assert_eq!(output, "arg=hello stdin=");
+    }
+
+    #[test]
+    fn runs_prompt_through_stdin_when_requested() {
+        let args = vec![
+            "-c".to_string(),
+            "printf 'arg=%s stdin=%s' \"${1-}\" \"$(cat)\"".to_string(),
+            "sh".to_string(),
+        ];
+        let output = run_oneshot_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "hello",
+            "test settings",
+            None,
+            None,
+            PromptTransport::Stdin,
+        )
+        .unwrap();
+
+        assert_eq!(output, "arg= stdin=hello");
     }
 }

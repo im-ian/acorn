@@ -55,7 +55,7 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   {
     value: "antigravity",
     label: "Antigravity",
-    oneshotHint: "agy -p",
+    oneshotHint: "agy -p <prompt>",
   },
 ];
 
