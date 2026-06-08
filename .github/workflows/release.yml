@@ -101,6 +101,7 @@ jobs:
       # builds (when Swatinem/rust-cache misses, e.g. after Cargo.lock
       # bumps). Wraps rustc to memoize per-crate compilation outputs.
       - name: Setup sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.6
 
       # Probe the GHA cache backend before trusting sccache. When the
