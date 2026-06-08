@@ -3646,6 +3646,27 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
         .map_err(|e| AppError::Pty(e.to_string()))
 }
 
+/// Detach the frontend from a daemon-managed session's PTY *without* killing
+/// it. Unlike [`pty_kill`], the daemon keeps the child process and its
+/// scrollback ring alive, so a later [`pty_spawn`] re-attaches and replays the
+/// ring. Used by the terminal eviction path to free frontend xterm memory for
+/// idle, off-screen sessions while leaving the running shell untouched.
+///
+/// Detach is a daemon-only capability: in-process PTYs have no re-attach replay
+/// (a second `pty_spawn` no-ops without replaying the tail ring), so evicting
+/// one would leave the user staring at a blank terminal. For an in-process or
+/// unknown session this is a no-op and returns `false` — the caller must keep
+/// such terminals mounted instead of evicting them.
+#[tauri::command]
+pub fn pty_detach(state: State<'_, AppState>, session_id: String) -> AppResult<bool> {
+    let id = parse_id(&session_id)?;
+    if state.stream_registry.contains(&id) {
+        state.stream_registry.drop_attachment(&id);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Drop the cached snapshot of the user's shell environment. The next PTY
 /// spawn re-runs `$SHELL -l -i -c` and picks up dotfile edits the user has
 /// made since the last capture. Existing PTY children are unaffected —
