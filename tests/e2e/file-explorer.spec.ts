@@ -713,6 +713,25 @@ test.describe("file explorer", () => {
       "src",
       /%2Ftmp%2Fdemo%2Flogo\.png/,
     );
+    await expect(
+      page.locator('[data-acorn-media-viewer="image"]'),
+    ).toHaveAttribute("data-acorn-media-zoom", "1");
+
+    await page.getByRole("button", { name: "Zoom in" }).click();
+
+    await expect(
+      page.locator('[data-acorn-media-viewer="image"]'),
+    ).toHaveAttribute("data-acorn-media-zoom", "1.25");
+    await expect(page.locator('img[alt="logo.png"]')).toHaveAttribute(
+      "style",
+      /scale\(1\.25\)/,
+    );
+
+    await page.getByRole("button", { name: "Reset zoom" }).click();
+
+    await expect(
+      page.locator('[data-acorn-media-viewer="image"]'),
+    ).toHaveAttribute("data-acorn-media-zoom", "1");
 
     await page.getByRole("button", { name: "spec.pdf" }).dblclick();
 
