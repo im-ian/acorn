@@ -621,6 +621,7 @@ pub fn run() {
             fs_explorer::fs_grant_external_file,
             fs_explorer::fs_file_exists,
             fs_explorer::fs_read_file,
+            fs_explorer::fs_prepare_asset,
             fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,

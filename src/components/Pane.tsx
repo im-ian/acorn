@@ -28,7 +28,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
-import { CodeViewer } from "./CodeViewer";
+import { FileViewer } from "./FileViewer";
 import { ChatPane } from "./ChatPane";
 import { api } from "../lib/api";
 import {
@@ -489,8 +489,8 @@ export function Pane({ paneId }: PaneProps) {
           at App level. It is portaled into a per-session target div which
           gets `appendChild`-moved into this pane body when this session is
           active. We render only an EmptyPane fallback here for the
-          no-active-session case — or a CodeViewer when the active tab is
-          a frontend-owned code tab instead of a PTY session.
+          no-active-session case — or a FileViewer when the active tab is
+          a frontend-owned file tab instead of a PTY session.
         */}
         {activeSession?.mode === "chat" ? (
           <ChatPane
@@ -501,7 +501,7 @@ export function Pane({ paneId }: PaneProps) {
           />
         ) : null}
         {active?.kind === "code" ? (
-          <CodeViewer
+          <FileViewer
             path={active.path}
             target={active.target}
             isActive={isFocused}

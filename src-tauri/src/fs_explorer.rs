@@ -11,7 +11,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -1011,6 +1011,11 @@ pub struct ReadFileResult {
     pub binary: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PrepareAssetResult {
+    pub size: u64,
+}
+
 const VIEWER_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[tauri::command]
@@ -1044,6 +1049,33 @@ fn fs_file_exists_scoped(scope: &FsScope, path: String) -> AppResult<bool> {
 pub fn fs_read_file(state: State<'_, AppState>, path: String) -> AppResult<ReadFileResult> {
     let scope = FsScope::from_state(state.inner());
     fs_read_file_scoped(&scope, path)
+}
+
+#[tauri::command]
+pub fn fs_prepare_asset<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<PrepareAssetResult> {
+    let scope = FsScope::from_state(state.inner());
+    fs_prepare_asset_scoped(&scope, app, path)
+}
+
+fn fs_prepare_asset_scoped<R: Runtime>(
+    scope: &FsScope,
+    app: AppHandle<R>,
+    path: String,
+) -> AppResult<PrepareAssetResult> {
+    let p = PathBuf::from(&path);
+    let scoped = scope.authorize_existing(&p)?;
+    if !scoped.resolved.is_file() {
+        return Err(AppError::InvalidPath(format!("not a file: {path}")));
+    }
+    let meta = std::fs::metadata(&scoped.resolved)?;
+    app.asset_protocol_scope()
+        .allow_file(&scoped.resolved)
+        .map_err(|e| AppError::Other(format!("asset scope failed: {e}")))?;
+    Ok(PrepareAssetResult { size: meta.len() })
 }
 
 fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResult> {

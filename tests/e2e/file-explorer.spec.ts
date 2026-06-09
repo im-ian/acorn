@@ -643,6 +643,91 @@ test.describe("file explorer", () => {
     ).toBeVisible();
   });
 
+  test("opens media files from the file explorer in a media viewer", async ({
+    page,
+    tauri,
+  }) => {
+    const repo = "/tmp/demo";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", []);
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      if (path !== "/tmp/demo") {
+        return { repo_root: "/tmp/demo", entries: [] };
+      }
+      return {
+        repo_root: "/tmp/demo",
+        entries: [
+          {
+            name: "logo.png",
+            path: "/tmp/demo/logo.png",
+            is_dir: false,
+            is_symlink: false,
+            size: 512,
+            modified_ms: 0,
+            gitignored: false,
+          },
+          {
+            name: "spec.pdf",
+            path: "/tmp/demo/spec.pdf",
+            is_dir: false,
+            is_symlink: false,
+            size: 1024,
+            modified_ms: 0,
+            gitignored: false,
+          },
+        ],
+      };
+    });
+    await tauri.handle("fs_prepare_asset", (args) => {
+      const { path } = args as { path: string };
+      if (path === "/tmp/demo/logo.png") return { size: 512 };
+      if (path === "/tmp/demo/spec.pdf") return { size: 1024 };
+      throw new Error(`unexpected media path: ${path}`);
+    });
+    await tauri.handle("fs_read_file", () => {
+      throw new Error("media files should not be read as text");
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+
+    await page.getByRole("button", { name: "logo.png" }).dblclick();
+
+    await expect(
+      page.getByRole("button", { name: /logo\.png Close tab/ }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-acorn-media-viewer="image"]'),
+    ).toBeVisible();
+    await expect(page.locator('img[alt="logo.png"]')).toHaveAttribute(
+      "src",
+      /%2Ftmp%2Fdemo%2Flogo\.png/,
+    );
+
+    await page.getByRole("button", { name: "spec.pdf" }).dblclick();
+
+    await expect(
+      page.getByRole("button", { name: /spec\.pdf Close tab/ }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-acorn-media-viewer="pdf"]'),
+    ).toBeVisible();
+    await expect(page.locator('iframe[title="spec.pdf"]')).toHaveAttribute(
+      "src",
+      /%2Ftmp%2Fdemo%2Fspec\.pdf/,
+    );
+  });
+
   test("finds matches inside a code viewer tab", async ({ page, tauri }) => {
     const repo = "/tmp/demo";
 
