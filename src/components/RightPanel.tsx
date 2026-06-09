@@ -2557,30 +2557,48 @@ function StagedTab({
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
         <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
-          {files.map((f) => (
-            <li
-              key={f.path}
-              onClick={() => setSelectedPath(f.path)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY, file: f });
-              }}
-              onDoubleClick={() => {
-                openInCodeViewer(f);
-              }}
-              className={cn(
-                "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
-                selectedPath === f.path && "bg-bg-elevated",
-              )}
-            >
-              <span className="w-24 shrink-0 truncate text-fg-muted">
-                {f.status}
-              </span>
-              <Tooltip label={f.path} side="top" multiline className="flex! min-w-0 flex-1">
-                <span className="min-w-0 flex-1 truncate text-fg">{f.path}</span>
-              </Tooltip>
-            </li>
-          ))}
+          {files.map((f) => {
+            const canOpen = !isDeleted(f);
+            return (
+              <li
+                key={f.path}
+                aria-disabled={!canOpen}
+                onClick={() => setSelectedPath(f.path)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, file: f });
+                }}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  if (!canOpen) return;
+                  openInCodeViewer(f);
+                }}
+                className={cn(
+                  "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
+                  selectedPath === f.path && "bg-bg-elevated",
+                )}
+              >
+                <span className="w-24 shrink-0 truncate text-fg-muted">
+                  {f.status}
+                </span>
+                <Tooltip
+                  label={f.path}
+                  side="top"
+                  multiline
+                  className="flex! min-w-0 flex-1"
+                >
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate",
+                      canOpen ? "text-fg" : "text-fg-muted line-through",
+                    )}
+                  >
+                    {f.path}
+                  </span>
+                </Tooltip>
+              </li>
+            );
+          })}
         </ul>
       </Panel>
       <ResizeHandle direction="vertical" thin />
@@ -3083,15 +3101,20 @@ function PullRequestsTab({
             {rt(t, prStateLabelKey(opt.value))}
           </button>
         ))}
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          aria-label={rt(t, "rightPanel.search.aria")}
-          title={rt(t, "rightPanel.search.aria")}
-          className="ml-auto rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+        <Tooltip
+          label={rt(t, "rightPanel.search.aria")}
+          side="bottom"
+          className="ml-auto"
         >
-          <Search size={12} />
-        </button>
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            aria-label={rt(t, "rightPanel.search.aria")}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <Search size={12} />
+          </button>
+        </Tooltip>
         <RefreshButton
           onClick={() => void fetchActivePrs()}
           loading={loading}
@@ -3339,64 +3362,69 @@ function WorkflowRunRow({
 
   return (
     <li>
-      <button
-        type="button"
-        onDoubleClick={onOpenDetail}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            onOpenDetail();
-          }
-        }}
-        className={cn(
-          "flex w-full items-start gap-2 border-b border-border/40 px-3 py-2 text-left",
-          "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
-        )}
-        title={rt(t, "rightPanel.actions.doubleClickDetails")}
+      <Tooltip
+        label={rt(t, "rightPanel.actions.doubleClickDetails")}
+        side="top"
+        className="w-full"
       >
-        <span className="mt-0.5 flex shrink-0 items-center">
-          <WorkflowRunStatusIcon
-            status={run.status}
-            conclusion={run.conclusion}
-          />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-fg">{title}</div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
-            <span className="truncate">{run.workflow_name}</span>
-            <span className="opacity-50">·</span>
-            <span className="truncate">{run.event}</span>
-            {branch ? (
-              <>
-                <span className="opacity-50">·</span>
-                <span className="truncate font-mono">{branch}</span>
-              </>
-            ) : null}
-            {run.attempt > 1 ? (
-              <>
-                <span className="opacity-50">·</span>
-                <span>
-                  {rtf(t, "rightPanel.actions.retryAttempt", {
-                    attempt: run.attempt,
-                  })}
-                </span>
-              </>
-            ) : null}
-          </div>
-        </div>
-        {startedRelative ? (
-          <Tooltip label={startedAbsolute}>
-            <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
-              {startedRelative}
-            </span>
-          </Tooltip>
-        ) : null}
-        {duration ? (
-          <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
-            {duration}
+        <button
+          type="button"
+          onDoubleClick={onOpenDetail}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onOpenDetail();
+            }
+          }}
+          className={cn(
+            "flex w-full items-start gap-2 border-b border-border/40 px-3 py-2 text-left",
+            "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
+          )}
+        >
+          <span className="mt-0.5 flex shrink-0 items-center">
+            <WorkflowRunStatusIcon
+              status={run.status}
+              conclusion={run.conclusion}
+            />
           </span>
-        ) : null}
-      </button>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-fg">{title}</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
+              <span className="truncate">{run.workflow_name}</span>
+              <span className="opacity-50">·</span>
+              <span className="truncate">{run.event}</span>
+              {branch ? (
+                <>
+                  <span className="opacity-50">·</span>
+                  <span className="truncate font-mono">{branch}</span>
+                </>
+              ) : null}
+              {run.attempt > 1 ? (
+                <>
+                  <span className="opacity-50">·</span>
+                  <span>
+                    {rtf(t, "rightPanel.actions.retryAttempt", {
+                      attempt: run.attempt,
+                    })}
+                  </span>
+                </>
+              ) : null}
+            </div>
+          </div>
+          {startedRelative ? (
+            <Tooltip label={startedAbsolute}>
+              <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
+                {startedRelative}
+              </span>
+            </Tooltip>
+          ) : null}
+          {duration ? (
+            <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
+              {duration}
+            </span>
+          ) : null}
+        </button>
+      </Tooltip>
     </li>
   );
 }
@@ -3526,15 +3554,19 @@ function WorkflowRunDetailModal({
         }
         actions={
           detail?.url ? (
-            <button
-              type="button"
-              onClick={() => void openUrl(detail.url)}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
-              title={rt(t, "rightPanel.tooltips.openOnGitHub")}
+            <Tooltip
+              label={rt(t, "rightPanel.tooltips.openOnGitHub")}
+              side="bottom"
             >
-              <ExternalLink size={12} />
-              {rt(t, "rightPanel.actions.github")}
-            </button>
+              <button
+                type="button"
+                onClick={() => void openUrl(detail.url)}
+                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              >
+                <ExternalLink size={12} />
+                {rt(t, "rightPanel.actions.github")}
+              </button>
+            </Tooltip>
           ) : null
         }
         onClose={onClose}
@@ -3720,25 +3752,29 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
           <span className="shrink-0 text-[11px] text-fg-muted">{duration}</span>
         ) : null}
         {job.url ? (
-          <span
-            role="link"
-            tabIndex={0}
-            onClick={(e) => {
-              e.stopPropagation();
-              void openUrl(job.url);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
+          <Tooltip
+            label={rt(t, "rightPanel.actions.openJobOnGitHub")}
+            side="top"
+          >
+            <span
+              role="link"
+              tabIndex={0}
+              onClick={(e) => {
                 e.stopPropagation();
                 void openUrl(job.url);
-              }
-            }}
-            className="shrink-0 cursor-pointer rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
-            title={rt(t, "rightPanel.actions.openJobOnGitHub")}
-          >
-            <ExternalLink size={11} />
-          </span>
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void openUrl(job.url);
+                }
+              }}
+              className="shrink-0 cursor-pointer rounded p-0.5 text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+            >
+              <ExternalLink size={11} />
+            </span>
+          </Tooltip>
         ) : null}
       </button>
       {expanded && job.steps.length > 0 ? (

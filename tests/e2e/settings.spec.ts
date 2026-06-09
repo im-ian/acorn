@@ -71,4 +71,74 @@ test.describe("settings modal", () => {
       .click();
     await expect(modal.getByText(/⌘=|Ctrl\+=/).first()).toBeVisible();
   });
+
+  test("syncs the keep-awake toggle with the backend and local settings", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ power: { preventSleep: true } }),
+      );
+      (window as typeof window & { __ACORN_PREVENT_SLEEP_CALLS__?: boolean[] })
+        .__ACORN_PREVENT_SLEEP_CALLS__ = [];
+    });
+    await tauri.handle("set_prevent_sleep", (args) => {
+      const win = window as typeof window & {
+        __ACORN_PREVENT_SLEEP_CALLS__?: boolean[];
+      };
+      const enabled =
+        !!args &&
+        typeof args === "object" &&
+        "enabled" in args &&
+        !!args.enabled;
+      win.__ACORN_PREVENT_SLEEP_CALLS__ =
+        win.__ACORN_PREVENT_SLEEP_CALLS__ || [];
+      win.__ACORN_PREVENT_SLEEP_CALLS__.push(enabled);
+      return { supported: true, enabled };
+    });
+
+    await page.goto("/");
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & {
+              __ACORN_PREVENT_SLEEP_CALLS__?: boolean[];
+            }).__ACORN_PREVENT_SLEEP_CALLS__ ?? [],
+        ),
+      )
+      .toEqual([true]);
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Services|서비스)$/ }).click();
+
+    const checkbox = modal.getByRole("checkbox", {
+      name: /Keep this Mac awake|이 Mac 잠자기 방지/,
+    });
+    await expect(checkbox).toBeChecked();
+    await checkbox.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & {
+              __ACORN_PREVENT_SLEEP_CALLS__?: boolean[];
+            }).__ACORN_PREVENT_SLEEP_CALLS__ ?? [],
+        ),
+      )
+      .toEqual([true, false]);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).power?.preventSleep : null;
+        }),
+      )
+      .toBe(false);
+  });
 });

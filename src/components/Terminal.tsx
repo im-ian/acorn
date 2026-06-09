@@ -17,9 +17,9 @@ import { ArrowDownToLine } from "lucide-react";
 import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { api, type ClipboardSnapshot } from "../lib/api";
+import { consumeTerminalDetaching } from "../lib/terminalDetach";
 import type { BackgroundState } from "../lib/background";
 import { visibleMultiInputSessionIds } from "../lib/multiInput";
-import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
 import {
   extractNativeFileDropPaths,
   hasNativeFileDropData,
@@ -477,6 +477,7 @@ export function Terminal({
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const pasteAgentProviderRef =
     useRef<SessionAgentProvider | null>(pasteAgentProvider);
+  const agentProviderRef = useRef<SessionAgentProvider | null>(agentProvider);
   const [linkTooltip, setLinkTooltip] = useState<{
     anchorRect: TooltipAnchorRect;
     underlineRects: TooltipAnchorRect[];
@@ -487,6 +488,10 @@ export function Terminal({
   useEffect(() => {
     pasteAgentProviderRef.current = pasteAgentProvider;
   }, [pasteAgentProvider]);
+
+  useEffect(() => {
+    agentProviderRef.current = agentProvider;
+  }, [agentProvider]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1160,7 +1165,11 @@ export function Terminal({
           ) {
             return;
           }
-          sendUserInputToPty(formatTerminalFileMention(attachment.path, cwd));
+          sendUserInputToPty(
+            formatTerminalFileMention(attachment.path, cwd, {
+              agentProvider: agentProviderRef.current,
+            }),
+          );
           term.focus();
         })().catch((err: unknown) => {
           if (fallbackHadAttachment) {
@@ -1589,27 +1598,28 @@ export function Terminal({
     window.addEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
 
     const onDragOver = (e: DragEvent) => {
-      if (!getCurrentFilePayload() && !hasNativeFileDropData(e.dataTransfer)) {
+      if (
+        !hasNativeFileDropData(e.dataTransfer)
+      ) {
         return;
       }
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     };
     const onDrop = (e: DragEvent) => {
-      const payload = getCurrentFilePayload();
-      const paths = payload
-        ? [payload.path]
-        : extractNativeFileDropPaths(e.dataTransfer);
+      const paths = extractNativeFileDropPaths(e.dataTransfer);
       if (paths.length === 0) return;
       e.preventDefault();
-      try {
-        sendUserInputToPty(
-          paths.map((path) => formatTerminalFileMention(path, cwd)).join(""),
-        );
-        term.focus();
-      } finally {
-        endAcornDrag();
-      }
+      sendUserInputToPty(
+        paths
+          .map((path) =>
+            formatTerminalFileMention(path, cwd, {
+              agentProvider: agentProviderRef.current,
+            }),
+          )
+          .join(""),
+      );
+      term.focus();
     };
     container.addEventListener("dragover", onDragOver);
     container.addEventListener("drop", onDrop);
@@ -2346,9 +2356,24 @@ export function Terminal({
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }
-      invoke("pty_kill", { sessionId }).catch(() => {
-        // Backend may not implement pty_kill yet — safe to ignore.
-      });
+      if (consumeTerminalDetaching(sessionId)) {
+        // Evicted for memory, not deleted: detach so the daemon keeps the
+        // shell + scrollback ring alive and a later remount re-attaches and
+        // replays it. If the backend reports the session was not daemon-backed
+        // (and therefore cannot be re-attached), fall back to a kill rather
+        // than strand a headless in-process shell.
+        invoke<boolean>("pty_detach", { sessionId })
+          .then((detached) => {
+            if (!detached) return invoke("pty_kill", { sessionId });
+          })
+          .catch(() => {
+            // best effort
+          });
+      } else {
+        invoke("pty_kill", { sessionId }).catch(() => {
+          // Backend may not implement pty_kill yet — safe to ignore.
+        });
+      }
       unpatchMouseCoordinateScale();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;

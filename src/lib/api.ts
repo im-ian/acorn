@@ -52,6 +52,11 @@ export interface LoadStatus {
   projectsClean: boolean;
 }
 
+export interface PreventSleepStatus {
+  supported: boolean;
+  enabled: boolean;
+}
+
 export interface AiExecutionRequest {
   provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
   ollamaModel?: string | null;
@@ -666,6 +671,12 @@ export const api = {
   acknowledgeStagedRevMismatch(): Promise<void> {
     return invoke<void>("acknowledge_staged_rev_mismatch");
   },
+  preventSleepStatus(): Promise<PreventSleepStatus> {
+    return invoke<PreventSleepStatus>("prevent_sleep_status");
+  },
+  setPreventSleep(enabled: boolean): Promise<PreventSleepStatus> {
+    return invoke<PreventSleepStatus>("set_prevent_sleep", { enabled });
+  },
   /**
    * Flip the daemon killswitch. Persistence (so the setting survives a
    * restart) is the caller's responsibility — stash to `localStorage`
@@ -849,8 +860,14 @@ export const api = {
   fsFileExists(path: string): Promise<boolean> {
     return invoke<boolean>("fs_file_exists", { path });
   },
+  fsGrantExternalFile(path: string): Promise<void> {
+    return invoke<void>("fs_grant_external_file", { path });
+  },
   fsReadFile(path: string): Promise<FsReadFileResult> {
     return invoke<FsReadFileResult>("fs_read_file", { path });
+  },
+  fsPrepareAsset(path: string): Promise<FsPrepareAssetResult> {
+    return invoke<FsPrepareAssetResult>("fs_prepare_asset", { path });
   },
   fsGitDiffLines(path: string): Promise<FsLineDiffEntry[]> {
     return invoke<FsLineDiffEntry[]>("fs_git_diff_lines", { path });
@@ -933,6 +950,11 @@ export interface FsReadFileResult {
   size: number;
   truncated: boolean;
   binary: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::PrepareAssetResult`. */
+export interface FsPrepareAssetResult {
+  size: number;
 }
 
 /** Mirror of `crate::fs_explorer::LineDiffEntry`. */

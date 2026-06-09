@@ -322,6 +322,40 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches the resident terminal limit from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const label = Array.from(document.querySelectorAll("span")).find(
+      (element) => element.textContent === "Resident terminal limit",
+    );
+    const field = label?.parentElement;
+    const increase = Array.from(field?.querySelectorAll("button") ?? []).find(
+      (element) => element.getAttribute("aria-label") === "Increase",
+    );
+
+    expect(field?.textContent).toContain("8");
+    expect(increase).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      increase?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(patchTerminal).toHaveBeenCalledWith({ maxMountedTerminals: 9 });
+  });
+
   it("does not render the Appearance font dropdown controls", async () => {
     await act(async () => {
       root = createRoot(container);

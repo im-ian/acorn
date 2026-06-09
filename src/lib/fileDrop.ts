@@ -16,6 +16,7 @@ interface FileDropDataTransferLike {
 
 const NATIVE_FILE_TYPES = new Set(["Files", "public.file-url"]);
 const FILE_URL_DATA_TYPES = ["text/uri-list", "public.file-url", "URL"];
+const FILE_URL_TRANSFER_TYPES = new Set(FILE_URL_DATA_TYPES);
 
 function arrayFromList<T>(
   value: ArrayLike<T> | Iterable<T> | null | undefined,
@@ -102,6 +103,13 @@ export function hasNativeFileDropData(
   if (arrayFromList(dataTransfer.files).length > 0) return true;
   if (
     getTransferTypes(dataTransfer).some((type) => NATIVE_FILE_TYPES.has(type))
+  ) {
+    return true;
+  }
+  if (
+    getTransferTypes(dataTransfer).some((type) =>
+      FILE_URL_TRANSFER_TYPES.has(type),
+    )
   ) {
     return true;
   }

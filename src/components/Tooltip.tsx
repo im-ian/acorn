@@ -18,7 +18,7 @@ interface TooltipProps {
   label: ReactNode;
   /** Where the tooltip appears relative to the trigger. Default: "bottom". */
   side?: "top" | "bottom" | "left" | "right";
-  /** Delay before showing on hover, in ms. Default: 250. */
+  /** Delay before showing on hover, in ms. Default: 1000. */
   delay?: number;
   /**
    * Allow the tooltip to span multiple lines. The container drops
@@ -196,7 +196,7 @@ export function FloatingTooltip({
 export function Tooltip({
   label,
   side = "bottom",
-  delay = 250,
+  delay = 1000,
   multiline = false,
   children,
   className,

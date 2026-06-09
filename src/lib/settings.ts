@@ -120,6 +120,9 @@ export const UI_SCALE_PERCENT_STEP = 5;
 export const NOTIFICATION_HISTORY_LIMIT_MIN = 1;
 export const NOTIFICATION_HISTORY_LIMIT_DEFAULT = 50;
 export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
+export const MOUNTED_TERMINAL_LIMIT_MIN = 1;
+export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
+export const MOUNTED_TERMINAL_LIMIT_MAX = 64;
 
 export type ToastPosition = "top" | "bottom";
 
@@ -213,6 +216,12 @@ export interface AcornSettings {
      * stray click on output containing a URL doesn't steal focus.
      */
     linkActivation: TerminalLinkActivation;
+    /**
+     * Upper bound on simultaneously-mounted terminal sessions. Visible
+     * terminals are always exempt, so this only evicts off-screen daemon
+     * sessions that can be re-attached with scrollback replay.
+     */
+    maxMountedTerminals: number;
   };
   /**
    * The single AI agent acorn uses everywhere AI features fire (currently
@@ -261,6 +270,14 @@ export interface AcornSettings {
      * preserved either way; only the in-app tab is affected.
      */
     closeOnExit: boolean;
+  };
+  power: {
+    /**
+     * Hold a macOS PreventUserIdleSystemSleep assertion while Acorn is
+     * running. The display may still sleep; this only keeps idle system
+     * sleep from suspending long-running sessions.
+     */
+    preventSleep: boolean;
   };
   editor: {
     /**
@@ -401,6 +418,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeightBold: 700,
     lineHeight: 1.0,
     linkActivation: "click",
+    maxMountedTerminals: MOUNTED_TERMINAL_LIMIT_DEFAULT,
   },
   agents: {
     selected: "claude",
@@ -414,6 +432,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     confirmRemove: true,
     autoDeleteWorktrees: false,
     closeOnExit: false,
+  },
+  power: {
+    preventSleep: false,
   },
   editor: {
     command: "",
@@ -576,6 +597,17 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   // Clamp to the same range the Stepper enforces in the UI so a hand-
   // edited localStorage value can't make the terminal unusable.
   return Math.max(1.0, Math.min(2.0, v));
+}
+
+export function normalizeMountedTerminalLimit(
+  v: unknown,
+  fallback: number,
+): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.max(
+    MOUNTED_TERMINAL_LIMIT_MIN,
+    Math.min(MOUNTED_TERMINAL_LIMIT_MAX, Math.round(v)),
+  );
 }
 
 function normalizePrInterval(v: unknown, fallback: number): number {
@@ -793,6 +825,11 @@ function loadSettings(): AcornSettings {
           (terminalRaw as { linkActivation?: unknown }).linkActivation,
           DEFAULT_SETTINGS.terminal.linkActivation,
         ),
+        maxMountedTerminals: normalizeMountedTerminalLimit(
+          (terminalRaw as { maxMountedTerminals?: unknown })
+            .maxMountedTerminals,
+          DEFAULT_SETTINGS.terminal.maxMountedTerminals,
+        ),
       },
       agents: {
         selected,
@@ -811,6 +848,12 @@ function loadSettings(): AcornSettings {
       sessions: {
         ...DEFAULT_SETTINGS.sessions,
         ...(parsed.sessions ?? {}),
+      },
+      power: {
+        preventSleep:
+          typeof parsed.power?.preventSleep === "boolean"
+            ? parsed.power.preventSleep
+            : DEFAULT_SETTINGS.power.preventSleep,
       },
       editor: {
         ...DEFAULT_SETTINGS.editor,
@@ -949,6 +992,7 @@ interface SettingsState {
     }>,
   ) => void;
   patchSessions: (patch: Partial<AcornSettings["sessions"]>) => void;
+  patchPower: (patch: Partial<AcornSettings["power"]>) => void;
   patchEditor: (patch: Partial<AcornSettings["editor"]>) => void;
   patchNotifications: (
     patch: Partial<Omit<AcornSettings["notifications"], "events">> & {
@@ -998,7 +1042,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set((s) => {
       const next: AcornSettings = {
         ...s.settings,
-        terminal: { ...s.settings.terminal, ...patch },
+        terminal: {
+          ...s.settings.terminal,
+          ...patch,
+          maxMountedTerminals:
+            patch.maxMountedTerminals === undefined
+              ? s.settings.terminal.maxMountedTerminals
+              : normalizeMountedTerminalLimit(
+                  patch.maxMountedTerminals,
+                  s.settings.terminal.maxMountedTerminals,
+                ),
+        },
       };
       persist(next);
       return { settings: next };
@@ -1036,6 +1090,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         sessions: { ...s.settings.sessions, ...patch },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchPower: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        power: { ...s.settings.power, ...patch },
       };
       persist(next);
       return { settings: next };

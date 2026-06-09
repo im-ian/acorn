@@ -101,6 +101,7 @@ jobs:
       # builds (when Swatinem/rust-cache misses, e.g. after Cargo.lock
       # bumps). Wraps rustc to memoize per-crate compilation outputs.
       - name: Setup sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.6
 
       # Probe the GHA cache backend before trusting sccache. When the
@@ -404,10 +405,10 @@ jobs:
             bundles/*.app.tar.gz
             bundles/*.app.tar.gz.sig
             latest.json
-          # Defer "Latest" badge + prerelease flag to GitHub's semver
-          # auto-detection so test tags like `v1.1.0-rc1` stay out of the
-          # default release pointer and the updater's latest.json feed.
-          make_latest: legacy
+          # Stable releases must update GitHub's "Latest" pointer because the
+          # app updater resolves latest.json through /releases/latest/download.
+          # Keep prerelease tags out of that pointer.
+          make_latest: ${{ contains(steps.meta.outputs.tag, '-') && 'false' || 'true' }}
           prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

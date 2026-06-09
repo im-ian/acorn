@@ -21,6 +21,7 @@ import {
   VirtualizedLineList,
   type VirtualizedLineListHandle,
 } from "./VirtualizedLines";
+import { Tooltip } from "./Tooltip";
 import { Markdown } from "./ui/Markdown";
 import type { CodeWorkspaceTabTarget } from "../lib/workspaceTabs";
 
@@ -482,35 +483,38 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
                     .replace("{current}", String(activeMatchIndex + 1))
                     .replace("{total}", String(currentMatchCount))}
           </span>
-          <button
-            type="button"
-            onClick={() => stepMatch(-1)}
-            disabled={currentMatchCount === 0}
-            aria-label={t("codeViewer.previousMatch")}
-            title={t("codeViewer.previousMatch")}
-            className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-          >
-            <ChevronUp size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => stepMatch(1)}
-            disabled={currentMatchCount === 0}
-            aria-label={t("codeViewer.nextMatch")}
-            title={t("codeViewer.nextMatch")}
-            className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-          >
-            <ChevronDown size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={closeSearch}
-            aria-label={t("codeViewer.closeFind")}
-            title={t("codeViewer.closeFind")}
-            className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
-          >
-            <X size={14} />
-          </button>
+          <Tooltip label={t("codeViewer.previousMatch")} side="bottom">
+            <button
+              type="button"
+              onClick={() => stepMatch(-1)}
+              disabled={currentMatchCount === 0}
+              aria-label={t("codeViewer.previousMatch")}
+              className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <ChevronUp size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip label={t("codeViewer.nextMatch")} side="bottom">
+            <button
+              type="button"
+              onClick={() => stepMatch(1)}
+              disabled={currentMatchCount === 0}
+              aria-label={t("codeViewer.nextMatch")}
+              className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip label={t("codeViewer.closeFind")} side="bottom">
+            <button
+              type="button"
+              onClick={closeSearch}
+              aria-label={t("codeViewer.closeFind")}
+              className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
         </div>
       ) : null}
       {canPreviewMarkdown ? (

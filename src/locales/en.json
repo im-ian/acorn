@@ -79,6 +79,10 @@
         "label": "Line height",
         "hint": "Cell-height multiplier. 1.00 packs rows flush; raise for more vertical breathing room. Range 1.00-2.00."
       },
+      "maxMountedTerminals": {
+        "label": "Resident terminal limit",
+        "hint": "How many off-screen terminal views stay mounted in memory before daemon-backed sessions are detached. Visible terminals are always kept."
+      },
       "openLinksOn": {
         "label": "Open links on",
         "hint": "How to follow URLs that xterm detects in terminal output.",
@@ -123,6 +127,14 @@
         "installed": "installed",
         "notInstalled": "not installed",
         "recheck": "Re-check"
+      }
+    },
+    "power": {
+      "title": "Power",
+      "description": "Controls how Acorn interacts with macOS sleep while it is running.",
+      "preventSleep": {
+        "label": "Keep this Mac awake",
+        "description": "Prevent idle system sleep while Acorn is open. The display may still turn off, and manual sleep or lid close still wins."
       }
     },
     "github": {
@@ -607,8 +619,8 @@
     "agentTokensWindowFiveHour": "5h",
     "agentTokensWindowWeekly": "weekly",
     "agentTokensResetUnknown": "-",
-    "agentTokensTooltipLine": "{window}: {remaining} left, resets in {reset}",
-    "agentTokensTooltipError": "{window}: {error}",
+    "agentTokensRemaining": "{remaining} left",
+    "agentTokensResetIn": "resets in {reset}",
     "agentTokensUpdated": "updated {time}",
     "sessionStatus": {
       "idle": "idle",
@@ -648,7 +660,7 @@
         "daemonOn": "daemon: on",
         "daemonOnWithSessions": "daemon: on ({count})",
         "daemonDown": "daemon: down",
-        "details": "{ipc} · {daemon} - click for details"
+        "detailsHint": "Click for details"
       },
       "status": {
         "loading": "loading",
@@ -688,6 +700,11 @@
     "openInBrowser": "Open in browser",
     "close": "Close"
   },
+  "mediaViewer": {
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "resetZoom": "Reset zoom"
+  },
   "codeViewer": {
     "loading": "Loading...",
     "binaryFile": "Binary file",
@@ -702,6 +719,14 @@
     "previousMatch": "Previous match",
     "nextMatch": "Next match",
     "closeFind": "Close find"
+  },
+  "fileDropHover": {
+    "previewTitle": "Drop to preview",
+    "terminalTitle": "Drop into terminal",
+    "tabTitle": "Drop to open tab",
+    "previewHint": "Open this file in the pane.",
+    "terminalHint": "Insert the file path.",
+    "tabHint": "Open this file as a tab."
   },
   "diffView": {
     "noChanges": "No changes in this diff.",

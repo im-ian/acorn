@@ -286,6 +286,12 @@ export const tauriMockSource = `
     if (cmd === 'staged_rev_mismatch_status') return Promise.resolve(null);
     if (cmd === 'acknowledge_staged_rev_mismatch')
       return Promise.resolve(undefined);
+    if (cmd === 'prevent_sleep_status') {
+      return Promise.resolve({ supported: true, enabled: false });
+    }
+    if (cmd === 'set_prevent_sleep') {
+      return Promise.resolve({ supported: true, enabled: !!args?.enabled });
+    }
     if (cmd === 'pty_write') return Promise.resolve(undefined);
     // File explorer. No real fs in E2E — default to an empty listing so
     // the panel renders without errors. Tests that need real entries
@@ -301,9 +307,11 @@ export const tauriMockSource = `
     if (cmd === 'fs_git_status') return Promise.resolve({ statuses: {}, huge: false, limit: 10000 });
     if (cmd === 'fs_git_branch') return Promise.resolve('');
     if (cmd === 'fs_file_exists') return Promise.resolve(false);
+    if (cmd === 'fs_grant_external_file') return Promise.resolve(undefined);
     if (cmd === 'fs_read_file') {
       return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
     }
+    if (cmd === 'fs_prepare_asset') return Promise.resolve({ size: 0 });
     if (cmd === 'fs_git_diff_lines') return Promise.resolve([]);
     if (cmd === 'fs_watch_set_root') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
@@ -328,6 +336,17 @@ export const tauriMockSource = `
     },
     unregisterCallback: (id) => {
       try { delete window['_' + id]; } catch (_) { window['_' + id] = undefined; }
+    },
+    convertFileSrc: (filePath, protocol = 'asset') => {
+      const path = encodeURIComponent(filePath);
+      if (protocol === 'asset') {
+        const lower = String(filePath).toLowerCase();
+        if (/\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)$/.test(lower)) {
+          return 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==#' + path;
+        }
+        return 'about:blank#' + path;
+      }
+      return protocol + '://localhost/' + path;
     },
     invoke: async (cmd, args) => {
       const handler = handlers[cmd];
