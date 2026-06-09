@@ -607,8 +607,8 @@
     "agentTokensWindowFiveHour": "5h",
     "agentTokensWindowWeekly": "weekly",
     "agentTokensResetUnknown": "-",
-    "agentTokensTooltipLine": "{window}: {remaining} left, resets in {reset}",
-    "agentTokensTooltipError": "{window}: {error}",
+    "agentTokensRemaining": "{remaining} left",
+    "agentTokensResetIn": "resets in {reset}",
     "agentTokensUpdated": "updated {time}",
     "sessionStatus": {
       "idle": "idle",
@@ -648,7 +648,7 @@
         "daemonOn": "daemon: on",
         "daemonOnWithSessions": "daemon: on ({count})",
         "daemonDown": "daemon: down",
-        "details": "{ipc} · {daemon} - click for details"
+        "detailsHint": "Click for details"
       },
       "status": {
         "loading": "loading",

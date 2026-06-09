@@ -998,20 +998,25 @@ function ResizableBody({ children }: { children: React.ReactNode }) {
       >
         {children}
       </div>
-      <div
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label={dt(t, "dialogs.pullRequestDetail.resizePrBody")}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onDoubleClick={() => setHeight(BODY_HEIGHT_DEFAULT)}
-        title={dt(t, "dialogs.pullRequestDetail.resizeHint")}
-        className="group relative flex h-1.5 shrink-0 cursor-row-resize items-center justify-center border-b border-border bg-bg-sidebar/40 transition hover:bg-accent/30"
+      <Tooltip
+        label={dt(t, "dialogs.pullRequestDetail.resizeHint")}
+        side="top"
+        className="flex w-full shrink-0"
       >
-        <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
-      </div>
+        <span
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={dt(t, "dialogs.pullRequestDetail.resizePrBody")}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onDoubleClick={() => setHeight(BODY_HEIGHT_DEFAULT)}
+          className="group relative flex h-1.5 w-full shrink-0 cursor-row-resize items-center justify-center border-b border-border bg-bg-sidebar/40 transition hover:bg-accent/30"
+        >
+          <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
+        </span>
+      </Tooltip>
     </>
   );
 }
@@ -1403,9 +1408,16 @@ function CommitListItem({
             : "text-fg-muted hover:bg-bg-elevated hover:text-fg",
         )}
       >
-        <div className="truncate text-[12px] font-medium text-fg" title={commit.message_headline}>
-          {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
-        </div>
+        <Tooltip
+          label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
+          side="right"
+          multiline
+          className="min-w-0 w-full"
+        >
+          <div className="w-full truncate text-[12px] font-medium text-fg">
+            {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
+          </div>
+        </Tooltip>
         <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-fg-muted">
           {primaryAuthor ? (
             <AuthorTag
@@ -1505,12 +1517,16 @@ function CommitDetailView({
       <header className="flex shrink-0 items-start gap-2 border-b border-border bg-bg-sidebar/40 px-4 py-2.5">
         <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
         <div className="min-w-0 flex-1">
-          <div
-            className="truncate text-[13px] font-semibold tracking-tight text-fg"
-            title={commit.message_headline}
+          <Tooltip
+            label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
+            side="bottom"
+            multiline
+            className="min-w-0 w-full"
           >
-            {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
-          </div>
+            <div className="w-full truncate text-[13px] font-semibold tracking-tight text-fg">
+              {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
+            </div>
+          </Tooltip>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
             {primaryAuthor ? (
               <AuthorTag
