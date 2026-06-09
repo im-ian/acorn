@@ -698,6 +698,12 @@ function ServicesSettings() {
 
   return (
     <section className="space-y-6">
+      <SettingsGroup
+        title={st(t, "settings.power.title")}
+        description={st(t, "settings.power.description")}
+      >
+        <PowerSettings />
+      </SettingsGroup>
       <ControlSessionInstallSection />
       <SettingsGroup
         title={st(t, "settings.sessions.background.title")}
@@ -706,6 +712,21 @@ function ServicesSettings() {
         <BackgroundSessionsSettings />
       </SettingsGroup>
     </section>
+  );
+}
+
+function PowerSettings() {
+  const preventSleep = useSettings((s) => s.settings.power.preventSleep);
+  const patchPower = useSettings((s) => s.patchPower);
+  const t = useTranslation();
+
+  return (
+    <CheckboxRow
+      label={st(t, "settings.power.preventSleep.label")}
+      description={st(t, "settings.power.preventSleep.description")}
+      checked={preventSleep}
+      onChange={(v) => patchPower({ preventSleep: v })}
+    />
   );
 }
 

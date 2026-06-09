@@ -16,6 +16,7 @@ mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
+mod power_assertion;
 mod project_settings;
 pub mod pty_env;
 mod pty_output;
@@ -598,6 +599,8 @@ pub fn run() {
             commands::acknowledge_antigravity_resume,
             commands::staged_rev_mismatch_status,
             commands::acknowledge_staged_rev_mismatch,
+            power_assertion::prevent_sleep_status,
+            power_assertion::set_prevent_sleep,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,

@@ -286,6 +286,12 @@ export const tauriMockSource = `
     if (cmd === 'staged_rev_mismatch_status') return Promise.resolve(null);
     if (cmd === 'acknowledge_staged_rev_mismatch')
       return Promise.resolve(undefined);
+    if (cmd === 'prevent_sleep_status') {
+      return Promise.resolve({ supported: true, enabled: false });
+    }
+    if (cmd === 'set_prevent_sleep') {
+      return Promise.resolve({ supported: true, enabled: !!args?.enabled });
+    }
     if (cmd === 'pty_write') return Promise.resolve(undefined);
     // File explorer. No real fs in E2E — default to an empty listing so
     // the panel renders without errors. Tests that need real entries

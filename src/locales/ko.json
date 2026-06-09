@@ -129,6 +129,14 @@
         "recheck": "다시 확인"
       }
     },
+    "power": {
+      "title": "전원",
+      "description": "Acorn이 실행 중일 때 macOS 잠자기 동작을 제어합니다.",
+      "preventSleep": {
+        "label": "이 Mac 잠자기 방지",
+        "description": "Acorn이 열려 있는 동안 유휴 상태로 시스템이 잠자기에 들어가지 않도록 합니다. 디스플레이는 꺼질 수 있으며, 수동 잠자기나 덮개 닫기가 우선합니다."
+      }
+    },
     "github": {
       "refreshInterval": {
         "label": "새로고침 간격",

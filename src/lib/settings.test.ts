@@ -175,6 +175,60 @@ describe("session removal settings", () => {
   });
 });
 
+describe("power settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to allowing normal idle sleep", () => {
+    expect(DEFAULT_SETTINGS.power.preventSleep).toBe(false);
+  });
+
+  it("loads a persisted prevent-sleep preference", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ power: { preventSleep: true } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.power.preventSleep).toBe(true);
+  });
+
+  it("persists patched prevent-sleep changes", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchPower({ preventSleep: true });
+
+    expect(useSettings.getState().settings.power.preventSleep).toBe(true);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").power).toEqual(
+      { preventSleep: true },
+    );
+  });
+});
+
 describe("notification settings", () => {
   const STORAGE_KEY = "acorn:settings:v1";
   let storage: Map<string, string>;

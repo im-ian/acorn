@@ -8,6 +8,7 @@ use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
 use crate::fs_explorer::WatcherState;
 use crate::ipc::server::IpcServerHandle;
+use crate::power_assertion::PowerAssertionState;
 use crate::pty_output::PtyOutputRouter;
 use crate::staged_rev_reconcile::StagedRevMismatch;
 use acorn_pty::PtyManager;
@@ -69,6 +70,9 @@ pub struct AppState {
     /// The cancel command uses this to kill the one-shot provider child and
     /// let the running turn settle as cancelled.
     pub chat_runs: Arc<crate::chat_runs::ChatRunRegistry>,
+    /// macOS idle-sleep assertion owned while Settings keeps Acorn awake.
+    /// Dropping the inner assertion releases the OS power-management hold.
+    pub power_assertion: Arc<Mutex<PowerAssertionState>>,
 }
 
 impl AppState {
@@ -89,6 +93,7 @@ impl AppState {
             folder_grants: Arc::new(Mutex::new(Vec::new())),
             external_file_grants: Arc::new(Mutex::new(Vec::new())),
             chat_runs: crate::chat_runs::ChatRunRegistry::new(),
+            power_assertion: Arc::new(Mutex::new(PowerAssertionState::new())),
         }
     }
 }

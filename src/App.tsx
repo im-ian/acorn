@@ -115,6 +115,8 @@ const RIGHT_PANEL_MIN_SIZE = 16;
 
 type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
 
+let lastPreventSleepSync: boolean | null = null;
+
 function appText(t: Translator, key: AppTranslationKey): string {
   return t(key);
 }
@@ -266,6 +268,7 @@ function App() {
   );
   const settings = useSettings((s) => s.settings);
   const shortcuts = settings.shortcuts;
+  const preventSleep = settings.power.preventSleep;
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
@@ -689,6 +692,15 @@ function App() {
       });
     });
   }, []);
+
+  useEffect(() => {
+    if (lastPreventSleepSync === preventSleep) return;
+    lastPreventSleepSync = preventSleep;
+    void api.setPreventSleep(preventSleep).catch((err) => {
+      lastPreventSleepSync = null;
+      console.warn("[App] prevent-sleep sync failed", err);
+    });
+  }, [preventSleep]);
 
   // Auto-update: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level
