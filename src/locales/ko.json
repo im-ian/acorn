@@ -692,6 +692,11 @@
     "openInBrowser": "브라우저에서 열기",
     "close": "닫기"
   },
+  "mediaViewer": {
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "resetZoom": "확대/축소 초기화"
+  },
   "codeViewer": {
     "loading": "불러오는 중...",
     "binaryFile": "바이너리 파일",

@@ -692,6 +692,11 @@
     "openInBrowser": "Open in browser",
     "close": "Close"
   },
+  "mediaViewer": {
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "resetZoom": "Reset zoom"
+  },
   "codeViewer": {
     "loading": "Loading...",
     "binaryFile": "Binary file",

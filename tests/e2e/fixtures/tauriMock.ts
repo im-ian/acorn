@@ -305,6 +305,7 @@ export const tauriMockSource = `
     if (cmd === 'fs_read_file') {
       return Promise.resolve({ content: '', size: 0, truncated: false, binary: false });
     }
+    if (cmd === 'fs_prepare_asset') return Promise.resolve({ size: 0 });
     if (cmd === 'fs_git_diff_lines') return Promise.resolve([]);
     if (cmd === 'fs_watch_set_root') return Promise.resolve(undefined);
     if (cmd && cmd.startsWith('list_')) return Promise.resolve([]);
@@ -329,6 +330,17 @@ export const tauriMockSource = `
     },
     unregisterCallback: (id) => {
       try { delete window['_' + id]; } catch (_) { window['_' + id] = undefined; }
+    },
+    convertFileSrc: (filePath, protocol = 'asset') => {
+      const path = encodeURIComponent(filePath);
+      if (protocol === 'asset') {
+        const lower = String(filePath).toLowerCase();
+        if (/\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)$/.test(lower)) {
+          return 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==#' + path;
+        }
+        return 'about:blank#' + path;
+      }
+      return protocol + '://localhost/' + path;
     },
     invoke: async (cmd, args) => {
       const handler = handlers[cmd];
