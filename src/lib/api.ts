@@ -855,6 +855,9 @@ export const api = {
   fsReadFile(path: string): Promise<FsReadFileResult> {
     return invoke<FsReadFileResult>("fs_read_file", { path });
   },
+  fsPrepareAsset(path: string): Promise<FsPrepareAssetResult> {
+    return invoke<FsPrepareAssetResult>("fs_prepare_asset", { path });
+  },
   fsGitDiffLines(path: string): Promise<FsLineDiffEntry[]> {
     return invoke<FsLineDiffEntry[]>("fs_git_diff_lines", { path });
   },
@@ -936,6 +939,11 @@ export interface FsReadFileResult {
   size: number;
   truncated: boolean;
   binary: boolean;
+}
+
+/** Mirror of `crate::fs_explorer::PrepareAssetResult`. */
+export interface FsPrepareAssetResult {
+  size: number;
 }
 
 /** Mirror of `crate::fs_explorer::LineDiffEntry`. */
