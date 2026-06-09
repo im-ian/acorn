@@ -79,6 +79,64 @@ async function seedWritableTerminal(tauri: TauriMock): Promise<void> {
   });
 }
 
+async function installNativeDragEventRecorder(
+  tauri: TauriMock,
+): Promise<void> {
+  await tauri.handle("plugin:event|listen", (args: unknown) => {
+    const { event, handler } = args as { event: string; handler: number };
+    const w = window as unknown as {
+      __tauriEventHandlers?: Record<string, number>;
+    };
+    w.__tauriEventHandlers = w.__tauriEventHandlers ?? {};
+    w.__tauriEventHandlers[event] = handler;
+    return handler;
+  });
+  await tauri.handle("plugin:event|unlisten", () => undefined);
+}
+
+async function emitNativeFileDragEvent(
+  page: Page,
+  event: "tauri://drag-enter" | "tauri://drag-drop",
+  box: { x: number; y: number; width: number; height: number },
+  paths: string[],
+): Promise<void> {
+  await page.evaluate(
+    ({ box, event, paths }) => {
+      const w = window as unknown as {
+        __tauriEventHandlers?: Record<string, number>;
+        [key: string]: unknown;
+      };
+      const id = w.__tauriEventHandlers?.[event];
+      if (typeof id !== "number") {
+        throw new Error(`missing ${event} handler`);
+      }
+      const callback = w[`_${id}`] as
+        | ((payload: {
+            event: string;
+            id: number;
+            payload: {
+              paths: string[];
+              position: { x: number; y: number };
+            };
+          }) => void)
+        | undefined;
+      if (!callback) throw new Error(`missing ${event} callback`);
+      callback({
+        event,
+        id,
+        payload: {
+          paths,
+          position: {
+            x: box.x + box.width / 2,
+            y: box.y + box.height / 2,
+          },
+        },
+      });
+    },
+    { box, event, paths },
+  );
+}
+
 async function emitSubscribedPtyOutput(
   page: Page,
   channelIdKey: string,
@@ -456,16 +514,7 @@ test.describe("terminal: spawn", () => {
     tauri,
   }) => {
     await seedWritableTerminal(tauri);
-    await tauri.handle("plugin:event|listen", (args: unknown) => {
-      const { event, handler } = args as { event: string; handler: number };
-      const w = window as unknown as {
-        __tauriEventHandlers?: Record<string, number>;
-      };
-      w.__tauriEventHandlers = w.__tauriEventHandlers ?? {};
-      w.__tauriEventHandlers[event] = handler;
-      return handler;
-    });
-    await tauri.handle("plugin:event|unlisten", () => undefined);
+    await installNativeDragEventRecorder(tauri);
 
     await page.goto("/");
     await page
@@ -495,37 +544,27 @@ test.describe("terminal: spawn", () => {
       .boundingBox();
     expect(terminalBox).not.toBeNull();
 
-    await page.evaluate((box) => {
-      if (!box) throw new Error("missing terminal box");
-      const w = window as unknown as {
-        __tauriEventHandlers?: Record<string, number>;
-        [key: string]: unknown;
-      };
-      const id = w.__tauriEventHandlers?.["tauri://drag-drop"];
-      if (typeof id !== "number") throw new Error("missing drag-drop handler");
-      const callback = w[`_${id}`] as
-        | ((payload: {
-            event: string;
-            id: number;
-            payload: {
-              paths: string[];
-              position: { x: number; y: number };
-            };
-          }) => void)
-        | undefined;
-      if (!callback) throw new Error("missing drag-drop callback");
-      callback({
-        event: "tauri://drag-drop",
-        id,
-        payload: {
-          paths: ["/Users/tester/Desktop/PR notes.md"],
-          position: {
-            x: box.x + box.width / 2,
-            y: box.y + box.height / 2,
-          },
-        },
-      });
-    }, terminalBox);
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-enter",
+      terminalBox!,
+      ["/Users/tester/Desktop/PR notes.md"],
+    );
+
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toContainText(
+      "Drop into terminal",
+    );
+
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-drop",
+      terminalBox!,
+      ["/Users/tester/Desktop/PR notes.md"],
+    );
+
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toHaveCount(
+      0,
+    );
 
     await expect
       .poll(() =>
@@ -533,7 +572,227 @@ test.describe("terminal: spawn", () => {
           () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
         ),
       )
-      .toEqual(["@/Users/tester/Desktop/PR\\ notes.md "]);
+      .toEqual(["/Users/tester/Desktop/PR\\ notes.md "]);
+  });
+
+  test("keeps the mention prefix for desktop file drops into Claude terminals", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-claude",
+        name: "claude",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        agent_provider: "claude",
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_write", (args: unknown) => {
+      const w = window as unknown as { __ptyWrites?: string[] };
+      w.__ptyWrites = w.__ptyWrites ?? [];
+      const { data } = args as { data: string };
+      const binary = atob(data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      w.__ptyWrites.push(new TextDecoder().decode(bytes));
+      return null;
+    });
+    await installNativeDragEventRecorder(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^Claude claude main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+
+    const terminalBox = await page
+      .locator("[data-pane-body] .acorn-terminal")
+      .boundingBox();
+    expect(terminalBox).not.toBeNull();
+
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-drop",
+      terminalBox!,
+      ["/tmp/demo/src/App.tsx"],
+    );
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual(["@src/App.tsx "]);
+  });
+
+  test("opens desktop files dropped onto the tab strip as code tabs", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await installNativeDragEventRecorder(tauri);
+    await tauri.handle("fs_grant_external_file", (args: unknown) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __externalFileGrants?: string[] };
+      w.__externalFileGrants = w.__externalFileGrants ?? [];
+      w.__externalFileGrants.push(path);
+      return null;
+    });
+    await tauri.handle("fs_read_file", (args: unknown) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __externalFileGrants?: string[] };
+      if (!w.__externalFileGrants?.includes(path)) {
+        throw new Error(`external file was not granted: ${path}`);
+      }
+      return {
+        content: "export const external = true;\n",
+        size: 30,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __tauriEventHandlers?: Record<string, number>;
+              }
+            ).__tauriEventHandlers?.["tauri://drag-drop"] ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const tabStripBox = await page
+      .locator('[data-pane-tab-strip="root"]')
+      .boundingBox();
+    expect(tabStripBox).not.toBeNull();
+
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-enter",
+      tabStripBox!,
+      ["/Users/tester/Desktop/external.ts"],
+    );
+
+    await expect(page.locator('[data-file-drop-hover="tab"]')).toContainText(
+      "Drop to open tab",
+    );
+    await expect(page.locator('[data-file-drop-hover="tab"]')).toContainText(
+      "external.ts",
+    );
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toHaveCount(
+      0,
+    );
+
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-drop",
+      tabStripBox!,
+      ["/Users/tester/Desktop/external.ts"],
+    );
+
+    await expect(page.locator('[data-file-drop-hover="tab"]')).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /external\.ts Close tab/ }),
+    ).toBeVisible();
+    await expect(page.getByText("export const external = true;")).toBeVisible();
+  });
+
+  test("opens desktop files dropped onto the hovered split pane", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await installNativeDragEventRecorder(tauri);
+    await tauri.handle("fs_grant_external_file", (args: unknown) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __externalFileGrants?: string[] };
+      w.__externalFileGrants = w.__externalFileGrants ?? [];
+      w.__externalFileGrants.push(path);
+      return null;
+    });
+    await tauri.handle("fs_read_file", (args: unknown) => {
+      const { path } = args as { path: string };
+      const w = window as unknown as { __externalFileGrants?: string[] };
+      if (!w.__externalFileGrants?.includes(path)) {
+        throw new Error(`external file was not granted: ${path}`);
+      }
+      return {
+        content: "export const secondPane = true;\n",
+        size: 32,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await pressHotkey(page, { mod: true, key: "d" });
+
+    const panes = page.locator("[data-pane-body]");
+    await expect(panes).toHaveCount(2);
+    const secondPane = panes.nth(1);
+    const secondPaneId = await secondPane.getAttribute("data-pane-body");
+    expect(secondPaneId).not.toBeNull();
+    const secondPaneBox = await secondPane.boundingBox();
+    expect(secondPaneBox).not.toBeNull();
+
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-enter",
+      secondPaneBox!,
+      ["/Users/tester/Desktop/second-pane.ts"],
+    );
+
+    await expect(page.locator('[data-file-drop-hover="preview"]')).toContainText(
+      "Drop to preview",
+    );
+
+    await emitNativeFileDragEvent(
+      page,
+      "tauri://drag-drop",
+      secondPaneBox!,
+      ["/Users/tester/Desktop/second-pane.ts"],
+    );
+
+    await expect(page.locator('[data-file-drop-hover="preview"]')).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByRole("button", { name: /second-pane\.ts Close tab/ }),
+    ).toBeVisible();
+    await expect(page.getByText("export const secondPane = true;")).toBeVisible();
+    await expect(page.locator("[data-active-pane-indicator]")).toHaveAttribute(
+      "data-active-pane-indicator",
+      secondPaneId!,
+    );
   });
 
   test("renders emoji grapheme clusters as two-cell terminal glyphs", async ({
