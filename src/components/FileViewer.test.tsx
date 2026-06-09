@@ -76,6 +76,51 @@ describe("FileViewer", () => {
     expect(api.fsReadFile).not.toHaveBeenCalled();
   });
 
+  it("lets image media zoom in, zoom out, and reset", async () => {
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 1536 });
+
+    await act(async () => {
+      root.render(<FileViewer path="/repo/assets/icon.svg" isActive />);
+    });
+    await flushPromises();
+
+    const image = container.querySelector<HTMLImageElement>('img[alt="icon.svg"]');
+    const zoomIn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Zoom in"]',
+    );
+    const zoomOut = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Zoom out"]',
+    );
+    const reset = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reset zoom"]',
+    );
+
+    expect(image).not.toBeNull();
+    expect(zoomIn).not.toBeNull();
+    expect(zoomOut).not.toBeNull();
+    expect(reset).not.toBeNull();
+    expect(image?.style.transform).toBe("scale(1)");
+    expect(
+      container.querySelector('[data-acorn-media-zoom="1"]'),
+    ).not.toBeNull();
+
+    await act(async () => zoomIn!.click());
+
+    expect(image?.style.transform).toBe("scale(1.25)");
+    expect(
+      container.querySelector('[data-acorn-media-zoom="1.25"]'),
+    ).not.toBeNull();
+
+    await act(async () => zoomOut!.click());
+    await act(async () => zoomOut!.click());
+
+    expect(image?.style.transform).toBe("scale(0.75)");
+
+    await act(async () => reset!.click());
+
+    expect(image?.style.transform).toBe("scale(1)");
+  });
+
   it("opens pdf files in the media viewer", async () => {
     vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 2048 });
 
@@ -89,6 +134,9 @@ describe("FileViewer", () => {
     );
     expect(frame).not.toBeNull();
     expect(frame?.src).toContain(encodeURIComponent("/repo/docs/spec.pdf"));
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]'),
+    ).toBeNull();
     expect(api.fsReadFile).not.toHaveBeenCalled();
   });
 
