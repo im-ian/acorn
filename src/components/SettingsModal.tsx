@@ -46,6 +46,8 @@ import { WhatsNewModal } from "./WhatsNewModal";
 import {
   AGENT_OPTIONS,
   DEFAULT_SESSION_TITLE_PROMPT,
+  MOUNTED_TERMINAL_LIMIT_MAX,
+  MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
   NOTIFICATION_HISTORY_LIMIT_MIN,
   PR_REFRESH_INTERVAL_OPTIONS,
@@ -510,6 +512,17 @@ function TerminalSettings() {
           step={0.05}
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
+        />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.maxMountedTerminals.label")}
+        hint={st(t, "settings.terminal.maxMountedTerminals.hint")}
+      >
+        <Stepper
+          value={settings.terminal.maxMountedTerminals}
+          min={MOUNTED_TERMINAL_LIMIT_MIN}
+          max={MOUNTED_TERMINAL_LIMIT_MAX}
+          onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
         />
       </Field>
       <Field

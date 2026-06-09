@@ -1,12 +1,3 @@
-/**
- * Upper bound on simultaneously-mounted terminal sessions. Each mounted
- * terminal keeps a full xterm instance plus its scrollback buffer resident in
- * memory; without a cap, every session a user has ever viewed stays alive for
- * the app's lifetime. Visible terminals are always exempt, so the effective cap
- * is `max(MAX_MOUNTED_TERMINALS, visibleCount)`.
- */
-export const MAX_MOUNTED_TERMINALS = 12;
-
 export interface EvictionPlanInput {
   /** Session ids currently mounted. */
   mounted: readonly string[];

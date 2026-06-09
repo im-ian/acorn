@@ -120,6 +120,9 @@ export const UI_SCALE_PERCENT_STEP = 5;
 export const NOTIFICATION_HISTORY_LIMIT_MIN = 1;
 export const NOTIFICATION_HISTORY_LIMIT_DEFAULT = 50;
 export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
+export const MOUNTED_TERMINAL_LIMIT_MIN = 1;
+export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
+export const MOUNTED_TERMINAL_LIMIT_MAX = 64;
 
 export type ToastPosition = "top" | "bottom";
 
@@ -213,6 +216,12 @@ export interface AcornSettings {
      * stray click on output containing a URL doesn't steal focus.
      */
     linkActivation: TerminalLinkActivation;
+    /**
+     * Upper bound on simultaneously-mounted terminal sessions. Visible
+     * terminals are always exempt, so this only evicts off-screen daemon
+     * sessions that can be re-attached with scrollback replay.
+     */
+    maxMountedTerminals: number;
   };
   /**
    * The single AI agent acorn uses everywhere AI features fire (currently
@@ -401,6 +410,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeightBold: 700,
     lineHeight: 1.0,
     linkActivation: "click",
+    maxMountedTerminals: MOUNTED_TERMINAL_LIMIT_DEFAULT,
   },
   agents: {
     selected: "claude",
@@ -576,6 +586,17 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   // Clamp to the same range the Stepper enforces in the UI so a hand-
   // edited localStorage value can't make the terminal unusable.
   return Math.max(1.0, Math.min(2.0, v));
+}
+
+export function normalizeMountedTerminalLimit(
+  v: unknown,
+  fallback: number,
+): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.max(
+    MOUNTED_TERMINAL_LIMIT_MIN,
+    Math.min(MOUNTED_TERMINAL_LIMIT_MAX, Math.round(v)),
+  );
 }
 
 function normalizePrInterval(v: unknown, fallback: number): number {
@@ -793,6 +814,11 @@ function loadSettings(): AcornSettings {
           (terminalRaw as { linkActivation?: unknown }).linkActivation,
           DEFAULT_SETTINGS.terminal.linkActivation,
         ),
+        maxMountedTerminals: normalizeMountedTerminalLimit(
+          (terminalRaw as { maxMountedTerminals?: unknown })
+            .maxMountedTerminals,
+          DEFAULT_SETTINGS.terminal.maxMountedTerminals,
+        ),
       },
       agents: {
         selected,
@@ -998,7 +1024,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set((s) => {
       const next: AcornSettings = {
         ...s.settings,
-        terminal: { ...s.settings.terminal, ...patch },
+        terminal: {
+          ...s.settings.terminal,
+          ...patch,
+          maxMountedTerminals:
+            patch.maxMountedTerminals === undefined
+              ? s.settings.terminal.maxMountedTerminals
+              : normalizeMountedTerminalLimit(
+                  patch.maxMountedTerminals,
+                  s.settings.terminal.maxMountedTerminals,
+                ),
+        },
       };
       persist(next);
       return { settings: next };

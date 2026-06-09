@@ -2,13 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { resolveSessionAgentProvider } from "../lib/agentProvider";
 import { api } from "../lib/api";
+import { useSettings } from "../lib/settings";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
 import { isSessionInFocusedPane } from "../lib/multiInput";
 import { markTerminalDetaching } from "../lib/terminalDetach";
-import {
-  MAX_MOUNTED_TERMINALS,
-  selectTerminalsToEvict,
-} from "../lib/terminalEviction";
+import { selectTerminalsToEvict } from "../lib/terminalEviction";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
 import { Terminal } from "./Terminal";
@@ -28,6 +26,9 @@ import { Terminal } from "./Terminal";
  */
 export function TerminalHost() {
   const sessions = useAppStore((s) => s.sessions);
+  const maxMountedTerminals = useSettings(
+    (s) => s.settings.terminal.maxMountedTerminals,
+  );
   const visibleSessionIdKey = useAppStore(visibleTerminalSessionIdKey);
   const visibleSessionIds = useMemo(
     () => parseSessionIdKey(visibleSessionIdKey),
@@ -83,7 +84,7 @@ export function TerminalHost() {
   // anything outside it. Runs only while over the cap, so steady state costs
   // nothing.
   useEffect(() => {
-    const cap = Math.max(MAX_MOUNTED_TERMINALS, visibleSessionIds.size);
+    const cap = Math.max(maxMountedTerminals, visibleSessionIds.size);
     if (mountedSessionIds.size <= cap) return;
     let cancelled = false;
     void (async () => {
@@ -122,7 +123,7 @@ export function TerminalHost() {
     return () => {
       cancelled = true;
     };
-  }, [mountedSessionIds, visibleSessionIds]);
+  }, [maxMountedTerminals, mountedSessionIds, visibleSessionIds]);
 
   return (
     <>
