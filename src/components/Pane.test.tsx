@@ -12,9 +12,18 @@ const mocks = vi.hoisted(() => ({
       [] as { id: string; status: SessionStatus }[],
   ),
   ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
+  fsReadFile: vi.fn(async () => ({
+    content: "",
+    size: 0,
+    truncated: false,
+    binary: false,
+  })),
+  fsGitDiffLines: vi.fn(async () => []),
+  ptyWrite: vi.fn(async () => undefined),
 }));
 
 vi.mock("../lib/api", () => ({
+  FS_CHANGED_EVENT: "acorn:fs-changed",
   api: {
     loadStatus: vi.fn(async () => ({
       sessionsClean: true,
@@ -25,7 +34,14 @@ vi.mock("../lib/api", () => ({
     listProjects: mocks.listProjects,
     detectSessionStatuses: mocks.detectSessionStatuses,
     ptyInWorktreeAll: mocks.ptyInWorktreeAll,
+    fsReadFile: mocks.fsReadFile,
+    fsGitDiffLines: mocks.fsGitDiffLines,
+    ptyWrite: mocks.ptyWrite,
   },
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -34,7 +50,11 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { Pane } from "./Pane";
 import { useAppStore } from "../store";
-import { endAcornDrag } from "../lib/dnd";
+import {
+  clearFileDropTargetsForTest,
+  dropFilePayloadsAtPoint,
+  resolveFileDropTargetAtPoint,
+} from "../lib/fileDropTargets";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
 import {
   cancelWorkspaceTabDrag,
@@ -192,6 +212,40 @@ function seedActivePaneWithTabs(tabs: Session[], activeTabId: string): void {
   }));
 }
 
+function seedTwoPanesWithTabs(first: Session, second: Session): void {
+  const layout = {
+    kind: "split" as const,
+    id: "split-test",
+    direction: "horizontal" as const,
+    a: { kind: "pane" as const, id: "root" },
+    b: { kind: "pane" as const, id: "pane-2" },
+  };
+  const panes = {
+    root: { id: "root", tabIds: [first.id], activeTabId: first.id },
+    "pane-2": { id: "pane-2", tabIds: [second.id], activeTabId: second.id },
+  };
+
+  useAppStore.setState((s) => ({
+    ...s,
+    sessions: [first, second],
+    activeProject: REPO,
+    activeProjectFolderId: REPO,
+    activeSessionId: first.id,
+    activeTabId: first.id,
+    workspaces: {
+      ...s.workspaces,
+      [REPO]: {
+        layout,
+        panes,
+        focusedPaneId: "root",
+      },
+    },
+    layout,
+    panes,
+    focusedPaneId: "root",
+  }));
+}
+
 function dispatchPointer(
   target: Element,
   type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
@@ -209,13 +263,31 @@ function dispatchPointer(
   return event;
 }
 
+function mockRect(
+  element: Element,
+  rect: { left: number; top: number; width: number; height: number },
+): void {
+  const domRect = {
+    ...rect,
+    x: rect.left,
+    y: rect.top,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    toJSON: () => ({}),
+  } as DOMRect;
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => domRect,
+  });
+}
+
 describe("Pane empty state", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     resetStore();
-    endAcornDrag();
+    clearFileDropTargetsForTest();
     cancelWorkspaceTabDrag();
     vi.clearAllMocks();
     container = document.createElement("div");
@@ -226,7 +298,7 @@ describe("Pane empty state", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    endAcornDrag();
+    clearFileDropTargetsForTest();
     cancelWorkspaceTabDrag();
   });
 
@@ -493,6 +565,134 @@ describe("Pane empty state", () => {
     });
 
     expect(useAppStore.getState().focusedPaneId).toBe("pane-2");
+  });
+
+  it("resolves the tab strip as a file drop target and opens the file there", () => {
+    const active = session("active-session");
+    const filePath = `${REPO}/src/App.tsx`;
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const tabStrip = container.querySelector('[data-pane-tab-strip="root"]');
+    expect(tabStrip).not.toBeNull();
+    mockRect(tabStrip!, { left: 0, top: 0, width: 320, height: 36 });
+
+    const target = resolveFileDropTargetAtPoint(
+      { x: 12, y: 12 },
+      { path: filePath, entryKind: "file", source: "explorer" },
+    );
+
+    expect(target).toMatchObject({
+      kind: "tab-strip",
+      paneId: "root",
+      purpose: "tab",
+    });
+
+    act(() => {
+      dropFilePayloadsAtPoint(
+        { x: 12, y: 12 },
+        [{ path: filePath, entryKind: "file", source: "explorer" }],
+      );
+    });
+
+    const state = useAppStore.getState();
+    const pane = state.panes.root;
+    expect(pane.tabIds).toHaveLength(2);
+    expect(pane.activeTabId).not.toBe(active.id);
+    expect(state.workspaceTabs[pane.activeTabId!]).toMatchObject({
+      kind: "code",
+      path: filePath,
+      repoPath: REPO,
+    });
+  });
+
+  it("ignores directories dropped on the tab strip", () => {
+    const active = session("active-session");
+    const dirPath = `${REPO}/src`;
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const tabStrip = container.querySelector('[data-pane-tab-strip="root"]');
+    expect(tabStrip).not.toBeNull();
+    mockRect(tabStrip!, { left: 0, top: 0, width: 320, height: 36 });
+
+    const target = dropFilePayloadsAtPoint(
+      { x: 12, y: 12 },
+      [{ path: dirPath, entryKind: "directory", source: "explorer" }],
+    );
+
+    const state = useAppStore.getState();
+    const pane = state.panes.root;
+    expect(target).toBeNull();
+    expect(pane.tabIds).toEqual([active.id]);
+    expect(pane.activeTabId).toBe(active.id);
+  });
+
+  it("writes file drops to the terminal in the hovered pane", () => {
+    const first = session("pane-1-session", {
+      worktree_path: `${REPO}/.worktrees/pane-1`,
+    });
+    const second = session("pane-2-session", {
+      worktree_path: `${REPO}/.worktrees/pane-2`,
+    });
+    const filePath = `${second.worktree_path}/src/App.tsx`;
+    seedTwoPanesWithTabs(first, second);
+
+    act(() => {
+      root.render(
+        <>
+          <Pane paneId="root" />
+          <Pane paneId="pane-2" />
+        </>,
+      );
+    });
+
+    const pane2Body = container.querySelector('[data-pane-body="pane-2"]');
+    expect(pane2Body).not.toBeNull();
+    mockRect(pane2Body!, { left: 400, top: 40, width: 360, height: 300 });
+
+    act(() => {
+      dropFilePayloadsAtPoint(
+        { x: 500, y: 120 },
+        [{ path: filePath, entryKind: "file", source: "explorer" }],
+      );
+    });
+
+    expect(mocks.ptyWrite).toHaveBeenCalledTimes(1);
+    expect(mocks.ptyWrite).toHaveBeenCalledWith(second.id, "src/App.tsx ");
+    expect(useAppStore.getState().focusedPaneId).toBe("pane-2");
+  });
+
+  it("keeps the file mention prefix for Claude agent terminal drops", () => {
+    const claude = session("claude-session", {
+      agent_provider: "claude",
+      worktree_path: `${REPO}/.worktrees/claude`,
+    });
+    const filePath = `${claude.worktree_path}/src/App.tsx`;
+    seedActivePaneWithTab(claude);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const paneBody = container.querySelector('[data-pane-body="root"]');
+    expect(paneBody).not.toBeNull();
+    mockRect(paneBody!, { left: 0, top: 40, width: 360, height: 300 });
+
+    act(() => {
+      dropFilePayloadsAtPoint(
+        { x: 120, y: 120 },
+        [{ path: filePath, entryKind: "file", source: "explorer" }],
+      );
+    });
+
+    expect(mocks.ptyWrite).toHaveBeenCalledWith(claude.id, "@src/App.tsx ");
   });
 
   it("starts tab drag from active tab chrome after pointer movement", () => {

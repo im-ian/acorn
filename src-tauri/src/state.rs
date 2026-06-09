@@ -61,6 +61,10 @@ pub struct AppState {
     /// run. Commands that create new trust roots consult this before accepting
     /// a renderer-supplied path.
     pub folder_grants: Arc<Mutex<Vec<PathBuf>>>,
+    /// Individual files explicitly handed to Acorn through native OS drag/drop
+    /// during this app run. The readonly viewer may read these exact files even
+    /// when they live outside registered project roots.
+    pub external_file_grants: Arc<Mutex<Vec<PathBuf>>>,
     /// Running native chat provider processes, keyed by Acorn session id.
     /// The cancel command uses this to kill the one-shot provider child and
     /// let the running turn settle as cancelled.
@@ -83,6 +87,7 @@ impl AppState {
             fs_watcher: WatcherState::new(),
             agent_hooks: Arc::new(Mutex::new(None)),
             folder_grants: Arc::new(Mutex::new(Vec::new())),
+            external_file_grants: Arc::new(Mutex::new(Vec::new())),
             chat_runs: crate::chat_runs::ChatRunRegistry::new(),
         }
     }

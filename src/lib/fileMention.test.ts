@@ -28,11 +28,21 @@ describe("pathRelativeToCwd", () => {
 });
 
 describe("formatTerminalFileMention", () => {
-  it("formats a simple repo-relative file mention", () => {
+  it("formats a simple repo-relative file path by default", () => {
     expect(
       formatTerminalFileMention(
         "/Users/me/repo/src/components/Terminal.tsx",
         "/Users/me/repo",
+      ),
+    ).toBe("src/components/Terminal.tsx ");
+  });
+
+  it("uses a mention prefix for Claude agent sessions", () => {
+    expect(
+      formatTerminalFileMention(
+        "/Users/me/repo/src/components/Terminal.tsx",
+        "/Users/me/repo",
+        { agentProvider: "claude" },
       ),
     ).toBe("@src/components/Terminal.tsx ");
   });
@@ -43,7 +53,7 @@ describe("formatTerminalFileMention", () => {
         "/Users/me/repo/docs/PR notes/final plan.md",
         "/Users/me/repo",
       ),
-    ).toBe("@docs/PR\\ notes/final\\ plan.md ");
+    ).toBe("docs/PR\\ notes/final\\ plan.md ");
   });
 
   it("backslash-escapes literal backslashes", () => {
@@ -52,6 +62,6 @@ describe("formatTerminalFileMention", () => {
         "/Users/me/repo/docs/back\\slash.md",
         "/Users/me/repo",
       ),
-    ).toBe("@docs/back\\\\slash.md ");
+    ).toBe("docs/back\\\\slash.md ");
   });
 });

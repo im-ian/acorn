@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../lib/cn";
-import {
-  classifyDropZone,
-  endAcornDrag,
-  type DropZone,
-  getCurrentFilePayload,
-  useAcornDragInProgress,
-} from "../lib/dnd";
+import { classifyDropZone, type DropZone } from "../lib/dnd";
 import { useAppStore } from "../store";
 import type { PaneId } from "../lib/layout";
 import {
@@ -17,23 +11,15 @@ import {
 
 interface PaneDropOverlayProps {
   paneId: PaneId;
-  acceptFileDrops?: boolean;
 }
 
 /**
  * Edge + center drop overlay for a pane body. Tab drops can move or split
- * panes; file drops open a code viewer tab when the pane body is allowed to
- * handle files. Terminal panes opt out so xterm can keep accepting file
- * mentions directly.
+ * panes. File drops are handled through the file drop target registry so
+ * native OS drags and right-panel file drags share the same hit testing.
  */
-export function PaneDropOverlay({
-  paneId,
-  acceptFileDrops = true,
-}: PaneDropOverlayProps) {
-  const fileDragging = useAcornDragInProgress();
-  const filePayload = fileDragging ? getCurrentFilePayload() : null;
+export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
   const tabDrag = useWorkspaceTabDragSession();
-  const acceptsFileDrop = acceptFileDrops && filePayload !== null;
   const moveTab = useAppStore((s) => s.moveTab);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zone, setZone] = useState<DropZone | null>(null);
@@ -88,8 +74,7 @@ export function PaneDropOverlay({
     });
   }, [computeTabZone, moveTab, paneId]);
 
-  // Clear or update highlights when pointer tab drags or native file drags end
-  // without firing a dragleave on this overlay.
+  // Clear or update highlights when pointer tab drags end.
   useEffect(() => {
     if (tabDrag) {
       const next = computeTabZone(tabDrag.pointer);
@@ -105,65 +90,13 @@ export function PaneDropOverlay({
       }
       return;
     }
-    if (!filePayload && zone) setZone(null);
-  }, [computeTabZone, filePayload, tabDrag, zone]);
+    if (zone) setZone(null);
+  }, [computeTabZone, tabDrag, zone]);
 
-  function computeZone(): DropZone | null {
-    if (!getCurrentFilePayload()) return null;
-    return { kind: "center" };
-  }
-
-  // Always mount so the very first dragenter into a pane body is captured;
-  // toggle pointer-events so the overlay only intercepts drags this pane body
-  // can handle.
   return (
     <div
       ref={containerRef}
-      className={
-        acceptsFileDrop
-          ? "absolute inset-0 z-20"
-          : "pointer-events-none absolute inset-0 z-20"
-      }
-      onDragEnter={(e) => {
-        if (!acceptsFileDrop) return;
-        e.preventDefault();
-        setZone(computeZone());
-      }}
-      onDragOver={(e) => {
-        if (!acceptsFileDrop) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-        const next = computeZone();
-        if (
-          !zone ||
-          !next ||
-          zone.kind !== next.kind ||
-          (zone.kind === "edge" &&
-            next.kind === "edge" &&
-            (zone.direction !== next.direction || zone.side !== next.side))
-        ) {
-          setZone(next);
-        }
-      }}
-      onDragLeave={(e) => {
-        // Only clear when leaving the overlay itself, not children.
-        if (e.currentTarget === e.target) setZone(null);
-      }}
-      onDrop={(e) => {
-        if (!acceptsFileDrop) return;
-        e.preventDefault();
-        try {
-          setZone(null);
-          const filePayload = getCurrentFilePayload();
-          if (filePayload) {
-            useAppStore.getState().setFocusedPane(paneId);
-            useAppStore.getState().openCodeViewerTab(filePayload.path);
-            return;
-          }
-        } finally {
-          endAcornDrag();
-        }
-      }}
+      className="pointer-events-none absolute inset-0 z-20"
     >
       <ZoneHighlight zone={zone} />
     </div>

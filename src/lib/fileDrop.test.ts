@@ -44,12 +44,21 @@ describe("hasNativeFileDropData", () => {
     ).toBe(true);
   });
 
-  it("ignores Acorn-owned text drags without native file markers", () => {
+  it("detects file URL drags when a webview exposes only uri-list", () => {
     expect(
       hasNativeFileDropData(
-        transfer({ types: ["text/plain", "text/uri-list"] }),
+        transfer({
+          types: ["text/uri-list"],
+          data: { "text/uri-list": "file:///Users/me/Desktop/a.txt" },
+        }),
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("ignores text-only drags without file URL data", () => {
+    expect(hasNativeFileDropData(transfer({ types: ["text/plain"] }))).toBe(
+      false,
+    );
   });
 });
 
@@ -66,6 +75,19 @@ describe("extractNativeFileDropPaths", () => {
         }),
       ),
     ).toEqual(["/Users/me/Desktop/PR notes.md"]);
+  });
+
+  it("decodes file URLs when text/uri-list is the only exposed type", () => {
+    expect(
+      extractNativeFileDropPaths(
+        transfer({
+          types: ["text/uri-list"],
+          data: {
+            "text/uri-list": "file:///Users/me/Desktop/%EC%9E%90%EB%A6%AC.png",
+          },
+        }),
+      ),
+    ).toEqual(["/Users/me/Desktop/자리.png"]);
   });
 
   it("uses public.file-url when WebKit exposes that pasteboard type", () => {

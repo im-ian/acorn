@@ -703,6 +703,14 @@
     "nextMatch": "Next match",
     "closeFind": "Close find"
   },
+  "fileDropHover": {
+    "previewTitle": "Drop to preview",
+    "terminalTitle": "Drop into terminal",
+    "tabTitle": "Drop to open tab",
+    "previewHint": "Open this file in the pane.",
+    "terminalHint": "Insert the file path.",
+    "tabHint": "Open this file as a tab."
+  },
   "diffView": {
     "noChanges": "No changes in this diff.",
     "filesChanged": "{count} files changed",

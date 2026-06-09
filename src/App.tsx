@@ -27,6 +27,8 @@ import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { FolderPermissionWarmupModal } from "./components/FolderPermissionWarmupModal";
+import { FileDragGhost } from "./components/FileDragGhost";
+import { FileDropHoverOverlay } from "./components/FileDropHoverOverlay";
 import {
   api,
   AGENT_HOOK_STATUS_EVENT,
@@ -85,8 +87,8 @@ import {
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
-import { useAcornDragGlobalCleanup } from "./lib/dnd";
-import { useNativeFileDropTerminalBridge } from "./lib/nativeFileDrop";
+import { useFileExplorerDragHoverTarget } from "./lib/fileExplorerDrag";
+import { useNativeFileDropBridge } from "./lib/nativeFileDrop";
 import {
   TERMINAL_PASTE_EVENT,
   type TerminalPasteEventDetail,
@@ -240,8 +242,10 @@ function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
 
 function App() {
   const t = useTranslation();
-  useAcornDragGlobalCleanup();
-  useNativeFileDropTerminalBridge();
+  const nativeFileDropHoverTarget = useNativeFileDropBridge();
+  const fileExplorerDropHoverTarget = useFileExplorerDragHoverTarget();
+  const fileDropHoverTarget =
+    fileExplorerDropHoverTarget ?? nativeFileDropHoverTarget;
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
@@ -1572,6 +1576,40 @@ function App() {
         <StatusBar />
       </div>
       <TerminalHost />
+      <FileDragGhost />
+      {fileDropHoverTarget?.kind === "tab-strip" ? (
+        <div
+          className="pointer-events-none fixed z-50"
+          style={{
+            left: fileDropHoverTarget.rect.left,
+            top: fileDropHoverTarget.rect.top,
+            width: fileDropHoverTarget.rect.width,
+            height: fileDropHoverTarget.rect.height,
+          }}
+        >
+          <FileDropHoverOverlay
+            purpose="tab"
+            path={fileDropHoverTarget.path}
+            scope="tabStrip"
+          />
+        </div>
+      ) : null}
+      {fileDropHoverTarget?.kind === "pane-body" ? (
+        <div
+          className="pointer-events-none fixed z-50"
+          style={{
+            left: fileDropHoverTarget.rect.left,
+            top: fileDropHoverTarget.rect.top,
+            width: fileDropHoverTarget.rect.width,
+            height: fileDropHoverTarget.rect.height,
+          }}
+        >
+          <FileDropHoverOverlay
+            purpose={fileDropHoverTarget.purpose}
+            path={fileDropHoverTarget.path}
+          />
+        </div>
+      ) : null}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <AcornRain />
       <ControlSessionGuideModal
