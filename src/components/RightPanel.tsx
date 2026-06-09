@@ -2557,30 +2557,48 @@ function StagedTab({
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
         <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
-          {files.map((f) => (
-            <li
-              key={f.path}
-              onClick={() => setSelectedPath(f.path)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY, file: f });
-              }}
-              onDoubleClick={() => {
-                openInCodeViewer(f);
-              }}
-              className={cn(
-                "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
-                selectedPath === f.path && "bg-bg-elevated",
-              )}
-            >
-              <span className="w-24 shrink-0 truncate text-fg-muted">
-                {f.status}
-              </span>
-              <Tooltip label={f.path} side="top" multiline className="flex! min-w-0 flex-1">
-                <span className="min-w-0 flex-1 truncate text-fg">{f.path}</span>
-              </Tooltip>
-            </li>
-          ))}
+          {files.map((f) => {
+            const canOpen = !isDeleted(f);
+            return (
+              <li
+                key={f.path}
+                aria-disabled={!canOpen}
+                onClick={() => setSelectedPath(f.path)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, file: f });
+                }}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  if (!canOpen) return;
+                  openInCodeViewer(f);
+                }}
+                className={cn(
+                  "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
+                  selectedPath === f.path && "bg-bg-elevated",
+                )}
+              >
+                <span className="w-24 shrink-0 truncate text-fg-muted">
+                  {f.status}
+                </span>
+                <Tooltip
+                  label={f.path}
+                  side="top"
+                  multiline
+                  className="flex! min-w-0 flex-1"
+                >
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate",
+                      canOpen ? "text-fg" : "text-fg-muted line-through",
+                    )}
+                  >
+                    {f.path}
+                  </span>
+                </Tooltip>
+              </li>
+            );
+          })}
         </ul>
       </Panel>
       <ResizeHandle direction="vertical" thin />
