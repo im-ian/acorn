@@ -9,7 +9,8 @@
 //! Algorithm (mirrors agent-sessions' approach):
 //!   1. List PTY descendants by basename.
 //!   2. Map process cwd → transcript directory:
-//!      claude: `~/.claude/projects/<slugified-cwd>/`
+//!      claude: `~/.claude/projects/<slugified-cwd>/`, with a metadata scan
+//!              fallback for Claude versions whose cwd slug differs
 //!      codex:  scan `${CODEX_HOME:-~/.codex}/sessions/<y>/<m>/<d>/`
 //!              (filename does not encode cwd, so read each candidate's
 //!              first line `payload.cwd` and match).
@@ -350,8 +351,8 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
 }
 
 /// Resolve the JSONL transcript a `claude` process is currently writing
-/// in the given cwd. The slug derivation matches Claude Code's on-disk
-/// bucketing — see [`slug_for_cwd`].
+/// in the given cwd. Claude normally buckets transcripts by slugified cwd,
+/// but the metadata fallback keeps pairing stable when that slug differs.
 fn find_recent_claude_jsonl(
     cwd: &Path,
     projects_root: Option<&Path>,
@@ -361,7 +362,58 @@ fn find_recent_claude_jsonl(
 ) -> Option<(PathBuf, String)> {
     let root = projects_root?;
     let slug_dir = root.join(slug_for_cwd(cwd));
-    pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, assigned)
+    pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, assigned).or_else(|| {
+        find_recent_claude_jsonl_by_cwd(cwd, root, recency_cutoff, process_start, assigned)
+    })
+}
+
+fn find_recent_claude_jsonl_by_cwd(
+    cwd: &Path,
+    projects_root: &Path,
+    recency_cutoff: SystemTime,
+    process_start: SystemTime,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    for project in std::fs::read_dir(projects_root).ok()?.flatten() {
+        let dir = project.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if assigned.contains(&path) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime < recency_cutoff || mtime < process_start {
+                continue;
+            }
+            let Some(transcript_cwd) = read_agent_transcript_cwd(&path) else {
+                continue;
+            };
+            if transcript_cwd != cwd {
+                continue;
+            }
+            let Some(uuid) = extract_uuid_from_path(&path) else {
+                continue;
+            };
+            let created = meta.created().unwrap_or(mtime);
+            candidates.push((path, created, uuid));
+        }
+    }
+    candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
+    candidates
+        .into_iter()
+        .next()
+        .map(|(path, _, id)| (path, id))
 }
 
 fn find_recent_codex_jsonl(
@@ -789,6 +841,46 @@ mod tests {
             antigravity_uuid_from_transcript_path(path).as_deref(),
             Some("17f38e8c-3a7e-408b-8c79-aef7432c0fd2")
         );
+    }
+
+    #[test]
+    fn claude_lookup_falls_back_to_cwd_metadata_when_slug_dir_differs() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-claude-cwd-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        let unexpected_slug = projects.join("-Users-me-project-with-alt-encoding");
+        let cwd = root.join("repo");
+        fs::create_dir_all(&unexpected_slug).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let transcript = unexpected_slug.join(format!("{id}.jsonl"));
+        let mut file = File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "sessionId": id,
+                "cwd": cwd.display().to_string(),
+            })
+        )
+        .unwrap();
+
+        let found = find_recent_claude_jsonl(
+            &cwd,
+            Some(&projects),
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            &HashSet::new(),
+        );
+
+        assert_eq!(found.map(|(_, found_id)| found_id).as_deref(), Some(id));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     /// `newest_subdir` must pick the chronologically latest date dir
