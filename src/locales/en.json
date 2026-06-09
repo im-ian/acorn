@@ -129,6 +129,14 @@
         "recheck": "Re-check"
       }
     },
+    "power": {
+      "title": "Power",
+      "description": "Controls how Acorn interacts with macOS sleep while it is running.",
+      "preventSleep": {
+        "label": "Keep this Mac awake",
+        "description": "Prevent idle system sleep while Acorn is open. The display may still turn off, and manual sleep or lid close still wins."
+      }
+    },
     "github": {
       "refreshInterval": {
         "label": "Refresh interval",

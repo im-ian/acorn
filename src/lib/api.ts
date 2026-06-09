@@ -52,6 +52,11 @@ export interface LoadStatus {
   projectsClean: boolean;
 }
 
+export interface PreventSleepStatus {
+  supported: boolean;
+  enabled: boolean;
+}
+
 export interface AiExecutionRequest {
   provider: "claude" | "antigravity" | "codex" | "ollama" | "llm" | "custom";
   ollamaModel?: string | null;
@@ -665,6 +670,12 @@ export const api = {
    */
   acknowledgeStagedRevMismatch(): Promise<void> {
     return invoke<void>("acknowledge_staged_rev_mismatch");
+  },
+  preventSleepStatus(): Promise<PreventSleepStatus> {
+    return invoke<PreventSleepStatus>("prevent_sleep_status");
+  },
+  setPreventSleep(enabled: boolean): Promise<PreventSleepStatus> {
+    return invoke<PreventSleepStatus>("set_prevent_sleep", { enabled });
   },
   /**
    * Flip the daemon killswitch. Persistence (so the setting survives a

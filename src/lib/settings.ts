@@ -271,6 +271,14 @@ export interface AcornSettings {
      */
     closeOnExit: boolean;
   };
+  power: {
+    /**
+     * Hold a macOS PreventUserIdleSystemSleep assertion while Acorn is
+     * running. The display may still sleep; this only keeps idle system
+     * sleep from suspending long-running sessions.
+     */
+    preventSleep: boolean;
+  };
   editor: {
     /**
      * External command used by the "Open in editor" action.
@@ -424,6 +432,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     confirmRemove: true,
     autoDeleteWorktrees: false,
     closeOnExit: false,
+  },
+  power: {
+    preventSleep: false,
   },
   editor: {
     command: "",
@@ -838,6 +849,12 @@ function loadSettings(): AcornSettings {
         ...DEFAULT_SETTINGS.sessions,
         ...(parsed.sessions ?? {}),
       },
+      power: {
+        preventSleep:
+          typeof parsed.power?.preventSleep === "boolean"
+            ? parsed.power.preventSleep
+            : DEFAULT_SETTINGS.power.preventSleep,
+      },
       editor: {
         ...DEFAULT_SETTINGS.editor,
         ...(parsed.editor ?? {}),
@@ -975,6 +992,7 @@ interface SettingsState {
     }>,
   ) => void;
   patchSessions: (patch: Partial<AcornSettings["sessions"]>) => void;
+  patchPower: (patch: Partial<AcornSettings["power"]>) => void;
   patchEditor: (patch: Partial<AcornSettings["editor"]>) => void;
   patchNotifications: (
     patch: Partial<Omit<AcornSettings["notifications"], "events">> & {
@@ -1072,6 +1090,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         sessions: { ...s.settings.sessions, ...patch },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  patchPower: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        power: { ...s.settings.power, ...patch },
       };
       persist(next);
       return { settings: next };
