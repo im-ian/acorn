@@ -37,7 +37,7 @@ const TAB_MARKERS: Array<{
     label: "Terminal",
     marker: {
       kind: "text",
-      pattern: /Font family|글꼴 패밀리/i,
+      pattern: /Resident terminal limit|메모리에 유지할 터미널 수/i,
     },
   },
   {
@@ -174,5 +174,6 @@ test.describe("settings modal: tab content", () => {
 
     await modal.getByRole("button", { name: "터미널", exact: true }).click();
     await expect(modal.getByText("글꼴 패밀리")).toBeVisible();
+    await expect(modal.getByText("메모리에 유지할 터미널 수")).toBeVisible();
   });
 });

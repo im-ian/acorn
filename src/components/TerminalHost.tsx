@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { resolveSessionAgentProvider } from "../lib/agentProvider";
+import { api } from "../lib/api";
+import { useSettings } from "../lib/settings";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
 import { isSessionInFocusedPane } from "../lib/multiInput";
+import { markTerminalDetaching } from "../lib/terminalDetach";
+import { selectTerminalsToEvict } from "../lib/terminalEviction";
 import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
 import { Terminal } from "./Terminal";
@@ -22,6 +26,9 @@ import { Terminal } from "./Terminal";
  */
 export function TerminalHost() {
   const sessions = useAppStore((s) => s.sessions);
+  const maxMountedTerminals = useSettings(
+    (s) => s.settings.terminal.maxMountedTerminals,
+  );
   const visibleSessionIdKey = useAppStore(visibleTerminalSessionIdKey);
   const visibleSessionIds = useMemo(
     () => parseSessionIdKey(visibleSessionIdKey),
@@ -55,6 +62,68 @@ export function TerminalHost() {
       return changed || next.size !== current.size ? next : current;
     });
   }, [terminalSessionIds, visibleSessionIds]);
+
+  // Mounted session ids ordered least-recently-visible → most-recent. Drives
+  // which terminals the eviction policy sheds first when over the mount cap.
+  const recencyRef = useRef<string[]>([]);
+  useEffect(() => {
+    const next = recencyRef.current.filter((id) => terminalSessionIds.has(id));
+    for (const id of visibleSessionIds) {
+      if (!terminalSessionIds.has(id)) continue;
+      const at = next.indexOf(id);
+      if (at !== -1) next.splice(at, 1);
+      next.push(id);
+    }
+    recencyRef.current = next;
+  }, [terminalSessionIds, visibleSessionIds]);
+
+  // When more terminals are mounted than the cap allows, detach the
+  // least-recently-visible off-screen *daemon* sessions to reclaim their xterm
+  // buffers. In-process sessions cannot be re-attached after a detach, so we
+  // confirm the alive daemon set before choosing victims and never evict
+  // anything outside it. Runs only while over the cap, so steady state costs
+  // nothing.
+  useEffect(() => {
+    const cap = Math.max(maxMountedTerminals, visibleSessionIds.size);
+    if (mountedSessionIds.size <= cap) return;
+    let cancelled = false;
+    void (async () => {
+      let daemonAlive: Set<string>;
+      try {
+        const summaries = await api.daemonListSessions();
+        daemonAlive = new Set(
+          summaries.filter((s) => s.alive).map((s) => s.id),
+        );
+      } catch {
+        // Cannot confirm evictability — leave terminals mounted rather than
+        // risk killing a live in-process shell.
+        return;
+      }
+      if (cancelled) return;
+      const victims = selectTerminalsToEvict({
+        mounted: [...mountedSessionIds],
+        visible: visibleSessionIds,
+        recency: recencyRef.current,
+        daemonAlive,
+        max: cap,
+      });
+      if (victims.length === 0) return;
+      // Mark before unmounting so each Terminal's cleanup detaches (keeping the
+      // daemon shell alive) instead of killing it.
+      for (const id of victims) markTerminalDetaching(id);
+      setMountedSessionIds((current) => {
+        let changed = false;
+        const next = new Set(current);
+        for (const id of victims) {
+          if (next.delete(id)) changed = true;
+        }
+        return changed ? next : current;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [maxMountedTerminals, mountedSessionIds, visibleSessionIds]);
 
   return (
     <>

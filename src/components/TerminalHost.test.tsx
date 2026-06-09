@@ -3,6 +3,23 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, Session } from "../lib/types";
 
+const mocks = vi.hoisted(() => ({
+  daemonListSessions: vi.fn<
+    () => Promise<Array<{ id: string; alive: boolean }>>
+  >(),
+  markTerminalDetaching: vi.fn<(sessionId: string) => void>(),
+}));
+
+vi.mock("../lib/api", () => ({
+  api: {
+    daemonListSessions: mocks.daemonListSessions,
+  },
+}));
+
+vi.mock("../lib/terminalDetach", () => ({
+  markTerminalDetaching: mocks.markTerminalDetaching,
+}));
+
 vi.mock("./Terminal", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
   return {
@@ -24,6 +41,7 @@ vi.mock("./Terminal", async () => {
 import { TerminalHost } from "./TerminalHost";
 import { useAppStore } from "../store";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
+import { DEFAULT_SETTINGS, useSettings } from "../lib/settings";
 
 const REPO = "/Users/me/repo";
 
@@ -107,6 +125,58 @@ function terminalRows(): Array<{ id: string; active: boolean }> {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function installWorkspaceSessions(ids: string[]): void {
+  const sessions = ids.map((id) => session(id));
+  const pane = {
+    id: "root",
+    tabIds: ids,
+    activeTabId: ids[0] ?? null,
+  };
+  useAppStore.setState((state) => ({
+    sessions,
+    workspaces: {
+      ...state.workspaces,
+      [REPO]: {
+        layout: { kind: "pane", id: "root" },
+        panes: { root: pane },
+        focusedPaneId: "root",
+      },
+    },
+    panes: { root: pane },
+    activeTabId: pane.activeTabId,
+    activeSessionId: pane.activeTabId,
+  }));
+}
+
+async function focusSession(id: string): Promise<void> {
+  await act(async () => {
+    useAppStore.setState((state) => {
+      const pane = { ...state.panes.root, activeTabId: id };
+      return {
+        panes: { ...state.panes, root: pane },
+        workspaces: {
+          ...state.workspaces,
+          [REPO]: {
+            ...state.workspaces[REPO],
+            panes: { root: pane },
+          },
+        },
+        activeTabId: id,
+        activeSessionId: id,
+      };
+    });
+    await Promise.resolve();
+  });
+}
+
+async function flushEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("TerminalHost", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -114,6 +184,8 @@ describe("TerminalHost", () => {
   beforeEach(() => {
     localStorage.clear();
     resetStore();
+    useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
+    mocks.daemonListSessions.mockResolvedValue([]);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -240,6 +312,37 @@ describe("TerminalHost", () => {
     expect(terminalRows()).toEqual([
       { id: "first", active: false },
       { id: "second", active: true },
+    ]);
+  });
+
+  it("uses the configured resident terminal limit when evicting idle daemon terminals", async () => {
+    const ids = ["s1", "s2", "s3", "s4"];
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          maxMountedTerminals: 3,
+        },
+      },
+    });
+    mocks.daemonListSessions.mockResolvedValue(
+      ids.map((id) => ({ id, alive: true })),
+    );
+    installWorkspaceSessions(ids);
+    render();
+    await flushEffects();
+
+    for (const id of ids.slice(1)) {
+      await focusSession(id);
+    }
+    await flushEffects();
+
+    expect(mocks.markTerminalDetaching).toHaveBeenCalledWith("s1");
+    expect(terminalRows()).toEqual([
+      { id: "s2", active: false },
+      { id: "s3", active: false },
+      { id: "s4", active: true },
     ]);
   });
 });

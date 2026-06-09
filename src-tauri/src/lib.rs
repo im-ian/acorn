@@ -560,6 +560,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::pty_detach,
             commands::pty_reload_shell_env,
             commands::pty_cwd,
             commands::pty_repo_root,
