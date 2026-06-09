@@ -1407,12 +1407,16 @@ function Toolbar(props: ToolbarProps) {
   const rootName = props.rootPath.split("/").filter(Boolean).pop() ?? "/";
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
-      <span
-        className="truncate font-medium text-fg-muted"
-        title={props.rootPath}
+      <Tooltip
+        label={props.rootPath}
+        side="bottom"
+        multiline
+        className="min-w-0"
       >
-        {rootName.toUpperCase()}
-      </span>
+        <span className="truncate font-medium text-fg-muted">
+          {rootName.toUpperCase()}
+        </span>
+      </Tooltip>
       <span className="flex-1" />
       <ToolbarBtn
         label={
@@ -1910,44 +1914,49 @@ function EntryRow({
 
   return (
     <>
-      <button
-        type="button"
-        onPointerDown={onEntryPointerDown}
-        onClick={(e) => {
-          if (suppressNextClickRef.current) {
-            suppressNextClickRef.current = false;
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
-          onEntryClick(entry, e);
-        }}
-        onDoubleClick={(e) => {
-          if (suppressNextClickRef.current) {
-            suppressNextClickRef.current = false;
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
-          e.preventDefault();
-          onEntryDoubleClick(entry);
-        }}
-        onContextMenu={(e) => {
-          e.stopPropagation();
-          onContextMenu(e, entry);
-        }}
-        className={cn(
-          "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
-          isSelected
-            ? "bg-accent/25 text-fg"
-            : isActive
-            ? "bg-accent/15 text-fg"
-            : "text-fg hover:bg-fg-muted/10",
-          entry.gitignored ? "opacity-60" : "",
-        )}
-        style={{ paddingLeft: 8 }}
-        title={entry.path}
+      <Tooltip
+        label={entry.path}
+        side="right"
+        multiline
+        className="w-full"
       >
+        <button
+          type="button"
+          onPointerDown={onEntryPointerDown}
+          onClick={(e) => {
+            if (suppressNextClickRef.current) {
+              suppressNextClickRef.current = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            onEntryClick(entry, e);
+          }}
+          onDoubleClick={(e) => {
+            if (suppressNextClickRef.current) {
+              suppressNextClickRef.current = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            e.preventDefault();
+            onEntryDoubleClick(entry);
+          }}
+          onContextMenu={(e) => {
+            e.stopPropagation();
+            onContextMenu(e, entry);
+          }}
+          className={cn(
+            "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
+            isSelected
+              ? "bg-accent/25 text-fg"
+              : isActive
+              ? "bg-accent/15 text-fg"
+              : "text-fg hover:bg-fg-muted/10",
+            entry.gitignored ? "opacity-60" : "",
+          )}
+          style={{ paddingLeft: 8 }}
+        >
         {Array.from({ length: depth }).map((_, i) => (
           <span
             key={i}
@@ -2007,7 +2016,8 @@ function EntryRow({
             </span>
           </span>
         ) : null}
-      </button>
+        </button>
+      </Tooltip>
       {children}
     </>
   );

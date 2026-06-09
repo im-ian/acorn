@@ -75,16 +75,6 @@ function exactButtonCount(container: HTMLElement, label: string): number {
   ).length;
 }
 
-function buttonWithTitle(container: HTMLElement, title: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find(
-    (button) => button.getAttribute("title") === title,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`button titled "${title}" not found`);
-  }
-  return button;
-}
-
 function buttonContaining(container: HTMLElement, text: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll("button")).find(
     (button) => button.textContent?.includes(text),
@@ -732,7 +722,7 @@ describe("RightPanel background tab loading", () => {
     });
     await flushPromises();
 
-    const runButton = buttonWithTitle(container, "Double-click to view details");
+    const runButton = buttonContaining(container, "Run CI");
     expect(runButton.textContent).toContain("Run CI");
     await act(async () => {
       runButton.dispatchEvent(

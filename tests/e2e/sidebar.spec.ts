@@ -332,6 +332,64 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("session hover details render as icon rows", async ({ page, tauri }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "detail-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/detail-session",
+        branch: "feature/readable-tooltip",
+        isolated: true,
+        project_scoped: true,
+        status: "needs_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "control",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: true,
+        agent_provider: null,
+        agent_transcript_id: null,
+      },
+    ]);
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /detail-session/ })
+      .hover();
+
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText("Name");
+    await expect(tooltip).toContainText("detail-session");
+    await expect(tooltip).toContainText("Branch");
+    await expect(tooltip).toContainText("feature/readable-tooltip");
+    await expect(tooltip).toContainText("Working directory");
+    await expect(tooltip).toContainText(
+      "/tmp/demo/.acorn/worktrees/detail-session",
+    );
+    await expect(tooltip).toContainText("Status");
+    await expect(tooltip).toContainText("Needs input");
+    await expect(tooltip).toContainText("Kind");
+    await expect(tooltip).toContainText("Control session");
+    await expect(tooltip).toContainText("Isolated worktree");
+    await expect(tooltip.locator("svg")).toHaveCount(6);
+  });
+
   test("regenerates a name for sessions backed by real git worktrees", async ({
     page,
     tauri,
@@ -896,6 +954,39 @@ test.describe("sidebar: project lifecycle", () => {
       () => (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
     )) as Array<{ id: string; removeWorktree: boolean }>;
     expect(calls).toEqual([{ id: "child-session", removeWorktree: false }]);
+  });
+
+  test("project folder remove skips confirmation for empty folders", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => []);
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const projectRow = page.getByRole("button", { name: "Project demo" });
+    await projectRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New project folder" }).click();
+
+    const folderRows = sidebar.getByRole("button", { name: /New folder/ });
+    await expect(folderRows).toHaveCount(1);
+    await folderRows.first().click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove folder" }).click();
+
+    await expect(page.getByRole("dialog", { name: "Remove folder" })).toHaveCount(
+      0,
+    );
+    await expect(folderRows).toHaveCount(0);
+    await expect(projectRow).toBeVisible();
   });
 
   test("project folder remove can keep sessions and move them out", async ({
