@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bot,
   ChevronRight,
   CircleX,
@@ -17,11 +18,19 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   SquareX,
+  Tag,
   Trash2,
   X,
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -2846,32 +2855,113 @@ function composeSessionMetadata(
   return parts.join(" · ");
 }
 
-function buildSessionHoverDetails(t: Translator, session: Session): string {
-  const lines = [
-    `${sidebarText(t, "sidebar.metadata.name")}: ${session.name}`,
-    `${sidebarText(t, "sidebar.metadata.branch")}: ${
-      session.branch || sidebarText(t, "sidebar.metadata.detached")
-    }`,
-    `${sidebarText(t, "sidebar.metadata.workingDirectory")}: ${
-      session.worktree_path
-    }`,
-    `${sidebarText(t, "sidebar.metadata.status")}: ${statusLabel(
-      t,
-      session.status,
-    )}`,
-  ];
-  if (session.kind === "control") {
-    lines.push(
-      `${sidebarText(t, "sidebar.metadata.kind")}: ${sidebarText(
-        t,
-        "sidebar.metadata.controlSession",
-      )}`,
-    );
-  }
-  if (session.isolated) {
-    lines.push(sidebarText(t, "sidebar.metadata.isolatedWorktree"));
-  }
-  return lines.join("\n");
+function buildSessionHoverDetails(t: Translator, session: Session): ReactNode {
+  const branch =
+    session.branch || sidebarText(t, "sidebar.metadata.detached");
+
+  return (
+    <span className="flex w-72 max-w-full flex-col gap-1.5">
+      <SessionHoverDetailRow
+        icon={<Tag size={12} />}
+        label={sidebarText(t, "sidebar.metadata.name")}
+        value={session.name}
+      />
+      <SessionHoverDetailRow
+        icon={<GitBranch size={12} />}
+        label={sidebarText(t, "sidebar.metadata.branch")}
+        value={branch}
+        valueClassName="font-mono"
+      />
+      <SessionHoverDetailRow
+        icon={<Folder size={12} />}
+        label={sidebarText(t, "sidebar.metadata.workingDirectory")}
+        value={session.worktree_path}
+        valueClassName="break-all font-mono"
+      />
+      <SessionHoverDetailRow
+        icon={<Activity size={12} />}
+        iconClassName={STATUS_ICON[session.status]}
+        label={sidebarText(t, "sidebar.metadata.status")}
+        value={statusLabel(t, session.status)}
+        valueClassName={STATUS_ICON[session.status]}
+      />
+      {session.kind === "control" ? (
+        <SessionHoverDetailRow
+          icon={<Bot size={12} />}
+          iconClassName="text-accent"
+          label={sidebarText(t, "sidebar.metadata.kind")}
+          value={sidebarText(t, "sidebar.metadata.controlSession")}
+        />
+      ) : null}
+      {session.isolated ? (
+        <SessionHoverFlag
+          icon={<GitBranch size={12} />}
+          value={sidebarText(t, "sidebar.metadata.isolatedWorktree")}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function SessionHoverDetailRow({
+  icon,
+  iconClassName,
+  label,
+  value,
+  valueClassName,
+}: {
+  icon: ReactNode;
+  iconClassName?: string;
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <span className="flex min-w-0 items-start gap-2">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border border-border/70 bg-bg/60 text-fg-muted",
+          iconClassName,
+        )}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] leading-3 text-fg-muted">
+          {label}
+        </span>
+        <span
+          className={cn(
+            "block min-w-0 break-words text-[11px] leading-snug text-fg",
+            valueClassName,
+          )}
+        >
+          {value}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function SessionHoverFlag({
+  icon,
+  value,
+}: {
+  icon: ReactNode;
+  value: string;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-2 rounded border border-border/60 bg-bg/40 px-1.5 py-1 text-[11px] leading-none text-fg">
+      <span
+        aria-hidden="true"
+        className="flex size-4 shrink-0 items-center justify-center rounded bg-bg-elevated/70 text-fg-muted"
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 truncate">{value}</span>
+    </span>
+  );
 }
 
 function loadStringSet(key: string): Set<string> {

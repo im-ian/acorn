@@ -72,6 +72,43 @@ async function enableAgentTokenUsage(
 }
 
 test.describe("status bar", () => {
+  test("service status tooltip renders service rows with icons", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("get_acorn_ipc_status", {
+      bundled_path: "/tmp/acorn-ipc",
+      bundled_exists: true,
+      socket_path: "/tmp/acorn-dev/ipc.sock",
+      server_running: true,
+      shim_paths: [],
+    });
+    await tauri.respond("daemon_status", {
+      running: true,
+      enabled: true,
+      daemon_version: "test",
+      uptime_seconds: 60,
+      session_count_total: 2,
+      session_count_alive: 2,
+      log_path: "/tmp/acorn/daemon.log",
+      last_error: null,
+    });
+
+    await page.goto("/");
+
+    const serviceButton = page.getByRole("button", { name: "Service status" });
+    await expect(serviceButton).toBeVisible();
+    await serviceButton.hover();
+
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("IPC server");
+    await expect(tooltip).toContainText("running");
+    await expect(tooltip).toContainText("acornd daemon");
+    await expect(tooltip).toContainText("running · 2 sessions");
+    await expect(tooltip).toContainText("Click for details");
+    await expect(tooltip.locator("svg")).toHaveCount(3);
+  });
+
   test("shows only Codex token usage for an active Codex tab", async ({
     page,
     tauri,
@@ -99,10 +136,13 @@ test.describe("status bar", () => {
 
     await tokenBadge.hover();
     const tooltip = page.getByRole("tooltip");
-    await expect(tooltip).toContainText("5h: 88% left, resets in 7m");
-    await expect(tooltip).toContainText(
-      "weekly: 66% left, resets in 19h 27m",
-    );
+    await expect(tooltip).toContainText("5h");
+    await expect(tooltip).toContainText("88% left");
+    await expect(tooltip).toContainText("resets in 7m");
+    await expect(tooltip).toContainText("weekly");
+    await expect(tooltip).toContainText("66% left");
+    await expect(tooltip).toContainText("resets in 19h 27m");
+    await expect(tooltip.locator("svg")).toHaveCount(5);
     await expect(tooltip).not.toContainText(/used|12%|34%/);
   });
 
