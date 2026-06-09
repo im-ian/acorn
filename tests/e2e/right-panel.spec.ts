@@ -143,6 +143,65 @@ test.describe("right panel: tab switching", () => {
       .toContain("/tmp/demo/.acorn/worktrees/demo-1/src/components/Terminal.tsx");
   });
 
+  test("double-clicking a deleted staged file does not open a code tab", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveWorktreeSession(tauri);
+    await tauri.respond("list_staged", [
+      {
+        path: "src/deleted.ts",
+        status: "staged-deleted",
+      },
+    ]);
+    await tauri.respond("staged_file_diff", {
+      files: [
+        {
+          old_path: "src/deleted.ts",
+          new_path: null,
+          patch: "@@ -1 +0,0 @@\n-export const gone = true;\n",
+          is_image: false,
+        },
+      ],
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const w = window as unknown as { __readFilePaths?: string[] };
+      w.__readFilePaths = w.__readFilePaths ?? [];
+      w.__readFilePaths.push((args as { path: string }).path);
+      return {
+        content: "",
+        size: 0,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Staged" }).click();
+    const stagedList = page.locator("#staged-list");
+    await stagedList.getByText("src/deleted.ts").dblclick();
+
+    await expect(stagedList.getByText("src/deleted.ts")).toBeVisible();
+    await expect(page.getByText(/nothing to open/i)).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /deleted\.ts Close tab/ }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __readFilePaths?: string[] })
+              .__readFilePaths ?? [],
+        ),
+      )
+      .toEqual([]);
+
+    await stagedList.getByText("src/deleted.ts").click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Open in editor" }),
+    ).toBeDisabled();
+  });
+
   test("null read_session_todos does not crash the panel (regression)", async ({
     page,
     tauri,
