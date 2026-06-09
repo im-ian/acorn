@@ -849,6 +849,9 @@ export const api = {
   fsFileExists(path: string): Promise<boolean> {
     return invoke<boolean>("fs_file_exists", { path });
   },
+  fsGrantExternalFile(path: string): Promise<void> {
+    return invoke<void>("fs_grant_external_file", { path });
+  },
   fsReadFile(path: string): Promise<FsReadFileResult> {
     return invoke<FsReadFileResult>("fs_read_file", { path });
   },

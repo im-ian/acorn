@@ -1,29 +1,33 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
-import { api } from "./api";
-import { formatTerminalFileMention } from "./fileMention";
-import { visibleMultiInputSessionIds } from "./multiInput";
-import { useAppStore } from "../store";
+import { useEffect, useState } from "react";
+import { hasNativeFileDropData } from "./fileDrop";
+import { useFileExplorerDragSession } from "./fileExplorerDrag";
+import {
+  dropFilePayloadsAtPoint,
+  resolveFileDropTargetAtPoint,
+  type FileDropPayload,
+  type FileDropPoint,
+  type ResolvedFileDropTarget,
+} from "./fileDropTargets";
 
-interface DropPoint {
-  x: number;
-  y: number;
+interface NativeDropPosition extends FileDropPoint {
+  toLogical?: (scaleFactor: number) => FileDropPoint;
 }
 
-interface NativeDropPosition extends DropPoint {
-  toLogical?: (scaleFactor: number) => DropPoint;
+interface NativePointResolution {
+  point: FileDropPoint;
+  target: ResolvedFileDropTarget | null;
 }
 
-interface TerminalDropTarget {
-  sessionId: string;
-  cwd: string;
-}
+export type NativeFileDropHoverTarget = ResolvedFileDropTarget;
+
+const DOM_DRAG_POINT_MAX_AGE_MS = 500;
 
 function toLogicalPoint(
   position: NativeDropPosition,
   scaleFactor: number,
-): DropPoint {
+): FileDropPoint {
   if (typeof position.toLogical === "function") {
     return position.toLogical(scaleFactor);
   }
@@ -33,52 +37,93 @@ function toLogicalPoint(
   };
 }
 
-export function terminalDropTargetAtPoint(
-  point: DropPoint,
-): TerminalDropTarget | null {
-  const element = document.elementFromPoint(
-    point.x,
-    point.y,
-  ) as HTMLElement | null;
-  const slot = element?.closest<HTMLElement>("[data-acorn-terminal-slot]");
-  if (!slot?.dataset.acornTerminalSlot) return null;
-  if (!slot.closest("[data-pane-body]")) return null;
-
-  const sessionId = slot.dataset.acornTerminalSlot;
-  const session = useAppStore
-    .getState()
-    .sessions.find((candidate) => candidate.id === sessionId);
-  if (!session) return null;
-  return { sessionId, cwd: session.worktree_path };
+function rawPoint(position: NativeDropPosition): FileDropPoint {
+  return { x: position.x, y: position.y };
 }
 
-function ptyWriteTargets(primarySessionId: string): string[] {
-  const state = useAppStore.getState();
-  const targets = state.multiInputEnabled
-    ? visibleMultiInputSessionIds(state.panes)
-    : [primarySessionId];
-  return targets.length > 0 ? targets : [primarySessionId];
+function isViewportPoint(point: FileDropPoint): boolean {
+  return (
+    point.x >= 0 &&
+    point.y >= 0 &&
+    point.x <= window.innerWidth &&
+    point.y <= window.innerHeight
+  );
 }
 
-function writePathsToTerminal(target: TerminalDropTarget, paths: string[]): void {
-  if (paths.length === 0) return;
-  const data = paths
-    .map((path) => formatTerminalFileMention(path, target.cwd))
-    .join("");
-  for (const sessionId of ptyWriteTargets(target.sessionId)) {
-    void api.ptyWrite(sessionId, data).catch((err: unknown) => {
-      console.error("[nativeFileDrop] pty_write failed", err);
-    });
+function samePoint(a: FileDropPoint, b: FileDropPoint): boolean {
+  return Math.round(a.x) === Math.round(b.x) && Math.round(a.y) === Math.round(b.y);
+}
+
+function uniquePoints(points: FileDropPoint[]): FileDropPoint[] {
+  const result: FileDropPoint[] = [];
+  for (const point of points) {
+    if (result.some((candidate) => samePoint(candidate, point))) continue;
+    result.push(point);
   }
+  return result;
 }
 
-export function useNativeFileDropTerminalBridge(): void {
+function nativePayloads(paths: string[]): FileDropPayload[] {
+  return paths
+    .filter(Boolean)
+    .map((path) => ({ path, entryKind: "unknown", source: "native" }));
+}
+
+function resolveNativePoint(
+  position: NativeDropPosition,
+  scaleFactor: number,
+  payload: FileDropPayload,
+  domPoint: FileDropPoint | null,
+): NativePointResolution {
+  const candidates = uniquePoints([
+    ...(domPoint ? [domPoint] : []),
+    toLogicalPoint(position, scaleFactor),
+    rawPoint(position),
+  ]).filter(isViewportPoint);
+
+  for (const point of candidates) {
+    const target = resolveFileDropTargetAtPoint(point, payload);
+    if (target) return { point, target };
+  }
+
+  return { point: candidates[0] ?? toLogicalPoint(position, scaleFactor), target: null };
+}
+
+export function useNativeFileDropBridge(): NativeFileDropHoverTarget | null {
+  const fileExplorerDrag = useFileExplorerDragSession();
+  const [hoverTarget, setHoverTarget] =
+    useState<NativeFileDropHoverTarget | null>(null);
+
+  useEffect(() => {
+    if (fileExplorerDrag) setHoverTarget(null);
+  }, [fileExplorerDrag]);
+
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
 
     let disposed = false;
     let scaleFactor = window.devicePixelRatio || 1;
     let unlisten: (() => void) | null = null;
+    let currentNativePaths: string[] = [];
+    let lastDomDragPoint: { point: FileDropPoint; at: number } | null = null;
+
+    function currentDomDragPoint(): FileDropPoint | null {
+      if (!lastDomDragPoint) return null;
+      if (performance.now() - lastDomDragPoint.at > DOM_DRAG_POINT_MAX_AGE_MS) {
+        return null;
+      }
+      return lastDomDragPoint.point;
+    }
+
+    function onDomDragOver(event: DragEvent): void {
+      if (!hasNativeFileDropData(event.dataTransfer)) return;
+      lastDomDragPoint = {
+        point: { x: event.clientX, y: event.clientY },
+        at: performance.now(),
+      };
+    }
+
+    window.addEventListener("dragover", onDomDragOver, true);
 
     void getCurrentWindow()
       .scaleFactor()
@@ -93,14 +138,46 @@ export function useNativeFileDropTerminalBridge(): void {
 
     void getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (disposed || event.payload.type !== "drop") return;
-        const point = toLogicalPoint(
+        if (disposed) return;
+        if (event.payload.type === "leave") {
+          currentNativePaths = [];
+          setHoverTarget(null);
+          return;
+        }
+        if (event.payload.type === "enter") {
+          currentNativePaths = event.payload.paths;
+        }
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          const firstPayload = nativePayloads(currentNativePaths)[0];
+          if (!firstPayload) {
+            setHoverTarget(null);
+            return;
+          }
+          const resolved = resolveNativePoint(
+            event.payload.position as NativeDropPosition,
+            scaleFactor,
+            firstPayload,
+            currentDomDragPoint(),
+          );
+          setHoverTarget(resolved.target);
+          return;
+        }
+        if (event.payload.type !== "drop") return;
+
+        setHoverTarget(null);
+        currentNativePaths = [];
+        const payloads = nativePayloads(event.payload.paths);
+        const firstPayload = payloads[0];
+        if (!firstPayload) return;
+
+        const resolved = resolveNativePoint(
           event.payload.position as NativeDropPosition,
           scaleFactor,
+          firstPayload,
+          currentDomDragPoint(),
         );
-        const target = terminalDropTargetAtPoint(point);
-        if (!target) return;
-        writePathsToTerminal(target, event.payload.paths);
+        if (!resolved.target) return;
+        dropFilePayloadsAtPoint(resolved.point, payloads);
       })
       .then((off) => {
         if (disposed) {
@@ -115,7 +192,10 @@ export function useNativeFileDropTerminalBridge(): void {
 
     return () => {
       disposed = true;
+      window.removeEventListener("dragover", onDomDragOver, true);
       unlisten?.();
     };
   }, []);
+
+  return hoverTarget;
 }

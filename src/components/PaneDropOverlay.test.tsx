@@ -14,10 +14,6 @@ vi.mock("../lib/api", () => ({
   api: {},
 }));
 
-import {
-  beginFileDrag,
-  endAcornDrag,
-} from "../lib/dnd";
 import { makePaneNode } from "../lib/layout";
 import { defaultTabByGroup } from "../lib/rightPanelGroups";
 import { useAppStore } from "../store";
@@ -29,8 +25,6 @@ import {
 import { PaneDropOverlay } from "./PaneDropOverlay";
 
 const REPO = "/tmp/acorn-repo";
-const FILE = `${REPO}/src/App.tsx`;
-
 function project(repoPath: string): Project {
   return {
     repo_path: repoPath,
@@ -109,35 +103,12 @@ function seedTwoPaneWorkspace(): void {
   }));
 }
 
-function makeDataTransfer(): DataTransfer {
-  return {
-    dropEffect: "none",
-    effectAllowed: "all",
-    setData: vi.fn(),
-    getData: vi.fn(() => ""),
-    clearData: vi.fn(),
-    files: [] as unknown as FileList,
-    items: [] as unknown as DataTransferItemList,
-    types: [],
-    setDragImage: vi.fn(),
-  };
-}
-
-function dispatchDrop(target: Element, dataTransfer: DataTransfer): void {
-  const event = new Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  Object.defineProperty(event, "clientX", { value: 10 });
-  Object.defineProperty(event, "clientY", { value: 10 });
-  target.dispatchEvent(event);
-}
-
 describe("PaneDropOverlay", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     resetStore();
-    endAcornDrag();
     cancelWorkspaceTabDrag();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -147,68 +118,14 @@ describe("PaneDropOverlay", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    endAcornDrag();
     cancelWorkspaceTabDrag();
-  });
-
-  it("opens a code viewer tab when a file is dropped on an empty pane", () => {
-    const dataTransfer = makeDataTransfer();
-    beginFileDrag(
-      { dataTransfer } as unknown as React.DragEvent,
-      { path: FILE },
-    );
-
-    act(() => {
-      root.render(<PaneDropOverlay paneId="root" />);
-    });
-
-    const overlay = container.firstElementChild;
-    if (!overlay) throw new Error("overlay did not render");
-
-    act(() => {
-      dispatchDrop(overlay, dataTransfer);
-    });
-
-    const state = useAppStore.getState();
-    const pane = state.panes.root;
-    expect(pane.tabIds).toHaveLength(1);
-    expect(pane.activeTabId).toBe(pane.tabIds[0]);
-    expect(state.workspaceTabs[pane.activeTabId!]).toMatchObject({
-      kind: "code",
-      path: FILE,
-      repoPath: REPO,
-    });
-  });
-
-  it("does not intercept file drops when the pane reserves them for the terminal", () => {
-    const dataTransfer = makeDataTransfer();
-    beginFileDrag(
-      { dataTransfer } as unknown as React.DragEvent,
-      { path: FILE },
-    );
-
-    act(() => {
-      root.render(<PaneDropOverlay paneId="root" acceptFileDrops={false} />);
-    });
-
-    const overlay = container.firstElementChild;
-    if (!overlay) throw new Error("overlay did not render");
-    expect(overlay.className).toContain("pointer-events-none");
-
-    act(() => {
-      dispatchDrop(overlay, dataTransfer);
-    });
-
-    const state = useAppStore.getState();
-    expect(state.panes.root.tabIds).toEqual([]);
-    expect(state.workspaceTabs).toEqual({});
   });
 
   it("moves a pointer-dragged tab onto a pane body center", () => {
     seedTwoPaneWorkspace();
 
     act(() => {
-      root.render(<PaneDropOverlay paneId="pane-2" acceptFileDrops={false} />);
+      root.render(<PaneDropOverlay paneId="pane-2" />);
     });
 
     const overlay = container.firstElementChild;

@@ -1,6 +1,324 @@
 import { test, expect, pressHotkey } from "./support";
+import type { Locator } from "@playwright/test";
+import type { Page, TauriMock } from "./support";
+
+async function installNativeDragEventRecorder(
+  tauri: TauriMock,
+): Promise<void> {
+  await tauri.handle("plugin:event|listen", (args: unknown) => {
+    const { event, handler } = args as { event: string; handler: number };
+    const w = window as unknown as {
+      __tauriEventHandlers?: Record<string, number>;
+    };
+    w.__tauriEventHandlers = w.__tauriEventHandlers ?? {};
+    w.__tauriEventHandlers[event] = handler;
+    return handler;
+  });
+  await tauri.handle("plugin:event|unlisten", () => undefined);
+}
+
+async function emitNativeFileDragEnter(
+  page: Page,
+  box: { x: number; y: number; width: number; height: number },
+  paths: string[],
+): Promise<void> {
+  await page.evaluate(
+    ({ box, paths }) => {
+      const w = window as unknown as {
+        __tauriEventHandlers?: Record<string, number>;
+        [key: string]: unknown;
+      };
+      const id = w.__tauriEventHandlers?.["tauri://drag-enter"];
+      if (typeof id !== "number") throw new Error("missing drag-enter handler");
+      const callback = w[`_${id}`] as
+        | ((payload: {
+            event: string;
+            id: number;
+            payload: {
+              paths: string[];
+              position: { x: number; y: number };
+            };
+          }) => void)
+        | undefined;
+      if (!callback) throw new Error("missing drag-enter callback");
+      callback({
+        event: "tauri://drag-enter",
+        id,
+        payload: {
+          paths,
+          position: {
+            x: box.x + box.width / 2,
+            y: box.y + box.height / 2,
+          },
+        },
+      });
+    },
+    { box, paths },
+  );
+}
+
+async function installPtyWriteRecorder(tauri: TauriMock): Promise<void> {
+  await tauri.handle("pty_write", (args: unknown) => {
+    const w = window as unknown as { __ptyWrites?: string[] };
+    w.__ptyWrites = w.__ptyWrites ?? [];
+    const { data } = args as { data: string };
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    w.__ptyWrites.push(new TextDecoder().decode(bytes));
+    return null;
+  });
+}
+
+async function dragCenterTo(
+  page: Page,
+  source: Locator,
+  target: Locator,
+  options: { release?: boolean } = {},
+): Promise<void> {
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+  expect(sourceBox).not.toBeNull();
+  expect(targetBox).not.toBeNull();
+  const from = {
+    x: sourceBox!.x + sourceBox!.width / 2,
+    y: sourceBox!.y + sourceBox!.height / 2,
+  };
+  const to = {
+    x: targetBox!.x + targetBox!.width / 2,
+    y: targetBox!.y + targetBox!.height / 2,
+  };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x - 16, from.y, { steps: 4 });
+  await page.mouse.move(to.x, to.y, { steps: 20 });
+  if (options.release !== false) await page.mouse.up();
+}
 
 test.describe("file explorer", () => {
+  test("shows a tab drop affordance when dragging a file onto the tab strip", async ({
+    page,
+    tauri,
+  }) => {
+    const repo = "/tmp/demo";
+    const file = `${repo}/src/App.tsx`;
+    const secondFile = `${repo}/src/Utils.ts`;
+
+    await installNativeDragEventRecorder(tauri);
+    await installPtyWriteRecorder(tauri);
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repo,
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-1",
+        name: "alpha",
+        repo_path: repo,
+        worktree_path: repo,
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_repo_root", () => "/tmp/demo");
+    await tauri.handle("fs_list_dir", (args) => {
+      const { path } = args as { path: string };
+      if (path === "/tmp/demo") {
+        return {
+          repo_root: "/tmp/demo",
+          entries: [
+            {
+              name: "src",
+              path: "/tmp/demo/src",
+              is_dir: true,
+              is_symlink: false,
+              size: 0,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
+      if (path === "/tmp/demo/src") {
+        return {
+          repo_root: "/tmp/demo",
+          entries: [
+            {
+              name: "App.tsx",
+              path: "/tmp/demo/src/App.tsx",
+              is_dir: false,
+              is_symlink: false,
+              size: 42,
+              modified_ms: 0,
+              gitignored: false,
+            },
+            {
+              name: "Utils.ts",
+              path: "/tmp/demo/src/Utils.ts",
+              is_dir: false,
+              is_symlink: false,
+              size: 24,
+              modified_ms: 0,
+              gitignored: false,
+            },
+          ],
+        };
+      }
+      return { repo_root: "/tmp/demo", entries: [] };
+    });
+    await tauri.handle("fs_read_file", (args) => {
+      const { path } = args as { path: string };
+      return {
+        content:
+          path === "/tmp/demo/src/App.tsx"
+            ? "export default function App() {}\n"
+            : path === "/tmp/demo/src/Utils.ts"
+              ? "export const util = true;\n"
+              : "",
+        size: path === "/tmp/demo/src/Utils.ts" ? 26 : 31,
+        truncated: false,
+        binary: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^alpha main · Idle$/ })
+      .click();
+    await page.getByRole("button", { name: "Code" }).click();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await page.getByRole("button", { name: "src" }).click();
+
+    const fileRow = page.getByRole("button", { name: "App.tsx", exact: true });
+    const tabStrip = page.locator('[data-pane-tab-strip="root"]');
+    await expect(fileRow).toBeVisible();
+    await expect(tabStrip).toBeVisible();
+
+    const terminalBox = await page
+      .locator("[data-pane-body] .acorn-terminal")
+      .boundingBox();
+    expect(terminalBox).not.toBeNull();
+    await emitNativeFileDragEnter(page, terminalBox!, [file]);
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toContainText(
+      "Drop into terminal",
+    );
+
+    const terminal = page.locator("[data-pane-body] .acorn-terminal");
+    await dragCenterTo(page, fileRow, terminal);
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [],
+        ),
+      )
+      .toContain("src/App.tsx ");
+    await expect(page.locator("[data-file-drag-ghost]")).toHaveCount(0);
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+    const sourceBox = await fileRow.boundingBox();
+    const terminalDragBox = await terminal.boundingBox();
+    const rightPanelBox = await page.locator('[data-panel-id="right"]').boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(terminalDragBox).not.toBeNull();
+    expect(rightPanelBox).not.toBeNull();
+
+    await page.mouse.move(
+      sourceBox!.x + sourceBox!.width / 2,
+      sourceBox!.y + sourceBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      terminalDragBox!.x + terminalDragBox!.width / 2,
+      terminalDragBox!.y + terminalDragBox!.height / 2,
+      { steps: 20 },
+    );
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toContainText(
+      "Drop into terminal",
+    );
+    await expect(page.locator("[data-file-drag-ghost]")).toContainText(
+      "App.tsx",
+    );
+    await page.mouse.move(
+      rightPanelBox!.x + rightPanelBox!.width / 2,
+      rightPanelBox!.y + rightPanelBox!.height / 2,
+      { steps: 20 },
+    );
+    await page.mouse.up();
+
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toHaveCount(
+      0,
+    );
+    await expect(page.locator("[data-file-drag-ghost]")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? [],
+        ),
+      )
+      .toEqual([]);
+
+    await dragCenterTo(page, fileRow, tabStrip, { release: false });
+
+    await expect(page.locator('[data-file-drop-hover="tab"]')).toContainText(
+      "Drop to open tab",
+    );
+    await expect(page.locator('[data-file-drop-hover="tab"]')).toContainText(
+      "App.tsx",
+    );
+    await expect(page.locator("[data-file-drag-ghost]")).toContainText(
+      "App.tsx",
+    );
+    await expect(page.locator('[data-file-drop-hover="terminal"]')).toHaveCount(
+      0,
+    );
+
+    await page.mouse.up();
+
+    await expect(page.locator('[data-file-drop-hover="tab"]')).toHaveCount(0);
+    await expect(page.locator("[data-file-drag-ghost]")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /App\.tsx Close tab/ }),
+    ).toBeVisible();
+
+    const secondFileRow = page.getByRole("button", {
+      name: "Utils.ts",
+      exact: true,
+    });
+    const paneBody = page.locator('[data-pane-body="root"]');
+    await expect(secondFileRow).toBeVisible();
+    await dragCenterTo(page, secondFileRow, paneBody, { release: false });
+
+    await expect(page.locator('[data-file-drop-hover="preview"]')).toContainText(
+      "Drop to preview",
+    );
+    await expect(page.locator('[data-file-drop-hover="preview"]')).toContainText(
+      "Utils.ts",
+    );
+
+    await page.mouse.up();
+
+    await expect(page.locator('[data-file-drop-hover="preview"]')).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByRole("button", { name: /Utils\.ts Close tab/ }),
+    ).toBeVisible();
+    await expect(page.getByText("export const util = true;")).toBeVisible();
+  });
+
   test("keeps expanded worktree folders after opening and closing a file", async ({
     page,
     tauri,
