@@ -76,6 +76,20 @@ test.describe("background sessions settings", () => {
     await expect(
       modal.getByRole("button", { name: "Restore session" }),
     ).toBeVisible();
+
+    await modal.getByText("alpha", { exact: true }).hover();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("ID");
+    await expect(tooltip).toContainText("s-1");
+    await expect(tooltip).toContainText("Tab");
+    await expect(tooltip).toContainText("alpha");
+    await expect(tooltip).toContainText("Branch");
+    await expect(tooltip).toContainText("main");
+    await expect(tooltip).toContainText("Status");
+    await expect(tooltip).toContainText("idle");
+    await expect(tooltip).toContainText("Worktree");
+    await expect(tooltip).toContainText("/tmp/demo");
+    await expect(tooltip.locator("svg")).toHaveCount(5);
   });
 
   test("restore adopts an orphaned daemon session and opens its project tab", async ({

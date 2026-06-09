@@ -332,6 +332,64 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("session hover details render as icon rows", async ({ page, tauri }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "detail-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/detail-session",
+        branch: "feature/readable-tooltip",
+        isolated: true,
+        project_scoped: true,
+        status: "needs_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "control",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: true,
+        agent_provider: null,
+        agent_transcript_id: null,
+      },
+    ]);
+
+    await page.goto("/");
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /detail-session/ })
+      .hover();
+
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText("Name");
+    await expect(tooltip).toContainText("detail-session");
+    await expect(tooltip).toContainText("Branch");
+    await expect(tooltip).toContainText("feature/readable-tooltip");
+    await expect(tooltip).toContainText("Working directory");
+    await expect(tooltip).toContainText(
+      "/tmp/demo/.acorn/worktrees/detail-session",
+    );
+    await expect(tooltip).toContainText("Status");
+    await expect(tooltip).toContainText("Needs input");
+    await expect(tooltip).toContainText("Kind");
+    await expect(tooltip).toContainText("Control session");
+    await expect(tooltip).toContainText("Isolated worktree");
+    await expect(tooltip.locator("svg")).toHaveCount(6);
+  });
+
   test("regenerates a name for sessions backed by real git worktrees", async ({
     page,
     tauri,

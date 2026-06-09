@@ -201,12 +201,13 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     });
     await flushPromises();
 
-    const img = document.body.querySelector<HTMLImageElement>(
-      'img[title="linear-code"]',
-    );
-    expect(img?.src).toBe(
-      "https://avatars.githubusercontent.com/in/1658531?s=56&v=4",
-    );
+    const avatarUrl =
+      "https://avatars.githubusercontent.com/in/1658531?s=56&v=4";
+    const img =
+      Array.from(document.body.querySelectorAll<HTMLImageElement>("img")).find(
+        (candidate) => candidate.src === avatarUrl,
+      ) ?? null;
+    expect(img?.src).toBe(avatarUrl);
   });
 
   it("reverts and surfaces an error when updatePullRequestBody rejects", async () => {

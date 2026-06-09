@@ -1,13 +1,25 @@
 import {
+  Activity,
+  AlertCircle,
   Power,
   RefreshCcw,
   Loader2,
   AlertTriangle,
   Bot,
+  Folder,
+  GitBranch,
+  Hash,
+  MessageSquareText,
   Trash2,
   Undo2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { api, type DaemonSessionSummary, type DaemonStatus } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -246,25 +258,29 @@ export function BackgroundSessionsSettings() {
             )}
             <span>{t("backgroundSessions.controls.restart")}</span>
           </button>
-          <button
-            type="button"
-            onClick={() => void handleForgetInactiveSessions()}
-            disabled={
-              !enabled || !running || inactiveSessionCount === 0 || busy !== null
-            }
-            title={t("backgroundSessions.controls.clearInactiveTooltip")}
-            className={cn(
-              "flex items-center gap-1 rounded border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
-              "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
-            )}
+          <Tooltip
+            label={t("backgroundSessions.controls.clearInactiveTooltip")}
+            side="bottom"
           >
-            {busy === "forget-inactive" ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : (
-              <Trash2 size={12} />
-            )}
-            <span>{t("backgroundSessions.controls.clearInactive")}</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => void handleForgetInactiveSessions()}
+              disabled={
+                !enabled || !running || inactiveSessionCount === 0 || busy !== null
+              }
+              className={cn(
+                "flex items-center gap-1 rounded border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
+                "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
+              )}
+            >
+              {busy === "forget-inactive" ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Trash2 size={12} />
+              )}
+              <span>{t("backgroundSessions.controls.clearInactive")}</span>
+            </button>
+          </Tooltip>
           {confirmShutdown ? (
             <div className="flex items-center gap-2 rounded border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
               <span>
@@ -593,27 +609,42 @@ function renderAppMetaTooltip(
   daemon: DaemonSessionSummary,
   t: BackgroundSessionsTranslator,
 ) {
-  const rows: { label: string; value: string }[] = [];
+  const rows: Array<{
+    icon: ReactNode;
+    label: string;
+    value: string;
+    valueClassName?: string;
+  }> = [];
   if (app) {
-    rows.push({ label: t("backgroundSessions.metadata.tab"), value: app.name });
+    rows.push({
+      icon: <MessageSquareText size={12} />,
+      label: t("backgroundSessions.metadata.tab"),
+      value: app.name,
+    });
     if (app.branch) {
       rows.push({
+        icon: <GitBranch size={12} />,
         label: t("backgroundSessions.metadata.branch"),
         value: app.branch,
+        valueClassName: "font-mono",
       });
     }
     rows.push({
+      icon: <Activity size={12} />,
       label: t("backgroundSessions.metadata.status"),
       value: app.status,
     });
     if (app.worktree_path) {
       rows.push({
+        icon: <Folder size={12} />,
         label: t("backgroundSessions.metadata.worktree"),
         value: app.worktree_path,
+        valueClassName: "break-all font-mono",
       });
     }
     if (app.last_message) {
       rows.push({
+        icon: <MessageSquareText size={12} />,
         label: t("backgroundSessions.metadata.last"),
         value: app.last_message,
       });
@@ -621,37 +652,88 @@ function renderAppMetaTooltip(
   } else {
     if (daemon.branch) {
       rows.push({
+        icon: <GitBranch size={12} />,
         label: t("backgroundSessions.metadata.branch"),
         value: daemon.branch,
+        valueClassName: "font-mono",
       });
     }
     if (daemon.repo_path) {
       rows.push({
+        icon: <Folder size={12} />,
         label: t("backgroundSessions.metadata.repo"),
         value: daemon.repo_path,
+        valueClassName: "break-all font-mono",
       });
     }
     if (daemon.cwd) {
       rows.push({
+        icon: <Folder size={12} />,
         label: t("backgroundSessions.metadata.worktree"),
         value: daemon.cwd,
+        valueClassName: "break-all font-mono",
       });
     }
   }
   return (
-    <div className="flex flex-col gap-0.5 text-left">
-      <div className="font-mono text-[10px] text-fg-muted">{daemon.id}</div>
+    <div className="flex w-72 max-w-full flex-col gap-1.5 text-left">
+      <BackgroundSessionTooltipRow
+        icon={<Hash size={12} />}
+        label="ID"
+        value={daemon.id}
+        valueClassName="break-all font-mono text-fg-muted"
+      />
       {!app ? (
-        <div className="text-[10px] italic text-fg-muted">
+        <div className="flex items-center gap-1.5 rounded border border-warning/30 bg-warning/10 px-1.5 py-1 text-[10px] leading-none text-warning">
+          <AlertCircle size={11} aria-hidden="true" className="shrink-0" />
           {t("backgroundSessions.metadata.orphaned")}
         </div>
       ) : null}
       {rows.map((r) => (
-        <div key={r.label} className="flex gap-1.5">
-          <span className="text-fg-muted">{r.label}:</span>
-          <span className="font-mono break-all">{r.value}</span>
-        </div>
+        <BackgroundSessionTooltipRow
+          key={`${r.label}:${r.value}`}
+          icon={r.icon}
+          label={r.label}
+          value={r.value}
+          valueClassName={r.valueClassName}
+        />
       ))}
+    </div>
+  );
+}
+
+function BackgroundSessionTooltipRow({
+  icon,
+  label,
+  value,
+  valueClassName,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      <span
+        aria-hidden="true"
+        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border border-border/70 bg-bg/60 text-fg-muted"
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] leading-3 text-fg-muted">
+          {label}
+        </span>
+        <span
+          className={cn(
+            "block min-w-0 break-words text-[11px] leading-snug text-fg",
+            valueClassName,
+          )}
+        >
+          {value}
+        </span>
+      </span>
     </div>
   );
 }

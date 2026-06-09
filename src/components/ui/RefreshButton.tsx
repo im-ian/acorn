@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, RefreshCw } from "lucide-react";
 import { cn } from "../../lib/cn";
+import { Tooltip } from "../Tooltip";
 
 interface RefreshButtonProps {
   onClick: () => void | Promise<void>;
@@ -60,43 +61,44 @@ export function RefreshButton({
   }, []);
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={loading}
-      title={title}
-      aria-label={ariaLabel ?? title}
-      className={cn(
-        "relative inline-flex items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60",
-        className,
-      )}
-    >
-      {/* Reserve space so the absolute icons don't collapse the button. */}
-      <span
-        aria-hidden
-        className="inline-block"
-        style={{ width: size, height: size }}
-      />
-      <RefreshCw
-        size={size}
-        aria-hidden
+    <Tooltip label={title} side="bottom">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={loading}
+        aria-label={ariaLabel ?? title}
         className={cn(
-          "absolute transition-opacity",
-          loading && "animate-spin",
-          showSuccess ? "opacity-0" : "opacity-100",
+          "relative inline-flex items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60",
+          className,
         )}
-        style={{ transitionDuration: `${FADE_MS}ms` }}
-      />
-      <Check
-        size={size}
-        strokeWidth={3}
-        aria-hidden
-        className={cn(
-          "absolute text-emerald-400 transition-opacity",
-          showSuccess ? "opacity-100" : "opacity-0",
-        )}
-        style={{ transitionDuration: `${FADE_MS}ms` }}
-      />
-    </button>
+      >
+        {/* Reserve space so the absolute icons don't collapse the button. */}
+        <span
+          aria-hidden
+          className="inline-block"
+          style={{ width: size, height: size }}
+        />
+        <RefreshCw
+          size={size}
+          aria-hidden
+          className={cn(
+            "absolute transition-opacity",
+            loading && "animate-spin",
+            showSuccess ? "opacity-0" : "opacity-100",
+          )}
+          style={{ transitionDuration: `${FADE_MS}ms` }}
+        />
+        <Check
+          size={size}
+          strokeWidth={3}
+          aria-hidden
+          className={cn(
+            "absolute text-emerald-400 transition-opacity",
+            showSuccess ? "opacity-100" : "opacity-0",
+          )}
+          style={{ transitionDuration: `${FADE_MS}ms` }}
+        />
+      </button>
+    </Tooltip>
   );
 }

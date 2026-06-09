@@ -2,6 +2,7 @@ import { Download, X } from "lucide-react";
 import { useState, type ReactElement } from "react";
 import { selectShouldNotify, useUpdater } from "../lib/updater-store";
 import { useTranslation } from "../lib/useTranslation";
+import { Tooltip } from "./Tooltip";
 import { WhatsNewModal } from "./WhatsNewModal";
 
 /**
@@ -58,15 +59,17 @@ export function UpdateBanner(): ReactElement | null {
               ? t("updateBanner.installing")
               : t("updateBanner.installRelaunch")}
           </button>
-          <button
-            type="button"
-            onClick={dismiss}
-            disabled={busy}
-            title={t("updateBanner.hideUntilNextVersion")}
-            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
-          >
-            <X size={14} />
-          </button>
+          <Tooltip label={t("updateBanner.hideUntilNextVersion")} side="bottom">
+            <button
+              type="button"
+              onClick={dismiss}
+              disabled={busy}
+              aria-label={t("updateBanner.hideUntilNextVersion")}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
         </div>
         {error ? (
           <div className="flex items-start gap-2 border-t border-danger/30 bg-danger/10 px-4 py-1.5 text-[11px] text-danger">

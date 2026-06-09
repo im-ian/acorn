@@ -10,8 +10,10 @@ import { createPortal } from "react-dom";
 import { homeDir } from "@tauri-apps/api/path";
 import {
   Activity,
+  AlertCircle,
   Bell,
   CheckCheck,
+  Clock,
   Gauge,
   Loader2,
   Settings,
@@ -399,7 +401,7 @@ function AgentTokenUsageBadge({
 }) {
   const t = useTranslation();
   const summary = renderAgentTokenSummary(snapshot, provider, t);
-  const tooltip = formatAgentTokenTooltip(snapshot, provider, t);
+  const tooltip = renderAgentTokenTooltip(snapshot, provider, t);
 
   return (
     <Tooltip label={tooltip} side="top" multiline>
@@ -472,36 +474,108 @@ function TokenWindowReadout({
   );
 }
 
-function formatAgentTokenTooltip(
+function renderAgentTokenTooltip(
   snapshot: AgentTokenUsageSnapshot | null,
   provider: AgentTokenProvider,
   t: Translator,
-): string {
-  if (!snapshot) return statusBarText(t, "statusBar.agentTokensUnavailable");
+): ReactNode {
+  if (!snapshot) {
+    return (
+      <span className="flex min-w-40 items-center gap-2">
+        <Loader2
+          size={12}
+          aria-hidden="true"
+          className="shrink-0 animate-spin text-fg-muted"
+        />
+        <span>{statusBarText(t, "statusBar.agentTokensUnavailable")}</span>
+      </span>
+    );
+  }
 
-  const lines = TOKEN_WINDOWS.map((window) => {
-    const metric = tokenMetric(snapshot, provider, window);
-    const windowName = windowDisplayName(window, t);
-    if (!metric || metric.error) {
-      return statusBarFormat(t, "statusBar.agentTokensTooltipError", {
-        window: windowName,
-        error:
-          metric?.error ?? statusBarText(t, "statusBar.agentTokensUnavailable"),
-      });
-    }
-    return statusBarFormat(t, "statusBar.agentTokensTooltipLine", {
-      window: windowName,
-      remaining: formatRemainingPercent(metric) ?? "-",
-      reset: formatResetRemaining(metric.reset_at, snapshot.updated_at, t),
-    });
-  });
-
-  lines.push(
-    statusBarFormat(t, "statusBar.agentTokensUpdated", {
-      time: formatUnixTime(snapshot.updated_at),
-    }),
+  return (
+    <span className="flex w-64 max-w-full flex-col gap-2">
+      {TOKEN_WINDOWS.map((window) => {
+        const metric = tokenMetric(snapshot, provider, window);
+        return (
+          <AgentTokenTooltipWindow
+            key={window}
+            metric={metric}
+            observedAt={snapshot.updated_at}
+            windowName={windowDisplayName(window, t)}
+            t={t}
+          />
+        );
+      })}
+      <span className="flex items-center gap-1.5 border-t border-border/60 pt-1.5 text-[10px] leading-none text-fg-muted">
+        <Clock size={11} aria-hidden="true" className="shrink-0" />
+        <span>
+          {statusBarFormat(t, "statusBar.agentTokensUpdated", {
+            time: formatUnixTime(snapshot.updated_at),
+          })}
+        </span>
+      </span>
+    </span>
   );
-  return lines.join("\n");
+}
+
+function AgentTokenTooltipWindow({
+  metric,
+  observedAt,
+  windowName,
+  t,
+}: {
+  metric: AgentTokenUsageMetric | null;
+  observedAt: number;
+  windowName: string;
+  t: Translator;
+}) {
+  const error =
+    metric?.error ??
+    (!metric ? statusBarText(t, "statusBar.agentTokensUnavailable") : null);
+  const remaining = metric ? (formatRemainingPercent(metric) ?? "-") : "-";
+  const reset = metric
+    ? formatResetRemaining(metric.reset_at, observedAt, t)
+    : statusBarText(t, "statusBar.agentTokensResetUnknown");
+
+  return (
+    <span className="flex min-w-0 items-start gap-2">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border border-border/70 bg-bg/60",
+          error ? "text-danger" : "text-fg-muted",
+        )}
+      >
+        {error ? <AlertCircle size={12} /> : <Gauge size={12} />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="mb-1 inline-flex rounded border border-fg-muted/25 bg-fg-muted/10 px-1 py-px text-[9px] font-semibold leading-none text-fg-muted">
+          {windowName}
+        </span>
+        {error ? (
+          <span className="block break-words text-[11px] leading-snug text-danger">
+            {error}
+          </span>
+        ) : (
+          <span className="flex flex-col gap-0.5 text-[11px] leading-snug">
+            <span className="font-medium text-fg">
+              {statusBarFormat(t, "statusBar.agentTokensRemaining", {
+                remaining,
+              })}
+            </span>
+            <span className="inline-flex min-w-0 items-center gap-1 text-fg-muted">
+              <Clock size={10} aria-hidden="true" className="shrink-0" />
+              <span className="min-w-0 truncate">
+                {statusBarFormat(t, "statusBar.agentTokensResetIn", {
+                  reset,
+                })}
+              </span>
+            </span>
+          </span>
+        )}
+      </span>
+    </span>
+  );
 }
 
 function tokenMetric(
@@ -992,33 +1066,6 @@ function ServicesStatusButton() {
     return "ok";
   })();
 
-  const tooltip = (() => {
-    const ipcLabel =
-      ipc.running === null
-        ? statusBarText(t, "statusBar.services.tooltip.ipcLoading")
-        : ipc.running
-          ? statusBarText(t, "statusBar.services.tooltip.ipcOn")
-          : statusBarText(t, "statusBar.services.tooltip.ipcOff");
-    const daemonLabel =
-      daemon === null
-        ? statusBarText(t, "statusBar.services.tooltip.daemonLoading")
-        : !daemon.enabled
-          ? statusBarText(t, "statusBar.services.tooltip.daemonDisabled")
-          : daemon.running
-            ? daemon.sessions !== null
-              ? statusBarFormat(
-                  t,
-                  "statusBar.services.tooltip.daemonOnWithSessions",
-                  { count: daemon.sessions },
-                )
-              : statusBarText(t, "statusBar.services.tooltip.daemonOn")
-            : statusBarText(t, "statusBar.services.tooltip.daemonDown");
-    return statusBarFormat(t, "statusBar.services.tooltip.details", {
-      ipc: ipcLabel,
-      daemon: daemonLabel,
-    });
-  })();
-
   const ipcDotState: DotState =
     ipc.running === null ? "muted" : ipc.running ? "ok" : "down";
   const daemonDotState: DotState = (() => {
@@ -1026,6 +1073,13 @@ function ServicesStatusButton() {
     if (!daemon.enabled) return "muted";
     return daemon.running ? "ok" : "down";
   })();
+  const tooltip = renderServicesTooltip(
+    ipc,
+    daemon,
+    ipcDotState,
+    daemonDotState,
+    t,
+  );
 
   return (
     <>
@@ -1064,6 +1118,94 @@ function ServicesStatusButton() {
         />
       ) : null}
     </>
+  );
+}
+
+function renderServicesTooltip(
+  ipc: IpcSnapshot,
+  daemon: DaemonSnapshot | null,
+  ipcDotState: DotState,
+  daemonDotState: DotState,
+  t: Translator,
+): ReactNode {
+  const ipcStatusText =
+    ipc.running === null
+      ? statusBarText(t, "statusBar.services.status.loading")
+      : ipc.running
+        ? statusBarText(t, "statusBar.services.status.running")
+        : statusBarText(t, "statusBar.services.status.down");
+  const daemonStatusText =
+    daemon === null
+      ? statusBarText(t, "statusBar.services.status.loading")
+      : !daemon.enabled
+        ? statusBarText(t, "statusBar.services.status.disabled")
+        : daemon.running
+          ? daemon.sessions !== null
+            ? statusBarFormat(
+                t,
+                "statusBar.services.status.runningSessions",
+                { count: daemon.sessions },
+              )
+            : statusBarText(t, "statusBar.services.status.running")
+          : statusBarText(t, "statusBar.services.status.down");
+
+  return (
+    <span className="flex w-56 max-w-full flex-col gap-1.5">
+      <ServiceTooltipRow
+        icon={<Activity size={12} />}
+        label={statusBarText(t, "statusBar.services.ipc.label")}
+        value={ipcStatusText}
+        dot={ipcDotState}
+      />
+      <ServiceTooltipRow
+        icon={<Gauge size={12} />}
+        label={statusBarText(t, "statusBar.services.daemon.label")}
+        value={daemonStatusText}
+        dot={daemonDotState}
+      />
+      <span className="flex items-center gap-1.5 border-t border-border/60 pt-1.5 text-[10px] leading-none text-fg-muted">
+        <Settings size={11} aria-hidden="true" className="shrink-0" />
+        <span>{statusBarText(t, "statusBar.services.tooltip.detailsHint")}</span>
+      </span>
+    </span>
+  );
+}
+
+function ServiceTooltipRow({
+  icon,
+  label,
+  value,
+  dot,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  dot: DotState;
+}) {
+  return (
+    <span className="flex min-w-0 items-start gap-2">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border border-border/70 bg-bg/60",
+          dot === "ok"
+            ? "text-accent"
+            : dot === "down"
+              ? "text-danger"
+              : "text-fg-muted",
+        )}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] leading-3 text-fg-muted">
+          {label}
+        </span>
+        <span className="block min-w-0 break-words text-[11px] leading-snug text-fg">
+          {value}
+        </span>
+      </span>
+    </span>
   );
 }
 

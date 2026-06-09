@@ -607,8 +607,8 @@
     "agentTokensWindowFiveHour": "5시간",
     "agentTokensWindowWeekly": "주간",
     "agentTokensResetUnknown": "-",
-    "agentTokensTooltipLine": "{window}: 잔여 {remaining}, 갱신까지 {reset}",
-    "agentTokensTooltipError": "{window}: {error}",
+    "agentTokensRemaining": "잔여 {remaining}",
+    "agentTokensResetIn": "갱신까지 {reset}",
     "agentTokensUpdated": "확인 시각 {time}",
     "sessionStatus": {
       "idle": "유휴",
@@ -648,7 +648,7 @@
         "daemonOn": "데몬: 켜짐",
         "daemonOnWithSessions": "데몬: 켜짐 ({count})",
         "daemonDown": "데몬: 중단됨",
-        "details": "{ipc} · {daemon} - 자세히 보려면 클릭"
+        "detailsHint": "자세히 보려면 클릭"
       },
       "status": {
         "loading": "불러오는 중",

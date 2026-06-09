@@ -1,4 +1,5 @@
 import { cn } from "../lib/cn";
+import { Tooltip } from "./Tooltip";
 
 /**
  * Inline GitHub avatar. Uses an API-provided avatar URL when one is available,
@@ -26,19 +27,20 @@ export function AuthorAvatar({
     ? withAvatarSize(avatarUrl, pixelSize)
     : `https://github.com/${encodeURIComponent(slug)}.png?size=${pixelSize}`;
   return (
-    <img
-      src={src}
-      alt=""
-      title={login}
-      width={size}
-      height={size}
-      loading="lazy"
-      style={{ width: size, height: size }}
-      className={cn(
-        "shrink-0 rounded-full bg-bg-elevated align-middle",
-        className,
-      )}
-    />
+    <Tooltip label={login} side="top" className="shrink-0">
+      <img
+        src={src}
+        alt=""
+        width={size}
+        height={size}
+        loading="lazy"
+        style={{ width: size, height: size }}
+        className={cn(
+          "shrink-0 rounded-full bg-bg-elevated align-middle",
+          className,
+        )}
+      />
+    </Tooltip>
   );
 }
 
