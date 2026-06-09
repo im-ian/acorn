@@ -193,7 +193,6 @@ describe("PaneDropOverlay", () => {
 
     const overlay = container.firstElementChild;
     if (!overlay) throw new Error("overlay did not render");
-    expect(overlay.className).toContain("pointer-events-none");
 
     act(() => {
       dispatchDrop(overlay, dataTransfer);

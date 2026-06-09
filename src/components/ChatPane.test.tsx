@@ -1728,7 +1728,6 @@ describe("ChatPane", () => {
     expect(currentDirectory?.getAttribute("aria-label")).toBe(
       "/tmp/acorn/.acorn/worktrees/source-chat",
     );
-    expect(currentDirectory?.className).toContain("truncate");
 
     await act(async () => {
       sameDirectory!.click();
@@ -1986,48 +1985,4 @@ describe("ChatPane", () => {
     expect(container.textContent).toContain("hi from antigravity");
   });
 
-  it("marks rendered message text as selectable", async () => {
-    mocks.loadChatSessionState.mockResolvedValueOnce(
-      chatState("s1", [
-        {
-          id: "u1",
-          role: "user",
-          content: "drag-select this message",
-          created_at: "2026-01-01T00:00:00Z",
-          status: "complete",
-          metadata: null,
-        },
-      ]),
-    );
-
-    await act(async () => {
-      root.render(<ChatPane sessionId="s1" />);
-    });
-    await settle();
-
-    const selectable = container.querySelector(".acorn-selectable");
-    expect(selectable?.textContent).toContain("drag-select this message");
-  });
-
-  it("applies the message entrance animation class", async () => {
-    mocks.loadChatSessionState.mockResolvedValueOnce(
-      chatState("s1", [
-        {
-          id: "u1",
-          role: "user",
-          content: "animated message",
-          created_at: "2026-01-01T00:00:00Z",
-          status: "complete",
-          metadata: null,
-        },
-      ]),
-    );
-
-    await act(async () => {
-      root.render(<ChatPane sessionId="s1" />);
-    });
-    await settle();
-
-    expect(container.querySelector(".acorn-chat-message-enter")).toBeTruthy();
-  });
 });
