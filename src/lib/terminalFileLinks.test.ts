@@ -126,6 +126,36 @@ describe("terminal file links", () => {
     ]);
   });
 
+  it("finds Next.js route segment file references", () => {
+    expect(
+      findTerminalFileReferences(
+        "apps/web/src/app/[locale]/(authenticated)/settings/page.tsx:321",
+      ),
+    ).toEqual([
+      {
+        path: "apps/web/src/app/[locale]/(authenticated)/settings/page.tsx",
+        line: 321,
+        text: "apps/web/src/app/[locale]/(authenticated)/settings/page.tsx:321",
+        startIndex: 0,
+      },
+    ]);
+  });
+
+  it("uses the first line from range file references", () => {
+    expect(
+      findTerminalFileReferences(
+        "apps/web/src/app/[locale]/(authenticated)/settings/page.tsx:321-324",
+      ),
+    ).toEqual([
+      {
+        path: "apps/web/src/app/[locale]/(authenticated)/settings/page.tsx",
+        line: 321,
+        text: "apps/web/src/app/[locale]/(authenticated)/settings/page.tsx:321-324",
+        startIndex: 0,
+      },
+    ]);
+  });
+
   it("finds file references with a trailing colon and no line number", () => {
     expect(
       findTerminalFileReferences(
