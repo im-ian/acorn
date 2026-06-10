@@ -42,6 +42,18 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 // input still surfaces as a Fork target.
 const RECENCY_WINDOW_SECS: u64 = 24 * 60 * 60;
 
+/// How long a transcript must sit un-appended (mtime → now) before we
+/// treat it as no longer being written. Used on both sides of the
+/// `/new` rotation: the birth-anchored pairing only rolls forward off a
+/// *dormant* anchor (the signal that the same process abandoned its
+/// first JSONL), and only onto a successor that is still *hot* — a file
+/// left behind by an exited sibling tab or one-shot `claude -p` run
+/// goes dormant within seconds of its writer dying, so it can never be
+/// adopted by mistake. Public so the resume persister can apply the
+/// same activity window when deciding whether a backwards marker move
+/// is a real `--resume` or a stale post-rotation echo.
+pub const DORMANT_TRANSCRIPT_SECS: u64 = 10;
+
 // Throttle window for `collect_live_mappings`. The scan walks every
 // process on the host plus several directory trees, so back-to-back
 // calls (e.g. a user flicking the right-click menu open repeatedly)
@@ -136,11 +148,17 @@ pub fn find_completed_agent_run(
         .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
         .unwrap_or(SystemTime::UNIX_EPOCH);
     match kind {
+        // `allow_rotation: false` — this path resolves a finished one-shot
+        // run, not a long-lived interactive process, so there is no
+        // in-session `/new` to follow and no process-table context to
+        // prove the cwd has a single claude. Keep the plain birth anchor.
         AgentKind::Claude => find_recent_claude_jsonl(
             cwd,
             claude_projects_root().as_deref(),
             recency_cutoff,
             process_start,
+            now,
+            false,
             &HashSet::new(),
         )
         .map(|(_, id)| id),
@@ -171,9 +189,35 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
     let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
+    // Host-wide counts of live agent processes (tracked by Acorn or
+    // not). The `/new` rotation in `pick_anchor_or_rotate` is only safe
+    // when the paired process is the sole agent in scope — any second
+    // live agent could be the writer of the hot later-born transcript,
+    // so rotation stays off while one is around. claude/codex bucket
+    // their transcripts by cwd, so the scope is per-cwd; antigravity
+    // transcripts carry no cwd, so its scope is the whole host.
+    let mut claude_cwd_counts: std::collections::HashMap<PathBuf, u32> =
+        std::collections::HashMap::new();
+    let mut codex_cwd_counts: std::collections::HashMap<PathBuf, u32> =
+        std::collections::HashMap::new();
+    let mut antigravity_count: u32 = 0;
     for (pid, proc) in sys.processes() {
         if let Some(parent) = proc.parent() {
             children.entry(parent).or_default().push(*pid);
+        }
+        if process_basename_matches(proc, "claude") {
+            if let Some(cwd) = proc.cwd() {
+                *claude_cwd_counts.entry(cwd.to_path_buf()).or_default() += 1;
+            }
+        } else if process_basename_matches(proc, "codex") {
+            if let Some(cwd) = proc.cwd() {
+                *codex_cwd_counts.entry(cwd.to_path_buf()).or_default() += 1;
+            }
+        } else if process_basename_matches(proc, "agy")
+            || process_basename_matches(proc, "antigravity")
+            || process_basename_matches(proc, "antigravity-cli")
+        {
+            antigravity_count += 1;
         }
     }
 
@@ -251,24 +295,36 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
 
     for c in candidates {
         let candidate = match c.kind {
-            AgentKind::Claude => find_recent_claude_jsonl(
-                &c.cwd,
-                claude_root.as_deref(),
-                recency_cutoff,
-                c.start_time,
-                &assigned,
-            ),
-            AgentKind::Codex => find_recent_codex_jsonl(
-                &c.cwd,
-                codex_root.as_deref(),
-                recency_cutoff,
-                c.start_time,
-                &assigned,
-            ),
+            AgentKind::Claude => {
+                let sole_claude_in_cwd = claude_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                find_recent_claude_jsonl(
+                    &c.cwd,
+                    claude_root.as_deref(),
+                    recency_cutoff,
+                    c.start_time,
+                    now,
+                    sole_claude_in_cwd,
+                    &assigned,
+                )
+            }
+            AgentKind::Codex => {
+                let sole_codex_in_cwd = codex_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                find_recent_codex_jsonl(
+                    &c.cwd,
+                    codex_root.as_deref(),
+                    recency_cutoff,
+                    c.start_time,
+                    now,
+                    sole_codex_in_cwd,
+                    &assigned,
+                )
+            }
             AgentKind::Antigravity => find_recent_antigravity_jsonl(
                 &antigravity_roots,
                 recency_cutoff,
                 c.start_time,
+                now,
+                antigravity_count <= 1,
                 &assigned,
             ),
         };
@@ -358,12 +414,30 @@ fn find_recent_claude_jsonl(
     projects_root: Option<&Path>,
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     let root = projects_root?;
     let slug_dir = root.join(slug_for_cwd(cwd));
-    pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, assigned).or_else(|| {
-        find_recent_claude_jsonl_by_cwd(cwd, root, recency_cutoff, process_start, assigned)
+    pick_newest_unassigned_jsonl(
+        &slug_dir,
+        recency_cutoff,
+        process_start,
+        now,
+        allow_rotation,
+        assigned,
+    )
+    .or_else(|| {
+        find_recent_claude_jsonl_by_cwd(
+            cwd,
+            root,
+            recency_cutoff,
+            process_start,
+            now,
+            allow_rotation,
+            assigned,
+        )
     })
 }
 
@@ -372,9 +446,11 @@ fn find_recent_claude_jsonl_by_cwd(
     projects_root: &Path,
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
-    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
     for project in std::fs::read_dir(projects_root).ok()?.flatten() {
         let dir = project.path();
         if !dir.is_dir() {
@@ -405,15 +481,16 @@ fn find_recent_claude_jsonl_by_cwd(
             let Some(uuid) = extract_uuid_from_path(&path) else {
                 continue;
             };
-            let created = meta.created().unwrap_or(mtime);
-            candidates.push((path, created, uuid));
+            let birth = meta.created().unwrap_or(mtime);
+            candidates.push(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid,
+            });
         }
     }
-    candidates.sort_by_key(|candidate| time_distance(candidate.1, process_start));
-    candidates
-        .into_iter()
-        .next()
-        .map(|(path, _, id)| (path, id))
+    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
 }
 
 fn find_recent_codex_jsonl(
@@ -421,16 +498,20 @@ fn find_recent_codex_jsonl(
     sessions_root: Option<&Path>,
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     // Codex rollouts live under <root>/<year>/<month>/<day>/. The
     // filename does NOT encode the cwd (unlike claude), so we read each
     // candidate's first JSONL line and match its `payload.cwd` against
     // the live process's cwd. Walking just the newest date-dir keeps
-    // the per-cycle work bounded.
+    // the per-cycle work bounded. The cwd check runs while collecting
+    // (not after ranking) so the rotation successor is also guaranteed
+    // to belong to this cwd.
     let root = sessions_root?;
     let day_dir = newest_subdir(&newest_subdir(&newest_subdir(root)?)?)?;
-    let mut candidates: Vec<(PathBuf, SystemTime)> = Vec::new();
+    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
     for entry in std::fs::read_dir(&day_dir).ok()?.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -449,25 +530,21 @@ fn find_recent_codex_jsonl(
         if mtime < process_start {
             continue;
         }
-        let created = meta.created().unwrap_or(mtime);
-        candidates.push((path, created));
-    }
-    // See `pick_newest_unassigned_jsonl`: rank by proximity of file
-    // birth time to process start so two concurrent codex runs in the
-    // same cwd do not swap rollouts on each other.
-    candidates.sort_by_key(|c| time_distance(c.1, process_start));
-    for (path, _) in candidates {
-        let Some(transcript_cwd) = read_codex_transcript_cwd(&path) else {
+        let Some(uuid) = extract_uuid_from_path(&path) else {
             continue;
         };
-        if transcript_cwd != cwd {
+        if read_codex_transcript_cwd(&path).as_deref() != Some(cwd) {
             continue;
         }
-        if let Some(uuid) = extract_uuid_from_path(&path) {
-            return Some((path, uuid));
-        }
+        let birth = meta.created().unwrap_or(mtime);
+        candidates.push(TranscriptCandidate {
+            path,
+            birth,
+            mtime,
+            uuid,
+        });
     }
-    None
+    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
 }
 
 fn find_completed_codex_jsonl(
@@ -514,9 +591,11 @@ fn find_recent_antigravity_jsonl(
     brain_roots: &[PathBuf],
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
-    let mut candidates: Vec<(PathBuf, SystemTime, String)> = Vec::new();
+    let mut candidates: Vec<TranscriptCandidate> = Vec::new();
     for root in brain_roots {
         let Ok(entries) = std::fs::read_dir(root) else {
             continue;
@@ -549,15 +628,16 @@ fn find_recent_antigravity_jsonl(
             if mtime < recency_cutoff || mtime < process_start {
                 continue;
             }
-            let created = meta.created().unwrap_or(mtime);
-            candidates.push((path, created, id));
+            let birth = meta.created().unwrap_or(mtime);
+            candidates.push(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid: id,
+            });
         }
     }
-    candidates.sort_by_key(|c| time_distance(c.1, process_start));
-    for (path, _, id) in candidates {
-        return Some((path, id));
-    }
-    None
+    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
 }
 
 fn find_completed_antigravity_jsonl(
@@ -694,6 +774,8 @@ fn pick_newest_unassigned_jsonl(
     dir: &Path,
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     // We track two timestamps per candidate. `created` (file birth
@@ -725,19 +807,84 @@ fn pick_newest_unassigned_jsonl(
         let created = meta.created().unwrap_or(mtime);
         candidates.push((path, created, mtime));
     }
-    // Earliest birth time *after* process_start is the best match —
-    // mtime-DESC order would hand the active live claude's JSONL
-    // (mtime keeps advancing) to a younger sibling claude in the same
-    // cwd, cross-contaminating their session-id capture. Ranking by
-    // proximity of `created` to `process_start` keeps each claude
-    // paired with the file it actually opened.
-    candidates.sort_by_key(|c| time_distance(c.1, process_start));
-    for (path, _, _) in candidates {
-        if let Some(uuid) = extract_uuid_from_path(&path) {
-            return Some((path, uuid));
+    let candidates = candidates
+        .into_iter()
+        .filter_map(|(path, birth, mtime)| {
+            let uuid = extract_uuid_from_path(&path)?;
+            Some(TranscriptCandidate {
+                path,
+                birth,
+                mtime,
+                uuid,
+            })
+        })
+        .collect();
+    pick_anchor_or_rotate(candidates, process_start, now, allow_rotation)
+}
+
+/// A transcript file eligible for pairing with a live agent process.
+struct TranscriptCandidate {
+    path: PathBuf,
+    birth: SystemTime,
+    mtime: SystemTime,
+    uuid: String,
+}
+
+/// Shared tail of every `find_recent_*` matcher.
+///
+/// The candidate born closest to `process_start` is the anchor —
+/// mtime-DESC order would hand the actively-written transcript (mtime
+/// keeps advancing) to a younger sibling agent in the same cwd,
+/// cross-contaminating their session-id capture. Ranking by proximity
+/// of birth to `process_start` keeps each process paired with the file
+/// it actually opened.
+///
+/// In-session `/new` continuity: the birth anchor stays correct for the
+/// whole life of one conversation, but `/new` keeps the *same* process
+/// alive while it stops writing the old transcript and opens a fresh
+/// one born much later than the process start. Birth-proximity would
+/// pin forever to that first transcript, so a stale tab title / resume
+/// cursor never advances. Roll forward to the later-born file, gated
+/// three ways so a neighbour's conversation is never adopted by
+/// mistake:
+///   1. the anchor must be dormant (its writer stopped appending) — a
+///      sibling agent still writing the anchor keeps it hot, so a live
+///      file is never stolen mid-write;
+///   2. the successor must still be hot — files left behind by an
+///      exited sibling tab or a one-shot run go dormant within seconds
+///      of their writer dying, while our own post-/new transcript is
+///      the one being appended right now;
+///   3. the caller must vouch via `allow_rotation` that this process is
+///      the only matching agent in scope (same cwd for claude/codex,
+///      host-wide for antigravity, whose transcripts carry no cwd) —
+///      with a second live agent around, the hot later-born file may be
+///      theirs, so ambiguity falls back to the anchor (old behaviour).
+///
+/// Tracked siblings are also excluded via `assigned` upstream.
+fn pick_anchor_or_rotate(
+    mut candidates: Vec<TranscriptCandidate>,
+    process_start: SystemTime,
+    now: SystemTime,
+    allow_rotation: bool,
+) -> Option<(PathBuf, String)> {
+    candidates.sort_by_key(|c| time_distance(c.birth, process_start));
+    let anchor = candidates.first()?;
+
+    let dormant_before = now
+        .checked_sub(Duration::from_secs(DORMANT_TRANSCRIPT_SECS))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    if allow_rotation && anchor.mtime < dormant_before {
+        let successor = candidates
+            .iter()
+            .filter(|c| c.birth > anchor.birth && c.mtime > anchor.mtime)
+            .filter(|c| c.mtime >= dormant_before)
+            .max_by_key(|c| c.birth);
+        if let Some(c) = successor {
+            return Some((c.path.clone(), c.uuid.clone()));
         }
     }
-    None
+
+    Some((anchor.path.clone(), anchor.uuid.clone()))
 }
 
 /// Absolute difference between two `SystemTime`s as seconds. Saturates
@@ -876,6 +1023,8 @@ mod tests {
             Some(&projects),
             SystemTime::UNIX_EPOCH,
             SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            true,
             &HashSet::new(),
         );
 
@@ -916,21 +1065,324 @@ mod tests {
         File::create(&jsonl).unwrap();
         let mtime = fs::metadata(&jsonl).unwrap().modified().unwrap();
         // Process start equals transcript mtime → must include (>=).
-        let result =
-            pick_newest_unassigned_jsonl(&dir, SystemTime::UNIX_EPOCH, mtime, &HashSet::new());
+        let result = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            mtime,
+            mtime,
+            true,
+            &HashSet::new(),
+        );
         assert!(
             result.is_some(),
             "transcript with mtime == process_start must be a valid pair"
         );
         // Process started one second after the transcript → exclude.
         let later = mtime + Duration::from_secs(1);
-        let result_later =
-            pick_newest_unassigned_jsonl(&dir, SystemTime::UNIX_EPOCH, later, &HashSet::new());
+        let result_later = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            later,
+            later,
+            true,
+            &HashSet::new(),
+        );
         assert!(
             result_later.is_none(),
             "transcript predating the process must be excluded"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Backdate a file's mtime so dormancy scenarios don't need real
+    /// sleeps. Birth time (btime) cannot be set after the fact, so tests
+    /// still create files in real birth order (with a >1s gap — both
+    /// btime and sysinfo start times round to seconds on macOS).
+    fn set_mtime(path: &Path, t: SystemTime) {
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(t))
+            .unwrap();
+    }
+
+    const A_UUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const B_UUID: &str = "11111111-2222-3333-4444-555555555555";
+
+    /// Create transcripts A then B (distinct birth seconds) and return
+    /// (dir, a_path, b_path, b_mtime).
+    fn two_transcripts(tag: &str) -> (PathBuf, PathBuf, PathBuf, SystemTime) {
+        use std::fs::{self, File};
+        let dir =
+            std::env::temp_dir().join(format!("acorn-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let a = dir.join(format!("{A_UUID}.jsonl"));
+        File::create(&a).unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let b = dir.join(format!("{B_UUID}.jsonl"));
+        File::create(&b).unwrap();
+        let b_mtime = fs::metadata(&b).unwrap().modified().unwrap();
+        (dir, a, b, b_mtime)
+    }
+
+    /// `claude /new` keeps the same process alive but opens a fresh
+    /// transcript born long after the process started. Birth-proximity
+    /// alone would pin forever to the first JSONL; once the anchor has
+    /// gone dormant and the successor is the file being written right
+    /// now, the pairing must roll forward so a tab title / resume cursor
+    /// tracks the live conversation.
+    #[test]
+    fn pick_newest_unassigned_jsonl_follows_dormant_new_rotation() {
+        let (dir, a, _b, b_mtime) = two_transcripts("newrot");
+        // A stopped being written a minute ago; B was written just now.
+        let a_mtime = b_mtime - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        let process_start = a_mtime;
+        let now = b_mtime;
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(B_UUID),
+            "dormant anchor must roll forward to the hot post-/new transcript"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The dormancy gate must not steal a still-hot sibling transcript:
+    /// when the birth-anchored pick is still being written (a concurrent
+    /// claude in the same cwd), a newer-born file is left alone even
+    /// though it exists. Only a dormant anchor rolls forward.
+    #[test]
+    fn pick_newest_unassigned_jsonl_keeps_hot_anchor_over_newer_sibling() {
+        use std::fs;
+        let (dir, a, _b, b_mtime) = two_transcripts("hotanchor");
+        let a_mtime = fs::metadata(&a).unwrap().modified().unwrap();
+        let process_start = a_mtime;
+        // `now` is right at the sibling's write → the anchor is still
+        // within the dormancy window, so it stays paired.
+        let now = b_mtime;
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(A_UUID),
+            "a hot anchor must not roll forward to a newer-born sibling file"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A transcript left behind by an exited sibling tab (or a one-shot
+    /// `claude -p` run) is later-born but cold. A dormant anchor must NOT
+    /// adopt it — only a successor that is actively being written (hot)
+    /// can be our own post-/new file.
+    #[test]
+    fn pick_newest_unassigned_jsonl_ignores_cold_leftover_sibling_file() {
+        let (dir, a, b, b_mtime_real) = two_transcripts("coldsib");
+        // Anchor went quiet 60s ago; the leftover stopped 30s ago. Both
+        // cold relative to `now`.
+        let a_mtime = b_mtime_real - Duration::from_secs(60);
+        let b_mtime = b_mtime_real - Duration::from_secs(30);
+        set_mtime(&a, a_mtime);
+        set_mtime(&b, b_mtime);
+        let process_start = a_mtime;
+        let now = b_mtime_real;
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(A_UUID),
+            "a cold leftover file must never be adopted by a dormant anchor"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// With `allow_rotation: false` (a second live claude shares the cwd,
+    /// or the completed-run path) the rotation must not fire even when
+    /// the anchor is dormant and a hot successor exists — the hot file
+    /// may belong to the other process.
+    #[test]
+    fn pick_newest_unassigned_jsonl_skips_rotation_when_not_sole_agent() {
+        let (dir, a, _b, b_mtime) = two_transcripts("norot");
+        let a_mtime = b_mtime - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        let process_start = a_mtime;
+        let now = b_mtime;
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(A_UUID),
+            "rotation must stay off when the process is not the sole claude in cwd"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Codex `/new` keeps the same process alive and opens a fresh
+    /// rollout, exactly like claude — and the successor must match the
+    /// process's cwd, so a hot later-born rollout from another directory
+    /// is never adopted.
+    #[test]
+    fn find_recent_codex_jsonl_rotates_within_cwd_only() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxrot-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+        let other_cwd = root.join("elsewhere");
+
+        let write_rollout = |name: &str, transcript_cwd: &Path| {
+            let path = day.join(name);
+            let mut f = File::create(&path).unwrap();
+            writeln!(
+                f,
+                "{{\"payload\":{{\"cwd\":\"{}\"}}}}",
+                transcript_cwd.display()
+            )
+            .unwrap();
+            path
+        };
+        // Birth order: A, then B (ours, post-/new), then decoy C in a
+        // different cwd born last — if the cwd filter broke, C would win
+        // the successor pick.
+        let a = write_rollout(
+            "rollout-2026-06-10T10-00-00-019e2001-3250-76b0-8410-2e073b38a2c1.jsonl",
+            &cwd,
+        );
+        std::thread::sleep(Duration::from_millis(1100));
+        let b = write_rollout(
+            "rollout-2026-06-10T10-00-01-019e2001-3250-76b0-8410-2e073b38a2c2.jsonl",
+            &cwd,
+        );
+        std::thread::sleep(Duration::from_millis(1100));
+        let decoy = write_rollout(
+            "rollout-2026-06-10T10-00-02-019e2001-3250-76b0-8410-2e073b38a2c3.jsonl",
+            &other_cwd,
+        );
+        let now = fs::metadata(&decoy).unwrap().modified().unwrap();
+        // A dormant; B and the decoy hot.
+        let a_mtime = now - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        set_mtime(&b, now);
+        let process_start = a_mtime;
+
+        let picked = find_recent_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some("019e2001-3250-76b0-8410-2e073b38a2c2"),
+            "dormant codex anchor must roll forward to the hot same-cwd rollout"
+        );
+
+        let pinned = find_recent_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            pinned.map(|(_, id)| id).as_deref(),
+            Some("019e2001-3250-76b0-8410-2e073b38a2c1"),
+            "rotation must stay off when not the sole codex in cwd"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Antigravity `/new` keeps the same `agy` process alive and creates
+    /// a fresh brain conversation; a dormant anchor must roll forward to
+    /// the hot one, and only when agy is the sole live instance.
+    #[test]
+    fn find_recent_antigravity_jsonl_rotates_to_hot_brain() {
+        use std::fs::{self, File};
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-agrot-{}", uuid::Uuid::new_v4().simple()));
+        let brain = root.join("brain");
+        let make_brain = |uuid: &str| {
+            let t = brain
+                .join(uuid)
+                .join(".system_generated")
+                .join("logs")
+                .join("transcript.jsonl");
+            fs::create_dir_all(t.parent().unwrap()).unwrap();
+            File::create(&t).unwrap();
+            t
+        };
+        let a_id = "17f38e8c-3a7e-408b-8c79-aef7432c0fd2";
+        let b_id = "28a49f9d-4b8f-419c-9d8a-bf0854310e03";
+        let a = make_brain(a_id);
+        std::thread::sleep(Duration::from_millis(1100));
+        let b = make_brain(b_id);
+        let now = fs::metadata(&b).unwrap().modified().unwrap();
+        let a_mtime = now - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        let process_start = a_mtime;
+
+        let picked = find_recent_antigravity_jsonl(
+            &[brain.clone()],
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(b_id),
+            "dormant antigravity anchor must roll forward to the hot brain"
+        );
+
+        let pinned = find_recent_antigravity_jsonl(
+            &[brain],
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            false,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            pinned.map(|(_, id)| id).as_deref(),
+            Some(a_id),
+            "rotation must stay off when agy is not the sole live instance"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
