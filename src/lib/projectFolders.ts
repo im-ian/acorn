@@ -175,6 +175,9 @@ export function resolveProjectFolderIdForSession(
   session: Session,
   assignments: SessionFolderAssignments = {},
 ): string {
+  const matchingWorktreeFolder = folders.find((folder) =>
+    isMatchingWorktreeFolder(folder, session),
+  );
   const assigned = assignments[session.id];
   const assignedFolder = assigned
     ? folders.find(
@@ -182,7 +185,11 @@ export function resolveProjectFolderIdForSession(
           folder.id === assigned && folder.repoPath === session.repo_path,
       )
     : undefined;
-  if (assignedFolder) return assignedFolder.id;
+  if (assignedFolder) {
+    if (matchingWorktreeFolder) return matchingWorktreeFolder.id;
+    if (!isWorktreeFolder(assignedFolder)) return assignedFolder.id;
+  }
+  if (matchingWorktreeFolder) return matchingWorktreeFolder.id;
 
   const defaultFolder =
     folders.find(isDefaultProjectFolder) ?? folders[0] ?? null;
@@ -194,16 +201,26 @@ export function pruneSessionFolderAssignments(
   sessions: readonly Session[],
   foldersByRepo: ProjectFoldersByRepo,
 ): SessionFolderAssignments {
-  const sessionRepoById = new Map(sessions.map((session) => [session.id, session.repo_path]));
+  const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const folderRepoById = new Map<string, string>();
   for (const folders of Object.values(foldersByRepo)) {
     for (const folder of folders) folderRepoById.set(folder.id, folder.repoPath);
   }
   const next: SessionFolderAssignments = {};
   for (const [sessionId, folderId] of Object.entries(assignments)) {
-    const sessionRepo = sessionRepoById.get(sessionId);
+    const session = sessionById.get(sessionId);
+    const sessionRepo = session?.repo_path;
     const folderRepo = folderRepoById.get(folderId);
-    if (sessionRepo && folderRepo && sessionRepo === folderRepo) {
+    const folders = sessionRepo ? (foldersByRepo[sessionRepo] ?? []) : [];
+    if (
+      session &&
+      sessionRepo &&
+      folderRepo &&
+      sessionRepo === folderRepo &&
+      resolveProjectFolderIdForSession(folders, session, {
+        [sessionId]: folderId,
+      }) === folderId
+    ) {
       next[sessionId] = folderId;
     }
   }
@@ -247,6 +264,23 @@ function normalizeProjectFolder(
           ? 0
           : Number.MAX_SAFE_INTEGER,
   };
+}
+
+function isWorktreeFolder(folder: ProjectFolder): boolean {
+  return (
+    !isDefaultProjectFolder(folder) &&
+    normalizePath(folder.cwdPath) !== normalizePath(folder.repoPath)
+  );
+}
+
+function isMatchingWorktreeFolder(
+  folder: ProjectFolder,
+  session: Session,
+): boolean {
+  return (
+    isWorktreeFolder(folder) &&
+    normalizePath(folder.cwdPath) === normalizePath(session.worktree_path)
+  );
 }
 
 function folderGroupsForRepo(

@@ -2,23 +2,22 @@
   "toasts": {
     "session": {
       "createFailed": "세션을 만들지 못했습니다:",
-      "duplicateFailed": "세션을 복제하지 못했습니다:",
       "removeFailed": "세션을 제거하지 못했습니다:",
-      "worktreeRemoved": "디스크에서 worktree를 삭제했습니다.",
-      "worktreeRemoveFailed": "worktree를 삭제하지 못했습니다:",
+      "worktreeRemoved": "디스크에서 워크트리를 삭제했습니다.",
+      "worktreeRemoveFailed": "워크트리를 삭제하지 못했습니다:",
       "refreshFailed": "세션을 새로고침하지 못했습니다:",
       "renameFailed": "세션 이름을 변경하지 못했습니다:",
       "titleNotReady": "아직 이 세션에서 사용할 transcript가 없습니다.",
       "titleRegenerateSkipped": "세션 이름을 다시 생성하지 못했습니다.",
-      "worktreeAdopted": "새 worktree를 가져왔습니다: {name}",
-      "worktreeAdoptFailed": "worktree를 가져오지 못했습니다:"
+      "worktreeAdopted": "새 워크트리를 가져왔습니다: {name}",
+      "worktreeAdoptFailed": "워크트리를 가져오지 못했습니다:"
     },
     "project": {
       "addFailed": "프로젝트를 추가하지 못했습니다:",
       "createFailed": "프로젝트를 만들지 못했습니다:",
       "removeFailed": "프로젝트를 제거하지 못했습니다:",
-      "worktreesRemoved": "디스크에서 프로젝트 worktree를 삭제했습니다.",
-      "worktreesRemoveFailed": "프로젝트 worktree를 삭제하지 못했습니다:"
+      "worktreesRemoved": "디스크에서 프로젝트 워크트리를 삭제했습니다.",
+      "worktreesRemoveFailed": "프로젝트 워크트리를 삭제하지 못했습니다:"
     },
     "ipc": {
       "restarted": "IPC 서버를 다시 시작했습니다.",
@@ -98,17 +97,17 @@
     "sessions": {
       "confirmRemove": {
         "label": "세션 제거 전 확인",
-        "hint": "일반 세션에 적용됩니다. worktree가 있는 세션은 아래 worktree 삭제 설정을 따릅니다.",
+        "hint": "일반 세션에 적용됩니다. 워크트리가 있는 세션은 아래 워크트리 삭제 설정을 따릅니다.",
         "checkbox": "확인 대화상자 표시"
       },
       "autoDeleteWorktrees": {
-        "label": "묻지 않고 worktree 삭제",
-        "hint": "격리 또는 linked worktree를 사용하는 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 worktree를 항상 삭제합니다.",
-        "checkbox": "worktree가 있는 세션은 항상 디스크에서도 삭제"
+        "label": "묻지 않고 워크트리 삭제",
+        "hint": "격리 또는 연결된 워크트리를 사용하는 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 워크트리를 항상 삭제합니다.",
+        "checkbox": "워크트리가 있는 세션은 항상 디스크에서도 삭제"
       },
       "closeOnExit": {
         "label": "프로세스 종료 시 탭 닫기",
-        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. worktree가 있는 세션은 위 worktree 삭제 설정을 따릅니다.",
+        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. 워크트리가 있는 세션은 위 워크트리 삭제 설정을 따릅니다.",
         "checkbox": "종료 시 자동 닫기"
       },
       "background": {
@@ -223,7 +222,7 @@
             },
             "workingDirectory": {
               "label": "작업 디렉터리",
-              "description": "worktree 디렉터리의 기본 이름입니다."
+              "description": "워크트리 디렉터리의 기본 이름입니다."
             },
             "branch": {
               "label": "브랜치",
@@ -240,7 +239,7 @@
           },
           "workingDirectory": {
             "label": "작업 디렉터리",
-            "description": "worktree 디렉터리의 기본 이름입니다."
+            "description": "워크트리 디렉터리의 기본 이름입니다."
           },
           "status": {
             "label": "상태",
@@ -260,7 +259,7 @@
           },
           "sessionKind": {
             "label": "세션 종류 아이콘",
-            "description": "격리된 worktree에는 브랜치 글리프를, 컨트롤 세션에는 봇 글리프를 표시합니다."
+            "description": "격리된 워크트리에는 브랜치 글리프를, 컨트롤 세션에는 봇 글리프를 표시합니다."
           }
         },
         "hover": {
@@ -290,7 +289,7 @@
         },
         "workingDirectory": {
           "label": "작업 디렉터리",
-          "description": "활성 세션의 worktree 경로입니다($HOME 기준으로 ~ 처리됨)."
+          "description": "활성 세션의 워크트리 경로입니다($HOME 기준으로 ~ 처리됨)."
         },
         "agentTokenUsage": {
           "label": "에이전트 토큰 사용량",
@@ -766,7 +765,7 @@
     },
     "dialog": {
       "selectExistingProject": "기존 프로젝트 선택",
-      "selectIsolatedRepository": "격리된 worktree용 Git 저장소 선택",
+      "selectIsolatedRepository": "격리된 워크트리용 Git 저장소 선택",
       "selectControlDirectory": "컨트롤 세션 디렉터리 선택",
       "selectDirectory": "디렉터리 선택"
     },
@@ -779,18 +778,19 @@
       "dragToReorder": "순서를 바꾸려면 드래그",
       "expandProject": "프로젝트 펼치기",
       "collapseProject": "프로젝트 접기",
-      "expandProjectFolder": "폴더 펼치기",
-      "collapseProjectFolder": "폴더 접기",
+      "expandProjectFolder": "작업공간 펼치기",
+      "collapseProjectFolder": "작업공간 접기",
       "newSession": "새 세션",
       "newIsolatedSession": "새 격리 세션",
-      "newIsolatedSessionWorktree": "새 격리 세션 (worktree)",
+      "newIsolatedSessionWorktree": "새 워크트리 세션",
       "newChatSession": "새 채팅 세션",
       "newControlSession": "새 컨트롤 세션",
-      "newProjectFolder": "새 프로젝트 폴더",
-      "renameProjectFolder": "폴더 이름 변경",
-      "removeProjectFolder": "폴더 제거",
-      "moveToProjectFolder": "폴더로 이동",
-      "removeFromProjectFolder": "폴더에서 빼기",
+      "newProjectFolder": "새 작업공간",
+      "newProjectFolderWithWorktree": "새 워크트리 작업공간",
+      "renameProjectFolder": "작업공간 이름 변경",
+      "removeProjectFolder": "작업공간 제거",
+      "moveToProjectFolder": "이동",
+      "moveToProjectRoot": "프로젝트 루트",
       "projectSettings": "프로젝트 설정",
       "closeProject": "프로젝트 닫기",
       "revealInFinder": "Finder에서 보기",
@@ -798,29 +798,38 @@
       "copyPath": "경로 복사",
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
-      "duplicateSession": "세션 복제",
       "equalizePaneSizes": "Pane 크기 균등화",
-      "openWorktreeInEditor": "편집기에서 worktree 열기",
-      "copyWorktreePath": "Worktree 경로 복사",
-      "copyWorktreeName": "Worktree 이름 복사",
-      "copyBranchName": "브랜치 이름 복사",
-      "copySessionId": "세션 ID 복사",
+      "openWorktreeInEditor": "편집기에서 워크트리 열기",
+      "worktreePath": "워크트리 경로",
+      "worktreeName": "워크트리 이름",
+      "branchName": "브랜치 이름",
+      "sessionId": "세션 ID",
+      "copyWorktreePath": "워크트리 경로 복사",
       "remove": "제거",
       "removeSession": "세션 제거",
-      "removeOthersInProject": "프로젝트의 다른 세션 제거",
-      "removeAllInProject": "프로젝트의 모든 세션 제거"
+      "removeSessionMenu": "세션 제거"
+    },
+    "contextMenu": {
+      "session": "세션",
+      "workspace": "작업공간",
+      "project": "프로젝트",
+      "open": "열기",
+      "copy": "복사",
+      "danger": "위험"
     },
     "aria": {
       "project": "프로젝트",
       "dragToReorderProject": "프로젝트 순서를 바꾸려면 드래그",
       "newSessionMenuInProject": "이 프로젝트에 세션 만들기",
+      "newSessionMenuInProjectFolder": "이 작업공간에 세션 만들기",
       "newSessionInProject": "이 프로젝트에 새 세션 만들기",
-      "newIsolatedSessionInProject": "이 프로젝트에 새 격리 세션 만들기",
+      "newSessionInProjectFolder": "이 작업공간에 새 세션 만들기",
+      "newIsolatedSessionInProject": "이 프로젝트에 새 워크트리 세션 만들기",
       "newChatSessionInProject": "이 프로젝트에 새 채팅 세션 만들기",
       "newControlSessionInProject": "이 프로젝트에 새 컨트롤 세션 만들기",
       "dragToReorderSession": "세션 순서를 바꾸려면 드래그",
       "localTerminalSessions": "로컬 터미널 세션",
-      "worktree": "worktree",
+      "worktree": "워크트리",
       "controlSession": "컨트롤 세션",
       "chatSession": "채팅 세션",
       "generatingSessionTitle": "세션 제목 생성 중"
@@ -847,7 +856,7 @@
       "status": "상태",
       "kind": "종류",
       "controlSession": "컨트롤 세션",
-      "isolatedWorktree": "격리된 worktree"
+      "isolatedWorktree": "격리된 워크트리"
     }
   },
   "pane": {
@@ -863,10 +872,17 @@
       "closeSession": "세션 닫기",
       "closeTab": "탭 닫기"
     },
+    "contextMenu": {
+      "session": "세션",
+      "fork": "포크",
+      "layout": "레이아웃",
+      "open": "열기",
+      "copy": "복사",
+      "close": "닫기"
+    },
     "menu": {
       "rename": "이름 변경",
       "regenerateName": "이름 다시 생성",
-      "duplicateSession": "세션 복제",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",
       "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
@@ -882,12 +898,14 @@
       "openFileInEditor": "편집기에서 파일 열기",
       "revealInFinder": "Finder에서 보기",
       "copy": "복사",
+      "worktreePath": "워크트리 경로",
+      "filePath": "파일 경로",
+      "worktreeName": "워크트리 이름",
+      "fileName": "파일 이름",
+      "branchName": "브랜치 이름",
+      "sessionId": "세션 ID",
       "copyWorktreePath": "워크트리 경로 복사",
-      "copyFilePath": "파일 경로 복사",
       "copyWorktreeName": "워크트리 이름 복사",
-      "copyFileName": "파일 이름 복사",
-      "copyBranchName": "브랜치 이름 복사",
-      "copySessionId": "세션 ID 복사",
       "close": "닫기",
       "closeOthers": "다른 탭 닫기",
       "closeAll": "모두 닫기",
@@ -1140,14 +1158,14 @@
     "removeSession": {
       "title": "세션 제거",
       "confirmPrefix": "세션 제거",
-      "isolatedWorktree": "격리된 worktree입니다:",
-      "linkedWorktree": "이 세션은 linked git worktree를 사용 중입니다:",
-      "deleteWorktreeQuestion": "디스크에서도 worktree를 삭제할까요?",
+      "isolatedWorktree": "격리된 워크트리입니다:",
+      "linkedWorktree": "이 세션은 연결된 Git 워크트리를 사용 중입니다:",
+      "deleteWorktreeQuestion": "디스크에서도 워크트리를 삭제할까요?",
       "filesIn": "다음 위치의 파일은",
       "willNotBeTouched": "변경되지 않습니다.",
       "dontAskAgain": "다시 묻지 않기(설정 → 세션에서 변경)",
-      "keepWorktree": "worktree 유지",
-      "deleteWorktree": "worktree 삭제",
+      "keepWorktree": "워크트리 유지",
+      "deleteWorktree": "워크트리 삭제",
       "remove": "제거"
     },
     "removeProject": {
@@ -1156,26 +1174,26 @@
       "sessionSingular": "세션",
       "sessionPlural": "세션",
       "willBeRemoved": "제거됩니다",
-      "isolatedWorktreeSingular": "격리된 worktree",
-      "isolatedWorktreePlural": "격리된 worktree",
-      "linkedWorktreeSingular": "linked worktree",
-      "linkedWorktreePlural": "linked worktree",
-      "closeKeepWorktrees": "닫기 · worktree 유지",
-      "closeDeleteWorktrees": "닫기 · worktree 삭제",
+      "isolatedWorktreeSingular": "격리된 워크트리",
+      "isolatedWorktreePlural": "격리된 워크트리",
+      "linkedWorktreeSingular": "연결된 워크트리",
+      "linkedWorktreePlural": "연결된 워크트리",
+      "closeKeepWorktrees": "닫기 · 워크트리 유지",
+      "closeDeleteWorktrees": "닫기 · 워크트리 삭제",
       "closeProject": "프로젝트 닫기"
     },
     "removeProjectFolder": {
-      "title": "폴더 제거",
-      "confirmPrefix": "폴더 제거",
+      "title": "작업공간 제거",
+      "confirmPrefix": "작업공간 제거",
       "sessionSingular": "세션",
       "sessionPlural": "세션",
-      "canBeMovedOut": "폴더를 제거하기 전에 프로젝트 상위 목록으로 이동할 수 있습니다",
-      "removeSessionsHint": "폴더와 함께 세션을 Acorn에서 제거할 수도 있습니다.",
-      "emptyFolder": "이 폴더에는 세션이 없습니다.",
-      "filesWillNotBeTouched": "디스크의 파일과 worktree는 삭제되지 않습니다.",
-      "removeFolder": "폴더 제거",
+      "canBeMovedOut": "작업공간을 제거하기 전에 프로젝트 상위 목록으로 이동할 수 있습니다",
+      "removeSessionsHint": "작업공간과 함께 세션을 Acorn에서 제거할 수도 있습니다.",
+      "emptyFolder": "이 작업공간에는 세션이 없습니다.",
+      "filesWillNotBeTouched": "디스크의 파일과 워크트리는 삭제되지 않습니다.",
+      "removeFolder": "작업공간 제거",
       "moveSessionsOut": "세션 밖으로 이동",
-      "removeWithSessions": "폴더와 세션 제거"
+      "removeWithSessions": "작업공간과 세션 제거"
     },
     "projectSettings": {
       "title": "프로젝트 설정",

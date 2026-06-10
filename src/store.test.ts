@@ -292,6 +292,26 @@ describe("refreshAll", () => {
     expect(useAppStore.getState().error).toBe("boom");
     expect(useAppStore.getState().loading).toBe(false);
   });
+
+  it("keeps successful session refresh data when project refresh fails", async () => {
+    const root = session("root", REPO_A, { worktree_path: REPO_A });
+    const web = session("web", REPO_A, { worktree_path: REPO_A });
+    await seed([project(REPO_A, 0)], [root, web]);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    useAppStore.getState().moveSessionToProjectFolder("web", folder.id);
+
+    mockApi.listSessions.mockResolvedValueOnce([root, web]);
+    mockApi.listProjects.mockRejectedValueOnce(new Error("projects unavailable"));
+
+    await useAppStore.getState().refreshAll();
+
+    const s = useAppStore.getState();
+    expect(s.error).toBe("projects unavailable");
+    expect(s.loading).toBe(false);
+    expect(s.sessionFolderIds.web).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["web"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual(["root"]);
+  });
 });
 
 describe("selectSession", () => {
@@ -433,6 +453,236 @@ describe("project folders", () => {
     expect(s.activeProject).toBe(REPO_A);
     expect(s.activeProjectFolderId).toBe(folder.id);
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["web1"]);
+  });
+
+  it("creates a session in a worktree workspace using the project root plus cwd", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const worktreePath = `${REPO_A}/.acorn/worktrees/repo-a-worktree-123456789abc`;
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder(REPO_A, "repo-a-worktree-123456789abc", worktreePath)!;
+    const created = session("wt-session", REPO_A, {
+      worktree_path: worktreePath,
+    });
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore
+      .getState()
+      .createSession(
+        "worker",
+        REPO_A,
+        false,
+        "regular",
+        null,
+        true,
+        "terminal",
+        folder.id,
+        folder.cwdPath,
+      );
+
+    expect(mockApi.createSession).toHaveBeenCalledWith(
+      "worker",
+      REPO_A,
+      false,
+      "regular",
+      null,
+      true,
+      "terminal",
+      worktreePath,
+    );
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds["wt-session"]).toBe(folder.id);
+    expect(s.activeProject).toBe(REPO_A);
+    expect(s.activeProjectFolderId).toBe(folder.id);
+  });
+
+  it("does not place a new isolated session into a different worktree workspace", async () => {
+    const worktreePath = `${REPO_A}/.acorn/worktrees/repo-a-worktree-123`;
+    const root = session("root", REPO_A, { worktree_path: REPO_A });
+    const worktreeSession = session("wt-session", REPO_A, {
+      worktree_path: worktreePath,
+      branch: "repo-a-worktree-123",
+    });
+    await seed([project(REPO_A, 0)], [root, worktreeSession]);
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder(REPO_A, "Worktree", worktreePath)!;
+    useAppStore.getState().moveSessionToProjectFolder("wt-session", folder.id);
+    useAppStore.getState().selectSession("wt-session");
+
+    const created = session("isolated-new", REPO_A, {
+      isolated: true,
+      worktree_path: `${REPO_A}/.acorn/worktrees/isolated-new`,
+      branch: "isolated-new",
+    });
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listSessions.mockResolvedValueOnce([root, worktreeSession, created]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore
+      .getState()
+      .createSession(
+        "isolated-new",
+        REPO_A,
+        true,
+        "regular",
+        null,
+        true,
+        "terminal",
+        folder.id,
+        worktreePath,
+      );
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds["isolated-new"]).toBeUndefined();
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["wt-session"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toContain("isolated-new");
+  });
+
+  it("keeps a new session workspace assignment when project refresh wins the race", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    const created = session("web1", REPO_A, { worktree_path: REPO_A });
+    const sessionsRefresh = deferred<Session[]>();
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listSessions.mockImplementationOnce(() => sessionsRefresh.promise);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    const create = useAppStore
+      .getState()
+      .createSession(
+        "web",
+        REPO_A,
+        false,
+        "regular",
+        null,
+        true,
+        "terminal",
+        folder.id,
+      );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    sessionsRefresh.resolve([created]);
+    await create;
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.web1).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["web1"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual([]);
+  });
+
+  it("preserves a new session workspace assignment when session refresh fails", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    const created = session("web1", REPO_A, { worktree_path: REPO_A });
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listSessions.mockRejectedValueOnce(new Error("sessions unavailable"));
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+
+    await useAppStore
+      .getState()
+      .createSession(
+        "web",
+        REPO_A,
+        false,
+        "regular",
+        null,
+        true,
+        "terminal",
+        folder.id,
+      );
+
+    expect(useAppStore.getState().sessionFolderIds.web1).toBe(folder.id);
+
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    await useAppStore.getState().refreshAll();
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.web1).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["web1"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual([]);
+  });
+
+  it("rehydrates workspace assignments before the first refresh", async () => {
+    window.localStorage.clear();
+    const root = session("root", REPO_A, { worktree_path: REPO_A });
+    const web = session("web", REPO_A, { worktree_path: REPO_A });
+    await seed([project(REPO_A, 0)], [root, web]);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    useAppStore.getState().moveSessionToProjectFolder("web", folder.id);
+
+    const raw = window.localStorage.getItem("acorn-workspaces");
+    expect(raw).not.toBeNull();
+
+    resetStore();
+    window.localStorage.setItem("acorn-workspaces", raw!);
+    await useAppStore.persist.rehydrate();
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValueOnce([root, web]);
+    await useAppStore.getState().refreshAll();
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.web).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["web"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual(["root"]);
+  });
+
+  it("keeps rehydrated workspace assignments when projects refresh before sessions", async () => {
+    window.localStorage.clear();
+    const root = session("root", REPO_A, { worktree_path: REPO_A });
+    const web = session("web", REPO_A, { worktree_path: REPO_A });
+    await seed([project(REPO_A, 0)], [root, web]);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    useAppStore.getState().moveSessionToProjectFolder("web", folder.id);
+
+    const raw = window.localStorage.getItem("acorn-workspaces");
+    expect(raw).not.toBeNull();
+
+    resetStore();
+    window.localStorage.setItem("acorn-workspaces", raw!);
+    await useAppStore.persist.rehydrate();
+
+    const sessionsRefresh = deferred<Session[]>();
+    mockApi.listSessions.mockImplementationOnce(() => sessionsRefresh.promise);
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    const refresh = useAppStore.getState().refreshAll();
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useAppStore.getState().sessionFolderIds.web).toBe(folder.id);
+
+    sessionsRefresh.resolve([root, web]);
+    await refresh;
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.web).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["web"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual(["root"]);
+  });
+
+  it("creates a named workspace rooted at a supplied worktree path", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder(
+        REPO_A,
+        "repo-a-worktree-123456789abc",
+        `${REPO_A}/.acorn/worktrees/repo-a-worktree-123456789abc`,
+      );
+
+    expect(folder).toMatchObject({
+      repoPath: REPO_A,
+      name: "repo-a-worktree-123456789abc",
+      cwdPath: `${REPO_A}/.acorn/worktrees/repo-a-worktree-123456789abc`,
+    });
+    const s = useAppStore.getState();
+    expect(s.activeProject).toBe(REPO_A);
+    expect(s.activeProjectFolderId).toBe(folder!.id);
+    expect(s.workspaces[folder!.id]).toBeDefined();
   });
 
   it("reorders named project folders without moving the default folder", async () => {

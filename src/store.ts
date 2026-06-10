@@ -120,14 +120,15 @@ interface AppStateModel {
   sessions: Session[];
   projects: Project[];
 
-  // Per-project-folder workspace state. The default folder id is the repo path.
+  // Per-project workspace state. Internally, named workspaces still use
+  // project-folder ids; the default workspace id is the repo path.
   workspaces: Record<string, ProjectWorkspace>;
   projectFolders: ProjectFoldersByRepo;
   sessionFolderIds: SessionFolderAssignments;
   activeProject: string | null;
   activeProjectFolderId: string | null;
 
-  // Mirrors of the active project folder workspace for consumers.
+  // Mirrors of the active project workspace for consumers.
   layout: LayoutNode;
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
@@ -206,6 +207,7 @@ interface AppStateModel {
   createProjectFolder: (
     repoPath: string,
     name?: string,
+    cwdPath?: string,
   ) => ProjectFolder | null;
   renameProjectFolder: (folderId: string, name: string) => void;
   removeProjectFolder: (folderId: string) => void;
@@ -229,6 +231,7 @@ interface AppStateModel {
     projectScoped?: boolean,
     mode?: SessionMode,
     projectFolderId?: string,
+    cwdPath?: string,
   ) => Promise<Session | null>;
   removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
@@ -738,6 +741,58 @@ function findProjectFolder(
   return null;
 }
 
+function normalizeWorkspacePath(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function sameWorkspacePath(a: string, b: string): boolean {
+  return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+}
+
+function isWorktreeProjectFolder(folder: ProjectFolder): boolean {
+  return !sameWorkspacePath(folder.cwdPath, folder.repoPath);
+}
+
+function sessionMatchesProjectFolderCwd(
+  session: Session,
+  folder: ProjectFolder,
+): boolean {
+  return sameWorkspacePath(session.worktree_path, folder.cwdPath);
+}
+
+function canAssignSessionToProjectFolder(
+  state: Pick<AppStateModel, "projectFolders" | "sessionFolderIds">,
+  session: Session,
+  folderId: string | null,
+): boolean {
+  const folders = state.projectFolders[session.repo_path] ?? [];
+  const targetFolderId = folderId ?? defaultProjectFolderId(session.repo_path);
+  const currentFolderId = resolveProjectFolderIdForSession(
+    folders,
+    session,
+    state.sessionFolderIds,
+  );
+  const currentFolder = folders.find(
+    (folder) => folder.id === currentFolderId,
+  );
+  const targetFolder = folders.find((folder) => folder.id === targetFolderId);
+  if (!targetFolder) return false;
+  if (
+    currentFolder &&
+    isWorktreeProjectFolder(currentFolder) &&
+    currentFolder.id !== targetFolder.id
+  ) {
+    return false;
+  }
+  if (
+    isWorktreeProjectFolder(targetFolder) &&
+    !sessionMatchesProjectFolderCwd(session, targetFolder)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function resolvePlacementProjectFolderId(
   state: AppStateModel,
   selectedPath: string,
@@ -866,7 +921,21 @@ function applySessionPlacementIntent(
   placement: SessionPlacementIntent | null,
 ): AppStateModel | Partial<AppStateModel> {
   if (!placement) return s;
-  if (!s.sessions.some((session) => session.id === sessionId)) return s;
+  const session = s.sessions.find((candidate) => candidate.id === sessionId);
+  if (!session) return s;
+  if (session.project_scoped !== false) {
+    const targetFolderId =
+      placement.projectFolderId === defaultProjectFolderId(session.repo_path)
+        ? null
+        : placement.projectFolderId;
+    if (
+      repoPathForProjectFolderId(s, placement.projectFolderId) !==
+        session.repo_path ||
+      !canAssignSessionToProjectFolder(s, session, targetFolderId)
+    ) {
+      return s;
+    }
+  }
 
   const ws = s.workspaces[placement.projectFolderId];
   const targetPane = ws?.panes[placement.paneId];
@@ -1117,7 +1186,82 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async refreshAll() {
-    await Promise.all([get().refreshSessions(), get().refreshProjects()]);
+    const seq = ++refreshSessionsSeq;
+    set({ loading: true, error: null });
+    const [sessionsResult, projectsResult] = await Promise.allSettled([
+      api.listSessions(),
+      api.listProjects(),
+    ]);
+    if (seq !== refreshSessionsSeq) return;
+    if (
+      sessionsResult.status === "rejected" &&
+      projectsResult.status === "rejected"
+    ) {
+      set({
+        loading: false,
+        error: errorMessage(sessionsResult.reason),
+      });
+      return;
+    }
+    set((s) => {
+      const receivedSessions = sessionsResult.status === "fulfilled";
+      const refreshError =
+        sessionsResult.status === "rejected"
+          ? errorMessage(sessionsResult.reason)
+          : projectsResult.status === "rejected"
+            ? errorMessage(projectsResult.reason)
+            : null;
+      const sessions =
+        receivedSessions ? sessionsResult.value : s.sessions;
+      const projects =
+        projectsResult.status === "fulfilled"
+          ? projectsResult.value
+          : s.projects;
+      const allowEmptyWipe =
+        receivedSessions ? s.sessionsLoadedCleanly : false;
+      const reconciled = reconcileWorkspaces(
+        sessions,
+        projects,
+        s.projectFolders,
+        s.sessionFolderIds,
+        s.workspaces,
+        s.activeProject,
+        s.activeProjectFolderId,
+        allowEmptyWipe,
+      );
+      const nextSessionsLoadedCleanly = receivedSessions
+        ? s.sessionsLoadedCleanly || sessions.length > 0
+        : s.sessionsLoadedCleanly;
+      const sessionIds = new Set(sessions.map((session) => session.id));
+      const shouldPruneActivity =
+        receivedSessions && (s.sessionsLoadedCleanly || sessions.length > 0);
+      const nextState: AppStateModel = {
+        ...s,
+        sessions,
+        projects,
+        loading: false,
+        error: refreshError,
+        sessionsLoadedCleanly: nextSessionsLoadedCleanly,
+        sessionNotifications: shouldPruneActivity
+          ? s.sessionNotifications.filter((notification) =>
+              sessionIds.has(notification.sessionId),
+            )
+          : s.sessionNotifications,
+        workspaces: reconciled.workspaces,
+        projectFolders: reconciled.projectFolders,
+        sessionFolderIds: reconciled.sessionFolderIds,
+        activeProject: reconciled.activeProject,
+        activeProjectFolderId: reconciled.activeProjectFolderId,
+        ...mirrorActive(
+          reconciled.workspaces,
+          reconciled.activeProjectFolderId,
+        ),
+      };
+      return applyKnownSessionPlacementIntents(nextState);
+    });
+    if (sessionsResult.status === "fulfilled") {
+      void get().refreshLiveInWorktree();
+    }
   },
 
   async pollSessionStatuses(ids) {
@@ -1400,7 +1544,7 @@ export const useAppStore = create<AppStateModel>()(
     });
   },
 
-  createProjectFolder(repoPath, name) {
+  createProjectFolder(repoPath, name, cwdPath) {
     let created: ProjectFolder | null = null;
     set((s) => {
       const knownRepo =
@@ -1416,7 +1560,13 @@ export const useAppStore = create<AppStateModel>()(
           position: 0,
         },
       ];
-      const baseName = (name ?? "New folder").trim() || "New folder";
+      const folderCwdPath = cwdPath?.trim() || repoPath;
+      const baseName =
+        (name ??
+          (folderCwdPath === repoPath
+            ? "New workspace"
+            : basenamePath(folderCwdPath))
+        ).trim() || "New workspace";
       const taken = new Set(current.map((folder) => folder.name));
       let nextName = baseName;
       let suffix = 2;
@@ -1428,7 +1578,7 @@ export const useAppStore = create<AppStateModel>()(
         id: makeProjectFolderId(repoPath),
         repoPath,
         name: nextName,
-        cwdPath: repoPath,
+        cwdPath: folderCwdPath,
         position:
           Math.max(0, ...current.map((folder) => folder.position ?? 0)) + 1,
       };
@@ -1536,6 +1686,7 @@ export const useAppStore = create<AppStateModel>()(
     set((s) => {
       const session = s.sessions.find((candidate) => candidate.id === sessionId);
       if (!session || session.project_scoped === false) return s;
+      if (!canAssignSessionToProjectFolder(s, session, folderId)) return s;
       const nextSessionFolderIds = { ...s.sessionFolderIds };
       if (
         folderId === null ||
@@ -1815,6 +1966,7 @@ export const useAppStore = create<AppStateModel>()(
     projectScoped = true,
     mode = "terminal",
     projectFolderId,
+    cwdPath,
   ) {
     set({ loading: true, error: null });
     // Capture the user's intended insertion point before the backend call.
@@ -1831,7 +1983,7 @@ export const useAppStore = create<AppStateModel>()(
       let created: Session;
       if (projectScoped === false) {
         created =
-          mode === "terminal"
+          mode === "terminal" && !cwdPath
             ? await api.createSession(
                 name,
                 selectedPath,
@@ -1848,10 +2000,11 @@ export const useAppStore = create<AppStateModel>()(
                 agentProvider,
                 false,
                 mode,
+                cwdPath,
               );
       } else {
         created =
-          mode === "terminal"
+          mode === "terminal" && !cwdPath
             ? await api.createSession(
                 name,
                 selectedPath,
@@ -1867,23 +2020,70 @@ export const useAppStore = create<AppStateModel>()(
                 agentProvider,
                 projectScoped,
                 mode,
+                cwdPath,
               );
       }
       createdId = created.id;
       const assignedFolderId = placement?.projectFolderId;
-      if (
-        assignedFolderId &&
-        projectScoped !== false &&
-        repoPathForProjectFolderId(get(), assignedFolderId) === created.repo_path
-      ) {
-        set((s) => ({
-          sessionFolderIds: {
-            ...s.sessionFolderIds,
-            [created.id]: assignedFolderId,
-          },
-        }));
-      }
+      const assignCreatedToFolder = (reconcile: boolean) => {
+        if (!assignedFolderId || projectScoped === false) return;
+        set((s) => {
+          const existingSession = s.sessions.find(
+            (candidate) => candidate.id === created.id,
+          );
+          const session = existingSession ?? created;
+          if (
+            repoPathForProjectFolderId(s, assignedFolderId) !==
+            session.repo_path
+          ) {
+            return s;
+          }
+          const targetFolderId =
+            assignedFolderId === defaultProjectFolderId(session.repo_path)
+              ? null
+              : assignedFolderId;
+          if (!canAssignSessionToProjectFolder(s, session, targetFolderId)) {
+            return s;
+          }
+          const sessionFolderIds = { ...s.sessionFolderIds };
+          if (targetFolderId === null) {
+            delete sessionFolderIds[created.id];
+          } else {
+            sessionFolderIds[created.id] = targetFolderId;
+          }
+          if (
+            (s.sessionFolderIds[created.id] ?? null) ===
+            (sessionFolderIds[created.id] ?? null)
+          ) {
+            return s;
+          }
+          if (!reconcile || !existingSession) return { sessionFolderIds };
+          const reconciled = reconcileWorkspaces(
+            s.sessions,
+            s.projects,
+            s.projectFolders,
+            sessionFolderIds,
+            s.workspaces,
+            s.activeProject,
+            s.activeProjectFolderId,
+            true,
+          );
+          return {
+            projectFolders: reconciled.projectFolders,
+            workspaces: reconciled.workspaces,
+            sessionFolderIds: reconciled.sessionFolderIds,
+            activeProject: reconciled.activeProject,
+            activeProjectFolderId: reconciled.activeProjectFolderId,
+            ...mirrorActive(
+              reconciled.workspaces,
+              reconciled.activeProjectFolderId,
+            ),
+          };
+        });
+      };
+      assignCreatedToFolder(false);
       await get().refreshAll();
+      assignCreatedToFolder(true);
 
       if (placement) {
         sessionPlacementById.set(created.id, placement);

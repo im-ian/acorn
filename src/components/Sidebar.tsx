@@ -2,22 +2,20 @@ import {
   Activity,
   Bot,
   ChevronRight,
-  CircleX,
-  Columns2,
   Copy,
-  Files,
   Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Home,
   MessageSquareText,
   MoreHorizontal,
+  PanelsTopLeft,
   Pencil,
   PencilLine,
   Plus,
   Settings as SettingsIcon,
   Sparkles,
-  SquareX,
   Tag,
   Trash2,
   X,
@@ -61,8 +59,6 @@ import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
-import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
 import {
   useSettings,
   resolveAiExecutionRequest,
@@ -93,7 +89,6 @@ import {
   applySessionCreateRequest,
   buildLocalSessionCreateRequest,
   buildSessionCreateRequest,
-  buildSessionCreateRequestFromScope,
   resolveActiveSessionScope,
   type SessionCreateScope,
 } from "../lib/sessionCreation";
@@ -101,6 +96,7 @@ import {
   PROJECT_SESSION_CREATE_ACTIONS,
   PROJECT_SESSION_CREATE_MENU,
   type ProjectSessionCreateAction,
+  type ProjectSessionCreateMenuItem,
 } from "../lib/projectSessionCreateActions";
 import {
   planChevronClick,
@@ -154,11 +150,22 @@ function sidebarText(t: Translator, key: SidebarTranslationKey): string {
   return t(key);
 }
 
-function shortcutLabel(
-  shortcuts: Record<HotkeyId, string>,
-  id: HotkeyId,
-): string {
-  return formatHotkey(shortcuts[id]);
+type SidebarContextMenuGroup =
+  | "session"
+  | "workspace"
+  | "project"
+  | "open"
+  | "copy"
+  | "danger";
+
+function contextMenuGroupTitle(
+  t: Translator,
+  group: SidebarContextMenuGroup,
+): ContextMenuItem {
+  return {
+    type: "group-title",
+    label: sidebarText(t, `sidebar.contextMenu.${group}`),
+  };
 }
 
 function statusLabel(t: Translator, status: SessionStatus): string {
@@ -333,6 +340,41 @@ export function Sidebar() {
     } catch (e) {
       console.error("create project folder failed", e);
       showToast(`${t("toasts.project.createFailed")} ${String(e)}`);
+    }
+  }
+
+  async function onAddProjectFolderWorktree(repoPath: string) {
+    try {
+      const request = buildSessionCreateRequest(
+        { sessions, projects },
+        {
+          repoPath,
+          cwdPath: repoPath,
+          isolated: true,
+          kind: "regular",
+          mode: "terminal",
+          projectScoped: true,
+        },
+      );
+      const created = await applySessionCreateRequest(createSession, request);
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+        return;
+      }
+      const folder = createProjectFolder(
+        created.repo_path,
+        created.name,
+        created.worktree_path,
+      );
+      if (!folder) return;
+      moveSessionToProjectFolder(created.id, folder.id);
+      expandProject(created.repo_path);
+      setActiveProjectFolder(folder.id);
+      selectSession(created.id);
+    } catch (e) {
+      console.error("create project worktree folder failed", e);
+      showToast(`${t("toasts.session.createFailed")} ${String(e)}`);
     }
   }
 
@@ -669,15 +711,47 @@ export function Sidebar() {
       const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
       const activeSession = sessions.find((s) => s.id === activeSid);
       if (!activeSession || activeSession.project_scoped === false) return;
+      const activeFolderId = projectFolderIdForSession(
+        projectGroups,
+        activeSid,
+      );
+      const activeFolder = activeFolderId
+        ? projectFolderById(projectGroups, activeFolderId)
+        : null;
 
       if (overId.startsWith(SESSION_FOLDER_DROP_PREFIX)) {
         const folderId = overId.slice(SESSION_FOLDER_DROP_PREFIX.length);
+        const targetFolder = projectFolderById(projectGroups, folderId);
+        if (
+          isSessionDragCrossingLockedWorkspace(
+            activeSession,
+            activeFolder,
+            activeFolderId,
+            targetFolder,
+            folderId,
+          )
+        ) {
+          return;
+        }
         moveSessionToProjectFolder(activeSid, folderId);
         return;
       }
 
       if (overId.startsWith(SESSION_PROJECT_DROP_PREFIX)) {
         const repoPath = overId.slice(SESSION_PROJECT_DROP_PREFIX.length);
+        const targetFolderId = defaultProjectFolderId(repoPath);
+        const targetFolder = projectFolderById(projectGroups, targetFolderId);
+        if (
+          isSessionDragCrossingLockedWorkspace(
+            activeSession,
+            activeFolder,
+            activeFolderId,
+            targetFolder,
+            targetFolderId,
+          )
+        ) {
+          return;
+        }
         if (activeSession.repo_path === repoPath) {
           moveSessionToProjectFolder(activeSid, null);
         }
@@ -704,6 +778,23 @@ export function Sidebar() {
       if (activeSession.repo_path !== overSession.repo_path) return;
       const activeFolderId = projectFolderIdForSession(projectGroups, activeSid);
       const overFolderId = projectFolderIdForSession(projectGroups, overSid);
+      const activeFolder = activeFolderId
+        ? projectFolderById(projectGroups, activeFolderId)
+        : null;
+      const overFolder = overFolderId
+        ? projectFolderById(projectGroups, overFolderId)
+        : null;
+      if (
+        isSessionDragCrossingLockedWorkspace(
+          activeSession,
+          activeFolder,
+          activeFolderId,
+          overFolder,
+          overFolderId,
+        )
+      ) {
+        return;
+      }
       const project =
         activeSession.project_scoped !== false
           ? (projectGroups.find(
@@ -878,6 +969,9 @@ export function Sidebar() {
                         )
                       }
                       onAddFolder={() => onAddProjectFolder(project.repoPath)}
+                      onAddWorktreeFolder={() =>
+                        void onAddProjectFolderWorktree(project.repoPath)
+                      }
                       onRenameFolder={renameProjectFolder}
                       onRemoveFolder={requestRemoveProjectFolder}
                       onMoveSessionToFolder={moveSessionToProjectFolder}
@@ -972,7 +1066,7 @@ function renderDragOverlay(
       .flatMap((group) => group.folders)
       .find((group) => group.folder.id === folderId);
     if (!folderGroup) return null;
-    return <ProjectFolderPreview name={folderGroup.folder.name} />;
+    return <ProjectFolderPreview folder={folderGroup.folder} />;
   }
   if (activeDragId.startsWith(SESSION_DRAG_PREFIX)) {
     const sid = activeDragId.slice(SESSION_DRAG_PREFIX.length);
@@ -1007,14 +1101,14 @@ function ProjectHeaderPreview({
   );
 }
 
-function ProjectFolderPreview({ name }: { name: string }) {
+function ProjectFolderPreview({ folder }: { folder: ProjectFolder }) {
   return (
     <div className="flex min-h-7 items-center gap-1 rounded-md bg-bg-elevated/95 px-1.5 py-1 shadow-lg ring-1 ring-border/60">
       <span className="flex size-5 shrink-0 items-center justify-center text-fg-muted">
-        <Folder size={13} />
+        <WorkspaceIcon folder={folder} size={13} />
       </span>
       <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-fg">
-        {name}
+        {folder.name}
       </span>
     </div>
   );
@@ -1095,6 +1189,112 @@ function projectFolderIdForSession(
     }
   }
   return null;
+}
+
+function projectFolderById(
+  projectGroups: ProjectFolderProjectGroup[],
+  folderId: string,
+): ProjectFolder | null {
+  for (const project of projectGroups) {
+    const folderGroup = project.folders.find(
+      (candidate) => candidate.folder.id === folderId,
+    );
+    if (folderGroup) return folderGroup.folder;
+  }
+  return null;
+}
+
+function normalizeWorkspacePath(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function isWorktreeWorkspace(folder: ProjectFolder): boolean {
+  return (
+    normalizeWorkspacePath(folder.cwdPath) !==
+    normalizeWorkspacePath(folder.repoPath)
+  );
+}
+
+function WorkspaceIcon({
+  folder,
+  size,
+  className,
+}: {
+  folder: ProjectFolder;
+  size: number;
+  className?: string;
+}) {
+  const Icon = isWorktreeWorkspace(folder) ? GitBranch : PanelsTopLeft;
+  return <Icon size={size} className={className} />;
+}
+
+function canAssignSessionToWorkspace(
+  session: Session,
+  currentFolder: ProjectFolder | null,
+  targetFolder: ProjectFolder,
+): boolean {
+  if (
+    currentFolder &&
+    isWorktreeWorkspace(currentFolder) &&
+    currentFolder.id !== targetFolder.id
+  ) {
+    return false;
+  }
+  if (
+    isWorktreeWorkspace(targetFolder) &&
+    normalizeWorkspacePath(session.worktree_path) !==
+      normalizeWorkspacePath(targetFolder.cwdPath)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isSessionDragCrossingLockedWorkspace(
+  session: Session,
+  activeFolder: ProjectFolder | null,
+  activeFolderId: string | null,
+  targetFolder: ProjectFolder | null,
+  targetFolderId: string | null,
+): boolean {
+  if (
+    activeFolder &&
+    activeFolderId &&
+    isWorktreeWorkspace(activeFolder) &&
+    targetFolderId !== activeFolderId
+  ) {
+    return true;
+  }
+  return Boolean(
+    targetFolder &&
+      isWorktreeWorkspace(targetFolder) &&
+      normalizeWorkspacePath(session.worktree_path) !==
+        normalizeWorkspacePath(targetFolder.cwdPath),
+  );
+}
+
+function workspacePathLabel(folder: ProjectFolder): string | null {
+  if (
+    normalizeWorkspacePath(folder.cwdPath) ===
+    normalizeWorkspacePath(folder.repoPath)
+  ) {
+    return null;
+  }
+  return basename(folder.cwdPath) || folder.cwdPath;
+}
+
+function projectSessionCreateMenuForWorkspace(
+  folder: ProjectFolder,
+  includeTerminal: boolean,
+): ProjectSessionCreateMenuItem[] {
+  return PROJECT_SESSION_CREATE_MENU.filter((item) => {
+    if (item.type === "separator") return true;
+    if (!includeTerminal && item.action.id === "terminal") return false;
+    if (isWorktreeWorkspace(folder) && item.action.id === "isolated") {
+      return false;
+    }
+    return true;
+  });
 }
 
 interface ProjectTopLevelSessionItem {
@@ -1241,11 +1441,10 @@ function isPrimaryProjectSessionCreateAction(
 const PROJECT_SESSION_PRIMARY_CREATE_ACTIONS =
   PROJECT_SESSION_CREATE_ACTIONS.filter(isPrimaryProjectSessionCreateAction);
 
-const PROJECT_SESSION_OVERFLOW_CREATE_MENU = PROJECT_SESSION_CREATE_MENU.filter(
-  (item) =>
-    item.type === "separator" ||
-    !isPrimaryProjectSessionCreateAction(item.action),
-);
+const PROJECT_SESSION_OVERFLOW_CREATE_ACTIONS =
+  PROJECT_SESSION_CREATE_ACTIONS.filter(
+    (action) => !isPrimaryProjectSessionCreateAction(action),
+  );
 
 interface ProjectGroupViewProps {
   project: ProjectFolderProjectGroup;
@@ -1270,6 +1469,7 @@ interface ProjectGroupViewProps {
     mode?: SessionMode,
   ) => void;
   onAddFolder: () => void;
+  onAddWorktreeFolder: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRemoveFolder: (folderId: string) => void;
   onMoveSessionToFolder: (sessionId: string, folderId: string | null) => void;
@@ -1294,6 +1494,7 @@ function ProjectGroupView({
   onRemoveSession,
   onAddSession,
   onAddFolder,
+  onAddWorktreeFolder,
   onRenameFolder,
   onRemoveFolder,
   onMoveSessionToFolder,
@@ -1337,16 +1538,7 @@ function ProjectGroupView({
     project.folders.find((folderGroup) =>
       isDefaultProjectFolder(folderGroup.folder),
     ) ?? project.folders[0] ?? null;
-  let sessionCreationFolder = folderForActiveSession(project, activeSessionId);
-  if (!sessionCreationFolder && activeProjectFolderId) {
-    sessionCreationFolder =
-      project.folders.find(
-        (folderGroup) => folderGroup.folder.id === activeProjectFolderId,
-      )?.folder ?? null;
-  }
-  if (!sessionCreationFolder) {
-    sessionCreationFolder = defaultFolderGroup?.folder ?? null;
-  }
+  const projectSessionCreationFolder = defaultFolderGroup?.folder ?? null;
 
   const createMenuItems = useMemo<ContextMenuItem[]>(
     () =>
@@ -1357,9 +1549,9 @@ function ProjectGroupView({
           label: sidebarText(t, action.labelKey),
           icon: projectSessionCreateIcon(action.id),
           onClick: () =>
-            sessionCreationFolder
+            projectSessionCreationFolder
               ? onAddSession(
-                  sessionCreationFolder,
+                  projectSessionCreationFolder,
                   action.isolated,
                   action.kind,
                   action.mode,
@@ -1367,40 +1559,52 @@ function ProjectGroupView({
               : undefined,
         };
       }),
-    [onAddSession, sessionCreationFolder, t],
+    [onAddSession, projectSessionCreationFolder, t],
   );
   const overflowCreateMenuItems = useMemo<ContextMenuItem[]>(
     () => {
-      const items: ContextMenuItem[] = PROJECT_SESSION_OVERFLOW_CREATE_MENU.map(
-        (item) => {
-          if (item.type === "separator") return { type: "separator" };
-          const action = item.action;
+      const sessionItems: ContextMenuItem[] =
+        PROJECT_SESSION_OVERFLOW_CREATE_ACTIONS.map((action) => {
           return {
             label: sidebarText(t, action.labelKey),
             icon: projectSessionCreateIcon(action.id),
             onClick: () =>
-              sessionCreationFolder
+              projectSessionCreationFolder
                 ? onAddSession(
-                    sessionCreationFolder,
+                    projectSessionCreationFolder,
                     action.isolated,
                     action.kind,
                     action.mode,
                   )
                 : undefined,
           };
-        },
-      );
+        });
       return [
-        ...items,
-        { type: "separator" as const },
+        contextMenuGroupTitle(t, "workspace"),
         {
           label: sidebarText(t, "sidebar.actions.newProjectFolder"),
           icon: <FolderPlus size={12} />,
           onClick: onAddFolder,
         },
+        {
+          label: sidebarText(
+            t,
+            "sidebar.actions.newProjectFolderWithWorktree",
+          ),
+          icon: <GitBranch size={12} />,
+          onClick: onAddWorktreeFolder,
+        },
+        contextMenuGroupTitle(t, "session"),
+        ...sessionItems,
       ];
     },
-    [onAddFolder, onAddSession, sessionCreationFolder, t],
+    [
+      onAddFolder,
+      onAddSession,
+      onAddWorktreeFolder,
+      projectSessionCreationFolder,
+      t,
+    ],
   );
 
   async function copyText(text: string) {
@@ -1465,7 +1669,7 @@ function ProjectGroupView({
         }}
         aria-label={`${sidebarText(t, "sidebar.aria.project")} ${project.name}`}
         className={cn(
-          "group flex min-h-8 items-center gap-1 rounded-md px-1 py-1.5 transition hover:bg-bg-elevated/40",
+          "group flex min-h-8 items-center gap-1 rounded-md bg-bg-elevated/10 px-1 py-1.5 transition hover:bg-bg-elevated/20",
           isActiveProject && "bg-bg-elevated/30",
         )}
       >
@@ -1507,9 +1711,9 @@ function ProjectGroupView({
                 e.stopPropagation();
                 setMenu(null);
                 setCreateMenu(null);
-                if (sessionCreationFolder) {
+                if (projectSessionCreationFolder) {
                   onAddSession(
-                    sessionCreationFolder,
+                    projectSessionCreationFolder,
                     action.isolated,
                     action.kind,
                     action.mode,
@@ -1572,14 +1776,23 @@ function ProjectGroupView({
         y={menu?.y ?? 0}
         onClose={() => setMenu(null)}
         items={[
+          contextMenuGroupTitle(t, "session"),
           ...createMenuItems,
-          { type: "separator" },
+          contextMenuGroupTitle(t, "workspace"),
           {
             label: sidebarText(t, "sidebar.actions.newProjectFolder"),
             icon: <FolderPlus size={12} />,
             onClick: onAddFolder,
           },
-          { type: "separator" },
+          {
+            label: sidebarText(
+              t,
+              "sidebar.actions.newProjectFolderWithWorktree",
+            ),
+            icon: <GitBranch size={12} />,
+            onClick: onAddWorktreeFolder,
+          },
+          contextMenuGroupTitle(t, "project"),
           {
             label: sidebarText(t, "sidebar.actions.projectSettings"),
             icon: <SettingsIcon size={12} />,
@@ -1599,7 +1812,7 @@ function ProjectGroupView({
               void copyText(project.repoPath);
             },
           },
-          { type: "separator" },
+          contextMenuGroupTitle(t, "danger"),
           {
             label: sidebarText(t, "sidebar.actions.closeProject"),
             icon: <X size={12} />,
@@ -1639,7 +1852,6 @@ function ProjectGroupView({
                   <SessionRow
                     key={item.id}
                     session={item.session}
-                    projectSessions={project.sessions}
                     active={item.session.id === activeSessionId}
                     onSelect={() =>
                       onSelectSession(item.folderId, item.session.id)
@@ -1654,7 +1866,6 @@ function ProjectGroupView({
                     key={item.id}
                     folderGroup={item.folderGroup}
                     projectFolders={projectFoldersForRows}
-                    projectSessions={project.sessions}
                     activeSessionId={activeSessionId}
                     active={activeProjectFolderId === item.folderGroup.folder.id}
                     collapsed={collapsedFolderIds.has(
@@ -1700,22 +1911,9 @@ function ProjectGroupView({
   );
 }
 
-function folderForActiveSession(
-  project: ProjectFolderProjectGroup,
-  activeSessionId: string | null,
-): ProjectFolder | null {
-  if (!activeSessionId) return null;
-  const folderGroup = project.folders.find(
-    (candidate) =>
-      candidate.sessions.some((session) => session.id === activeSessionId),
-  );
-  return folderGroup?.folder ?? null;
-}
-
 interface ProjectFolderViewProps {
   folderGroup: ProjectFolderGroup;
   projectFolders: ProjectFolder[];
-  projectSessions: Session[];
   activeSessionId: string | null;
   active: boolean;
   collapsed: boolean;
@@ -1736,7 +1934,6 @@ interface ProjectFolderViewProps {
 function ProjectFolderView({
   folderGroup,
   projectFolders,
-  projectSessions,
   activeSessionId,
   active,
   collapsed,
@@ -1752,6 +1949,10 @@ function ProjectFolderView({
   const t = useTranslation();
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [createMenu, setCreateMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const folder = folderGroup.folder;
   const removable = !isDefaultProjectFolder(folder);
   const {
@@ -1781,10 +1982,19 @@ function ProjectFolderView({
     () => folderGroup.sessions.map((s) => sessionDragId(s.id)),
     [folderGroup.sessions],
   );
+  const folderCreateMenu = useMemo(
+    () => projectSessionCreateMenuForWorkspace(folder, true),
+    [folder],
+  );
+  const folderOverflowCreateMenu = useMemo(
+    () => projectSessionCreateMenuForWorkspace(folder, false),
+    [folder],
+  );
   const folderCreateMenuItems = useMemo<ContextMenuItem[]>(
-    () =>
-      PROJECT_SESSION_CREATE_MENU.map((item) => {
-        if (item.type === "separator") return { type: "separator" };
+    () => [
+      contextMenuGroupTitle(t, "session"),
+      ...folderCreateMenu.map((item) => {
+        if (item.type === "separator") return { type: "separator" as const };
         const action = item.action;
         return {
           label: sidebarText(t, action.labelKey),
@@ -1793,13 +2003,32 @@ function ProjectFolderView({
             onAddSession(action.isolated, action.kind, action.mode),
         };
       }),
-    [onAddSession, t],
+    ],
+    [folderCreateMenu, onAddSession, t],
+  );
+  const folderOverflowCreateMenuItems = useMemo<ContextMenuItem[]>(
+    () => [
+      contextMenuGroupTitle(t, "session"),
+      ...folderOverflowCreateMenu.map((item) => {
+        if (item.type === "separator") return { type: "separator" as const };
+        const action = item.action;
+        return {
+          label: sidebarText(t, action.labelKey),
+          icon: projectSessionCreateIcon(action.id),
+          onClick: () =>
+            onAddSession(action.isolated, action.kind, action.mode),
+        };
+      }),
+    ],
+    [folderOverflowCreateMenu, onAddSession, t],
   );
 
   function submitRename(next: string) {
     setEditing(false);
     onRenameFolder(folder.id, next);
   }
+
+  const workspaceLabel = workspacePathLabel(folder);
 
   return (
     <li
@@ -1836,11 +2065,14 @@ function ProjectFolderView({
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
+          setCreateMenu(null);
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
           "group/project-folder flex min-h-7 w-full items-center gap-1 rounded-md px-1.5 py-1 text-left transition",
-          active ? "bg-bg-elevated/70" : "hover:bg-bg-elevated/40",
+          active
+            ? "bg-bg-elevated/50"
+            : "bg-bg-elevated/20 hover:bg-bg-elevated/30",
         )}
       >
         <button
@@ -1857,9 +2089,10 @@ function ProjectFolderView({
               : "sidebar.actions.collapseProjectFolder",
           )}
           aria-expanded={!collapsed}
-          className="group/folder-toggle relative flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:bg-bg-elevated focus-visible:text-fg focus-visible:outline-none"
+          className="group/folder-toggle relative flex size-5 shrink-0 self-start items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg focus-visible:bg-bg-elevated focus-visible:text-fg focus-visible:outline-none"
         >
-          <Folder
+          <WorkspaceIcon
+            folder={folder}
             size={13}
             className="transition-opacity group-hover/project-folder:opacity-0 group-focus-visible/folder-toggle:opacity-0"
           />
@@ -1879,12 +2112,113 @@ function ProjectFolderView({
               onCancel={() => setEditing(false)}
             />
           ) : (
-            <span className="block truncate text-[12px] font-medium leading-5 text-fg">
-              {folder.name}
+            <span className="flex min-w-0 flex-col leading-none">
+              <span className="block truncate text-[12px] font-medium leading-4 text-fg">
+                {folder.name}
+              </span>
+              {workspaceLabel ? (
+                <Tooltip
+                  label={folder.cwdPath}
+                  side="right"
+                  className="min-w-0 max-w-full"
+                >
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-3 text-fg-muted">
+                    <FolderOpen size={10} className="shrink-0" />
+                    <span className="truncate">{workspaceLabel}</span>
+                  </span>
+                </Tooltip>
+              ) : null}
             </span>
           )}
         </span>
+        {!editing ? (
+          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            <Tooltip
+              label={sidebarText(t, "sidebar.aria.newSessionInProjectFolder")}
+              side="bottom"
+            >
+              <button
+                type="button"
+                aria-label={sidebarText(
+                  t,
+                  "sidebar.aria.newSessionInProjectFolder",
+                )}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddSession(false, "regular", "terminal");
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover/project-folder:visible group-focus-within/project-folder:visible"
+              >
+                <Plus size={12} />
+              </button>
+            </Tooltip>
+            <Tooltip
+              label={sidebarText(
+                t,
+                "sidebar.aria.newSessionMenuInProjectFolder",
+              )}
+              side="bottom"
+            >
+              <button
+                type="button"
+                aria-label={sidebarText(
+                  t,
+                  "sidebar.aria.newSessionMenuInProjectFolder",
+                )}
+                aria-haspopup="menu"
+                aria-expanded={createMenu !== null}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setMenu(null);
+                  setCreateMenu((current) =>
+                    current === null
+                      ? { x: rect.left, y: rect.bottom + 4 }
+                      : null,
+                  );
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover/project-folder:visible group-focus-within/project-folder:visible"
+              >
+                <MoreHorizontal size={13} />
+              </button>
+            </Tooltip>
+            {removable ? (
+              <Tooltip
+                label={sidebarText(t, "sidebar.actions.removeProjectFolder")}
+                side="bottom"
+              >
+                <button
+                  type="button"
+                  aria-label={sidebarText(
+                    t,
+                    "sidebar.actions.removeProjectFolder",
+                  )}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveFolder(folder.id);
+                  }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover/project-folder:visible group-focus-within/project-folder:visible"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </Tooltip>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+      <ContextMenu
+        open={createMenu !== null}
+        x={createMenu?.x ?? 0}
+        y={createMenu?.y ?? 0}
+        onClose={() => setCreateMenu(null)}
+        items={folderOverflowCreateMenuItems}
+      />
       <ContextMenu
         open={menu !== null}
         x={menu?.x ?? 0}
@@ -1892,7 +2226,7 @@ function ProjectFolderView({
         onClose={() => setMenu(null)}
         items={[
           ...folderCreateMenuItems,
-          { type: "separator" },
+          contextMenuGroupTitle(t, "workspace"),
           {
             label: sidebarText(t, "sidebar.actions.renameProjectFolder"),
             icon: <Pencil size={12} />,
@@ -1912,7 +2246,7 @@ function ProjectFolderView({
               void copyToClipboard(folder.cwdPath);
             },
           },
-          { type: "separator" },
+          contextMenuGroupTitle(t, "danger"),
           {
             label: sidebarText(t, "sidebar.actions.removeProjectFolder"),
             icon: <Trash2 size={12} />,
@@ -1926,7 +2260,7 @@ function ProjectFolderView({
           items={sessionIds}
           strategy={verticalListSortingStrategy}
         >
-          <ul className="ml-4 flex flex-col gap-0.5 pt-0.5">
+          <ul className="ml-4 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
             {folderGroup.sessions.length === 0 ? (
               <li
                 className="flex items-center justify-center rounded px-3 py-2 text-center text-[11px] text-fg-muted select-none"
@@ -1938,7 +2272,6 @@ function ProjectFolderView({
                 <SessionRow
                   key={session.id}
                   session={session}
-                  projectSessions={projectSessions}
                   active={session.id === activeSessionId}
                   onSelect={() => onSelectSession(session.id)}
                   onRemove={() => onRemoveSession(session)}
@@ -1957,7 +2290,6 @@ function ProjectFolderView({
 
 interface SessionRowProps {
   session: Session;
-  projectSessions: Session[];
   active: boolean;
   onSelect: () => void;
   onRemove: () => void;
@@ -1971,7 +2303,6 @@ interface SessionRowProps {
 
 function SessionRow({
   session,
-  projectSessions,
   active,
   onSelect,
   onRemove,
@@ -1985,14 +2316,33 @@ function SessionRow({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
-  const shortcuts = useSettings((s) => s.settings.shortcuts);
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const showAgentProviderIcons = sessionDisplay.icons.agentProvider;
+  const namedProjectFolders = projectFolders.filter(
+    (folder) => !isDefaultProjectFolder(folder),
+  );
+  const currentProjectFolder = projectFolders.find(
+    (folder) => folder.id === currentProjectFolderId,
+  );
+  const currentWorkspaceCwd = currentProjectFolder?.cwdPath ?? null;
+  const hideWorkspaceDuplicateContext =
+    currentProjectFolder !== undefined &&
+    currentWorkspaceCwd !== null &&
+    isWorktreeWorkspace(currentProjectFolder) &&
+    normalizeWorkspacePath(session.worktree_path) ===
+      normalizeWorkspacePath(currentWorkspaceCwd);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
     t,
     session,
     sessionDisplay.metadata,
+    {
+      hideBranch:
+        hideWorkspaceDuplicateContext &&
+        currentWorkspaceCwd !== null &&
+        session.branch === basename(currentWorkspaceCwd),
+      hideWorkingDirectory: hideWorkspaceDuplicateContext,
+    },
   );
   const hoverDetails = sessionDisplay.showDetailsOnHover
     ? buildSessionHoverDetails(t, session)
@@ -2024,52 +2374,6 @@ function SessionRow({
     if (isGeneratingTitle && editing) setEditing(false);
   }, [editing, isGeneratingTitle]);
 
-  async function duplicate() {
-    const base = session.name;
-    const taken = new Set(useAppStore.getState().sessions.map((s) => s.name));
-    let next = `${base}-copy`;
-    let n = 2;
-    while (taken.has(next)) {
-      next = `${base}-copy-${n}`;
-      n += 1;
-    }
-    try {
-      // Route through the store wrapper so the duplicate gets the same
-      // post-create treatment as Cmd+T and Pane "Duplicate Session": land
-      // next to the active tab, auto-select, and auto-focus xterm. Carries
-      // the source session's `kind` so a control session stays a control
-      // session (preserves its IPC-dispatch role).
-      const state = useAppStore.getState();
-      const created = await applySessionCreateRequest(
-        state.createSession,
-        buildSessionCreateRequestFromScope(
-          { sessions: state.sessions, projects: state.projects },
-          {
-            repoPath: session.repo_path,
-            projectScoped: session.project_scoped !== false,
-          },
-          {
-            name: next,
-            isolated: session.isolated,
-            kind: session.kind,
-            projectFolderId:
-              currentProjectFolder &&
-              !isDefaultProjectFolder(currentProjectFolder)
-                ? currentProjectFolder.id
-                : undefined,
-          },
-        ),
-      );
-      const error = useAppStore.getState().consumeError();
-      if (!created || error) {
-        showToast(`${t("toasts.session.duplicateFailed")} ${error ?? ""}`.trim());
-      }
-    } catch (err) {
-      console.error("[Sidebar] duplicate session failed", err);
-      showToast(`${t("toasts.session.duplicateFailed")} ${String(err)}`);
-    }
-  }
-
   async function regenerateTitle() {
     const settings = useSettings.getState().settings;
     const status = await generateSessionTitle(
@@ -2085,48 +2389,66 @@ function SessionRow({
     }
   }
 
-  const otherSiblings = useMemo(
-    () => projectSessions.filter((s) => s.id !== session.id),
-    [projectSessions, session.id],
-  );
   const agentProvider = showAgentProviderIcons
     ? resolveSessionAgentProvider(session)
     : null;
-  const namedProjectFolders = projectFolders.filter(
-    (folder) => !isDefaultProjectFolder(folder),
-  );
-  const currentProjectFolder = projectFolders.find(
-    (folder) => folder.id === currentProjectFolderId,
-  );
   const folderMoveMenuItems: ContextMenuItem[] = [];
   const targetFolderMenuItems: ContextMenuItem[] = [];
   if (onMoveToProjectFolder) {
-    if (currentProjectFolder && !isDefaultProjectFolder(currentProjectFolder)) {
-      folderMoveMenuItems.push({
-        label: sidebarText(t, "sidebar.actions.removeFromProjectFolder"),
-        icon: <FolderOpen size={12} />,
+    const defaultProjectFolder = projectFolders.find(isDefaultProjectFolder);
+    const rootMoveMenuItems: ContextMenuItem[] = [];
+    if (
+      currentProjectFolder &&
+      defaultProjectFolder &&
+      !isDefaultProjectFolder(currentProjectFolder) &&
+      canAssignSessionToWorkspace(
+        session,
+        currentProjectFolder,
+        defaultProjectFolder,
+      )
+    ) {
+      rootMoveMenuItems.push({
+        label: sidebarText(t, "sidebar.actions.moveToProjectRoot"),
+        icon: <Home size={12} />,
         onClick: () => onMoveToProjectFolder(session.id, null),
       });
     }
     for (const folder of namedProjectFolders) {
       if (folder.id === currentProjectFolderId) continue;
+      if (
+        !canAssignSessionToWorkspace(
+          session,
+          currentProjectFolder ?? null,
+          folder,
+        )
+      ) {
+        continue;
+      }
       targetFolderMenuItems.push({
         label: folder.name,
-        icon: <Folder size={12} />,
+        icon: <WorkspaceIcon folder={folder} size={12} />,
         onClick: () => onMoveToProjectFolder(session.id, folder.id),
       });
     }
-    if (targetFolderMenuItems.length > 0) {
+    const moveToMenuItems: ContextMenuItem[] = [
+      ...rootMoveMenuItems,
+      ...(rootMoveMenuItems.length > 0 && targetFolderMenuItems.length > 0
+        ? [{ type: "separator" as const }]
+        : []),
+      ...targetFolderMenuItems,
+    ];
+    if (moveToMenuItems.length > 0) {
       folderMoveMenuItems.push({
         type: "submenu",
         label: sidebarText(t, "sidebar.actions.moveToProjectFolder"),
         icon: <Folder size={12} />,
-        children: targetFolderMenuItems,
+        children: moveToMenuItems,
       });
     }
   }
 
   const sessionMenuItems: ContextMenuItem[] = [
+    contextMenuGroupTitle(t, "session"),
     {
       label: sidebarText(t, "sidebar.actions.rename"),
       icon: <Pencil size={12} />,
@@ -2139,24 +2461,10 @@ function SessionRow({
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
     },
-    {
-      label: sidebarText(t, "sidebar.actions.duplicateSession"),
-      icon: <Files size={12} />,
-      onClick: () => void duplicate(),
-    },
     ...(folderMoveMenuItems.length > 0
-      ? [{ type: "separator" as const }, ...folderMoveMenuItems]
+      ? [contextMenuGroupTitle(t, "workspace"), ...folderMoveMenuItems]
       : []),
-    { type: "separator" },
-    {
-      label: sidebarText(t, "sidebar.actions.equalizePaneSizes"),
-      icon: <Columns2 size={12} />,
-      shortcut: shortcutLabel(shortcuts, "equalizePanes"),
-      onClick: () => {
-        window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
-      },
-    },
-    { type: "separator" },
+    contextMenuGroupTitle(t, "open"),
     {
       label: sidebarText(t, "sidebar.actions.openWorktreeInEditor"),
       icon: <PencilLine size={12} />,
@@ -2178,58 +2486,40 @@ function SessionRow({
         });
       },
     },
-    { type: "separator" },
+    contextMenuGroupTitle(t, "copy"),
     {
       type: "submenu",
       label: sidebarText(t, "sidebar.actions.copy"),
       icon: <Copy size={12} />,
       children: [
         {
-          label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
+          label: sidebarText(t, "sidebar.actions.worktreePath"),
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(session.worktree_path),
         },
         {
-          label: sidebarText(t, "sidebar.actions.copyWorktreeName"),
+          label: sidebarText(t, "sidebar.actions.worktreeName"),
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(basename(session.worktree_path)),
         },
         {
-          label: sidebarText(t, "sidebar.actions.copyBranchName"),
+          label: sidebarText(t, "sidebar.actions.branchName"),
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(session.branch),
           disabled: !session.branch,
         },
         {
-          label: sidebarText(t, "sidebar.actions.copySessionId"),
+          label: sidebarText(t, "sidebar.actions.sessionId"),
           icon: <Copy size={12} />,
           onClick: () => void copyToClipboard(session.id),
         },
       ],
     },
-    { type: "separator" },
+    contextMenuGroupTitle(t, "danger"),
     {
-      label: sidebarText(t, "sidebar.actions.remove"),
+      label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
       icon: <Trash2 size={12} />,
       onClick: onRemove,
-    },
-    {
-      label: sidebarText(t, "sidebar.actions.removeOthersInProject"),
-      icon: <CircleX size={12} />,
-      disabled: otherSiblings.length === 0,
-      onClick: () => {
-        const request = useAppStore.getState().requestRemoveSession;
-        for (const s of otherSiblings) request(s.id);
-      },
-    },
-    {
-      label: sidebarText(t, "sidebar.actions.removeAllInProject"),
-      icon: <SquareX size={12} />,
-      disabled: projectSessions.length === 0,
-      onClick: () => {
-        const request = useAppStore.getState().requestRemoveSession;
-        for (const s of projectSessions) request(s.id);
-      },
     },
   ];
 
@@ -2267,7 +2557,9 @@ function SessionRow({
       }}
       className={cn(
         "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
-        active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
+        active
+          ? "bg-bg-elevated/70"
+          : "bg-bg-elevated/30 hover:bg-bg-elevated/50",
         isDragging && "opacity-40",
       )}
     >
@@ -2286,6 +2578,7 @@ function SessionRow({
         titleText={titleText}
         metadataText={metadataText}
         showKindIcons={sessionDisplay.icons.sessionKind}
+        hideWorktreeIcon={hideWorkspaceDuplicateContext}
         t={t}
         onSubmitRename={async (next) => {
           setEditing(false);
@@ -2341,6 +2634,7 @@ interface SessionRowLabelProps {
   titleText: string;
   metadataText: string;
   showKindIcons: boolean;
+  hideWorktreeIcon?: boolean;
   t: Translator;
   onSubmitRename: (value: string) => void | Promise<void>;
   onCancelRename: () => void;
@@ -2352,6 +2646,7 @@ function SessionRowLabel({
   titleText,
   metadataText,
   showKindIcons,
+  hideWorktreeIcon = false,
   t,
   onSubmitRename,
   onCancelRename,
@@ -2376,7 +2671,7 @@ function SessionRowLabel({
             {titleText}
           </span>
         )}
-        {showKindIcons && inWorktree ? (
+        {showKindIcons && inWorktree && !hideWorktreeIcon ? (
           <GitBranch
             size={10}
             className="shrink-0 text-fg-muted"
@@ -2660,30 +2955,6 @@ function LocalSessionRow({
     if (isGeneratingTitle && editing) setEditing(false);
   }, [editing, isGeneratingTitle]);
 
-  async function duplicate() {
-    const base = session.name;
-    const taken = new Set(useAppStore.getState().sessions.map((s) => s.name));
-    let next = `${base}-copy`;
-    let n = 2;
-    while (taken.has(next)) {
-      next = `${base}-copy-${n}`;
-      n += 1;
-    }
-    const state = useAppStore.getState();
-    const created = await applySessionCreateRequest(
-      state.createSession,
-      buildSessionCreateRequestFromScope(
-        { sessions: state.sessions, projects: state.projects },
-        { repoPath: session.repo_path, projectScoped: false },
-        { name: next },
-      ),
-    );
-    const error = useAppStore.getState().consumeError();
-    if (!created || error) {
-      showToast(`${t("toasts.session.duplicateFailed")} ${error ?? ""}`.trim());
-    }
-  }
-
   async function regenerateTitle() {
     const settings = useSettings.getState().settings;
     const status = await generateSessionTitle(
@@ -2712,11 +2983,6 @@ function LocalSessionRow({
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
     },
-    {
-      label: sidebarText(t, "sidebar.actions.duplicateSession"),
-      icon: <Files size={12} />,
-      onClick: () => void duplicate(),
-    },
     { type: "separator" },
     {
       label: sidebarText(t, "sidebar.actions.revealInFinder"),
@@ -2734,7 +3000,7 @@ function LocalSessionRow({
     },
     { type: "separator" },
     {
-      label: sidebarText(t, "sidebar.actions.remove"),
+      label: sidebarText(t, "sidebar.actions.removeSessionMenu"),
       icon: <Trash2 size={12} />,
       onClick: onRemove,
     },
@@ -2774,7 +3040,9 @@ function LocalSessionRow({
       }}
       className={cn(
         "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
-        active ? "bg-bg-elevated" : "hover:bg-bg-elevated/60",
+        active
+          ? "bg-bg-elevated/70"
+          : "bg-bg-elevated/30 hover:bg-bg-elevated/50",
         isDragging && "opacity-40",
       )}
     >
@@ -2870,10 +3138,16 @@ function composeSessionMetadata(
   t: Translator,
   session: Session,
   metadata: AcornSettings["sessionDisplay"]["metadata"],
+  options: {
+    hideBranch?: boolean;
+    hideWorkingDirectory?: boolean;
+  } = {},
 ): string {
   const parts: string[] = [];
-  if (metadata.branch && session.branch) parts.push(session.branch);
-  if (metadata.workingDirectory) {
+  if (metadata.branch && session.branch && !options.hideBranch) {
+    parts.push(session.branch);
+  }
+  if (metadata.workingDirectory && !options.hideWorkingDirectory) {
     const dir = basename(session.worktree_path);
     if (dir) parts.push(dir);
   }
