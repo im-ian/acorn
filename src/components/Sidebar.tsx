@@ -70,7 +70,10 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
-import { hasRecordedWorktree } from "../lib/sessionWorktree";
+import {
+  hasRecordedWorktree,
+  shouldAutoDeleteSessionWorktree,
+} from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
@@ -198,6 +201,12 @@ export function Sidebar() {
   const renameProjectFolder = useAppStore((s) => s.renameProjectFolder);
   const removeProjectFolder = useAppStore((s) => s.removeProjectFolder);
   const removeSession = useAppStore((s) => s.removeSession);
+  const autoDeleteWorktrees = useSettings(
+    (s) => s.settings.sessions.autoDeleteWorktrees,
+  );
+  const autoDeleteEmptyWorktreeWorkspaces = useSettings(
+    (s) => s.settings.sessions.autoDeleteEmptyWorktreeWorkspaces,
+  );
   const moveSessionToProjectFolder = useAppStore(
     (s) => s.moveSessionToProjectFolder,
   );
@@ -383,7 +392,11 @@ export function Sidebar() {
   ) {
     try {
       for (const session of folderGroup.sessions) {
-        await removeSession(session.id, false);
+        await removeSession(
+          session.id,
+          autoDeleteWorktrees &&
+            shouldAutoDeleteSessionWorktree(session, projectFolders),
+        );
         const error = useAppStore.getState().consumeError();
         if (error) {
           showToast(`${t("toasts.session.removeFailed")} ${error}`);
@@ -397,12 +410,31 @@ export function Sidebar() {
     }
   }
 
+  async function removeProjectFolderAndWorktree(folder: ProjectFolder) {
+    try {
+      await api.removeWorktree(folder.repoPath, folder.cwdPath);
+      removeProjectFolder(folder.id);
+      showToast(t("toasts.session.worktreeRemoved"));
+    } catch (e) {
+      console.error("remove project folder worktree failed", e);
+      showToast(`${t("toasts.session.worktreeRemoveFailed")} ${String(e)}`);
+    }
+  }
+
   function requestRemoveProjectFolder(folderId: string) {
     const folderGroup = projectGroups
       .flatMap((project) => project.folders)
       .find((candidate) => candidate.folder.id === folderId);
     if (!folderGroup) return;
     if (folderGroup.sessions.length === 0) {
+      if (isWorktreeWorkspace(folderGroup.folder)) {
+        if (autoDeleteEmptyWorktreeWorkspaces) {
+          void removeProjectFolderAndWorktree(folderGroup.folder);
+        } else {
+          setPendingRemoveProjectFolderId(folderGroup.folder.id);
+        }
+        return;
+      }
       removeProjectFolder(folderGroup.folder.id);
       return;
     }
@@ -1028,10 +1060,24 @@ export function Sidebar() {
       <RemoveProjectFolderDialog
         folder={pendingRemoveProjectFolderGroup?.folder ?? null}
         sessions={pendingRemoveProjectFolderGroup?.sessions ?? []}
+        worktreeWorkspace={Boolean(
+          pendingRemoveProjectFolderGroup &&
+            isWorktreeWorkspace(pendingRemoveProjectFolderGroup.folder),
+        )}
+        deleteWorktrees={Boolean(
+          autoDeleteWorktrees &&
+            pendingRemoveProjectFolderGroup?.sessions.some((session) =>
+              shouldAutoDeleteSessionWorktree(session, projectFolders),
+            ),
+        )}
         onClose={(choice) => {
           const target = pendingRemoveProjectFolderGroup;
           setPendingRemoveProjectFolderId(null);
           if (!target || choice === "cancel") return;
+          if (choice === "folder_and_worktree") {
+            void removeProjectFolderAndWorktree(target.folder);
+            return;
+          }
           if (choice === "folder_only") {
             removeProjectFolder(target.folder.id);
             return;

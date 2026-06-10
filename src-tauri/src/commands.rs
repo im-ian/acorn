@@ -3169,6 +3169,13 @@ pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
         .collect())
 }
 
+#[tauri::command]
+pub fn remove_worktree(repo_path: String, worktree_path: String) -> AppResult<()> {
+    let repo_path = PathBuf::from(repo_path);
+    let worktree_path = PathBuf::from(worktree_path);
+    remove_linked_worktree_at_path(&repo_path, &worktree_path)
+}
+
 fn parse_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|e| AppError::Other(e.to_string()))
 }

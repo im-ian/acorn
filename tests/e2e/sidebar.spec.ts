@@ -1083,9 +1083,12 @@ test.describe("sidebar: project lifecycle", () => {
       page.getByRole("tooltip", { name: "Remove workspace" }),
     ).toBeVisible();
     await removeFolderButton.click();
-    await page
-      .getByRole("dialog", { name: "Remove workspace" })
-      .getByRole("button", { name: "Remove workspace and sessions" })
+    const removeDialog = page.getByRole("dialog", { name: "Remove workspace" });
+    await expect(
+      removeDialog.getByRole("button", { name: "Move sessions out" }),
+    ).toHaveCount(0);
+    await removeDialog
+      .getByRole("button", { name: "Remove with sessions" })
       .click();
 
     await expect(child).toHaveCount(0);
@@ -1096,6 +1099,119 @@ test.describe("sidebar: project lifecycle", () => {
       () => (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
     )) as Array<{ id: string; removeWorktree: boolean }>;
     expect(calls).toEqual([{ id: "child-session", removeWorktree: false }]);
+  });
+
+  test("project workspace remove preserves shared worktrees despite auto-delete setting", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: true,
+            autoDeleteWorktrees: true,
+            closeOnExit: false,
+          },
+        }),
+      );
+      localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo": [
+                {
+                  id: "/tmp/demo",
+                  repoPath: "/tmp/demo",
+                  name: "Default",
+                  cwdPath: "/tmp/demo",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo:feature-worktree",
+                  repoPath: "/tmp/demo",
+                  name: "Feature workspace",
+                  cwdPath: "/tmp/demo/.acorn/worktrees/feature",
+                  position: 1,
+                },
+              ],
+            },
+            sessionFolderIds: {},
+          },
+          version: 4,
+        }),
+      );
+    });
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __removedIds?: string[] };
+      const removed = new Set(w.__removedIds ?? []);
+      return removed.has("worktree-session")
+        ? []
+        : [
+            {
+              id: "worktree-session",
+              name: "alpha",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo/.acorn/worktrees/feature",
+              branch: "main",
+              isolated: true,
+              project_scoped: true,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              last_message: null,
+              title_source: "manual",
+              kind: "regular",
+              owner: { kind: "user" },
+              position: 0,
+              in_worktree: true,
+            },
+          ];
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __removedIds?: string[];
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      const id = String(args?.id ?? "");
+      w.__removedIds = Array.from(new Set([...(w.__removedIds ?? []), id]));
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const workspace = sidebar
+      .getByRole("button", { name: /Feature workspace/ })
+      .first();
+    await expect(workspace).toBeVisible();
+
+    await workspace.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove workspace" }).click();
+    const dialog = page.getByRole("dialog", { name: "Remove workspace" });
+    await expect(dialog).toContainText(
+      "The workspace worktree will be kept on disk.",
+    );
+    await dialog.getByRole("button", { name: "Remove with sessions" }).click();
+
+    const calls = (await page.evaluate(
+      () => (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ id: string; removeWorktree: boolean }>;
+    expect(calls).toEqual([
+      { id: "worktree-session", removeWorktree: false },
+    ]);
   });
 
   test("project workspace remove skips confirmation for empty workspaces", async ({
@@ -1131,7 +1247,7 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(projectRow).toBeVisible();
   });
 
-  test("project workspace remove can keep sessions and move them out", async ({
+  test("project workspace remove asks before deleting an empty worktree workspace worktree", async ({
     page,
     tauri,
   }) => {
@@ -1143,86 +1259,177 @@ test.describe("sidebar: project lifecycle", () => {
         position: 0,
       },
     ]);
-    await tauri.handle("list_sessions", () => [
-      {
-        id: "root-session",
-        name: "root",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        project_scoped: true,
-        status: "idle",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:00Z",
-        last_message: null,
-        title_source: "manual",
-        kind: "regular",
-        owner: { kind: "user" },
-        position: 0,
-        in_worktree: false,
-      },
-      {
-        id: "child-session",
-        name: "child",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        project_scoped: true,
-        status: "idle",
-        created_at: "2026-01-01T00:00:01Z",
-        updated_at: "2026-01-01T00:00:01Z",
-        last_message: null,
-        title_source: "manual",
-        kind: "regular",
-        owner: { kind: "user" },
-        position: 1,
-        in_worktree: false,
-      },
-    ]);
-    await tauri.handle("remove_session", (args) => {
-      const w = window as unknown as { __removeCalls?: unknown[] };
-      w.__removeCalls = w.__removeCalls ?? [];
-      w.__removeCalls.push(args);
+    await tauri.handle("list_sessions", () => []);
+    await tauri.handle("remove_worktree", (args) => {
+      const w = window as unknown as { __removeWorktreeCalls?: unknown[] };
+      w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
+      w.__removeWorktreeCalls.push(args);
       return null;
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo": [
+                {
+                  id: "/tmp/demo",
+                  repoPath: "/tmp/demo",
+                  name: "Default",
+                  cwdPath: "/tmp/demo",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo:feature-empty",
+                  repoPath: "/tmp/demo",
+                  name: "feature-empty",
+                  cwdPath: "/tmp/demo/.acorn/worktrees/feature-empty",
+                  position: 1,
+                },
+              ],
+            },
+            sessionFolderIds: {},
+          },
+          version: 4,
+        }),
+      );
     });
 
     await page.goto("/");
 
     const sidebar = page.locator("aside");
-    const projectRow = page.getByRole("button", { name: "Project demo" });
-    await projectRow.click({ button: "right" });
-    await page.getByRole("menuitem", { name: "New workspace", exact: true }).click();
-    const folderRow = sidebar.getByRole("button", { name: /New workspace/ }).first();
-    await folderRow.dblclick();
-    await sidebar.getByRole("textbox").fill("Frontend");
-    await sidebar.getByRole("textbox").press("Enter");
-
-    const frontend = sidebar.getByRole("button", { name: /Frontend/ }).first();
-    const child = sidebar
-      .getByRole("button", { name: /^child main · Idle/ })
+    const folderRow = sidebar
+      .getByRole("button", { name: /feature-empty/ })
       .first();
-    await child.click({ button: "right" });
-    await clickMoveToTarget(page, "Frontend");
+    await expect(folderRow).toBeVisible();
 
-    await frontend.click({ button: "right" });
+    await folderRow.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Remove workspace" }).click();
-    const dialog = page.getByRole("dialog", { name: "Remove workspace" });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("project before the workspace is removed");
-    await dialog.getByRole("button", { name: "Move sessions out" }).click();
 
-    await expect(frontend).toHaveCount(0);
-    await expect(child).toBeVisible();
-    await child.click({ button: "right" });
-    await expectNoMoveToTarget(page, "Project root");
-    await page.keyboard.press("Escape");
+    const dialog = page.getByRole("dialog", { name: "Remove workspace" });
+    await expect(dialog).toContainText("This workspace has no sessions.");
+    await expect(dialog).toContainText(
+      "/tmp/demo/.acorn/worktrees/feature-empty",
+    );
+    await expect(dialog).toContainText("Also delete this worktree from disk?");
+    const remember = dialog.getByRole("checkbox", {
+      name: "Always delete empty worktree workspace directories",
+    });
+    await expect(remember).not.toBeChecked();
+    await remember.check();
+    await expect
+      .poll(async () =>
+        page.evaluate(() =>
+          Boolean(
+            JSON.parse(localStorage.getItem("acorn:settings:v1") ?? "{}")
+              .sessions?.autoDeleteEmptyWorktreeWorkspaces,
+          ),
+        ),
+      )
+      .toBe(true);
+    await dialog.getByRole("button", { name: "Delete worktree" }).click();
 
     const calls = (await page.evaluate(
-      () => (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
-    )) as unknown[] | undefined;
-    expect(calls ?? []).toEqual([]);
+      () =>
+        (window as unknown as { __removeWorktreeCalls?: unknown[] })
+          .__removeWorktreeCalls,
+    )) as Array<{ repoPath: string; worktreePath: string }>;
+    expect(calls).toEqual([
+      {
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.acorn/worktrees/feature-empty",
+      },
+    ]);
+    await expect(folderRow).toHaveCount(0);
+  });
+
+  test("project workspace remove can auto-delete empty worktree workspaces", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => []);
+    await tauri.handle("remove_worktree", (args) => {
+      const w = window as unknown as { __removeWorktreeCalls?: unknown[] };
+      w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
+      w.__removeWorktreeCalls.push(args);
+      return null;
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: true,
+            autoDeleteWorktrees: false,
+            autoDeleteEmptyWorktreeWorkspaces: true,
+            closeOnExit: false,
+          },
+        }),
+      );
+      localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo": [
+                {
+                  id: "/tmp/demo",
+                  repoPath: "/tmp/demo",
+                  name: "Default",
+                  cwdPath: "/tmp/demo",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo:feature-empty",
+                  repoPath: "/tmp/demo",
+                  name: "feature-empty",
+                  cwdPath: "/tmp/demo/.acorn/worktrees/feature-empty",
+                  position: 1,
+                },
+              ],
+            },
+            sessionFolderIds: {},
+          },
+          version: 4,
+        }),
+      );
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const folderRow = sidebar
+      .getByRole("button", { name: /feature-empty/ })
+      .first();
+    await expect(folderRow).toBeVisible();
+
+    await folderRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove workspace" }).click();
+
+    await expect(
+      page.getByRole("dialog", { name: "Remove workspace" }),
+    ).toHaveCount(0);
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeWorktreeCalls?: unknown[] })
+          .__removeWorktreeCalls,
+    )) as Array<{ repoPath: string; worktreePath: string }>;
+    expect(calls).toEqual([
+      {
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.acorn/worktrees/feature-empty",
+      },
+    ]);
+    await expect(folderRow).toHaveCount(0);
   });
 
   test("project workspaces and sessions can move by drag and drop", async ({
