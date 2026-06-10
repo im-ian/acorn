@@ -17,13 +17,19 @@ function dt(t: Translator, key: DialogTranslationKey): string {
 
 interface RemoveSessionDialogProps {
   session: Session | null;
+  canDeleteWorktree?: boolean;
   onClose: (choice: RemoveChoice) => void;
 }
 
-export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogProps) {
+export function RemoveSessionDialog({
+  session,
+  canDeleteWorktree = true,
+  onClose,
+}: RemoveSessionDialogProps) {
   const t = useTranslation();
   const isolated = session?.isolated ?? false;
   const recordedWorktree = session ? hasRecordedWorktree(session) : false;
+  const showWorktreeDeleteChoice = recordedWorktree && canDeleteWorktree;
   const patchSessions = useSettings((s) => s.patchSessions);
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
@@ -34,7 +40,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
 
   // Keep Enter conservative for non-isolated linked worktrees, which may be
   // user-managed outside Acorn even though the session path is a real worktree.
-  const primaryChoice: RemoveChoice = isolated
+  const primaryChoice: RemoveChoice = isolated && canDeleteWorktree
     ? "session_and_worktree"
     : "session_only";
 
@@ -81,7 +87,9 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
                   {session.worktree_path}
                 </p>
                 <p className="text-xs text-fg-muted">
-                  {dt(t, "dialogs.removeSession.deleteWorktreeQuestion")}
+                  {canDeleteWorktree
+                    ? dt(t, "dialogs.removeSession.deleteWorktreeQuestion")
+                    : dt(t, "dialogs.removeSession.keepSharedWorktree")}
                 </p>
               </div>
             ) : (
@@ -111,7 +119,7 @@ export function RemoveSessionDialog({ session, onClose }: RemoveSessionDialogPro
             >
               {dt(t, "dialogs.common.cancel")}
             </button>
-            {recordedWorktree ? (
+            {showWorktreeDeleteChoice ? (
               <>
                 <button
                   type="button"

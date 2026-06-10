@@ -48,7 +48,11 @@ import {
   TERMINAL_CONVERSATION_NAV_EVENT,
   type ConversationNavigationDirection,
 } from "./lib/terminalConversation";
-import { hasRecordedWorktree } from "./lib/sessionWorktree";
+import {
+  canDeleteSessionWorktree,
+  hasRecordedWorktree,
+  shouldAutoDeleteSessionWorktree,
+} from "./lib/sessionWorktree";
 import {
   EQUALIZE_PANES_EVENT,
   EXPAND_PANEL_EVENT,
@@ -251,6 +255,7 @@ function App() {
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
+  const projectFolders = useAppStore((s) => s.projectFolders);
   const layout = useAppStore((s) => s.layout);
   const pendingRemoveId = useAppStore((s) => s.pendingRemoveId);
   const pendingRemoveProject = useAppStore((s) => s.pendingRemoveProject);
@@ -277,9 +282,15 @@ function App() {
     : [];
   const pendingRemoveRecordedWorktree =
     pendingRemove !== null && hasRecordedWorktree(pendingRemove);
+  const pendingRemoveCanDeleteWorktree =
+    pendingRemove !== null &&
+    canDeleteSessionWorktree(pendingRemove, projectFolders);
+  const pendingRemoveAutoDeletesWorktree =
+    pendingRemove !== null &&
+    shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders);
   const pendingRemoveSkipsDialog =
     pendingRemove !== null &&
-    ((pendingRemoveRecordedWorktree && autoDeleteWorktrees) ||
+    ((pendingRemoveAutoDeletesWorktree && autoDeleteWorktrees) ||
       (!pendingRemoveRecordedWorktree && !confirmRemoveSession));
   const sessionIdsKey = useMemo(
     () => sessions.map((session) => session.id).join("\0"),
@@ -1050,12 +1061,16 @@ function App() {
   }, [activeSessionId, sessionIdsKey]);
 
   // Skip the confirmation dialog when Settings gives a deterministic removal
-  // choice: plain sessions can skip confirmation, and worktree-backed sessions
-  // can opt into always deleting the worktree from disk.
+  // choice: plain sessions can skip confirmation, and standalone isolated
+  // sessions can opt into always deleting their worktree from disk.
   useEffect(() => {
     if (!pendingRemove) return;
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
-    if (recordedWorktree && autoDeleteWorktrees) {
+    const autoDeleteWorktree = shouldAutoDeleteSessionWorktree(
+      pendingRemove,
+      projectFolders,
+    );
+    if (autoDeleteWorktree && autoDeleteWorktrees) {
       clearPendingRemove();
       void removeSession(pendingRemove.id, true).then(() =>
         showStoreOperationToast(
@@ -1078,6 +1093,7 @@ function App() {
     autoDeleteWorktrees,
     clearPendingRemove,
     confirmRemoveSession,
+    projectFolders,
     removeSession,
     showStoreOperationToast,
   ]);
@@ -1660,6 +1676,7 @@ function App() {
       />
       <RemoveSessionDialog
         session={pendingRemoveSkipsDialog ? null : pendingRemove}
+        canDeleteWorktree={pendingRemoveCanDeleteWorktree}
         onClose={(choice) => {
           const target = pendingRemove;
           clearPendingRemove();

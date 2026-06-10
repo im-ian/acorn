@@ -676,6 +676,33 @@ function SessionSettings() {
         </label>
       </Field>
       <Field
+        label={st(
+          t,
+          "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.label",
+        )}
+        hint={st(
+          t,
+          "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.hint",
+        )}
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={settings.sessions.autoDeleteEmptyWorktreeWorkspaces}
+            onChange={(e) =>
+              patchSessions({
+                autoDeleteEmptyWorktreeWorkspaces: e.target.checked,
+              })
+            }
+            className="accent-[var(--color-accent)]"
+          />
+          {st(
+            t,
+            "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.checkbox",
+          )}
+        </label>
+      </Field>
+      <Field
         label={st(t, "settings.sessions.closeOnExit.label")}
         hint={st(t, "settings.sessions.closeOnExit.hint")}
       >

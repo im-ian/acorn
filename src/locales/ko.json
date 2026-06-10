@@ -97,17 +97,22 @@
     "sessions": {
       "confirmRemove": {
         "label": "세션 제거 전 확인",
-        "hint": "일반 세션에 적용됩니다. 워크트리가 있는 세션은 아래 워크트리 삭제 설정을 따릅니다.",
+        "hint": "일반 세션에 적용됩니다. 공유 워크트리 세션은 제거 전에 계속 확인합니다.",
         "checkbox": "확인 대화상자 표시"
       },
       "autoDeleteWorktrees": {
-        "label": "묻지 않고 워크트리 삭제",
-        "hint": "격리 또는 연결된 워크트리를 사용하는 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 워크트리를 항상 삭제합니다.",
-        "checkbox": "워크트리가 있는 세션은 항상 디스크에서도 삭제"
+        "label": "묻지 않고 격리 워크트리 삭제",
+        "hint": "단독 격리 워크트리 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 워크트리를 삭제합니다. 공유 워크트리 작업공간은 유지됩니다.",
+        "checkbox": "단독 격리 워크트리는 항상 디스크에서도 삭제"
+      },
+      "autoDeleteEmptyWorktreeWorkspaces": {
+        "label": "빈 워크트리 작업공간은 묻지 않고 삭제",
+        "hint": "세션이 없는 워크트리 작업공간을 제거할 때 유지/삭제 확인 없이 디스크의 연결된 워크트리도 삭제합니다.",
+        "checkbox": "빈 워크트리 작업공간 디렉터리 항상 삭제"
       },
       "closeOnExit": {
         "label": "프로세스 종료 시 탭 닫기",
-        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. 워크트리가 있는 세션은 위 워크트리 삭제 설정을 따릅니다.",
+        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. 단독 격리 세션은 위 워크트리 삭제 설정을 따릅니다.",
         "checkbox": "종료 시 자동 닫기"
       },
       "background": {
@@ -1163,6 +1168,7 @@
       "deleteWorktreeQuestion": "디스크에서도 워크트리를 삭제할까요?",
       "filesIn": "다음 위치의 파일은",
       "willNotBeTouched": "변경되지 않습니다.",
+      "keepSharedWorktree": "이 워크트리는 작업공간에서 공유 중이므로 디스크에 유지됩니다.",
       "dontAskAgain": "다시 묻지 않기(설정 → 세션에서 변경)",
       "keepWorktree": "워크트리 유지",
       "deleteWorktree": "워크트리 삭제",
@@ -1187,13 +1193,18 @@
       "confirmPrefix": "작업공간 제거",
       "sessionSingular": "세션",
       "sessionPlural": "세션",
-      "canBeMovedOut": "작업공간을 제거하기 전에 프로젝트 상위 목록으로 이동할 수 있습니다",
-      "removeSessionsHint": "작업공간과 함께 세션을 Acorn에서 제거할 수도 있습니다.",
+      "sessionsWillBeRemoved": "이 작업공간과 함께 Acorn에서 제거됩니다.",
       "emptyFolder": "이 작업공간에는 세션이 없습니다.",
       "filesWillNotBeTouched": "디스크의 파일과 워크트리는 삭제되지 않습니다.",
+      "worktreesWillBeDeleted": "단독 격리 세션은 디스크의 워크트리도 함께 삭제됩니다.",
+      "worktreeWorkspacePath": "이 작업공간은 연결된 Git 워크트리를 사용합니다:",
+      "deleteWorkspaceWorktreeQuestion": "이 워크트리도 디스크에서 삭제할까요?",
+      "sharedWorktreeWillBeKept": "작업공간 워크트리는 디스크에 유지됩니다.",
+      "rememberDeleteWorktree": "빈 워크트리 작업공간 디렉터리 항상 삭제",
       "removeFolder": "작업공간 제거",
-      "moveSessionsOut": "세션 밖으로 이동",
-      "removeWithSessions": "작업공간과 세션 제거"
+      "keepWorktree": "워크트리 유지",
+      "deleteWorktree": "워크트리 삭제",
+      "removeWithSessions": "세션까지 제거"
     },
     "projectSettings": {
       "title": "프로젝트 설정",

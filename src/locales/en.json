@@ -97,17 +97,22 @@
     "sessions": {
       "confirmRemove": {
         "label": "Confirm before removing a session",
-        "hint": "Applies to plain sessions. Worktree-backed sessions follow the delete-worktree setting below.",
+        "hint": "Applies to plain sessions. Shared worktree sessions still ask before removal.",
         "checkbox": "Show confirmation dialog"
       },
       "autoDeleteWorktrees": {
-        "label": "Delete worktrees without asking",
-        "hint": "When removing a session that uses an isolated or linked worktree, skip the keep/delete prompt and always delete the worktree from disk.",
-        "checkbox": "Always delete worktree-backed sessions from disk"
+        "label": "Delete isolated worktrees without asking",
+        "hint": "When removing a standalone isolated worktree session, skip the keep/delete prompt and delete its worktree from disk. Shared worktree workspaces are preserved.",
+        "checkbox": "Always delete standalone isolated worktrees from disk"
+      },
+      "autoDeleteEmptyWorktreeWorkspaces": {
+        "label": "Delete empty worktree workspaces without asking",
+        "hint": "When removing a worktree workspace with no sessions, delete its linked worktree from disk without showing the keep/delete prompt.",
+        "checkbox": "Always delete empty worktree workspace directories"
       },
       "closeOnExit": {
         "label": "Close tab when the process exits",
-        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. Worktree-backed sessions follow the delete-worktree setting above.",
+        "hint": "When the session's shell or agent exits (e.g. you type `exit`), close the tab automatically instead of showing the press-Enter restart prompt. Standalone isolated sessions follow the delete-worktree setting above.",
         "checkbox": "Auto-close on exit"
       },
       "background": {
@@ -1163,6 +1168,7 @@
       "deleteWorktreeQuestion": "Also delete the worktree from disk?",
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
+      "keepSharedWorktree": "This worktree is shared by a workspace and will be kept on disk.",
       "dontAskAgain": "Don't ask again (toggle in Settings → Sessions)",
       "keepWorktree": "Keep worktree",
       "deleteWorktree": "Delete worktree",
@@ -1187,13 +1193,18 @@
       "confirmPrefix": "Remove workspace",
       "sessionSingular": "session",
       "sessionPlural": "sessions",
-      "canBeMovedOut": "can be moved out to the project before the workspace is removed",
-      "removeSessionsHint": "You can also remove the sessions from Acorn with the workspace.",
+      "sessionsWillBeRemoved": "will be removed from Acorn with this workspace.",
       "emptyFolder": "This workspace has no sessions.",
       "filesWillNotBeTouched": "Files and worktrees on disk will not be deleted.",
+      "worktreesWillBeDeleted": "Standalone isolated sessions will also delete their worktrees from disk.",
+      "worktreeWorkspacePath": "This workspace uses a linked git worktree:",
+      "deleteWorkspaceWorktreeQuestion": "Also delete this worktree from disk?",
+      "sharedWorktreeWillBeKept": "The workspace worktree will be kept on disk.",
+      "rememberDeleteWorktree": "Always delete empty worktree workspace directories",
       "removeFolder": "Remove workspace",
-      "moveSessionsOut": "Move sessions out",
-      "removeWithSessions": "Remove workspace and sessions"
+      "keepWorktree": "Keep worktree",
+      "deleteWorktree": "Delete worktree",
+      "removeWithSessions": "Remove with sessions"
     },
     "projectSettings": {
       "title": "Project Settings",
