@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/cn";
 
 interface ContextMenuButton {
@@ -258,7 +259,16 @@ function ContextMenuPanel({
                   <span className="shrink-0 text-fg-muted">{item.icon}</span>
                 ) : null}
                 <span className="flex-1 truncate">{item.label}</span>
-                {item.shortcut ? (
+                {item.shortcut === ">" ? (
+                  <ChevronRight
+                    size={13}
+                    aria-hidden
+                    className={cn(
+                      "ml-3 shrink-0",
+                      item.disabled ? "text-fg-muted/40" : "text-fg-muted",
+                    )}
+                  />
+                ) : item.shortcut ? (
                   <kbd
                     aria-hidden
                     className={cn(
