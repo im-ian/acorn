@@ -66,6 +66,23 @@ describe("ContextMenu", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it("renders submenu affordances separately from shortcut text", () => {
+    render([
+      {
+        type: "submenu",
+        label: "Copy",
+        children: [{ label: "Path", onClick: vi.fn() }],
+      },
+      { label: "Command palette", shortcut: "⌘K", onClick: vi.fn() },
+    ]);
+
+    const [copy, commandPalette] = document.querySelectorAll('[role="menuitem"]');
+    expect(copy?.textContent?.trim()).toBe("Copy");
+    expect(copy?.querySelector("svg")).not.toBeNull();
+    expect(commandPalette?.textContent?.trim()).toBe("Command palette⌘K");
+    expect(commandPalette?.querySelector("kbd")?.textContent).toBe("⌘K");
+  });
+
   it("opens nested submenu items without a depth limit in the item model", () => {
     const onClick = vi.fn();
     const onClose = render([
