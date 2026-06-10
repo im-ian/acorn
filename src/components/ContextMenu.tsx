@@ -15,7 +15,15 @@ interface ContextMenuSeparator {
   type: "separator";
 }
 
-export type ContextMenuItem = ContextMenuButton | ContextMenuSeparator;
+interface ContextMenuGroupTitle {
+  type: "group-title";
+  label: string;
+}
+
+export type ContextMenuItem =
+  | ContextMenuButton
+  | ContextMenuSeparator
+  | ContextMenuGroupTitle;
 
 interface ContextMenuProps {
   open: boolean;
@@ -92,6 +100,20 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
                 aria-orientation="horizontal"
                 className="my-1 h-px bg-border"
               />
+            );
+          }
+          if (item.type === "group-title") {
+            return (
+              <li
+                key={i}
+                role="presentation"
+                className={cn(
+                  "px-2.5 pb-1 text-[10px] font-semibold text-fg-muted/70",
+                  i === 0 ? "pt-1" : "pt-2",
+                )}
+              >
+                <span className="block truncate">{item.label}</span>
+              </li>
             );
           }
           return (
