@@ -43,9 +43,12 @@ import {
 import { useUpdater } from "../lib/updater-store";
 import { BackgroundSessionsSettings } from "./BackgroundSessionsSettings";
 import { WhatsNewModal } from "./WhatsNewModal";
+import { Tooltip } from "./Tooltip";
 import {
   AGENT_OPTIONS,
   DEFAULT_SESSION_TITLE_PROMPT,
+  MOUNTED_TERMINAL_LIMIT_MAX,
+  MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
   NOTIFICATION_HISTORY_LIMIT_MIN,
   PR_REFRESH_INTERVAL_OPTIONS,
@@ -513,6 +516,17 @@ function TerminalSettings() {
         />
       </Field>
       <Field
+        label={st(t, "settings.terminal.maxMountedTerminals.label")}
+        hint={st(t, "settings.terminal.maxMountedTerminals.hint")}
+      >
+        <Stepper
+          value={settings.terminal.maxMountedTerminals}
+          min={MOUNTED_TERMINAL_LIMIT_MIN}
+          max={MOUNTED_TERMINAL_LIMIT_MAX}
+          onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
+        />
+      </Field>
+      <Field
         label={st(t, "settings.terminal.openLinksOn.label")}
         hint={st(t, "settings.terminal.openLinksOn.hint")}
       >
@@ -684,6 +698,12 @@ function ServicesSettings() {
 
   return (
     <section className="space-y-6">
+      <SettingsGroup
+        title={st(t, "settings.power.title")}
+        description={st(t, "settings.power.description")}
+      >
+        <PowerSettings />
+      </SettingsGroup>
       <ControlSessionInstallSection />
       <SettingsGroup
         title={st(t, "settings.sessions.background.title")}
@@ -692,6 +712,21 @@ function ServicesSettings() {
         <BackgroundSessionsSettings />
       </SettingsGroup>
     </section>
+  );
+}
+
+function PowerSettings() {
+  const preventSleep = useSettings((s) => s.settings.power.preventSleep);
+  const patchPower = useSettings((s) => s.patchPower);
+  const t = useTranslation();
+
+  return (
+    <CheckboxRow
+      label={st(t, "settings.power.preventSleep.label")}
+      description={st(t, "settings.power.preventSleep.description")}
+      checked={preventSleep}
+      onChange={(v) => patchPower({ preventSleep: v })}
+    />
   );
 }
 
@@ -1054,14 +1089,19 @@ function ThemeSection({
             </option>
           ))}
         </Select>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
-          title={st(t, "settings.appearance.theme.rescanTitle")}
+        <Tooltip
+          label={st(t, "settings.appearance.theme.rescanTitle")}
+          side="bottom"
         >
-          <RefreshCcw size={12} /> {st(t, "settings.appearance.theme.refresh")}
-        </button>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-fg"
+          >
+            <RefreshCcw size={12} />{" "}
+            {st(t, "settings.appearance.theme.refresh")}
+          </button>
+        </Tooltip>
         <button
           type="button"
           onClick={() => void revealThemesFolder()}
@@ -1776,18 +1816,22 @@ function AgentSettings({
               {st(t, "settings.agents.sessionTitles.checkbox")}
             </span>
           </label>
-          <button
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={sessionTitlePromptOpen}
-            aria-label={st(t, "settings.agents.sessionTitlePrompt.open")}
-            title={st(t, "settings.agents.sessionTitlePrompt.open")}
-            onClick={() => onSessionTitlePromptOpenChange(true)}
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-bg px-2 text-[11px] font-medium text-fg-muted transition hover:border-accent/60 hover:bg-bg-elevated hover:text-fg"
+          <Tooltip
+            label={st(t, "settings.agents.sessionTitlePrompt.open")}
+            side="bottom"
           >
-            <SettingsIcon size={12} />
-            {st(t, "settings.agents.sessionTitlePrompt.shortButton")}
-          </button>
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={sessionTitlePromptOpen}
+              aria-label={st(t, "settings.agents.sessionTitlePrompt.open")}
+              onClick={() => onSessionTitlePromptOpenChange(true)}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-bg px-2 text-[11px] font-medium text-fg-muted transition hover:border-accent/60 hover:bg-bg-elevated hover:text-fg"
+            >
+              <SettingsIcon size={12} />
+              {st(t, "settings.agents.sessionTitlePrompt.shortButton")}
+            </button>
+          </Tooltip>
         </div>
       </Field>
       <SessionTitlePromptModal
@@ -1902,23 +1946,27 @@ function SessionTitlePromptModal({
                   max: SESSION_TITLE_PROMPT_MAX_CHARS,
                 })}
               </span>
-              <button
-                type="button"
-                onClick={() =>
-                  patchAgents({
-                    sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
-                  })
-                }
-                disabled={
-                  settings.agents.sessionTitlePrompt ===
-                  DEFAULT_SESSION_TITLE_PROMPT
-                }
-                title={st(t, "settings.agents.sessionTitlePrompt.reset")}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              <Tooltip
+                label={st(t, "settings.agents.sessionTitlePrompt.reset")}
+                side="bottom"
               >
-                <RefreshCcw size={11} />
-                {st(t, "settings.agents.sessionTitlePrompt.reset")}
-              </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    patchAgents({
+                      sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
+                    })
+                  }
+                  disabled={
+                    settings.agents.sessionTitlePrompt ===
+                    DEFAULT_SESSION_TITLE_PROMPT
+                  }
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-[11px] text-fg-muted transition hover:border-accent/60 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <RefreshCcw size={11} />
+                  {st(t, "settings.agents.sessionTitlePrompt.reset")}
+                </button>
+              </Tooltip>
             </div>
             <div className="rounded-md border border-border bg-bg-sidebar/30 p-2">
               <div className="mb-1 text-[11px] font-medium text-fg-muted">
@@ -2354,57 +2402,67 @@ function ShortcutsSettings() {
                         ? st(t, "settings.shortcuts.recording")
                         : formatHotkey(shortcuts[item.id])}
                     </kbd>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        recordingId === item.id
-                          ? stopRecording()
-                          : startRecording(item.id)
-                      }
-                      aria-label={stf(
+                    <Tooltip
+                      label={stf(
                         t,
                         recordingId === item.id
                           ? "settings.shortcuts.cancelRecording"
                           : "settings.shortcuts.recordShortcut",
                         { command: shortcutLabel(t, item.id) },
                       )}
-                      title={stf(
-                        t,
-                        recordingId === item.id
-                          ? "settings.shortcuts.cancelRecording"
-                          : "settings.shortcuts.recordShortcut",
-                        { command: shortcutLabel(t, item.id) },
-                      )}
-                      className={cn(
-                        "inline-flex h-7 w-[4.75rem] items-center justify-center gap-1 rounded border text-[11px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-                        recordingId === item.id
-                          ? "border-danger/50 bg-danger/10 text-danger hover:bg-danger/15"
-                          : "border-border bg-bg text-fg-muted hover:border-accent/60 hover:text-fg",
-                      )}
+                      side="bottom"
                     >
-                      {recordingId === item.id ? (
-                        <X size={11} />
-                      ) : (
-                        <Keyboard size={11} />
-                      )}
-                      {recordingId === item.id
-                        ? st(t, "settings.shortcuts.cancel")
-                        : st(t, "settings.shortcuts.record")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => resetShortcut(item.id)}
-                      disabled={shortcuts[item.id] === DEFAULT_HOTKEYS[item.id]}
-                      aria-label={stf(t, "settings.shortcuts.resetShortcut", {
+                      <button
+                        type="button"
+                        onClick={() =>
+                          recordingId === item.id
+                            ? stopRecording()
+                            : startRecording(item.id)
+                        }
+                        aria-label={stf(
+                          t,
+                          recordingId === item.id
+                            ? "settings.shortcuts.cancelRecording"
+                            : "settings.shortcuts.recordShortcut",
+                          { command: shortcutLabel(t, item.id) },
+                        )}
+                        className={cn(
+                          "inline-flex h-7 w-[4.75rem] items-center justify-center gap-1 rounded border text-[11px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                          recordingId === item.id
+                            ? "border-danger/50 bg-danger/10 text-danger hover:bg-danger/15"
+                            : "border-border bg-bg text-fg-muted hover:border-accent/60 hover:text-fg",
+                        )}
+                      >
+                        {recordingId === item.id ? (
+                          <X size={11} />
+                        ) : (
+                          <Keyboard size={11} />
+                        )}
+                        {recordingId === item.id
+                          ? st(t, "settings.shortcuts.cancel")
+                          : st(t, "settings.shortcuts.record")}
+                      </button>
+                    </Tooltip>
+                    <Tooltip
+                      label={stf(t, "settings.shortcuts.resetShortcut", {
                         command: shortcutLabel(t, item.id),
                       })}
-                      title={stf(t, "settings.shortcuts.resetShortcut", {
-                        command: shortcutLabel(t, item.id),
-                      })}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-bg text-fg-muted transition hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:opacity-40 disabled:hover:border-border disabled:hover:text-fg-muted"
+                      side="bottom"
                     >
-                      <RefreshCcw size={11} />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => resetShortcut(item.id)}
+                        disabled={
+                          shortcuts[item.id] === DEFAULT_HOTKEYS[item.id]
+                        }
+                        aria-label={stf(t, "settings.shortcuts.resetShortcut", {
+                          command: shortcutLabel(t, item.id),
+                        })}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-bg text-fg-muted transition hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:opacity-40 disabled:hover:border-border disabled:hover:text-fg-muted"
+                      >
+                        <RefreshCcw size={11} />
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
               ))}

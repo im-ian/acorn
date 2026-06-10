@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "../../lib/cn";
 import { ImageLightbox } from "../ImageLightbox";
+import { Tooltip } from "../Tooltip";
 
 // Sanitize schema for PR/comment markdown bodies — they routinely embed raw
 // HTML (image uploads, GitHub's `<img width="…">` snippets, details/summary).
@@ -87,8 +88,8 @@ interface MarkdownProps {
 }
 
 const baseComponents: Components = {
-  a({ href, children, ...rest }) {
-    return (
+  a({ href, children, title, ...rest }) {
+    const link = (
       <a
         {...rest}
         href={href}
@@ -100,6 +101,13 @@ const baseComponents: Components = {
       >
         {children}
       </a>
+    );
+    return typeof title === "string" && title.length > 0 ? (
+      <Tooltip label={title} side="top" multiline>
+        {link}
+      </Tooltip>
+    ) : (
+      link
     );
   },
   p({ children }) {
@@ -234,9 +242,9 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
   const components = useMemo<Components>(
     () => ({
       ...baseComponents,
-      img({ src, alt, width, height }) {
+      img({ src, alt, title, width, height }) {
         const url = typeof src === "string" ? src : undefined;
-        return (
+        const image = (
           <img
             src={url}
             alt={alt ?? ""}
@@ -249,6 +257,13 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
             }}
             className="my-2 max-w-full cursor-zoom-in rounded border border-border transition hover:opacity-90"
           />
+        );
+        return typeof title === "string" && title.length > 0 ? (
+          <Tooltip label={title} side="top" multiline>
+            {image}
+          </Tooltip>
+        ) : (
+          image
         );
       },
       input(props) {

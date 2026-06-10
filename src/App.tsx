@@ -27,6 +27,8 @@ import { TerminalHost } from "./components/TerminalHost";
 import { ToastHost } from "./components/ToastHost";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { FolderPermissionWarmupModal } from "./components/FolderPermissionWarmupModal";
+import { FileDragGhost } from "./components/FileDragGhost";
+import { FileDropHoverOverlay } from "./components/FileDropHoverOverlay";
 import {
   api,
   AGENT_HOOK_STATUS_EVENT,
@@ -85,8 +87,8 @@ import {
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
 import { applyTheme, useThemes } from "./lib/themes";
 import { extractTabFromEvent } from "./lib/settings-events";
-import { useAcornDragGlobalCleanup } from "./lib/dnd";
-import { useNativeFileDropTerminalBridge } from "./lib/nativeFileDrop";
+import { useFileExplorerDragHoverTarget } from "./lib/fileExplorerDrag";
+import { useNativeFileDropBridge } from "./lib/nativeFileDrop";
 import {
   TERMINAL_PASTE_EVENT,
   type TerminalPasteEventDetail,
@@ -112,6 +114,8 @@ const RIGHT_PANEL_DEFAULT_SIZE = 26;
 const RIGHT_PANEL_MIN_SIZE = 16;
 
 type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
+
+let lastPreventSleepSync: boolean | null = null;
 
 function appText(t: Translator, key: AppTranslationKey): string {
   return t(key);
@@ -240,8 +244,10 @@ function focusAdjacentPane(direction: "left" | "right" | "up" | "down") {
 
 function App() {
   const t = useTranslation();
-  useAcornDragGlobalCleanup();
-  useNativeFileDropTerminalBridge();
+  const nativeFileDropHoverTarget = useNativeFileDropBridge();
+  const fileExplorerDropHoverTarget = useFileExplorerDragHoverTarget();
+  const fileDropHoverTarget =
+    fileExplorerDropHoverTarget ?? nativeFileDropHoverTarget;
   const refreshAll = useAppStore((s) => s.refreshAll);
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
@@ -262,6 +268,7 @@ function App() {
   );
   const settings = useSettings((s) => s.settings);
   const shortcuts = settings.shortcuts;
+  const preventSleep = settings.power.preventSleep;
   const pendingRemove = sessions.find((s) => s.id === pendingRemoveId) ?? null;
   const pendingProject =
     projects.find((p) => p.repo_path === pendingRemoveProject) ?? null;
@@ -685,6 +692,15 @@ function App() {
       });
     });
   }, []);
+
+  useEffect(() => {
+    if (lastPreventSleepSync === preventSleep) return;
+    lastPreventSleepSync = preventSleep;
+    void api.setPreventSleep(preventSleep).catch((err) => {
+      lastPreventSleepSync = null;
+      console.warn("[App] prevent-sleep sync failed", err);
+    });
+  }, [preventSleep]);
 
   // Auto-update: check once on startup, then every 24h. Both calls are
   // best-effort and non-blocking — surfaced via the App-level
@@ -1572,6 +1588,40 @@ function App() {
         <StatusBar />
       </div>
       <TerminalHost />
+      <FileDragGhost />
+      {fileDropHoverTarget?.kind === "tab-strip" ? (
+        <div
+          className="pointer-events-none fixed z-50"
+          style={{
+            left: fileDropHoverTarget.rect.left,
+            top: fileDropHoverTarget.rect.top,
+            width: fileDropHoverTarget.rect.width,
+            height: fileDropHoverTarget.rect.height,
+          }}
+        >
+          <FileDropHoverOverlay
+            purpose="tab"
+            path={fileDropHoverTarget.path}
+            scope="tabStrip"
+          />
+        </div>
+      ) : null}
+      {fileDropHoverTarget?.kind === "pane-body" ? (
+        <div
+          className="pointer-events-none fixed z-50"
+          style={{
+            left: fileDropHoverTarget.rect.left,
+            top: fileDropHoverTarget.rect.top,
+            width: fileDropHoverTarget.rect.width,
+            height: fileDropHoverTarget.rect.height,
+          }}
+        >
+          <FileDropHoverOverlay
+            purpose={fileDropHoverTarget.purpose}
+            path={fileDropHoverTarget.path}
+          />
+        </div>
+      ) : null}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <AcornRain />
       <ControlSessionGuideModal

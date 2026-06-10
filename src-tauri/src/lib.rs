@@ -16,6 +16,7 @@ mod fs_explorer;
 mod git_ops;
 mod ipc;
 mod persistence;
+mod power_assertion;
 mod project_settings;
 pub mod pty_env;
 mod pty_output;
@@ -560,6 +561,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::pty_detach,
             commands::pty_reload_shell_env,
             commands::pty_cwd,
             commands::pty_repo_root,
@@ -597,6 +599,8 @@ pub fn run() {
             commands::acknowledge_antigravity_resume,
             commands::staged_rev_mismatch_status,
             commands::acknowledge_staged_rev_mismatch,
+            power_assertion::prevent_sleep_status,
+            power_assertion::set_prevent_sleep,
             daemon_commands::daemon_status,
             daemon_commands::daemon_set_enabled,
             daemon_commands::daemon_restart,
@@ -617,8 +621,10 @@ pub fn run() {
             fs_explorer::fs_shell_editor,
             fs_explorer::fs_git_status,
             fs_explorer::fs_git_branch,
+            fs_explorer::fs_grant_external_file,
             fs_explorer::fs_file_exists,
             fs_explorer::fs_read_file,
+            fs_explorer::fs_prepare_asset,
             fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,

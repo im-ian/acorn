@@ -27,10 +27,27 @@ export interface TerminalFileLinkProviderOptions {
   leave?: (event: MouseEvent, reference: TerminalFileReference) => void;
 }
 
-const FILE_REF_RE =
-  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[\p{L}\p{N}._@+-]+\/)+[\p{L}\p{N}._@+-]+|[\p{L}\p{N}._@+-]*\.[\p{L}\p{N}._@+-]+)):(?:(\d{1,7})(?::(\d{1,5}))?)?(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))/gu;
-const FILE_PATH_RE =
-  /(^|[\s([{"'`<])((?:~\/|\.{1,2}\/|\/)?(?:(?:[\p{L}\p{N}._@+-]+\/)+[\p{L}\p{N}._@+-]*\.[\p{L}][\p{L}\p{N}_@+-]+|[\p{L}\p{N}._@+-]*\.[\p{L}][\p{L}\p{N}_@+-]+))(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))/gu;
+const LINK_PREFIX_RE = String.raw`(^|[\s([{"'\x60<])`;
+const OPTIONAL_PATH_ROOT_RE = String.raw`(?:~\/|\.{1,2}\/|\/)?`;
+// Next.js route groups need parentheses in directory segments, but the final
+// file segment excludes them so code like `unwrap().reset_at` is not linked.
+const DIRECTORY_SEGMENT_RE = String.raw`[\p{L}\p{N}._@+\[\]()-]+`;
+const FILE_SEGMENT_RE = String.raw`[\p{L}\p{N}._@+\[\]-]+`;
+const FILE_STEM_RE = String.raw`[\p{L}\p{N}._@+\[\]-]*`;
+const FILE_REF_PATH_RE = String.raw`${OPTIONAL_PATH_ROOT_RE}(?:(?:${DIRECTORY_SEGMENT_RE}\/)+${FILE_SEGMENT_RE}|${FILE_STEM_RE}\.${FILE_SEGMENT_RE})`;
+const FILE_EXTENSION_RE = String.raw`[\p{L}][\p{L}\p{N}_@+\[\]-]+`;
+const FILE_PATH_REQUIRING_EXTENSION_RE = String.raw`${OPTIONAL_PATH_ROOT_RE}(?:(?:${DIRECTORY_SEGMENT_RE}\/)+${FILE_STEM_RE}\.${FILE_EXTENSION_RE}|${FILE_STEM_RE}\.${FILE_EXTENSION_RE})`;
+const FILE_REF_LOCATION_RE = String.raw`:(?:(\d{1,7})(?:-\d{1,7})?(?::(\d{1,5}))?)?`;
+const FILE_REF_TRAILER_RE = String.raw`(?=$|[\s)\]}>,;!?:]|[.](?=$|[\s)\]}>,;!?:]))`;
+const FILE_PATH_TRAILER_RE = String.raw`(?=$|[\s)\]}>,;!?]|[.](?=$|[\s)\]}>,;!?]))`;
+const FILE_REF_RE = new RegExp(
+  `${LINK_PREFIX_RE}(${FILE_REF_PATH_RE})${FILE_REF_LOCATION_RE}${FILE_REF_TRAILER_RE}`,
+  "gu",
+);
+const FILE_PATH_RE = new RegExp(
+  `${LINK_PREFIX_RE}(${FILE_PATH_REQUIRING_EXTENSION_RE})${FILE_PATH_TRAILER_RE}`,
+  "gu",
+);
 
 export function createTerminalFileLinkProvider(
   terminal: XTerm,

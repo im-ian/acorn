@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use git2::{Repository, Status, StatusOptions};
@@ -11,7 +11,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -239,6 +239,7 @@ struct ScopedPath {
 #[derive(Debug, Clone)]
 struct FsScope {
     roots: Vec<PathBuf>,
+    external_files: Vec<PathBuf>,
 }
 
 impl FsScope {
@@ -271,7 +272,13 @@ impl FsScope {
                 .then_with(|| a.cmp(b))
         });
         roots.dedup();
-        Self { roots }
+        let mut external_files = state.external_file_grants.lock().clone();
+        external_files.sort();
+        external_files.dedup();
+        Self {
+            roots,
+            external_files,
+        }
     }
 
     #[cfg(test)]
@@ -290,7 +297,23 @@ impl FsScope {
                 .then_with(|| a.cmp(b))
         });
         out.dedup();
-        Self { roots: out }
+        Self {
+            roots: out,
+            external_files: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_roots_and_external_files<I, J>(roots: I, external_files: J) -> Self
+    where
+        I: IntoIterator<Item = PathBuf>,
+        J: IntoIterator<Item = PathBuf>,
+    {
+        let mut scope = Self::from_roots(roots);
+        scope.external_files = external_files.into_iter().collect();
+        scope.external_files.sort();
+        scope.external_files.dedup();
+        scope
     }
 
     fn push_root(roots: &mut Vec<PathBuf>, root: PathBuf) -> Option<PathBuf> {
@@ -355,16 +378,21 @@ impl FsScope {
     }
 
     fn match_root(&self, path: &Path) -> AppResult<PathBuf> {
-        self.roots
+        if let Some(root) = self
+            .roots
             .iter()
             .find(|root| path_is_inside_root(path, root))
             .cloned()
-            .ok_or_else(|| {
-                AppError::InvalidPath(format!(
-                    "path outside allowed project roots: {}",
-                    path.display()
-                ))
-            })
+        {
+            return Ok(root);
+        }
+        if self.external_files.iter().any(|file| file == path) {
+            return Ok(path.to_path_buf());
+        }
+        Err(AppError::InvalidPath(format!(
+            "path outside allowed project roots: {}",
+            path.display()
+        )))
     }
 }
 
@@ -983,7 +1011,27 @@ pub struct ReadFileResult {
     pub binary: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PrepareAssetResult {
+    pub size: u64,
+}
+
 const VIEWER_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+#[tauri::command]
+pub fn fs_grant_external_file(state: State<'_, AppState>, path: String) -> AppResult<()> {
+    let p = PathBuf::from(&path);
+    reject_dangerous(&p)?;
+    let resolved = p.canonicalize().map_err(AppError::from)?;
+    if !resolved.is_file() {
+        return Err(AppError::InvalidPath(format!("not a file: {path}")));
+    }
+    let mut grants = state.external_file_grants.lock();
+    if !grants.iter().any(|granted| granted == &resolved) {
+        grants.push(resolved);
+    }
+    Ok(())
+}
 
 #[tauri::command]
 pub fn fs_file_exists(state: State<'_, AppState>, path: String) -> AppResult<bool> {
@@ -1001,6 +1049,33 @@ fn fs_file_exists_scoped(scope: &FsScope, path: String) -> AppResult<bool> {
 pub fn fs_read_file(state: State<'_, AppState>, path: String) -> AppResult<ReadFileResult> {
     let scope = FsScope::from_state(state.inner());
     fs_read_file_scoped(&scope, path)
+}
+
+#[tauri::command]
+pub fn fs_prepare_asset<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<PrepareAssetResult> {
+    let scope = FsScope::from_state(state.inner());
+    fs_prepare_asset_scoped(&scope, app, path)
+}
+
+fn fs_prepare_asset_scoped<R: Runtime>(
+    scope: &FsScope,
+    app: AppHandle<R>,
+    path: String,
+) -> AppResult<PrepareAssetResult> {
+    let p = PathBuf::from(&path);
+    let scoped = scope.authorize_existing(&p)?;
+    if !scoped.resolved.is_file() {
+        return Err(AppError::InvalidPath(format!("not a file: {path}")));
+    }
+    let meta = std::fs::metadata(&scoped.resolved)?;
+    app.asset_protocol_scope()
+        .allow_file(&scoped.resolved)
+        .map_err(|e| AppError::Other(format!("asset scope failed: {e}")))?;
+    Ok(PrepareAssetResult { size: meta.len() })
 }
 
 fn fs_read_file_scoped(scope: &FsScope, path: String) -> AppResult<ReadFileResult> {
@@ -1895,10 +1970,9 @@ mod tests {
             .unwrap();
         assert!(!res.huge);
         assert_eq!(res.limit, 10_000);
-        assert!(
-            res.statuses
-                .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned())
-        );
+        assert!(res
+            .statuses
+            .contains_key(&repo_path.join("a.txt").to_string_lossy().into_owned()));
     }
 
     #[test]
@@ -1919,6 +1993,23 @@ mod tests {
         let res = fs_read_file_scoped(&scope, outside_file.to_string_lossy().into_owned());
 
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn scope_allows_granted_external_file_read_outside_registered_root() {
+        let allowed = tmpdir();
+        let outside = tmpdir();
+        let outside_file = outside.path().join("note.txt");
+        fs::write(&outside_file, b"hello").unwrap();
+        let outside_file = outside_file.canonicalize().unwrap();
+
+        let scope = FsScope::from_roots_and_external_files(
+            [allowed.path().to_path_buf()],
+            [outside_file.clone()],
+        );
+        let res = fs_read_file_scoped(&scope, outside_file.to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(res.content, "hello");
     }
 
     #[test]
@@ -1952,13 +2043,11 @@ mod tests {
 
         assert!(fs_file_exists_scoped(&scope, file.to_string_lossy().into_owned()).unwrap());
         assert!(!fs_file_exists_scoped(&scope, dir.to_string_lossy().into_owned()).unwrap());
-        assert!(
-            !fs_file_exists_scoped(
-                &scope,
-                d.path().join("missing.txt").to_string_lossy().into_owned()
-            )
-            .unwrap()
-        );
+        assert!(!fs_file_exists_scoped(
+            &scope,
+            d.path().join("missing.txt").to_string_lossy().into_owned()
+        )
+        .unwrap());
     }
 
     #[test]

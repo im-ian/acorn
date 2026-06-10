@@ -1394,22 +1394,26 @@ export function ChatPane({
               {attachments.length > 0 ? (
                 <div className="flex min-w-0 flex-wrap items-center gap-1">
                   {attachments.map((attachment) => (
-                    <span
+                    <Tooltip
                       key={attachment.id}
-                      className="inline-flex max-w-40 items-center gap-1 rounded border border-border bg-bg/70 px-1.5 py-1 text-xs text-fg-muted"
-                      title={attachment.path}
+                      label={attachment.path}
+                      side="top"
+                      multiline
+                      className="max-w-40"
                     >
-                      <span className="truncate">{attachment.name}</span>
-                      <button
-                        aria-label={`Remove attachment ${attachment.name}`}
-                        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
-                        disabled={sending}
-                        type="button"
-                        onClick={() => removeAttachment(attachment.id)}
-                      >
-                        <X size={11} />
-                      </button>
-                    </span>
+                      <span className="inline-flex max-w-40 items-center gap-1 rounded border border-border bg-bg/70 px-1.5 py-1 text-xs text-fg-muted">
+                        <span className="truncate">{attachment.name}</span>
+                        <button
+                          aria-label={`Remove attachment ${attachment.name}`}
+                          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                          disabled={sending}
+                          type="button"
+                          onClick={() => removeAttachment(attachment.id)}
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    </Tooltip>
                   ))}
                 </div>
               ) : null}

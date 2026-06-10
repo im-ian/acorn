@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -34,7 +35,12 @@ import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { beginFileDrag, endAcornDrag } from "../lib/dnd";
+import {
+  beginFileExplorerDrag,
+  cancelFileExplorerDrag,
+  finishFileExplorerDrag,
+  updateFileExplorerDrag,
+} from "../lib/fileExplorerDrag";
 import { Tooltip } from "./Tooltip";
 import { IconInput, TextInput } from "./ui";
 import { useToasts } from "../lib/toasts";
@@ -48,6 +54,7 @@ import { findProjectFolderById } from "../lib/projectFolders";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
+const FILE_DRAG_START_THRESHOLD_PX = 5;
 
 type FileExplorerTranslationKey = Extract<TranslationKey, `fileExplorer.${string}`>;
 
@@ -1400,12 +1407,16 @@ function Toolbar(props: ToolbarProps) {
   const rootName = props.rootPath.split("/").filter(Boolean).pop() ?? "/";
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
-      <span
-        className="truncate font-medium text-fg-muted"
-        title={props.rootPath}
+      <Tooltip
+        label={props.rootPath}
+        side="bottom"
+        multiline
+        className="min-w-0"
       >
-        {rootName.toUpperCase()}
-      </span>
+        <span className="truncate font-medium text-fg-muted">
+          {rootName.toUpperCase()}
+        </span>
+      </Tooltip>
       <span className="flex-1" />
       <ToolbarBtn
         label={
@@ -1772,56 +1783,180 @@ function EntryRow({
   const statusLetter = gitStatus ? STATUS_LABELS[gitStatus.kind] : "";
   const additions = gitStatus?.additions ?? 0;
   const deletions = gitStatus?.deletions ?? 0;
+  const pendingDragCleanupRef = useRef<(() => void) | null>(null);
+  const suppressNextClickRef = useRef(false);
   // Folder rollup: when a directory itself has no status entry but
   // contains at least one dirty descendant, tint the name amber so the
   // user sees there's something to look at inside.
   const folderRollupClass =
     !gitStatus && dirtyDescendant ? "text-amber-400/70" : "";
+
+  useEffect(() => {
+    return () => {
+      pendingDragCleanupRef.current?.();
+      pendingDragCleanupRef.current = null;
+    };
+  }, []);
+
+  function onEntryPointerDown(
+    e: ReactPointerEvent<HTMLButtonElement>,
+  ): void {
+    if (e.button !== 0) return;
+
+    pendingDragCleanupRef.current?.();
+    const source = e.currentTarget;
+    const pointerId = e.pointerId;
+    const start = { x: e.clientX, y: e.clientY };
+    const payload = {
+      path: entry.path,
+      entryKind: entry.is_dir ? ("directory" as const) : ("file" as const),
+      source: "explorer" as const,
+    };
+    let dragging = false;
+
+    let cleanupAndCancel: (() => void) | null = null;
+    const cleanup = () => {
+      try {
+        source.releasePointerCapture?.(pointerId);
+      } catch {
+        // The pointer may already be released if the row unmounted.
+      }
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerCancel, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("blur", onWindowBlur);
+      if (pendingDragCleanupRef.current === cleanupAndCancel) {
+        pendingDragCleanupRef.current = null;
+      }
+    };
+
+    cleanupAndCancel = () => {
+      cleanup();
+      if (dragging) cancelFileExplorerDrag();
+    };
+
+    const clearClickSuppressionSoon = () => {
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 0);
+    };
+
+    const startDragging = (point: { x: number; y: number }) => {
+      dragging = true;
+      suppressNextClickRef.current = true;
+      beginFileExplorerDrag({ payload, pointer: point });
+    };
+
+    function onPointerMove(event: PointerEvent): void {
+      if (event.pointerId !== pointerId) return;
+      const point = { x: event.clientX, y: event.clientY };
+      if (!dragging) {
+        const dx = point.x - start.x;
+        const dy = point.y - start.y;
+        if (dx * dx + dy * dy < FILE_DRAG_START_THRESHOLD_PX ** 2) {
+          return;
+        }
+        startDragging(point);
+      } else {
+        updateFileExplorerDrag(point);
+      }
+      event.preventDefault();
+    }
+
+    function onPointerUp(event: PointerEvent): void {
+      if (event.pointerId !== pointerId) return;
+      cleanup();
+      if (!dragging) return;
+      event.preventDefault();
+      event.stopPropagation();
+      finishFileExplorerDrag({ x: event.clientX, y: event.clientY });
+      clearClickSuppressionSoon();
+    }
+
+    function onPointerCancel(event: PointerEvent): void {
+      if (event.pointerId !== pointerId) return;
+      cleanup();
+      if (!dragging) return;
+      event.preventDefault();
+      cancelFileExplorerDrag();
+      clearClickSuppressionSoon();
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      cleanup();
+      if (!dragging) return;
+      event.preventDefault();
+      cancelFileExplorerDrag();
+      clearClickSuppressionSoon();
+    }
+
+    function onWindowBlur(): void {
+      cleanup();
+      if (!dragging) return;
+      cancelFileExplorerDrag();
+      clearClickSuppressionSoon();
+    }
+
+    pendingDragCleanupRef.current = cleanupAndCancel;
+    try {
+      source.setPointerCapture?.(pointerId);
+    } catch {
+      // Window listeners still cover ordinary in-window drags.
+    }
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerCancel, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("blur", onWindowBlur);
+  }
+
   return (
     <>
-      <button
-        type="button"
-        draggable
-        onDragStart={(e) => {
-          // Set both the OS-friendly text data (terminals + external
-          // apps paste the quoted path) and the in-process Acorn drag
-          // mirror used by Pane/TabStrip drop targets.
-          if (!entry.is_dir) {
-            beginFileDrag(e, { path: entry.path });
-          } else {
-            endAcornDrag();
-          }
-          const quoted = shellQuote(entry.path);
-          try {
-            e.dataTransfer.setData("text/plain", quoted);
-            e.dataTransfer.setData("text/uri-list", `file://${entry.path}`);
-          } catch {
-            // ignore
-          }
-          e.dataTransfer.effectAllowed = "copy";
-        }}
-        onDragEnd={endAcornDrag}
-        onClick={(e) => onEntryClick(entry, e)}
-        onDoubleClick={(e) => {
-          e.preventDefault();
-          onEntryDoubleClick(entry);
-        }}
-        onContextMenu={(e) => {
-          e.stopPropagation();
-          onContextMenu(e, entry);
-        }}
-        className={cn(
-          "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
-          isSelected
-            ? "bg-accent/25 text-fg"
-            : isActive
-            ? "bg-accent/15 text-fg"
-            : "text-fg hover:bg-fg-muted/10",
-          entry.gitignored ? "opacity-60" : "",
-        )}
-        style={{ paddingLeft: 8 }}
-        title={entry.path}
+      <Tooltip
+        label={entry.path}
+        side="right"
+        multiline
+        className="w-full"
       >
+        <button
+          type="button"
+          onPointerDown={onEntryPointerDown}
+          onClick={(e) => {
+            if (suppressNextClickRef.current) {
+              suppressNextClickRef.current = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            onEntryClick(entry, e);
+          }}
+          onDoubleClick={(e) => {
+            if (suppressNextClickRef.current) {
+              suppressNextClickRef.current = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            e.preventDefault();
+            onEntryDoubleClick(entry);
+          }}
+          onContextMenu={(e) => {
+            e.stopPropagation();
+            onContextMenu(e, entry);
+          }}
+          className={cn(
+            "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
+            isSelected
+              ? "bg-accent/25 text-fg"
+              : isActive
+              ? "bg-accent/15 text-fg"
+              : "text-fg hover:bg-fg-muted/10",
+            entry.gitignored ? "opacity-60" : "",
+          )}
+          style={{ paddingLeft: 8 }}
+        >
         {Array.from({ length: depth }).map((_, i) => (
           <span
             key={i}
@@ -1881,7 +2016,8 @@ function EntryRow({
             </span>
           </span>
         ) : null}
-      </button>
+        </button>
+      </Tooltip>
       {children}
     </>
   );

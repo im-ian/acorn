@@ -28,7 +28,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
-import { CodeViewer } from "./CodeViewer";
+import { FileViewer } from "./FileViewer";
 import { ChatPane } from "./ChatPane";
 import { api } from "../lib/api";
 import {
@@ -39,7 +39,6 @@ import {
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
-import { endAcornDrag, getCurrentFilePayload } from "../lib/dnd";
 import {
   hasConfiguredEditor,
   openInConfiguredEditor,
@@ -65,6 +64,10 @@ import {
   type SessionCreateScope,
 } from "../lib/sessionCreation";
 import type { Direction, PaneId } from "../lib/layout";
+import {
+  registerPaneBodyFileDropTarget,
+  registerTabStripFileDropTarget,
+} from "../lib/fileDropTargets";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
@@ -217,6 +220,15 @@ export function Pane({ paneId }: PaneProps) {
   const isFocused = focusedPaneId === paneId;
   const lastEmptyPaneSpaceKeyDownAtRef = useRef<number | null>(null);
   const activeSession = active?.kind === "session" ? active.session : null;
+
+  useEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+    return registerPaneBodyFileDropTarget(
+      paneId,
+      () => bodyRef.current?.getBoundingClientRect() ?? null,
+    );
+  }, [paneId]);
 
   function scopeForTab(tab: PaneTab): SessionCreateScope {
     if (tab.kind === "session") return scopeForSession(tab.session);
@@ -400,6 +412,7 @@ export function Pane({ paneId }: PaneProps) {
   return (
     <div
       className="relative flex h-full flex-col bg-bg"
+      data-pane-root={paneId}
       onMouseDown={(e) => {
         if (e.button === 0 && isTabStripMouseDownTarget(e.target)) return;
         if (!isFocused) setFocusedPane(paneId);
@@ -476,8 +489,8 @@ export function Pane({ paneId }: PaneProps) {
           at App level. It is portaled into a per-session target div which
           gets `appendChild`-moved into this pane body when this session is
           active. We render only an EmptyPane fallback here for the
-          no-active-session case — or a CodeViewer when the active tab is
-          a frontend-owned code tab instead of a PTY session.
+          no-active-session case — or a FileViewer when the active tab is
+          a frontend-owned file tab instead of a PTY session.
         */}
         {activeSession?.mode === "chat" ? (
           <ChatPane
@@ -488,7 +501,7 @@ export function Pane({ paneId }: PaneProps) {
           />
         ) : null}
         {active?.kind === "code" ? (
-          <CodeViewer
+          <FileViewer
             path={active.path}
             target={active.target}
             isActive={isFocused}
@@ -509,10 +522,7 @@ export function Pane({ paneId }: PaneProps) {
             }}
           />
         )}
-        <PaneDropOverlay
-          paneId={paneId}
-          acceptFileDrops={active?.kind !== "session"}
-        />
+        <PaneDropOverlay paneId={paneId} />
       </div>
       <ContextMenu
         open={paneMenu !== null}
@@ -678,6 +688,13 @@ function TabStrip({
   }, [tabs]);
 
   useEffect(() => {
+    return registerTabStripFileDropTarget(
+      paneId,
+      () => stripRef.current?.getBoundingClientRect() ?? null,
+    );
+  }, [paneId]);
+
+  useEffect(() => {
     return registerWorkspaceTabDropTarget({
       id: `tab-strip:${paneId}`,
       priority: 20,
@@ -712,33 +729,6 @@ function TabStrip({
       ref={stripRef}
       data-pane-tab-strip={paneId}
       className="acorn-no-scrollbar relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
-      onDragEnter={(e) => {
-        if (!getCurrentFilePayload()) return;
-        e.preventDefault();
-      }}
-      onDragOver={(e) => {
-        if (!getCurrentFilePayload()) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setInsertIndex(null);
-      }}
-      onDrop={(e) => {
-        if (!getCurrentFilePayload()) return;
-        e.preventDefault();
-        try {
-          setInsertIndex(null);
-          const filePayload = getCurrentFilePayload();
-          if (filePayload) {
-            useAppStore.getState().setFocusedPane(paneId);
-            useAppStore.getState().openCodeViewerTab(filePayload.path);
-            return;
-          }
-        } finally {
-          endAcornDrag();
-        }
-      }}
     >
       {tabs.map((tab, i) => (
         <TabItem
@@ -1244,10 +1234,8 @@ function TabItem({
         tabIndex={0}
         onPointerDown={onTabPointerDown}
         onDragStart={(e) => {
-          if (!getCurrentFilePayload()) {
-            e.preventDefault();
-            e.stopPropagation();
-          }
+          e.preventDefault();
+          e.stopPropagation();
         }}
         onClickCapture={(e) => {
           if (suppressNextClickRef.current) {

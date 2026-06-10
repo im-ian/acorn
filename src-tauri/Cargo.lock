@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acorn"
-version = "1.13.6"
+version = "1.15.0"
 dependencies = [
  "acorn-daemon",
  "acorn-ipc",
@@ -16,6 +16,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "core-foundation",
  "dashmap",
  "directories",
  "git2",

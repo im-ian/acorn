@@ -1,3 +1,5 @@
+import type { SessionAgentProvider } from "./types";
+
 function normalizePath(path: string): string {
   if (path === "/") return path;
   return path.replace(/\/+$/u, "");
@@ -21,6 +23,8 @@ function escapeMentionPath(path: string): string {
 export function formatTerminalFileMention(
   filePath: string,
   cwd: string,
+  options: { agentProvider?: SessionAgentProvider | null } = {},
 ): string {
-  return `@${escapeMentionPath(pathRelativeToCwd(filePath, cwd))} `;
+  const prefix = options.agentProvider === "claude" ? "@" : "";
+  return `${prefix}${escapeMentionPath(pathRelativeToCwd(filePath, cwd))} `;
 }

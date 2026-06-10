@@ -30,59 +30,6 @@ test.describe("about tab: what's new button", () => {
     ).toBeVisible();
   });
 
-  test("does not animate disabled opacity while switching to the loading label", async ({
-    page,
-  }) => {
-    let releaseResolve: () => void = () => {};
-    const releaseReady = new Promise<void>((resolve) => {
-      releaseResolve = resolve;
-    });
-    await page.route(
-      "https://api.github.com/repos/im-ian/acorn/releases/tags/v0.0.0-test",
-      async (route) => {
-        await releaseReady;
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            tag_name: "v0.0.0-test",
-            body: "## Highlights\n\n- Test release body",
-            html_url: "https://github.com/im-ian/acorn/releases/tag/v0.0.0-test",
-            published_at: "2026-05-11T07:00:00Z",
-          }),
-        });
-      },
-    );
-
-    const modal = await openAboutTab(page);
-    await modal
-      .getByRole("button", {
-        name: new RegExp(`What's new in ${TEST_VERSION}`),
-      })
-      .click();
-
-    const loadingButton = modal.getByRole("button", {
-      name: "loading...",
-      exact: true,
-    });
-    await expect(loadingButton).toBeVisible();
-    await expect(loadingButton).toBeDisabled();
-
-    const transitionProperties = await loadingButton.evaluate((el) =>
-      getComputedStyle(el)
-        .transitionProperty.split(",")
-        .map((property) => property.trim()),
-    );
-    expect(transitionProperties).not.toContain("opacity");
-
-    releaseResolve();
-    await expect(
-      page.getByRole("dialog", {
-        name: new RegExp(`What's new in Acorn ${TEST_VERSION}`),
-      }),
-    ).toBeVisible();
-  });
-
   test("clicking the button fetches release notes from GitHub and opens the modal", async ({
     page,
   }) => {

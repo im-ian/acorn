@@ -3,6 +3,9 @@ import {
   AGENT_OPTIONS,
   DEFAULT_SETTINGS,
   DEFAULT_SESSION_TITLE_PROMPT,
+  MOUNTED_TERMINAL_LIMIT_DEFAULT,
+  MOUNTED_TERMINAL_LIMIT_MAX,
+  MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
   resolveAiCommitRequest,
   resolveAiExecutionRequest,
@@ -65,6 +68,69 @@ describe("terminal.linkActivation default", () => {
   });
 });
 
+describe("terminal.maxMountedTerminals settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to 8 resident terminal views", () => {
+    expect(DEFAULT_SETTINGS.terminal.maxMountedTerminals).toBe(
+      MOUNTED_TERMINAL_LIMIT_DEFAULT,
+    );
+  });
+
+  it("loads a persisted resident terminal limit and clamps it", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { maxMountedTerminals: 1000 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.maxMountedTerminals).toBe(
+      MOUNTED_TERMINAL_LIMIT_MAX,
+    );
+  });
+
+  it("rounds patched resident terminal limits inside the supported range", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings
+      .getState()
+      .patchTerminal({ maxMountedTerminals: MOUNTED_TERMINAL_LIMIT_MIN - 0.4 });
+    expect(useSettings.getState().settings.terminal.maxMountedTerminals).toBe(
+      MOUNTED_TERMINAL_LIMIT_MIN,
+    );
+
+    useSettings.getState().patchTerminal({ maxMountedTerminals: 9.6 });
+    expect(useSettings.getState().settings.terminal.maxMountedTerminals).toBe(
+      10,
+    );
+  });
+});
+
 describe("session removal settings", () => {
   const STORAGE_KEY = "acorn:settings:v1";
   let storage: Map<string, string>;
@@ -105,6 +171,60 @@ describe("session removal settings", () => {
 
     expect(useSettings.getState().settings.sessions.autoDeleteWorktrees).toBe(
       true,
+    );
+  });
+});
+
+describe("power settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to allowing normal idle sleep", () => {
+    expect(DEFAULT_SETTINGS.power.preventSleep).toBe(false);
+  });
+
+  it("loads a persisted prevent-sleep preference", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ power: { preventSleep: true } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.power.preventSleep).toBe(true);
+  });
+
+  it("persists patched prevent-sleep changes", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchPower({ preventSleep: true });
+
+    expect(useSettings.getState().settings.power.preventSleep).toBe(true);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").power).toEqual(
+      { preventSleep: true },
     );
   });
 });
