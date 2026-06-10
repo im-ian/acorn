@@ -27,8 +27,8 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use acorn_transcript::{self as transcript_watcher, AgentKind, SessionPid};
 
@@ -128,8 +128,20 @@ fn tick(state: &AppState) -> io::Result<()> {
             }
         }
         let id_file = state_dir.join(id_filename(kind));
-        if read_trimmed(&id_file).as_deref() == Some(uuid.as_str()) {
+        let previous = read_trimmed(&id_file);
+        if previous.as_deref() == Some(uuid.as_str()) {
             continue;
+        }
+        // A backwards move (to an earlier-born transcript) is legitimate
+        // when the user `--resume`d an old conversation — that transcript
+        // is hot again. But right after an in-session `/new` rotation the
+        // scan can echo the abandoned original once the new transcript
+        // goes idle; writing that echo would oscillate the marker. Skip
+        // only the dormant-echo case so the marker never flaps.
+        if let Some(prev) = previous.as_deref() {
+            if marker_rollback_is_dormant_echo(kind, prev, &uuid) {
+                continue;
+            }
         }
         if let Err(err) = write_if_changed(&id_file, &format!("{uuid}\n")) {
             tracing::warn!(
@@ -156,6 +168,48 @@ fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
     }
 }
 
+/// True when replacing `prev_uuid` with `next_uuid` would move the marker
+/// to an *earlier-born* transcript that is no longer being written. That
+/// combination is the post-`/new` echo: once the new conversation idles,
+/// the birth-anchored scan returns the abandoned original again, and
+/// writing it would oscillate the marker old → new → old. A real
+/// `claude --resume` of an older conversation also moves backwards, but
+/// its transcript is being appended right now (hot), so it passes.
+fn marker_rollback_is_dormant_echo(kind: AgentKind, prev_uuid: &str, next_uuid: &str) -> bool {
+    let resume_kind = match kind {
+        AgentKind::Claude => agent_resume::AgentKind::Claude,
+        AgentKind::Codex => agent_resume::AgentKind::Codex,
+        AgentKind::Antigravity => agent_resume::AgentKind::Antigravity,
+    };
+    let Some(prev_path) = agent_resume::locate_transcript(resume_kind, prev_uuid) else {
+        return false;
+    };
+    let Some(next_path) = agent_resume::locate_transcript(resume_kind, next_uuid) else {
+        return false;
+    };
+    rollback_is_dormant_echo(&prev_path, &next_path, SystemTime::now())
+}
+
+fn rollback_is_dormant_echo(prev: &Path, next: &Path, now: SystemTime) -> bool {
+    let (Ok(prev_meta), Ok(next_meta)) = (fs::metadata(prev), fs::metadata(next)) else {
+        return false;
+    };
+    let (Ok(prev_mtime), Ok(next_mtime)) = (prev_meta.modified(), next_meta.modified()) else {
+        return false;
+    };
+    let prev_birth = prev_meta.created().unwrap_or(prev_mtime);
+    let next_birth = next_meta.created().unwrap_or(next_mtime);
+    if next_birth >= prev_birth {
+        // Moving forward in birth order — always allowed.
+        return false;
+    }
+    // Backwards move: a dormant target is the echo; a hot one is a
+    // genuine resume of the older conversation.
+    now.duration_since(next_mtime)
+        .map(|d| d.as_secs() > acorn_transcript::DORMANT_TRANSCRIPT_SECS)
+        .unwrap_or(false)
+}
+
 fn write_if_changed(path: &PathBuf, content: &str) -> io::Result<()> {
     if fs::read_to_string(path).ok().as_deref() == Some(content) {
         return Ok(());
@@ -165,4 +219,48 @@ fn write_if_changed(path: &PathBuf, content: &str) -> io::Result<()> {
 
 fn read_trimmed(path: &PathBuf) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set_mtime(path: &Path, t: SystemTime) {
+        let f = fs::File::options().write(true).open(path).unwrap();
+        f.set_times(fs::FileTimes::new().set_modified(t)).unwrap();
+    }
+
+    /// Forward birth-order moves always pass; a backwards move passes
+    /// only while the older transcript is being actively written (a real
+    /// `--resume`), and is skipped once it has gone dormant (the
+    /// post-`/new` echo that would oscillate the marker).
+    #[test]
+    fn rollback_gate_distinguishes_echo_from_resume() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-rollback-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let older = dir.join("older.jsonl");
+        fs::File::create(&older).unwrap();
+        // Distinct birth seconds (btime rounds to seconds on macOS).
+        std::thread::sleep(Duration::from_millis(1100));
+        let newer = dir.join("newer.jsonl");
+        fs::File::create(&newer).unwrap();
+        let now = fs::metadata(&newer).unwrap().modified().unwrap();
+
+        // Forward move (older → newer): never an echo.
+        assert!(!rollback_is_dormant_echo(&older, &newer, now));
+
+        // Backwards move onto a dormant older transcript: echo → skip.
+        set_mtime(
+            &older,
+            now - Duration::from_secs(acorn_transcript::DORMANT_TRANSCRIPT_SECS + 60),
+        );
+        assert!(rollback_is_dormant_echo(&newer, &older, now));
+
+        // Backwards move onto a hot older transcript: a real resume.
+        set_mtime(&older, now);
+        assert!(!rollback_is_dormant_echo(&newer, &older, now));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

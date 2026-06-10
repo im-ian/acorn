@@ -278,7 +278,7 @@ fn acknowledge_at(
     fs::write(state_dir.join(ack_file), id)
 }
 
-fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> {
+pub(crate) fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> {
     match kind {
         AgentKind::Claude => crate::todos::locate_transcript_for(uuid).ok().flatten(),
         AgentKind::Codex => locate_codex_transcript(uuid),
