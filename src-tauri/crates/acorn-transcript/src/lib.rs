@@ -41,6 +41,16 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, U
 // input still surfaces as a Fork target.
 const RECENCY_WINDOW_SECS: u64 = 24 * 60 * 60;
 
+// How long a transcript must sit un-appended (mtime → now) before we
+// treat it as abandoned and allow the pairing to roll forward to a
+// later-born transcript in the same cwd. This is the signal for an
+// in-session `claude /new` (or `/clear`): the agent process stays
+// alive but stops writing the old JSONL and opens a fresh one. The
+// window is a few poll cycles long so a still-live sibling claude's
+// hotter file is never stolen mid-write — we only move off the
+// birth-anchored pick once it is demonstrably no longer being written.
+const DORMANT_TRANSCRIPT_SECS: u64 = 10;
+
 // Throttle window for `collect_live_mappings`. The scan walks every
 // process on the host plus several directory trees, so back-to-back
 // calls (e.g. a user flicking the right-click menu open repeatedly)
@@ -140,6 +150,7 @@ pub fn find_completed_agent_run(
             claude_projects_root().as_deref(),
             recency_cutoff,
             process_start,
+            now,
             &HashSet::new(),
         )
         .map(|(_, id)| id),
@@ -255,6 +266,7 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
                 claude_root.as_deref(),
                 recency_cutoff,
                 c.start_time,
+                now,
                 &assigned,
             ),
             AgentKind::Codex => find_recent_codex_jsonl(
@@ -357,11 +369,12 @@ fn find_recent_claude_jsonl(
     projects_root: Option<&Path>,
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     let root = projects_root?;
     let slug_dir = root.join(slug_for_cwd(cwd));
-    pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, assigned)
+    pick_newest_unassigned_jsonl(&slug_dir, recency_cutoff, process_start, now, assigned)
 }
 
 fn find_recent_codex_jsonl(
@@ -642,6 +655,7 @@ fn pick_newest_unassigned_jsonl(
     dir: &Path,
     recency_cutoff: SystemTime,
     process_start: SystemTime,
+    now: SystemTime,
     assigned: &HashSet<PathBuf>,
 ) -> Option<(PathBuf, String)> {
     // We track two timestamps per candidate. `created` (file birth
@@ -673,19 +687,46 @@ fn pick_newest_unassigned_jsonl(
         let created = meta.created().unwrap_or(mtime);
         candidates.push((path, created, mtime));
     }
-    // Earliest birth time *after* process_start is the best match —
+    // Earliest birth time *after* process_start is the anchor match —
     // mtime-DESC order would hand the active live claude's JSONL
     // (mtime keeps advancing) to a younger sibling claude in the same
     // cwd, cross-contaminating their session-id capture. Ranking by
     // proximity of `created` to `process_start` keeps each claude
     // paired with the file it actually opened.
     candidates.sort_by_key(|c| time_distance(c.1, process_start));
-    for (path, _, _) in candidates {
-        if let Some(uuid) = extract_uuid_from_path(&path) {
-            return Some((path, uuid));
+    let anchor_idx = candidates
+        .iter()
+        .position(|c| extract_uuid_from_path(&c.0).is_some())?;
+    let anchor = &candidates[anchor_idx];
+
+    // In-session `/new` continuity: the birth-anchored pick stays correct
+    // for the whole life of one conversation, but `claude /new` keeps the
+    // *same* process alive while it stops writing the old JSONL and opens a
+    // fresh one born much later than the process start. Birth-proximity
+    // would pin forever to that first transcript, so a stale tab title /
+    // resume cursor never advances. Roll forward to the later-born file —
+    // but only once the anchor has gone dormant (no writes for
+    // `DORMANT_TRANSCRIPT_SECS`). The dormancy gate is what preserves the
+    // concurrent same-cwd guarantee: a sibling claude still actively
+    // writing the anchor keeps it hot, so we never steal a live file
+    // mid-write. (Tracked siblings are already excluded via `assigned`.)
+    let dormant_before = now
+        .checked_sub(Duration::from_secs(DORMANT_TRANSCRIPT_SECS))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    if anchor.2 < dormant_before {
+        let successor = candidates
+            .iter()
+            .filter(|c| c.1 > anchor.1 && c.2 > anchor.2)
+            .filter(|c| extract_uuid_from_path(&c.0).is_some())
+            .max_by_key(|c| c.1);
+        if let Some(c) = successor {
+            if let Some(uuid) = extract_uuid_from_path(&c.0) {
+                return Some((c.0.clone(), uuid));
+            }
         }
     }
-    None
+
+    extract_uuid_from_path(&anchor.0).map(|uuid| (anchor.0.clone(), uuid))
 }
 
 /// Absolute difference between two `SystemTime`s as seconds. Saturates
@@ -824,19 +865,105 @@ mod tests {
         File::create(&jsonl).unwrap();
         let mtime = fs::metadata(&jsonl).unwrap().modified().unwrap();
         // Process start equals transcript mtime → must include (>=).
-        let result =
-            pick_newest_unassigned_jsonl(&dir, SystemTime::UNIX_EPOCH, mtime, &HashSet::new());
+        let result = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            mtime,
+            mtime,
+            &HashSet::new(),
+        );
         assert!(
             result.is_some(),
             "transcript with mtime == process_start must be a valid pair"
         );
         // Process started one second after the transcript → exclude.
         let later = mtime + Duration::from_secs(1);
-        let result_later =
-            pick_newest_unassigned_jsonl(&dir, SystemTime::UNIX_EPOCH, later, &HashSet::new());
+        let result_later = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            later,
+            later,
+            &HashSet::new(),
+        );
         assert!(
             result_later.is_none(),
             "transcript predating the process must be excluded"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `claude /new` keeps the same process alive but opens a fresh
+    /// transcript born long after the process started. Birth-proximity
+    /// alone would pin forever to the first JSONL; once that anchor has
+    /// gone dormant the pairing must roll forward to the newer file so a
+    /// tab title / resume cursor tracks the live conversation.
+    #[test]
+    fn pick_newest_unassigned_jsonl_follows_dormant_new_rotation() {
+        use std::fs::{self, File};
+        let dir =
+            std::env::temp_dir().join(format!("acorn-newrot-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        // Anchor transcript A, born at process start.
+        let a = dir.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        File::create(&a).unwrap();
+        let a_mtime = fs::metadata(&a).unwrap().modified().unwrap();
+        // A distinct, later second so B sorts after A by birth + mtime.
+        std::thread::sleep(Duration::from_millis(1100));
+        let b = dir.join("11111111-2222-3333-4444-555555555555.jsonl");
+        File::create(&b).unwrap();
+        let b_mtime = fs::metadata(&b).unwrap().modified().unwrap();
+
+        let process_start = a_mtime;
+        // `now` puts A well past the dormancy window; B is the live file.
+        let now = b_mtime + Duration::from_secs(DORMANT_TRANSCRIPT_SECS + 5);
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some("11111111-2222-3333-4444-555555555555"),
+            "dormant anchor must roll forward to the post-/new transcript"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The dormancy gate must not steal a still-hot sibling transcript:
+    /// when the birth-anchored pick is still being written (a concurrent
+    /// claude in the same cwd), a newer-born file is left alone even
+    /// though it exists. Only a dormant anchor rolls forward.
+    #[test]
+    fn pick_newest_unassigned_jsonl_keeps_hot_anchor_over_newer_sibling() {
+        use std::fs::{self, File};
+        let dir =
+            std::env::temp_dir().join(format!("acorn-hotanchor-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let anchor = dir.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        File::create(&anchor).unwrap();
+        let anchor_mtime = fs::metadata(&anchor).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let sibling = dir.join("11111111-2222-3333-4444-555555555555.jsonl");
+        File::create(&sibling).unwrap();
+        let sibling_mtime = fs::metadata(&sibling).unwrap().modified().unwrap();
+
+        let process_start = anchor_mtime;
+        // `now` is right at the sibling's write → the anchor is still
+        // within the dormancy window, so it stays paired.
+        let now = sibling_mtime;
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            now,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "a hot anchor must not roll forward to a newer-born sibling file"
         );
         fs::remove_dir_all(&dir).unwrap();
     }
