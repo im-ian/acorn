@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applySessionCreateRequest,
   buildSessionCreateRequest,
   buildSessionCreateRequestFromScope,
   resolveActiveSessionScope,
@@ -81,6 +82,55 @@ describe("session creation policy", () => {
     ).toMatchObject({ repoPath: "/Users/me", projectScoped: false });
   });
 
+  it("preserves the active project workspace when the active session is inside it", () => {
+    const sessions = [
+      session("web", "/repo/app", {
+        project_scoped: true,
+        worktree_path: "/repo/app",
+      }),
+    ];
+
+    expect(
+      resolveActiveSessionScope({
+        sessions,
+        projects: [project("/repo/app")],
+        activeSessionId: "web",
+        activeWorkspaceRepoPath: "/repo/app",
+        activeWorkspaceCwdPath: "/repo/app/apps/web",
+        activeProjectFolderId: "frontend",
+      }),
+    ).toEqual({
+      repoPath: "/repo/app",
+      cwdPath: "/repo/app/apps/web",
+      projectScoped: true,
+      projectFolderId: "frontend",
+    });
+  });
+
+  it("does not assign the default project workspace as an explicit folder", () => {
+    const sessions = [
+      session("root", "/repo/app", {
+        project_scoped: true,
+        worktree_path: "/repo/app",
+      }),
+    ];
+
+    expect(
+      resolveActiveSessionScope({
+        sessions,
+        projects: [project("/repo/app")],
+        activeSessionId: "root",
+        activeWorkspaceRepoPath: "/repo/app",
+        activeWorkspaceCwdPath: "/repo/app",
+        activeProjectFolderId: "/repo/app",
+      }),
+    ).toEqual({
+      repoPath: "/repo/app",
+      cwdPath: "/repo/app",
+      projectScoped: true,
+    });
+  });
+
   it("preserves active workspace folder cwd and id when there is no active session", () => {
     expect(
       resolveActiveSessionScope({
@@ -133,5 +183,54 @@ describe("session creation policy", () => {
       agentProvider: "codex",
       projectScoped: false,
     });
+  });
+
+  it("applies project repo and workspace cwd as separate create args", async () => {
+    const created = session("created", "/repo/app", {
+      worktree_path: "/repo/app/.acorn/worktrees/app-worktree",
+    });
+    const createSession = async (
+      _name: string,
+      _repoPath: string,
+      _isolated?: boolean,
+      _kind?: Session["kind"],
+      _agentProvider?: Session["agent_provider"],
+      _projectScoped?: boolean,
+      _mode?: Session["mode"],
+      _projectFolderId?: string,
+      _cwdPath?: string,
+    ) => created;
+
+    const calls: unknown[][] = [];
+    const wrapped = async (...args: Parameters<typeof createSession>) => {
+      calls.push(args);
+      return createSession(...args);
+    };
+
+    await applySessionCreateRequest(wrapped, {
+      name: "worker",
+      repoPath: "/repo/app",
+      cwdPath: "/repo/app/.acorn/worktrees/app-worktree",
+      isolated: false,
+      kind: "regular",
+      agentProvider: null,
+      projectScoped: true,
+      mode: "terminal",
+      projectFolderId: "worktree-folder",
+    });
+
+    expect(calls).toEqual([
+      [
+        "worker",
+        "/repo/app",
+        false,
+        "regular",
+        null,
+        true,
+        undefined,
+        "worktree-folder",
+        "/repo/app/.acorn/worktrees/app-worktree",
+      ],
+    ]);
   });
 });

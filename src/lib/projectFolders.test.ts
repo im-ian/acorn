@@ -4,6 +4,7 @@ import {
   defaultProjectFolderId,
   ensureProjectFolders,
   makeDefaultProjectFolder,
+  pruneSessionFolderAssignments,
   resolveProjectFolderIdForSession,
   type ProjectFolder,
 } from "./projectFolders";
@@ -124,6 +125,49 @@ describe("project folders", () => {
     ]);
     expect(groups[0].folders[0].sessions.map((s) => s.id)).toEqual(["root"]);
     expect(groups[0].folders[1].sessions.map((s) => s.id)).toEqual(["s1", "s2"]);
+  });
+
+  it("groups sessions into matching worktree workspaces without explicit assignments", () => {
+    const repoPath = "/repo/app";
+    const worktreePath = "/repo/app/.acorn/worktrees/app-worktree-123";
+    const worktree = folder("worktree", repoPath, worktreePath, "Worktree");
+    const groups = buildProjectFolderGroups(
+      [project(repoPath)],
+      [
+        session("root", repoPath),
+        session("worker", repoPath, { worktree_path: worktreePath }),
+      ],
+      {
+        [repoPath]: [makeDefaultProjectFolder(repoPath), worktree],
+      },
+    );
+
+    expect(groups[0].folders[0].sessions.map((s) => s.id)).toEqual(["root"]);
+    expect(groups[0].folders[1].sessions.map((s) => s.id)).toEqual(["worker"]);
+  });
+
+  it("ignores stale assignments that move sessions across worktree workspace boundaries", () => {
+    const repoPath = "/repo/app";
+    const worktreePath = "/repo/app/.acorn/worktrees/app-worktree-123";
+    const regular = folder("regular", repoPath, repoPath, "Regular");
+    const worktree = folder("worktree", repoPath, worktreePath, "Worktree");
+    const folders = [makeDefaultProjectFolder(repoPath), regular, worktree];
+    const worker = session("worker", repoPath, { worktree_path: worktreePath });
+    const root = session("root", repoPath);
+
+    expect(
+      resolveProjectFolderIdForSession(folders, worker, { worker: "regular" }),
+    ).toBe("worktree");
+    expect(
+      resolveProjectFolderIdForSession(folders, root, { root: "worktree" }),
+    ).toBe(repoPath);
+    expect(
+      pruneSessionFolderAssignments(
+        { worker: "regular", root: "worktree" },
+        [worker, root],
+        { [repoPath]: folders },
+      ),
+    ).toEqual({});
   });
 
   it("preserves project order and attaches matching sessions", () => {

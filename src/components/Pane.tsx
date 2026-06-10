@@ -118,6 +118,24 @@ function paneT(t: Translator, key: PaneTranslationKey): string {
   return t(key);
 }
 
+type PaneContextMenuGroup =
+  | "session"
+  | "fork"
+  | "layout"
+  | "open"
+  | "copy"
+  | "close";
+
+function paneContextMenuGroupTitle(
+  t: Translator,
+  group: PaneContextMenuGroup,
+): ContextMenuItem {
+  return {
+    type: "group-title",
+    label: paneT(t, `pane.contextMenu.${group}`),
+  };
+}
+
 function shortcutLabel(
   shortcuts: Record<HotkeyId, string>,
   id: HotkeyId,
@@ -263,15 +281,18 @@ export function Pane({ paneId }: PaneProps) {
       scope,
       { kind },
     );
+    const cwdPath =
+      request.cwdPath === request.repoPath ? undefined : request.cwdPath;
     await createSession(
       request.name,
-      request.cwdPath,
+      request.repoPath,
       request.isolated,
       request.kind,
       request.agentProvider,
       request.projectScoped,
       request.mode,
       request.projectFolderId,
+      cwdPath,
     );
     const error = useAppStore.getState().consumeError();
     if (error) showToast(`${t("toasts.session.createFailed")} ${error}`);
@@ -300,15 +321,18 @@ export function Pane({ paneId }: PaneProps) {
       { isolated, kind: "regular", agentProvider: kind },
     );
     try {
+      const cwdPath =
+        request.cwdPath === request.repoPath ? undefined : request.cwdPath;
       const created = await useAppStore.getState().createSession(
         request.name,
-        request.cwdPath,
+        request.repoPath,
         request.isolated,
         request.kind,
         request.agentProvider,
         request.projectScoped,
         request.mode,
         request.projectFolderId,
+        cwdPath,
       );
       if (!created) return;
       // Claude resolves `--resume <uuid>` by looking under
@@ -452,9 +476,6 @@ export function Pane({ paneId }: PaneProps) {
               splitDirection: direction,
               splitSide: "after",
             });
-          }}
-          onDuplicate={(repoPath, kind, projectScoped) => {
-            void spawnSession(repoPath, kind, { repoPath, projectScoped });
           }}
           onFork={(parent, kind, parentAgentId, isolated) => {
             void forkSession(parent, kind, parentAgentId, isolated);
@@ -643,11 +664,6 @@ interface TabStripProps {
   ) => void;
   onNewTab: () => void;
   onSplitTab: (tabId: string, direction: Direction) => void;
-  onDuplicate: (
-    repoPath: string,
-    kind: SessionKind,
-    projectScoped: boolean,
-  ) => void;
   onFork: (
     parent: Session,
     kind: SessionAgentProvider,
@@ -665,7 +681,6 @@ function TabStrip({
   onDropReorder,
   onNewTab,
   onSplitTab,
-  onDuplicate,
   onFork,
 }: TabStripProps) {
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
@@ -748,16 +763,6 @@ function TabStrip({
             for (const t of tabs) onClose(t.id);
           }}
           onSplitTab={(direction) => onSplitTab(tab.id, direction)}
-          onDuplicate={
-            tab.kind === "session"
-              ? () =>
-                  onDuplicate(
-                    tab.session.repo_path,
-                    tab.session.kind,
-                    tab.session.project_scoped !== false,
-                  )
-              : undefined
-          }
           onFork={
             tab.kind === "session"
               ? (kind, parentAgentId, isolated) =>
@@ -803,7 +808,6 @@ interface TabItemProps {
   onCloseOthers: () => void;
   onCloseAll: () => void;
   onSplitTab: (direction: Direction) => void;
-  onDuplicate?: () => void;
   onFork?: (
     kind: SessionAgentProvider,
     parentAgentId: string,
@@ -823,7 +827,6 @@ function TabItem({
   onCloseOthers,
   onCloseAll,
   onSplitTab,
-  onDuplicate,
   onFork,
   siblingCount,
   registerRef,
@@ -1096,32 +1099,31 @@ function TabItem({
         onClick: () => onFork("antigravity", agent.antigravity!, true),
       });
     }
-    return items.length > 0
-      ? [...items, { type: "separator" } as ContextMenuItem]
-      : [];
+    return items;
   })();
 
   const menuItems: ContextMenuItem[] = [
-    {
-      label: paneT(t, "pane.menu.rename"),
-      icon: <Pencil size={12} />,
-      onClick: () => setEditing(true),
-      disabled: !canRename,
-    },
-    {
-      label: paneT(t, "pane.menu.regenerateName"),
-      icon: <Sparkles size={12} />,
-      onClick: () => void regenerateTitle(),
-      disabled: !canRegenerateTitle,
-    },
-    {
-      label: paneT(t, "pane.menu.duplicateSession"),
-      icon: <Files size={12} />,
-      onClick: () => onDuplicate?.(),
-      disabled: !onDuplicate,
-    },
-    { type: "separator" },
-    ...forkItems,
+    ...(session
+      ? [
+          paneContextMenuGroupTitle(t, "session"),
+          {
+            label: paneT(t, "pane.menu.rename"),
+            icon: <Pencil size={12} />,
+            onClick: () => setEditing(true),
+            disabled: !canRename,
+          },
+          {
+            label: paneT(t, "pane.menu.regenerateName"),
+            icon: <Sparkles size={12} />,
+            onClick: () => void regenerateTitle(),
+            disabled: !canRegenerateTitle,
+          },
+        ]
+      : []),
+    ...(forkItems.length > 0
+      ? [paneContextMenuGroupTitle(t, "fork"), ...forkItems]
+      : []),
+    paneContextMenuGroupTitle(t, "layout"),
     {
       label: paneT(t, "pane.menu.splitRight"),
       icon: <SplitSquareHorizontal size={12} />,
@@ -1144,7 +1146,7 @@ function TabItem({
         window.dispatchEvent(new CustomEvent(EQUALIZE_PANES_EVENT));
       },
     },
-    { type: "separator" },
+    paneContextMenuGroupTitle(t, "open"),
     {
       label: session
         ? paneT(t, "pane.menu.openWorktreeInEditor")
@@ -1168,7 +1170,7 @@ function TabItem({
         });
       },
     },
-    { type: "separator" },
+    paneContextMenuGroupTitle(t, "copy"),
     {
       type: "submenu",
       label: paneT(t, "pane.menu.copy"),
@@ -1176,8 +1178,8 @@ function TabItem({
       children: [
         {
           label: session
-            ? paneT(t, "pane.menu.copyWorktreePath")
-            : paneT(t, "pane.menu.copyFilePath"),
+            ? paneT(t, "pane.menu.worktreePath")
+            : paneT(t, "pane.menu.filePath"),
           icon: <Copy size={12} />,
           onClick: () => {
             void copyToClipboard(tabPath);
@@ -1185,49 +1187,55 @@ function TabItem({
         },
         {
           label: session
-            ? paneT(t, "pane.menu.copyWorktreeName")
-            : paneT(t, "pane.menu.copyFileName"),
+            ? paneT(t, "pane.menu.worktreeName")
+            : paneT(t, "pane.menu.fileName"),
           icon: <Copy size={12} />,
           onClick: () => {
             void copyToClipboard(basename(tabPath));
           },
         },
-        {
-          label: paneT(t, "pane.menu.copyBranchName"),
-          icon: <Copy size={12} />,
-          onClick: () => {
-            if (session) void copyToClipboard(session.branch);
-          },
-          disabled: !session?.branch,
-        },
-        {
-          label: paneT(t, "pane.menu.copySessionId"),
-          icon: <Copy size={12} />,
-          onClick: () => {
-            void copyToClipboard(tab.id);
-          },
-          disabled: !session,
-        },
+        ...(session
+          ? [
+              {
+                label: paneT(t, "pane.menu.branchName"),
+                icon: <Copy size={12} />,
+                onClick: () => {
+                  void copyToClipboard(session.branch);
+                },
+                disabled: !session.branch,
+              },
+              {
+                label: paneT(t, "pane.menu.sessionId"),
+                icon: <Copy size={12} />,
+                onClick: () => {
+                  void copyToClipboard(session.id);
+                },
+              },
+            ]
+          : []),
       ],
     },
-    { type: "separator" },
+    paneContextMenuGroupTitle(t, "close"),
     {
       label: paneT(t, "pane.menu.close"),
       icon: <X size={12} />,
       shortcut: shortcutLabel(shortcuts, "closeTab"),
       onClick: onClose,
     },
-    {
-      label: paneT(t, "pane.menu.closeOthers"),
-      icon: <CircleX size={12} />,
-      onClick: onCloseOthers,
-      disabled: siblingCount <= 1,
-    },
-    {
-      label: paneT(t, "pane.menu.closeAll"),
-      icon: <SquareX size={12} />,
-      onClick: onCloseAll,
-    },
+    ...(siblingCount > 1
+      ? [
+          {
+            label: paneT(t, "pane.menu.closeOthers"),
+            icon: <CircleX size={12} />,
+            onClick: onCloseOthers,
+          },
+          {
+            label: paneT(t, "pane.menu.closeAll"),
+            icon: <SquareX size={12} />,
+            onClick: onCloseAll,
+          },
+        ]
+      : []),
   ];
 
   return (

@@ -97,6 +97,7 @@ export const api = {
     agentProvider?: SessionAgentProvider | null,
     projectScoped?: boolean,
     mode: SessionMode = "terminal",
+    cwdPath?: string,
   ): Promise<Session> {
     const args: {
       name: string;
@@ -106,6 +107,7 @@ export const api = {
       agentProvider?: SessionAgentProvider | null;
       projectScoped?: boolean;
       mode: SessionMode;
+      cwdPath?: string;
     } = {
       name,
       repoPath,
@@ -115,6 +117,7 @@ export const api = {
       mode,
     };
     if (projectScoped !== undefined) args.projectScoped = projectScoped;
+    if (cwdPath !== undefined) args.cwdPath = cwdPath;
     return invoke<Session>("create_session", args);
   },
   createSessionFromDialog(

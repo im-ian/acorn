@@ -113,15 +113,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           projectFolderId: scope.projectFolderId,
         },
       );
+      const cwdPath =
+        request.cwdPath === request.repoPath ? undefined : request.cwdPath;
       const created = await state.createSession(
         request.name,
-        request.cwdPath,
+        request.repoPath,
         request.isolated,
         request.kind,
         request.agentProvider,
         request.projectScoped,
         request.mode,
         request.projectFolderId,
+        cwdPath,
       );
       const error = useAppStore.getState().consumeError();
       if (!created || error) {

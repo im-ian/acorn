@@ -1521,6 +1521,7 @@ describe("ChatPane", () => {
       "claude",
       true,
       "chat",
+      undefined,
     );
     expect(mocks.renameSession).toHaveBeenCalledWith(
       "fork1",
@@ -1634,6 +1635,7 @@ describe("ChatPane", () => {
       "claude",
       true,
       "chat",
+      undefined,
     );
     expect(mocks.updateSessionWorktree).not.toHaveBeenCalled();
     const saved = mocks.saveChatSessionState.mock.calls[0]?.[0] as
@@ -1743,6 +1745,7 @@ describe("ChatPane", () => {
       "claude",
       true,
       "chat",
+      undefined,
     );
     expect(mocks.updateSessionWorktree).toHaveBeenCalledWith(
       "fork-same",

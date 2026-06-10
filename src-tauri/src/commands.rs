@@ -76,6 +76,23 @@ fn authorize_registered_project_root(state: &AppState, repo: &Path) -> AppResult
         })
 }
 
+fn authorize_project_session_cwd(repo: &Path, cwd: &Path) -> AppResult<()> {
+    if path_is_inside(cwd, repo) {
+        return Ok(());
+    }
+    if worktree::list_worktree_paths(repo)?
+        .into_iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .any(|worktree| path_is_inside(cwd, &worktree))
+    {
+        return Ok(());
+    }
+    Err(AppError::InvalidPath(format!(
+        "cwd is outside the registered project and its worktrees: {}",
+        cwd.display()
+    )))
+}
+
 fn authorize_local_session_root(path: &Path) -> AppResult<PathBuf> {
     let path = canonical_existing_path(path)?;
     let home = std::env::var_os("HOME")
@@ -2119,6 +2136,7 @@ pub async fn create_session(
     state: State<'_, AppState>,
     name: String,
     repo_path: String,
+    cwd_path: Option<String>,
     isolated: Option<bool>,
     kind: Option<SessionKind>,
     agent_provider: Option<SessionAgentProvider>,
@@ -2129,6 +2147,7 @@ pub async fn create_session(
         state.inner(),
         name,
         PathBuf::from(repo_path),
+        cwd_path.map(PathBuf::from),
         isolated.unwrap_or(false),
         kind.unwrap_or_default(),
         agent_provider,
@@ -2157,6 +2176,7 @@ pub async fn create_session_from_dialog<R: Runtime>(
         state.inner(),
         name,
         selected_path,
+        None,
         isolated.unwrap_or(false),
         kind.unwrap_or_default(),
         agent_provider,
@@ -2170,6 +2190,7 @@ fn create_session_inner(
     state: &AppState,
     mut name: String,
     selected_path: PathBuf,
+    cwd_path: Option<PathBuf>,
     isolated: bool,
     kind: SessionKind,
     agent_provider: Option<SessionAgentProvider>,
@@ -2178,6 +2199,9 @@ fn create_session_inner(
     allow_project_registration: bool,
 ) -> AppResult<Session> {
     let selected_path = canonical_existing_path(&selected_path)?;
+    let cwd_path = cwd_path
+        .map(|path| canonical_existing_path(&path))
+        .transpose()?;
     let repo = if project_scoped || isolated {
         let repo = worktree::project_root_for_path(&selected_path)?;
         if allow_project_registration {
@@ -2185,9 +2209,18 @@ fn create_session_inner(
         } else {
             authorize_registered_project_root(state, &repo)?;
         }
+        if !isolated {
+            if let Some(cwd) = cwd_path.as_deref() {
+                authorize_project_session_cwd(&repo, cwd)?;
+            }
+        }
         repo
     } else {
-        authorize_local_session_root(&selected_path)?
+        let root = authorize_local_session_root(&selected_path)?;
+        if let Some(cwd) = cwd_path.as_deref() {
+            authorize_local_session_root(cwd)?;
+        }
+        root
     };
     let worktree_path = if isolated {
         if name.trim().is_empty() {
@@ -2197,7 +2230,7 @@ fn create_session_inner(
         let (_safe_name, path) = create_unique_worktree(&repo, &base)?;
         path
     } else {
-        selected_path
+        cwd_path.unwrap_or(selected_path)
     };
     if name.trim().is_empty() {
         name = project_basename(&worktree_path);
