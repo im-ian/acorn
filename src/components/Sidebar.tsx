@@ -2099,6 +2099,7 @@ function SessionRow({
     (folder) => folder.id === currentProjectFolderId,
   );
   const folderMoveMenuItems: ContextMenuItem[] = [];
+  const targetFolderMenuItems: ContextMenuItem[] = [];
   if (onMoveToProjectFolder) {
     if (currentProjectFolder && !isDefaultProjectFolder(currentProjectFolder)) {
       folderMoveMenuItems.push({
@@ -2109,12 +2110,18 @@ function SessionRow({
     }
     for (const folder of namedProjectFolders) {
       if (folder.id === currentProjectFolderId) continue;
-      folderMoveMenuItems.push({
-        label: `${sidebarText(t, "sidebar.actions.moveToProjectFolder")}: ${
-          folder.name
-        }`,
+      targetFolderMenuItems.push({
+        label: folder.name,
         icon: <Folder size={12} />,
         onClick: () => onMoveToProjectFolder(session.id, folder.id),
+      });
+    }
+    if (targetFolderMenuItems.length > 0) {
+      folderMoveMenuItems.push({
+        type: "submenu",
+        label: sidebarText(t, "sidebar.actions.moveToProjectFolder"),
+        icon: <Folder size={12} />,
+        children: targetFolderMenuItems,
       });
     }
   }
@@ -2173,25 +2180,32 @@ function SessionRow({
     },
     { type: "separator" },
     {
-      label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
+      type: "submenu",
+      label: sidebarText(t, "sidebar.actions.copy"),
       icon: <Copy size={12} />,
-      onClick: () => void copyToClipboard(session.worktree_path),
-    },
-    {
-      label: sidebarText(t, "sidebar.actions.copyWorktreeName"),
-      icon: <Copy size={12} />,
-      onClick: () => void copyToClipboard(basename(session.worktree_path)),
-    },
-    {
-      label: sidebarText(t, "sidebar.actions.copyBranchName"),
-      icon: <Copy size={12} />,
-      onClick: () => void copyToClipboard(session.branch),
-      disabled: !session.branch,
-    },
-    {
-      label: sidebarText(t, "sidebar.actions.copySessionId"),
-      icon: <Copy size={12} />,
-      onClick: () => void copyToClipboard(session.id),
+      children: [
+        {
+          label: sidebarText(t, "sidebar.actions.copyWorktreePath"),
+          icon: <Copy size={12} />,
+          onClick: () => void copyToClipboard(session.worktree_path),
+        },
+        {
+          label: sidebarText(t, "sidebar.actions.copyWorktreeName"),
+          icon: <Copy size={12} />,
+          onClick: () => void copyToClipboard(basename(session.worktree_path)),
+        },
+        {
+          label: sidebarText(t, "sidebar.actions.copyBranchName"),
+          icon: <Copy size={12} />,
+          onClick: () => void copyToClipboard(session.branch),
+          disabled: !session.branch,
+        },
+        {
+          label: sidebarText(t, "sidebar.actions.copySessionId"),
+          icon: <Copy size={12} />,
+          onClick: () => void copyToClipboard(session.id),
+        },
+      ],
     },
     { type: "separator" },
     {

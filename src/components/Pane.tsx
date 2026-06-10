@@ -1170,38 +1170,45 @@ function TabItem({
     },
     { type: "separator" },
     {
-      label: session
-        ? paneT(t, "pane.menu.copyWorktreePath")
-        : paneT(t, "pane.menu.copyFilePath"),
+      type: "submenu",
+      label: paneT(t, "pane.menu.copy"),
       icon: <Copy size={12} />,
-      onClick: () => {
-        void copyToClipboard(tabPath);
-      },
-    },
-    {
-      label: session
-        ? paneT(t, "pane.menu.copyWorktreeName")
-        : paneT(t, "pane.menu.copyFileName"),
-      icon: <Copy size={12} />,
-      onClick: () => {
-        void copyToClipboard(basename(tabPath));
-      },
-    },
-    {
-      label: paneT(t, "pane.menu.copyBranchName"),
-      icon: <Copy size={12} />,
-      onClick: () => {
-        if (session) void copyToClipboard(session.branch);
-      },
-      disabled: !session?.branch,
-    },
-    {
-      label: paneT(t, "pane.menu.copySessionId"),
-      icon: <Copy size={12} />,
-      onClick: () => {
-        void copyToClipboard(tab.id);
-      },
-      disabled: !session,
+      children: [
+        {
+          label: session
+            ? paneT(t, "pane.menu.copyWorktreePath")
+            : paneT(t, "pane.menu.copyFilePath"),
+          icon: <Copy size={12} />,
+          onClick: () => {
+            void copyToClipboard(tabPath);
+          },
+        },
+        {
+          label: session
+            ? paneT(t, "pane.menu.copyWorktreeName")
+            : paneT(t, "pane.menu.copyFileName"),
+          icon: <Copy size={12} />,
+          onClick: () => {
+            void copyToClipboard(basename(tabPath));
+          },
+        },
+        {
+          label: paneT(t, "pane.menu.copyBranchName"),
+          icon: <Copy size={12} />,
+          onClick: () => {
+            if (session) void copyToClipboard(session.branch);
+          },
+          disabled: !session?.branch,
+        },
+        {
+          label: paneT(t, "pane.menu.copySessionId"),
+          icon: <Copy size={12} />,
+          onClick: () => {
+            void copyToClipboard(tab.id);
+          },
+          disabled: !session,
+        },
+      ],
     },
     { type: "separator" },
     {

@@ -65,4 +65,49 @@ describe("ContextMenu", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it("opens nested submenu items without a depth limit in the item model", () => {
+    const onClick = vi.fn();
+    const onClose = render([
+      {
+        type: "submenu",
+        label: "Copy",
+        children: [
+          {
+            type: "submenu",
+            label: "Advanced",
+            children: [{ label: "Session ID", onClick }],
+          },
+        ],
+      },
+    ]);
+
+    const copy = document.querySelector('[role="menuitem"]');
+    if (!copy) throw new Error("missing submenu trigger");
+
+    act(() => {
+      copy.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+
+    const advanced = Array.from(
+      document.querySelectorAll('[role="menuitem"]'),
+    ).find((node) => node.textContent?.includes("Advanced"));
+    if (!advanced) throw new Error("missing nested submenu trigger");
+
+    act(() => {
+      advanced.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+
+    const sessionId = Array.from(
+      document.querySelectorAll('[role="menuitem"]'),
+    ).find((node) => node.textContent?.includes("Session ID"));
+    if (!sessionId) throw new Error("missing nested menu item");
+
+    act(() => {
+      (sessionId as HTMLButtonElement).click();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
 });

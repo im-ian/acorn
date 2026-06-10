@@ -47,6 +47,28 @@ async function dragBetween(
   await page.mouse.up();
 }
 
+async function clickMoveToFolder(
+  page: Page,
+  folderName: string,
+): Promise<void> {
+  await page
+    .getByRole("menuitem", { name: "Move to folder", exact: true })
+    .hover();
+  await page.getByRole("menuitem", { name: folderName, exact: true }).click();
+}
+
+async function expectMoveToFolderTarget(
+  page: Page,
+  folderName: string,
+): Promise<void> {
+  await page
+    .getByRole("menuitem", { name: "Move to folder", exact: true })
+    .hover();
+  await expect(
+    page.getByRole("menuitem", { name: folderName, exact: true }),
+  ).toBeVisible();
+}
+
 function createLinkedWorktreeFixture(): {
   root: string;
   repo: string;
@@ -641,9 +663,7 @@ test.describe("sidebar: project lifecycle", () => {
       .locator("aside")
       .getByRole("button", { name: /root main · Idle/ })
       .click({ button: "right" });
-    await page
-      .getByRole("menuitem", { name: "Move to folder: Frontend" })
-      .click();
+    await clickMoveToFolder(page, "Frontend");
     const frontendFolder = page
       .locator("aside")
       .getByRole("button", { name: /Frontend/ })
@@ -925,9 +945,7 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("button", { name: /^child main · Idle/ })
       .first();
     await child.click({ button: "right" });
-    await page
-      .getByRole("menuitem", { name: "Move to folder: Frontend" })
-      .click();
+    await clickMoveToFolder(page, "Frontend");
 
     await frontend.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Remove folder" }).click();
@@ -1062,9 +1080,7 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("button", { name: /^child main · Idle/ })
       .first();
     await child.click({ button: "right" });
-    await page
-      .getByRole("menuitem", { name: "Move to folder: Frontend" })
-      .click();
+    await clickMoveToFolder(page, "Frontend");
 
     await frontend.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Remove folder" }).click();
@@ -1409,9 +1425,7 @@ test.describe("sidebar: project lifecycle", () => {
       })
       .toBe("moved-out");
     await child.click({ button: "right" });
-    await expect(
-      page.getByRole("menuitem", { name: "Move to folder: Frontend" }),
-    ).toBeVisible();
+    await expectMoveToFolderTarget(page, "Frontend");
     await expect(
       page.getByRole("menuitem", { name: "Remove from folder" }),
     ).toHaveCount(0);
@@ -1482,9 +1496,7 @@ test.describe("sidebar: project lifecycle", () => {
       .locator("aside")
       .getByRole("button", { name: /root main · Idle/ });
     await rootSession.click({ button: "right" });
-    await page
-      .getByRole("menuitem", { name: "Move to folder: Frontend" })
-      .click();
+    await clickMoveToFolder(page, "Frontend");
     await expect(rootSession).toBeVisible();
 
     await page
