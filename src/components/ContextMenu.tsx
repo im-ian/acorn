@@ -106,6 +106,86 @@ interface ContextMenuPanelProps {
   panelRef?: React.Ref<HTMLDivElement>;
 }
 
+interface ContextMenuItemButtonProps {
+  label: string;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  trailing?: React.ReactNode;
+  ariaHasPopup?: "menu";
+  ariaExpanded?: boolean;
+  onClick?: () => void;
+  onMouseEnter?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onFocus?: (event: React.FocusEvent<HTMLButtonElement>) => void;
+}
+
+function ContextMenuItemButton({
+  label,
+  icon,
+  disabled,
+  trailing,
+  ariaHasPopup,
+  ariaExpanded,
+  onClick,
+  onMouseEnter,
+  onFocus,
+}: ContextMenuItemButtonProps) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      aria-haspopup={ariaHasPopup}
+      aria-expanded={ariaExpanded}
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
+      className={cn(
+        "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
+        disabled
+          ? "cursor-not-allowed text-fg-muted/50"
+          : "text-fg hover:bg-bg-sidebar",
+      )}
+    >
+      {icon ? <span className="shrink-0 text-fg-muted">{icon}</span> : null}
+      <span className="flex-1 truncate">{label}</span>
+      {trailing}
+    </button>
+  );
+}
+
+function ContextMenuShortcut({
+  shortcut,
+  disabled,
+}: {
+  shortcut: string;
+  disabled?: boolean;
+}) {
+  return (
+    <kbd
+      aria-hidden
+      className={cn(
+        "shrink-0 pl-3 font-sans text-[11px] tabular-nums tracking-wide",
+        disabled ? "text-fg-muted/40" : "text-fg-muted",
+      )}
+    >
+      {shortcut}
+    </kbd>
+  );
+}
+
+function ContextMenuSubmenuChevron({ disabled }: { disabled?: boolean }) {
+  return (
+    <ChevronRight
+      size={13}
+      aria-hidden
+      className={cn(
+        "ml-3 shrink-0",
+        disabled ? "text-fg-muted/40" : "text-fg-muted",
+      )}
+    />
+  );
+}
+
 function ContextMenuPanel({
   items,
   position,
@@ -182,12 +262,13 @@ function ContextMenuPanel({
             const disabled = item.disabled || item.children.length === 0;
             return (
               <li key={i}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  aria-haspopup="menu"
-                  aria-expanded={activeSubmenu?.index === i}
+                <ContextMenuItemButton
+                  label={item.label}
+                  icon={item.icon}
                   disabled={disabled}
+                  ariaHasPopup="menu"
+                  ariaExpanded={activeSubmenu?.index === i}
+                  trailing={<ContextMenuSubmenuChevron disabled={disabled} />}
                   onMouseEnter={(event) => {
                     if (disabled) return;
                     const rect = event.currentTarget.getBoundingClientRect();
@@ -204,27 +285,7 @@ function ContextMenuPanel({
                       position: { left: rect.right - 1, top: rect.top },
                     });
                   }}
-                  className={cn(
-                    "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
-                    disabled
-                      ? "cursor-not-allowed text-fg-muted/50"
-                      : "text-fg hover:bg-bg-sidebar",
-                  )}
-                >
-                  {item.icon ? (
-                    <span className="shrink-0 text-fg-muted">{item.icon}</span>
-                  ) : null}
-                  <span className="flex-1 truncate">{item.label}</span>
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "shrink-0 pl-3 font-sans text-[11px]",
-                      disabled ? "text-fg-muted/40" : "text-fg-muted",
-                    )}
-                  >
-                    &gt;
-                  </span>
-                </button>
+                />
                 {activeSubmenu?.index === i ? (
                   <ContextMenuPanel
                     items={item.children}
@@ -237,10 +298,18 @@ function ContextMenuPanel({
           }
           return (
             <li key={i}>
-              <button
-                type="button"
-                role="menuitem"
+              <ContextMenuItemButton
+                label={item.label}
+                icon={item.icon}
                 disabled={item.disabled}
+                trailing={
+                  item.shortcut ? (
+                    <ContextMenuShortcut
+                      shortcut={item.shortcut}
+                      disabled={item.disabled}
+                    />
+                  ) : null
+                }
                 onMouseEnter={() => setActiveSubmenu(null)}
                 onFocus={() => setActiveSubmenu(null)}
                 onClick={() => {
@@ -248,38 +317,7 @@ function ContextMenuPanel({
                   onClose();
                   item.onClick();
                 }}
-                className={cn(
-                  "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
-                  item.disabled
-                    ? "cursor-not-allowed text-fg-muted/50"
-                    : "text-fg hover:bg-bg-sidebar",
-                )}
-              >
-                {item.icon ? (
-                  <span className="shrink-0 text-fg-muted">{item.icon}</span>
-                ) : null}
-                <span className="flex-1 truncate">{item.label}</span>
-                {item.shortcut === ">" ? (
-                  <ChevronRight
-                    size={13}
-                    aria-hidden
-                    className={cn(
-                      "ml-3 shrink-0",
-                      item.disabled ? "text-fg-muted/40" : "text-fg-muted",
-                    )}
-                  />
-                ) : item.shortcut ? (
-                  <kbd
-                    aria-hidden
-                    className={cn(
-                      "shrink-0 pl-3 font-sans text-[11px] tabular-nums tracking-wide",
-                      item.disabled ? "text-fg-muted/40" : "text-fg-muted",
-                    )}
-                  >
-                    {item.shortcut}
-                  </kbd>
-                ) : null}
-              </button>
+              />
             </li>
           );
         })}
