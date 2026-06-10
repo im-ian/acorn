@@ -645,6 +645,9 @@ export const api = {
   gitWorktrees(repoPath: string): Promise<string[]> {
     return invoke<string[]>("git_worktrees", { repoPath });
   },
+  removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    return invoke<void>("remove_worktree", { repoPath, worktreePath });
+  },
   /**
    * Probe the `acornd` daemon. Backs the StatusBar daemon indicator and
    * the Settings → Background sessions panel. Always resolves — when no

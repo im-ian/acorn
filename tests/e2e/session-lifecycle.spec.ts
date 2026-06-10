@@ -189,7 +189,7 @@ test.describe("session lifecycle", () => {
     expect(calls[0].removeWorktree).toBe(false);
   });
 
-  test("worktree auto-delete skips the remove confirmation", async ({
+  test("standalone isolated worktree auto-delete skips the remove confirmation", async ({
     page,
     tauri,
   }) => {
@@ -217,7 +217,7 @@ test.describe("session lifecycle", () => {
               repo_path: "/tmp/demo",
               worktree_path: "/tmp/demo/.acorn/worktrees/alpha",
               branch: "main",
-              isolated: false,
+              isolated: true,
               in_worktree: true,
               status: "idle",
               created_at: "2026-01-01T00:00:00Z",

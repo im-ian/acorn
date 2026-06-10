@@ -158,12 +158,20 @@ describe("session removal settings", () => {
 
   it("keeps worktree auto-delete off by default", () => {
     expect(DEFAULT_SETTINGS.sessions.autoDeleteWorktrees).toBe(false);
+    expect(DEFAULT_SETTINGS.sessions.autoDeleteEmptyWorktreeWorkspaces).toBe(
+      false,
+    );
   });
 
   it("loads a persisted worktree auto-delete preference", async () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ sessions: { autoDeleteWorktrees: true } }),
+      JSON.stringify({
+        sessions: {
+          autoDeleteWorktrees: true,
+          autoDeleteEmptyWorktreeWorkspaces: true,
+        },
+      }),
     );
 
     vi.resetModules();
@@ -172,6 +180,10 @@ describe("session removal settings", () => {
     expect(useSettings.getState().settings.sessions.autoDeleteWorktrees).toBe(
       true,
     );
+    expect(
+      useSettings.getState().settings.sessions
+        .autoDeleteEmptyWorktreeWorkspaces,
+    ).toBe(true);
   });
 });
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "./types";
-import { hasRecordedWorktree } from "./sessionWorktree";
+import {
+  canDeleteSessionWorktree,
+  hasRecordedWorktree,
+  isSessionInWorktreeWorkspace,
+  shouldAutoDeleteSessionWorktree,
+} from "./sessionWorktree";
 
 function session(overrides: Partial<Session> = {}): Session {
   return {
@@ -34,5 +39,60 @@ describe("hasRecordedWorktree", () => {
 
   it("does not infer a removable worktree for ordinary repo sessions", () => {
     expect(hasRecordedWorktree(session())).toBe(false);
+  });
+});
+
+describe("worktree deletion policy", () => {
+  const foldersByRepo = {
+    "/repo": [
+      {
+        id: "/repo",
+        repoPath: "/repo",
+        name: "Default",
+        cwdPath: "/repo",
+        position: 0,
+      },
+      {
+        id: "project-folder:/repo:shared",
+        repoPath: "/repo",
+        name: "Shared",
+        cwdPath: "/repo/.acorn/worktrees/shared",
+        position: 1,
+      },
+    ],
+  };
+
+  it("auto-deletes standalone isolated sessions", () => {
+    const target = session({
+      isolated: true,
+      worktree_path: "/repo/.acorn/worktrees/solo",
+    });
+
+    expect(isSessionInWorktreeWorkspace(target, foldersByRepo)).toBe(false);
+    expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
+    expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
+  });
+
+  it("preserves isolated sessions that are backing a worktree workspace", () => {
+    const target = session({
+      isolated: true,
+      worktree_path: "/repo/.acorn/worktrees/shared",
+      in_worktree: true,
+    });
+
+    expect(isSessionInWorktreeWorkspace(target, foldersByRepo)).toBe(true);
+    expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
+    expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
+  });
+
+  it("does not auto-delete linked worktree sessions", () => {
+    const target = session({
+      isolated: false,
+      in_worktree: true,
+      worktree_path: "/repo/.acorn/worktrees/solo",
+    });
+
+    expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
+    expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
   });
 });

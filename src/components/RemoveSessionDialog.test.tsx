@@ -43,10 +43,16 @@ describe("RemoveSessionDialog", () => {
     vi.clearAllMocks();
   });
 
-  function renderDialog(target: Session) {
+  function renderDialog(target: Session, canDeleteWorktree = true) {
     const onClose = vi.fn();
     act(() => {
-      root.render(<RemoveSessionDialog session={target} onClose={onClose} />);
+      root.render(
+        <RemoveSessionDialog
+          session={target}
+          canDeleteWorktree={canDeleteWorktree}
+          onClose={onClose}
+        />,
+      );
     });
     return onClose;
   }
@@ -60,6 +66,17 @@ describe("RemoveSessionDialog", () => {
     expect(document.body.textContent).toContain("Keep worktree");
     expect(document.body.textContent).toContain("Delete worktree");
     expect(document.body.textContent).not.toContain("Don't ask again");
+  });
+
+  it("keeps shared worktree workspace sessions on disk", () => {
+    renderDialog(session({ isolated: true, in_worktree: true }), false);
+
+    expect(document.body.textContent).toContain(
+      "This worktree is shared by a workspace and will be kept on disk.",
+    );
+    expect(document.body.textContent).not.toContain("Keep worktree");
+    expect(document.body.textContent).not.toContain("Delete worktree");
+    expect(document.body.textContent).toContain("Remove");
   });
 
   it("keeps the plain session remove confirmation for non-worktree sessions", () => {
