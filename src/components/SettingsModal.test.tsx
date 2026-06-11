@@ -70,11 +70,17 @@ const mocks = vi.hoisted(() => ({
       repoPath?: string | null,
     ) => Promise<string>
   >(),
+  getAcornIpcStatus: vi.fn(),
+  daemonStatus: vi.fn(),
+  daemonListSessions: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
   api: {
     previewSessionTitle: mocks.previewSessionTitle,
+    getAcornIpcStatus: mocks.getAcornIpcStatus,
+    daemonStatus: mocks.daemonStatus,
+    daemonListSessions: mocks.daemonListSessions,
   },
 }));
 
@@ -327,6 +333,22 @@ describe("SettingsModal font controls", () => {
       relativePath: "backgrounds/wallpaper.png",
     });
     mocks.removeBackgroundImage.mockResolvedValue(undefined);
+    mocks.getAcornIpcStatus.mockResolvedValue({
+      bundled_path: "/Applications/Acorn.app/Contents/MacOS/acorn-ipc",
+      bundled_exists: true,
+      shim_paths: [],
+    });
+    mocks.daemonStatus.mockResolvedValue({
+      running: false,
+      enabled: true,
+      daemon_version: null,
+      uptime_seconds: null,
+      session_count_total: null,
+      session_count_alive: null,
+      log_path: null,
+      last_error: null,
+    });
+    mocks.daemonListSessions.mockResolvedValue([]);
     useSettings.setState({
       open: true,
       settings: cloneSettings(),
@@ -412,7 +434,7 @@ describe("SettingsModal font controls", () => {
     });
   });
 
-  it("patches the resident terminal limit from the Terminal tab", async () => {
+  it("patches the resident terminal limit from the Sessions tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({
       settings: cloneSettings(),
@@ -423,7 +445,7 @@ describe("SettingsModal font controls", () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
-    openTerminalTab();
+    openSessionsTab();
     await act(async () => {
       await Promise.resolve();
     });
@@ -444,6 +466,26 @@ describe("SettingsModal font controls", () => {
     });
 
     expect(patchTerminal).toHaveBeenCalledWith({ maxMountedTerminals: 9 });
+  });
+
+  it("maps legacy Services deep links to the Sessions tab", async () => {
+    useSettings.setState({
+      open: false,
+      settings: cloneSettings(),
+    });
+    useSettings.getState().openTab("services");
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain("Session lifecycle");
+    expect(document.body.textContent).toContain("Session runtime");
+    expect(document.body.textContent).not.toContain("Language");
   });
 
   it("does not render the Appearance font dropdown controls", async () => {
@@ -554,7 +596,7 @@ describe("SettingsModal font controls", () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
     });
-    openInterfaceTab();
+    openAppearanceTab();
     await act(async () => {
       await Promise.resolve();
     });
@@ -630,7 +672,6 @@ describe("SettingsModal font controls", () => {
       "터미널",
       "에이전트",
       "세션",
-      "서비스",
       "GitHub",
       "편집기",
       "알림",

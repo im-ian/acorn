@@ -1051,7 +1051,7 @@ function ServicesStatusButton() {
 
   const openDaemonSettings = useCallback(() => {
     window.dispatchEvent(
-      new CustomEvent("acorn:open-settings", { detail: { tab: "services" } }),
+      new CustomEvent("acorn:open-settings", { detail: { tab: "sessions" } }),
     );
     setOpen(false);
   }, []);

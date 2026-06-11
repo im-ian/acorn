@@ -93,9 +93,8 @@ type Tab =
   | "interface"
   | "appearance"
   | "terminal"
-  | "agents"
   | "sessions"
-  | "services"
+  | "agents"
   | "github"
   | "editor"
   | "notifications"
@@ -108,9 +107,8 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "interface", labelKey: "settings.tabs.interface" },
   { id: "appearance", labelKey: "settings.tabs.appearance" },
   { id: "terminal", labelKey: "settings.tabs.terminal" },
-  { id: "agents", labelKey: "settings.tabs.agents" },
   { id: "sessions", labelKey: "settings.tabs.sessions" },
-  { id: "services", labelKey: "settings.tabs.services" },
+  { id: "agents", labelKey: "settings.tabs.agents" },
   { id: "github", labelKey: "settings.tabs.github" },
   { id: "editor", labelKey: "settings.tabs.editor" },
   { id: "notifications", labelKey: "settings.tabs.notifications" },
@@ -121,6 +119,9 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
 ];
 
 const TAB_IDS = new Set<string>(TABS.map((t) => t.id));
+const TAB_ALIASES: Record<string, Tab> = {
+  services: "sessions",
+};
 type SettingsTranslator = Translator;
 
 type ShortcutItem = {
@@ -357,7 +358,7 @@ export function SettingsModal() {
   const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
-  // dispatched `acorn:open-settings` with `tab: "services"`),
+  // dispatched `acorn:open-settings` with `tab: "sessions"`),
   // jump there on the next render and clear the flag so subsequent
   // opens restore the user's manual tab choice. Subscribing to
   // `pendingTab` (not just `open`) makes the deep-link work even when
@@ -366,8 +367,9 @@ export function SettingsModal() {
   useEffect(() => {
     if (!open || pendingTab === null) return;
     const pending = consumePendingTab();
-    if (pending && TAB_IDS.has(pending)) {
-      setTab(pending as Tab);
+    const nextTab = pending ? (TAB_ALIASES[pending] ?? pending) : null;
+    if (nextTab && TAB_IDS.has(nextTab)) {
+      setTab(nextTab as Tab);
     }
   }, [open, pendingTab, consumePendingTab]);
 
@@ -432,15 +434,13 @@ export function SettingsModal() {
             <AppearanceSettings />
           ) : tab === "terminal" ? (
             <TerminalSettings />
+          ) : tab === "sessions" ? (
+            <SessionSettings />
           ) : tab === "agents" ? (
             <AgentSettings
               sessionTitlePromptOpen={sessionTitlePromptOpen}
               onSessionTitlePromptOpenChange={setSessionTitlePromptOpen}
             />
-          ) : tab === "sessions" ? (
-            <SessionSettings />
-          ) : tab === "services" ? (
-            <ServicesSettings />
           ) : tab === "github" ? (
             <GithubSettings />
           ) : tab === "editor" ? (
@@ -519,17 +519,6 @@ function TerminalSettings() {
           step={0.05}
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
-        />
-      </Field>
-      <Field
-        label={st(t, "settings.terminal.maxMountedTerminals.label")}
-        hint={st(t, "settings.terminal.maxMountedTerminals.hint")}
-      >
-        <Stepper
-          value={settings.terminal.maxMountedTerminals}
-          min={MOUNTED_TERMINAL_LIMIT_MIN}
-          max={MOUNTED_TERMINAL_LIMIT_MAX}
-          onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
         />
       </Field>
       <Field
@@ -645,113 +634,127 @@ function WeightSelect({ value, onChange }: WeightSelectProps) {
 function SessionSettings() {
   const settings = useSettings((s) => s.settings);
   const patchSessions = useSettings((s) => s.patchSessions);
-  const t = useTranslation();
-
-  return (
-    <section className="space-y-4">
-      <Field
-        label={st(t, "settings.sessions.confirmRemove.label")}
-        hint={st(t, "settings.sessions.confirmRemove.hint")}
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.confirmRemove}
-            onChange={(e) =>
-              patchSessions({ confirmRemove: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          {st(t, "settings.sessions.confirmRemove.checkbox")}
-        </label>
-      </Field>
-      <Field
-        label={st(t, "settings.sessions.warnBeforeClosingRunning.label")}
-        hint={st(t, "settings.sessions.warnBeforeClosingRunning.hint")}
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.warnBeforeClosingRunning}
-            onChange={(e) =>
-              patchSessions({ warnBeforeClosingRunning: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          {st(t, "settings.sessions.warnBeforeClosingRunning.checkbox")}
-        </label>
-      </Field>
-      <Field
-        label={st(t, "settings.sessions.autoDeleteWorktrees.label")}
-        hint={st(t, "settings.sessions.autoDeleteWorktrees.hint")}
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.autoDeleteWorktrees}
-            onChange={(e) =>
-              patchSessions({ autoDeleteWorktrees: e.target.checked })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          {st(t, "settings.sessions.autoDeleteWorktrees.checkbox")}
-        </label>
-      </Field>
-      <Field
-        label={st(
-          t,
-          "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.label",
-        )}
-        hint={st(
-          t,
-          "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.hint",
-        )}
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.autoDeleteEmptyWorktreeWorkspaces}
-            onChange={(e) =>
-              patchSessions({
-                autoDeleteEmptyWorktreeWorkspaces: e.target.checked,
-              })
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          {st(
-            t,
-            "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.checkbox",
-          )}
-        </label>
-      </Field>
-      <Field
-        label={st(t, "settings.sessions.closeOnExit.label")}
-        hint={st(t, "settings.sessions.closeOnExit.hint")}
-      >
-        <label className="flex items-center gap-2 text-xs text-fg">
-          <input
-            type="checkbox"
-            checked={settings.sessions.closeOnExit}
-            onChange={(e) => patchSessions({ closeOnExit: e.target.checked })}
-            className="accent-[var(--color-accent)]"
-          />
-          {st(t, "settings.sessions.closeOnExit.checkbox")}
-        </label>
-      </Field>
-    </section>
-  );
-}
-
-function ServicesSettings() {
+  const patchTerminal = useSettings((s) => s.patchTerminal);
   const t = useTranslation();
 
   return (
     <section className="space-y-6">
       <SettingsGroup
-        title={st(t, "settings.power.title")}
-        description={st(t, "settings.power.description")}
+        title={st(t, "settings.sessions.lifecycle.title")}
+        description={st(t, "settings.sessions.lifecycle.description")}
       >
-        <PowerSettings />
+        <div className="space-y-4">
+          <Field
+            label={st(t, "settings.sessions.confirmRemove.label")}
+            hint={st(t, "settings.sessions.confirmRemove.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.confirmRemove}
+                onChange={(e) =>
+                  patchSessions({ confirmRemove: e.target.checked })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(t, "settings.sessions.confirmRemove.checkbox")}
+            </label>
+          </Field>
+          <Field
+            label={st(t, "settings.sessions.warnBeforeClosingRunning.label")}
+            hint={st(t, "settings.sessions.warnBeforeClosingRunning.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.warnBeforeClosingRunning}
+                onChange={(e) =>
+                  patchSessions({ warnBeforeClosingRunning: e.target.checked })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(t, "settings.sessions.warnBeforeClosingRunning.checkbox")}
+            </label>
+          </Field>
+          <Field
+            label={st(t, "settings.sessions.autoDeleteWorktrees.label")}
+            hint={st(t, "settings.sessions.autoDeleteWorktrees.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.autoDeleteWorktrees}
+                onChange={(e) =>
+                  patchSessions({ autoDeleteWorktrees: e.target.checked })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(t, "settings.sessions.autoDeleteWorktrees.checkbox")}
+            </label>
+          </Field>
+          <Field
+            label={st(
+              t,
+              "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.label",
+            )}
+            hint={st(
+              t,
+              "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.hint",
+            )}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.autoDeleteEmptyWorktreeWorkspaces}
+                onChange={(e) =>
+                  patchSessions({
+                    autoDeleteEmptyWorktreeWorkspaces: e.target.checked,
+                  })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(
+                t,
+                "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.checkbox",
+              )}
+            </label>
+          </Field>
+          <Field
+            label={st(t, "settings.sessions.closeOnExit.label")}
+            hint={st(t, "settings.sessions.closeOnExit.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.closeOnExit}
+                onChange={(e) =>
+                  patchSessions({ closeOnExit: e.target.checked })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(t, "settings.sessions.closeOnExit.checkbox")}
+            </label>
+          </Field>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup
+        title={st(t, "settings.sessions.runtime.title")}
+        description={st(t, "settings.sessions.runtime.description")}
+      >
+        <div className="space-y-4">
+          <Field
+            label={st(t, "settings.terminal.maxMountedTerminals.label")}
+            hint={st(t, "settings.terminal.maxMountedTerminals.hint")}
+          >
+            <Stepper
+              value={settings.terminal.maxMountedTerminals}
+              min={MOUNTED_TERMINAL_LIMIT_MIN}
+              max={MOUNTED_TERMINAL_LIMIT_MAX}
+              onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
+            />
+          </Field>
+          <PowerSettings />
+        </div>
       </SettingsGroup>
       <ControlSessionInstallSection />
       <SettingsGroup
@@ -985,13 +988,10 @@ function GithubSettings() {
 function InterfaceSettings({ t }: { t: SettingsTranslator }) {
   const settings = useSettings((s) => s.settings);
   const patchLanguage = useSettings((s) => s.patchLanguage);
-  const patchStatusBar = useSettings((s) => s.patchStatusBar);
-  const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
   const patchAppearance = useSettings((s) => s.patchAppearance);
-  const sessionDisplay = settings.sessionDisplay;
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-4">
       <LanguageSection
         language={settings.language}
         onChange={patchLanguage}
@@ -1001,27 +1001,30 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
         value={settings.appearance.uiScalePercent}
         onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
       />
-      <SessionDisplaySection
-        sessionDisplay={sessionDisplay}
-        patch={patchSessionDisplay}
-      />
-      <StatusBarSection
-        statusBar={settings.statusBar}
-        patch={patchStatusBar}
-      />
     </section>
   );
 }
 
 function AppearanceSettings() {
-  const appearance = useSettings((s) => s.settings.appearance);
+  const settings = useSettings((s) => s.settings);
   const patchAppearance = useSettings((s) => s.patchAppearance);
+  const patchSessionDisplay = useSettings((s) => s.patchSessionDisplay);
+  const patchStatusBar = useSettings((s) => s.patchStatusBar);
+  const appearance = settings.appearance;
 
   return (
     <section className="space-y-6">
       <ThemeSection
         themeId={appearance.themeId}
         onChange={(themeId) => patchAppearance({ themeId })}
+      />
+      <SessionDisplaySection
+        sessionDisplay={settings.sessionDisplay}
+        patch={patchSessionDisplay}
+      />
+      <StatusBarSection
+        statusBar={settings.statusBar}
+        patch={patchStatusBar}
       />
       <ToastPositionSection
         value={appearance.toastPosition}

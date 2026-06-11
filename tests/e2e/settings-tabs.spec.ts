@@ -37,7 +37,7 @@ const TAB_MARKERS: Array<{
     label: "Terminal",
     marker: {
       kind: "text",
-      pattern: /Resident terminal limit|메모리에 유지할 터미널 수/i,
+      pattern: /Open links on|링크 열기 방식/i,
     },
   },
   {
@@ -51,14 +51,6 @@ const TAB_MARKERS: Array<{
     marker: {
       kind: "text",
       pattern: /Confirm before removing|세션 제거 전 확인/i,
-    },
-  },
-  {
-    tab: /^(Services|서비스)$/,
-    label: "Services",
-    marker: {
-      kind: "text",
-      pattern: /Bundled binary|번들 바이너리/i,
     },
   },
   {
@@ -144,9 +136,8 @@ test.describe("settings modal: tab content", () => {
       "인터페이스",
       "모양",
       "터미널",
-      "에이전트",
       "세션",
-      "서비스",
+      "에이전트",
       "GitHub",
       "편집기",
       "알림",
@@ -174,6 +165,6 @@ test.describe("settings modal: tab content", () => {
 
     await modal.getByRole("button", { name: "터미널", exact: true }).click();
     await expect(modal.getByText("글꼴 패밀리")).toBeVisible();
-    await expect(modal.getByText("메모리에 유지할 터미널 수")).toBeVisible();
+    await expect(modal.getByText("링크 열기 방식")).toBeVisible();
   });
 });
