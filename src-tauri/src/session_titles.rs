@@ -436,6 +436,23 @@ mod tests {
     }
 
     #[test]
+    fn legacy_plain_terminals_do_not_auto_title_from_detected_child_agents() {
+        let mut session = Session::new(
+            "repo".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.auto_title_enabled = None;
+        session.agent_provider = Some(acorn_session::SessionAgentProvider::Codex);
+        session.agent_transcript_id = Some("transcript-1".to_string());
+
+        assert!(!can_generate_title(&session, Some("transcript-1")));
+    }
+
+    #[test]
     fn legacy_generated_and_named_agent_sessions_can_auto_title() {
         let mut generated = Session::new(
             "generated-title".to_string(),

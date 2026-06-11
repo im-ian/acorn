@@ -225,6 +225,36 @@ describe("session title helpers", () => {
     ).toBe(false);
   });
 
+  it("does not auto-title legacy plain terminals only because a child agent is detected", () => {
+    const legacy = session({
+      agent_provider: "codex",
+      agent_transcript_id: "codex-1",
+      status: "running",
+    });
+    delete legacy.auto_title_enabled;
+
+    expect(canAutoGenerateSessionTitle(legacy, true)).toBe(false);
+  });
+
+  it("keeps legacy generated and named agent sessions eligible", () => {
+    const generated = session({
+      title_source: "generated",
+      generated_title_transcript_id: "codex-1",
+      agent_transcript_id: "codex-2",
+      agent_provider: null,
+    });
+    delete generated.auto_title_enabled;
+
+    const named = session({
+      name: "Codex task",
+      agent_provider: null,
+    });
+    delete named.auto_title_enabled;
+
+    expect(canAutoGenerateSessionTitle(generated, true)).toBe(true);
+    expect(canAutoGenerateSessionTitle(named, true)).toBe(true);
+  });
+
   it("auto-titles explicit agent and chat sessions", () => {
     expect(
       canAutoGenerateSessionTitle(
