@@ -1202,6 +1202,9 @@ test.describe("sidebar: project lifecycle", () => {
     await page.getByRole("menuitem", { name: "Remove workspace" }).click();
     const dialog = page.getByRole("dialog", { name: "Remove workspace" });
     await expect(dialog).toContainText(
+      "Worktree workspace sessions will be removed from Acorn only.",
+    );
+    await expect(dialog).toContainText(
       "The workspace worktree will be kept on disk.",
     );
     await dialog.getByRole("button", { name: "Remove with sessions" }).click();

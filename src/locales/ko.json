@@ -1194,6 +1194,7 @@
       "sessionSingular": "세션",
       "sessionPlural": "세션",
       "sessionsWillBeRemoved": "이 작업공간과 함께 Acorn에서 제거됩니다.",
+      "worktreeSessionsWillBeRemovedOnly": "워크트리 작업공간 세션은 Acorn에서만 제거됩니다.",
       "emptyFolder": "이 작업공간에는 세션이 없습니다.",
       "filesWillNotBeTouched": "디스크의 파일과 워크트리는 삭제되지 않습니다.",
       "worktreesWillBeDeleted": "단독 격리 세션은 디스크의 워크트리도 함께 삭제됩니다.",

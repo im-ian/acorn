@@ -79,6 +79,14 @@ export function RemoveProjectFolderDialog({
                       : dt(t, "dialogs.removeProjectFolder.sessionPlural")}{" "}
                     {dt(t, "dialogs.removeProjectFolder.sessionsWillBeRemoved")}
                   </p>
+                  {worktreeWorkspace ? (
+                    <p className="text-fg-muted">
+                      {dt(
+                        t,
+                        "dialogs.removeProjectFolder.worktreeSessionsWillBeRemovedOnly",
+                      )}
+                    </p>
+                  ) : null}
                 </>
               ) : worktreeWorkspace ? (
                 <>
