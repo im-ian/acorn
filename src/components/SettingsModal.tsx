@@ -660,6 +660,22 @@ function SessionSettings() {
         </label>
       </Field>
       <Field
+        label={st(t, "settings.sessions.warnBeforeClosingRunning.label")}
+        hint={st(t, "settings.sessions.warnBeforeClosingRunning.hint")}
+      >
+        <label className="flex items-center gap-2 text-xs text-fg">
+          <input
+            type="checkbox"
+            checked={settings.sessions.warnBeforeClosingRunning}
+            onChange={(e) =>
+              patchSessions({ warnBeforeClosingRunning: e.target.checked })
+            }
+            className="accent-[var(--color-accent)]"
+          />
+          {st(t, "settings.sessions.warnBeforeClosingRunning.checkbox")}
+        </label>
+      </Field>
+      <Field
         label={st(t, "settings.sessions.autoDeleteWorktrees.label")}
         hint={st(t, "settings.sessions.autoDeleteWorktrees.hint")}
       >

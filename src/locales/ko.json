@@ -100,6 +100,11 @@
         "hint": "일반 세션에 적용됩니다. 공유 워크트리 세션은 제거 전에 계속 확인합니다.",
         "checkbox": "확인 대화상자 표시"
       },
+      "warnBeforeClosingRunning": {
+        "label": "실행 중인 세션을 닫기 전 경고",
+        "hint": "아직 실행 중인 세션을 닫기 전에 경고를 표시합니다. 실행 중인 세션을 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
+        "checkbox": "실행 중 세션 경고 표시"
+      },
       "autoDeleteWorktrees": {
         "label": "묻지 않고 격리 워크트리 삭제",
         "hint": "단독 격리 워크트리 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 워크트리를 삭제합니다. 공유 워크트리 작업공간은 유지됩니다.",
@@ -1173,6 +1178,13 @@
       "keepWorktree": "워크트리 유지",
       "deleteWorktree": "워크트리 삭제",
       "remove": "제거"
+    },
+    "runningSessionClose": {
+      "title": "실행 중인 세션을 닫을까요?",
+      "message": "이 세션은 아직 실행 중입니다. 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
+      "sessionLabel": "세션",
+      "dontWarnAgain": "다시 경고하지 않기(설정 → 세션에서 변경)",
+      "continue": "세션 닫기"
     },
     "removeProject": {
       "title": "프로젝트 닫기",
