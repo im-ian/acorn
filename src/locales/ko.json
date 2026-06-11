@@ -44,7 +44,6 @@
       "terminal": "터미널",
       "agents": "에이전트",
       "sessions": "세션",
-      "services": "서비스",
       "github": "GitHub",
       "editor": "편집기",
       "notifications": "알림",
@@ -95,6 +94,14 @@
       }
     },
     "sessions": {
+      "lifecycle": {
+        "title": "세션 생명주기",
+        "description": "세션과 워크트리 기반 작업공간을 닫을 때의 확인 및 정리 동작입니다."
+      },
+      "runtime": {
+        "title": "세션 런타임",
+        "description": "Acorn이 열려 있거나 재시작되는 동안 장시간 실행되는 터미널을 유지하는 동작입니다."
+      },
       "confirmRemove": {
         "label": "세션 제거 전 확인",
         "hint": "일반 세션에 적용됩니다. 공유 워크트리 세션은 제거 전에 계속 확인합니다.",

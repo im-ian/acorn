@@ -44,7 +44,6 @@
       "terminal": "Terminal",
       "agents": "Agents",
       "sessions": "Sessions",
-      "services": "Services",
       "github": "GitHub",
       "editor": "Editor",
       "notifications": "Notifications",
@@ -95,6 +94,14 @@
       }
     },
     "sessions": {
+      "lifecycle": {
+        "title": "Session lifecycle",
+        "description": "Confirmation and cleanup behavior for closing sessions and worktree-backed workspaces."
+      },
+      "runtime": {
+        "title": "Session runtime",
+        "description": "Runtime behavior that keeps long-running terminals usable while Acorn is open or restarting."
+      },
       "confirmRemove": {
         "label": "Confirm before removing a session",
         "hint": "Applies to plain sessions. Shared worktree sessions still ask before removal.",
