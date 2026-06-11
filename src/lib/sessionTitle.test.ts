@@ -207,11 +207,56 @@ describe("session title helpers", () => {
     ).toBe(true);
   });
 
+  it("does not auto-title a plain terminal only because a child agent is detected", () => {
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          auto_title_enabled: false,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
+          status: "running",
+        }),
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it("auto-titles explicit agent and chat sessions", () => {
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          auto_title_enabled: true,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
+        }),
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          auto_title_enabled: true,
+          agent_provider: null,
+          mode: "chat",
+          status: "needs_input",
+        }),
+        false,
+      ),
+    ).toBe(true);
+  });
+
   it("plans immediate generation for eligible sessions only", () => {
     expect(
       planAutoGenerateSessionTitles({
         sessions: [
           session({ id: "ready" }),
+          session({
+            id: "plain-terminal-with-agent",
+            auto_title_enabled: false,
+            agent_provider: "codex",
+            agent_transcript_id: "codex-1",
+            status: "running",
+          }),
           session({ id: "manual", title_source: "manual" }),
           session({ id: "terminal", agent_provider: null }),
           session({
