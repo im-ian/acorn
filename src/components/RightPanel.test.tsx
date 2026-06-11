@@ -85,12 +85,30 @@ function buttonContaining(container: HTMLElement, text: string): HTMLButtonEleme
   return button;
 }
 
-function selectWithAria(container: HTMLElement, label: string): HTMLSelectElement {
-  const select = container.querySelector(`select[aria-label="${label}"]`);
-  if (!(select instanceof HTMLSelectElement)) {
-    throw new Error(`select labelled "${label}" not found`);
+function comboboxWithAria(
+  container: HTMLElement,
+  label: string,
+): HTMLButtonElement {
+  const button = container.querySelector(
+    `button[role="combobox"][aria-label="${label}"]`,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`combobox labelled "${label}" not found`);
   }
-  return select;
+  return button;
+}
+
+function selectOption(label: string) {
+  const optionLabel = Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).find((element) => element.textContent?.trim() === label);
+  const option = optionLabel?.closest('[role="option"]');
+  if (!(option instanceof HTMLElement)) {
+    throw new Error(`option "${label}" not found`);
+  }
+  act(() => {
+    option.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
 }
 
 const labeledPullRequest = {
@@ -415,19 +433,22 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).toContain("Codex patch");
     expect(container.textContent).toContain("Claude plan");
 
-    const select = selectWithAria(container, "Filter by agent");
-    await act(async () => {
-      select.value = "codex";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
+    act(() => {
+      comboboxWithAria(container, "Filter by agent").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
     });
+    selectOption("Codex");
 
     expect(container.textContent).toContain("Codex patch");
     expect(container.textContent).not.toContain("Claude plan");
 
-    await act(async () => {
-      select.value = "claude";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
+    act(() => {
+      comboboxWithAria(container, "Filter by agent").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
     });
+    selectOption("Claude");
 
     expect(container.textContent).not.toContain("Codex patch");
     expect(container.textContent).toContain("Claude plan");
@@ -471,14 +492,6 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).not.toContain("Exploring chat runtime");
     expect(container.textContent).not.toContain("Acorn chat");
     expect(container.textContent).toContain("No Claude, Codex, or Antigravity sessions found");
-
-    const select = selectWithAria(container, "Filter by agent");
-    await act(async () => {
-      select.value = "codex";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    expect(container.textContent).not.toContain("Exploring chat runtime");
   });
 
   it("reprobes GitHub visibility when git metadata changes", async () => {

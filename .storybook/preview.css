@@ -1,0 +1,8 @@
+.sb-show-main {
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+body {
+  overflow: auto;
+}

@@ -5,6 +5,7 @@ import { create } from "zustand";
 
 import acornDarkCss from "../assets/themes/acorn-dark.css?raw";
 import acornLightCss from "../assets/themes/acorn-light.css?raw";
+import acornPinkCss from "../assets/themes/acorn-pink.css?raw";
 import ayuDarkCss from "../assets/themes/ayu-dark.css?raw";
 import catppuccinLatteCss from "../assets/themes/catppuccin-latte.css?raw";
 import catppuccinMochaCss from "../assets/themes/catppuccin-mocha.css?raw";
@@ -56,9 +57,16 @@ export const THEME_CSS_VARS = [
 export const BUILT_IN_THEMES: ReadonlyArray<AcornTheme> = [
   {
     id: "acorn-dark",
-    label: "Acorn Dark",
+    label: "Acorn Dark Green",
     mode: "dark",
     css: acornDarkCss,
+    source: "builtin",
+  },
+  {
+    id: "acorn-pink",
+    label: "Acorn Dark Pink",
+    mode: "dark",
+    css: acornPinkCss,
     source: "builtin",
   },
   {

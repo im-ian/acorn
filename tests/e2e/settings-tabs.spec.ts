@@ -162,8 +162,8 @@ test.describe("settings modal: tab content", () => {
 
     await modal.getByRole("button", { name: "인터페이스", exact: true }).click();
     await expect(modal.getByText("언어", { exact: true })).toBeVisible();
-    await expect(modal.getByRole("combobox", { name: "언어" })).toHaveValue(
-      "ko",
+    await expect(modal.getByRole("combobox", { name: "언어" })).toContainText(
+      "한국어",
     );
     await expect(
       modal.getByRole("button", { name: "기본값으로 재설정" }),

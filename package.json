@@ -17,7 +17,9 @@
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "storybook": "storybook dev -p 6006",
+    "build:storybook": "storybook build"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -56,6 +58,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@storybook/addon-docs": "10.4.3",
+    "@storybook/react-vite": "10.4.3",
     "@tailwindcss/vite": "^4.2.4",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
@@ -64,6 +68,7 @@
     "@vitest/ui": "^4.1.5",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.14",
+    "storybook": "10.4.3",
     "tailwindcss": "^4.2.4",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
