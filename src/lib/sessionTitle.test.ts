@@ -22,6 +22,7 @@ function session(overrides: Partial<Session> = {}): Session {
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
     title_source: "default",
+    auto_title_enabled: true,
     kind: "regular",
     owner: { kind: "user" },
     position: null,
@@ -89,6 +90,9 @@ describe("session title helpers", () => {
       ),
     ).toBe(false);
     expect(canGenerateSessionTitle(session({ agent_provider: null }))).toBe(true);
+    expect(
+      canGenerateSessionTitle(session({ auto_title_enabled: false })),
+    ).toBe(false);
   });
 
   it("allows forced title generation for user-owned regular sessions", () => {
@@ -207,11 +211,86 @@ describe("session title helpers", () => {
     ).toBe(true);
   });
 
+  it("does not auto-title a plain terminal only because a child agent is detected", () => {
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          auto_title_enabled: false,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
+          status: "running",
+        }),
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not auto-title legacy plain terminals only because a child agent is detected", () => {
+    const legacy = session({
+      agent_provider: "codex",
+      agent_transcript_id: "codex-1",
+      status: "running",
+    });
+    delete legacy.auto_title_enabled;
+
+    expect(canAutoGenerateSessionTitle(legacy, true)).toBe(false);
+  });
+
+  it("keeps legacy generated and named agent sessions eligible", () => {
+    const generated = session({
+      title_source: "generated",
+      generated_title_transcript_id: "codex-1",
+      agent_transcript_id: "codex-2",
+      agent_provider: null,
+    });
+    delete generated.auto_title_enabled;
+
+    const named = session({
+      name: "Codex task",
+      agent_provider: null,
+    });
+    delete named.auto_title_enabled;
+
+    expect(canAutoGenerateSessionTitle(generated, true)).toBe(true);
+    expect(canAutoGenerateSessionTitle(named, true)).toBe(true);
+  });
+
+  it("auto-titles explicit agent and chat sessions", () => {
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          auto_title_enabled: true,
+          agent_provider: "codex",
+          agent_transcript_id: "codex-1",
+        }),
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      canAutoGenerateSessionTitle(
+        session({
+          auto_title_enabled: true,
+          agent_provider: null,
+          mode: "chat",
+          status: "needs_input",
+        }),
+        false,
+      ),
+    ).toBe(true);
+  });
+
   it("plans immediate generation for eligible sessions only", () => {
     expect(
       planAutoGenerateSessionTitles({
         sessions: [
           session({ id: "ready" }),
+          session({
+            id: "plain-terminal-with-agent",
+            auto_title_enabled: false,
+            agent_provider: "codex",
+            agent_transcript_id: "codex-1",
+            status: "running",
+          }),
           session({ id: "manual", title_source: "manual" }),
           session({ id: "terminal", agent_provider: null }),
           session({

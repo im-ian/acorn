@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use acorn_session::{Session, SessionKind, SessionOwner, SessionTitleSource};
+use acorn_session::{Session, SessionKind, SessionMode, SessionOwner, SessionTitleSource};
 
 use crate::agent_history::{self, AgentHistoryProvider};
 use crate::agent_resume;
@@ -36,6 +36,9 @@ pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> boo
     if !can_force_generate_title(session) {
         return false;
     }
+    if !auto_title_enabled(session) {
+        return false;
+    }
     match session.title_source {
         SessionTitleSource::Default => true,
         SessionTitleSource::Generated => transcript_id
@@ -46,6 +49,27 @@ pub fn can_generate_title(session: &Session, transcript_id: Option<&str>) -> boo
 
 pub fn can_force_generate_title(session: &Session) -> bool {
     session.kind == SessionKind::Regular && matches!(session.owner, SessionOwner::User)
+}
+
+fn auto_title_enabled(session: &Session) -> bool {
+    if let Some(enabled) = session.auto_title_enabled {
+        return enabled;
+    }
+
+    session.mode == SessionMode::Chat
+        || session.title_source == SessionTitleSource::Generated
+        || name_implies_agent_session(&session.name)
+}
+
+fn name_implies_agent_session(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["claude", "codex", "antigravity", "agy"]
+        .iter()
+        .any(|needle| {
+            lower
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|part| part == *needle)
+        })
 }
 
 pub fn build_prompt(prompt: Option<&str>, title_context: &str) -> String {
@@ -373,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_is_limited_to_user_owned_default_regular_sessions() {
+    fn generation_is_limited_to_opted_in_user_owned_regular_sessions() {
         let mut session = Session::new(
             "repo".to_string(),
             PathBuf::from("/tmp/repo"),
@@ -382,6 +406,7 @@ mod tests {
             false,
             SessionKind::Regular,
         );
+        session.auto_title_enabled = Some(true);
         assert!(can_generate_title(&session, None));
 
         session.title_source = SessionTitleSource::Manual;
@@ -390,6 +415,68 @@ mod tests {
         session.title_source = SessionTitleSource::Default;
         session.owner = SessionOwner::control(uuid::Uuid::new_v4());
         assert!(!can_generate_title(&session, Some("transcript-1")));
+    }
+
+    #[test]
+    fn generation_requires_auto_title_opt_in() {
+        let mut session = Session::new(
+            "repo".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.agent_provider = Some(acorn_session::SessionAgentProvider::Codex);
+
+        assert!(!can_generate_title(&session, Some("transcript-1")));
+
+        session.auto_title_enabled = Some(true);
+        assert!(can_generate_title(&session, Some("transcript-1")));
+    }
+
+    #[test]
+    fn legacy_plain_terminals_do_not_auto_title_from_detected_child_agents() {
+        let mut session = Session::new(
+            "repo".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        session.auto_title_enabled = None;
+        session.agent_provider = Some(acorn_session::SessionAgentProvider::Codex);
+        session.agent_transcript_id = Some("transcript-1".to_string());
+
+        assert!(!can_generate_title(&session, Some("transcript-1")));
+    }
+
+    #[test]
+    fn legacy_generated_and_named_agent_sessions_can_auto_title() {
+        let mut generated = Session::new(
+            "generated-title".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        generated.auto_title_enabled = None;
+        generated.title_source = SessionTitleSource::Generated;
+        generated.generated_title_transcript_id = Some("old-transcript".to_string());
+        assert!(can_generate_title(&generated, Some("new-transcript")));
+
+        let mut named = Session::new(
+            "codex resume".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            SessionKind::Regular,
+        );
+        named.auto_title_enabled = None;
+        assert!(can_generate_title(&named, Some("transcript-1")));
     }
 
     #[test]
@@ -425,6 +512,7 @@ mod tests {
             false,
             SessionKind::Regular,
         );
+        session.auto_title_enabled = Some(true);
         session.title_source = SessionTitleSource::Generated;
         session.generated_title_transcript_id = Some("old-transcript".to_string());
 

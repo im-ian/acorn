@@ -118,6 +118,7 @@ export interface Session {
   updated_at: string;
   last_message: string | null;
   title_source: SessionTitleSource;
+  auto_title_enabled?: boolean | null;
   generated_title_transcript_id?: string | null;
   kind: SessionKind;
   mode?: SessionMode;

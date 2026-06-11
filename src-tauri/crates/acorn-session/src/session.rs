@@ -248,6 +248,10 @@ pub struct Session {
     pub last_message: Option<String>,
     #[serde(default = "default_title_source_for_existing_sessions")]
     pub title_source: SessionTitleSource,
+    /// Explicit opt-in for automatic title generation. `None` means the row
+    /// predates this field and callers should apply legacy compatibility rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_title_enabled: Option<bool>,
     /// Transcript id used when Acorn last generated this tab title. Manual
     /// renames clear this value; generated titles keep it so a later agent
     /// session rotation (for example Claude `/clear`) can generate a fresh
@@ -329,6 +333,7 @@ impl Session {
             updated_at: now,
             last_message: None,
             title_source: SessionTitleSource::Default,
+            auto_title_enabled: Some(false),
             generated_title_transcript_id: None,
             kind,
             mode: SessionMode::Terminal,
@@ -574,6 +579,7 @@ mod tests {
         let session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
 
         assert_eq!(session.title_source, SessionTitleSource::Default);
+        assert_eq!(session.auto_title_enabled, Some(false));
     }
 
     #[test]

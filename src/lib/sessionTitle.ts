@@ -31,6 +31,7 @@ export function canGenerateSessionTitle(session: Session): boolean {
   const currentTranscriptId = session.agent_transcript_id?.trim();
   return (
     canForceGenerateSessionTitle(session) &&
+    autoTitleEligibleForSession(session) &&
     (titleSource === "default" ||
       (titleSource === "generated" &&
         currentTranscriptId != null &&
@@ -55,6 +56,18 @@ export function autoTitleGenerationEnabledForSession(
   enabled: boolean,
 ): boolean {
   return enabled || session.mode === "chat";
+}
+
+function autoTitleEligibleForSession(session: Session): boolean {
+  if (typeof session.auto_title_enabled === "boolean") {
+    return session.auto_title_enabled;
+  }
+
+  return (
+    session.mode === "chat" ||
+    session.title_source === "generated" ||
+    inferAgentProvider(session.name) != null
+  );
 }
 
 function hasAgentChatWork(session: Session): boolean {
