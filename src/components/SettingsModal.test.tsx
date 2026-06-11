@@ -292,6 +292,12 @@ function optionLabels(): string[] {
   ).map((option) => option.textContent?.trim() ?? "");
 }
 
+function separatorLabels(): string[] {
+  return Array.from(
+    document.querySelectorAll("[data-select-separator]"),
+  ).map((separator) => separator.textContent?.trim() ?? "");
+}
+
 function blurInput(input: HTMLInputElement) {
   act(() => {
     input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
@@ -448,7 +454,7 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
-  it("renders searchable grouped theme options including user themes", async () => {
+  it("renders searchable theme sections with separators including user themes", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -464,11 +470,8 @@ describe("SettingsModal font controls", () => {
 
     clickElement(themeSelect);
 
-    expect(
-      Array.from(document.querySelectorAll("[data-select-group-label]")).map(
-        (element) => element.textContent?.trim(),
-      ),
-    ).toEqual([
+    expect(document.querySelector("[data-select-group-label]")).toBeNull();
+    expect(separatorLabels()).toEqual([
       "Acorn themes",
       "Built-in dark",
       "Built-in light",
@@ -488,6 +491,7 @@ describe("SettingsModal font controls", () => {
     setInputValue(searchInput, "local");
 
     expect(optionLabels()).toEqual(["Solarized Local (custom)"]);
+    expect(separatorLabels()).toEqual([]);
 
     pressKey(searchInput, "Enter");
 

@@ -85,7 +85,7 @@ import {
   Select,
   Stepper,
   TextInput,
-  type SelectOptionGroup,
+  type SelectItem,
 } from "./ui";
 
 type Tab =
@@ -1092,10 +1092,10 @@ function UiScaleSection({
   );
 }
 
-function buildThemeSelectGroups(
+function buildThemeSelectItems(
   themes: ReadonlyArray<AcornTheme>,
   t: SettingsTranslator,
-): SelectOptionGroup[] {
+): SelectItem[] {
   const customLabel = st(t, "settings.appearance.theme.custom");
   const acornBuiltIns = themes.filter(isAcornBuiltInTheme);
   const otherBuiltInDark = themes.filter(
@@ -1112,7 +1112,7 @@ function buildThemeSelectGroups(
   );
   const userThemes = themes.filter((theme) => theme.source === "user");
 
-  return [
+  const sections = [
     {
       label: st(t, "settings.appearance.theme.groups.acorn"),
       options: acornBuiltIns.map((theme) => themeToSelectOption(theme)),
@@ -1131,7 +1131,14 @@ function buildThemeSelectGroups(
         themeToSelectOption(theme, customLabel),
       ),
     },
-  ].filter((group) => group.options.length > 0);
+  ];
+
+  const items: SelectItem[] = [];
+  for (const section of sections) {
+    if (section.options.length === 0) continue;
+    items.push({ type: "separator", label: section.label }, ...section.options);
+  }
+  return items;
 }
 
 function isAcornBuiltInTheme(theme: AcornTheme): boolean {
@@ -1160,7 +1167,7 @@ function ThemeSection({
   const themes = useThemes((s) => s.themes);
   const refresh = useThemes((s) => s.refresh);
   const t = useTranslation();
-  const themeOptions = buildThemeSelectGroups(themes, t);
+  const themeOptions = buildThemeSelectItems(themes, t);
 
   return (
     <Field
