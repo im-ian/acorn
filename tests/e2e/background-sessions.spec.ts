@@ -39,12 +39,12 @@ const DAEMON_RUNNING = {
   last_error: null,
 };
 
-async function openServicesSettings(page: import("./support").Page) {
+async function openSessionsSettings(page: import("./support").Page) {
   await page.goto("/");
   await pressHotkey(page, { mod: true, key: "," });
   const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
   await expect(modal).toBeVisible();
-  await modal.getByRole("button", { name: "Services", exact: true }).click();
+  await modal.getByRole("button", { name: "Sessions", exact: true }).click();
   return modal;
 }
 
@@ -69,7 +69,7 @@ test.describe("background sessions settings", () => {
       },
     ]);
 
-    const modal = await openServicesSettings(page);
+    const modal = await openSessionsSettings(page);
 
     await expect(modal.getByText("alpha", { exact: true })).toBeVisible();
     await expect(modal.getByText("s-1", { exact: true })).toHaveCount(0);
@@ -146,7 +146,7 @@ test.describe("background sessions settings", () => {
       return undefined;
     });
 
-    const modal = await openServicesSettings(page);
+    const modal = await openSessionsSettings(page);
     await modal.getByRole("button", { name: "Restore session" }).click();
 
     await expect(
@@ -221,7 +221,7 @@ test.describe("background sessions settings", () => {
       return 1;
     });
 
-    const modal = await openServicesSettings(page);
+    const modal = await openSessionsSettings(page);
 
     await expect(modal.getByText("live session", { exact: true })).toBeVisible();
     await expect(

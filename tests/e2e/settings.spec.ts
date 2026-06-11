@@ -114,7 +114,7 @@ test.describe("settings modal", () => {
 
     await pressHotkey(page, { mod: true, key: "," });
     const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
-    await modal.getByRole("button", { name: /^(Services|서비스)$/ }).click();
+    await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
 
     const checkbox = modal.getByRole("checkbox", {
       name: /Keep this Mac awake|이 Mac 잠자기 방지/,

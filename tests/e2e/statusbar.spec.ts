@@ -67,6 +67,7 @@ async function enableAgentTokenUsage(
 ): Promise<void> {
   await pressHotkey(page, { mod: true, key: "," });
   const modal = page.getByRole("dialog", { name: "Settings" });
+  await modal.getByRole("button", { name: "Appearance", exact: true }).click();
   await modal.getByRole("checkbox", { name: /Agent token usage/ }).click();
   await page.keyboard.press("Escape");
 }
