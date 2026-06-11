@@ -151,6 +151,9 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
       multiple: _multiple,
       onValueChange: _onValueChange,
       onValuesChange: _onValuesChange,
+      "aria-label": ariaLabel,
+      "aria-labelledby": ariaLabelledBy,
+      "aria-describedby": ariaDescribedBy,
       ...rest
     } = props;
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -599,9 +602,9 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
           aria-controls={isOpen ? listboxId : undefined}
           aria-expanded={isOpen}
           aria-haspopup="listbox"
-          aria-label={props["aria-label"]}
-          aria-labelledby={props["aria-labelledby"]}
-          aria-describedby={props["aria-describedby"]}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          aria-describedby={ariaDescribedBy}
           disabled={disabled}
           className={cn(
             SELECT_CLASS,
