@@ -2160,6 +2160,7 @@ function ProjectFolderView({
     >
       <div
         ref={setFolderHeaderNodeRef}
+        data-sidebar-workspace-id={folder.id}
         {...attributes}
         role="button"
         tabIndex={0}

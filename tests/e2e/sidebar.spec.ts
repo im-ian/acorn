@@ -677,8 +677,7 @@ test.describe("sidebar: project lifecycle", () => {
     await page.getByRole("menuitem", { name: "New workspace", exact: true }).click();
 
     const folderRow = page
-      .locator("aside")
-      .getByRole("button", { name: /New workspace/ })
+      .locator("aside [data-sidebar-workspace-id]")
       .first();
     await expect(folderRow).toBeVisible();
     await expectRootWorkspaceMetadataHidden(folderRow);
@@ -843,6 +842,7 @@ test.describe("sidebar: project lifecycle", () => {
     const folderRow = page
       .locator("aside")
       .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
       .first();
     await expect(folderRow).toBeVisible();
 
@@ -1048,7 +1048,10 @@ test.describe("sidebar: project lifecycle", () => {
     const projectRow = page.getByRole("button", { name: "Project demo" });
     await projectRow.click({ button: "right" });
     await page.getByRole("menuitem", { name: "New workspace", exact: true }).click();
-    const folderRow = sidebar.getByRole("button", { name: /New workspace/ }).first();
+    const folderRow = sidebar
+      .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
+      .first();
     await folderRow.dblclick();
     await sidebar.getByRole("textbox").fill("Frontend");
     await sidebar.getByRole("textbox").press("Enter");
@@ -1238,7 +1241,9 @@ test.describe("sidebar: project lifecycle", () => {
     await projectRow.click({ button: "right" });
     await page.getByRole("menuitem", { name: "New workspace" }).click();
 
-    const folderRows = sidebar.getByRole("button", { name: /New workspace/ });
+    const folderRows = sidebar
+      .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" });
     await expect(folderRows).toHaveCount(1);
     await folderRows.first().click({ button: "right" });
     await page.getByRole("menuitem", { name: "Remove workspace" }).click();
@@ -1476,6 +1481,7 @@ test.describe("sidebar: project lifecycle", () => {
     const firstFolder = page
       .locator("aside")
       .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
       .first();
     await firstFolder.dblclick();
     await page.locator("aside").getByRole("textbox").fill("Frontend");
@@ -1486,6 +1492,7 @@ test.describe("sidebar: project lifecycle", () => {
     const secondFolder = page
       .locator("aside")
       .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
       .first();
     await secondFolder.dblclick();
     await page.locator("aside").getByRole("textbox").fill("Backend");
@@ -1612,7 +1619,10 @@ test.describe("sidebar: project lifecycle", () => {
     const projectRow = page.getByRole("button", { name: "Project demo" });
     await projectRow.click({ button: "right" });
     await page.getByRole("menuitem", { name: "New workspace", exact: true }).click();
-    const folderRow = sidebar.getByRole("button", { name: /New workspace/ }).first();
+    const folderRow = sidebar
+      .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
+      .first();
     await folderRow.dblclick();
     await sidebar.getByRole("textbox").fill("Frontend");
     await sidebar.getByRole("textbox").press("Enter");
@@ -1725,7 +1735,10 @@ test.describe("sidebar: project lifecycle", () => {
     const projectRow = page.getByRole("button", { name: "Project demo" });
     await projectRow.click({ button: "right" });
     await page.getByRole("menuitem", { name: "New workspace", exact: true }).click();
-    const folderRow = sidebar.getByRole("button", { name: /New workspace/ }).first();
+    const folderRow = sidebar
+      .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
+      .first();
     await folderRow.dblclick();
     await sidebar.getByRole("textbox").fill("Frontend");
     await sidebar.getByRole("textbox").press("Enter");
@@ -1965,6 +1978,7 @@ test.describe("sidebar: project lifecycle", () => {
     const folderRow = page
       .locator("aside")
       .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
       .first();
     await folderRow.dblclick();
     await page.locator("aside").getByRole("textbox").fill("Frontend");
@@ -2107,7 +2121,10 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("menuitem", { name: "New workspace", exact: true })
       .click();
     await expect(
-      page.locator("aside").getByRole("button", { name: /New workspace/ }),
+      page
+        .locator("aside")
+        .getByRole("button", { name: /New workspace/ })
+        .filter({ hasText: "New workspace" }),
     ).toBeVisible();
 
     await projectRow.hover();
