@@ -189,6 +189,106 @@ test.describe("session lifecycle", () => {
     expect(calls[0].removeWorktree).toBe(false);
   });
 
+  test("closing a running session shows a warning before removal", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: false,
+            warnBeforeClosingRunning: true,
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      return w.__sessionRemoved
+        ? []
+        : [
+            {
+              id: "s-1",
+              name: "alpha",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo",
+              branch: "main",
+              isolated: false,
+              status: "running",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:05Z",
+              last_message: null,
+            },
+          ];
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __sessionRemoved?: boolean;
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      w.__sessionRemoved = true;
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const row = sidebar
+      .getByRole("button", { name: /^alpha main · Running/ })
+      .first();
+    await expect(row).toBeVisible();
+
+    await row.hover();
+    await sidebar
+      .getByRole("button", { name: "Remove session", exact: true })
+      .click();
+
+    const warning = page.getByRole("dialog", {
+      name: "Close running session?",
+    });
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText(
+      "Closing it will terminate the active shell or agent process.",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __removeCalls?: unknown[] }).__removeCalls
+              ?.length ?? 0,
+        ),
+      )
+      .toBe(0);
+
+    await warning
+      .getByRole("checkbox", { name: /Don't warn again/ })
+      .click();
+    await warning.getByRole("button", { name: "Close session" }).click();
+
+    await expect(
+      sidebar.getByRole("button", { name: /^alpha main · Running/ }),
+    ).toHaveCount(0);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ id: string; removeWorktree: boolean }>;
+    expect(calls).toEqual([{ id: "s-1", removeWorktree: false }]);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).sessions?.warnBeforeClosingRunning : null;
+        }),
+      )
+      .toBe(false);
+  });
+
   test("standalone isolated worktree auto-delete skips the remove confirmation", async ({
     page,
     tauri,

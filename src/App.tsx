@@ -10,6 +10,7 @@ import "./App.css";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
+import { RunningSessionCloseWarningDialog } from "./components/RunningSessionCloseWarningDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { LayoutRenderer } from "./components/LayoutRenderer";
 import { RightPanel } from "./components/RightPanel";
@@ -290,8 +291,16 @@ function App() {
   const pendingRemoveAutoDeletesWorktree =
     pendingRemove !== null &&
     shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders);
+  const [runningCloseWarningConfirmedId, setRunningCloseWarningConfirmedId] =
+    useState<string | null>(null);
+  const pendingRemoveNeedsRunningWarning =
+    pendingRemove !== null &&
+    pendingRemove.status === "running" &&
+    settings.sessions.warnBeforeClosingRunning &&
+    runningCloseWarningConfirmedId !== pendingRemove.id;
   const pendingRemoveSkipsDialog =
     pendingRemove !== null &&
+    !pendingRemoveNeedsRunningWarning &&
     (pendingRemoveKeepsSharedWorktree ||
       (pendingRemoveAutoDeletesWorktree && autoDeleteWorktrees) ||
       (!pendingRemoveRecordedWorktree && !confirmRemoveSession));
@@ -1063,12 +1072,22 @@ function App() {
     };
   }, [activeSessionId, sessionIdsKey]);
 
+  useEffect(() => {
+    if (
+      runningCloseWarningConfirmedId !== null &&
+      pendingRemove?.id !== runningCloseWarningConfirmedId
+    ) {
+      setRunningCloseWarningConfirmedId(null);
+    }
+  }, [pendingRemove?.id, runningCloseWarningConfirmedId]);
+
   // Skip the confirmation dialog when Settings gives a deterministic removal
   // choice: shared worktree workspace sessions keep the worktree, plain
   // sessions can skip confirmation, and standalone isolated sessions can opt
   // into always deleting their worktree from disk.
   useEffect(() => {
     if (!pendingRemove) return;
+    if (pendingRemoveNeedsRunningWarning) return;
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
     const canDeleteWorktree = canDeleteSessionWorktree(
       pendingRemove,
@@ -1108,6 +1127,7 @@ function App() {
     );
   }, [
     pendingRemove,
+    pendingRemoveNeedsRunningWarning,
     autoDeleteWorktrees,
     clearPendingRemove,
     confirmRemoveSession,
@@ -1692,8 +1712,24 @@ function App() {
           });
         }}
       />
+      <RunningSessionCloseWarningDialog
+        session={pendingRemoveNeedsRunningWarning ? pendingRemove : null}
+        onCancel={() => {
+          setRunningCloseWarningConfirmedId(null);
+          clearPendingRemove();
+        }}
+        onContinue={() => {
+          if (pendingRemove) {
+            setRunningCloseWarningConfirmedId(pendingRemove.id);
+          }
+        }}
+      />
       <RemoveSessionDialog
-        session={pendingRemoveSkipsDialog ? null : pendingRemove}
+        session={
+          pendingRemoveSkipsDialog || pendingRemoveNeedsRunningWarning
+            ? null
+            : pendingRemove
+        }
         canDeleteWorktree={pendingRemoveCanDeleteWorktree}
         onClose={(choice) => {
           const target = pendingRemove;

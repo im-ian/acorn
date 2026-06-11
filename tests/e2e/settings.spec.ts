@@ -141,4 +141,29 @@ test.describe("settings modal", () => {
       )
       .toBe(false);
   });
+
+  test("toggles the running-session close warning from Sessions settings", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
+
+    const checkbox = modal.getByRole("checkbox", {
+      name: /Show running-session warning|실행 중 세션 경고 표시/,
+    });
+    await expect(checkbox).toBeChecked();
+    await checkbox.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).sessions?.warnBeforeClosingRunning : null;
+        }),
+      )
+      .toBe(false);
+  });
 });

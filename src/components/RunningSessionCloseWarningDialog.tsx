@@ -1,0 +1,106 @@
+import { AlertTriangle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useDialogShortcuts } from "../lib/dialog";
+import type { TranslationKey, Translator } from "../lib/i18n";
+import { useSettings } from "../lib/settings";
+import type { Session } from "../lib/types";
+import { useTranslation } from "../lib/useTranslation";
+import { Modal, ModalHeader } from "./ui";
+
+type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
+
+const TITLE_ID = "running-session-close-warning-title";
+
+function dt(t: Translator, key: DialogTranslationKey): string {
+  return t(key);
+}
+
+interface RunningSessionCloseWarningDialogProps {
+  session: Session | null;
+  onCancel: () => void;
+  onContinue: () => void;
+}
+
+export function RunningSessionCloseWarningDialog({
+  session,
+  onCancel,
+  onContinue,
+}: RunningSessionCloseWarningDialogProps) {
+  const t = useTranslation();
+  const patchSessions = useSettings((s) => s.patchSessions);
+  const [dontWarnAgain, setDontWarnAgain] = useState(false);
+
+  useEffect(() => {
+    if (session) setDontWarnAgain(false);
+  }, [session?.id]);
+
+  function commitContinue() {
+    if (dontWarnAgain) {
+      patchSessions({ warnBeforeClosingRunning: false });
+    }
+    onContinue();
+  }
+
+  useDialogShortcuts(session !== null, {
+    onCancel,
+    onConfirm: commitContinue,
+  });
+
+  return (
+    <Modal
+      open={session !== null}
+      onClose={onCancel}
+      variant="dialog"
+      size="md"
+      ariaLabelledBy={TITLE_ID}
+    >
+      {session ? (
+        <>
+          <ModalHeader
+            title={dt(t, "dialogs.runningSessionClose.title")}
+            titleId={TITLE_ID}
+            icon={<AlertTriangle size={16} className="text-warning" />}
+            variant="dialog"
+            onClose={onCancel}
+          />
+          <div className="space-y-3 px-4 py-3 text-sm text-fg">
+            <p>{dt(t, "dialogs.runningSessionClose.message")}</p>
+            <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-fg-muted">
+                {dt(t, "dialogs.runningSessionClose.sessionLabel")}
+              </div>
+              <div className="mt-1 truncate font-mono text-xs text-accent">
+                {session.name}
+              </div>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
+              <input
+                type="checkbox"
+                checked={dontWarnAgain}
+                onChange={(e) => setDontWarnAgain(e.target.checked)}
+                className="accent-[var(--color-accent)]"
+              />
+              {dt(t, "dialogs.runningSessionClose.dontWarnAgain")}
+            </label>
+          </div>
+          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+            >
+              {dt(t, "dialogs.common.cancel")}
+            </button>
+            <button
+              type="button"
+              onClick={commitContinue}
+              className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+            >
+              {dt(t, "dialogs.runningSessionClose.continue")}
+            </button>
+          </footer>
+        </>
+      ) : null}
+    </Modal>
+  );
+}
