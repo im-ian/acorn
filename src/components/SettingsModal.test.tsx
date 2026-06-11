@@ -28,7 +28,14 @@ const mocks = vi.hoisted(() => ({
     {
       css: "",
       id: "acorn-light",
-      label: "Acorn Light",
+      label: "Acorn Light Green",
+      mode: "light" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "acorn-light-pink",
+      label: "Acorn Light Pink",
       mode: "light" as const,
       source: "builtin" as const,
     },
@@ -488,7 +495,8 @@ describe("SettingsModal font controls", () => {
     expect(optionLabels()).toEqual([
       "Acorn Dark Green",
       "Acorn Dark Pink",
-      "Acorn Light",
+      "Acorn Light Green",
+      "Acorn Light Pink",
       "One Dark Pro",
       "GitHub Light",
       "Solarized Local (custom)",

@@ -30,7 +30,8 @@ const themeGroups: SelectOptionGroup[] = [
     options: [
       { value: "acorn-dark", label: "Acorn Dark Green" },
       { value: "acorn-pink", label: "Acorn Dark Pink" },
-      { value: "acorn-light", label: "Acorn Light" },
+      { value: "acorn-light", label: "Acorn Light Green" },
+      { value: "acorn-light-pink", label: "Acorn Light Pink" },
     ],
   },
   {
