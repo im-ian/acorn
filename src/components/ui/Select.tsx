@@ -679,6 +679,11 @@ function normalizeOptionGroups(
 
   const groups: NormalizedOptionGroup[] = [];
   const ungrouped: NormalizedSelectItem[] = [];
+  const flushUngrouped = () => {
+    if (ungrouped.length === 0) return;
+    groups.push({ items: [...ungrouped] });
+    ungrouped.length = 0;
+  };
 
   Children.forEach(children, (child) => {
     if (!isValidElement(child) || typeof child.type !== "string") return;
@@ -696,6 +701,7 @@ function normalizeOptionGroups(
     }
 
     if (child.type === "optgroup") {
+      flushUngrouped();
       const optgroupProps = child.props as ChildOptionGroupProps;
       const label =
         typeof optgroupProps.label === "string"
@@ -724,9 +730,7 @@ function normalizeOptionGroups(
     }
   });
 
-  if (ungrouped.length > 0) {
-    groups.unshift({ items: ungrouped });
-  }
+  flushUngrouped();
 
   return groups;
 }
@@ -736,9 +740,15 @@ function normalizeExplicitOptions(
 ): NormalizedOptionGroup[] {
   const groups: NormalizedOptionGroup[] = [];
   const ungrouped: NormalizedSelectItem[] = [];
+  const flushUngrouped = () => {
+    if (ungrouped.length === 0) return;
+    groups.push({ items: [...ungrouped] });
+    ungrouped.length = 0;
+  };
 
   for (const item of options) {
     if ("options" in item) {
+      flushUngrouped();
       groups.push({
         label: item.label,
         items: item.options.map((option) => normalizeItem(option, item.label)),
@@ -748,9 +758,7 @@ function normalizeExplicitOptions(
     }
   }
 
-  if (ungrouped.length > 0) {
-    groups.unshift({ items: ungrouped });
-  }
+  flushUngrouped();
 
   return groups;
 }

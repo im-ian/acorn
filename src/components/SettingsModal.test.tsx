@@ -454,7 +454,7 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
-  it("renders searchable theme sections with separators including user themes", async () => {
+  it("renders searchable grouped theme options with separators including user themes", async () => {
     await act(async () => {
       root = createRoot(container);
       root.render(<SettingsModal />);
@@ -470,12 +470,20 @@ describe("SettingsModal font controls", () => {
 
     clickElement(themeSelect);
 
-    expect(document.querySelector("[data-select-group-label]")).toBeNull();
-    expect(separatorLabels()).toEqual([
+    expect(
+      Array.from(document.querySelectorAll("[data-select-group-label]")).map(
+        (element) => element.textContent?.trim(),
+      ),
+    ).toEqual([
       "Acorn themes",
       "Built-in dark",
       "Built-in light",
       "Custom themes",
+    ]);
+    expect(separatorLabels()).toEqual([
+      "",
+      "",
+      "",
     ]);
     expect(optionLabels()).toEqual([
       "Acorn Dark Green",

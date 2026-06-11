@@ -86,6 +86,7 @@ import {
   Stepper,
   TextInput,
   type SelectItem,
+  type SelectOptionGroup,
 } from "./ui";
 
 type Tab =
@@ -1095,7 +1096,7 @@ function UiScaleSection({
 function buildThemeSelectItems(
   themes: ReadonlyArray<AcornTheme>,
   t: SettingsTranslator,
-): SelectItem[] {
+): Array<SelectItem | SelectOptionGroup> {
   const customLabel = st(t, "settings.appearance.theme.custom");
   const acornBuiltIns = themes.filter(isAcornBuiltInTheme);
   const otherBuiltInDark = themes.filter(
@@ -1112,7 +1113,7 @@ function buildThemeSelectItems(
   );
   const userThemes = themes.filter((theme) => theme.source === "user");
 
-  const sections = [
+  const sections: SelectOptionGroup[] = [
     {
       label: st(t, "settings.appearance.theme.groups.acorn"),
       options: acornBuiltIns.map((theme) => themeToSelectOption(theme)),
@@ -1131,12 +1132,14 @@ function buildThemeSelectItems(
         themeToSelectOption(theme, customLabel),
       ),
     },
-  ];
+  ].filter((section) => section.options.length > 0);
 
-  const items: SelectItem[] = [];
-  for (const section of sections) {
-    if (section.options.length === 0) continue;
-    items.push({ type: "separator", label: section.label }, ...section.options);
+  const items: Array<SelectItem | SelectOptionGroup> = [];
+  for (const [index, section] of sections.entries()) {
+    if (index > 0) {
+      items.push({ type: "separator" });
+    }
+    items.push(section);
   }
   return items;
 }

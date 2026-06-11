@@ -1,7 +1,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Select, type SelectItem, type SelectOption } from "./Select";
+import {
+  Select,
+  type SelectItem,
+  type SelectOption,
+  type SelectOptionGroup,
+} from "./Select";
 
 const THEME_OPTIONS: SelectOption[] = [
   { value: "acorn-dark", label: "Acorn Dark Green" },
@@ -63,6 +68,18 @@ function optionLabels(): string[] {
 function separators(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>("[data-select-separator]"),
+  );
+}
+
+function sectionMarkers(): string[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[data-select-group-label], [data-select-separator]",
+    ),
+  ).map((element) =>
+    element.hasAttribute("data-select-separator")
+      ? "separator"
+      : (element.textContent?.trim() ?? ""),
   );
 }
 
@@ -269,6 +286,39 @@ describe("Select", () => {
     pressKey(getSearchInput(), "Enter");
 
     expect(onValueChange).toHaveBeenCalledWith("enterprise");
+  });
+
+  it("preserves separators between explicit option groups", () => {
+    const options: Array<SelectItem | SelectOptionGroup> = [
+      {
+        label: "Acorn themes",
+        options: [{ value: "acorn-dark", label: "Acorn Dark Green" }],
+      },
+      { type: "separator" },
+      {
+        label: "Built-in dark",
+        options: [{ value: "github-dark", label: "GitHub Dark" }],
+      },
+    ];
+
+    act(() => {
+      root = createRoot(container);
+      root.render(<Select searchable value="acorn-dark" options={options} />);
+    });
+
+    clickElement(getCombobox());
+
+    expect(sectionMarkers()).toEqual([
+      "Acorn themes",
+      "separator",
+      "Built-in dark",
+    ]);
+    expect(optionLabels()).toEqual(["Acorn Dark Green", "GitHub Dark"]);
+
+    setInputValue(getSearchInput(), "github");
+
+    expect(sectionMarkers()).toEqual(["Built-in dark"]);
+    expect(optionLabels()).toEqual(["GitHub Dark"]);
   });
 
   it("opens non-searchable selects without rendering a search input", () => {
