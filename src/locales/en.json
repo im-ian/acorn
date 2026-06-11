@@ -859,8 +859,9 @@
       "generatingSessionTitle": "Generating session title"
     },
     "localTerminals": {
-      "title": "Instant sessions",
+      "title": "Instant Sessions",
       "newSession": "New instant session",
+      "newWorkspace": "New workspace",
       "empty": "Double-click to start an instant session."
     },
     "emptyProject": {

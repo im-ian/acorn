@@ -64,7 +64,6 @@ export function resolveActiveSessionScope(
   if (active) {
     const scope = scopeForSession(active);
     if (
-      scope.projectScoped &&
       context.activeProjectFolderId &&
       context.activeWorkspaceRepoPath === active.repo_path
     ) {

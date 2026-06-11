@@ -617,8 +617,17 @@ function reconcileWorkspaces(
   }
   for (const session of sessions) {
     if (session.project_scoped === false) {
-      if (!byFolder[session.repo_path]) byFolder[session.repo_path] = [];
-      byFolder[session.repo_path].push(session);
+      const folders = nextProjectFolders[session.repo_path] ?? [];
+      const folderId =
+        folders.length > 0
+          ? resolveProjectFolderIdForSession(
+              folders,
+              session,
+              nextSessionFolderIds,
+            )
+          : session.repo_path;
+      if (!byFolder[folderId]) byFolder[folderId] = [];
+      byFolder[folderId].push(session);
       continue;
     }
     const folders = nextProjectFolders[session.repo_path] ?? [];
@@ -923,18 +932,16 @@ function applySessionPlacementIntent(
   if (!placement) return s;
   const session = s.sessions.find((candidate) => candidate.id === sessionId);
   if (!session) return s;
-  if (session.project_scoped !== false) {
-    const targetFolderId =
-      placement.projectFolderId === defaultProjectFolderId(session.repo_path)
-        ? null
-        : placement.projectFolderId;
-    if (
-      repoPathForProjectFolderId(s, placement.projectFolderId) !==
-        session.repo_path ||
-      !canAssignSessionToProjectFolder(s, session, targetFolderId)
-    ) {
-      return s;
-    }
+  const targetFolderId =
+    placement.projectFolderId === defaultProjectFolderId(session.repo_path)
+      ? null
+      : placement.projectFolderId;
+  if (
+    repoPathForProjectFolderId(s, placement.projectFolderId) !==
+      session.repo_path ||
+    !canAssignSessionToProjectFolder(s, session, targetFolderId)
+  ) {
+    return s;
   }
 
   const ws = s.workspaces[placement.projectFolderId];
@@ -1547,10 +1554,6 @@ export const useAppStore = create<AppStateModel>()(
   createProjectFolder(repoPath, name, cwdPath) {
     let created: ProjectFolder | null = null;
     set((s) => {
-      const knownRepo =
-        s.projects.some((project) => project.repo_path === repoPath) ||
-        s.sessions.some((session) => session.repo_path === repoPath);
-      if (!knownRepo) return s;
       const current = s.projectFolders[repoPath] ?? [
         {
           id: defaultProjectFolderId(repoPath),
@@ -1685,7 +1688,7 @@ export const useAppStore = create<AppStateModel>()(
   moveSessionToProjectFolder(sessionId, folderId) {
     set((s) => {
       const session = s.sessions.find((candidate) => candidate.id === sessionId);
-      if (!session || session.project_scoped === false) return s;
+      if (!session) return s;
       if (!canAssignSessionToProjectFolder(s, session, folderId)) return s;
       const nextSessionFolderIds = { ...s.sessionFolderIds };
       if (
@@ -2026,7 +2029,7 @@ export const useAppStore = create<AppStateModel>()(
       createdId = created.id;
       const assignedFolderId = placement?.projectFolderId;
       const assignCreatedToFolder = (reconcile: boolean) => {
-        if (!assignedFolderId || projectScoped === false) return;
+        if (!assignedFolderId) return;
         set((s) => {
           const existingSession = s.sessions.find(
             (candidate) => candidate.id === created.id,
