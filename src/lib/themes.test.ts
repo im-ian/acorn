@@ -54,6 +54,14 @@ describe("BUILT_IN_THEMES", () => {
       expect(validateThemeCss(theme.css)).toEqual({ ok: true });
     }
   });
+
+  it("gives every built-in dark theme an explicit terminal selection color", () => {
+    for (const theme of BUILT_IN_THEMES.filter(
+      (candidate) => candidate.mode === "dark",
+    )) {
+      expect(theme.css, theme.id).toMatch(/--color-term-selection\s*:/);
+    }
+  });
 });
 
 describe("validateThemeCss", () => {
