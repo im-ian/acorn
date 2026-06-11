@@ -2238,6 +2238,11 @@ fn create_session_inner(
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let mut session = Session::new(name, repo.clone(), worktree_path, branch, isolated, kind);
     session.project_scoped = project_scoped;
+    session.auto_title_enabled = Some(auto_title_enabled_for_new_session(
+        kind,
+        mode,
+        agent_provider,
+    ));
     session.agent_provider = agent_provider;
     session.mode = mode;
     let inserted = state.sessions.insert(session);
@@ -2246,6 +2251,14 @@ fn create_session_inner(
     }
     persist(state);
     Ok(enrich_session(inserted))
+}
+
+fn auto_title_enabled_for_new_session(
+    kind: SessionKind,
+    mode: SessionMode,
+    agent_provider: Option<SessionAgentProvider>,
+) -> bool {
+    kind == SessionKind::Regular && (mode == SessionMode::Chat || agent_provider.is_some())
 }
 
 #[tauri::command]
@@ -4795,14 +4808,15 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_memory_usage_from_roots, create_unique_worktree, daemon_spawn_name_for_session,
-        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
+        create_unique_worktree, daemon_spawn_name_for_session, font_name_from_path,
+        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
+        remove_linked_worktree_at_path, should_remove_local_project_mirror,
         validate_editor_command, validate_new_project_name, ChatProviderAdapter,
         ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
-    use acorn_session::{Session, SessionAgentProvider, SessionKind};
+    use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionMode};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
@@ -5997,6 +6011,30 @@ mod tests {
         assert!(!env.contains_key("ACORN_AGENT_HOOK_TOKEN"));
         assert!(!env.contains_key("ACORN_AGENT_HOOK_SESSION_ID"));
         assert!(!env.contains_key("ACORN_AGENT_HOOK_PROVIDER"));
+    }
+
+    #[test]
+    fn auto_title_is_enabled_only_for_new_agent_and_chat_sessions() {
+        assert!(!auto_title_enabled_for_new_session(
+            SessionKind::Regular,
+            SessionMode::Terminal,
+            None,
+        ));
+        assert!(auto_title_enabled_for_new_session(
+            SessionKind::Regular,
+            SessionMode::Terminal,
+            Some(SessionAgentProvider::Codex),
+        ));
+        assert!(auto_title_enabled_for_new_session(
+            SessionKind::Regular,
+            SessionMode::Chat,
+            None,
+        ));
+        assert!(!auto_title_enabled_for_new_session(
+            SessionKind::Control,
+            SessionMode::Chat,
+            Some(SessionAgentProvider::Codex),
+        ));
     }
 
     #[test]
