@@ -33,6 +33,7 @@ describe("BUILT_IN_THEMES", () => {
       "rose-pine",
       "ayu-dark",
       "acorn-light",
+      "acorn-light-pink",
       "github-light",
       "high-contrast-light",
       "flexoki-light",
@@ -41,13 +42,13 @@ describe("BUILT_IN_THEMES", () => {
       "one-light",
       "gruvbox-light",
     ]);
-    expect(BUILT_IN_THEMES).toHaveLength(25);
+    expect(BUILT_IN_THEMES).toHaveLength(26);
     expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(
       17,
     );
     expect(
       BUILT_IN_THEMES.filter((theme) => theme.mode === "light"),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
   });
 
   it("keeps Acorn built-in theme ids and labels stable", () => {
@@ -59,6 +60,19 @@ describe("BUILT_IN_THEMES", () => {
     ).toEqual([
       { id: "acorn-dark", label: "Acorn Dark Green" },
       { id: "acorn-pink", label: "Acorn Dark Pink" },
+    ]);
+    expect(
+      BUILT_IN_THEMES.filter((theme) => theme.id.startsWith("acorn-")).map(
+        (theme) => ({
+          id: theme.id,
+          label: theme.label,
+        }),
+      ),
+    ).toEqual([
+      { id: "acorn-dark", label: "Acorn Dark Green" },
+      { id: "acorn-pink", label: "Acorn Dark Pink" },
+      { id: "acorn-light", label: "Acorn Light Green" },
+      { id: "acorn-light-pink", label: "Acorn Light Pink" },
     ]);
   });
 
@@ -123,7 +137,10 @@ describe("applyTheme", () => {
 
   it("replaces the previous theme on a second call", () => {
     applyTheme("acorn-dark", BUILT_IN_THEMES[0].css);
-    applyTheme("acorn-light", BUILT_IN_THEMES[3].css);
+    applyTheme(
+      "acorn-light",
+      BUILT_IN_THEMES.find((theme) => theme.id === "acorn-light")?.css ?? "",
+    );
 
     expect(document.querySelectorAll("style#acorn-theme")).toHaveLength(1);
     expect(document.documentElement.getAttribute("data-acorn-theme")).toBe(
