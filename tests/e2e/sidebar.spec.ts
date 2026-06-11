@@ -2262,7 +2262,7 @@ test.describe("sidebar: project lifecycle", () => {
     const chats = page.getByRole("region", { name: "Local terminal sessions" });
     await chats.getByRole("button", { name: "New instant session" }).click();
 
-    await expect(page.getByText("Instant sessions")).toBeVisible();
+    await expect(page.getByText("Instant Sessions")).toBeVisible();
     await expect(
       chats.getByRole("button", { name: /^terminal\b/ }),
     ).toBeVisible();
@@ -2321,6 +2321,204 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(
       chats.getByRole("button", { name: /codex/i }),
     ).toBeVisible();
+  });
+
+  test("instant sessions can create workspaces and create sessions inside them", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("plugin:path|resolve_directory", () => "/Users/tester");
+    await tauri.handle("list_projects", () => []);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __localSessionCreated?: boolean };
+      return w.__localSessionCreated
+        ? [
+            {
+              id: "local-1",
+              name: "terminal",
+              repo_path: "/Users/tester",
+              worktree_path: "/Users/tester",
+              branch: "HEAD",
+              isolated: false,
+              project_scoped: false,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              last_message: null,
+              kind: "regular",
+              owner: { kind: "user" },
+              position: null,
+              in_worktree: false,
+            },
+          ]
+        : [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createSessionCalls?: unknown[];
+        __localSessionCreated?: boolean;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      w.__localSessionCreated = true;
+      return {
+        id: "local-1",
+        name: "terminal",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+    });
+
+    await page.goto("/");
+
+    const instant = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    await instant
+      .getByRole("button", { name: "New workspace" })
+      .click();
+    const folderRow = instant
+      .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
+      .first();
+    await expect(folderRow).toBeVisible();
+    await folderRow.dblclick();
+    const input = instant.getByRole("textbox");
+    await input.fill("Scratch");
+    await input.press("Enter");
+
+    const scratch = instant
+      .getByRole("button", { name: /Scratch/ })
+      .first();
+    await expect(scratch).toBeVisible();
+    await scratch.hover();
+    await scratch
+      .getByRole("button", { name: "New instant session" })
+      .click();
+    await expect(
+      instant.getByRole("button", { name: /^terminal\b/ }),
+    ).toBeVisible();
+
+    await scratch
+      .getByRole("button", { name: "Collapse workspace" })
+      .click();
+    await expect(
+      instant.getByRole("button", { name: /^terminal\b/ }),
+    ).toHaveCount(0);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      name: string;
+      repoPath: string;
+      isolated: boolean;
+      kind: string;
+      projectScoped: boolean;
+    }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      name: "terminal",
+      repoPath: "/Users/tester",
+      isolated: false,
+      kind: "regular",
+      projectScoped: false,
+    });
+  });
+
+  test("instant sessions can move into workspaces by drag and drop", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("plugin:path|resolve_directory", () => "/Users/tester");
+    await tauri.handle("list_projects", () => []);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "local-1",
+        name: "terminal",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const instant = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    const terminal = instant
+      .getByRole("button", { name: /^terminal\b/ })
+      .first();
+    await expect(terminal).toBeVisible();
+
+    await instant
+      .getByRole("button", { name: "New workspace" })
+      .click();
+    const folderRow = instant
+      .getByRole("button", { name: /New workspace/ })
+      .filter({ hasText: "New workspace" })
+      .first();
+    await expect(folderRow).toBeVisible();
+    await folderRow.dblclick();
+    const input = instant.getByRole("textbox");
+    await input.fill("Scratch");
+    await input.press("Enter");
+
+    const scratch = instant
+      .getByRole("button", { name: /Scratch/ })
+      .first();
+    await expect(scratch).toBeVisible();
+    const scratchWorkspace = instant.locator("[data-sidebar-workspace-id]").first();
+
+    await dragBetween(page, terminal, scratch);
+
+    await expect(scratchWorkspace).toContainText("terminal");
+
+    const terminalBox = await terminal.boundingBox();
+    const instantBox = await instant.boundingBox();
+    if (!terminalBox || !instantBox) {
+      throw new Error("instant session drag target is not visible");
+    }
+    await page.mouse.move(
+      terminalBox.x + Math.min(60, terminalBox.width / 2),
+      terminalBox.y + terminalBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(instantBox.x + 18, instantBox.y + 24, { steps: 10 });
+    await page.mouse.up();
+
+    await expect(scratchWorkspace).not.toContainText("terminal");
+    await expect
+      .poll(async () => {
+        const sessionBox = await terminal.boundingBox();
+        const scratchBox = await scratch.boundingBox();
+        if (!sessionBox || !scratchBox) return "missing";
+        return sessionBox.y < scratchBox.y ? "root" : "workspace";
+      })
+      .toBe("root");
   });
 
   test("new-session hotkey preserves local chat scope", async ({

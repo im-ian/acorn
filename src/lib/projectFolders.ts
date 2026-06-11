@@ -80,7 +80,7 @@ export function ensureProjectFolders(
   sessions: Session[],
   foldersByRepo: ProjectFoldersByRepo,
 ): ProjectFoldersByRepo {
-  const knownRepos = knownProjectRepos(projects, sessions);
+  const knownRepos = knownWorkspaceRepos(projects, sessions, foldersByRepo);
   const next: ProjectFoldersByRepo = {};
   for (const repoPath of knownRepos) {
     const existing = foldersByRepo[repoPath] ?? [];
@@ -168,6 +168,64 @@ export function buildProjectFolderGroups(
   }
 
   return Array.from(map.values());
+}
+
+export function buildLocalSessionFolderGroups(
+  projects: Project[],
+  sessions: Session[],
+  foldersByRepo: ProjectFoldersByRepo,
+  assignments: SessionFolderAssignments = {},
+): ProjectFolderProjectGroup[] {
+  const projectRepoPaths = new Set(projects.map((project) => project.repo_path));
+  for (const session of sessions) {
+    if (isProjectSession(session)) projectRepoPaths.add(session.repo_path);
+  }
+
+  const localSessions = sessions.filter(isLocalSession);
+  const localSessionPaths = new Set(
+    localSessions.map((session) => session.repo_path),
+  );
+  const repoPaths = new Set(localSessionPaths);
+  for (const [repoPath, folders] of Object.entries(foldersByRepo)) {
+    if (projectRepoPaths.has(repoPath)) continue;
+    if (folders.some((folder) => !isDefaultProjectFolder(folder))) {
+      repoPaths.add(repoPath);
+    }
+  }
+
+  return Array.from(repoPaths)
+    .sort((a, b) => basenamePath(a).localeCompare(basenamePath(b)))
+    .map((repoPath) => {
+      const folders = sortProjectFolders(
+        foldersByRepo[repoPath] ?? [makeDefaultProjectFolder(repoPath)],
+      );
+      const group: ProjectFolderProjectGroup = {
+        repoPath,
+        name: basenamePath(repoPath),
+        folders: folderGroupsForRepo(folders),
+        sessions: [],
+      };
+      for (const session of localSessions) {
+        if (session.repo_path !== repoPath) continue;
+        const folderId = resolveProjectFolderIdForSession(
+          folders,
+          session,
+          assignments,
+        );
+        const folderGroup =
+          group.folders.find((candidate) => candidate.folder.id === folderId) ??
+          group.folders[0];
+        if (!folderGroup) continue;
+        folderGroup.sessions.push(session);
+        group.sessions.push(session);
+      }
+      group.sessions = sortSessions(group.sessions);
+      group.folders = group.folders.map((folderGroup) => ({
+        ...folderGroup,
+        sessions: sortSessions(folderGroup.sessions),
+      }));
+      return group;
+    });
 }
 
 export function resolveProjectFolderIdForSession(
@@ -292,15 +350,24 @@ function folderGroupsForRepo(
   }));
 }
 
-function knownProjectRepos(projects: Project[], sessions: Session[]): string[] {
+function knownWorkspaceRepos(
+  projects: Project[],
+  sessions: Session[],
+  foldersByRepo: ProjectFoldersByRepo,
+): string[] {
   const repos = new Map<string, number>();
   for (const project of projects) {
     repos.set(project.repo_path, project.position ?? Number.MAX_SAFE_INTEGER);
   }
   for (const session of sessions) {
-    if (!isProjectSession(session)) continue;
     if (!repos.has(session.repo_path)) {
       repos.set(session.repo_path, Number.MAX_SAFE_INTEGER);
+    }
+  }
+  for (const [repoPath, folders] of Object.entries(foldersByRepo)) {
+    if (repos.has(repoPath)) continue;
+    if (folders.some((folder) => !isDefaultProjectFolder(folder))) {
+      repos.set(repoPath, Number.MAX_SAFE_INTEGER);
     }
   }
   return Array.from(repos.entries())

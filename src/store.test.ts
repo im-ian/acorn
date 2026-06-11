@@ -368,6 +368,88 @@ describe("focusLocalSessions", () => {
   });
 });
 
+describe("local workspaces", () => {
+  it("creates and preserves an empty local workspace", async () => {
+    await seed([], []);
+
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder("/Users/me", "Scratch");
+
+    expect(folder).toMatchObject({
+      repoPath: "/Users/me",
+      name: "Scratch",
+      cwdPath: "/Users/me",
+    });
+    expect(useAppStore.getState().activeProject).toBe("/Users/me");
+    expect(useAppStore.getState().activeProjectFolderId).toBe(folder!.id);
+    expect(useAppStore.getState().workspaces[folder!.id]).toBeDefined();
+
+    mockApi.listProjects.mockResolvedValueOnce([]);
+    mockApi.listSessions.mockResolvedValueOnce([]);
+    await useAppStore.getState().refreshAll();
+
+    const s = useAppStore.getState();
+    expect(s.projectFolders["/Users/me"].map((item) => item.id)).toEqual([
+      "/Users/me",
+      folder!.id,
+    ]);
+    expect(s.workspaces[folder!.id]).toBeDefined();
+    expect(s.activeProjectFolderId).toBe(folder!.id);
+  });
+
+  it("moves local sessions between local workspaces", async () => {
+    const local = session("local", "/Users/me", {
+      project_scoped: false,
+      worktree_path: "/Users/me",
+    });
+    await seed([], [local]);
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder("/Users/me", "Scratch")!;
+
+    useAppStore.getState().moveSessionToProjectFolder("local", folder.id);
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.local).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["local"]);
+    expect(s.workspaces["/Users/me"].panes.root.tabIds).toEqual([]);
+  });
+
+  it("assigns newly created local sessions to the requested local workspace", async () => {
+    await seed([], []);
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder("/Users/me", "Scratch")!;
+    const created = session("local-new", "/Users/me", {
+      project_scoped: false,
+      worktree_path: "/Users/me",
+    });
+    mockApi.createSession.mockResolvedValueOnce(created);
+    mockApi.listProjects.mockResolvedValueOnce([]);
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+
+    await useAppStore
+      .getState()
+      .createSession(
+        "local-new",
+        "/Users/me",
+        false,
+        "regular",
+        null,
+        false,
+        "terminal",
+        folder.id,
+      );
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds["local-new"]).toBe(folder.id);
+    expect(s.activeProject).toBe("/Users/me");
+    expect(s.activeProjectFolderId).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["local-new"]);
+  });
+});
+
 describe("setActiveProject", () => {
   it("recreates a missing workspace mirror for a known project", async () => {
     await seed([project(REPO_A, 0)], []);
