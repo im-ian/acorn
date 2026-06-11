@@ -100,6 +100,11 @@
         "hint": "Applies to plain sessions. Shared worktree sessions still ask before removal.",
         "checkbox": "Show confirmation dialog"
       },
+      "warnBeforeClosingRunning": {
+        "label": "Warn before closing a running session",
+        "hint": "Show a warning before closing a session that is still running. Closing a running session terminates its active shell or agent process.",
+        "checkbox": "Show running-session warning"
+      },
       "autoDeleteWorktrees": {
         "label": "Delete isolated worktrees without asking",
         "hint": "When removing a standalone isolated worktree session, skip the keep/delete prompt and delete its worktree from disk. Shared worktree workspaces are preserved.",
@@ -1173,6 +1178,13 @@
       "keepWorktree": "Keep worktree",
       "deleteWorktree": "Delete worktree",
       "remove": "Remove"
+    },
+    "runningSessionClose": {
+      "title": "Close running session?",
+      "message": "This session is still running. Closing it will terminate the active shell or agent process.",
+      "sessionLabel": "Session",
+      "dontWarnAgain": "Don't warn again (toggle in Settings → Sessions)",
+      "continue": "Close session"
     },
     "removeProject": {
       "title": "Close project",

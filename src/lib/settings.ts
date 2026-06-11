@@ -259,6 +259,12 @@ export interface AcornSettings {
      */
     confirmRemove: boolean;
     /**
+     * Warn before closing a session that Acorn currently marks as running.
+     * This sits ahead of the normal removal confirmation so users get an
+     * explicit chance to avoid killing active shell or agent work.
+     */
+    warnBeforeClosingRunning: boolean;
+    /**
      * Remove standalone isolated worktree sessions without asking whether to
      * keep the worktree directory. Shared worktree workspaces and linked
      * worktree sessions are preserved unless the user explicitly deletes them.
@@ -438,6 +444,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   sessions: {
     confirmRemove: true,
+    warnBeforeClosingRunning: true,
     autoDeleteWorktrees: false,
     autoDeleteEmptyWorktreeWorkspaces: false,
     closeOnExit: false,
