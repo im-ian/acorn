@@ -1172,6 +1172,11 @@ function ThemeSection({
           value={themeId}
           onValueChange={onChange}
           options={themeOptions}
+          searchable
+          searchPlaceholder={st(
+            t,
+            "settings.appearance.theme.searchPlaceholder",
+          )}
           className="min-w-[14rem]"
           aria-label={st(t, "settings.appearance.theme.label")}
         />

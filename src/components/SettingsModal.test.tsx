@@ -243,23 +243,40 @@ function setInputValue(input: HTMLInputElement, value: string) {
   });
 }
 
-function getComboboxByLabel(label: string): HTMLInputElement {
-  const input = document.querySelector<HTMLInputElement>(
-    `input[role="combobox"][aria-label="${label}"]`,
+function getComboboxByLabel(label: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    `button[role="combobox"][aria-label="${label}"]`,
   );
-  if (!input) throw new Error(`Combobox not found: ${label}`);
-  return input;
+  if (!button) throw new Error(`Combobox not found: ${label}`);
+  return button;
 }
 
-function focusInput(input: HTMLInputElement) {
+function clickElement(element: HTMLElement) {
   act(() => {
-    input.focus();
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
 }
 
-function pressKey(input: HTMLInputElement, key: string) {
+function getSelectSearchInput(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>("[data-select-search]");
+  if (!input) throw new Error("Select search input not found");
+  return input;
+}
+
+function clickOption(label: string) {
+  const optionLabel = Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).find((element) => element.textContent?.trim() === label);
+  const option = optionLabel?.closest('[role="option"]');
+  if (!(option instanceof HTMLElement)) {
+    throw new Error(`Select option not found: ${label}`);
+  }
+  clickElement(option);
+}
+
+function pressKey(element: HTMLElement, key: string) {
   act(() => {
-    input.dispatchEvent(
+    element.dispatchEvent(
       new KeyboardEvent("keydown", {
         bubbles: true,
         cancelable: true,
@@ -270,9 +287,9 @@ function pressKey(input: HTMLInputElement, key: string) {
 }
 
 function optionLabels(): string[] {
-  return Array.from(document.querySelectorAll('[role="option"]')).map(
-    (option) => option.textContent?.trim() ?? "",
-  );
+  return Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).map((option) => option.textContent?.trim() ?? "");
 }
 
 function blurInput(input: HTMLInputElement) {
@@ -442,9 +459,10 @@ describe("SettingsModal font controls", () => {
     });
 
     const themeSelect = getComboboxByLabel("Theme");
-    expect(themeSelect.value).toBe("Acorn Dark Green");
+    expect(themeSelect.textContent).toContain("Acorn Dark Green");
+    expect(document.querySelector("[data-select-search]")).toBeNull();
 
-    focusInput(themeSelect);
+    clickElement(themeSelect);
 
     expect(
       Array.from(document.querySelectorAll("[data-select-group-label]")).map(
@@ -465,11 +483,13 @@ describe("SettingsModal font controls", () => {
       "Solarized Local (custom)",
     ]);
 
-    setInputValue(themeSelect, "local");
+    const searchInput = getSelectSearchInput();
+    expect(searchInput.getAttribute("placeholder")).toBe("Search themes");
+    setInputValue(searchInput, "local");
 
     expect(optionLabels()).toEqual(["Solarized Local (custom)"]);
 
-    pressKey(themeSelect, "Enter");
+    pressKey(searchInput, "Enter");
 
     expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
       themeId: "solarized-local",
@@ -492,11 +512,11 @@ describe("SettingsModal font controls", () => {
     expect(
       document.querySelector('input[aria-label="Custom UI scale percentage"]'),
     ).toBeNull();
-    expect(scaleSelect.value).toBe("100%");
+    expect(scaleSelect.textContent).toContain("100%");
 
-    focusInput(scaleSelect);
-    setInputValue(scaleSelect, "125");
-    pressKey(scaleSelect, "Enter");
+    clickElement(scaleSelect);
+    expect(document.querySelector("[data-select-search]")).toBeNull();
+    clickOption("125%");
 
     expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
       uiScalePercent: 125,
@@ -562,12 +582,11 @@ describe("SettingsModal font controls", () => {
 
     const languageSelect = getComboboxByLabel("언어");
 
-    expect(languageSelect).toBeInstanceOf(HTMLInputElement);
-    expect(languageSelect.value).toBe("한국어");
+    expect(languageSelect).toBeInstanceOf(HTMLButtonElement);
+    expect(languageSelect.textContent).toContain("한국어");
 
-    focusInput(languageSelect);
-    setInputValue(languageSelect, "English");
-    pressKey(languageSelect, "Enter");
+    clickElement(languageSelect);
+    clickOption("English");
 
     expect(patchLanguage).toHaveBeenCalledWith("en");
   });

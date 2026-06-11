@@ -1,4 +1,4 @@
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 import {
   Children,
   forwardRef,
@@ -11,6 +11,7 @@ import {
   useState,
   type HTMLAttributes,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -21,6 +22,7 @@ type SelectValue = string | number;
 export interface SelectOption {
   value: SelectValue;
   label: string;
+  description?: string;
   disabled?: boolean;
   searchText?: string;
 }
@@ -53,6 +55,8 @@ type BaseSelectProps = Omit<
   emptyMessage?: string;
   name?: string;
   placeholder?: string;
+  searchable?: boolean;
+  searchPlaceholder?: string;
 };
 
 type SingleSelectProps = BaseSelectProps & {
@@ -78,6 +82,7 @@ export type SelectProps = SingleSelectProps | MultiSelectProps;
 interface NormalizedOption {
   value: string;
   label: string;
+  description?: string;
   disabled: boolean;
   group?: string;
   searchText: string;
@@ -93,6 +98,7 @@ interface ChildOptionProps {
   disabled?: boolean;
   label?: string;
   value?: SelectValue;
+  "data-description"?: string;
 }
 
 interface ChildOptionGroupProps {
@@ -101,11 +107,11 @@ interface ChildOptionGroupProps {
 }
 
 export const SELECT_CLASS =
-  "flex h-7 w-full items-center rounded-md border border-border bg-bg font-mono text-xs text-fg outline-none transition focus-within:border-accent";
+  "flex h-7 w-full items-center rounded-md border border-border bg-bg font-mono text-xs text-fg outline-none transition focus-visible:border-accent";
 
 const SELECT_ROOT_CLASS = "relative inline-block min-w-0 text-xs";
 
-export const Select = forwardRef<HTMLInputElement, SelectProps>(
+export const Select = forwardRef<HTMLButtonElement, SelectProps>(
   function Select(props, ref) {
     const {
       children,
@@ -115,6 +121,8 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
       name,
       options,
       placeholder = "",
+      searchable = false,
+      searchPlaceholder = "Search options",
       onChange,
       value: _value,
       defaultValue: _defaultValue,
@@ -124,7 +132,9 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
       ...rest
     } = props;
     const rootRef = useRef<HTMLDivElement | null>(null);
-    const inputRef = useRef<HTMLInputElement | null>(null);
+    const listboxRef = useRef<HTMLDivElement | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const triggerRef = useRef<HTMLButtonElement | null>(null);
     const reactId = useId();
     const listboxId = `${reactId}-listbox`;
     const multiple = props.multiple === true;
@@ -166,19 +176,33 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
     const [query, setQuery] = useState("");
     const [activeIndex, setActiveIndex] = useState(-1);
     const visibleGroups = useMemo(
-      () => filterGroups(optionGroups, query),
-      [optionGroups, query],
+      () => filterGroups(optionGroups, searchable ? query : ""),
+      [optionGroups, query, searchable],
     );
     const visibleOptions = useMemo(
       () => visibleGroups.flatMap((group) => group.options),
       [visibleGroups],
     );
-    const inputValue = isOpen ? query : selectedLabels.join(", ");
+    const displayValue = selectedLabels.join(", ");
+    const hasDisplayValue = displayValue.length > 0;
     const activeOption =
       activeIndex >= 0 ? visibleOptions[activeIndex] : undefined;
     const activeOptionId = activeOption
       ? optionId(listboxId, activeIndex)
       : undefined;
+
+    const openList = () => {
+      if (disabled) return;
+      setQuery("");
+      setIsOpen(true);
+    };
+
+    const closeList = () => {
+      setIsOpen(false);
+      setListboxRect(null);
+      setQuery("");
+      setActiveIndex(-1);
+    };
 
     useEffect(() => {
       if (!isOpen) return;
@@ -199,6 +223,23 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
         return firstEnabledIndex(visibleOptions);
       });
     }, [isOpen, selectedSet, visibleOptions]);
+
+    useEffect(() => {
+      if (!isOpen) return;
+
+      const handlePointerDown = (event: PointerEvent) => {
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (rootRef.current?.contains(target)) return;
+        if (listboxRef.current?.contains(target)) return;
+        closeList();
+      };
+
+      document.addEventListener("pointerdown", handlePointerDown);
+      return () => {
+        document.removeEventListener("pointerdown", handlePointerDown);
+      };
+    }, [isOpen]);
 
     useLayoutEffect(() => {
       if (!isOpen) return;
@@ -222,25 +263,18 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
       };
     }, [isOpen]);
 
-    const assignInputRef = (node: HTMLInputElement | null) => {
-      inputRef.current = node;
+    useLayoutEffect(() => {
+      if (!isOpen || !searchable || !listboxRect) return;
+      searchInputRef.current?.focus();
+    }, [isOpen, listboxRect, searchable]);
+
+    const assignTriggerRef = (node: HTMLButtonElement | null) => {
+      triggerRef.current = node;
       if (typeof ref === "function") {
         ref(node);
       } else if (ref) {
         ref.current = node;
       }
-    };
-
-    const openList = () => {
-      if (disabled) return;
-      setIsOpen(true);
-    };
-
-    const closeList = () => {
-      setIsOpen(false);
-      setListboxRect(null);
-      setQuery("");
-      setActiveIndex(-1);
     };
 
     const commitValues = (nextValues: string[]) => {
@@ -274,7 +308,7 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
       } else {
         commitValues([option.value]);
         closeList();
-        inputRef.current?.focus();
+        triggerRef.current?.focus();
       }
     };
 
@@ -301,7 +335,18 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
       });
     };
 
-    const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    const chooseActiveOption = () => {
+      const option =
+        visibleOptions[activeIndex] ??
+        visibleOptions.find((candidate) => !candidate.disabled);
+      if (option && !option.disabled) {
+        selectOption(option);
+        return true;
+      }
+      return false;
+    };
+
+    const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
@@ -315,23 +360,25 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
           openList();
           moveActive(-1);
           break;
-        case "Enter": {
+        case "Enter":
           if (!isOpen) {
             event.preventDefault();
             event.stopPropagation();
             openList();
             break;
           }
-          const option =
-            visibleOptions[activeIndex] ??
-            visibleOptions.find((candidate) => !candidate.disabled);
-          if (option && !option.disabled) {
+          if (chooseActiveOption()) {
             event.preventDefault();
             event.stopPropagation();
-            selectOption(option);
           }
           break;
-        }
+        case " ":
+          if (!isOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            openList();
+          }
+          break;
         case "Escape":
           if (isOpen) {
             event.preventDefault();
@@ -345,130 +392,196 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
       }
     };
 
+    const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          event.stopPropagation();
+          moveActive(1);
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          event.stopPropagation();
+          moveActive(-1);
+          break;
+        case "Enter":
+          if (chooseActiveOption()) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          break;
+        case "Escape":
+          event.preventDefault();
+          event.stopPropagation();
+          closeList();
+          triggerRef.current?.focus();
+          break;
+        case "Tab":
+          closeList();
+          break;
+      }
+    };
+
+    const handleTriggerClick = (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      if (disabled) return;
+      if (isOpen) {
+        closeList();
+      } else {
+        openList();
+      }
+    };
+
     const listbox =
       isOpen && listboxRect
         ? createPortal(
             <div
-              id={listboxId}
-              role="listbox"
-              aria-multiselectable={multiple || undefined}
-              className="fixed z-[60] max-h-56 overflow-y-auto rounded-md border border-border bg-bg-elevated py-1 font-mono text-xs text-fg shadow-xl"
+              ref={listboxRef}
+              className="fixed z-[60] overflow-hidden rounded-md border border-border bg-bg-elevated font-mono text-xs text-fg shadow-xl"
               style={{
                 left: listboxRect.left,
                 minWidth: listboxRect.width,
                 top: listboxRect.top,
               }}
             >
-              {visibleGroups.length > 0 ? (
-                visibleGroups.map((group, groupIndex) => (
-                  <div key={`${group.label ?? "group"}-${groupIndex}`}>
-                    {group.label ? (
-                      <div
-                        data-select-group-label
-                        className="px-2 py-1 text-[10px] font-semibold uppercase tracking-normal text-fg-muted"
-                      >
-                        {group.label}
-                      </div>
-                    ) : null}
-                    {group.options.map((option) => {
-                      const optionIndex = visibleOptions.indexOf(option);
-                      const selected = selectedSet.has(option.value);
-                      const active = optionIndex === activeIndex;
-                      return (
-                        <div
-                          id={optionId(listboxId, optionIndex)}
-                          key={`${option.group ?? "option"}-${option.value}`}
-                          role="option"
-                          aria-disabled={option.disabled || undefined}
-                          aria-selected={selected}
-                          className={cn(
-                            "flex min-h-7 cursor-default items-center gap-2 px-2 py-1.5",
-                            option.disabled && "opacity-50",
-                            active && "bg-accent/15 text-fg",
-                            !active && "text-fg",
-                          )}
-                          onMouseDown={(event) => event.preventDefault()}
-                          onMouseEnter={() => {
-                            if (!option.disabled) setActiveIndex(optionIndex);
-                          }}
-                          onClick={() => selectOption(option)}
-                        >
-                          <span className="min-w-0 flex-1 truncate">
-                            {option.label}
-                          </span>
-                          {selected ? (
-                            <Check
-                              aria-hidden="true"
-                              size={13}
-                              className="shrink-0 text-accent"
-                            />
-                          ) : null}
-                        </div>
-                      );
-                    })}
+              {searchable ? (
+                <div className="border-b border-border p-1.5">
+                  <div className="flex h-7 items-center rounded-md border border-border bg-bg px-2 focus-within:border-accent">
+                    <Search
+                      aria-hidden="true"
+                      size={13}
+                      className="mr-1.5 shrink-0 text-fg-muted"
+                    />
+                    <input
+                      ref={searchInputRef}
+                      data-select-search
+                      aria-activedescendant={activeOptionId}
+                      aria-controls={listboxId}
+                      aria-label={searchPlaceholder}
+                      autoComplete="off"
+                      className="h-full min-w-0 flex-1 bg-transparent text-xs text-fg outline-none placeholder:text-fg-muted"
+                      placeholder={searchPlaceholder}
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      onKeyDown={handleSearchKeyDown}
+                    />
                   </div>
-                ))
-              ) : (
-                <div className="px-2 py-2 text-fg-muted">{emptyMessage}</div>
-              )}
+                </div>
+              ) : null}
+              <div
+                id={listboxId}
+                role="listbox"
+                aria-multiselectable={multiple || undefined}
+                className="max-h-56 overflow-y-auto py-1"
+              >
+                {visibleGroups.length > 0 ? (
+                  visibleGroups.map((group, groupIndex) => (
+                    <div key={`${group.label ?? "group"}-${groupIndex}`}>
+                      {group.label ? (
+                        <div
+                          data-select-group-label
+                          className="px-2 py-1 text-[10px] font-semibold uppercase tracking-normal text-fg-muted"
+                        >
+                          {group.label}
+                        </div>
+                      ) : null}
+                      {group.options.map((option) => {
+                        const optionIndex = visibleOptions.indexOf(option);
+                        const selected = selectedSet.has(option.value);
+                        const active = optionIndex === activeIndex;
+                        return (
+                          <div
+                            id={optionId(listboxId, optionIndex)}
+                            key={`${option.group ?? "option"}-${option.value}`}
+                            role="option"
+                            aria-disabled={option.disabled || undefined}
+                            aria-selected={selected}
+                            className={cn(
+                              "flex min-h-7 cursor-default items-center gap-2 px-2 py-1.5",
+                              option.disabled && "opacity-50",
+                              active && "bg-accent/15 text-fg",
+                              !active && "text-fg",
+                            )}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => {
+                              if (!option.disabled) setActiveIndex(optionIndex);
+                            }}
+                            onClick={() => selectOption(option)}
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span
+                                data-select-option-label
+                                className="block truncate"
+                              >
+                                {option.label}
+                              </span>
+                              {option.description ? (
+                                <span
+                                  data-select-option-description
+                                  className="block truncate text-[11px] text-fg-muted"
+                                >
+                                  {option.description}
+                                </span>
+                              ) : null}
+                            </span>
+                            {selected ? (
+                              <Check
+                                aria-hidden="true"
+                                size={13}
+                                className="shrink-0 text-accent"
+                              />
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-2 py-2 text-fg-muted">{emptyMessage}</div>
+                )}
+              </div>
             </div>,
             document.body,
           )
         : null;
 
     return (
-      <div
-        ref={rootRef}
-        {...rest}
-        className={cn(SELECT_ROOT_CLASS, className)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            closeList();
-          }
-        }}
-      >
-        <div
+      <div ref={rootRef} {...rest} className={cn(SELECT_ROOT_CLASS, className)}>
+        {name
+          ? selectedValues.map((value) => (
+              <input key={value} type="hidden" name={name} value={value} />
+            ))
+          : null}
+        <button
+          ref={assignTriggerRef}
+          type="button"
+          role="combobox"
+          aria-activedescendant={!searchable ? activeOptionId : undefined}
+          aria-autocomplete={searchable ? "list" : "none"}
+          aria-controls={isOpen ? listboxId : undefined}
+          aria-expanded={isOpen}
+          aria-haspopup="listbox"
+          aria-label={props["aria-label"]}
+          aria-labelledby={props["aria-labelledby"]}
+          aria-describedby={props["aria-describedby"]}
+          disabled={disabled}
           className={cn(
             SELECT_CLASS,
+            "justify-between text-left",
             disabled && "cursor-not-allowed opacity-60",
             isOpen && "border-accent",
           )}
-          onMouseDown={(event) => {
-            if (disabled) return;
-            if (event.target !== inputRef.current) {
-              event.preventDefault();
-              inputRef.current?.focus();
-            }
-            openList();
-          }}
+          onClick={handleTriggerClick}
+          onKeyDown={handleTriggerKeyDown}
         >
-          <input
-            ref={assignInputRef}
-            role="combobox"
-            aria-activedescendant={activeOptionId}
-            aria-autocomplete="list"
-            aria-controls={isOpen ? listboxId : undefined}
-            aria-expanded={isOpen}
-            aria-haspopup="listbox"
-            aria-label={props["aria-label"]}
-            aria-labelledby={props["aria-labelledby"]}
-            aria-describedby={props["aria-describedby"]}
-            autoComplete="off"
-            className="h-full min-w-0 flex-1 bg-transparent px-2 text-xs text-fg outline-none placeholder:text-fg-muted disabled:cursor-not-allowed"
-            disabled={disabled}
-            name={name}
-            placeholder={placeholder}
-            value={inputValue}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              openList();
-            }}
-            onFocus={() => {
-              setQuery("");
-              openList();
-            }}
-            onKeyDown={handleKeyDown}
-          />
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate px-2",
+              !hasDisplayValue && "text-fg-muted",
+            )}
+          >
+            {hasDisplayValue ? displayValue : placeholder}
+          </span>
           <ChevronDown
             aria-hidden="true"
             size={14}
@@ -477,7 +590,7 @@ export const Select = forwardRef<HTMLInputElement, SelectProps>(
               isOpen && "rotate-180 text-fg",
             )}
           />
-        </div>
+        </button>
 
         {listbox}
       </div>
@@ -576,6 +689,7 @@ function normalizeChildOption(
     {
       value: props.value ?? label,
       label,
+      description: props["data-description"],
       disabled: props.disabled,
     },
     group,
@@ -588,12 +702,14 @@ function normalizeOption(
 ): NormalizedOption {
   const value = String(option.value);
   const label = option.label;
+  const description = option.description;
   return {
     value,
     label,
+    description,
     disabled: option.disabled === true,
     group,
-    searchText: [label, value, group, option.searchText]
+    searchText: [label, description, value, group, option.searchText]
       .filter(Boolean)
       .join(" ")
       .toLowerCase(),

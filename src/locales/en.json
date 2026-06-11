@@ -177,6 +177,7 @@
         "label": "Theme",
         "hint": "Built-in palettes and valid CSS files from the themes folder.",
         "custom": "(custom)",
+        "searchPlaceholder": "Search themes",
         "groups": {
           "acorn": "Acorn themes",
           "dark": "Built-in dark",

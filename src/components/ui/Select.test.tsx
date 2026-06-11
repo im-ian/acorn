@@ -9,16 +9,24 @@ const THEME_OPTIONS: SelectOption[] = [
   { value: "solarized-dark", label: "Solarized Dark" },
 ];
 
-function getCombobox(): HTMLInputElement {
-  const input = document.querySelector<HTMLInputElement>('[role="combobox"]');
-  if (!input) throw new Error("Combobox not found");
-  return input;
+function getCombobox(): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    'button[role="combobox"]',
+  );
+  if (!button) throw new Error("Combobox not found");
+  return button;
 }
 
-function focusInput(input: HTMLInputElement) {
+function clickElement(element: HTMLElement) {
   act(() => {
-    input.focus();
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
+}
+
+function getSearchInput(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>("[data-select-search]");
+  if (!input) throw new Error("Search input not found");
+  return input;
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
@@ -34,9 +42,9 @@ function setInputValue(input: HTMLInputElement, value: string) {
   });
 }
 
-function pressKey(input: HTMLInputElement, key: string) {
+function pressKey(element: HTMLElement, key: string) {
   act(() => {
-    input.dispatchEvent(
+    element.dispatchEvent(
       new KeyboardEvent("keydown", {
         bubbles: true,
         cancelable: true,
@@ -47,9 +55,9 @@ function pressKey(input: HTMLInputElement, key: string) {
 }
 
 function optionLabels(): string[] {
-  return Array.from(document.querySelectorAll('[role="option"]')).map(
-    (option) => option.textContent?.trim() ?? "",
-  );
+  return Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).map((option) => option.textContent?.trim() ?? "");
 }
 
 describe("Select", () => {
@@ -75,11 +83,11 @@ describe("Select", () => {
     vi.clearAllMocks();
   });
 
-  it("filters option children by typed keywords", () => {
+  it("opens a searchable popover from a button trigger", () => {
     act(() => {
       root = createRoot(container);
       root.render(
-        <Select defaultValue="acorn-dark">
+        <Select searchable defaultValue="acorn-dark">
           <option value="acorn-dark">Acorn Dark Green</option>
           <option value="acorn-pink">Acorn Dark Pink</option>
           <option value="solarized-dark">Solarized Dark</option>
@@ -87,10 +95,12 @@ describe("Select", () => {
       );
     });
 
-    const input = getCombobox();
-    expect(input.value).toBe("Acorn Dark Green");
+    const trigger = getCombobox();
+    expect(trigger.textContent).toContain("Acorn Dark Green");
+    expect(document.querySelector("[data-select-search]")).toBeNull();
 
-    focusInput(input);
+    clickElement(trigger);
+    const input = getSearchInput();
     setInputValue(input, "pink");
 
     expect(optionLabels()).toEqual(["Acorn Dark Pink"]);
@@ -104,6 +114,7 @@ describe("Select", () => {
       root = createRoot(container);
       root.render(
         <Select
+          searchable
           value="acorn-dark"
           options={THEME_OPTIONS}
           onValueChange={onValueChange}
@@ -112,8 +123,8 @@ describe("Select", () => {
       );
     });
 
-    const input = getCombobox();
-    focusInput(input);
+    clickElement(getCombobox());
+    const input = getSearchInput();
     setInputValue(input, "pink");
     pressKey(input, "Enter");
 
@@ -134,6 +145,7 @@ describe("Select", () => {
       root.render(
         <Select
           multiple
+          searchable
           value={["acorn-dark"]}
           options={THEME_OPTIONS}
           onValuesChange={onValuesChange}
@@ -142,8 +154,8 @@ describe("Select", () => {
       );
     });
 
-    const input = getCombobox();
-    focusInput(input);
+    clickElement(getCombobox());
+    const input = getSearchInput();
     setInputValue(input, "pink");
     pressKey(input, "Enter");
 
@@ -159,5 +171,85 @@ describe("Select", () => {
         }),
       }),
     );
+  });
+
+  it("renders option descriptions and includes them in search", () => {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Select
+          searchable
+          value="pro"
+          options={[
+            {
+              value: "basic",
+              label: "Basic Plan",
+              description: "$9/month - Perfect for small projects",
+            },
+            {
+              value: "pro",
+              label: "Pro Plan",
+              description: "$29/month - Advanced features",
+            },
+            {
+              value: "enterprise",
+              label: "Enterprise Plan",
+              description: "Custom pricing - Tailored solutions",
+            },
+          ]}
+        />,
+      );
+    });
+
+    clickElement(getCombobox());
+
+    expect(optionLabels()).toEqual([
+      "Basic Plan",
+      "Pro Plan",
+      "Enterprise Plan",
+    ]);
+    expect(
+      Array.from(
+        document.querySelectorAll("[data-select-option-description]"),
+      ).map((option) => option.textContent?.trim() ?? ""),
+    ).toEqual([
+      "$9/month - Perfect for small projects",
+      "$29/month - Advanced features",
+      "Custom pricing - Tailored solutions",
+    ]);
+
+    setInputValue(getSearchInput(), "tailored");
+
+    expect(optionLabels()).toEqual(["Enterprise Plan"]);
+  });
+
+  it("opens non-searchable selects without rendering a search input", () => {
+    const onValueChange = vi.fn();
+
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Select
+          value="acorn-dark"
+          options={THEME_OPTIONS}
+          onValueChange={onValueChange}
+        />,
+      );
+    });
+
+    const trigger = getCombobox();
+    clickElement(trigger);
+
+    expect(document.querySelector("[data-select-search]")).toBeNull();
+    expect(optionLabels()).toEqual([
+      "Acorn Dark Green",
+      "Acorn Dark Pink",
+      "Solarized Dark",
+    ]);
+
+    pressKey(trigger, "ArrowDown");
+    pressKey(trigger, "Enter");
+
+    expect(onValueChange).toHaveBeenCalledWith("acorn-pink");
   });
 });
