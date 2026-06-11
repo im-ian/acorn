@@ -22,6 +22,7 @@ function session(overrides: Partial<Session> = {}): Session {
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
     title_source: "default",
+    auto_title_enabled: true,
     kind: "regular",
     owner: { kind: "user" },
     position: null,
@@ -89,6 +90,9 @@ describe("session title helpers", () => {
       ),
     ).toBe(false);
     expect(canGenerateSessionTitle(session({ agent_provider: null }))).toBe(true);
+    expect(
+      canGenerateSessionTitle(session({ auto_title_enabled: false })),
+    ).toBe(false);
   });
 
   it("allows forced title generation for user-owned regular sessions", () => {

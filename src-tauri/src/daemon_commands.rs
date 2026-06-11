@@ -344,6 +344,7 @@ pub fn daemon_adopt_session(
         updated_at: now,
         last_message: None,
         title_source: acorn_session::SessionTitleSource::Manual,
+        auto_title_enabled: Some(false),
         generated_title_transcript_id: None,
         kind,
         mode: acorn_session::SessionMode::Terminal,

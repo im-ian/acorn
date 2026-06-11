@@ -86,6 +86,7 @@ import {
 } from "./lib/settings";
 import {
   autoTitleGenerationEnabledForSession,
+  canAutoGenerateSessionTitle,
   planAutoGenerateSessionTitles,
 } from "./lib/sessionTitle";
 import { applyBackgroundVars, clearBackgroundVars } from "./lib/background";
@@ -820,7 +821,7 @@ function App() {
         .sessions.find((session) => session.id === sessionId);
       return (
         latestSession != null &&
-        autoTitleGenerationEnabledForSession(
+        canAutoGenerateSessionTitle(
           latestSession,
           latestSettings.agents.autoGenerateSessionTitles,
         ) &&
