@@ -3,6 +3,50 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  themes: [
+    {
+      css: "",
+      id: "acorn-dark",
+      label: "Acorn Dark Green",
+      mode: "dark" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "acorn-pink",
+      label: "Acorn Dark Pink",
+      mode: "dark" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "one-dark-pro",
+      label: "One Dark Pro",
+      mode: "dark" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "acorn-light",
+      label: "Acorn Light",
+      mode: "light" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "github-light",
+      label: "GitHub Light",
+      mode: "light" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "solarized-local",
+      label: "Solarized Local",
+      mode: "dark" as const,
+      source: "user" as const,
+    },
+  ],
   importBackgroundImage: vi.fn<
     (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
   >(),
@@ -42,28 +86,12 @@ vi.mock("../lib/releases", () => ({
 }));
 
 vi.mock("../lib/themes", () => ({
-  BUILT_IN_THEMES: [
-    {
-      css: "",
-      id: "acorn-dark",
-      label: "Acorn Dark",
-      mode: "dark",
-      source: "builtin",
-    },
-  ],
+  BUILT_IN_THEMES: mocks.themes.filter((theme) => theme.source === "builtin"),
   revealThemesFolder: vi.fn(),
   useThemes: (selector: (state: unknown) => unknown) =>
     selector({
       refresh: vi.fn(),
-      themes: [
-        {
-          css: "",
-          id: "acorn-dark",
-          label: "Acorn Dark",
-          mode: "dark",
-          source: "builtin",
-        },
-      ],
+      themes: mocks.themes,
     }),
 }));
 
@@ -213,6 +241,38 @@ function setInputValue(input: HTMLInputElement, value: string) {
     setter.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+}
+
+function getComboboxByLabel(label: string): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>(
+    `input[role="combobox"][aria-label="${label}"]`,
+  );
+  if (!input) throw new Error(`Combobox not found: ${label}`);
+  return input;
+}
+
+function focusInput(input: HTMLInputElement) {
+  act(() => {
+    input.focus();
+  });
+}
+
+function pressKey(input: HTMLInputElement, key: string) {
+  act(() => {
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+      }),
+    );
+  });
+}
+
+function optionLabels(): string[] {
+  return Array.from(document.querySelectorAll('[role="option"]')).map(
+    (option) => option.textContent?.trim() ?? "",
+  );
 }
 
 function blurInput(input: HTMLInputElement) {
@@ -371,6 +431,51 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
+  it("renders searchable grouped theme options including user themes", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const themeSelect = getComboboxByLabel("Theme");
+    expect(themeSelect.value).toBe("Acorn Dark Green");
+
+    focusInput(themeSelect);
+
+    expect(
+      Array.from(document.querySelectorAll("[data-select-group-label]")).map(
+        (element) => element.textContent?.trim(),
+      ),
+    ).toEqual([
+      "Acorn themes",
+      "Built-in dark",
+      "Built-in light",
+      "Custom themes",
+    ]);
+    expect(optionLabels()).toEqual([
+      "Acorn Dark Green",
+      "Acorn Dark Pink",
+      "Acorn Light",
+      "One Dark Pro",
+      "GitHub Light",
+      "Solarized Local (custom)",
+    ]);
+
+    setInputValue(themeSelect, "local");
+
+    expect(optionLabels()).toEqual(["Solarized Local (custom)"]);
+
+    pressKey(themeSelect, "Enter");
+
+    expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
+      themeId: "solarized-local",
+    });
+  });
+
   it("edits Interface UI scale with presets only", async () => {
     await act(async () => {
       root = createRoot(container);
@@ -381,21 +486,17 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const scaleSelect = Array.from(
-      document.querySelectorAll<HTMLSelectElement>("select"),
-    ).find((element) => element.value === "100");
+    const scaleSelect = getComboboxByLabel("UI scale");
 
     expect(document.body.textContent).toContain("UI scale");
     expect(
       document.querySelector('input[aria-label="Custom UI scale percentage"]'),
     ).toBeNull();
-    expect(scaleSelect?.value).toBe("100");
+    expect(scaleSelect.value).toBe("100%");
 
-    act(() => {
-      if (!scaleSelect) throw new Error("UI scale select not found");
-      scaleSelect.value = "125";
-      scaleSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    focusInput(scaleSelect);
+    setInputValue(scaleSelect, "125");
+    pressKey(scaleSelect, "Enter");
 
     expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
       uiScalePercent: 125,
@@ -459,18 +560,14 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("인터페이스");
     expect(document.body.textContent).toContain("언어");
 
-    const languageSelect = Array.from(
-      document.querySelectorAll<HTMLSelectElement>("select"),
-    ).find((element) => element.value === "ko");
+    const languageSelect = getComboboxByLabel("언어");
 
-    expect(languageSelect).toBeInstanceOf(HTMLSelectElement);
-    expect(languageSelect?.textContent).toContain("한국어");
+    expect(languageSelect).toBeInstanceOf(HTMLInputElement);
+    expect(languageSelect.value).toBe("한국어");
 
-    act(() => {
-      if (!languageSelect) throw new Error("Language select not found");
-      languageSelect.value = "en";
-      languageSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    focusInput(languageSelect);
+    setInputValue(languageSelect, "English");
+    pressKey(languageSelect, "Enter");
 
     expect(patchLanguage).toHaveBeenCalledWith("en");
   });

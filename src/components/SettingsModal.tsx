@@ -67,7 +67,11 @@ import {
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
-import { revealThemesFolder, useThemes } from "../lib/themes";
+import {
+  revealThemesFolder,
+  useThemes,
+  type AcornTheme,
+} from "../lib/themes";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
@@ -81,6 +85,7 @@ import {
   Select,
   Stepper,
   TextInput,
+  type SelectOptionGroup,
 } from "./ui";
 
 type Tab =
@@ -915,6 +920,7 @@ function GithubSettings() {
             })
           }
           className="w-48"
+          aria-label={st(t, "settings.github.refreshInterval.label")}
         >
           {PR_REFRESH_INTERVAL_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -1073,6 +1079,7 @@ function UiScaleSection({
           value={String(value)}
           onChange={(e) => commitValue(Number(e.target.value))}
           className="w-32"
+          aria-label={st(t, "settings.appearance.uiScale.label")}
         >
           {presets.map((preset) => (
             <option key={preset} value={preset}>
@@ -1085,6 +1092,64 @@ function UiScaleSection({
   );
 }
 
+function buildThemeSelectGroups(
+  themes: ReadonlyArray<AcornTheme>,
+  t: SettingsTranslator,
+): SelectOptionGroup[] {
+  const customLabel = st(t, "settings.appearance.theme.custom");
+  const acornBuiltIns = themes.filter(isAcornBuiltInTheme);
+  const otherBuiltInDark = themes.filter(
+    (theme) =>
+      theme.source === "builtin" &&
+      theme.mode === "dark" &&
+      !isAcornBuiltInTheme(theme),
+  );
+  const otherBuiltInLight = themes.filter(
+    (theme) =>
+      theme.source === "builtin" &&
+      theme.mode === "light" &&
+      !isAcornBuiltInTheme(theme),
+  );
+  const userThemes = themes.filter((theme) => theme.source === "user");
+
+  return [
+    {
+      label: st(t, "settings.appearance.theme.groups.acorn"),
+      options: acornBuiltIns.map((theme) => themeToSelectOption(theme)),
+    },
+    {
+      label: st(t, "settings.appearance.theme.groups.dark"),
+      options: otherBuiltInDark.map((theme) => themeToSelectOption(theme)),
+    },
+    {
+      label: st(t, "settings.appearance.theme.groups.light"),
+      options: otherBuiltInLight.map((theme) => themeToSelectOption(theme)),
+    },
+    {
+      label: st(t, "settings.appearance.theme.groups.custom"),
+      options: userThemes.map((theme) =>
+        themeToSelectOption(theme, customLabel),
+      ),
+    },
+  ].filter((group) => group.options.length > 0);
+}
+
+function isAcornBuiltInTheme(theme: AcornTheme): boolean {
+  return (
+    theme.source === "builtin" &&
+    (theme.id.startsWith("acorn-") || theme.label.startsWith("Acorn "))
+  );
+}
+
+function themeToSelectOption(theme: AcornTheme, suffix?: string) {
+  const label = suffix ? `${theme.label} ${suffix}` : theme.label;
+  return {
+    value: theme.id,
+    label,
+    searchText: [theme.id, theme.label, suffix].filter(Boolean).join(" "),
+  };
+}
+
 function ThemeSection({
   themeId,
   onChange,
@@ -1095,6 +1160,7 @@ function ThemeSection({
   const themes = useThemes((s) => s.themes);
   const refresh = useThemes((s) => s.refresh);
   const t = useTranslation();
+  const themeOptions = buildThemeSelectGroups(themes, t);
 
   return (
     <Field
@@ -1104,18 +1170,11 @@ function ThemeSection({
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={themeId}
-          onChange={(e) => onChange(e.target.value)}
+          onValueChange={onChange}
+          options={themeOptions}
           className="min-w-[14rem]"
-        >
-          {themes.map((theme) => (
-            <option key={theme.id} value={theme.id}>
-              {theme.label}
-              {theme.source === "user"
-                ? ` ${st(t, "settings.appearance.theme.custom")}`
-                : ""}
-            </option>
-          ))}
-        </Select>
+          aria-label={st(t, "settings.appearance.theme.label")}
+        />
         <Tooltip
           label={st(t, "settings.appearance.theme.rescanTitle")}
           side="bottom"

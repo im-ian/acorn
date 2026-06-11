@@ -16,6 +16,7 @@ describe("BUILT_IN_THEMES", () => {
   it("ships an expanded set of built-in themes", () => {
     expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual([
       "acorn-dark",
+      "acorn-pink",
       "one-dark-pro",
       "monokai-pro",
       "kanagawa-wave",
@@ -40,13 +41,25 @@ describe("BUILT_IN_THEMES", () => {
       "one-light",
       "gruvbox-light",
     ]);
-    expect(BUILT_IN_THEMES).toHaveLength(24);
+    expect(BUILT_IN_THEMES).toHaveLength(25);
     expect(BUILT_IN_THEMES.filter((theme) => theme.mode === "dark")).toHaveLength(
-      16,
+      17,
     );
     expect(
       BUILT_IN_THEMES.filter((theme) => theme.mode === "light"),
     ).toHaveLength(8);
+  });
+
+  it("keeps Acorn built-in theme ids and labels stable", () => {
+    expect(
+      BUILT_IN_THEMES.slice(0, 2).map((theme) => ({
+        id: theme.id,
+        label: theme.label,
+      })),
+    ).toEqual([
+      { id: "acorn-dark", label: "Acorn Dark Green" },
+      { id: "acorn-pink", label: "Acorn Dark Pink" },
+    ]);
   });
 
   it("every built-in css passes validation", () => {

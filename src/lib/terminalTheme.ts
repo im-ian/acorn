@@ -31,7 +31,7 @@ export interface TerminalPalette {
 }
 
 // Default xterm ANSI palette for dark themes. Mirrors the One Dark family the
-// stock Acorn Dark theme is tuned for, so a stream of ANSI-coloured output
+// stock Acorn Dark Green theme is tuned for, so a stream of ANSI-coloured output
 // from agent TUIs and shells stays readable on the default background.
 export const DARK_PALETTE: TerminalPalette = {
   background: "#1f2326",
