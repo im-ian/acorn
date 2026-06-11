@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildLocalSessionFolderGroups,
   buildProjectFolderGroups,
   defaultProjectFolderId,
   ensureProjectFolders,
@@ -220,6 +221,51 @@ describe("project folders", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].sessions.map((s) => s.id)).toEqual(["project"]);
+  });
+
+  it("groups local sessions into local workspaces", () => {
+    const repoPath = "/Users/me";
+    const scratch = folder("scratch", repoPath, repoPath, "Scratch");
+    const groups = buildLocalSessionFolderGroups(
+      [],
+      [
+        session("root", repoPath, { project_scoped: false }),
+        session("notes", repoPath, { project_scoped: false }),
+      ],
+      {
+        [repoPath]: [makeDefaultProjectFolder(repoPath), scratch],
+      },
+      { notes: "scratch" },
+    );
+
+    expect(groups.map((group) => group.repoPath)).toEqual([repoPath]);
+    expect(groups[0].folders.map((group) => group.folder.id)).toEqual([
+      repoPath,
+      "scratch",
+    ]);
+    expect(groups[0].folders[0].sessions.map((s) => s.id)).toEqual(["root"]);
+    expect(groups[0].folders[1].sessions.map((s) => s.id)).toEqual(["notes"]);
+  });
+
+  it("keeps empty local workspaces out of project groups", () => {
+    const repoPath = "/Users/me";
+    const scratch = folder("scratch", repoPath, repoPath, "Scratch");
+
+    expect(
+      buildProjectFolderGroups(
+        [],
+        [],
+        { [repoPath]: [makeDefaultProjectFolder(repoPath), scratch] },
+      ),
+    ).toEqual([]);
+
+    expect(
+      buildLocalSessionFolderGroups(
+        [],
+        [],
+        { [repoPath]: [makeDefaultProjectFolder(repoPath), scratch] },
+      )[0].folders.map((group) => group.folder.id),
+    ).toEqual([repoPath, "scratch"]);
   });
 
   it("hides stale empty projects that only mirror local sessions", () => {

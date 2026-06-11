@@ -184,6 +184,31 @@ describe("session creation policy", () => {
     });
   });
 
+  it("preserves the active local workspace when the active session is inside it", () => {
+    const sessions = [
+      session("local", "/Users/me", {
+        project_scoped: false,
+        worktree_path: "/Users/me",
+      }),
+    ];
+
+    expect(
+      resolveActiveSessionScope({
+        sessions,
+        projects: [],
+        activeSessionId: "local",
+        activeWorkspaceRepoPath: "/Users/me",
+        activeWorkspaceCwdPath: "/Users/me/scratch",
+        activeProjectFolderId: "scratch",
+      }),
+    ).toEqual({
+      repoPath: "/Users/me",
+      cwdPath: "/Users/me/scratch",
+      projectScoped: false,
+      projectFolderId: "scratch",
+    });
+  });
+
   it("builds local session requests with local naming", () => {
     const sessions = [
       session("local", "/Users/me", {

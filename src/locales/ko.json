@@ -861,6 +861,7 @@
     "localTerminals": {
       "title": "인스턴트 세션",
       "newSession": "새 인스턴트 세션",
+      "newWorkspace": "새 작업공간",
       "empty": "더블클릭하면 인스턴트 세션을 시작할 수 있습니다."
     },
     "emptyProject": {
