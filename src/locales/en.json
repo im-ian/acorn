@@ -1194,6 +1194,7 @@
       "sessionSingular": "session",
       "sessionPlural": "sessions",
       "sessionsWillBeRemoved": "will be removed from Acorn with this workspace.",
+      "worktreeSessionsWillBeRemovedOnly": "Worktree workspace sessions will be removed from Acorn only.",
       "emptyFolder": "This workspace has no sessions.",
       "filesWillNotBeTouched": "Files and worktrees on disk will not be deleted.",
       "worktreesWillBeDeleted": "Standalone isolated sessions will also delete their worktrees from disk.",

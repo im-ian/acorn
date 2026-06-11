@@ -285,12 +285,15 @@ function App() {
   const pendingRemoveCanDeleteWorktree =
     pendingRemove !== null &&
     canDeleteSessionWorktree(pendingRemove, projectFolders);
+  const pendingRemoveKeepsSharedWorktree =
+    pendingRemoveRecordedWorktree && !pendingRemoveCanDeleteWorktree;
   const pendingRemoveAutoDeletesWorktree =
     pendingRemove !== null &&
     shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders);
   const pendingRemoveSkipsDialog =
     pendingRemove !== null &&
-    ((pendingRemoveAutoDeletesWorktree && autoDeleteWorktrees) ||
+    (pendingRemoveKeepsSharedWorktree ||
+      (pendingRemoveAutoDeletesWorktree && autoDeleteWorktrees) ||
       (!pendingRemoveRecordedWorktree && !confirmRemoveSession));
   const sessionIdsKey = useMemo(
     () => sessions.map((session) => session.id).join("\0"),
@@ -1061,11 +1064,26 @@ function App() {
   }, [activeSessionId, sessionIdsKey]);
 
   // Skip the confirmation dialog when Settings gives a deterministic removal
-  // choice: plain sessions can skip confirmation, and standalone isolated
-  // sessions can opt into always deleting their worktree from disk.
+  // choice: shared worktree workspace sessions keep the worktree, plain
+  // sessions can skip confirmation, and standalone isolated sessions can opt
+  // into always deleting their worktree from disk.
   useEffect(() => {
     if (!pendingRemove) return;
     const recordedWorktree = hasRecordedWorktree(pendingRemove);
+    const canDeleteWorktree = canDeleteSessionWorktree(
+      pendingRemove,
+      projectFolders,
+    );
+    if (recordedWorktree && !canDeleteWorktree) {
+      clearPendingRemove();
+      void removeSession(pendingRemove.id, false).then(() =>
+        showStoreOperationToast(
+          null,
+          "toasts.session.removeFailed",
+        ),
+      );
+      return;
+    }
     const autoDeleteWorktree = shouldAutoDeleteSessionWorktree(
       pendingRemove,
       projectFolders,
