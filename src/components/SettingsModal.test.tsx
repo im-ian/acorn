@@ -3,6 +3,50 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  themes: [
+    {
+      css: "",
+      id: "acorn-dark",
+      label: "Acorn Dark Green",
+      mode: "dark" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "acorn-pink",
+      label: "Acorn Dark Pink",
+      mode: "dark" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "one-dark-pro",
+      label: "One Dark Pro",
+      mode: "dark" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "acorn-light",
+      label: "Acorn Light",
+      mode: "light" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "github-light",
+      label: "GitHub Light",
+      mode: "light" as const,
+      source: "builtin" as const,
+    },
+    {
+      css: "",
+      id: "solarized-local",
+      label: "Solarized Local",
+      mode: "dark" as const,
+      source: "user" as const,
+    },
+  ],
   importBackgroundImage: vi.fn<
     (name: string, bytes: Uint8Array) => Promise<{ relativePath: string; fileName: string }>
   >(),
@@ -42,28 +86,12 @@ vi.mock("../lib/releases", () => ({
 }));
 
 vi.mock("../lib/themes", () => ({
-  BUILT_IN_THEMES: [
-    {
-      css: "",
-      id: "acorn-dark",
-      label: "Acorn Dark",
-      mode: "dark",
-      source: "builtin",
-    },
-  ],
+  BUILT_IN_THEMES: mocks.themes.filter((theme) => theme.source === "builtin"),
   revealThemesFolder: vi.fn(),
   useThemes: (selector: (state: unknown) => unknown) =>
     selector({
       refresh: vi.fn(),
-      themes: [
-        {
-          css: "",
-          id: "acorn-dark",
-          label: "Acorn Dark",
-          mode: "dark",
-          source: "builtin",
-        },
-      ],
+      themes: mocks.themes,
     }),
 }));
 
@@ -213,6 +241,61 @@ function setInputValue(input: HTMLInputElement, value: string) {
     setter.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+}
+
+function getComboboxByLabel(label: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    `button[role="combobox"][aria-label="${label}"]`,
+  );
+  if (!button) throw new Error(`Combobox not found: ${label}`);
+  return button;
+}
+
+function clickElement(element: HTMLElement) {
+  act(() => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function getSelectSearchInput(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>("[data-select-search]");
+  if (!input) throw new Error("Select search input not found");
+  return input;
+}
+
+function clickOption(label: string) {
+  const optionLabel = Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).find((element) => element.textContent?.trim() === label);
+  const option = optionLabel?.closest('[role="option"]');
+  if (!(option instanceof HTMLElement)) {
+    throw new Error(`Select option not found: ${label}`);
+  }
+  clickElement(option);
+}
+
+function pressKey(element: HTMLElement, key: string) {
+  act(() => {
+    element.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+      }),
+    );
+  });
+}
+
+function optionLabels(): string[] {
+  return Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).map((option) => option.textContent?.trim() ?? "");
+}
+
+function separatorLabels(): string[] {
+  return Array.from(
+    document.querySelectorAll("[data-select-separator]"),
+  ).map((separator) => separator.textContent?.trim() ?? "");
 }
 
 function blurInput(input: HTMLInputElement) {
@@ -371,6 +454,60 @@ describe("SettingsModal font controls", () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull();
   });
 
+  it("renders searchable grouped theme options with separators including user themes", async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openAppearanceTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const themeSelect = getComboboxByLabel("Theme");
+    expect(themeSelect.textContent).toContain("Acorn Dark Green");
+    expect(document.querySelector("[data-select-search]")).toBeNull();
+
+    clickElement(themeSelect);
+
+    expect(
+      Array.from(document.querySelectorAll("[data-select-group-label]")).map(
+        (element) => element.textContent?.trim(),
+      ),
+    ).toEqual([
+      "Acorn themes",
+      "Built-in dark",
+      "Built-in light",
+      "Custom themes",
+    ]);
+    expect(separatorLabels()).toEqual([
+      "",
+      "",
+      "",
+    ]);
+    expect(optionLabels()).toEqual([
+      "Acorn Dark Green",
+      "Acorn Dark Pink",
+      "Acorn Light",
+      "One Dark Pro",
+      "GitHub Light",
+      "Solarized Local (custom)",
+    ]);
+
+    const searchInput = getSelectSearchInput();
+    expect(searchInput.getAttribute("placeholder")).toBe("Search themes");
+    setInputValue(searchInput, "local");
+
+    expect(optionLabels()).toEqual(["Solarized Local (custom)"]);
+    expect(separatorLabels()).toEqual([]);
+
+    pressKey(searchInput, "Enter");
+
+    expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
+      themeId: "solarized-local",
+    });
+  });
+
   it("edits Interface UI scale with presets only", async () => {
     await act(async () => {
       root = createRoot(container);
@@ -381,21 +518,17 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const scaleSelect = Array.from(
-      document.querySelectorAll<HTMLSelectElement>("select"),
-    ).find((element) => element.value === "100");
+    const scaleSelect = getComboboxByLabel("UI scale");
 
     expect(document.body.textContent).toContain("UI scale");
     expect(
       document.querySelector('input[aria-label="Custom UI scale percentage"]'),
     ).toBeNull();
-    expect(scaleSelect?.value).toBe("100");
+    expect(scaleSelect.textContent).toContain("100%");
 
-    act(() => {
-      if (!scaleSelect) throw new Error("UI scale select not found");
-      scaleSelect.value = "125";
-      scaleSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    clickElement(scaleSelect);
+    expect(document.querySelector("[data-select-search]")).toBeNull();
+    clickOption("125%");
 
     expect(useSettings.getState().patchAppearance).toHaveBeenCalledWith({
       uiScalePercent: 125,
@@ -459,18 +592,13 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("인터페이스");
     expect(document.body.textContent).toContain("언어");
 
-    const languageSelect = Array.from(
-      document.querySelectorAll<HTMLSelectElement>("select"),
-    ).find((element) => element.value === "ko");
+    const languageSelect = getComboboxByLabel("언어");
 
-    expect(languageSelect).toBeInstanceOf(HTMLSelectElement);
-    expect(languageSelect?.textContent).toContain("한국어");
+    expect(languageSelect).toBeInstanceOf(HTMLButtonElement);
+    expect(languageSelect.textContent).toContain("한국어");
 
-    act(() => {
-      if (!languageSelect) throw new Error("Language select not found");
-      languageSelect.value = "en";
-      languageSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    clickElement(languageSelect);
+    clickOption("English");
 
     expect(patchLanguage).toHaveBeenCalledWith("en");
   });

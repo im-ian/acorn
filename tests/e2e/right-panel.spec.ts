@@ -591,16 +591,18 @@ test.describe("right panel: groups", () => {
     await page.getByRole("button", { name: "Agents" }).click();
     await page.getByRole("button", { name: "History" }).click();
 
-    const filter = page.getByLabel("Filter by agent");
-    await expect(filter).toHaveValue("__all__");
+    const filter = page.getByRole("combobox", { name: "Filter by agent" });
+    await expect(filter).toContainText("All agents");
     await expect(page.getByText("Codex refactor")).toBeVisible();
     await expect(page.getByText("Claude outline")).toBeVisible();
 
-    await filter.selectOption("codex");
+    await filter.click();
+    await page.getByRole("option", { name: "Codex" }).click();
     await expect(page.getByText("Codex refactor")).toBeVisible();
     await expect(page.getByText("Claude outline")).toHaveCount(0);
 
-    await filter.selectOption("claude");
+    await filter.click();
+    await page.getByRole("option", { name: "Claude" }).click();
     await expect(page.getByText("Codex refactor")).toHaveCount(0);
     await expect(page.getByText("Claude outline")).toBeVisible();
   });

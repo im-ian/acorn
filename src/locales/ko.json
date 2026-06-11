@@ -182,6 +182,13 @@
         "label": "테마",
         "hint": "내장 팔레트와 themes 폴더의 유효한 CSS 파일입니다.",
         "custom": "(사용자 지정)",
+        "searchPlaceholder": "테마 검색",
+        "groups": {
+          "acorn": "Acorn 테마",
+          "dark": "내장 다크",
+          "light": "내장 라이트",
+          "custom": "사용자 지정 테마"
+        },
         "rescanTitle": "테마 폴더 다시 스캔",
         "refresh": "새로고침",
         "revealFolder": "폴더 보기"

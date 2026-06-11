@@ -3,7 +3,14 @@ export { ModalHeader } from "./ModalHeader";
 export { Field } from "./Field";
 export { TextInput, TEXT_INPUT_CLASS } from "./TextInput";
 export { IconInput } from "./IconInput";
-export { Select, SELECT_CLASS } from "./Select";
+export {
+  Select,
+  SELECT_CLASS,
+  type SelectItem,
+  type SelectOption,
+  type SelectOptionGroup,
+  type SelectSeparator,
+} from "./Select";
 export { Stepper } from "./Stepper";
 export { CheckboxRow } from "./CheckboxRow";
 export { RadioCard } from "./RadioCard";

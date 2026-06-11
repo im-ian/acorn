@@ -1,0 +1,15 @@
+:root[data-acorn-theme="acorn-pink"] {
+  --color-bg: #1f2326;
+  --color-bg-elevated: #272b2f;
+  --color-bg-sidebar: #1a1d20;
+  --color-fg: #ededed;
+  --color-fg-muted: oklch(64% 0.01 250);
+  --color-border: #2f3338;
+  --color-accent: oklch(72% 0.18 345);
+  --color-accent-hover: oklch(78% 0.18 345);
+  --color-danger: oklch(62% 0.22 25);
+  --color-warning: oklch(78% 0.16 75);
+  --color-terminal-bg: #1f2326;
+  --color-terminal-fg: #ededed;
+  --color-term-selection: rgba(240, 112, 190, 0.32);
+}
