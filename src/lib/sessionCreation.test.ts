@@ -5,6 +5,7 @@ import {
   buildSessionCreateRequestFromScope,
   resolveActiveSessionScope,
   resolveProjectScopedForRepoPath,
+  scopeForSession,
 } from "./sessionCreation";
 import type { Project, Session } from "./types";
 
@@ -80,6 +81,41 @@ describe("session creation policy", () => {
         activeWorkspaceRepoPath: "/repo/app",
       }),
     ).toMatchObject({ repoPath: "/Users/me", projectScoped: false });
+  });
+
+  it("uses the session worktree path for isolated session scope", () => {
+    const isolated = session("isolated", "/repo/app", {
+      isolated: true,
+      project_scoped: true,
+      worktree_path: "/repo/app/.acorn/worktrees/feature",
+    });
+
+    expect(scopeForSession(isolated)).toEqual({
+      repoPath: "/repo/app",
+      cwdPath: "/repo/app/.acorn/worktrees/feature",
+      projectScoped: true,
+    });
+  });
+
+  it("preserves an isolated active session cwd when resolving active scope", () => {
+    const isolated = session("isolated", "/repo/app", {
+      isolated: true,
+      project_scoped: true,
+      worktree_path: "/repo/app/.acorn/worktrees/feature",
+    });
+
+    expect(
+      resolveActiveSessionScope({
+        sessions: [isolated],
+        projects: [project("/repo/app")],
+        activeSessionId: "isolated",
+        activeWorkspaceRepoPath: "/repo/app",
+      }),
+    ).toEqual({
+      repoPath: "/repo/app",
+      cwdPath: "/repo/app/.acorn/worktrees/feature",
+      projectScoped: true,
+    });
   });
 
   it("preserves the active project workspace when the active session is inside it", () => {

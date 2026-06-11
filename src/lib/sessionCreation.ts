@@ -50,7 +50,7 @@ export interface BuildSessionCreateOptions {
 export function scopeForSession(session: Session): SessionCreateScope {
   return {
     repoPath: session.repo_path,
-    cwdPath: session.isolated ? session.repo_path : session.worktree_path,
+    cwdPath: session.worktree_path,
     projectScoped: session.project_scoped !== false,
   };
 }
