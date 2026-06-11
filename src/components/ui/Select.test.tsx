@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Select, type SelectOption } from "./Select";
+import { Select, type SelectItem, type SelectOption } from "./Select";
 
 const THEME_OPTIONS: SelectOption[] = [
   { value: "acorn-dark", label: "Acorn Dark Green" },
@@ -58,6 +58,12 @@ function optionLabels(): string[] {
   return Array.from(
     document.querySelectorAll("[data-select-option-label]"),
   ).map((option) => option.textContent?.trim() ?? "");
+}
+
+function separators(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>("[data-select-separator]"),
+  );
 }
 
 describe("Select", () => {
@@ -221,6 +227,48 @@ describe("Select", () => {
     setInputValue(getSearchInput(), "tailored");
 
     expect(optionLabels()).toEqual(["Enterprise Plan"]);
+  });
+
+  it("renders separators without making them selectable", () => {
+    const onValueChange = vi.fn();
+    const options: SelectItem[] = [
+      { value: "basic", label: "Basic Plan" },
+      { type: "separator" },
+      { value: "pro", label: "Pro Plan" },
+      { type: "separator", label: "Enterprise" },
+      { value: "enterprise", label: "Enterprise Plan" },
+    ];
+
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Select
+          searchable
+          value="basic"
+          options={options}
+          onValueChange={onValueChange}
+        />,
+      );
+    });
+
+    clickElement(getCombobox());
+
+    expect(optionLabels()).toEqual([
+      "Basic Plan",
+      "Pro Plan",
+      "Enterprise Plan",
+    ]);
+    expect(separators()).toHaveLength(2);
+    expect(separators()[1]?.getAttribute("aria-label")).toBe("Enterprise");
+
+    setInputValue(getSearchInput(), "enterprise");
+
+    expect(optionLabels()).toEqual(["Enterprise Plan"]);
+    expect(separators()).toHaveLength(0);
+
+    pressKey(getSearchInput(), "Enter");
+
+    expect(onValueChange).toHaveBeenCalledWith("enterprise");
   });
 
   it("opens non-searchable selects without rendering a search input", () => {

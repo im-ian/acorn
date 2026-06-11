@@ -27,9 +27,16 @@ export interface SelectOption {
   searchText?: string;
 }
 
+export interface SelectSeparator {
+  type: "separator";
+  label?: string;
+}
+
+export type SelectItem = SelectOption | SelectSeparator;
+
 export interface SelectOptionGroup {
   label: string;
-  options: ReadonlyArray<SelectOption>;
+  options: ReadonlyArray<SelectItem>;
 }
 
 export interface SelectChangeEvent {
@@ -50,7 +57,7 @@ type BaseSelectProps = Omit<
   "children" | "defaultValue" | "onChange" | "onKeyDown"
 > & {
   children?: ReactNode;
-  options?: ReadonlyArray<SelectOption | SelectOptionGroup>;
+  options?: ReadonlyArray<SelectItem | SelectOptionGroup>;
   disabled?: boolean;
   emptyMessage?: string;
   name?: string;
@@ -80,6 +87,7 @@ type MultiSelectProps = BaseSelectProps & {
 export type SelectProps = SingleSelectProps | MultiSelectProps;
 
 interface NormalizedOption {
+  kind: "option";
   value: string;
   label: string;
   description?: string;
@@ -88,9 +96,17 @@ interface NormalizedOption {
   searchText: string;
 }
 
+interface NormalizedSeparator {
+  kind: "separator";
+  label?: string;
+  group?: string;
+}
+
+type NormalizedSelectItem = NormalizedOption | NormalizedSeparator;
+
 interface NormalizedOptionGroup {
   label?: string;
-  options: NormalizedOption[];
+  items: NormalizedSelectItem[];
 }
 
 interface ChildOptionProps {
@@ -104,6 +120,12 @@ interface ChildOptionProps {
 interface ChildOptionGroupProps {
   children?: ReactNode;
   label?: string;
+}
+
+interface ChildSeparatorProps {
+  "aria-label"?: string;
+  "data-label"?: string;
+  title?: string;
 }
 
 export const SELECT_CLASS =
@@ -143,7 +165,10 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
       [children, options],
     );
     const allOptions = useMemo(
-      () => optionGroups.flatMap((group) => group.options),
+      () =>
+        optionGroups.flatMap((group) =>
+          group.items.filter(isNormalizedOption),
+        ),
       [optionGroups],
     );
     const [internalValues, setInternalValues] = useState<string[]>(() => {
@@ -180,7 +205,10 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
       [optionGroups, query, searchable],
     );
     const visibleOptions = useMemo(
-      () => visibleGroups.flatMap((group) => group.options),
+      () =>
+        visibleGroups.flatMap((group) =>
+          group.items.filter(isNormalizedOption),
+        ),
       [visibleGroups],
     );
     const displayValue = selectedLabels.join(", ");
@@ -485,7 +513,17 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
                           {group.label}
                         </div>
                       ) : null}
-                      {group.options.map((option) => {
+                      {group.items.map((item, itemIndex) => {
+                        if (item.kind === "separator") {
+                          return (
+                            <SelectSeparatorRow
+                              key={`${group.label ?? "group"}-separator-${itemIndex}`}
+                              label={item.label}
+                            />
+                          );
+                        }
+
+                        const option = item;
                         const optionIndex = visibleOptions.indexOf(option);
                         const selected = selectedSet.has(option.value);
                         const active = optionIndex === activeIndex;
@@ -598,6 +636,31 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
   },
 );
 
+function SelectSeparatorRow({ label }: { label?: string }) {
+  if (!label) {
+    return (
+      <div
+        role="separator"
+        data-select-separator
+        className="my-1 border-t border-border"
+      />
+    );
+  }
+
+  return (
+    <div
+      role="separator"
+      aria-label={label}
+      data-select-separator
+      className="my-1 flex items-center gap-2 px-2 text-[10px] font-semibold uppercase tracking-normal text-fg-muted"
+    >
+      <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      <span className="min-w-0 truncate">{label}</span>
+      <span aria-hidden="true" className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
 function normalizeValue(value: SelectValue | undefined): string[] {
   return value === undefined ? [] : [String(value)];
 }
@@ -607,7 +670,7 @@ function normalizeValues(values: ReadonlyArray<SelectValue>): string[] {
 }
 
 function normalizeOptionGroups(
-  options: ReadonlyArray<SelectOption | SelectOptionGroup> | undefined,
+  options: ReadonlyArray<SelectItem | SelectOptionGroup> | undefined,
   children: ReactNode,
 ): NormalizedOptionGroup[] {
   if (options) {
@@ -615,7 +678,7 @@ function normalizeOptionGroups(
   }
 
   const groups: NormalizedOptionGroup[] = [];
-  const ungrouped: NormalizedOption[] = [];
+  const ungrouped: NormalizedSelectItem[] = [];
 
   Children.forEach(children, (child) => {
     if (!isValidElement(child) || typeof child.type !== "string") return;
@@ -625,56 +688,68 @@ function normalizeOptionGroups(
       return;
     }
 
+    if (child.type === "hr") {
+      ungrouped.push(
+        normalizeSeparator(child.props as ChildSeparatorProps),
+      );
+      return;
+    }
+
     if (child.type === "optgroup") {
       const optgroupProps = child.props as ChildOptionGroupProps;
       const label =
         typeof optgroupProps.label === "string"
           ? optgroupProps.label
           : undefined;
-      const groupOptions: NormalizedOption[] = [];
+      const groupItems: NormalizedSelectItem[] = [];
       Children.forEach(optgroupProps.children, (optionChild) => {
-        if (
-          isValidElement(optionChild) &&
-          typeof optionChild.type === "string" &&
-          optionChild.type === "option"
-        ) {
-          groupOptions.push(
+        if (!isValidElement(optionChild) || typeof optionChild.type !== "string") {
+          return;
+        }
+
+        if (optionChild.type === "option") {
+          groupItems.push(
             normalizeChildOption(optionChild.props as ChildOptionProps, label),
+          );
+          return;
+        }
+
+        if (optionChild.type === "hr") {
+          groupItems.push(
+            normalizeSeparator(optionChild.props as ChildSeparatorProps, label),
           );
         }
       });
-      groups.push({ label, options: groupOptions });
+      groups.push({ label, items: groupItems });
     }
   });
 
   if (ungrouped.length > 0) {
-    groups.unshift({ options: ungrouped });
+    groups.unshift({ items: ungrouped });
   }
 
   return groups;
 }
 
 function normalizeExplicitOptions(
-  options: ReadonlyArray<SelectOption | SelectOptionGroup>,
+  options: ReadonlyArray<SelectItem | SelectOptionGroup>,
 ): NormalizedOptionGroup[] {
   const groups: NormalizedOptionGroup[] = [];
-  const ungrouped: NormalizedOption[] = [];
+  const ungrouped: NormalizedSelectItem[] = [];
 
   for (const item of options) {
     if ("options" in item) {
       groups.push({
         label: item.label,
-        options: item.options.map((option) =>
-          normalizeOption(option, item.label),
-        ),
+        items: item.options.map((option) => normalizeItem(option, item.label)),
       });
     } else {
-      ungrouped.push(normalizeOption(item));
+      ungrouped.push(normalizeItem(item));
     }
   }
 
   if (ungrouped.length > 0) {
-    groups.unshift({ options: ungrouped });
+    groups.unshift({ items: ungrouped });
   }
 
   return groups;
@@ -696,6 +771,12 @@ function normalizeChildOption(
   );
 }
 
+function normalizeItem(item: SelectItem, group?: string): NormalizedSelectItem {
+  return isSelectSeparator(item)
+    ? normalizeSeparator(item, group)
+    : normalizeOption(item, group);
+}
+
 function normalizeOption(
   option: SelectOption,
   group?: string,
@@ -704,6 +785,7 @@ function normalizeOption(
   const label = option.label;
   const description = option.description;
   return {
+    kind: "option",
     value,
     label,
     description,
@@ -713,6 +795,20 @@ function normalizeOption(
       .filter(Boolean)
       .join(" ")
       .toLowerCase(),
+  };
+}
+
+function normalizeSeparator(
+  separator: SelectSeparator | ChildSeparatorProps,
+  group?: string,
+): NormalizedSeparator {
+  const label = isSelectSeparatorProps(separator)
+    ? separator.label
+    : separator["data-label"] ?? separator["aria-label"] ?? separator.title;
+  return {
+    kind: "separator",
+    group,
+    label: typeof label === "string" && label.trim() ? label.trim() : undefined,
   };
 }
 
@@ -726,15 +822,80 @@ function filterGroups(
   return groups
     .map((group) => ({
       ...group,
-      options: group.options.filter((option) =>
-        option.searchText.includes(normalizedQuery),
+      items: compactSeparators(
+        group.items.filter(
+          (item, index, items) =>
+            (isNormalizedOption(item) &&
+              item.searchText.includes(normalizedQuery)) ||
+            (item.kind === "separator" &&
+              hasMatchingOption(items, index, -1, normalizedQuery) &&
+              hasMatchingOption(items, index, 1, normalizedQuery)),
+        ),
       ),
     }))
-    .filter((group) => group.options.length > 0);
+    .filter((group) => group.items.some(isNormalizedOption));
 }
 
 function firstEnabledIndex(options: ReadonlyArray<NormalizedOption>): number {
   return options.findIndex((option) => !option.disabled);
+}
+
+function compactSeparators(
+  items: ReadonlyArray<NormalizedSelectItem>,
+): NormalizedSelectItem[] {
+  const compacted: NormalizedSelectItem[] = [];
+
+  for (const item of items) {
+    if (
+      item.kind === "separator" &&
+      (compacted.length === 0 ||
+        compacted[compacted.length - 1]?.kind === "separator")
+    ) {
+      continue;
+    }
+    compacted.push(item);
+  }
+
+  while (compacted[compacted.length - 1]?.kind === "separator") {
+    compacted.pop();
+  }
+
+  return compacted;
+}
+
+function hasMatchingOption(
+  items: ReadonlyArray<NormalizedSelectItem>,
+  fromIndex: number,
+  direction: 1 | -1,
+  query: string,
+): boolean {
+  for (
+    let index = fromIndex + direction;
+    index >= 0 && index < items.length;
+    index += direction
+  ) {
+    const item = items[index];
+    if (isNormalizedOption(item) && item.searchText.includes(query)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSelectSeparator(item: SelectItem): item is SelectSeparator {
+  return "type" in item && item.type === "separator";
+}
+
+function isSelectSeparatorProps(
+  separator: SelectSeparator | ChildSeparatorProps,
+): separator is SelectSeparator {
+  return "type" in separator && separator.type === "separator";
+}
+
+function isNormalizedOption(
+  item: NormalizedSelectItem,
+): item is NormalizedOption {
+  return item.kind === "option";
 }
 
 function optionId(listboxId: string, index: number): string {
