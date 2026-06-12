@@ -400,6 +400,21 @@ impl SessionStore {
         Ok(entry.clone())
     }
 
+    /// Flip the explicit auto-title opt-in. Used by the status poll to
+    /// promote a plain terminal session once an agent transcript is bound
+    /// to it. Does not bump `updated_at` — polling must not reshuffle the
+    /// sidebar's most-recent-first ordering. No-op when unchanged.
+    pub fn set_auto_title_enabled(&self, id: &Uuid, enabled: bool) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if entry.auto_title_enabled != Some(enabled) {
+            entry.auto_title_enabled = Some(enabled);
+        }
+        Ok(entry.clone())
+    }
+
     /// Attach a daemon session id to an existing session record. The
     /// setter exists so the daemon-routed PTY path can update the row
     /// it created in-app; it is wired up at the same time as that path
@@ -580,6 +595,24 @@ mod tests {
 
         assert_eq!(session.title_source, SessionTitleSource::Default);
         assert_eq!(session.auto_title_enabled, Some(false));
+    }
+
+    #[test]
+    fn set_auto_title_enabled_flips_flag_without_touching_updated_at() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+        assert_eq!(session.auto_title_enabled, Some(false));
+
+        let updated = store
+            .set_auto_title_enabled(&session.id, true)
+            .expect("session exists");
+
+        assert_eq!(updated.auto_title_enabled, Some(true));
+        assert_eq!(updated.updated_at, session.updated_at);
+        assert_eq!(
+            store.get(&session.id).expect("session exists").auto_title_enabled,
+            Some(true)
+        );
     }
 
     #[test]

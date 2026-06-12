@@ -4060,6 +4060,23 @@ pub struct SessionStatusEntry {
     /// `git checkout` performed inside the session without requiring a
     /// manual refresh.
     pub branch: Option<String>,
+    /// Auto-title opt-in after this poll. Carries the promotion performed
+    /// when an agent transcript is first detected (see
+    /// `auto_title_promotion_needed`) so the frontend planner becomes
+    /// eligible without waiting for the next full session refresh.
+    pub auto_title_enabled: Option<bool>,
+}
+
+/// A session created as a plain terminal starts with
+/// `auto_title_enabled == Some(false)` — at creation time there is no
+/// agent. Once an agent transcript is bound to the session, the user is
+/// running an agent inside it, which is exactly the case auto titles
+/// exist for. Promote the opt-in then; without this flip the per-session
+/// gate permanently overrides the global auto-title setting for every
+/// terminal session. Explicit values (`Some(true)`, legacy `None`) and
+/// transcript-less shells are left untouched.
+fn auto_title_promotion_needed(auto_title_enabled: Option<bool>, has_transcript: bool) -> bool {
+    has_transcript && auto_title_enabled == Some(false)
 }
 
 #[tauri::command]
@@ -4116,7 +4133,8 @@ fn detect_session_statuses_blocking(
             .copied()
     };
 
-    Ok(ids
+    let mut promoted_auto_title = false;
+    let entries: Vec<SessionStatusEntry> = ids
         .into_iter()
         .map(|id| {
             // Hand the detector the in-memory previous status so it can
@@ -4141,6 +4159,7 @@ fn detect_session_statuses_blocking(
                         .as_ref()
                         .and_then(|s| s.agent_transcript_id.clone()),
                     branch,
+                    auto_title_enabled: session.as_ref().and_then(|s| s.auto_title_enabled),
                 };
             }
             // Routing-aware pid lookup. Daemon-managed sessions live
@@ -4208,6 +4227,23 @@ fn detect_session_statuses_blocking(
             let agent_provider = live_agent_kind
                 .or_else(|| transcript.as_ref().map(|(_, kind)| *kind))
                 .map(status_agent_kind_to_provider);
+            let auto_title_enabled = {
+                let current = session.as_ref().and_then(|s| s.auto_title_enabled);
+                match parsed_id {
+                    Some(uuid)
+                        if auto_title_promotion_needed(current, transcript.is_some()) =>
+                    {
+                        promoted_auto_title = true;
+                        state
+                            .sessions
+                            .set_auto_title_enabled(&uuid, true)
+                            .ok()
+                            .and_then(|s| s.auto_title_enabled)
+                            .or(Some(true))
+                    }
+                    _ => current,
+                }
+            };
             let status = session_status::detect(transcript, previous, shell_hint);
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
@@ -4234,9 +4270,16 @@ fn detect_session_statuses_blocking(
                 agent_provider,
                 agent_transcript_id,
                 branch,
+                auto_title_enabled,
             }
         })
-        .collect())
+        .collect();
+    // Promotion must survive an app restart — without the save a session
+    // would silently fall back to ineligible until the agent runs again.
+    if promoted_auto_title {
+        persist(&state);
+    }
+    Ok(entries)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6084,6 +6127,18 @@ mod tests {
             SessionMode::Chat,
             Some(SessionAgentProvider::Codex),
         ));
+    }
+
+    #[test]
+    fn auto_title_promotes_only_opted_out_sessions_with_transcripts() {
+        // Plain terminal that started an agent: promote.
+        assert!(super::auto_title_promotion_needed(Some(false), true));
+        // Plain terminal still shell-only: leave gated.
+        assert!(!super::auto_title_promotion_needed(Some(false), false));
+        // Already opted in: nothing to do.
+        assert!(!super::auto_title_promotion_needed(Some(true), true));
+        // Legacy rows keep using compatibility heuristics.
+        assert!(!super::auto_title_promotion_needed(None, true));
     }
 
     #[test]

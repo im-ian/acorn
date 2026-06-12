@@ -1332,11 +1332,18 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.agent_transcript_id ?? null)
                   : (sess.agent_transcript_id ?? null);
+                // Carries the backend's auto-title promotion (terminal
+                // session that started an agent) so the title planner sees
+                // eligibility on the next poll instead of waiting for a
+                // full session refresh.
+                const nextAutoTitleEnabled =
+                  update.auto_title_enabled ?? sess.auto_title_enabled ?? null;
                 if (
                   nextStatus !== sess.status ||
                   nextBranch !== sess.branch ||
                   nextAgentProvider !== (sess.agent_provider ?? null) ||
-                  nextAgentTranscriptId !== (sess.agent_transcript_id ?? null)
+                  nextAgentTranscriptId !== (sess.agent_transcript_id ?? null) ||
+                  nextAutoTitleEnabled !== (sess.auto_title_enabled ?? null)
                 ) {
                   changed = true;
                   return {
@@ -1345,6 +1352,7 @@ export const useAppStore = create<AppStateModel>()(
                     branch: nextBranch,
                     agent_provider: nextAgentProvider,
                     agent_transcript_id: nextAgentTranscriptId,
+                    auto_title_enabled: nextAutoTitleEnabled,
                   };
                 }
                 return sess;
