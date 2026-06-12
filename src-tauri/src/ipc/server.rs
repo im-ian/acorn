@@ -103,12 +103,18 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
     // Best-effort cleanup of any previous socket inode. We do not block on
     // failure because the next `bind` will surface the real error.
     let _ = std::fs::remove_file(&path);
-    let listener = match UnixListener::bind(&path) {
+    // Bind at a temporary name, tighten permissions, then rename onto the
+    // advertised path. Binding directly at `path` would leave a window
+    // between bind (umask-derived permissions) and chmod during which any
+    // local user could connect.
+    let staging_path = path.with_extension("sock-staging");
+    let _ = std::fs::remove_file(&staging_path);
+    let listener = match UnixListener::bind(&staging_path) {
         Ok(l) => l,
         Err(err) => {
             tracing::warn!(
                 error = %err,
-                path = %path.display(),
+                path = %staging_path.display(),
                 "ipc: bind failed; server disabled",
             );
             return None;
@@ -124,15 +130,27 @@ pub fn start<R: Runtime>(app: AppHandle<R>, state: AppState) -> Option<IpcServer
         );
         return None;
     }
-    if let Err(err) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+    if let Err(err) =
+        std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o600))
+    {
         // Tighten on best-effort. If chmod fails we keep going — it just
         // means the socket is more permissive than ideal, not that the
         // server is unsafe (the unix peer is still local).
         tracing::warn!(
             error = %err,
-            path = %path.display(),
+            path = %staging_path.display(),
             "ipc: chmod 0600 failed",
         );
+    }
+    if let Err(err) = std::fs::rename(&staging_path, &path) {
+        tracing::warn!(
+            error = %err,
+            from = %staging_path.display(),
+            to = %path.display(),
+            "ipc: socket rename failed; server disabled",
+        );
+        let _ = std::fs::remove_file(&staging_path);
+        return None;
     }
     tracing::info!(path = %path.display(), "ipc: listening");
 
@@ -191,6 +209,11 @@ fn run_listener<R: Runtime>(
     tracing::info!("ipc: listener stopped");
 }
 
+/// Upper bound for a single request line. `read_line` otherwise grows the
+/// buffer without limit, so a misbehaving client writing an endless unbroken
+/// line could exhaust memory. Generous compared to any real `Envelope`.
+const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+
 fn handle_connection<R: Runtime>(
     stream: UnixStream,
     app: &AppHandle<R>,
@@ -199,7 +222,7 @@ fn handle_connection<R: Runtime>(
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
     let mut line = String::new();
-    let n = reader.read_line(&mut line)?;
+    let n = std::io::Read::take(&mut reader, MAX_REQUEST_BYTES).read_line(&mut line)?;
     if n == 0 {
         return Ok(());
     }
