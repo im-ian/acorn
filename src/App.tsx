@@ -603,7 +603,10 @@ function App() {
       if (!sid) return;
       const state = useAppStore.getState();
       if (!state.activeProject) return;
-      const ws = state.workspaces[state.activeProject];
+      // Workspaces are keyed by project-folder id when a named folder is
+      // active; the repo path only keys the default workspace.
+      const ws =
+        state.workspaces[state.activeProjectFolderId ?? state.activeProject];
       if (!ws) return;
       for (const [pid, pane] of Object.entries(ws.panes)) {
         if (pane.tabIds.includes(sid)) {
