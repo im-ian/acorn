@@ -75,11 +75,6 @@ export const VirtualizedLineList = forwardRef<
     for (let i = 0; i < sample; i++) total += estimateSize(i);
     return Math.max(1, total / sample);
   }, [count, estimateSize]);
-  const estimatedTotalSize = useMemo(() => {
-    let total = 0;
-    for (let i = 0; i < count; i++) total += estimateSize(i);
-    return total;
-  }, [count, estimateSize]);
   const fallbackItems = useMemo(
     () =>
       buildFallbackItems(count, estimateSize, INITIAL_VIEWPORT_ROWS + overscan),
@@ -96,6 +91,16 @@ export const VirtualizedLineList = forwardRef<
       height: averageInitialSize * INITIAL_VIEWPORT_ROWS,
     },
   });
+  // Only needed while the virtualizer has not produced a total yet (no
+  // scroll element measured). Skipping the O(n) scan once measurements
+  // exist keeps large lists from re-summing every line each render.
+  const measuredTotalSize = virtualized ? virtualizer.getTotalSize() : 0;
+  const estimatedTotalSize = useMemo(() => {
+    if (!virtualized || measuredTotalSize > 0) return 0;
+    let total = 0;
+    for (let i = 0; i < count; i++) total += estimateSize(i);
+    return total;
+  }, [virtualized, measuredTotalSize, count, estimateSize]);
   const virtualItems = virtualizer.getVirtualItems();
   const renderedItems: RenderedVirtualItem[] =
     virtualItems.length > 0 ? virtualItems : fallbackItems;
@@ -139,7 +144,7 @@ export const VirtualizedLineList = forwardRef<
     <div
       className={innerClassName}
       style={{
-        height: virtualizer.getTotalSize() || estimatedTotalSize,
+        height: measuredTotalSize || estimatedTotalSize,
         minWidth:
           minWidthCh === undefined ? undefined : `max(100%, ${minWidthCh}ch)`,
         position: "relative",
