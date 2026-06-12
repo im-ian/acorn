@@ -1067,7 +1067,13 @@ export function Terminal({
         writeToPty(targetId, data);
       }
     };
-    let terminalActivityVersion = 0;
+    // Counts USER INPUT only (xterm onData). The image-paste fallback
+    // cancels itself when this advances, meaning "the paste already
+    // reached the PTY as input". PTY *output* must not bump this:
+    // a busy agent (spinner, streaming) emits output continuously, and
+    // counting it cancelled every deferred image paste while an agent
+    // was running.
+    let terminalInputVersion = 0;
     let imagePasteFallbackTimer: number | null = null;
     let imagePasteFallbackSerial = 0;
     const IMAGE_PASTE_FALLBACK_DELAY_MS = 500;
@@ -1111,21 +1117,29 @@ export function Terminal({
         }
       };
     const pasteNativeClipboard = async () => {
-      const observedActivityVersion = terminalActivityVersion;
+      const observedInputVersion = terminalInputVersion;
       const snapshot = await api.clipboardSnapshot();
       logNativeClipboardSnapshot(snapshot);
       const imageFile = nativeClipboardImageFile(snapshot);
-      if (imageFile) {
-        scheduleClipboardImageFallback(imageFile, observedActivityVersion);
+      // Same precedence as the DOM paste path (`terminalPasteAction`):
+      // text wins over an image flavor. Apps like Word/Excel put both a
+      // string and a bitmap on the pasteboard; preferring the image here
+      // made Cmd+V silently attach a picture instead of pasting the text.
+      const action = terminalPasteAction({
+        text: snapshot.text ?? "",
+        hasImagePayload: Boolean(imageFile),
+      });
+      if (action.kind === "pasteText") {
+        term.paste(action.text);
         return;
       }
-      if (snapshot.text) {
-        term.paste(snapshot.text);
+      if (action.kind === "deferImageAttachment") {
+        scheduleClipboardImageFallback(imageFile, observedInputVersion);
       }
     };
     const scheduleClipboardImageFallback = (
       imageFile: ClipboardImageFile | null,
-      observedActivityVersion: number,
+      observedInputVersion: number,
     ) => {
       if (imagePasteFallbackTimer !== null) {
         window.clearTimeout(imagePasteFallbackTimer);
@@ -1137,7 +1151,7 @@ export function Terminal({
         if (
           disposed ||
           serial !== imagePasteFallbackSerial ||
-          terminalActivityVersion !== observedActivityVersion
+          terminalInputVersion !== observedInputVersion
         ) {
           return;
         }
@@ -1150,7 +1164,7 @@ export function Terminal({
             if (
               disposed ||
               serial !== imagePasteFallbackSerial ||
-              terminalActivityVersion !== observedActivityVersion
+              terminalInputVersion !== observedInputVersion
             ) {
               return;
             }
@@ -1161,7 +1175,7 @@ export function Terminal({
           if (
             disposed ||
             serial !== imagePasteFallbackSerial ||
-            terminalActivityVersion !== observedActivityVersion
+            terminalInputVersion !== observedInputVersion
           ) {
             return;
           }
@@ -1562,8 +1576,9 @@ export function Terminal({
     // blocks xterm's listener so the data emits exactly once.
     //
     // Image-only payloads first stay on the native path. If the paste
-    // produces no terminal input or output, run the provider-specific
-    // compatibility path.
+    // produces no terminal *input*, run the provider-specific
+    // compatibility path. (Unrelated PTY output — agent spinners,
+    // streaming — must not cancel the fallback.)
     const onPaste = (e: Event) => {
       const ev = e as ClipboardEvent;
       const cd = ev.clipboardData;
@@ -1575,11 +1590,11 @@ export function Terminal({
         hasImagePayload: Boolean(imageFile) || hasClipboardImagePayload(cd),
       });
       if (action.kind === "deferImageAttachment") {
-        scheduleClipboardImageFallback(imageFile, terminalActivityVersion);
+        scheduleClipboardImageFallback(imageFile, terminalInputVersion);
         return;
       }
       if (action.kind === "native") {
-        scheduleClipboardImageFallback(null, terminalActivityVersion);
+        scheduleClipboardImageFallback(null, terminalInputVersion);
         return;
       }
       if (action.kind === "pasteText") term.paste(action.text);
@@ -1688,7 +1703,7 @@ export function Terminal({
     );
 
     const inputDisposable = term.onData((data: string) => {
-      terminalActivityVersion += 1;
+      terminalInputVersion += 1;
       sendUserInputToPty(data);
       if (data.includes("\r") || data.includes("\n")) {
         commandSizeSyncScheduler.schedule();
@@ -1952,7 +1967,6 @@ export function Terminal({
     // PTY to also exit (zsh prints "Saving session..." twice). Guard every
     // await resumption point so a disposed mount short-circuits cleanly.
     const handlePtyOutput = (bytes: Uint8Array) => {
-      terminalActivityVersion += 1;
       term.write(bytes, () => {
         if (disposed) return;
         // The parser has drained this chunk. Force a frame-bound
