@@ -1777,6 +1777,7 @@ export const useAppStore = create<AppStateModel>()(
           nextSplitId(),
         );
         return {
+          ...ws,
           layout: newLayout,
           panes: { ...ws.panes, [newPaneId]: emptyPane(newPaneId) },
           focusedPaneId: newPaneId,
@@ -1856,13 +1857,26 @@ export const useAppStore = create<AppStateModel>()(
         const fallback = surviving[0] ?? ROOT_PANE_ID;
         if (newPanes[fallback] && pane.tabIds.length > 0) {
           const target = newPanes[fallback];
+          const mergedTabIds = [...target.tabIds, ...pane.tabIds];
+          const mergedActive = target.activeTabId ?? pane.activeTabId;
           newPanes[fallback] = {
             ...target,
-            tabIds: [...target.tabIds, ...pane.tabIds],
-            activeTabId: target.activeTabId ?? pane.activeTabId,
+            tabIds: mergedTabIds,
+            activeTabId: mergedActive,
+            activationHistory: activationHistoryFor(
+              {
+                activationHistory: [
+                  ...(pane.activationHistory ?? []),
+                  ...(target.activationHistory ?? []),
+                ],
+              },
+              mergedTabIds,
+              mergedActive,
+            ),
           };
         }
         return {
+          ...ws,
           layout: collapsed,
           panes: newPanes,
           focusedPaneId: fallback,
@@ -1951,6 +1965,7 @@ export const useAppStore = create<AppStateModel>()(
         }
 
         return {
+          ...ws,
           layout: newLayout,
           panes: newPanes,
           focusedPaneId: toPaneId,
