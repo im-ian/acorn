@@ -2105,7 +2105,11 @@ fn collect_memory_usage_from_roots(
 
 #[tauri::command]
 pub fn get_memory_usage(state: State<'_, AppState>) -> MemoryUsage {
-    let mut guard = MEMORY_PROBE.lock().expect("memory probe poisoned");
+    // Recover a poisoned probe rather than panicking the command: the
+    // cached `System` is refreshed from scratch below either way.
+    let mut guard = MEMORY_PROBE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let refresh = ProcessRefreshKind::new()
         .with_memory()
         .with_exe(UpdateKind::Always)
@@ -3254,9 +3258,39 @@ pub async fn pty_spawn<R: Runtime>(
     rows: Option<u16>,
     replay_scrollback: Option<bool>,
 ) -> AppResult<()> {
+    let state = state.inner().clone();
+    // Staging dirs, control markers, and the daemon spawn path (which can
+    // poll the daemon socket for seconds on first spawn) are all blocking —
+    // keep them off the async executor.
+    run_blocking("pty_spawn", move || {
+        pty_spawn_blocking(
+            app,
+            state,
+            session_id,
+            cwd,
+            env,
+            cols,
+            rows,
+            replay_scrollback,
+        )
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pty_spawn_blocking<R: Runtime>(
+    app: AppHandle<R>,
+    state: AppState,
+    session_id: String,
+    cwd: String,
+    env: Option<HashMap<String, String>>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    replay_scrollback: Option<bool>,
+) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let session = state.sessions.get(&id)?;
-    let cwd = authorize_session_cwd(state.inner(), &session, &PathBuf::from(cwd))?;
+    let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
     // Either an in-process PTY or a daemon-side stream attachment for
     // this session already exists — caller hit `pty_spawn` twice (e.g.
     // StrictMode double mount), nothing to do.
@@ -3498,7 +3532,7 @@ pub async fn pty_spawn<R: Runtime>(
 ///    persist `daemon_session_id` so the next restart hits case 2.
 fn spawn_via_daemon<R: Runtime>(
     app: &AppHandle<R>,
-    state: &State<'_, AppState>,
+    state: &AppState,
     id: uuid::Uuid,
     cwd: &std::path::Path,
     command: &str,
@@ -4031,6 +4065,21 @@ pub struct SessionStatusEntry {
 #[tauri::command]
 pub async fn detect_session_statuses(
     state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> AppResult<Vec<SessionStatusEntry>> {
+    let state = state.inner().clone();
+    // The process-table refresh, per-session branch probes, and the daemon
+    // `list_sessions` RPC (which can sit in the daemon spawn retry loop for
+    // seconds) are all blocking — keep them off the async executor, or the
+    // frontend's status poll stalls every other Tauri command.
+    run_blocking("detect_session_statuses", move || {
+        detect_session_statuses_blocking(state, ids)
+    })
+    .await
+}
+
+fn detect_session_statuses_blocking(
+    state: AppState,
     ids: Vec<String>,
 ) -> AppResult<Vec<SessionStatusEntry>> {
     // One process-table snapshot covers every session in this poll. cwd is
