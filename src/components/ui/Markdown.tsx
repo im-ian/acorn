@@ -87,6 +87,12 @@ interface MarkdownProps {
   onTaskToggle?: (index: number, checked: boolean) => void;
 }
 
+// Markdown bodies come from untrusted sources (PR descriptions, comments).
+// rehype-sanitize already strips most schemes from href, but it still admits
+// xmpp/irc and the like — gate what we hand to the OS opener to web links
+// and mailto so a crafted body can't launch arbitrary scheme handlers.
+const SAFE_OPEN_URL_RE = /^(https?:|mailto:)/i;
+
 const baseComponents: Components = {
   a({ href, children, title, ...rest }) {
     const link = (
@@ -95,7 +101,7 @@ const baseComponents: Components = {
         href={href}
         onClick={(e) => {
           e.preventDefault();
-          if (href) void openUrl(href);
+          if (href && SAFE_OPEN_URL_RE.test(href)) void openUrl(href);
         }}
         className="text-accent underline-offset-2 hover:underline"
       >

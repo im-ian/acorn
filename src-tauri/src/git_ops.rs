@@ -141,20 +141,40 @@ fn cached_ssh_hostname(alias: &str) -> Option<String> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    if let Ok(map) = cache.lock() {
+    // A poisoned lock would otherwise silently skip the cache and re-spawn
+    // `ssh -G` on every call; the map itself stays valid, so recover it.
+    {
+        let map = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(hit) = map.get(alias) {
             return hit.clone();
         }
     }
 
     let resolved = resolve_ssh_hostname(alias);
-    if let Ok(mut map) = cache.lock() {
-        map.insert(alias.to_string(), resolved.clone());
-    }
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(alias.to_string(), resolved.clone());
     resolved
 }
 
+/// Aliases come from git remote URLs, i.e. repo-controlled data. Only pass
+/// plain host-shaped strings to `ssh -G`: anything with spaces, globs, or an
+/// option-like leading `-` could match an unexpected wildcard `Host` block
+/// (whose `ProxyCommand` OpenSSH would then execute) or be parsed as a flag.
+fn is_plain_hostname(alias: &str) -> bool {
+    !alias.is_empty()
+        && alias.len() <= 255
+        && !alias.starts_with('-')
+        && alias
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
 fn resolve_ssh_hostname(alias: &str) -> Option<String> {
+    if !is_plain_hostname(alias) {
+        return None;
+    }
     let out = std::process::Command::new("ssh")
         .args(["-G", alias])
         .output()
