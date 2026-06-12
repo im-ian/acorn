@@ -169,15 +169,20 @@ impl DaemonBridge {
         if !self.is_enabled() {
             return Err(BridgeError::Disabled);
         }
-        if self.conn.lock().is_some() {
+        // Hold the lock across the whole probe/spawn/connect sequence.
+        // Releasing it between the `is_some` check and the write let two
+        // concurrent callers both observe `None`, both sit in the spawn
+        // retry loop (up to the socket-wait timeout each), and the loser's
+        // freshly opened connection get silently dropped.
+        let mut conn = self.conn.lock();
+        if conn.is_some() {
             return Ok(());
         }
         // No cached conn — probe; if down, spawn; then connect.
         if client::probe_status()?.is_none() {
             self.spawn_daemon_with_retries()?;
         }
-        let conn = ControlConn::persistent("acorn-app")?;
-        *self.conn.lock() = Some(conn);
+        *conn = Some(ControlConn::persistent("acorn-app")?);
         Ok(())
     }
 
@@ -226,23 +231,37 @@ impl DaemonBridge {
     /// cached connection so the next call re-establishes.
     fn call(&self, payload: ControlPayload) -> BridgeResult<ControlResult> {
         self.ensure_connection()?;
-        // First attempt over the persistent conn.
+        // First attempt over the persistent conn. A concurrent caller's
+        // error path can null the cached conn between `ensure_connection`
+        // and the lock here, so treat a missing conn as a stale-connection
+        // error instead of panicking on it.
         let result = {
             let mut guard = self.conn.lock();
-            let conn = guard.as_mut().expect("ensure_connection set this");
-            conn.call(payload.clone())
+            match guard.as_mut() {
+                Some(conn) => conn.call(payload.clone()),
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "daemon connection dropped concurrently",
+                )),
+            }
         };
         match result {
             Ok(resp) => Ok(resp.payload),
             Err(e)
                 if e.kind() == io::ErrorKind::UnexpectedEof
-                    || e.kind() == io::ErrorKind::BrokenPipe =>
+                    || e.kind() == io::ErrorKind::BrokenPipe
+                    || e.kind() == io::ErrorKind::NotConnected =>
             {
                 // Stale connection — drop and reconnect once.
                 *self.conn.lock() = None;
                 self.ensure_connection()?;
                 let mut guard = self.conn.lock();
-                let conn = guard.as_mut().expect("reconnected");
+                let conn = guard.as_mut().ok_or_else(|| {
+                    BridgeError::from(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "daemon connection dropped during retry",
+                    ))
+                })?;
                 let resp = conn.call(payload).map_err(BridgeError::from)?;
                 Ok(resp.payload)
             }
