@@ -52,6 +52,9 @@ const DIFF_KIND_CLASS: Record<FsLineDiffEntry["kind"], string> = {
 };
 
 const CODE_LINE_HEIGHT = 18;
+// Stable reference so VirtualizedLineList's size memos don't recompute on
+// every CodeViewer render.
+const estimateCodeLineHeight = () => CODE_LINE_HEIGHT;
 const MARKDOWN_EXT_RE = /\.(md|mdown|markdown|mdx)$/i;
 const SEARCH_MARK_CLASS = "rounded-[2px] px-0.5 text-fg";
 const SEARCH_MARK_ACTIVE_CLASS = `${SEARCH_MARK_CLASS} bg-accent/75`;
@@ -434,7 +437,7 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
           as="pre"
           count={sourceLines.length}
           className="acorn-selectable m-0 flex-1 cursor-text overflow-auto bg-transparent pb-12 font-mono text-[12px] leading-[1.5] text-fg"
-          estimateSize={() => CODE_LINE_HEIGHT}
+          estimateSize={estimateCodeLineHeight}
           getLineText={(index) => sourceLines[index] ?? ""}
           minWidthCh={minWidthCh}
           renderLine={(index) => (

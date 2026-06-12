@@ -1,5 +1,5 @@
 import { ChevronRight, Maximize2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "../lib/cn";
 import {
   countStats,
@@ -402,13 +402,19 @@ export function DiffLineList({
     () => estimateMaxLineWidthCh(lineTexts, gutterWidth * 2 + 7),
     [lineTexts, gutterWidth],
   );
+  // Stable reference: an inline arrow here invalidates every size memo in
+  // VirtualizedLineList on each render, re-running O(n) estimate scans.
+  const estimateSize = useCallback(
+    (index: number) => estimateDiffLineHeight(lines[index]),
+    [lines],
+  );
 
   return (
     <VirtualizedLineList
       count={lines.length}
       className={className}
       innerClassName="w-max min-w-full"
-      estimateSize={(index) => estimateDiffLineHeight(lines[index])}
+      estimateSize={estimateSize}
       getLineText={(index) => lineTexts[index] ?? ""}
       minWidthCh={minWidthCh}
       renderLine={(index) => (
