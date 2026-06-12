@@ -698,7 +698,7 @@ function tabLabelKey(tab: RightTab): RightPanelTranslationKey {
 
 function Empty({ msg }: { msg: string }) {
   return (
-    <div className="flex h-full items-center justify-center text-xs text-fg-muted">
+    <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs leading-5 text-fg-muted">
       {msg}
     </div>
   );
