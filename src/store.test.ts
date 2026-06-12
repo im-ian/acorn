@@ -1572,6 +1572,25 @@ describe("pollSessionStatuses", () => {
     expect(mockApi.detectSessionStatuses).not.toHaveBeenCalled();
   });
 
+  it("merges the backend auto-title promotion from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { auto_title_enabled: false })],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        auto_title_enabled: true,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.auto_title_enabled).toBe(true);
+  });
+
   it("serializes overlapping polls and runs queued subsets afterward", async () => {
     await seed(
       [project(REPO_A, 0)],

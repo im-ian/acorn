@@ -514,6 +514,7 @@ export const api = {
       agent_provider?: SessionAgentProvider | null;
       agent_transcript_id?: string | null;
       branch: string | null;
+      auto_title_enabled?: boolean | null;
     }[]
   > {
     return invoke<
@@ -523,6 +524,7 @@ export const api = {
         agent_provider?: SessionAgentProvider | null;
         agent_transcript_id?: string | null;
         branch: string | null;
+        auto_title_enabled?: boolean | null;
       }[]
     >("detect_session_statuses", { ids });
   },
