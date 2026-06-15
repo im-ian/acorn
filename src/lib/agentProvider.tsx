@@ -3,7 +3,6 @@ import { cn } from "./cn";
 import {
   AGENT_PROVIDER_ORDER,
   getAgentProviderDefinition,
-  inferAgentProvider,
 } from "./agentProviderRegistry";
 import type { Session, SessionAgentProvider } from "./types";
 
@@ -23,8 +22,7 @@ export {
 export function resolveSessionAgentProvider(
   session: Pick<Session, "agent_provider" | "name">,
 ): SessionAgentProvider | null {
-  if (session.agent_provider) return session.agent_provider;
-  return inferAgentProvider(session.name);
+  return session.agent_provider ?? null;
 }
 
 export function collectSessionAgentProviders(

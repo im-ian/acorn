@@ -459,6 +459,60 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(tooltip.locator("svg")).toHaveCount(6);
   });
 
+  test("clears agent provider icon after the agent process exits", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "codex",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "needs_input",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        agent_provider: "codex",
+        agent_transcript_id: "codex-1",
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "session-1",
+        status: "idle",
+        branch: null,
+        agent_provider: null,
+        agent_transcript_id: "codex-1",
+      },
+    ]);
+
+    await page.goto("/");
+
+    await expect(page.locator("aside").getByRole("img", { name: "Codex" }))
+      .toHaveCount(0);
+    await expect(
+      page.locator("aside").getByRole("button", { name: /codex/ }),
+    ).toBeVisible();
+  });
+
   test("regenerates a name for sessions backed by real git worktrees", async ({
     page,
     tauri,

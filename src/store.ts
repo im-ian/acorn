@@ -1325,7 +1325,9 @@ export const useAppStore = create<AppStateModel>()(
                 const nextStatus = update.status;
                 const nextBranch = update.branch ?? sess.branch;
                 const nextAgentProvider =
-                  update.agent_provider ?? sess.agent_provider ?? null;
+                  Object.prototype.hasOwnProperty.call(update, "agent_provider")
+                    ? (update.agent_provider ?? null)
+                    : (sess.agent_provider ?? null);
                 const nextAgentTranscriptId = Object.prototype.hasOwnProperty.call(
                   update,
                   "agent_transcript_id",
