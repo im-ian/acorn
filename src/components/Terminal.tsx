@@ -48,7 +48,6 @@ import {
 } from "../lib/pasteEvents";
 import {
   prepareScrollbackForSave,
-  RESTORE_MARKER_TEXT,
   shouldRestoreScrollback,
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
@@ -2192,16 +2191,10 @@ export function Terminal({
           restored &&
           shouldRestoreScrollback(restored)
         ) {
-          // Each step is awaited individually. Previously the mode
-          // resets and marker were fired without awaiting and `spawnPty`
-          // was called immediately after, so the new shell's first
-          // prompt could arrive via the pty:output listener while our
-          // own writes were still sitting in xterm's parser queue.
-          // Interleaving with the shell's prompt-redraw escape sequences
-          // intermittently parked the cursor at column 0 of the new
-          // prompt line and left input invisible (the user typed but
-          // echo landed off-screen). Strict serial drain makes the
-          // post-restore cursor position deterministic.
+          // Each step is awaited individually so the restored snapshot,
+          // terminal-mode resets, and the new shell's first prompt cannot
+          // interleave inside xterm's parser queue. Strict serial drain
+          // keeps the post-restore cursor position deterministic.
           const writeAndDrain = (data: string): Promise<void> =>
             new Promise<void>((resolve) => term.write(data, resolve));
 
@@ -2238,9 +2231,9 @@ export function Terminal({
             "\r"; //          park cursor at column 0
           await writeAndDrain(RESETS);
           if (disposed) return;
-          await writeAndDrain(
-            `\r\n${ANSI_DIM}${RESTORE_MARKER_TEXT}${ANSI_RESET}\r\n`,
-          );
+          // Leave room for the new shell prompt without adding a visible
+          // restore banner to the terminal history.
+          await writeAndDrain("\r\n");
           if (disposed) return;
         }
       } catch (err) {
