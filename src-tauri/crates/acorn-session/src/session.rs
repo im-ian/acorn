@@ -628,7 +628,10 @@ mod tests {
         assert_eq!(updated.auto_title_enabled, Some(true));
         assert_eq!(updated.updated_at, session.updated_at);
         assert_eq!(
-            store.get(&session.id).expect("session exists").auto_title_enabled,
+            store
+                .get(&session.id)
+                .expect("session exists")
+                .auto_title_enabled,
             Some(true)
         );
     }

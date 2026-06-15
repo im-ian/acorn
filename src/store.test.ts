@@ -25,6 +25,7 @@ vi.mock("./lib/api", () => {
       ptyInWorktreeAll: vi.fn(async () => ({} as Record<string, boolean>)),
       createSession: vi.fn(async () => ({}) as Session),
       removeSession: vi.fn(async () => null),
+      removeWorktree: vi.fn(async () => null),
       renameSession: vi.fn(async () => ({}) as Session),
       generateSessionTitle: vi.fn(
         async () =>
@@ -188,6 +189,7 @@ beforeEach(() => {
   mockApi.listProjects.mockResolvedValue([]);
   mockApi.detectSessionStatuses.mockResolvedValue([]);
   mockApi.removeSession.mockResolvedValue(null);
+  mockApi.removeWorktree.mockResolvedValue(null);
   mockApi.removeProject.mockResolvedValue([]);
   useSettings.setState({
     settings: structuredClone(DEFAULT_SETTINGS),
@@ -1917,6 +1919,46 @@ describe("removeProject", () => {
     expect(s.workspaces[REPO_B]).toBeUndefined();
     // After refreshAll with one remaining project (no sessions), it becomes active.
     expect(s.activeProject).toBe(REPO_A);
+  });
+});
+
+describe("removeProjectWorktree", () => {
+  it("removes sessions and matching worktree workspaces after backend deletion", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo],
+      [
+        session("b1", REPO_B, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+        }),
+      ],
+    );
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder(REPO_B, "feature-alpha", worktreePath);
+    expect(folder).not.toBeNull();
+    mockApi.listProjects.mockResolvedValueOnce([repo]);
+    mockApi.listSessions.mockResolvedValueOnce([]);
+
+    await useAppStore
+      .getState()
+      .removeProjectWorktree(REPO_B, worktreePath, true);
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).toHaveBeenCalledWith(
+      REPO_B,
+      worktreePath,
+      true,
+    );
+    expect(state.sessions).toEqual([]);
+    expect(
+      state.projectFolders[REPO_B]?.some(
+        (candidate) => candidate.id === folder?.id,
+      ),
+    ).toBe(false);
+    expect(state.workspaces[folder!.id]).toBeUndefined();
   });
 });
 

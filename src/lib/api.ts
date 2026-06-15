@@ -15,6 +15,7 @@ import type {
   Project,
   ProjectSettings,
   ProjectSettingsRecord,
+  ProjectWorktree,
   PrStateFilter,
   PullRequestDetailListing,
   PullRequestDiffListing,
@@ -301,6 +302,9 @@ export const api = {
       repoPath,
       settings,
     });
+  },
+  listProjectWorktrees(repoPath: string): Promise<ProjectWorktree[]> {
+    return invoke<ProjectWorktree[]>("list_project_worktrees", { repoPath });
   },
   reorderProjects(order: string[]): Promise<Project[]> {
     return invoke<Project[]>("reorder_projects", { order });
@@ -660,11 +664,14 @@ export const api = {
   removeWorktree(
     repoPath: string,
     worktreePath: string,
+    removeSessions = false,
   ): Promise<WorktreeRemoval | null> {
-    return invoke<WorktreeRemoval | null>("remove_worktree", {
-      repoPath,
-      worktreePath,
-    });
+    return invoke<WorktreeRemoval | null>(
+      "remove_worktree",
+      removeSessions
+        ? { repoPath, worktreePath, removeSessions }
+        : { repoPath, worktreePath },
+    );
   },
   restoreRemovedWorktree(removal: WorktreeRemoval): Promise<void> {
     return invoke<void>("restore_removed_worktree", { ...removal });
