@@ -299,13 +299,13 @@ pub struct Session {
     /// worktrees when added.
     #[serde(default, skip_deserializing)]
     pub in_worktree: bool,
-    /// Derived from Acorn's per-session agent-state markers. This reflects
-    /// the most recently associated Claude/Codex/Antigravity transcript and is not
+    /// Derived from status polling. This reflects the currently live
+    /// Claude/Codex/Antigravity process under the session PTY and is not
     /// persisted in sessions.json.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub agent_provider: Option<SessionAgentProvider>,
-    /// Derived from Acorn's per-session agent-state markers. This is the
-    /// current live transcript id and is not persisted in sessions.json.
+    /// Derived from Acorn's per-session agent-state markers. This is the most
+    /// recently paired transcript id and is not persisted in sessions.json.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub agent_transcript_id: Option<String>,
 }
@@ -397,6 +397,24 @@ impl SessionStore {
         if entry.status != status {
             entry.status = status;
         }
+        Ok(entry.clone())
+    }
+
+    /// Refresh derived live-agent metadata without bumping `updated_at`.
+    /// Status polling owns these fields because they describe the current PTY
+    /// process tree, not user-authored session data.
+    pub fn refresh_agent_state(
+        &self,
+        id: &Uuid,
+        provider: Option<SessionAgentProvider>,
+        transcript_id: Option<String>,
+    ) -> SessionResult<Session> {
+        let mut entry = self
+            .inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        entry.agent_provider = provider;
+        entry.agent_transcript_id = transcript_id;
         Ok(entry.clone())
     }
 
@@ -613,6 +631,26 @@ mod tests {
             store.get(&session.id).expect("session exists").auto_title_enabled,
             Some(true)
         );
+    }
+
+    #[test]
+    fn refresh_agent_state_updates_live_metadata_without_touching_updated_at() {
+        let store = SessionStore::new();
+        let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        session.agent_provider = Some(SessionAgentProvider::Codex);
+        session.agent_transcript_id = Some("codex-old".to_string());
+        let session = store.insert(session);
+
+        let updated = store
+            .refresh_agent_state(&session.id, None, Some("codex-old".to_string()))
+            .expect("session exists");
+
+        assert_eq!(updated.agent_provider, None);
+        assert_eq!(updated.agent_transcript_id.as_deref(), Some("codex-old"));
+        assert_eq!(updated.updated_at, session.updated_at);
+        let stored = store.get(&session.id).expect("session exists");
+        assert_eq!(stored.agent_provider, None);
+        assert_eq!(stored.agent_transcript_id.as_deref(), Some("codex-old"));
     }
 
     #[test]
