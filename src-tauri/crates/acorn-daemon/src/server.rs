@@ -436,19 +436,25 @@ impl Daemon {
             }
         };
 
-        // Snapshot scrollback first (if requested), then subscribe to live.
-        if attach.replay_scrollback {
-            if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
-                let frame = StreamFrame::Output {
-                    data_b64: base64_encode(&snap),
-                };
-                write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
-            }
-        }
         let Some(mut subscription) = self.pty.subscribe(&attach.session_id) else {
             let frame = StreamFrame::Exit { code: None };
             return write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap());
         };
+        // Subscribe before snapshotting so output produced during attach is
+        // queued on the live receiver. The snapshot carries its end sequence;
+        // the pump below then skips queued chunks already represented by the
+        // replay, avoiding both the old snapshot->subscribe gap and duplicate
+        // bytes.
+        let mut replayed_until = 0;
+        if attach.replay_scrollback {
+            if let Some(snap) = self.pty.scrollback_snapshot(&attach.session_id) {
+                replayed_until = snap.end_seq;
+                let frame = StreamFrame::Output {
+                    data_b64: base64_encode(&snap.bytes),
+                };
+                write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())?;
+            }
+        }
 
         // Reader side (client → daemon) runs on a separate thread so
         // the broadcast pump can keep delivering even while the client
@@ -491,8 +497,13 @@ impl Daemon {
         loop {
             match subscription.rx.blocking_recv() {
                 Ok(chunk) => {
+                    let bytes = live_chunk_after_replay(&chunk, replayed_until);
+                    replayed_until = replayed_until.max(chunk.end_seq);
+                    if bytes.is_empty() {
+                        continue;
+                    }
                     let frame = StreamFrame::Output {
-                        data_b64: base64_encode(&chunk),
+                        data_b64: base64_encode(bytes),
                     };
                     if write_line(reader.get_mut(), &serde_json::to_string(&frame).unwrap())
                         .is_err()
@@ -528,6 +539,19 @@ impl Daemon {
         };
         serde_json::to_string(&env).unwrap()
     }
+}
+
+fn live_chunk_after_replay(chunk: &super::pty::OutputChunk, replayed_until: u64) -> &[u8] {
+    if chunk.end_seq <= replayed_until {
+        return &[];
+    }
+    if chunk.start_seq < replayed_until {
+        let offset = usize::try_from(replayed_until - chunk.start_seq)
+            .unwrap_or(usize::MAX)
+            .min(chunk.bytes.len());
+        return &chunk.bytes[offset..];
+    }
+    &chunk.bytes
 }
 
 fn write_line<W: Write>(w: &mut W, line: &str) -> io::Result<()> {
@@ -644,6 +668,21 @@ mod tests {
             let decoded = base64_decode(&encoded).unwrap();
             assert_eq!(&decoded, input);
         }
+    }
+
+    #[test]
+    fn live_chunk_filter_skips_bytes_already_sent_by_replay() {
+        let chunk = super::super::pty::OutputChunk {
+            bytes: b"abcdef".to_vec(),
+            start_seq: 10,
+            end_seq: 16,
+        };
+
+        assert_eq!(live_chunk_after_replay(&chunk, 0), b"abcdef");
+        assert_eq!(live_chunk_after_replay(&chunk, 10), b"abcdef");
+        assert_eq!(live_chunk_after_replay(&chunk, 13), b"def");
+        assert_eq!(live_chunk_after_replay(&chunk, 16), b"");
+        assert_eq!(live_chunk_after_replay(&chunk, 99), b"");
     }
 
     #[test]
