@@ -2,7 +2,11 @@ import { useEffect, useState, type CSSProperties, type ReactElement } from "reac
 import { createPortal } from "react-dom";
 import { cn } from "../lib/cn";
 import { useSettings } from "../lib/settings";
-import { useToasts, type ToastItem } from "../lib/toasts";
+import {
+  getToastRemainingMs,
+  useToasts,
+  type ToastItem,
+} from "../lib/toasts";
 
 const TOAST_EXIT_MS = 180;
 
@@ -22,6 +26,7 @@ export function ToastHost(): ReactElement | null {
   const [rendered, setRendered] = useState<RenderedToast[]>([]);
   const [mounted, setMounted] = useState(false);
   const [stackPaused, setStackPaused] = useState(false);
+  const [, setCountdownTick] = useState(0);
 
   useEffect(() => {
     setMounted(true);
@@ -69,6 +74,17 @@ export function ToastHost(): ReactElement | null {
     }
   }, [pause, stackPaused, toasts]);
 
+  useEffect(() => {
+    const hasCountdownToast = rendered.some(
+      (toast) => toast.formatMessage && !toast.exiting,
+    );
+    if (!hasCountdownToast) return;
+    const interval = window.setInterval(() => {
+      setCountdownTick((tick) => tick + 1);
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [rendered]);
+
   if (rendered.length === 0 || !mounted) return null;
   const pauseAll = () => {
     setStackPaused(true);
@@ -84,17 +100,15 @@ export function ToastHost(): ReactElement | null {
   };
   const handleClick = (toast: RenderedToast) => {
     if (toast.exiting) return;
-    try {
-      if (toast.action) {
-        void Promise.resolve(toast.action()).catch((err: unknown) => {
-          console.error("[ToastHost] toast action failed", err);
-        });
-      }
-    } catch (err) {
-      console.error("[ToastHost] toast action failed", err);
-    } finally {
+    if (!toast.action) {
       hide(toast.id);
+      return;
     }
+    hide(toast.id, { skipDismiss: true });
+    void Promise.resolve(toast.action())
+      .catch((err: unknown) => {
+        console.error("[ToastHost] toast action failed", err);
+      });
   };
   return createPortal(
     <div
@@ -121,6 +135,11 @@ export function ToastHost(): ReactElement | null {
           const progressStyle = {
             "--toast-duration": `${toast.durationMs}ms`,
           } as CSSProperties;
+          const message = toast.formatMessage
+            ? toast.formatMessage(
+                Math.max(0, Math.ceil(getToastRemainingMs(toast.id) / 1000)),
+              )
+            : toast.message;
           return (
             <button
               key={toast.id}
@@ -132,7 +151,7 @@ export function ToastHost(): ReactElement | null {
               data-state={toast.exiting ? "exit" : "enter"}
               className="acorn-toast-motion relative cursor-pointer overflow-hidden rounded-full border border-border bg-bg-elevated px-4 py-2 text-xs text-fg shadow-md transition-[background-color,border-color,box-shadow] duration-200 ease-out hover:border-accent/60 hover:bg-bg-elevated/95 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-accent/50"
             >
-              {toast.message}
+              {message}
               <div
                 aria-hidden="true"
                 className="acorn-toast-progress absolute inset-x-0 bottom-0 h-0.5 origin-left bg-accent/80"

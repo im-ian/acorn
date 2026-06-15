@@ -74,6 +74,13 @@ export interface ClipboardSnapshot {
   dataB64: string | null;
 }
 
+export interface WorktreeRemoval {
+  token: string;
+  repoPath: string;
+  worktreePath: string;
+  gitCommonDir: string;
+}
+
 export interface ChatSessionStateChangedPayload {
   session_id: string;
   state: ChatSessionState;
@@ -139,8 +146,11 @@ export const api = {
       mode,
     });
   },
-  removeSession(id: string, removeWorktree = false): Promise<void> {
-    return invoke<void>("remove_session", { id, removeWorktree });
+  removeSession(
+    id: string,
+    removeWorktree = false,
+  ): Promise<WorktreeRemoval | null> {
+    return invoke<WorktreeRemoval | null>("remove_session", { id, removeWorktree });
   },
   setSessionStatus(id: string, status: SessionStatus): Promise<Session> {
     return invoke<Session>("set_session_status", { id, status });
@@ -272,8 +282,8 @@ export const api = {
     removeSessions = true,
     removeWorktrees = false,
     removeSettings = false,
-  ): Promise<void> {
-    return invoke<void>("remove_project", {
+  ): Promise<WorktreeRemoval[]> {
+    return invoke<WorktreeRemoval[]>("remove_project", {
       repoPath,
       removeSessions,
       removeWorktrees,
@@ -647,8 +657,20 @@ export const api = {
   gitWorktrees(repoPath: string): Promise<string[]> {
     return invoke<string[]>("git_worktrees", { repoPath });
   },
-  removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-    return invoke<void>("remove_worktree", { repoPath, worktreePath });
+  removeWorktree(
+    repoPath: string,
+    worktreePath: string,
+  ): Promise<WorktreeRemoval | null> {
+    return invoke<WorktreeRemoval | null>("remove_worktree", {
+      repoPath,
+      worktreePath,
+    });
+  },
+  restoreRemovedWorktree(removal: WorktreeRemoval): Promise<void> {
+    return invoke<void>("restore_removed_worktree", { ...removal });
+  },
+  discardRemovedWorktree(removal: WorktreeRemoval): Promise<void> {
+    return invoke<void>("discard_removed_worktree", { ...removal });
   },
   /**
    * Probe the `acornd` daemon. Backs the StatusBar daemon indicator and

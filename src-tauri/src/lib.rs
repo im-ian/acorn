@@ -572,6 +572,8 @@ pub fn run() {
             commands::prepare_chat_session_worktree,
             commands::git_worktrees,
             commands::remove_worktree,
+            commands::restore_removed_worktree,
+            commands::discard_removed_worktree,
             commands::scrollback_save,
             commands::scrollback_load,
             commands::scrollback_delete,

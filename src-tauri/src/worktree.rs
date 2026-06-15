@@ -1,11 +1,23 @@
 use git2::Repository;
+use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
 const ACORN_DIR: &str = ".acorn";
 const EXCLUDE_ENTRY: &str = ".acorn/";
+const DELETED_WORKTREES_DIR: &str = ".acorn-deleted-worktrees";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedWorktree {
+    pub token: String,
+    pub repo_path: String,
+    pub worktree_path: String,
+    pub git_common_dir: String,
+}
 
 pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
     // `discover` walks up from `path` to find the nearest `.git`, so callers
@@ -119,7 +131,10 @@ pub fn list_worktree_paths(repo_path: &Path) -> AppResult<Vec<std::path::PathBuf
     Ok(paths)
 }
 
-pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppResult<()> {
+pub fn stage_remove_worktree_at_path(
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<Option<RemovedWorktree>> {
     if worktree_path.exists() && !is_linked_worktree_root(worktree_path) {
         return Err(AppError::InvalidPath(format!(
             "not a linked git worktree: {}",
@@ -132,18 +147,154 @@ pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppRes
     for name in names.iter().flatten() {
         let wt = repo.find_worktree(name)?;
         if same_path(wt.path(), worktree_path) {
-            if worktree_path.exists() {
-                std::fs::remove_dir_all(worktree_path).ok();
+            if !worktree_path.exists() {
+                if has_staged_worktree_backup(worktree_path) {
+                    return Ok(None);
+                }
+                wt.prune(None)?;
+                return Ok(None);
             }
-            wt.prune(None)?;
-            return Ok(());
+            let token = Uuid::new_v4().to_string();
+            let backup = removed_worktree_backup_path(worktree_path, &token)?;
+            if let Some(parent) = backup.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(worktree_path, &backup)?;
+            return Ok(Some(RemovedWorktree {
+                token,
+                repo_path: repo_path.to_string_lossy().into_owned(),
+                worktree_path: worktree_path.to_string_lossy().into_owned(),
+                git_common_dir: repo.commondir().to_string_lossy().into_owned(),
+            }));
         }
+    }
+
+    if !worktree_path.exists() {
+        return Ok(None);
     }
 
     Err(AppError::InvalidPath(format!(
         "linked git worktree is not registered: {}",
         worktree_path.display()
     )))
+}
+
+#[cfg(test)]
+pub fn remove_worktree_at_path(repo_path: &Path, worktree_path: &Path) -> AppResult<()> {
+    if let Some(removed) = stage_remove_worktree_at_path(repo_path, worktree_path)? {
+        discard_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )?;
+    }
+    Ok(())
+}
+
+pub fn restore_removed_worktree(
+    _repo_path: &Path,
+    worktree_path: &Path,
+    token: &str,
+    _git_common_dir: &Path,
+) -> AppResult<()> {
+    validate_removal_token(token)?;
+    let backup = removed_worktree_backup_path(worktree_path, token)?;
+    if !backup.exists() {
+        return Err(AppError::InvalidPath(format!(
+            "removed worktree backup is not available: {}",
+            backup.display()
+        )));
+    }
+    if worktree_path.exists() {
+        return Err(AppError::InvalidPath(format!(
+            "worktree path already exists: {}",
+            worktree_path.display()
+        )));
+    }
+    if let Some(parent) = worktree_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(&backup, worktree_path)?;
+    remove_empty_backup_root(worktree_path);
+    Ok(())
+}
+
+pub fn discard_removed_worktree(
+    repo_path: &Path,
+    worktree_path: &Path,
+    token: &str,
+    git_common_dir: &Path,
+) -> AppResult<()> {
+    validate_removal_token(token)?;
+    let backup = removed_worktree_backup_path(worktree_path, token)?;
+    if backup.exists() {
+        std::fs::remove_dir_all(&backup)?;
+    }
+    remove_empty_backup_root(worktree_path);
+    if worktree_path.exists() {
+        return Ok(());
+    }
+    let repo = match Repository::open(git_common_dir) {
+        Ok(repo) => repo,
+        Err(_) => ensure_repo(repo_path)?,
+    };
+    prune_registered_worktree_at_path(&repo, worktree_path)?;
+    Ok(())
+}
+
+fn prune_registered_worktree_at_path(repo: &Repository, worktree_path: &Path) -> AppResult<bool> {
+    let names = repo.worktrees()?;
+    for name in names.iter().flatten() {
+        let wt = repo.find_worktree(name)?;
+        if same_path(wt.path(), worktree_path) {
+            wt.prune(None)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn removed_worktree_backup_path(worktree_path: &Path, token: &str) -> AppResult<PathBuf> {
+    validate_removal_token(token)?;
+    let parent = worktree_path.parent().ok_or_else(|| {
+        AppError::InvalidPath(format!(
+            "worktree path has no parent directory: {}",
+            worktree_path.display()
+        ))
+    })?;
+    Ok(parent.join(DELETED_WORKTREES_DIR).join(token))
+}
+
+fn validate_removal_token(token: &str) -> AppResult<()> {
+    let safe = !token.is_empty()
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if safe {
+        return Ok(());
+    }
+    Err(AppError::InvalidPath(
+        "invalid worktree removal token".into(),
+    ))
+}
+
+fn remove_empty_backup_root(worktree_path: &Path) {
+    let Some(parent) = worktree_path.parent() else {
+        return;
+    };
+    let root = parent.join(DELETED_WORKTREES_DIR);
+    let _ = std::fs::remove_dir(&root);
+}
+
+fn has_staged_worktree_backup(worktree_path: &Path) -> bool {
+    let Some(parent) = worktree_path.parent() else {
+        return false;
+    };
+    let root = parent.join(DELETED_WORKTREES_DIR);
+    root.read_dir()
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -190,6 +341,122 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    fn init_repo_with_tracked_file(path: &Path) -> Repository {
+        let repo = Repository::init(path).expect("init repo");
+        std::fs::write(path.join("tracked.txt"), "initial").expect("write tracked file");
+        let sig = git2::Signature::now("acorn-test", "test@acorn").expect("sig");
+        let tree_id = {
+            let mut idx = repo.index().expect("index");
+            idx.add_path(Path::new("tracked.txt"))
+                .expect("add tracked file");
+            idx.write_tree().expect("write tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .expect("initial commit");
+        drop(tree);
+        repo
+    }
+
+    #[test]
+    fn staged_remove_restore_preserves_uncommitted_files() {
+        let root = unique_temp_dir("restore-uncommitted");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "feature").expect("create worktree");
+        std::fs::write(worktree_path.join("tracked.txt"), "modified").expect("modify tracked file");
+        std::fs::write(worktree_path.join("untracked.txt"), "new").expect("write untracked file");
+
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("stage remove")
+            .expect("removal token");
+
+        assert!(!worktree_path.exists(), "worktree should move out of place");
+
+        restore_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("restore worktree");
+
+        assert_eq!(
+            std::fs::read_to_string(worktree_path.join("tracked.txt")).unwrap(),
+            "modified"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree_path.join("untracked.txt")).unwrap(),
+            "new"
+        );
+        assert!(is_linked_worktree_root(&worktree_path));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discard_removed_worktree_prunes_registration() {
+        let root = unique_temp_dir("discard");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "discard-me").expect("create worktree");
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("stage remove")
+            .expect("removal token");
+
+        discard_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("discard worktree");
+
+        assert!(!worktree_path.exists());
+        assert!(
+            !list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| same_path(path, &worktree_path)),
+            "discard should prune the linked worktree registration"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn staged_remove_duplicate_call_preserves_registration_for_restore() {
+        let root = unique_temp_dir("duplicate-stage");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "duplicate").expect("create worktree");
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("stage remove")
+            .expect("removal token");
+
+        let second =
+            stage_remove_worktree_at_path(&root, &worktree_path).expect("second stage remove");
+        assert!(second.is_none());
+
+        restore_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("restore worktree");
+
+        assert!(
+            list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| same_path(path, &worktree_path)),
+            "duplicate stage should not prune a restorable worktree"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

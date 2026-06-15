@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { api, type AiExecutionRequest } from "./lib/api";
+import { api, type AiExecutionRequest, type WorktreeRemoval } from "./lib/api";
 import type {
   Project,
   Session,
@@ -233,7 +233,10 @@ interface AppStateModel {
     projectFolderId?: string,
     cwdPath?: string,
   ) => Promise<Session | null>;
-  removeSession: (id: string, removeWorktree?: boolean) => Promise<void>;
+  removeSession: (
+    id: string,
+    removeWorktree?: boolean,
+  ) => Promise<WorktreeRemoval | null>;
   renameSession: (id: string, name: string) => Promise<void>;
   generateSessionTitle: (
     id: string,
@@ -256,7 +259,7 @@ interface AppStateModel {
     repoPath: string,
     removeWorktrees?: boolean,
     removeSettings?: boolean,
-  ) => Promise<void>;
+  ) => Promise<WorktreeRemoval[]>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
   reorderProjectFolders: (
     repoPath: string,
@@ -2219,13 +2222,15 @@ export const useAppStore = create<AppStateModel>()(
     }
 
     try {
-      await api.removeSession(id, removeWorktree);
+      const removedWorktree = await api.removeSession(id, removeWorktree);
       await get().refreshAll();
       set({ error: null });
+      return removedWorktree ?? null;
     } catch (e) {
       const message = errorMessage(e);
       await get().refreshAll();
       set({ error: message });
+      return null;
     }
   },
 
@@ -2337,7 +2342,12 @@ export const useAppStore = create<AppStateModel>()(
 
   async removeProject(repoPath, removeWorktrees = false, removeSettings = false) {
     try {
-      await api.removeProject(repoPath, true, removeWorktrees, removeSettings);
+      const removedWorktrees = await api.removeProject(
+        repoPath,
+        true,
+        removeWorktrees,
+        removeSettings,
+      );
       // Drop the project's workspace from local state explicitly — refreshAll
       // also reconciles, but pre-clearing avoids a flash of stale state.
       set((s) => {
@@ -2378,8 +2388,10 @@ export const useAppStore = create<AppStateModel>()(
       });
       await get().refreshAll();
       set({ error: null });
+      return removedWorktrees ?? [];
     } catch (e) {
       set({ error: errorMessage(e) });
+      return [];
     }
   },
 

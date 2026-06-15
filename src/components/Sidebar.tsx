@@ -55,7 +55,7 @@ import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
-import { api } from "../lib/api";
+import { api, type WorktreeRemoval } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openInConfiguredEditor } from "../lib/editor";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -76,6 +76,7 @@ import {
 } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
+import { showWorktreeRemovalToast } from "../lib/operationToasts";
 import {
   buildLocalSessions,
 } from "../lib/sessionGrouping";
@@ -419,12 +420,16 @@ export function Sidebar() {
     folderGroup: ProjectFolderGroup,
   ) {
     try {
+      const removedWorktrees: WorktreeRemoval[] = [];
       for (const session of folderGroup.sessions) {
-        await removeSession(
+        const removedWorktree = await removeSession(
           session.id,
           autoDeleteWorktrees &&
             shouldAutoDeleteSessionWorktree(session, projectFolders),
         );
+        if (removedWorktree) {
+          removedWorktrees.push(removedWorktree);
+        }
         const error = useAppStore.getState().consumeError();
         if (error) {
           showToast(`${t("toasts.session.removeFailed")} ${error}`);
@@ -432,6 +437,15 @@ export function Sidebar() {
         }
       }
       removeProjectFolder(folderGroup.folder.id);
+      if (removedWorktrees.length > 0) {
+        showWorktreeRemovalToast(
+          removedWorktrees,
+          "toasts.project.worktreesRemoved",
+          "toasts.project.worktreesRemovedUndo",
+          "toasts.project.worktreesRestored",
+          "toasts.project.worktreesRestoreFailed",
+        );
+      }
     } catch (e) {
       console.error("remove project folder failed", e);
       showToast(`${t("toasts.session.removeFailed")} ${String(e)}`);
@@ -440,9 +454,30 @@ export function Sidebar() {
 
   async function removeProjectFolderAndWorktree(folder: ProjectFolder) {
     try {
-      await api.removeWorktree(folder.repoPath, folder.cwdPath);
+      const removedWorktree = await api.removeWorktree(
+        folder.repoPath,
+        folder.cwdPath,
+      );
       removeProjectFolder(folder.id);
-      showToast(t("toasts.session.worktreeRemoved"));
+      showWorktreeRemovalToast(
+        removedWorktree,
+        "toasts.session.worktreeRemoved",
+        "toasts.session.worktreeRemovedUndo",
+        "toasts.session.worktreeRestored",
+        "toasts.session.worktreeRestoreFailed",
+        {
+          onRestored: () => {
+            const restored = createProjectFolder(
+              folder.repoPath,
+              folder.name,
+              folder.cwdPath,
+            );
+            if (restored) {
+              setActiveProjectFolder(restored.id);
+            }
+          },
+        },
+      );
     } catch (e) {
       console.error("remove project folder worktree failed", e);
       showToast(`${t("toasts.session.worktreeRemoveFailed")} ${String(e)}`);

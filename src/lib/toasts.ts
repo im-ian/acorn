@@ -1,16 +1,25 @@
 import { create } from "zustand";
 
 type ToastAction = () => void | Promise<void>;
+type ToastMessageFormatter = (remainingSeconds: number) => string;
 
 interface ToastOptions {
   action?: ToastAction;
+  onDismiss?: ToastAction;
+  formatMessage?: ToastMessageFormatter;
+}
+
+interface ToastHideOptions {
+  skipDismiss?: boolean;
 }
 
 export interface ToastItem {
   id: number;
   message: string;
+  formatMessage: ToastMessageFormatter | null;
   durationMs: number;
   action: ToastAction | null;
+  onDismiss: ToastAction | null;
   paused: boolean;
 }
 
@@ -22,7 +31,7 @@ export interface ToastItem {
 interface ToastState {
   toasts: ToastItem[];
   show: (message: string, options?: ToastOptions) => void;
-  hide: (id?: number) => void;
+  hide: (id?: number, options?: ToastHideOptions) => void;
   pause: (id: number) => void;
   resume: (id: number) => void;
 }
@@ -43,6 +52,26 @@ function clearDismissTimer(id: number) {
   }
 }
 
+function runDismissAction(toast: ToastItem, skipDismiss?: boolean) {
+  if (skipDismiss || !toast.onDismiss) return;
+  try {
+    void Promise.resolve(toast.onDismiss()).catch((err: unknown) => {
+      console.error("[toasts] dismiss action failed", err);
+    });
+  } catch (err) {
+    console.error("[toasts] dismiss action failed", err);
+  }
+}
+
+export function getToastRemainingMs(id: number): number {
+  const toast = useToasts.getState().toasts.find((item) => item.id === id);
+  if (!toast) return 0;
+  const remaining = remainingMs.get(id) ?? toast.durationMs;
+  if (toast.paused) return remaining;
+  const started = startedAt.get(id) ?? Date.now();
+  return Math.max(0, remaining - (Date.now() - started));
+}
+
 export const useToasts = create<ToastState>((set, get) => ({
   toasts: [],
   show: (message: string, options?: ToastOptions) => {
@@ -55,8 +84,10 @@ export const useToasts = create<ToastState>((set, get) => ({
         {
           id,
           message,
+          formatMessage: options?.formatMessage ?? null,
           durationMs: TOAST_TTL_MS,
           action: options?.action ?? null,
+          onDismiss: options?.onDismiss ?? null,
           paused: false,
         },
       ],
@@ -68,19 +99,24 @@ export const useToasts = create<ToastState>((set, get) => ({
       }, TOAST_TTL_MS),
     );
   },
-  hide: (id?: number) => {
+  hide: (id?: number, options?: ToastHideOptions) => {
     if (id === undefined) {
       for (const toast of get().toasts) {
         clearDismissTimer(toast.id);
         startedAt.delete(toast.id);
         remainingMs.delete(toast.id);
+        runDismissAction(toast, options?.skipDismiss);
       }
       set({ toasts: [] });
       return;
     }
+    const toast = get().toasts.find((item) => item.id === id);
     clearDismissTimer(id);
     startedAt.delete(id);
     remainingMs.delete(id);
+    if (toast) {
+      runDismissAction(toast, options?.skipDismiss);
+    }
     set((state) => ({
       toasts: state.toasts.filter((toast) => toast.id !== id),
     }));

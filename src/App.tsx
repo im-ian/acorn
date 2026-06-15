@@ -108,6 +108,7 @@ import { useAppStore } from "./store";
 import type { TranslationKey, Translator } from "./lib/i18n";
 import type { SessionStatus } from "./lib/types";
 import { useTranslation } from "./lib/useTranslation";
+import { showStoreWorktreeRemovalToast } from "./lib/operationToasts";
 
 const FOCUSABLE_SELECTOR =
   "textarea, input:not([type='hidden']), button, [tabindex]:not([tabindex='-1']), a[href]";
@@ -1113,10 +1114,14 @@ function App() {
     );
     if (autoDeleteWorktree && autoDeleteWorktrees) {
       clearPendingRemove();
-      void removeSession(pendingRemove.id, true).then(() =>
-        showStoreOperationToast(
+      void removeSession(pendingRemove.id, true).then((removedWorktree) =>
+        showStoreWorktreeRemovalToast(
+          removedWorktree,
           "toasts.session.worktreeRemoved",
+          "toasts.session.worktreeRemovedUndo",
           "toasts.session.worktreeRemoveFailed",
+          "toasts.session.worktreeRestored",
+          "toasts.session.worktreeRestoreFailed",
         ),
       );
       return;
@@ -1740,15 +1745,20 @@ function App() {
           clearPendingRemove();
           if (!target || choice === "cancel") return;
           void removeSession(target.id, choice === "session_and_worktree").then(
-            () =>
-              showStoreOperationToast(
-                choice === "session_and_worktree"
-                  ? "toasts.session.worktreeRemoved"
-                  : null,
-                choice === "session_and_worktree"
-                  ? "toasts.session.worktreeRemoveFailed"
-                  : "toasts.session.removeFailed",
-              ),
+            (removedWorktree) => {
+              if (choice === "session_and_worktree") {
+                showStoreWorktreeRemovalToast(
+                  removedWorktree,
+                  "toasts.session.worktreeRemoved",
+                  "toasts.session.worktreeRemovedUndo",
+                  "toasts.session.worktreeRemoveFailed",
+                  "toasts.session.worktreeRestored",
+                  "toasts.session.worktreeRestoreFailed",
+                );
+                return;
+              }
+              showStoreOperationToast(null, "toasts.session.removeFailed");
+            },
           );
         }}
       />
@@ -1762,16 +1772,20 @@ function App() {
           void removeProject(
             target.repo_path,
             choice === "project_and_worktrees",
-          ).then(() =>
-            showStoreOperationToast(
-              choice === "project_and_worktrees"
-                ? "toasts.project.worktreesRemoved"
-                : null,
-              choice === "project_and_worktrees"
-                ? "toasts.project.worktreesRemoveFailed"
-                : "toasts.project.removeFailed",
-            ),
-          );
+          ).then((removedWorktrees) => {
+            if (choice === "project_and_worktrees") {
+              showStoreWorktreeRemovalToast(
+                removedWorktrees,
+                "toasts.project.worktreesRemoved",
+                "toasts.project.worktreesRemovedUndo",
+                "toasts.project.worktreesRemoveFailed",
+                "toasts.project.worktreesRestored",
+                "toasts.project.worktreesRestoreFailed",
+              );
+              return;
+            }
+            showStoreOperationToast(null, "toasts.project.removeFailed");
+          });
         }}
       />
     </div>

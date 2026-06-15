@@ -1406,6 +1406,116 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(folderRow).toHaveCount(0);
   });
 
+  test("project workspace worktree removal toast restores the worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => []);
+    await tauri.respond("remove_worktree", {
+      token: "undo-token",
+      repoPath: "/tmp/demo",
+      worktreePath: "/tmp/demo/.acorn/worktrees/feature-empty",
+      gitCommonDir: "/tmp/demo/.git",
+    });
+    await tauri.handle("restore_removed_worktree", (args) => {
+      const w = window as unknown as { __restoreWorktreeCalls?: unknown[] };
+      w.__restoreWorktreeCalls = w.__restoreWorktreeCalls ?? [];
+      w.__restoreWorktreeCalls.push(args);
+      return null;
+    });
+    await tauri.handle("discard_removed_worktree", (args) => {
+      const w = window as unknown as { __discardWorktreeCalls?: unknown[] };
+      w.__discardWorktreeCalls = w.__discardWorktreeCalls ?? [];
+      w.__discardWorktreeCalls.push(args);
+      return null;
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            projectFolders: {
+              "/tmp/demo": [
+                {
+                  id: "/tmp/demo",
+                  repoPath: "/tmp/demo",
+                  name: "Default",
+                  cwdPath: "/tmp/demo",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo:feature-empty",
+                  repoPath: "/tmp/demo",
+                  name: "feature-empty",
+                  cwdPath: "/tmp/demo/.acorn/worktrees/feature-empty",
+                  position: 1,
+                },
+              ],
+            },
+            sessionFolderIds: {},
+          },
+          version: 4,
+        }),
+      );
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const folderRow = sidebar
+      .getByRole("button", { name: /feature-empty/ })
+      .first();
+    await expect(folderRow).toBeVisible();
+
+    await folderRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove workspace" }).click();
+    await page
+      .getByRole("dialog", { name: "Remove workspace" })
+      .getByRole("button", { name: "Delete worktree" })
+      .click();
+
+    await expect(folderRow).toHaveCount(0);
+    await page
+      .getByText(/Removing feature-empty worktree in \d+s\. Undo/)
+      .click();
+
+    await expect(
+      sidebar.getByRole("button", { name: /feature-empty/ }).first(),
+    ).toBeVisible();
+    const restoreCalls = (await page.evaluate(
+      () =>
+        (window as unknown as { __restoreWorktreeCalls?: unknown[] })
+          .__restoreWorktreeCalls,
+    )) as Array<{
+      token: string;
+      repoPath: string;
+      worktreePath: string;
+      gitCommonDir: string;
+    }>;
+    expect(restoreCalls).toEqual([
+      {
+        token: "undo-token",
+        repoPath: "/tmp/demo",
+        worktreePath: "/tmp/demo/.acorn/worktrees/feature-empty",
+        gitCommonDir: "/tmp/demo/.git",
+      },
+    ]);
+    const discardCalls = await page.evaluate(
+      () =>
+        (window as unknown as { __discardWorktreeCalls?: unknown[] })
+          .__discardWorktreeCalls,
+    );
+    expect(discardCalls).toBeUndefined();
+  });
+
   test("project workspace remove can auto-delete empty worktree workspaces", async ({
     page,
     tauri,
