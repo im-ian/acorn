@@ -1860,14 +1860,6 @@ fn enrich_session(mut s: Session) -> Session {
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
     let live = crate::agent_resume::live_transcript(s.id);
     s.agent_transcript_id = live.as_ref().map(|transcript| transcript.id.clone());
-    let live_provider = live.as_ref().map(|transcript| match transcript.kind {
-        crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
-        crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
-        crate::agent_resume::AgentKind::Antigravity => {
-            acorn_session::SessionAgentProvider::Antigravity
-        }
-    });
-    s.agent_provider = live_provider.or(s.agent_provider);
     s
 }
 
@@ -4224,15 +4216,14 @@ fn detect_session_statuses_blocking(
                 transcript.is_some(),
                 live_agent_kind,
             );
-            let agent_provider = live_agent_kind
-                .or_else(|| transcript.as_ref().map(|(_, kind)| *kind))
-                .map(status_agent_kind_to_provider);
+            // Durable transcript markers keep resume/title features working
+            // after exit, but provider badges should reflect only a live
+            // agent process under the PTY.
+            let agent_provider = live_agent_kind.map(status_agent_kind_to_provider);
             let auto_title_enabled = {
                 let current = session.as_ref().and_then(|s| s.auto_title_enabled);
                 match parsed_id {
-                    Some(uuid)
-                        if auto_title_promotion_needed(current, transcript.is_some()) =>
-                    {
+                    Some(uuid) if auto_title_promotion_needed(current, transcript.is_some()) => {
                         promoted_auto_title = true;
                         state
                             .sessions
@@ -4263,6 +4254,11 @@ fn detect_session_statuses_blocking(
             // (e.g. UUID parse failure for a stale id from the frontend).
             if let Some(uuid) = parsed_id {
                 let _ = state.sessions.refresh_status(&uuid, status);
+                let _ = state.sessions.refresh_agent_state(
+                    &uuid,
+                    agent_provider,
+                    agent_transcript_id.clone(),
+                );
             }
             SessionStatusEntry {
                 id,

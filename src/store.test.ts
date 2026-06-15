@@ -1564,6 +1564,34 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("clears the live agent provider when status polling reports null", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          agent_provider: "codex",
+          agent_transcript_id: "codex-old",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "idle",
+        agent_provider: null,
+        agent_transcript_id: "codex-old",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.agent_provider).toBeNull();
+    expect(useAppStore.getState().sessions[0]?.agent_transcript_id).toBe(
+      "codex-old",
+    );
+  });
+
   it("does not call the backend when the requested ids are absent", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
 

@@ -126,6 +126,15 @@ describe("agent provider helpers", () => {
     ).toBe("codex");
   });
 
+  it("does not infer live providers from session names", () => {
+    expect(
+      resolveSessionAgentProvider({
+        agent_provider: null,
+        name: "codex shell",
+      }),
+    ).toBeNull();
+  });
+
   it("infers known providers from session names", () => {
     expect(inferAgentProvider("Claude worktree")).toBe("claude");
     expect(inferAgentProvider("resume codex session")).toBe("codex");
@@ -142,6 +151,6 @@ describe("agent provider helpers", () => {
         { agent_provider: null, name: "claude fork" },
         { agent_provider: "codex", name: "second" },
       ]),
-    ).toEqual(["claude", "codex", "antigravity"]);
+    ).toEqual(["codex", "antigravity"]);
   });
 });
