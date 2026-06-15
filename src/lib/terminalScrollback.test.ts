@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   prepareScrollbackForSave,
-  RESTORE_MARKER_TEXT,
   shouldRestoreScrollback,
 } from "./terminalScrollback";
 
 describe("terminal scrollback restore hygiene", () => {
+  const legacyRestoreMarkerText = "— restored from previous session —";
+
   it("does not restore whitespace-only scrollback", () => {
     expect(shouldRestoreScrollback("\r\n\n   \x1b[0m\r\n")).toBe(false);
   });
@@ -18,12 +19,12 @@ describe("terminal scrollback restore hygiene", () => {
     ).toBe(false);
   });
 
-  it("removes Acorn restore markers before saving", () => {
+  it("removes legacy Acorn restore markers before saving", () => {
     const saved = prepareScrollbackForSave(
-      `build ok\r\n\x1b[2m${RESTORE_MARKER_TEXT}\x1b[0m\r\nnext prompt % `,
+      `build ok\r\n\x1b[2m${legacyRestoreMarkerText}\x1b[0m\r\nnext prompt % `,
     );
 
-    expect(saved).not.toContain(RESTORE_MARKER_TEXT);
+    expect(saved).not.toContain(legacyRestoreMarkerText);
     expect(saved).toContain("build ok");
   });
 
