@@ -3189,12 +3189,27 @@ pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
+pub fn list_project_worktrees(repo_path: String) -> AppResult<Vec<worktree::ProjectWorktreeInfo>> {
+    let path = PathBuf::from(repo_path);
+    crate::worktree::list_worktree_infos(&path)
+}
+
+#[tauri::command]
 pub fn remove_worktree(
+    state: State<'_, AppState>,
     repo_path: String,
     worktree_path: String,
+    remove_sessions: Option<bool>,
 ) -> AppResult<Option<worktree::RemovedWorktree>> {
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
+    if remove_sessions.unwrap_or(false) {
+        return stage_remove_linked_worktree_at_path_and_sessions(
+            state.inner(),
+            &repo_path,
+            &worktree_path,
+        );
+    }
     stage_remove_linked_worktree_at_path(&repo_path, &worktree_path)
 }
 
@@ -4778,6 +4793,38 @@ pub(crate) fn remove_linked_worktree_at_path(
     worktree_path: &Path,
 ) -> AppResult<()> {
     worktree::remove_worktree_at_path(repo_path, worktree_path)
+}
+
+fn stage_remove_linked_worktree_at_path_and_sessions(
+    state: &AppState,
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<Option<worktree::RemovedWorktree>> {
+    let sessions: Vec<_> = state
+        .sessions
+        .list()
+        .into_iter()
+        .filter(|session| {
+            worktree::same_path(&session.repo_path, repo_path)
+                && worktree::same_path(&session.worktree_path, worktree_path)
+        })
+        .collect();
+
+    let removed = stage_remove_linked_worktree_at_path(repo_path, worktree_path)?;
+
+    if let Ok(dir) = persistence::data_dir() {
+        for session in &sessions {
+            scrollback::delete(&dir, &session.id.to_string()).ok();
+        }
+    }
+    for session in &sessions {
+        terminate_session_pty(state, &session.id);
+    }
+    for session in sessions {
+        state.sessions.remove(&session.id).ok();
+    }
+    persist(state);
+    Ok(removed)
 }
 
 pub(crate) fn stage_remove_linked_worktree_at_path(

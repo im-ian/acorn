@@ -1,7 +1,8 @@
 use git2::Repository;
 use serde::Serialize;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -17,6 +18,13 @@ pub struct RemovedWorktree {
     pub repo_path: String,
     pub worktree_path: String,
     pub git_common_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProjectWorktreeInfo {
+    pub name: String,
+    pub path: String,
+    pub modified_ms: Option<i64>,
 }
 
 pub fn ensure_repo(path: &Path) -> AppResult<Repository> {
@@ -131,6 +139,41 @@ pub fn list_worktree_paths(repo_path: &Path) -> AppResult<Vec<std::path::PathBuf
     Ok(paths)
 }
 
+pub fn list_worktree_infos(repo_path: &Path) -> AppResult<Vec<ProjectWorktreeInfo>> {
+    let mut infos: Vec<ProjectWorktreeInfo> = list_worktree_paths(repo_path)?
+        .into_iter()
+        .map(project_worktree_info_from_path)
+        .collect();
+    infos.sort_by(|a, b| {
+        b.modified_ms
+            .cmp(&a.modified_ms)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    Ok(infos)
+}
+
+fn project_worktree_info_from_path(path: PathBuf) -> ProjectWorktreeInfo {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let modified_ms = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(system_time_millis);
+    ProjectWorktreeInfo {
+        name,
+        path: path.to_string_lossy().into_owned(),
+        modified_ms,
+    }
+}
+
+fn system_time_millis(time: SystemTime) -> Option<i64> {
+    let millis = time.duration_since(UNIX_EPOCH).ok()?.as_millis();
+    i64::try_from(millis).ok()
+}
+
 pub fn stage_remove_worktree_at_path(
     repo_path: &Path,
     worktree_path: &Path,
@@ -166,6 +209,16 @@ pub fn stage_remove_worktree_at_path(
                 worktree_path: worktree_path.to_string_lossy().into_owned(),
                 git_common_dir: repo.commondir().to_string_lossy().into_owned(),
             }));
+        }
+    }
+
+    if is_acorn_managed_worktree_path(repo_path, worktree_path) {
+        if worktree_path.exists() && is_linked_worktree_root(worktree_path) {
+            std::fs::remove_dir_all(worktree_path)?;
+            return Ok(None);
+        }
+        if !worktree_path.exists() {
+            return Ok(None);
         }
     }
 
@@ -297,11 +350,22 @@ fn has_staged_worktree_backup(worktree_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn same_path(left: &Path, right: &Path) -> bool {
+pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }
+}
+
+fn is_acorn_managed_worktree_path(repo_path: &Path, worktree_path: &Path) -> bool {
+    if worktree_path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return false;
+    }
+    let root = worktree_root(repo_path);
+    worktree_path.parent() == Some(root.as_path()) && worktree_path.file_name().is_some()
 }
 
 /// Returns `true` when `path` is the root of a *linked* git worktree.
@@ -538,6 +602,102 @@ mod tests {
             root.canonicalize().unwrap(),
         );
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_worktree_infos_includes_name_path_and_mtime() {
+        let root = unique_temp_dir("worktree-info");
+        let repo = Repository::init(&root).expect("init repo");
+        let readme = root.join("README.md");
+        std::fs::write(&readme, "# test\n").expect("write readme");
+        let mut index = repo.index().expect("repo index");
+        index.add_path(Path::new("README.md")).expect("add readme");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        let signature = git2::Signature::now("Acorn Test", "acorn@example.com").expect("signature");
+        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .expect("commit");
+        drop(tree);
+        drop(repo);
+
+        let path = create_worktree(&root, "feature-alpha").expect("create worktree");
+        let infos = list_worktree_infos(&root).expect("list worktree infos");
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].name, "feature-alpha");
+        assert_eq!(
+            Path::new(&infos[0].path).canonicalize().unwrap(),
+            path.canonicalize().unwrap(),
+        );
+        assert!(
+            infos[0].modified_ms.unwrap_or_default() > 0,
+            "worktree mtime should be captured"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn remove_worktree_at_path_allows_already_missing_path() {
+        let root = unique_temp_dir("remove-missing");
+        Repository::init(&root).expect("init repo");
+        let missing = root.join(".acorn").join("worktrees").join("gone");
+
+        remove_worktree_at_path(&root, &missing).expect("missing worktree removal is idempotent");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn remove_worktree_at_path_deletes_unregistered_managed_linked_root() {
+        let root = unique_temp_dir("remove-stale-linked");
+        Repository::init(&root).expect("init repo");
+        let stale = root.join(".acorn").join("worktrees").join("stale");
+        std::fs::create_dir_all(&stale).expect("create stale worktree dir");
+        std::fs::write(stale.join(".git"), "gitdir: ../../.git/worktrees/stale\n")
+            .expect("write linked worktree marker");
+
+        remove_worktree_at_path(&root, &stale).expect("remove stale managed linked root");
+
+        assert!(
+            !stale.exists(),
+            "stale linked worktree dir should be removed"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn remove_worktree_at_path_allows_unregistered_missing_path() {
+        let root = unique_temp_dir("remove-missing-unmanaged");
+        Repository::init(&root).expect("init repo");
+        let missing = root.join("somewhere-else").join("gone");
+
+        remove_worktree_at_path(&root, &missing).expect("missing worktree removal is idempotent");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn remove_worktree_at_path_does_not_delete_managed_traversal_path() {
+        let root = unique_temp_dir("remove-traversal");
+        Repository::init(&root).expect("init repo");
+        let escaped = root.join(".acorn").join("escaped");
+        std::fs::create_dir_all(&escaped).expect("create escaped dir");
+        std::fs::write(escaped.join(".git"), "gitdir: ../.git/worktrees/escaped\n")
+            .expect("write linked marker");
+        let traversal = root
+            .join(".acorn")
+            .join("worktrees")
+            .join("..")
+            .join("escaped");
+        let removed = stage_remove_worktree_at_path(&root, &traversal)
+            .expect("traversal path removal should be a no-op");
+
+        assert!(removed.is_none());
+        assert!(
+            escaped.exists(),
+            "stale fallback must not delete paths outside managed worktrees"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

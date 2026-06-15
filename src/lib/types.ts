@@ -244,6 +244,12 @@ export interface Project {
   position: number;
 }
 
+export interface ProjectWorktree {
+  name: string;
+  path: string;
+  modified_ms: number | null;
+}
+
 export interface ProjectPullRequestSettings {
   generation_prompt: string | null;
 }

@@ -571,6 +571,7 @@ pub fn run() {
             commands::update_session_worktree,
             commands::prepare_chat_session_worktree,
             commands::git_worktrees,
+            commands::list_project_worktrees,
             commands::remove_worktree,
             commands::restore_removed_worktree,
             commands::discard_removed_worktree,
