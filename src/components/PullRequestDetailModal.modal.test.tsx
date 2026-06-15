@@ -118,7 +118,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
       },
     });
     mockApi.listProjectWorktrees.mockResolvedValue([]);
-    mockApi.removeWorktree.mockResolvedValue(undefined);
+    mockApi.removeWorktree.mockResolvedValue(null);
     window.localStorage.clear();
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });

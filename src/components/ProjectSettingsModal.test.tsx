@@ -7,6 +7,7 @@ import type {
   ProjectWorktree,
   Session,
 } from "../lib/types";
+import type { WorktreeRemoval } from "../lib/api";
 
 vi.mock("../lib/api", () => ({
   api: {
@@ -21,7 +22,7 @@ vi.mock("../lib/api", () => ({
         repoPath: string,
         worktreePath: string,
         removeSessions?: boolean,
-      ) => Promise<void>
+      ) => Promise<WorktreeRemoval | null>
     >(),
     updateProjectSettings: vi.fn<
       (
@@ -102,7 +103,7 @@ describe("ProjectSettingsModal", () => {
     mockApi.listProjectWorktrees.mockResolvedValue([]);
     mockApi.listProjects.mockResolvedValue([]);
     mockApi.listSessions.mockResolvedValue([]);
-    mockApi.removeWorktree.mockResolvedValue();
+    mockApi.removeWorktree.mockResolvedValue(null);
   });
 
   afterEach(() => {

@@ -19,8 +19,10 @@
 //! Both bounds enforced lazily on every append, so the steady-state cost is
 //! one `VecDeque::extend` plus an O(n) drain when the cap is crossed (rare).
 
-use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use parking_lot::Mutex;
 
 /// Maximum line count retained (xterm.js scrollback parity). Lines are
 /// counted by `\n` occurrences in the byte stream; non-terminated trailing
@@ -32,6 +34,18 @@ pub const LINE_CAP: usize = 5_000;
 /// compared to the in-process implementation.
 pub const BYTE_CAP: usize = 4 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteSpan {
+    pub start_seq: u64,
+    pub end_seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RingSnapshot {
+    pub bytes: Vec<u8>,
+    pub end_seq: u64,
+}
+
 /// Concurrent-safe ring of PTY output bytes for a single session.
 ///
 /// `Mutex<VecDeque<u8>>` was deliberately picked over a lockless ringbuf:
@@ -42,6 +56,7 @@ pub const BYTE_CAP: usize = 4 * 1024 * 1024;
 pub struct RingBuffer {
     bytes: Mutex<VecDeque<u8>>,
     newlines: Mutex<VecDeque<usize>>,
+    total_written: AtomicU64,
 }
 
 impl Default for RingBuffer {
@@ -57,17 +72,27 @@ impl RingBuffer {
             // burst of PTY output after spawn.
             bytes: Mutex::new(VecDeque::with_capacity(8 * 1024)),
             newlines: Mutex::new(VecDeque::with_capacity(LINE_CAP / 8)),
+            total_written: AtomicU64::new(0),
         }
     }
 
     /// Append a chunk of bytes. Older bytes/lines are evicted from the
     /// front until both `BYTE_CAP` and `LINE_CAP` invariants hold.
     pub fn push(&self, chunk: &[u8]) {
+        let _ = self.push_tracked(chunk);
+    }
+
+    /// Append a chunk and return the absolute byte span it occupied in the
+    /// PTY output stream. Stream attach uses this to avoid a replay gap between
+    /// a scrollback snapshot and live broadcast subscription.
+    pub fn push_tracked(&self, chunk: &[u8]) -> Option<ByteSpan> {
         if chunk.is_empty() {
-            return;
+            return None;
         }
         let mut bytes = self.bytes.lock();
         let mut newlines = self.newlines.lock();
+        let start_seq = self.total_written.load(Ordering::SeqCst);
+        let end_seq = start_seq.saturating_add(chunk.len() as u64);
 
         // 1) Append. Track each new newline by its absolute position
         //    BEFORE eviction (we rebase the indices after byte-eviction
@@ -123,6 +148,8 @@ impl RingBuffer {
                 *n = n.saturating_sub(drop_bytes);
             }
         }
+        self.total_written.store(end_seq, Ordering::SeqCst);
+        Some(ByteSpan { start_seq, end_seq })
     }
 
     /// Snapshot up to `max_bytes` of the freshest bytes. Returns
@@ -141,8 +168,19 @@ impl RingBuffer {
     /// `replay_scrollback = true` so the client sees exactly what the
     /// previous session left on the screen.
     pub fn snapshot(&self) -> Vec<u8> {
+        self.snapshot_with_seq().bytes
+    }
+
+    /// Snapshot the current ring plus the absolute stream sequence at the end
+    /// of that snapshot. If a stream subscriber was already registered before
+    /// this call, any broadcast chunk ending at or before `end_seq` is already
+    /// represented by `bytes` and should be skipped on the live path.
+    pub fn snapshot_with_seq(&self) -> RingSnapshot {
         let buf = self.bytes.lock();
-        buf.iter().copied().collect()
+        RingSnapshot {
+            bytes: buf.iter().copied().collect(),
+            end_seq: self.total_written.load(Ordering::SeqCst),
+        }
     }
 
     /// Current byte length, for status reporting.
@@ -190,6 +228,26 @@ mod tests {
         let (snap, truncated) = r.tail(1024);
         assert_eq!(snap, b"hello\nworld\n");
         assert!(!truncated);
+    }
+
+    #[test]
+    fn tracked_push_reports_absolute_byte_spans() {
+        let r = RingBuffer::new();
+        assert_eq!(
+            r.push_tracked(b"abc"),
+            Some(ByteSpan {
+                start_seq: 0,
+                end_seq: 3,
+            })
+        );
+        assert_eq!(
+            r.push_tracked(b"de"),
+            Some(ByteSpan {
+                start_seq: 3,
+                end_seq: 5,
+            })
+        );
+        assert_eq!(r.snapshot_with_seq().end_seq, 5);
     }
 
     #[test]

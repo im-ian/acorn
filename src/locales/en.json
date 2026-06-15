@@ -4,12 +4,15 @@
       "createFailed": "Failed to create session:",
       "removeFailed": "Failed to remove session:",
       "worktreeRemoved": "Worktree deleted from disk.",
+      "worktreeRemovedUndo": "Removing {name} worktree in {seconds}s. Undo",
+      "worktreeRestored": "Worktree restored.",
+      "worktreeRestoreFailed": "Failed to restore worktree:",
       "worktreeRemoveFailed": "Failed to delete worktree:",
       "refreshFailed": "Failed to refresh sessions:",
       "renameFailed": "Failed to rename session:",
       "titleNotReady": "No transcript is available for this session yet.",
       "titleRegenerateSkipped": "Session name was not regenerated.",
-      "worktreeAdopted": "Adopted new worktree: {name}",
+      "worktreeAdopted": "Worktree adopted: {name}",
       "worktreeAdoptFailed": "Failed to adopt worktree:"
     },
     "project": {
@@ -17,6 +20,9 @@
       "createFailed": "Failed to create project:",
       "removeFailed": "Failed to remove project:",
       "worktreesRemoved": "Project worktrees deleted from disk.",
+      "worktreesRemovedUndo": "Removing {count} project worktrees in {seconds}s. Undo",
+      "worktreesRestored": "Project worktrees restored.",
+      "worktreesRestoreFailed": "Failed to restore project worktrees:",
       "worktreesRemoveFailed": "Failed to delete project worktrees:"
     },
     "ipc": {
@@ -369,9 +375,9 @@
         "send": "Send test notification",
         "sending": "Sending...",
         "result": {
-          "sent": "Sent. Check your notification center if it didn't appear.",
-          "denied": "Permission denied. Allow Acorn under System Settings -> Notifications.",
-          "failed": "Failed to send. See the console for details."
+          "sent": "Test notification sent. Check Notification Center if it did not appear.",
+          "denied": "Notification permission denied. Allow Acorn in System Settings -> Notifications.",
+          "failed": "Failed to send test notification. See console for details."
         }
       },
       "permissionHint": "macOS may ask once for permission the first time a notification fires."
@@ -561,7 +567,7 @@
         "clearedSingular": "Cleared {count} cached file.",
         "clearedPlural": "Cleared {count} cached files.",
         "nothingToClear": "Nothing to clear.",
-        "clearFailed": "Clear failed - see console."
+        "clearFailed": "Failed to clear cache. See console for details."
       },
       "confirm": {
         "message": "This will permanently delete the cached data listed above ({size}). Continue?",
@@ -605,8 +611,8 @@
       "toasts": {
         "upToDate": "Acorn is up to date.",
         "updateAvailable": "Acorn {version} is available.",
-        "checkFailed": "Update check failed:",
-        "installFailed": "Update install failed:",
+        "checkFailed": "Failed to check for updates:",
+        "installFailed": "Failed to install update:",
         "releaseNotesFailed": "Failed to load release notes:"
       },
       "relative": {
@@ -620,8 +626,8 @@
   },
   "app": {
     "toast": {
-      "multiInputOn": "Multi-input on.",
-      "multiInputOff": "Multi-input off.",
+      "multiInputOn": "Multi-input enabled.",
+      "multiInputOff": "Multi-input disabled.",
       "shellEnvironmentReloaded": "Shell environment reloaded. Open a new session to apply.",
       "shellEnvironmentReloadFailed": "Failed to reload shell environment."
     }
@@ -1303,8 +1309,8 @@
       "bodyClaude": "There's a Claude conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
       "bodyCodex": "There's a Codex conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
       "bodyAntigravity": "There's an Antigravity conversation that was in progress in this session. You can pick it up where you left off, or just close this dialog to start fresh.",
-      "sessionIdCopied": "Session ID copied",
-      "copyFailed": "Failed to copy to clipboard",
+      "sessionIdCopied": "Session ID copied.",
+      "copyFailed": "Failed to copy session ID.",
       "copyId": "Copy ID",
       "resume": "Resume",
       "lastActivityUnknown": "Last activity unknown",
@@ -1361,9 +1367,9 @@
       "noProjectHint": "No project is registered - add a project before running this command, or use \"Copy\" to paste it into an existing terminal.",
       "noProjectError": "No project available to host the new session.",
       "createFailed": "Failed to create session.",
-      "copiedPrefix": "Copied:",
-      "copyFailedPrefix": "Copy failed:",
-      "runningPrefix": "Running:",
+      "copiedPrefix": "Command copied:",
+      "copyFailedPrefix": "Failed to copy command:",
+      "runningPrefix": "Running command:",
       "running": "Running...",
       "run": "Run"
     },
@@ -1591,11 +1597,11 @@
       "shutdownFailed": "Failed to quit daemon:",
       "sessionKilled": "PTY killed.",
       "sessionRestored": "Session restored.",
-      "sessionForgotten": "Session forgotten.",
+      "sessionForgotten": "Session removed from daemon list.",
       "inactiveCleared": "Inactive daemon sessions cleared.",
       "inactiveNone": "No inactive daemon sessions to clear.",
       "inactiveClearFailed": "Failed to clear inactive daemon sessions:",
-      "sessionActionFailed": "Daemon session action failed:"
+      "sessionActionFailed": "Failed to run daemon session action:"
     }
   }
 }

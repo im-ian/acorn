@@ -1860,14 +1860,6 @@ fn enrich_session(mut s: Session) -> Session {
     s.in_worktree = worktree::is_linked_worktree_root(&s.worktree_path);
     let live = crate::agent_resume::live_transcript(s.id);
     s.agent_transcript_id = live.as_ref().map(|transcript| transcript.id.clone());
-    let live_provider = live.as_ref().map(|transcript| match transcript.kind {
-        crate::agent_resume::AgentKind::Claude => acorn_session::SessionAgentProvider::Claude,
-        crate::agent_resume::AgentKind::Codex => acorn_session::SessionAgentProvider::Codex,
-        crate::agent_resume::AgentKind::Antigravity => {
-            acorn_session::SessionAgentProvider::Antigravity
-        }
-    });
-    s.agent_provider = live_provider.or(s.agent_provider);
     s
 }
 
@@ -2693,10 +2685,12 @@ pub async fn remove_project(
     remove_sessions: Option<bool>,
     remove_worktrees: Option<bool>,
     remove_settings: Option<bool>,
-) -> AppResult<()> {
+) -> AppResult<Vec<worktree::RemovedWorktree>> {
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
+    let mut removed_worktrees = Vec::new();
+    let mut staged_worktree_paths = HashSet::new();
     if cascade {
         let session_ids: Vec<_> = state
             .sessions
@@ -2706,8 +2700,12 @@ pub async fn remove_project(
             .collect();
         for session in session_ids {
             terminate_session_pty(state.inner(), &session.id);
-            if drop_worktrees {
-                remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
+            if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
+                if let Ok(Some(removed)) =
+                    stage_remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path)
+                {
+                    removed_worktrees.push(removed);
+                }
             }
             state.sessions.remove(&session.id).ok();
         }
@@ -2721,7 +2719,7 @@ pub async fn remove_project(
         }
     }
     persist(&state);
-    Ok(())
+    Ok(removed_worktrees)
 }
 
 #[tauri::command]
@@ -2729,22 +2727,26 @@ pub async fn remove_session(
     state: State<'_, AppState>,
     id: String,
     remove_worktree: Option<bool>,
-) -> AppResult<()> {
+) -> AppResult<Option<worktree::RemovedWorktree>> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
     terminate_session_pty(state.inner(), &id);
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
-    if remove_worktree.unwrap_or(false) {
-        remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
-    }
+    let removed_worktree = if remove_worktree.unwrap_or(false) {
+        stage_remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     state.sessions.remove(&id)?;
     if should_remove_local_project_mirror(&session, &state.sessions.list()) {
         state.projects.remove(&session.repo_path);
     }
     persist(&state);
-    Ok(())
+    Ok(removed_worktree)
 }
 
 #[tauri::command]
@@ -3198,17 +3200,47 @@ pub fn remove_worktree(
     repo_path: String,
     worktree_path: String,
     remove_sessions: Option<bool>,
-) -> AppResult<()> {
+) -> AppResult<Option<worktree::RemovedWorktree>> {
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
     if remove_sessions.unwrap_or(false) {
-        return remove_linked_worktree_at_path_and_sessions(
+        return stage_remove_linked_worktree_at_path_and_sessions(
             state.inner(),
             &repo_path,
             &worktree_path,
         );
     }
-    remove_linked_worktree_at_path(&repo_path, &worktree_path)
+    stage_remove_linked_worktree_at_path(&repo_path, &worktree_path)
+}
+
+#[tauri::command]
+pub fn restore_removed_worktree(
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    worktree::restore_removed_worktree(
+        Path::new(&repo_path),
+        Path::new(&worktree_path),
+        &token,
+        Path::new(&git_common_dir),
+    )
+}
+
+#[tauri::command]
+pub fn discard_removed_worktree(
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    worktree::discard_removed_worktree(
+        Path::new(&repo_path),
+        Path::new(&worktree_path),
+        &token,
+        Path::new(&git_common_dir),
+    )
 }
 
 fn parse_id(id: &str) -> AppResult<Uuid> {
@@ -3275,6 +3307,7 @@ pub async fn pty_spawn<R: Runtime>(
     cols: Option<u16>,
     rows: Option<u16>,
     replay_scrollback: Option<bool>,
+    output_token: Option<u64>,
 ) -> AppResult<()> {
     let state = state.inner().clone();
     // Staging dirs, control markers, and the daemon spawn path (which can
@@ -3290,6 +3323,7 @@ pub async fn pty_spawn<R: Runtime>(
             cols,
             rows,
             replay_scrollback,
+            output_token,
         )
     })
     .await
@@ -3305,14 +3339,20 @@ fn pty_spawn_blocking<R: Runtime>(
     cols: Option<u16>,
     rows: Option<u16>,
     replay_scrollback: Option<bool>,
+    output_token: Option<u64>,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let session = state.sessions.get(&id)?;
     let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
+    let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
     // Either an in-process PTY or a daemon-side stream attachment for
     // this session already exists — caller hit `pty_spawn` twice (e.g.
     // StrictMode double mount), nothing to do.
-    if state.pty.contains(&id) || state.stream_registry.contains(&id) {
+    if state.pty.contains(&id)
+        || state
+            .stream_registry
+            .attachment_matches_output_token(&id, output_token)
+    {
         return Ok(());
     }
     // Sessions always spawn the user's interactive `$SHELL` in login
@@ -3507,6 +3547,7 @@ fn pty_spawn_blocking<R: Runtime>(
             &effective_env,
             cols.unwrap_or(0),
             rows.unwrap_or(0),
+            output_token,
             replay_scrollback.unwrap_or(true),
         ) {
             Ok(()) => return Ok(()),
@@ -3558,12 +3599,13 @@ fn spawn_via_daemon<R: Runtime>(
     env: &HashMap<String, String>,
     cols: u16,
     rows: u16,
+    output_token: Option<u64>,
     replay_scrollback: bool,
 ) -> Result<(), String> {
     let bridge = &state.daemon_bridge;
     let registry = state.stream_registry.clone();
 
-    if registry.contains(&id) {
+    if registry.attachment_matches_output_token(&id, output_token) {
         return Ok(());
     }
 
@@ -3603,6 +3645,7 @@ fn spawn_via_daemon<R: Runtime>(
             state.pty_output.clone(),
             id,
             pid,
+            output_token,
             replay_scrollback,
         )
         .map_err(|e| format!("daemon stream attach failed: {e}"))?;
@@ -3646,6 +3689,7 @@ fn spawn_via_daemon<R: Runtime>(
         state.pty_output.clone(),
         id,
         outcome.pid,
+        output_token,
         replay_scrollback,
     )
     .map_err(|e| format!("daemon stream attach failed: {e}"))
@@ -3711,8 +3755,10 @@ pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -
     // Daemon-managed sessions route stdin through the control socket.
     // Keystrokes are small; one RPC round-trip per keystroke is well
     // under the typing-feedback threshold and avoids managing a second
-    // socket on the app side just for input.
-    if state.stream_registry.contains(&id) {
+    // socket on the app side just for input. A stream attachment is the
+    // fast-path signal, but detached/re-attaching sessions can be alive in
+    // the daemon without an app-side output pump for a short window.
+    if daemon_session_alive_or_attached(&state, id) {
         return state
             .daemon_bridge
             .send_input(id, &bytes)
@@ -3732,7 +3778,7 @@ pub fn pty_resize(
     rows: u16,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    if state.stream_registry.contains(&id) {
+    if daemon_session_alive_or_attached(&state, id) {
         return state
             .daemon_bridge
             .resize(id, cols, rows)
@@ -3747,7 +3793,8 @@ pub fn pty_resize(
 #[tauri::command]
 pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    if state.stream_registry.contains(&id) {
+    let stream_attached = state.stream_registry.contains(&id);
+    if stream_attached || state.daemon_bridge.is_alive(id) {
         // Order: tell the daemon to terminate the PTY first, then
         // release the stream attachment. The daemon's wait thread
         // emits an `Exit` frame the stream pump turns into a Tauri
@@ -3759,7 +3806,9 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
             .daemon_bridge
             .kill(id)
             .map_err(|e| AppError::Pty(e.to_string()));
-        state.stream_registry.drop_attachment(&id);
+        if stream_attached {
+            state.stream_registry.drop_attachment(&id);
+        }
         return result;
     }
     state
@@ -3779,14 +3828,44 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
 /// one would leave the user staring at a blank terminal. For an in-process or
 /// unknown session this is a no-op and returns `false` — the caller must keep
 /// such terminals mounted instead of evicting them.
+///
+/// `output_token` is the renderer output subscription being unmounted. If a
+/// newer renderer has already subscribed for the same session, the detach is a
+/// stale cleanup and must not drop the current daemon stream attachment.
 #[tauri::command]
-pub fn pty_detach(state: State<'_, AppState>, session_id: String) -> AppResult<bool> {
+pub fn pty_detach(
+    state: State<'_, AppState>,
+    session_id: String,
+    output_token: Option<u64>,
+) -> AppResult<bool> {
     let id = parse_id(&session_id)?;
-    if state.stream_registry.contains(&id) {
+    let stream_attached = state.stream_registry.contains(&id);
+    if stream_attached {
+        if detach_requested_by_stale_renderer(output_token, state.pty_output.current_token(&id)) {
+            return Ok(true);
+        }
         state.stream_registry.drop_attachment(&id);
         return Ok(true);
     }
+    if state.daemon_bridge.is_alive(id) {
+        return Ok(true);
+    }
     Ok(false)
+}
+
+fn daemon_session_alive_or_attached(state: &AppState, id: Uuid) -> bool {
+    state.stream_registry.contains(&id) || state.daemon_bridge.is_alive(id)
+}
+
+fn detach_requested_by_stale_renderer(
+    detach_output_token: Option<u64>,
+    current_output_token: Option<u64>,
+) -> bool {
+    match (detach_output_token, current_output_token) {
+        (Some(detach_token), Some(current_token)) => detach_token != current_token,
+        (None, Some(_)) => true,
+        _ => false,
+    }
 }
 
 /// Drop the cached snapshot of the user's shell environment. The next PTY
@@ -4242,15 +4321,14 @@ fn detect_session_statuses_blocking(
                 transcript.is_some(),
                 live_agent_kind,
             );
-            let agent_provider = live_agent_kind
-                .or_else(|| transcript.as_ref().map(|(_, kind)| *kind))
-                .map(status_agent_kind_to_provider);
+            // Durable transcript markers keep resume/title features working
+            // after exit, but provider badges should reflect only a live
+            // agent process under the PTY.
+            let agent_provider = live_agent_kind.map(status_agent_kind_to_provider);
             let auto_title_enabled = {
                 let current = session.as_ref().and_then(|s| s.auto_title_enabled);
                 match parsed_id {
-                    Some(uuid)
-                        if auto_title_promotion_needed(current, transcript.is_some()) =>
-                    {
+                    Some(uuid) if auto_title_promotion_needed(current, transcript.is_some()) => {
                         promoted_auto_title = true;
                         state
                             .sessions
@@ -4281,6 +4359,11 @@ fn detect_session_statuses_blocking(
             // (e.g. UUID parse failure for a stale id from the frontend).
             if let Some(uuid) = parsed_id {
                 let _ = state.sessions.refresh_status(&uuid, status);
+                let _ = state.sessions.refresh_agent_state(
+                    &uuid,
+                    agent_provider,
+                    agent_transcript_id.clone(),
+                );
             }
             SessionStatusEntry {
                 id,
@@ -4704,6 +4787,7 @@ pub(crate) fn create_unique_worktree(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn remove_linked_worktree_at_path(
     repo_path: &Path,
     worktree_path: &Path,
@@ -4711,11 +4795,11 @@ pub(crate) fn remove_linked_worktree_at_path(
     worktree::remove_worktree_at_path(repo_path, worktree_path)
 }
 
-fn remove_linked_worktree_at_path_and_sessions(
+fn stage_remove_linked_worktree_at_path_and_sessions(
     state: &AppState,
     repo_path: &Path,
     worktree_path: &Path,
-) -> AppResult<()> {
+) -> AppResult<Option<worktree::RemovedWorktree>> {
     let sessions: Vec<_> = state
         .sessions
         .list()
@@ -4726,39 +4810,28 @@ fn remove_linked_worktree_at_path_and_sessions(
         })
         .collect();
 
-    let registered = worktree::list_worktree_paths(repo_path)?
-        .into_iter()
-        .any(|candidate| worktree::same_path(&candidate, worktree_path));
-    if !registered && sessions.is_empty() {
-        return remove_linked_worktree_at_path(repo_path, worktree_path);
-    }
-
-    for session in &sessions {
-        terminate_session_pty(state, &session.id);
-    }
-
-    if registered {
-        remove_linked_worktree_at_path(repo_path, worktree_path)?;
-    } else if worktree::is_linked_worktree_root(worktree_path) {
-        std::fs::remove_dir_all(worktree_path)?;
-    } else if worktree_path.exists() {
-        tracing::warn!(
-            repo = %repo_path.display(),
-            worktree = %worktree_path.display(),
-            "removing stale sessions for an unregistered worktree path without deleting files"
-        );
-    }
+    let removed = stage_remove_linked_worktree_at_path(repo_path, worktree_path)?;
 
     if let Ok(dir) = persistence::data_dir() {
         for session in &sessions {
             scrollback::delete(&dir, &session.id.to_string()).ok();
         }
     }
+    for session in &sessions {
+        terminate_session_pty(state, &session.id);
+    }
     for session in sessions {
         state.sessions.remove(&session.id).ok();
     }
     persist(state);
-    Ok(())
+    Ok(removed)
+}
+
+pub(crate) fn stage_remove_linked_worktree_at_path(
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<Option<worktree::RemovedWorktree>> {
+    worktree::stage_remove_worktree_at_path(repo_path, worktree_path)
 }
 
 /// Surface the "이전 Claude 대화 있음" candidate for a session — used by
@@ -4969,9 +5042,9 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 mod tests {
     use super::{
         auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
-        create_unique_worktree, daemon_spawn_name_for_session, font_name_from_path,
-        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
+        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
         validate_editor_command, validate_new_project_name, ChatProviderAdapter,
         ProcessMemorySnapshot,
     };
@@ -6069,6 +6142,15 @@ mod tests {
         let id = Uuid::new_v4();
 
         assert_eq!(daemon_spawn_name_for_session(None, id), id.to_string());
+    }
+
+    #[test]
+    fn detach_token_keeps_newer_renderer_attachment() {
+        assert!(!detach_requested_by_stale_renderer(Some(7), Some(7)));
+        assert!(!detach_requested_by_stale_renderer(Some(7), None));
+
+        assert!(detach_requested_by_stale_renderer(Some(7), Some(8)));
+        assert!(detach_requested_by_stale_renderer(None, Some(8)));
     }
 
     #[test]

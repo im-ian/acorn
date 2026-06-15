@@ -31,7 +31,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::protocol::{AgentKind, SpawnSpec};
-use super::ring_buffer::RingBuffer;
+use super::ring_buffer::{ByteSpan, RingBuffer, RingSnapshot};
 use super::session::{DaemonSession, SessionRegistry};
 
 const DEFAULT_COLS: u16 = 80;
@@ -71,7 +71,7 @@ struct PtyHandle {
     /// Broadcast channel: every byte chunk read from the PTY goes here
     /// for live consumers. Stored as a `Sender` — drop is the only
     /// teardown signal, no explicit close needed.
-    output_tx: broadcast::Sender<Vec<u8>>,
+    output_tx: broadcast::Sender<OutputChunk>,
     /// Scrollback ring. Same `Arc` as the one in
     /// `DaemonSession::scrollback`; both pointers are clones of the
     /// instance created during `spawn`.
@@ -83,8 +83,25 @@ struct PtyHandle {
 }
 
 pub struct PtySubscription {
-    pub rx: broadcast::Receiver<Vec<u8>>,
+    pub rx: broadcast::Receiver<OutputChunk>,
     pub exit_code: Arc<Mutex<Option<i32>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputChunk {
+    pub bytes: Vec<u8>,
+    pub start_seq: u64,
+    pub end_seq: u64,
+}
+
+impl OutputChunk {
+    fn new(bytes: Vec<u8>, span: ByteSpan) -> Self {
+        Self {
+            bytes,
+            start_seq: span.start_seq,
+            end_seq: span.end_seq,
+        }
+    }
 }
 
 /// Caller-supplied policy for applying environment variables to the
@@ -193,7 +210,7 @@ impl PtyManager {
         let pid = child.process_id();
 
         let scrollback = Arc::new(RingBuffer::new());
-        let (output_tx, _output_rx) = broadcast::channel::<Vec<u8>>(BROADCAST_CAPACITY);
+        let (output_tx, _output_rx) = broadcast::channel::<OutputChunk>(BROADCAST_CAPACITY);
 
         let stop = Arc::new(AtomicBool::new(false));
         let exit_code = Arc::new(Mutex::new(None));
@@ -329,10 +346,10 @@ impl PtyManager {
 
     /// Snapshot the current scrollback ring without subscribing to live
     /// updates. Used in concert with `subscribe` on attach.
-    pub fn scrollback_snapshot(&self, id: &Uuid) -> Option<Vec<u8>> {
+    pub fn scrollback_snapshot(&self, id: &Uuid) -> Option<RingSnapshot> {
         self.handles
             .get(id)
-            .map(|r| r.value().scrollback.snapshot())
+            .map(|r| r.value().scrollback.snapshot_with_seq())
     }
 
     pub fn contains(&self, id: &Uuid) -> bool {
@@ -393,7 +410,7 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     stop: Arc<AtomicBool>,
     scrollback: Arc<RingBuffer>,
-    output_tx: broadcast::Sender<Vec<u8>>,
+    output_tx: broadcast::Sender<OutputChunk>,
 ) {
     let mut buf = [0u8; READ_BUFFER_SIZE];
     loop {
@@ -404,12 +421,14 @@ fn read_loop(
             Ok(0) => break, // EOF
             Ok(n) => {
                 let chunk = &buf[..n];
-                scrollback.push(chunk);
+                let span = scrollback.push_tracked(chunk);
                 // Broadcast is a best-effort delivery; if no clients are
                 // attached, the send fails and we drop the chunk for
                 // them. The scrollback ring is the safety net on
                 // reattach.
-                let _ = output_tx.send(chunk.to_vec());
+                if let Some(span) = span {
+                    let _ = output_tx.send(OutputChunk::new(chunk.to_vec(), span));
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
