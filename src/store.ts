@@ -257,6 +257,11 @@ interface AppStateModel {
     removeWorktrees?: boolean,
     removeSettings?: boolean,
   ) => Promise<void>;
+  removeProjectWorktree: (
+    repoPath: string,
+    worktreePath: string,
+    removeSessions?: boolean,
+  ) => Promise<void>;
   reorderProjects: (orderedRepoPaths: string[]) => Promise<void>;
   reorderProjectFolders: (
     repoPath: string,
@@ -2378,6 +2383,96 @@ export const useAppStore = create<AppStateModel>()(
       set({ error: null });
     } catch (e) {
       set({ error: errorMessage(e) });
+    }
+  },
+
+  async removeProjectWorktree(repoPath, worktreePath, removeSessions = false) {
+    try {
+      await api.removeWorktree(repoPath, worktreePath, removeSessions);
+      set((s) => {
+        const removedSessionIds = new Set<string>();
+        const sessions = removeSessions
+          ? s.sessions.filter((session) => {
+              const shouldRemove =
+                sameWorkspacePath(session.repo_path, repoPath) &&
+                sameWorkspacePath(session.worktree_path, worktreePath);
+              if (shouldRemove) removedSessionIds.add(session.id);
+              return !shouldRemove;
+            })
+          : s.sessions;
+        const currentFolders = s.projectFolders[repoPath] ?? [];
+        const removedFolderIds = new Set(
+          currentFolders
+            .filter(
+              (folder) =>
+                !isDefaultProjectFolder(folder) &&
+                sameWorkspacePath(folder.cwdPath, worktreePath),
+            )
+            .map((folder) => folder.id),
+        );
+        const projectFolders = {
+          ...s.projectFolders,
+          [repoPath]: currentFolders.filter(
+            (folder) => !removedFolderIds.has(folder.id),
+          ),
+        };
+        const workspaces = Object.fromEntries(
+          Object.entries(s.workspaces).filter(
+            ([workspaceId]) => !removedFolderIds.has(workspaceId),
+          ),
+        );
+        const sessionFolderIds = Object.fromEntries(
+          Object.entries(s.sessionFolderIds).filter(
+            ([sessionId, folderId]) =>
+              !removedSessionIds.has(sessionId) &&
+              !removedFolderIds.has(folderId),
+          ),
+        );
+        const liveInWorktree = { ...s.liveInWorktree };
+        const pendingTerminalInput = { ...s.pendingTerminalInput };
+        for (const sessionId of removedSessionIds) {
+          delete liveInWorktree[sessionId];
+          delete pendingTerminalInput[sessionId];
+        }
+        const activeProjectFolderId = removedFolderIds.has(
+          s.activeProjectFolderId ?? "",
+        )
+          ? defaultProjectFolderId(repoPath)
+          : s.activeProjectFolderId;
+        const reconciled = reconcileWorkspaces(
+          sessions,
+          s.projects,
+          projectFolders,
+          sessionFolderIds,
+          workspaces,
+          s.activeProject,
+          activeProjectFolderId,
+          true,
+        );
+        return {
+          sessions,
+          error: null,
+          liveInWorktree,
+          pendingTerminalInput,
+          sessionNotifications: s.sessionNotifications.filter(
+            (notification) => !removedSessionIds.has(notification.sessionId),
+          ),
+          workspaces: reconciled.workspaces,
+          projectFolders: reconciled.projectFolders,
+          sessionFolderIds: reconciled.sessionFolderIds,
+          activeProject: reconciled.activeProject,
+          activeProjectFolderId: reconciled.activeProjectFolderId,
+          ...mirrorActive(
+            reconciled.workspaces,
+            reconciled.activeProjectFolderId,
+          ),
+        };
+      });
+      await get().refreshAll();
+      set({ error: null });
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      throw e;
     }
   },
 

@@ -31,6 +31,8 @@ vi.mock("../lib/api", () => {
       closePullRequest: vi.fn(),
       generatePrCommitMessage: vi.fn(),
       getProjectSettings: vi.fn(),
+      listProjectWorktrees: vi.fn(),
+      removeWorktree: vi.fn(),
       updateProjectSettings: vi.fn(),
     },
   };
@@ -105,6 +107,8 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     mockApi.closePullRequest.mockReset();
     mockApi.generatePrCommitMessage.mockReset();
     mockApi.getProjectSettings.mockReset();
+    mockApi.listProjectWorktrees.mockReset();
+    mockApi.removeWorktree.mockReset();
     mockApi.updateProjectSettings.mockReset();
     mockApi.getProjectSettings.mockResolvedValue({
       key: "path:/r",
@@ -113,6 +117,8 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
         pull_requests: { generation_prompt: null },
       },
     });
+    mockApi.listProjectWorktrees.mockResolvedValue([]);
+    mockApi.removeWorktree.mockResolvedValue(undefined);
     window.localStorage.clear();
     useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) });
   });

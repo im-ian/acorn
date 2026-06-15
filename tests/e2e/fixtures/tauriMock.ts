@@ -242,6 +242,8 @@ export const tauriMockSource = `
     // session flags (isolated, in_worktree) drive the worktree icon.
     if (cmd === 'pty_in_worktree_all') return Promise.resolve({});
     if (cmd === 'is_path_linked_worktree') return Promise.resolve(false);
+    if (cmd === 'list_project_worktrees') return Promise.resolve([]);
+    if (cmd === 'remove_worktree') return Promise.resolve(undefined);
     // Daemon-mode commands. E2E runs in-browser without a real acornd
     // bound to a socket, so every routed call short-circuits with a
     // realistic "disabled / not-running" response. Tests that need to
