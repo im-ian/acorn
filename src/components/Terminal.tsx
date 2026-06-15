@@ -47,10 +47,19 @@ import {
   type TerminalPasteEventDetail,
 } from "../lib/pasteEvents";
 import {
-  prepareScrollbackForSave,
   shouldRestoreScrollback,
   stripRestoreMarkers,
 } from "../lib/terminalScrollback";
+import {
+  clearRememberedTerminalScrollback,
+  rememberedTerminalScrollback,
+  rememberTerminalScrollback,
+} from "../lib/terminalScrollbackHandoff";
+import {
+  cancelPendingTerminalPtyDisposal,
+  scheduleTerminalPtyDisposal,
+} from "../lib/terminalPtyDisposal";
+import { planTerminalRestore } from "../lib/terminalRestorePlan";
 import {
   AGENT_IMAGE_PASTE_CONTROL,
   getClipboardImageFile,
@@ -773,6 +782,7 @@ export function Terminal({
     // terminal column.
     termRef.current = term;
     fitRef.current = fitAddon;
+    cancelPendingTerminalPtyDisposal(sessionId);
 
     // The DOM renderer (default) anchors xterm's hidden textarea at the
     // cursor cell, so IME composition popups (CJK input) render at the
@@ -821,8 +831,8 @@ export function Terminal({
     let observedLinkedWorktreePath: string | null = null;
     let liveCwdProbeTimer: number | null = null;
     let agentProbeTimer: number | null = null;
-    let restoredDiskScrollback = false;
     let daemonSessionAliveAtMount = false;
+    let replayScrollbackOnSpawn = true;
     let agentImagePasteFallbackActive =
       pasteAgentProviderRef.current === "codex" ||
       pasteAgentProviderRef.current === "claude";
@@ -1827,6 +1837,7 @@ export function Terminal({
       const detail = (e as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
       term.clear();
+      clearRememberedTerminalScrollback(sessionId);
       // Sticky-prompt banner watches the buffer for `> ` lines; after a
       // clear there are none, so explicitly schedule a dispatch so the
       // banner picks up the now-empty state without waiting for the
@@ -1911,7 +1922,11 @@ export function Terminal({
           env: {},
           cols: spawnCols,
           rows: spawnRows,
-          replayScrollback: daemonSessionAliveAtMount || !restoredDiskScrollback,
+          // Live daemon-backed attaches replay their raw ring as the source of
+          // truth. Local snapshots are only restored for dead daemon sessions,
+          // where there is no live ring to replay.
+          replayScrollback: replayScrollbackOnSpawn,
+          outputToken: outputSubscriptionToken,
         });
         if (disposed) {
           // Cleanup ran mid-spawn — the pty just got created has no UI.
@@ -1990,6 +2005,7 @@ export function Terminal({
       scheduleLiveCwdProbe();
       scheduleAgentDetection();
     };
+    let outputSubscriptionToken: number | null = null;
 
     (async () => {
       let outputChannel: Channel<unknown> | null = null;
@@ -2006,6 +2022,7 @@ export function Terminal({
           sessionId,
           channel: outputChannel,
         });
+        outputSubscriptionToken = outputToken;
         const subscribedOutputChannel = outputChannel;
         if (disposed) {
           invoke("pty_unsubscribe_output", {
@@ -2184,10 +2201,18 @@ export function Terminal({
           sessionId,
         });
         if (disposed) return;
-        restoredDiskScrollback = !daemonSessionAliveAtMount && saved !== null;
-        const restored = saved ? stripRestoreMarkers(saved) : "";
+        const handoff = rememberedTerminalScrollback(sessionId);
+        const restorePlan = planTerminalRestore({
+          daemonAlive: daemonSessionAliveAtMount,
+          handoff,
+          disk: saved,
+        });
+        replayScrollbackOnSpawn = restorePlan.replayScrollback;
+        const restored = restorePlan.snapshot
+          ? stripRestoreMarkers(restorePlan.snapshot)
+          : "";
         if (
-          !daemonSessionAliveAtMount &&
+          restorePlan.source !== null &&
           restored &&
           shouldRestoreScrollback(restored)
         ) {
@@ -2267,19 +2292,20 @@ export function Terminal({
     // ~1s debounce window of unsaved output; that is the cost we accept
     // in exchange for not constantly serialising idle buffers.
     const SCROLLBACK_MAX_ROWS = 2000;
-    const persistScrollbackAsync = async () => {
+    const persistScrollbackAsync = async (options?: { force?: boolean }) => {
       // `savesAllowed` flips true only after the initial scrollback_load
       // settles. Skipping the save until then prevents a still-empty
       // buffer from clobbering the persisted scrollback during the
       // StrictMode mount → cleanup → mount cycle.
-      if (disposed || !savesAllowed) return;
+      if ((!options?.force && disposed) || !savesAllowed) return;
       try {
         const data = serializeAddon.serialize({
           scrollback: SCROLLBACK_MAX_ROWS,
         });
+        const prepared = rememberTerminalScrollback(sessionId, data);
         await invoke("scrollback_save", {
           sessionId,
-          data: prepareScrollbackForSave(data),
+          data: prepared,
         });
       } catch (err) {
         console.warn("[Terminal] scrollback_save failed", err);
@@ -2292,6 +2318,7 @@ export function Terminal({
 
     return () => {
       disposed = true;
+      const detachingForReuse = consumeTerminalDetaching(sessionId);
       unsubSettings();
       hideLinkTooltip(true);
       if (themeFrame !== null) {
@@ -2303,6 +2330,14 @@ export function Terminal({
         window.clearTimeout(scrollbackSaveTimer);
         scrollbackSaveTimer = null;
       }
+      if (detachingForReuse) {
+        // A resident-limit eviction can unmount the terminal less than one
+        // debounce window after the latest output. Persist once from cleanup so
+        // the next mount cannot fall back to an older disk snapshot if daemon
+        // reattach is unavailable or delayed. `savesAllowed` still protects
+        // StrictMode's pre-load cleanup from writing an empty buffer.
+        void persistScrollbackAsync({ force: true });
+      }
       if (viewportRepaintTimer !== null) {
         window.clearTimeout(viewportRepaintTimer);
         viewportRepaintTimer = null;
@@ -2312,14 +2347,6 @@ export function Terminal({
         viewportRepaintFrame = null;
       }
       cancelLinkTooltipHide();
-      // No cleanup-time save: under React.StrictMode the cleanup of the
-      // first dev mount fires while the buffer is still empty (load
-      // hasn't run yet), and a fire-and-forget save here would clobber
-      // the persisted scrollback with 0 bytes. Tab-close / project-switch
-      // unmount instead relies on the most recent debounced output save
-      // (within ~1s of the last activity), which is already on disk; the
-      // App-level `onCloseRequested` handler covers full app quit and
-      // does an awaited flush via `flushAllScrollbacks` before destroy.
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
         resizeTimer = null;
@@ -2363,24 +2390,29 @@ export function Terminal({
       for (const off of unlistenFns) {
         try { off(); } catch { /* ignore */ }
       }
-      if (consumeTerminalDetaching(sessionId)) {
-        // Evicted for memory, not deleted: detach so the daemon keeps the
-        // shell + scrollback ring alive and a later remount re-attaches and
-        // replays it. If the backend reports the session was not daemon-backed
-        // (and therefore cannot be re-attached), fall back to a kill rather
-        // than strand a headless in-process shell.
-        invoke<boolean>("pty_detach", { sessionId })
-          .then((detached) => {
-            if (!detached) return invoke("pty_kill", { sessionId });
+      scheduleTerminalPtyDisposal(sessionId, () => {
+        if (detachingForReuse) {
+          // Evicted for memory, not deleted: detach so the daemon keeps the
+          // shell + scrollback ring alive and a later remount re-attaches and
+          // replays it. If the backend reports the session was not daemon-backed
+          // (and therefore cannot be re-attached), fall back to a kill rather
+          // than strand a headless in-process shell.
+          invoke<boolean>("pty_detach", {
+            sessionId,
+            outputToken: outputSubscriptionToken,
           })
-          .catch(() => {
-            // best effort
+            .then((detached) => {
+              if (!detached) return invoke("pty_kill", { sessionId });
+            })
+            .catch(() => {
+              // best effort
+            });
+        } else {
+          invoke("pty_kill", { sessionId }).catch(() => {
+            // Backend may not implement pty_kill yet — safe to ignore.
           });
-      } else {
-        invoke("pty_kill", { sessionId }).catch(() => {
-          // Backend may not implement pty_kill yet — safe to ignore.
-        });
-      }
+        }
+      });
       unpatchMouseCoordinateScale();
       try { webLinksDisposable?.dispose(); } catch { /* ignore */ }
       webLinksDisposable = null;

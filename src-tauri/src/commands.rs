@@ -3249,6 +3249,7 @@ pub async fn pty_spawn<R: Runtime>(
     cols: Option<u16>,
     rows: Option<u16>,
     replay_scrollback: Option<bool>,
+    output_token: Option<u64>,
 ) -> AppResult<()> {
     let state = state.inner().clone();
     // Staging dirs, control markers, and the daemon spawn path (which can
@@ -3264,6 +3265,7 @@ pub async fn pty_spawn<R: Runtime>(
             cols,
             rows,
             replay_scrollback,
+            output_token,
         )
     })
     .await
@@ -3279,14 +3281,20 @@ fn pty_spawn_blocking<R: Runtime>(
     cols: Option<u16>,
     rows: Option<u16>,
     replay_scrollback: Option<bool>,
+    output_token: Option<u64>,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
     let session = state.sessions.get(&id)?;
     let cwd = authorize_session_cwd(&state, &session, &PathBuf::from(cwd))?;
+    let output_token = output_token.or_else(|| state.pty_output.current_token(&id));
     // Either an in-process PTY or a daemon-side stream attachment for
     // this session already exists — caller hit `pty_spawn` twice (e.g.
     // StrictMode double mount), nothing to do.
-    if state.pty.contains(&id) || state.stream_registry.contains(&id) {
+    if state.pty.contains(&id)
+        || state
+            .stream_registry
+            .attachment_matches_output_token(&id, output_token)
+    {
         return Ok(());
     }
     // Sessions always spawn the user's interactive `$SHELL` in login
@@ -3481,6 +3489,7 @@ fn pty_spawn_blocking<R: Runtime>(
             &effective_env,
             cols.unwrap_or(0),
             rows.unwrap_or(0),
+            output_token,
             replay_scrollback.unwrap_or(true),
         ) {
             Ok(()) => return Ok(()),
@@ -3532,12 +3541,13 @@ fn spawn_via_daemon<R: Runtime>(
     env: &HashMap<String, String>,
     cols: u16,
     rows: u16,
+    output_token: Option<u64>,
     replay_scrollback: bool,
 ) -> Result<(), String> {
     let bridge = &state.daemon_bridge;
     let registry = state.stream_registry.clone();
 
-    if registry.contains(&id) {
+    if registry.attachment_matches_output_token(&id, output_token) {
         return Ok(());
     }
 
@@ -3577,6 +3587,7 @@ fn spawn_via_daemon<R: Runtime>(
             state.pty_output.clone(),
             id,
             pid,
+            output_token,
             replay_scrollback,
         )
         .map_err(|e| format!("daemon stream attach failed: {e}"))?;
@@ -3620,6 +3631,7 @@ fn spawn_via_daemon<R: Runtime>(
         state.pty_output.clone(),
         id,
         outcome.pid,
+        output_token,
         replay_scrollback,
     )
     .map_err(|e| format!("daemon stream attach failed: {e}"))
@@ -3685,8 +3697,10 @@ pub fn pty_write(state: State<'_, AppState>, session_id: String, data: String) -
     // Daemon-managed sessions route stdin through the control socket.
     // Keystrokes are small; one RPC round-trip per keystroke is well
     // under the typing-feedback threshold and avoids managing a second
-    // socket on the app side just for input.
-    if state.stream_registry.contains(&id) {
+    // socket on the app side just for input. A stream attachment is the
+    // fast-path signal, but detached/re-attaching sessions can be alive in
+    // the daemon without an app-side output pump for a short window.
+    if daemon_session_alive_or_attached(&state, id) {
         return state
             .daemon_bridge
             .send_input(id, &bytes)
@@ -3706,7 +3720,7 @@ pub fn pty_resize(
     rows: u16,
 ) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    if state.stream_registry.contains(&id) {
+    if daemon_session_alive_or_attached(&state, id) {
         return state
             .daemon_bridge
             .resize(id, cols, rows)
@@ -3721,7 +3735,8 @@ pub fn pty_resize(
 #[tauri::command]
 pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    if state.stream_registry.contains(&id) {
+    let stream_attached = state.stream_registry.contains(&id);
+    if stream_attached || state.daemon_bridge.is_alive(id) {
         // Order: tell the daemon to terminate the PTY first, then
         // release the stream attachment. The daemon's wait thread
         // emits an `Exit` frame the stream pump turns into a Tauri
@@ -3733,7 +3748,9 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
             .daemon_bridge
             .kill(id)
             .map_err(|e| AppError::Pty(e.to_string()));
-        state.stream_registry.drop_attachment(&id);
+        if stream_attached {
+            state.stream_registry.drop_attachment(&id);
+        }
         return result;
     }
     state
@@ -3753,14 +3770,44 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> AppResult<()>
 /// one would leave the user staring at a blank terminal. For an in-process or
 /// unknown session this is a no-op and returns `false` — the caller must keep
 /// such terminals mounted instead of evicting them.
+///
+/// `output_token` is the renderer output subscription being unmounted. If a
+/// newer renderer has already subscribed for the same session, the detach is a
+/// stale cleanup and must not drop the current daemon stream attachment.
 #[tauri::command]
-pub fn pty_detach(state: State<'_, AppState>, session_id: String) -> AppResult<bool> {
+pub fn pty_detach(
+    state: State<'_, AppState>,
+    session_id: String,
+    output_token: Option<u64>,
+) -> AppResult<bool> {
     let id = parse_id(&session_id)?;
-    if state.stream_registry.contains(&id) {
+    let stream_attached = state.stream_registry.contains(&id);
+    if stream_attached {
+        if detach_requested_by_stale_renderer(output_token, state.pty_output.current_token(&id)) {
+            return Ok(true);
+        }
         state.stream_registry.drop_attachment(&id);
         return Ok(true);
     }
+    if state.daemon_bridge.is_alive(id) {
+        return Ok(true);
+    }
     Ok(false)
+}
+
+fn daemon_session_alive_or_attached(state: &AppState, id: Uuid) -> bool {
+    state.stream_registry.contains(&id) || state.daemon_bridge.is_alive(id)
+}
+
+fn detach_requested_by_stale_renderer(
+    detach_output_token: Option<u64>,
+    current_output_token: Option<u64>,
+) -> bool {
+    match (detach_output_token, current_output_token) {
+        (Some(detach_token), Some(current_token)) => detach_token != current_token,
+        (None, Some(_)) => true,
+        _ => false,
+    }
 }
 
 /// Drop the cached snapshot of the user's shell environment. The next PTY
@@ -4897,9 +4944,9 @@ pub fn acknowledge_staged_rev_mismatch(state: State<'_, AppState>) {
 mod tests {
     use super::{
         auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
-        create_unique_worktree, daemon_spawn_name_for_session, font_name_from_path,
-        infer_acornd_root_from_session_pids, inject_agent_hook_env, memory_root_pids,
-        remove_linked_worktree_at_path, should_remove_local_project_mirror,
+        create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
+        font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
+        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
         validate_editor_command, validate_new_project_name, ChatProviderAdapter,
         ProcessMemorySnapshot,
     };
@@ -5997,6 +6044,15 @@ mod tests {
         let id = Uuid::new_v4();
 
         assert_eq!(daemon_spawn_name_for_session(None, id), id.to_string());
+    }
+
+    #[test]
+    fn detach_token_keeps_newer_renderer_attachment() {
+        assert!(!detach_requested_by_stale_renderer(Some(7), Some(7)));
+        assert!(!detach_requested_by_stale_renderer(Some(7), None));
+
+        assert!(detach_requested_by_stale_renderer(Some(7), Some(8)));
+        assert!(detach_requested_by_stale_renderer(None, Some(8)));
     }
 
     #[test]
