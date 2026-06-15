@@ -4,6 +4,9 @@
       "createFailed": "세션을 만들지 못했습니다:",
       "removeFailed": "세션을 제거하지 못했습니다:",
       "worktreeRemoved": "디스크에서 워크트리를 삭제했습니다.",
+      "worktreeRemovedUndo": "{seconds}초 후 {name} 워크트리를 제거합니다. 실행 취소",
+      "worktreeRestored": "워크트리를 복구했습니다.",
+      "worktreeRestoreFailed": "워크트리를 복구하지 못했습니다:",
       "worktreeRemoveFailed": "워크트리를 삭제하지 못했습니다:",
       "refreshFailed": "세션 목록을 새로 고치지 못했습니다:",
       "renameFailed": "세션 이름을 바꾸지 못했습니다:",
@@ -17,6 +20,9 @@
       "createFailed": "프로젝트를 만들지 못했습니다:",
       "removeFailed": "프로젝트를 제거하지 못했습니다:",
       "worktreesRemoved": "디스크에서 프로젝트 워크트리를 삭제했습니다.",
+      "worktreesRemovedUndo": "{seconds}초 후 프로젝트 워크트리 {count}개를 제거합니다. 실행 취소",
+      "worktreesRestored": "프로젝트 워크트리를 복구했습니다.",
+      "worktreesRestoreFailed": "프로젝트 워크트리를 복구하지 못했습니다:",
       "worktreesRemoveFailed": "프로젝트 워크트리를 삭제하지 못했습니다:"
     },
     "ipc": {

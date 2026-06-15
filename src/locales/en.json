@@ -4,6 +4,9 @@
       "createFailed": "Failed to create session:",
       "removeFailed": "Failed to remove session:",
       "worktreeRemoved": "Worktree deleted from disk.",
+      "worktreeRemovedUndo": "Removing {name} worktree in {seconds}s. Undo",
+      "worktreeRestored": "Worktree restored.",
+      "worktreeRestoreFailed": "Failed to restore worktree:",
       "worktreeRemoveFailed": "Failed to delete worktree:",
       "refreshFailed": "Failed to refresh sessions:",
       "renameFailed": "Failed to rename session:",
@@ -17,6 +20,9 @@
       "createFailed": "Failed to create project:",
       "removeFailed": "Failed to remove project:",
       "worktreesRemoved": "Project worktrees deleted from disk.",
+      "worktreesRemovedUndo": "Removing {count} project worktrees in {seconds}s. Undo",
+      "worktreesRestored": "Project worktrees restored.",
+      "worktreesRestoreFailed": "Failed to restore project worktrees:",
       "worktreesRemoveFailed": "Failed to delete project worktrees:"
     },
     "ipc": {

@@ -2685,10 +2685,12 @@ pub async fn remove_project(
     remove_sessions: Option<bool>,
     remove_worktrees: Option<bool>,
     remove_settings: Option<bool>,
-) -> AppResult<()> {
+) -> AppResult<Vec<worktree::RemovedWorktree>> {
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
+    let mut removed_worktrees = Vec::new();
+    let mut staged_worktree_paths = HashSet::new();
     if cascade {
         let session_ids: Vec<_> = state
             .sessions
@@ -2698,8 +2700,12 @@ pub async fn remove_project(
             .collect();
         for session in session_ids {
             terminate_session_pty(state.inner(), &session.id);
-            if drop_worktrees {
-                remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
+            if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
+                if let Ok(Some(removed)) =
+                    stage_remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path)
+                {
+                    removed_worktrees.push(removed);
+                }
             }
             state.sessions.remove(&session.id).ok();
         }
@@ -2713,7 +2719,7 @@ pub async fn remove_project(
         }
     }
     persist(&state);
-    Ok(())
+    Ok(removed_worktrees)
 }
 
 #[tauri::command]
@@ -2721,22 +2727,26 @@ pub async fn remove_session(
     state: State<'_, AppState>,
     id: String,
     remove_worktree: Option<bool>,
-) -> AppResult<()> {
+) -> AppResult<Option<worktree::RemovedWorktree>> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
     terminate_session_pty(state.inner(), &id);
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
-    if remove_worktree.unwrap_or(false) {
-        remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
-    }
+    let removed_worktree = if remove_worktree.unwrap_or(false) {
+        stage_remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     state.sessions.remove(&id)?;
     if should_remove_local_project_mirror(&session, &state.sessions.list()) {
         state.projects.remove(&session.repo_path);
     }
     persist(&state);
-    Ok(())
+    Ok(removed_worktree)
 }
 
 #[tauri::command]
@@ -3179,10 +3189,43 @@ pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
-pub fn remove_worktree(repo_path: String, worktree_path: String) -> AppResult<()> {
+pub fn remove_worktree(
+    repo_path: String,
+    worktree_path: String,
+) -> AppResult<Option<worktree::RemovedWorktree>> {
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
-    remove_linked_worktree_at_path(&repo_path, &worktree_path)
+    stage_remove_linked_worktree_at_path(&repo_path, &worktree_path)
+}
+
+#[tauri::command]
+pub fn restore_removed_worktree(
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    worktree::restore_removed_worktree(
+        Path::new(&repo_path),
+        Path::new(&worktree_path),
+        &token,
+        Path::new(&git_common_dir),
+    )
+}
+
+#[tauri::command]
+pub fn discard_removed_worktree(
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    worktree::discard_removed_worktree(
+        Path::new(&repo_path),
+        Path::new(&worktree_path),
+        &token,
+        Path::new(&git_common_dir),
+    )
 }
 
 fn parse_id(id: &str) -> AppResult<Uuid> {
@@ -4682,11 +4725,19 @@ pub(crate) fn create_unique_worktree(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn remove_linked_worktree_at_path(
     repo_path: &Path,
     worktree_path: &Path,
 ) -> AppResult<()> {
     worktree::remove_worktree_at_path(repo_path, worktree_path)
+}
+
+pub(crate) fn stage_remove_linked_worktree_at_path(
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> AppResult<Option<worktree::RemovedWorktree>> {
+    worktree::stage_remove_worktree_at_path(repo_path, worktree_path)
 }
 
 /// Surface the "이전 Claude 대화 있음" candidate for a session — used by
