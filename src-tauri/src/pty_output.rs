@@ -42,6 +42,10 @@ impl PtyOutputRouter {
         }
     }
 
+    pub fn current_token(&self, session_id: &Uuid) -> Option<u64> {
+        self.channels.get(session_id).map(|entry| entry.token)
+    }
+
     pub fn send_or_emit<R: Runtime>(
         &self,
         app: &AppHandle<R>,
