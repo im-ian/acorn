@@ -43,6 +43,61 @@ where
         .map_err(|e| AppError::Other(format!("{label} task failed: {e}")))?
 }
 
+async fn stage_remove_linked_worktree_blocking(
+    repo_path: PathBuf,
+    worktree_path: PathBuf,
+) -> AppResult<Option<worktree::RemovedWorktree>> {
+    run_blocking("stage linked worktree removal", move || {
+        stage_remove_linked_worktree_at_path(&repo_path, &worktree_path)
+    })
+    .await
+}
+
+async fn stage_remove_linked_worktree_and_sessions_blocking(
+    state: AppState,
+    repo_path: PathBuf,
+    worktree_path: PathBuf,
+) -> AppResult<Option<worktree::RemovedWorktree>> {
+    run_blocking("stage linked worktree removal with sessions", move || {
+        stage_remove_linked_worktree_at_path_and_sessions(&state, &repo_path, &worktree_path)
+    })
+    .await
+}
+
+async fn restore_removed_worktree_blocking(
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    run_blocking("restore removed worktree", move || {
+        worktree::restore_removed_worktree(
+            Path::new(&repo_path),
+            Path::new(&worktree_path),
+            &token,
+            Path::new(&git_common_dir),
+        )
+    })
+    .await
+}
+
+async fn discard_removed_worktree_blocking(
+    token: String,
+    repo_path: String,
+    worktree_path: String,
+    git_common_dir: String,
+) -> AppResult<()> {
+    run_blocking("discard removed worktree", move || {
+        worktree::discard_removed_worktree(
+            Path::new(&repo_path),
+            Path::new(&worktree_path),
+            &token,
+            Path::new(&git_common_dir),
+        )
+    })
+    .await
+}
+
 fn canonical_existing_path(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() {
         return Err(AppError::InvalidPath("absolute path required".into()));
@@ -2686,31 +2741,44 @@ pub async fn remove_project(
     remove_worktrees: Option<bool>,
     remove_settings: Option<bool>,
 ) -> AppResult<Vec<worktree::RemovedWorktree>> {
+    let app_state = state.inner().clone();
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
     let mut removed_worktrees = Vec::new();
     let mut staged_worktree_paths = HashSet::new();
     if cascade {
-        let session_ids: Vec<_> = state
+        let session_ids: Vec<_> = app_state
             .sessions
             .list()
             .into_iter()
             .filter(|s| s.repo_path == path)
             .collect();
         for session in session_ids {
-            terminate_session_pty(state.inner(), &session.id);
+            terminate_session_pty(&app_state, &session.id);
             if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
-                if let Ok(Some(removed)) =
-                    stage_remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path)
+                match stage_remove_linked_worktree_blocking(
+                    session.repo_path.clone(),
+                    session.worktree_path.clone(),
+                )
+                .await
                 {
-                    removed_worktrees.push(removed);
+                    Ok(Some(removed)) => removed_worktrees.push(removed),
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            repo_path = %session.repo_path.display(),
+                            worktree_path = %session.worktree_path.display(),
+                            error = %err,
+                            "failed to stage linked worktree removal"
+                        );
+                    }
                 }
             }
-            state.sessions.remove(&session.id).ok();
+            app_state.sessions.remove(&session.id).ok();
         }
     }
-    state.projects.remove(&path);
+    app_state.projects.remove(&path);
     let drop_settings = remove_settings.unwrap_or(false)
         || project_settings::should_remove_on_project_close(&path).unwrap_or(false);
     if drop_settings {
@@ -2718,7 +2786,7 @@ pub async fn remove_project(
             tracing::warn!(error = %err, path = %path.display(), "failed to remove project settings");
         }
     }
-    persist(&state);
+    persist(&app_state);
     Ok(removed_worktrees)
 }
 
@@ -2728,24 +2796,39 @@ pub async fn remove_session(
     id: String,
     remove_worktree: Option<bool>,
 ) -> AppResult<Option<worktree::RemovedWorktree>> {
+    let app_state = state.inner().clone();
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
-    let session = state.sessions.get(&id)?;
-    terminate_session_pty(state.inner(), &id);
+    let session = app_state.sessions.get(&id)?;
+    terminate_session_pty(&app_state, &id);
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
     }
     let removed_worktree = if remove_worktree.unwrap_or(false) {
-        stage_remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path)
-            .ok()
-            .flatten()
+        match stage_remove_linked_worktree_blocking(
+            session.repo_path.clone(),
+            session.worktree_path.clone(),
+        )
+        .await
+        {
+            Ok(removed) => removed,
+            Err(err) => {
+                tracing::warn!(
+                    repo_path = %session.repo_path.display(),
+                    worktree_path = %session.worktree_path.display(),
+                    error = %err,
+                    "failed to stage linked worktree removal"
+                );
+                None
+            }
+        }
     } else {
         None
     };
-    state.sessions.remove(&id)?;
-    if should_remove_local_project_mirror(&session, &state.sessions.list()) {
-        state.projects.remove(&session.repo_path);
+    app_state.sessions.remove(&id)?;
+    if should_remove_local_project_mirror(&session, &app_state.sessions.list()) {
+        app_state.projects.remove(&session.repo_path);
     }
-    persist(&state);
+    persist(&app_state);
     Ok(removed_worktree)
 }
 
@@ -3195,52 +3278,44 @@ pub fn list_project_worktrees(repo_path: String) -> AppResult<Vec<worktree::Proj
 }
 
 #[tauri::command]
-pub fn remove_worktree(
+pub async fn remove_worktree(
     state: State<'_, AppState>,
     repo_path: String,
     worktree_path: String,
     remove_sessions: Option<bool>,
 ) -> AppResult<Option<worktree::RemovedWorktree>> {
+    let app_state = state.inner().clone();
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
     if remove_sessions.unwrap_or(false) {
-        return stage_remove_linked_worktree_at_path_and_sessions(
-            state.inner(),
-            &repo_path,
-            &worktree_path,
-        );
+        return stage_remove_linked_worktree_and_sessions_blocking(
+            app_state,
+            repo_path,
+            worktree_path,
+        )
+        .await;
     }
-    stage_remove_linked_worktree_at_path(&repo_path, &worktree_path)
+    stage_remove_linked_worktree_blocking(repo_path, worktree_path).await
 }
 
 #[tauri::command]
-pub fn restore_removed_worktree(
+pub async fn restore_removed_worktree(
     token: String,
     repo_path: String,
     worktree_path: String,
     git_common_dir: String,
 ) -> AppResult<()> {
-    worktree::restore_removed_worktree(
-        Path::new(&repo_path),
-        Path::new(&worktree_path),
-        &token,
-        Path::new(&git_common_dir),
-    )
+    restore_removed_worktree_blocking(token, repo_path, worktree_path, git_common_dir).await
 }
 
 #[tauri::command]
-pub fn discard_removed_worktree(
+pub async fn discard_removed_worktree(
     token: String,
     repo_path: String,
     worktree_path: String,
     git_common_dir: String,
 ) -> AppResult<()> {
-    worktree::discard_removed_worktree(
-        Path::new(&repo_path),
-        Path::new(&worktree_path),
-        &token,
-        Path::new(&git_common_dir),
-    )
+    discard_removed_worktree_blocking(token, repo_path, worktree_path, git_common_dir).await
 }
 
 fn parse_id(id: &str) -> AppResult<Uuid> {
