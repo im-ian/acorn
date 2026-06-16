@@ -43,6 +43,39 @@ where
         .map_err(|e| AppError::Other(format!("{label} task failed: {e}")))?
 }
 
+async fn remove_linked_worktree_blocking(
+    repo_path: PathBuf,
+    worktree_path: PathBuf,
+) -> AppResult<()> {
+    run_blocking("remove linked worktree", move || {
+        remove_linked_worktree_at_path(&repo_path, &worktree_path)
+    })
+    .await
+}
+
+async fn remove_linked_worktrees_best_effort(worktrees: Vec<(PathBuf, PathBuf)>) {
+    if worktrees.is_empty() {
+        return;
+    }
+    if let Err(err) = run_blocking("remove linked worktrees", move || {
+        for (repo_path, worktree_path) in worktrees {
+            if let Err(err) = remove_linked_worktree_at_path(&repo_path, &worktree_path) {
+                tracing::warn!(
+                    repo_path = %repo_path.display(),
+                    worktree_path = %worktree_path.display(),
+                    error = %err,
+                    "failed to remove linked worktree"
+                );
+            }
+        }
+        Ok(())
+    })
+    .await
+    {
+        tracing::warn!(error = %err, "failed to run linked worktree removal task");
+    }
+}
+
 fn canonical_existing_path(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() {
         return Err(AppError::InvalidPath("absolute path required".into()));
@@ -2697,6 +2730,7 @@ pub async fn remove_project(
     let path = PathBuf::from(&repo_path);
     let cascade = remove_sessions.unwrap_or(true);
     let drop_worktrees = remove_worktrees.unwrap_or(false);
+    let mut worktrees_to_remove = Vec::new();
     if cascade {
         let session_ids: Vec<_> = state
             .sessions
@@ -2707,7 +2741,8 @@ pub async fn remove_project(
         for session in session_ids {
             terminate_session_pty(state.inner(), &session.id);
             if drop_worktrees {
-                remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
+                worktrees_to_remove
+                    .push((session.repo_path.clone(), session.worktree_path.clone()));
             }
             state.sessions.remove(&session.id).ok();
         }
@@ -2721,6 +2756,7 @@ pub async fn remove_project(
         }
     }
     persist(&state);
+    remove_linked_worktrees_best_effort(worktrees_to_remove).await;
     Ok(())
 }
 
@@ -2732,18 +2768,30 @@ pub async fn remove_session(
 ) -> AppResult<()> {
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = state.sessions.get(&id)?;
+    let worktree_to_remove = remove_worktree
+        .unwrap_or(false)
+        .then(|| (session.repo_path.clone(), session.worktree_path.clone()));
     terminate_session_pty(state.inner(), &id);
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
-    }
-    if remove_worktree.unwrap_or(false) {
-        remove_linked_worktree_at_path(&session.repo_path, &session.worktree_path).ok();
     }
     state.sessions.remove(&id)?;
     if should_remove_local_project_mirror(&session, &state.sessions.list()) {
         state.projects.remove(&session.repo_path);
     }
     persist(&state);
+    if let Some((repo_path, worktree_path)) = worktree_to_remove {
+        if let Err(err) =
+            remove_linked_worktree_blocking(repo_path.clone(), worktree_path.clone()).await
+        {
+            tracing::warn!(
+                repo_path = %repo_path.display(),
+                worktree_path = %worktree_path.display(),
+                error = %err,
+                "failed to remove linked worktree"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -3187,10 +3235,10 @@ pub fn git_worktrees(repo_path: String) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
-pub fn remove_worktree(repo_path: String, worktree_path: String) -> AppResult<()> {
+pub async fn remove_worktree(repo_path: String, worktree_path: String) -> AppResult<()> {
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
-    remove_linked_worktree_at_path(&repo_path, &worktree_path)
+    remove_linked_worktree_blocking(repo_path, worktree_path).await
 }
 
 fn parse_id(id: &str) -> AppResult<Uuid> {
