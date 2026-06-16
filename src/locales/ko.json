@@ -4,11 +4,14 @@
       "createFailed": "세션을 만들지 못했습니다:",
       "removeFailed": "세션을 제거하지 못했습니다:",
       "worktreeRemoved": "디스크에서 워크트리를 삭제했습니다.",
+      "worktreeRemovedUndo": "{seconds}초 후 {name} 워크트리를 제거합니다. 실행 취소",
+      "worktreeRestored": "워크트리를 복구했습니다.",
+      "worktreeRestoreFailed": "워크트리를 복구하지 못했습니다:",
       "worktreeRemoveFailed": "워크트리를 삭제하지 못했습니다:",
-      "refreshFailed": "세션을 새로고침하지 못했습니다:",
-      "renameFailed": "세션 이름을 변경하지 못했습니다:",
+      "refreshFailed": "세션 목록을 새로 고치지 못했습니다:",
+      "renameFailed": "세션 이름을 바꾸지 못했습니다:",
       "titleNotReady": "아직 이 세션에서 사용할 transcript가 없습니다.",
-      "titleRegenerateSkipped": "세션 이름을 다시 생성하지 못했습니다.",
+      "titleRegenerateSkipped": "세션 이름을 다시 생성하지 않았습니다.",
       "worktreeAdopted": "새 워크트리를 가져왔습니다: {name}",
       "worktreeAdoptFailed": "워크트리를 가져오지 못했습니다:"
     },
@@ -17,6 +20,9 @@
       "createFailed": "프로젝트를 만들지 못했습니다:",
       "removeFailed": "프로젝트를 제거하지 못했습니다:",
       "worktreesRemoved": "디스크에서 프로젝트 워크트리를 삭제했습니다.",
+      "worktreesRemovedUndo": "{seconds}초 후 프로젝트 워크트리 {count}개를 제거합니다. 실행 취소",
+      "worktreesRestored": "프로젝트 워크트리를 복구했습니다.",
+      "worktreesRestoreFailed": "프로젝트 워크트리를 복구하지 못했습니다:",
       "worktreesRemoveFailed": "프로젝트 워크트리를 삭제하지 못했습니다:"
     },
     "ipc": {
@@ -24,7 +30,7 @@
       "restartFailed": "IPC 서버를 다시 시작하지 못했습니다:"
     },
     "files": {
-      "renameFailed": "파일 이름을 변경하지 못했습니다:",
+      "renameFailed": "파일 이름을 바꾸지 못했습니다:",
       "trashFailed": "휴지통으로 이동하지 못했습니다:",
       "pathsCopied": "파일 경로를 복사했습니다.",
       "copyFailed": "파일 경로를 복사하지 못했습니다."
@@ -369,9 +375,9 @@
         "send": "테스트 알림 보내기",
         "sending": "보내는 중...",
         "result": {
-          "sent": "보냈습니다. 표시되지 않으면 알림 센터를 확인하세요.",
-          "denied": "권한이 거부되었습니다. 시스템 설정 -> 알림에서 Acorn을 허용하세요.",
-          "failed": "보내지 못했습니다. 자세한 내용은 콘솔을 확인하세요."
+          "sent": "테스트 알림을 보냈습니다. 표시되지 않으면 알림 센터를 확인하세요.",
+          "denied": "알림 권한이 없습니다. 시스템 설정 -> 알림에서 Acorn을 허용하세요.",
+          "failed": "테스트 알림을 보내지 못했습니다. 자세한 내용은 콘솔을 확인하세요."
         }
       },
       "permissionHint": "처음 알림이 발생할 때 macOS가 한 번 권한을 요청할 수 있습니다."
@@ -561,7 +567,7 @@
         "clearedSingular": "캐시 파일 {count}개를 지웠습니다.",
         "clearedPlural": "캐시 파일 {count}개를 지웠습니다.",
         "nothingToClear": "지울 항목이 없습니다.",
-        "clearFailed": "지우지 못했습니다 - 콘솔을 확인하세요."
+        "clearFailed": "캐시를 지우지 못했습니다. 자세한 내용은 콘솔을 확인하세요."
       },
       "confirm": {
         "message": "위에 표시된 캐시 데이터({size})를 영구적으로 삭제합니다. 계속할까요?",
@@ -605,8 +611,8 @@
       "toasts": {
         "upToDate": "Acorn이 최신 상태입니다.",
         "updateAvailable": "Acorn {version}을 사용할 수 있습니다.",
-        "checkFailed": "업데이트 확인에 실패했습니다:",
-        "installFailed": "업데이트 설치에 실패했습니다:",
+        "checkFailed": "업데이트를 확인하지 못했습니다:",
+        "installFailed": "업데이트를 설치하지 못했습니다:",
         "releaseNotesFailed": "릴리스 노트를 불러오지 못했습니다:"
       },
       "relative": {
@@ -620,8 +626,8 @@
   },
   "app": {
     "toast": {
-      "multiInputOn": "다중 입력 켜짐.",
-      "multiInputOff": "다중 입력 꺼짐.",
+      "multiInputOn": "다중 입력을 켰습니다.",
+      "multiInputOff": "다중 입력을 껐습니다.",
       "shellEnvironmentReloaded": "셸 환경을 다시 불러왔습니다. 적용하려면 새 세션을 여세요.",
       "shellEnvironmentReloadFailed": "셸 환경을 다시 불러오지 못했습니다."
     }
@@ -1236,14 +1242,43 @@
     },
     "projectSettings": {
       "title": "프로젝트 설정",
+      "tabs": {
+        "general": "일반",
+        "pullRequests": "Pull request",
+        "worktrees": "워크트리"
+      },
+      "general": "일반",
+      "generalHint": "프로젝트 식별 정보와 설정 유지 동작입니다.",
       "pullRequests": "Pull request",
       "pullRequestsHint": "이 프로젝트의 pull request 작업에만 적용되는 기본값입니다.",
+      "worktrees": "워크트리",
+      "worktreesHint": "이 프로젝트에 등록된 연결 Git 워크트리입니다.",
       "generationPrompt": "PR 제목, 코멘트, 머지 메시지 생성 프롬프트",
       "generationPromptHint": "Acorn이 선택된 AI CLI로 이 프로젝트의 pull request 제목, 리뷰 코멘트, 머지 메시지를 생성할 때 사용합니다.",
       "generationPromptPlaceholder": "예: Conventional Commit 제목과 영향 중심 본문을 사용하는 표준 GitHub 스타일 pull request merge message로 작성하세요.",
       "promptCount": "{count} / {max}",
       "rememberAfterClose": "프로젝트를 닫은 뒤에도 설정 유지",
       "rememberAfterCloseHint": "끄면 이 프로젝트를 닫을 때 저장된 프로젝트 설정을 삭제합니다.",
+      "loadingWorktrees": "워크트리를 불러오는 중...",
+      "noWorktrees": "이 프로젝트에 연결된 워크트리가 없습니다.",
+      "lastModified": "마지막 수정일",
+      "lastModifiedUnknown": "마지막 수정일 알 수 없음",
+      "usedBySession": "1개 세션에서 사용 중",
+      "usedBySessions": "{count}개 세션에서 사용 중",
+      "removeWorktree": "제거",
+      "removeWorktreeAria": "{name} 워크트리 제거",
+      "confirmRemoveDialog": "워크트리 삭제",
+      "confirmRemoveTitle": "{name} 삭제",
+      "confirmRemoveBody": "연결된 Git 워크트리 디렉터리를 디스크에서 제거합니다. 이 워크트리를 사용하는 세션은 메인 프로젝트에서 다시 열어야 할 수 있습니다.",
+      "confirmRemoveInUseBody": "이 워크트리는 {count}개 세션에서 사용 중입니다. 삭제하면 해당 세션을 닫고 좌측 패널에서 제거한 뒤, 연결된 Git 워크트리를 디스크에서 삭제합니다.",
+      "sessionsToRemoveSingular": "1개 세션이 제거됩니다",
+      "sessionsToRemovePlural": "{count}개 세션이 제거됩니다",
+      "cancelRemove": "취소",
+      "deletingWorktree": "삭제 중...",
+      "deleteWorktree": "워크트리 삭제",
+      "deleteWorktreeAndSessions": "세션 제거 및 워크트리 삭제",
+      "loadWorktreesFailed": "워크트리를 불러오지 못했습니다:",
+      "removeWorktreeFailed": "워크트리를 제거하지 못했습니다:",
       "saving": "저장 중...",
       "save": "저장"
     },
@@ -1274,8 +1309,8 @@
       "bodyClaude": "이 세션에 진행 중이던 Claude 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
       "bodyCodex": "이 세션에 진행 중이던 Codex 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
       "bodyAntigravity": "이 세션에 진행 중이던 Antigravity 대화가 있습니다. 이어서 진행하거나 이 대화상자를 닫고 새로 시작할 수 있습니다.",
-      "sessionIdCopied": "세션 ID를 복사했습니다",
-      "copyFailed": "클립보드에 복사하지 못했습니다",
+      "sessionIdCopied": "세션 ID를 복사했습니다.",
+      "copyFailed": "세션 ID를 복사하지 못했습니다.",
       "copyId": "ID 복사",
       "resume": "재개",
       "lastActivityUnknown": "마지막 활동 알 수 없음",
@@ -1332,15 +1367,15 @@
       "noProjectHint": "등록된 프로젝트가 없습니다. 이 명령을 실행하기 전에 프로젝트를 추가하거나 \"복사\"를 사용해 기존 터미널에 붙여 넣으세요.",
       "noProjectError": "새 세션을 실행할 프로젝트가 없습니다.",
       "createFailed": "세션을 만들지 못했습니다.",
-      "copiedPrefix": "복사됨:",
-      "copyFailedPrefix": "복사 실패:",
-      "runningPrefix": "실행 중:",
+      "copiedPrefix": "명령을 복사했습니다:",
+      "copyFailedPrefix": "명령을 복사하지 못했습니다:",
+      "runningPrefix": "명령을 실행합니다:",
       "running": "실행 중...",
       "run": "실행"
     },
     "closePullRequest": {
       "titlePrefix": "닫기",
-      "confirmPrefix": "풀 리퀘스트",
+      "confirmPrefix": "Pull request",
       "confirmSuffix": "를 병합하지 않고 닫을까요?",
       "closing": "닫는 중...",
       "closePr": "PR 닫기"
@@ -1431,7 +1466,7 @@
       "reviewApproved": "승인됨",
       "reviewChangesRequested": "변경 요청됨",
       "reviewDismissed": "해제됨",
-      "noCommits": "이 풀 리퀘스트에 커밋이 없습니다.",
+      "noCommits": "이 Pull request에 커밋이 없습니다.",
       "viewOnGithub": "GitHub에서 보기",
       "copySha": "SHA 복사",
       "noMessage": "(메시지 없음)",
@@ -1479,7 +1514,7 @@
       "viewTodos": "할 일 보기",
       "viewCommits": "커밋 보기",
       "viewStaged": "스테이징 보기",
-      "viewPullRequests": "풀 리퀘스트 보기",
+      "viewPullRequests": "Pull requests 보기",
       "resetPanelSizes": "패널 크기 재설정",
       "reloadShellEnvironment": "셸 환경 다시 로드",
       "restartIpcServer": "IPC 서버 다시 시작",
@@ -1487,8 +1522,8 @@
       "shakeTree": "나무 흔들기"
     },
     "toasts": {
-      "shellEnvReloaded": "셸 환경을 다시 로드했습니다. 적용하려면 새 세션을 여세요.",
-      "shellEnvReloadFailed": "셸 환경을 다시 로드하지 못했습니다.",
+      "shellEnvReloaded": "셸 환경을 다시 불러왔습니다. 적용하려면 새 세션을 여세요.",
+      "shellEnvReloadFailed": "셸 환경을 다시 불러오지 못했습니다.",
       "ipcRestarted": "IPC 서버를 다시 시작했습니다.",
       "ipcRestartFailedPrefix": "IPC 서버를 다시 시작하지 못했습니다:"
     }
@@ -1562,11 +1597,11 @@
       "shutdownFailed": "데몬을 종료하지 못했습니다:",
       "sessionKilled": "PTY를 종료했습니다.",
       "sessionRestored": "세션을 복원했습니다.",
-      "sessionForgotten": "세션을 잊었습니다.",
+      "sessionForgotten": "세션을 데몬 목록에서 제거했습니다.",
       "inactiveCleared": "비활성 데몬 세션을 정리했습니다.",
       "inactiveNone": "정리할 비활성 데몬 세션이 없습니다.",
       "inactiveClearFailed": "비활성 데몬 세션을 정리하지 못했습니다:",
-      "sessionActionFailed": "데몬 세션 작업에 실패했습니다:"
+      "sessionActionFailed": "데몬 세션 작업을 완료하지 못했습니다:"
     }
   }
 }

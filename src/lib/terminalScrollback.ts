@@ -1,4 +1,4 @@
-export const RESTORE_MARKER_TEXT = "— restored from previous session —";
+const LEGACY_RESTORE_MARKER_TEXT = "— restored from previous session —";
 
 const ANSI_ESCAPE_RE =
   // OSC, CSI, and common one-character escape sequences.
@@ -30,7 +30,7 @@ export function stripRestoreMarkers(input: string): string {
   return chunks
     .filter((chunk) => {
       if (chunk.length === 0) return false;
-      return !stripAnsi(chunk).includes(RESTORE_MARKER_TEXT);
+      return !stripAnsi(chunk).includes(LEGACY_RESTORE_MARKER_TEXT);
     })
     .join("");
 }

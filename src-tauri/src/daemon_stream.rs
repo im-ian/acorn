@@ -41,6 +41,7 @@ const NEEDS_INPUT_STICKY: std::time::Duration = std::time::Duration::from_secs(5
 /// closes.
 pub struct StreamAttachment {
     stop: Arc<AtomicBool>,
+    output_token: Option<u64>,
     /// OS process id of the daemon-side PTY child captured at spawn /
     /// attach. Used by status polling to walk descendants for
     /// shell-mode classification (Running / NeedsInput / Idle).
@@ -86,6 +87,32 @@ impl StreamRegistry {
         if let Some((_, handle)) = self.inner.remove(id) {
             handle.stop();
         }
+    }
+
+    /// Stop and remove `handle` only if it is still the registered attachment.
+    /// Stream pump threads use this on exit so a stale reader cannot remove a
+    /// newer attachment that re-entered the same session while the old socket
+    /// was shutting down.
+    pub fn drop_attachment_if_current(&self, id: &Uuid, handle: &Arc<StreamAttachment>) {
+        if let Some((_, current)) = self
+            .inner
+            .remove_if(id, |_, current| Arc::ptr_eq(current, handle))
+        {
+            current.stop();
+        }
+    }
+
+    /// Return whether the current attachment belongs to the renderer
+    /// subscription token that is asking to spawn. A missing token keeps the
+    /// older "attached means spawned" behavior for non-eviction callers.
+    pub fn attachment_matches_output_token(&self, id: &Uuid, output_token: Option<u64>) -> bool {
+        let Some(token) = output_token else {
+            return self.contains(id);
+        };
+        self.inner
+            .get(id)
+            .map(|entry| entry.output_token == Some(token))
+            .unwrap_or(false)
     }
 
     /// Look up the immediate PTY child pid for a daemon-managed
@@ -152,6 +179,7 @@ pub fn attach<R: Runtime>(
     output_router: Arc<PtyOutputRouter>,
     session_id: Uuid,
     pid: Option<u32>,
+    output_token: Option<u64>,
     replay_scrollback: bool,
 ) -> std::io::Result<()> {
     let mut conn = socket::connect_stream()?;
@@ -188,13 +216,15 @@ pub fn attach<R: Runtime>(
     let stop = Arc::new(AtomicBool::new(false));
     let handle = Arc::new(StreamAttachment {
         stop: stop.clone(),
+        output_token,
         pid,
         had_child: AtomicBool::new(false),
         needs_input_until: Mutex::new(None),
     });
-    registry.insert(session_id, handle);
+    registry.insert(session_id, Arc::clone(&handle));
 
     let registry_for_thread = Arc::clone(&registry);
+    let handle_for_thread = Arc::clone(&handle);
     std::thread::Builder::new()
         .name(format!("acorn-daemon-stream-{session_id}"))
         .spawn(move || {
@@ -205,6 +235,7 @@ pub fn attach<R: Runtime>(
                 session_id,
                 reader,
                 stop,
+                handle_for_thread,
             );
         })?;
     Ok(())
@@ -217,6 +248,7 @@ fn pump_loop<R: Runtime>(
     session_id: Uuid,
     mut reader: BufReader<Stream>,
     stop: Arc<AtomicBool>,
+    handle: Arc<StreamAttachment>,
 ) {
     let out_event = format!("pty:output:{session_id}");
     let exit_event = format!("pty:exit:{session_id}");
@@ -242,6 +274,16 @@ fn pump_loop<R: Runtime>(
                 let _ = app.emit(&exit_event, ExitPayload { code: None });
                 break;
             }
+        }
+        // A newer renderer generation may have superseded this attachment (via
+        // `StreamRegistry::insert`) while we were parked in `read_line`. The
+        // current attachment's pump is already subscribed to the same broadcast,
+        // so delivering this chunk too would double it. The visible symptom is
+        // the echo of the first keystroke after a fast resident re-attach landing
+        // twice. Bail before delivering; do NOT emit an Exit frame (this is a
+        // supersession, not a PTY exit).
+        if stop.load(Ordering::SeqCst) {
+            break;
         }
         let frame: StreamFrame = match serde_json::from_str(line.trim()) {
             Ok(f) => f,
@@ -275,5 +317,61 @@ fn pump_loop<R: Runtime>(
             | StreamFrame::ClientNote { .. } => {}
         }
     }
-    registry.drop_attachment(&session_id);
+    registry.drop_attachment_if_current(&session_id, &handle);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_attachment() -> Arc<StreamAttachment> {
+        Arc::new(StreamAttachment {
+            stop: Arc::new(AtomicBool::new(false)),
+            output_token: None,
+            pid: None,
+            had_child: AtomicBool::new(false),
+            needs_input_until: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn stale_pump_cleanup_does_not_remove_newer_attachment() {
+        let registry = StreamRegistry::new();
+        let id = Uuid::new_v4();
+        let old = test_attachment();
+        let new = test_attachment();
+
+        registry.insert(id, Arc::clone(&old));
+        registry.insert(id, Arc::clone(&new));
+
+        assert!(old.stop.load(Ordering::SeqCst));
+        assert!(registry.contains(&id));
+
+        registry.drop_attachment_if_current(&id, &old);
+        assert!(registry.contains(&id));
+        assert!(!new.stop.load(Ordering::SeqCst));
+
+        registry.drop_attachment_if_current(&id, &new);
+        assert!(!registry.contains(&id));
+        assert!(new.stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn attachment_token_distinguishes_renderer_generations() {
+        let registry = StreamRegistry::new();
+        let id = Uuid::new_v4();
+        let old = Arc::new(StreamAttachment {
+            stop: Arc::new(AtomicBool::new(false)),
+            output_token: Some(7),
+            pid: None,
+            had_child: AtomicBool::new(false),
+            needs_input_until: Mutex::new(None),
+        });
+
+        registry.insert(id, old);
+
+        assert!(registry.attachment_matches_output_token(&id, Some(7)));
+        assert!(!registry.attachment_matches_output_token(&id, Some(8)));
+        assert!(registry.attachment_matches_output_token(&id, None));
+    }
 }

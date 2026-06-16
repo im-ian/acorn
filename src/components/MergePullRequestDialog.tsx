@@ -471,6 +471,7 @@ export function MergePullRequestDialog({
             ? { name: projectNameFromRepoPath(repoPath), repoPath }
             : null
         }
+        initialTab="pullRequests"
         onClose={() => {
           setProjectSettingsOpen(false);
           void reloadProjectPrompt();

@@ -127,7 +127,7 @@ describe("AgentResumeModal", () => {
     // Allow the clipboard promise to flush before checking the toast.
     await Promise.resolve();
     await Promise.resolve();
-    expect(mocks.toastShow).toHaveBeenCalledWith("Session ID copied");
+    expect(mocks.toastShow).toHaveBeenCalledWith("Session ID copied.");
   });
 
   it("Cancel on a claude candidate writes a single `#`-commented resume command for recall", () => {

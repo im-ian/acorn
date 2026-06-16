@@ -128,9 +128,9 @@ export interface Session {
    * worktree marker). Surfaces the worktree icon regardless of whether Acorn,
    * `claude -w`, or the user originally created the worktree. */
   in_worktree: boolean;
-  /** Most recently associated agent transcript for this Acorn session. */
+  /** Current live agent provider, if a known agent process is under the PTY. */
   agent_provider?: SessionAgentProvider | null;
-  /** Current live agent transcript id, if Acorn has paired this tab to one. */
+  /** Most recently paired agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
 }
 
@@ -242,6 +242,12 @@ export interface Project {
   name: string;
   created_at: string;
   position: number;
+}
+
+export interface ProjectWorktree {
+  name: string;
+  path: string;
+  modified_ms: number | null;
 }
 
 export interface ProjectPullRequestSettings {
