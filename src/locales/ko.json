@@ -101,6 +101,11 @@
         "label": "메모리에 유지할 터미널 수",
         "hint": "백그라운드 터미널 뷰를 몇 개까지 메모리에 유지할지 정합니다. 초과한 daemon 세션은 detach하며, 현재 보이는 터미널은 항상 유지됩니다."
       },
+      "detachOffscreenTerminals": {
+        "label": "상주 터미널 제한 사용",
+        "hint": "상주 제한을 초과한 daemon 기반 백그라운드 터미널 뷰를 detach합니다. 끄면 열어 본 모든 터미널 뷰를 메모리에 유지합니다.",
+        "checkbox": "제한을 초과한 백그라운드 터미널 detach"
+      },
       "openLinksOn": {
         "label": "링크 열기 방식",
         "hint": "xterm이 터미널 출력에서 감지한 URL을 여는 방식입니다.",

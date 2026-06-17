@@ -29,6 +29,9 @@ export function TerminalHost() {
   const maxMountedTerminals = useSettings(
     (s) => s.settings.terminal.maxMountedTerminals,
   );
+  const detachOffscreenTerminals = useSettings(
+    (s) => s.settings.terminal.detachOffscreenTerminals,
+  );
   const visibleSessionIdKey = useAppStore(visibleTerminalSessionIdKey);
   const visibleSessionIds = useMemo(
     () => parseSessionIdKey(visibleSessionIdKey),
@@ -84,6 +87,7 @@ export function TerminalHost() {
   // anything outside it. Runs only while over the cap, so steady state costs
   // nothing.
   useEffect(() => {
+    if (!detachOffscreenTerminals) return;
     const cap = Math.max(maxMountedTerminals, visibleSessionIds.size);
     if (mountedSessionIds.size <= cap) return;
     let cancelled = false;
@@ -123,7 +127,12 @@ export function TerminalHost() {
     return () => {
       cancelled = true;
     };
-  }, [maxMountedTerminals, mountedSessionIds, visibleSessionIds]);
+  }, [
+    detachOffscreenTerminals,
+    maxMountedTerminals,
+    mountedSessionIds,
+    visibleSessionIds,
+  ]);
 
   return (
     <>

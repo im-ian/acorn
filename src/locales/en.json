@@ -101,6 +101,11 @@
         "label": "Resident terminal limit",
         "hint": "How many off-screen terminal views stay mounted in memory before daemon-backed sessions are detached. Visible terminals are always kept."
       },
+      "detachOffscreenTerminals": {
+        "label": "Enable resident terminal limit",
+        "hint": "Detach daemon-backed off-screen terminal views after the resident limit is exceeded. Turn off to keep every opened terminal view mounted.",
+        "checkbox": "Detach off-screen terminals over the limit"
+      },
       "openLinksOn": {
         "label": "Open links on",
         "hint": "How to follow URLs that xterm detects in terminal output.",

@@ -183,6 +183,7 @@ describe("terminal.maxMountedTerminals settings", () => {
     expect(DEFAULT_SETTINGS.terminal.maxMountedTerminals).toBe(
       MOUNTED_TERMINAL_LIMIT_DEFAULT,
     );
+    expect(DEFAULT_SETTINGS.terminal.detachOffscreenTerminals).toBe(true);
   });
 
   it("loads a persisted resident terminal limit and clamps it", async () => {
@@ -196,6 +197,20 @@ describe("terminal.maxMountedTerminals settings", () => {
 
     expect(useSettings.getState().settings.terminal.maxMountedTerminals).toBe(
       MOUNTED_TERMINAL_LIMIT_MAX,
+    );
+  });
+
+  it("loads a persisted resident terminal eviction toggle", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { detachOffscreenTerminals: false } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.detachOffscreenTerminals).toBe(
+      false,
     );
   });
 
@@ -213,6 +228,21 @@ describe("terminal.maxMountedTerminals settings", () => {
     useSettings.getState().patchTerminal({ maxMountedTerminals: 9.6 });
     expect(useSettings.getState().settings.terminal.maxMountedTerminals).toBe(
       10,
+    );
+  });
+
+  it("patches the resident terminal eviction toggle", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchTerminal({ detachOffscreenTerminals: false });
+    expect(useSettings.getState().settings.terminal.detachOffscreenTerminals).toBe(
+      false,
+    );
+
+    useSettings.getState().patchTerminal({ detachOffscreenTerminals: true });
+    expect(useSettings.getState().settings.terminal.detachOffscreenTerminals).toBe(
+      true,
     );
   });
 });
