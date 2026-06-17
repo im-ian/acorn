@@ -86,6 +86,66 @@ test.describe("right panel: tab switching", () => {
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
 
+  test("double-clicking an issue opens its in-app detail modal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_issues", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 42,
+          title: "Render issue detail in app",
+          state: "OPEN",
+          author: "im-ian",
+          url: "https://github.com/im-ian/acorn/issues/42",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          state_reason: null,
+          comments: 1,
+          labels: [{ name: "enhancement", color: "a2eeef" }],
+        },
+      ],
+    });
+    await tauri.respond("get_issue_detail", {
+      kind: "ok",
+      account: "test-account",
+      detail: {
+        number: 42,
+        title: "Render issue detail in app",
+        body: "Loaded issue body from gh.",
+        state: "OPEN",
+        author: "im-ian",
+        url: "https://github.com/im-ian/acorn/issues/42",
+        created_at: "2026-05-18T00:00:00Z",
+        updated_at: "2026-05-19T00:00:00Z",
+        state_reason: null,
+        labels: [{ name: "enhancement", color: "a2eeef" }],
+        comments: [
+          {
+            author: "im-ian",
+            author_avatar_url: null,
+            body: "First in-app issue comment.",
+            created_at: "2026-05-19T01:00:00Z",
+            url: "https://github.com/im-ian/acorn/issues/42#issuecomment-1",
+          },
+        ],
+        assignees: ["im-ian"],
+        milestone: "v1",
+      },
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "Issues" }).click();
+    await page.getByText("Render issue detail in app").dblclick();
+
+    await expect(page.getByText("Loaded issue body from gh.")).toBeVisible();
+    await expect(page.getByText("First in-app issue comment.")).toBeVisible();
+  });
+
   test("hotkey $mod+Shift+S routes to Staged tab", async ({ page, tauri }) => {
     await seedActiveSession(tauri);
 

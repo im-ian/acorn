@@ -3,6 +3,8 @@ import type {
   AgentHistoryItem,
   CommitInfo,
   DiffPayload,
+  IssueListing,
+  IssueStateFilter,
   PrStateFilter,
   PullRequestListing,
   StagedFile,
@@ -36,6 +38,8 @@ class RightPanelCacheManager {
   private fileExplorerExpanded = new Map<string, Set<string>>();
   private prListCache = new Map<string, PullRequestListing>();
   private prListInFlight = new Map<string, Promise<PullRequestListing>>();
+  private issueListCache = new Map<string, IssueListing>();
+  private issueListInFlight = new Map<string, Promise<IssueListing>>();
   private workflowRunsCache = new Map<string, WorkflowRunsListing>();
   private workflowRunsInFlight = new Map<string, Promise<WorkflowRunsListing>>();
 
@@ -61,6 +65,8 @@ class RightPanelCacheManager {
     this.collectRemovedStringValues(this.prefetchedProjectRepos, next, removed);
     this.collectRemovedJsonKeys(this.prListCache, next, removed);
     this.collectRemovedJsonKeys(this.prListInFlight, next, removed);
+    this.collectRemovedJsonKeys(this.issueListCache, next, removed);
+    this.collectRemovedJsonKeys(this.issueListInFlight, next, removed);
     this.collectRemovedJsonKeys(this.workflowRunsCache, next, removed);
     this.collectRemovedJsonKeys(this.workflowRunsInFlight, next, removed);
     for (const repoPath of removed) this.bumpRepoVersion(repoPath);
@@ -74,6 +80,8 @@ class RightPanelCacheManager {
     this.pruneStringKeyedSet(this.prefetchedProjectRepos, next);
     this.pruneJsonKeyedMap(this.prListCache, next);
     this.pruneJsonKeyedMap(this.prListInFlight, next);
+    this.pruneJsonKeyedMap(this.issueListCache, next);
+    this.pruneJsonKeyedMap(this.issueListInFlight, next);
     this.pruneJsonKeyedMap(this.workflowRunsCache, next);
     this.pruneJsonKeyedMap(this.workflowRunsInFlight, next);
   }
@@ -202,6 +210,41 @@ class RightPanelCacheManager {
     return promise;
   }
 
+  getIssues(
+    repoPath: string,
+    filter: IssueStateFilter,
+    limit: number,
+  ): IssueListing | null {
+    return this.issueListCache.get(this.issueListKey(repoPath, filter, limit)) ?? null;
+  }
+
+  fetchIssues(
+    repoPath: string,
+    filter: IssueStateFilter,
+    limit: number,
+    options: FetchOptions = {},
+  ): Promise<IssueListing> {
+    const key = this.issueListKey(repoPath, filter, limit);
+    const cached = this.issueListCache.get(key);
+    if (cached && !options.force) return Promise.resolve(cached);
+    const existing = this.issueListInFlight.get(key);
+    if (existing) return existing;
+    const version = this.repoVersion(repoPath);
+    const promise = api
+      .listIssues(repoPath, filter, limit)
+      .then((result) => {
+        if (this.isCurrentRepoVersion(repoPath, version)) {
+          this.issueListCache.set(key, result);
+        }
+        return result;
+      })
+      .finally(() => {
+        this.issueListInFlight.delete(key);
+      });
+    this.issueListInFlight.set(key, promise);
+    return promise;
+  }
+
   getWorkflowRuns(repoPath: string, limit: number): WorkflowRunsListing | null {
     return this.workflowRunsCache.get(this.workflowRunsKey(repoPath, limit)) ?? null;
   }
@@ -245,6 +288,8 @@ class RightPanelCacheManager {
     this.fileExplorerExpanded.clear();
     this.prListCache.clear();
     this.prListInFlight.clear();
+    this.issueListCache.clear();
+    this.issueListInFlight.clear();
     this.workflowRunsCache.clear();
     this.workflowRunsInFlight.clear();
   }
@@ -268,6 +313,14 @@ class RightPanelCacheManager {
   private prListKey(
     repoPath: string,
     filter: PrStateFilter,
+    limit: number,
+  ): string {
+    return JSON.stringify([repoPath, filter, limit]);
+  }
+
+  private issueListKey(
+    repoPath: string,
+    filter: IssueStateFilter,
     limit: number,
   ): string {
     return JSON.stringify([repoPath, filter, limit]);

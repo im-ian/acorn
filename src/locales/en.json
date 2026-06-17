@@ -181,20 +181,20 @@
     "github": {
       "refreshInterval": {
         "label": "Refresh interval",
-        "hint": "How often the PRs and Actions tabs auto-refetch from gh. Lower values feel snappier but spend more API budget."
+        "hint": "How often the PRs, Issues, and Actions tabs auto-refetch from gh. Lower values feel snappier but spend more API budget."
       },
       "manualRefresh": "Manual refresh (the icon in each tab) always works regardless of this interval.",
       "listDensity": {
         "label": "List density",
-        "hint": "Choose which optional details appear in each PR row."
+        "hint": "Choose which optional details appear in each PR or issue row."
       },
       "showAuthorAvatars": {
         "label": "Show author avatars",
-        "description": "Render the GitHub avatar next to each PR row."
+        "description": "Render the GitHub avatar next to each PR or issue row."
       },
       "showLabels": {
         "label": "Show labels",
-        "description": "Render GitHub labels next to each PR row title."
+        "description": "Render GitHub labels next to each PR or issue row title."
       },
       "showBranches": {
         "label": "Show branches",
@@ -334,7 +334,7 @@
         },
         "githubAccount": {
           "label": "GitHub account",
-          "description": "The `gh` account used to list pull requests for the active repo."
+          "description": "The `gh` account used to list GitHub data for the active repo."
         },
         "workingDirectory": {
           "label": "Working directory",
@@ -976,6 +976,7 @@
       "commits": "Commits",
       "staged": "Staged",
       "prs": "PRs",
+      "issues": "Issues",
       "activity": "Activity",
       "history": "History",
       "actions": "Actions"
@@ -1067,6 +1068,7 @@
       "openDetail": "Open detail",
       "openInBrowser": "Open in browser",
       "copyPrNumber": "Copy PR number",
+      "copyIssueNumber": "Copy issue number",
       "copyUrl": "Copy URL",
       "copyBranchWithValue": "Copy branch ({branch})",
       "merge": "Merge…",
@@ -1079,9 +1081,18 @@
       "all": "All",
       "draft": "DRAFT"
     },
+    "issueStates": {
+      "open": "Open",
+      "closed": "Closed",
+      "all": "All"
+    },
     "prs": {
       "emptyByState": "No {state} pull requests.",
       "reachedMax": "Showing first {count}. Use search to find older PRs."
+    },
+    "issues": {
+      "emptyByState": "No {state} issues.",
+      "reachedMax": "Showing first {count}. Use search to find older issues."
     },
     "search": {
       "aria": "Search pull requests",
@@ -1091,6 +1102,15 @@
       "noGhAccessThisRepo": "No logged-in gh account can access this repo.",
       "noMatches": "No matching pull requests.",
       "reachedMax": "Showing first {count}. Refine the query for older PRs."
+    },
+    "issueSearch": {
+      "aria": "Search issues",
+      "placeholder": "Search title, author, label…",
+      "searching": "Searching…",
+      "typeToSearch": "Type to search issues.",
+      "noGhAccessThisRepo": "No logged-in gh account can access this repo.",
+      "noMatches": "No matching issues.",
+      "reachedMax": "Showing first {count}. Refine the query for older issues."
     },
     "actions": {
       "filterByWorkflow": "Filter by workflow",
@@ -1508,6 +1528,24 @@
       "checkNeutral": "neutral",
       "checkSkipped": "skipped",
       "checkCompleted": "completed"
+    },
+    "issueDetail": {
+      "notGithub": "Origin remote is not a GitHub repository.",
+      "noAccessPrefix": "No logged-in",
+      "noAccessSuffix": "account can access",
+      "openOnGithub": "Open on GitHub",
+      "openCommentOnGithub": "Open comment on GitHub",
+      "created": "Created",
+      "updated": "Updated",
+      "comments": "Comments",
+      "noComments": "No comments yet.",
+      "noBody": "No issue description.",
+      "empty": "(empty)",
+      "stateOpen": "Open",
+      "stateCompleted": "Completed",
+      "stateNotPlanned": "Not planned",
+      "assignees": "Assignees:",
+      "milestone": "Milestone:"
     }
   },
   "commandPalette": {

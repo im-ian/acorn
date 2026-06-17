@@ -15,8 +15,9 @@ use crate::git_ops::{self, CommitInfo, DiffPayload, StagedFile};
 use crate::persistence;
 use crate::project_settings::{self, ProjectSettings, ProjectSettingsRecord};
 use crate::pull_requests::{
-    self, GeneratedCommitMessage, MergeMethod, PrStateFilter, PullRequestDetailListing,
-    PullRequestDiffListing, PullRequestListing, WorkflowRunDetailListing, WorkflowRunsListing,
+    self, GeneratedCommitMessage, IssueDetailListing, IssueListing, IssueStateFilter, MergeMethod,
+    PrStateFilter, PullRequestDetailListing, PullRequestDiffListing, PullRequestListing,
+    WorkflowRunDetailListing, WorkflowRunsListing,
 };
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
@@ -4722,6 +4723,32 @@ pub async fn list_pull_requests(
             limit.unwrap_or(50),
             query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
         )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_issues(
+    repo_path: String,
+    state: Option<IssueStateFilter>,
+    limit: Option<u32>,
+    query: Option<String>,
+) -> AppResult<IssueListing> {
+    run_blocking("list_issues", move || {
+        pull_requests::list_issues(
+            &PathBuf::from(repo_path),
+            state.unwrap_or(IssueStateFilter::Open),
+            limit.unwrap_or(50),
+            query.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_issue_detail(repo_path: String, number: u64) -> AppResult<IssueDetailListing> {
+    run_blocking("get_issue_detail", move || {
+        pull_requests::get_issue_detail(&PathBuf::from(repo_path), number)
     })
     .await
 }

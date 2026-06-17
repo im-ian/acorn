@@ -110,7 +110,9 @@ The mock returns safe values for the boot path so empty UIs render without crash
 | `detect_session_statuses`                  | `[]`                                             |
 | `read_session_todos`                       | `[]`                                             |
 | `list_commits`, `list_staged`              | `[]`                                             |
-| `list_pull_requests`                       | `{ items: [], account: null, error: null }`      |
+| `list_pull_requests`                       | `{ kind: "ok", items: [], account: "test" }`     |
+| `list_issues`                              | `{ kind: "ok", items: [], account: "test" }`     |
+| `get_issue_detail`                         | `{ kind: "not_github" }`                         |
 | `staged_diff`, `commit_diff`               | `{ files: [] }`                                  |
 | `scrollback_load`                          | `null`                                           |
 | `scrollback_orphan_size` / `_clear`        | `0`                                              |
@@ -151,7 +153,11 @@ If you only need a constant return value (no per-call logic), use `respond` inst
 import { makeProject } from "./fixtures/factories";
 
 await tauri.respond("list_projects", [makeProject({ name: "demo" })]);
-await tauri.respond("list_pull_requests", { items: [], account: null, error: null });
+await tauri.respond("list_pull_requests", {
+  kind: "ok",
+  items: [],
+  account: "test",
+});
 ```
 
 Use `handle` when the response depends on the call args, when it needs to mutate state on `window`, or when later actions in the same test should change what the next call returns.

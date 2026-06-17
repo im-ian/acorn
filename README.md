@@ -87,7 +87,7 @@ Acorn은 여러 AI 코딩 에이전트(Claude Code / Codex / Antigravity / Ollam
 세 그룹으로 묶인 탭:
 
 - **Code** — Files / Staged / Commits. 파일 트리·검색·Git 상태, 스테이징 변경, 커밋 + Diff 모달
-- **GitHub** — PRs / Actions. PR 리스트(라벨/체크/CI 시간), 상세 모달(Conversation·Commits·Checks·Files), 본문 task 토글, 머지 메시지 AI 자동 생성. GitHub Actions 실행 + workflow 필터
+- **GitHub** — PRs / Issues / Actions. PR 리스트(라벨/체크/CI 시간), Issues 목록/검색/상세 모달, PR 상세 모달(Conversation·Commits·Checks·Files), 본문 task 토글, 머지 메시지 AI 자동 생성. GitHub Actions 실행 + workflow 필터
 - **Agents** — Activity / History / Todos. 세션별 알림, transcript 히스토리, Claude Code todo (`TodoWrite` 이벤트)
 
 ### 🔍 Code / Diff 뷰어

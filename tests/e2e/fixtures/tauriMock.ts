@@ -184,7 +184,13 @@ export const tauriMockSource = `
     if (cmd === 'list_staged') return Promise.resolve([]);
     if (cmd === 'list_unscoped_agent_history') return Promise.resolve([]);
     if (cmd === 'list_pull_requests') {
-      return Promise.resolve({ items: [], account: null, error: null });
+      return Promise.resolve({ kind: 'ok', items: [], account: 'test' });
+    }
+    if (cmd === 'list_issues') {
+      return Promise.resolve({ kind: 'ok', items: [], account: 'test' });
+    }
+    if (cmd === 'get_issue_detail') {
+      return Promise.resolve({ kind: 'not_github' });
     }
     if (cmd === 'get_pull_request_diff') {
       return Promise.resolve({ kind: 'ok', account: 'test', diff: { files: [] } });

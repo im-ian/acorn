@@ -15,6 +15,7 @@ import {
   Code2,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   CircleX,
   Copy,
   ExternalLink,
@@ -30,6 +31,7 @@ import {
   Loader2,
   ListTodo,
   Maximize2,
+  MessageSquare,
   MinusCircle,
   Play,
   Search,
@@ -68,6 +70,9 @@ import type {
   AgentHistoryProvider,
   CommitInfo,
   DiffPayload,
+  IssueInfo,
+  IssueListing,
+  IssueStateFilter,
   PrStateFilter,
   PullRequestChecksSummary,
   PullRequestDetail,
@@ -93,6 +98,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { FileExplorer } from "./FileExplorer";
+import { IssueDetailModal } from "./IssueDetailModal";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
@@ -132,7 +138,12 @@ interface ExpandedDiff {
 
 const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
-const BACKGROUND_LOADED_TABS = new Set<RightTab>(["prs", "actions", "history"]);
+const BACKGROUND_LOADED_TABS = new Set<RightTab>([
+  "prs",
+  "issues",
+  "actions",
+  "history",
+]);
 const PROJECT_PREFETCH_START_DELAY_MS = 1_000;
 const PROJECT_PREFETCH_GAP_MS = 250;
 
@@ -180,6 +191,10 @@ async function prefetchProjectPanelData(repoPath: string): Promise<void> {
   await rightPanelCache.fetchPullRequests(repoPath, "open", PR_PAGE_SIZE);
   for (const filter of PR_BACKGROUND_PREFETCH_STATES) {
     await rightPanelCache.fetchPullRequests(repoPath, filter, PR_PAGE_SIZE);
+  }
+  await rightPanelCache.fetchIssues(repoPath, "open", ISSUE_PAGE_SIZE);
+  for (const filter of ISSUE_BACKGROUND_PREFETCH_STATES) {
+    await rightPanelCache.fetchIssues(repoPath, filter, ISSUE_PAGE_SIZE);
   }
   await rightPanelCache.fetchWorkflowRuns(repoPath, WORKFLOW_RUNS_LIMIT);
 }
@@ -508,6 +523,12 @@ export function RightPanel() {
                 refreshKey={prListVersion}
               />
             </BackgroundLoadedTab>
+            <BackgroundLoadedTab active={rightTab === "issues"}>
+              <IssuesTab
+                key={`issues:${projectPanelRepoPath}`}
+                repoPath={projectPanelRepoPath}
+              />
+            </BackgroundLoadedTab>
             <BackgroundLoadedTab active={rightTab === "actions"}>
               <ActionsTab
                 key={`actions:${projectPanelRepoPath}`}
@@ -681,6 +702,8 @@ function tabIcon(tab: RightTab): ReactNode {
       return <GitCommit size={12} />;
     case "prs":
       return <GitPullRequest size={12} />;
+    case "issues":
+      return <CircleDot size={12} />;
     case "actions":
       return <Activity size={12} />;
     case "activity":
@@ -3179,6 +3202,385 @@ function PullRequestsTab({
   );
 }
 
+const ISSUE_STATE_OPTIONS: { value: IssueStateFilter }[] = [
+  { value: "open" },
+  { value: "closed" },
+  { value: "all" },
+];
+const ISSUE_BACKGROUND_PREFETCH_STATES: ReadonlyArray<IssueStateFilter> = [
+  "closed",
+  "all",
+];
+
+function issueStateLabelKey(value: IssueStateFilter): RightPanelTranslationKey {
+  return `rightPanel.issueStates.${value}`;
+}
+
+const ISSUE_PAGE_SIZE = 50;
+const ISSUE_PAGE_MAX = 1000;
+
+interface IssueListState {
+  listing: IssueListing | null;
+  error: string | null;
+  limit: number;
+}
+
+function cachedIssueListing(
+  repoPath: string,
+  filter: IssueStateFilter,
+  limit = ISSUE_PAGE_SIZE,
+): IssueListing | null {
+  return rightPanelCache.getIssues(repoPath, filter, limit);
+}
+
+function fetchIssuesCached(
+  repoPath: string,
+  filter: IssueStateFilter,
+  limit: number,
+  options: { force?: boolean } = {},
+): Promise<IssueListing> {
+  return rightPanelCache.fetchIssues(repoPath, filter, limit, options);
+}
+
+function emptyIssueListState(): IssueListState {
+  return { listing: null, error: null, limit: ISSUE_PAGE_SIZE };
+}
+
+function initialIssueListStates(
+  repoPath?: string,
+): Record<IssueStateFilter, IssueListState> {
+  return {
+    open: issueListStateFromCache(repoPath, "open"),
+    closed: issueListStateFromCache(repoPath, "closed"),
+    all: issueListStateFromCache(repoPath, "all"),
+  };
+}
+
+function issueListStateFromCache(
+  repoPath: string | undefined,
+  filter: IssueStateFilter,
+): IssueListState {
+  if (!repoPath) return emptyIssueListState();
+  return {
+    listing: cachedIssueListing(repoPath, filter),
+    error: null,
+    limit: ISSUE_PAGE_SIZE,
+  };
+}
+
+function useIssueRowActions(onOpenDetail: (number: number) => void) {
+  const t = useTranslation();
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    issue: IssueInfo;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openIssueInBrowser(issue: IssueInfo) {
+    try {
+      await openUrl(issue.url);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function openContextMenu(
+    e: React.MouseEvent<HTMLLIElement>,
+    issue: IssueInfo,
+  ) {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, issue });
+  }
+
+  const overlays = (
+    <ContextMenu
+      open={menu !== null}
+      x={menu?.x ?? 0}
+      y={menu?.y ?? 0}
+      items={
+        menu
+          ? ([
+              {
+                label: rt(t, "rightPanel.menu.openDetail"),
+                icon: <Maximize2 size={12} />,
+                onClick: () => onOpenDetail(menu.issue.number),
+              },
+              {
+                label: rt(t, "rightPanel.menu.openInBrowser"),
+                icon: <ExternalLink size={12} />,
+                onClick: () => void openIssueInBrowser(menu.issue),
+              },
+              { type: "separator" },
+              {
+                label: rt(t, "rightPanel.menu.copyIssueNumber"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyText(`#${menu.issue.number}`),
+              },
+              {
+                label: rt(t, "rightPanel.menu.copyUrl"),
+                icon: <Copy size={12} />,
+                onClick: () => void copyText(menu.issue.url),
+              },
+            ] satisfies ContextMenuItem[])
+          : []
+      }
+      onClose={() => setMenu(null)}
+    />
+  );
+
+  return { openContextMenu, overlays, error };
+}
+
+function IssuesTab({ repoPath }: { repoPath: string }) {
+  const t = useTranslation();
+  const refreshIntervalMs = useSettings(
+    (s) => s.settings.github.refreshIntervalMs,
+  );
+  const showAvatars = useSettings((s) => s.settings.github.showAvatars);
+  const showLabels = useSettings((s) => s.settings.github.showLabels);
+  const [stateFilter, setStateFilter] = useState<IssueStateFilter>("open");
+  const [listsByState, setListsByState] = useState(() =>
+    initialIssueListStates(repoPath),
+  );
+  const [loadingKeys, setLoadingKeys] = useState<string[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [issueDetail, setIssueDetail] = useState<{
+    repoPath: string;
+    number: number;
+  } | null>(null);
+  const activeList = listsByState[stateFilter] ?? emptyIssueListState();
+  const listing = activeList.listing;
+  const error = activeList.error;
+  const limit = activeList.limit;
+  const loading = loadingKeys.some((key) =>
+    key.startsWith(`${repoPath}:${stateFilter}:`),
+  );
+
+  const fetchIssues = useCallback(
+    async (
+      filter: IssueStateFilter,
+      requestedLimit: number,
+      signal?: { cancelled: boolean },
+    ) => {
+      const key = `${repoPath}:${filter}:${requestedLimit}`;
+      setLoadingKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      try {
+        const result = await fetchIssuesCached(
+          repoPath,
+          filter,
+          requestedLimit,
+          { force: true },
+        );
+        if (signal?.cancelled) return;
+        setListsByState((prev) => ({
+          ...prev,
+          [filter]: {
+            listing: result,
+            error: null,
+            limit: requestedLimit,
+          },
+        }));
+      } catch (e) {
+        if (signal?.cancelled) return;
+        setListsByState((prev) => ({
+          ...prev,
+          [filter]: {
+            ...(prev[filter] ?? emptyIssueListState()),
+            error: String(e),
+            limit: requestedLimit,
+          },
+        }));
+      } finally {
+        setLoadingKeys((prev) => prev.filter((candidate) => candidate !== key));
+      }
+    },
+    [repoPath],
+  );
+  const fetchActiveIssues = useCallback(
+    (signal?: { cancelled: boolean }) =>
+      fetchIssues(stateFilter, limit, signal),
+    [fetchIssues, stateFilter, limit],
+  );
+
+  useEffect(() => {
+    setLoadingKeys([]);
+    setListsByState(initialIssueListStates(repoPath));
+  }, [repoPath]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void fetchActiveIssues(signal);
+    const handle = setInterval(() => {
+      void fetchActiveIssues(signal);
+    }, refreshIntervalMs);
+    return () => {
+      signal.cancelled = true;
+      clearInterval(handle);
+    };
+  }, [fetchActiveIssues, refreshIntervalMs]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        for (const filter of ISSUE_BACKGROUND_PREFETCH_STATES) {
+          if (signal.cancelled) return;
+          await fetchIssues(filter, ISSUE_PAGE_SIZE, signal);
+        }
+      })();
+    }, PR_BACKGROUND_PREFETCH_DELAY_MS);
+    return () => {
+      signal.cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [repoPath, fetchIssues]);
+
+  const openIssueDetail = useCallback(
+    (number: number) => setIssueDetail({ repoPath, number }),
+    [repoPath],
+  );
+  const rowActions = useIssueRowActions(openIssueDetail);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (loading) return;
+    if (!listing || listing.kind !== "ok") return;
+    if (listing.items.length < limit) return;
+    if (limit >= ISSUE_PAGE_MAX) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+      setListsByState((prev) => {
+        const current = prev[stateFilter] ?? emptyIssueListState();
+        const nextLimit = Math.min(
+          current.limit + ISSUE_PAGE_SIZE,
+          ISSUE_PAGE_MAX,
+        );
+        if (nextLimit === current.limit) return prev;
+        return {
+          ...prev,
+          [stateFilter]: { ...current, limit: nextLimit },
+        };
+      });
+    }
+  }
+
+  const reachedMax =
+    listing?.kind === "ok" &&
+    listing.items.length >= limit &&
+    limit >= ISSUE_PAGE_MAX;
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+        {ISSUE_STATE_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => setStateFilter(opt.value)}
+            className={cn(
+              "rounded px-2 py-0.5 text-[11px] transition",
+              stateFilter === opt.value
+                ? "bg-bg-elevated text-fg"
+                : "text-fg-muted hover:text-fg",
+            )}
+          >
+            {rt(t, issueStateLabelKey(opt.value))}
+          </button>
+        ))}
+        <Tooltip
+          label={rt(t, "rightPanel.issueSearch.aria")}
+          side="bottom"
+          className="ml-auto"
+        >
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            aria-label={rt(t, "rightPanel.issueSearch.aria")}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <Search size={12} />
+          </button>
+        </Tooltip>
+        <RefreshButton
+          onClick={() => void fetchActiveIssues()}
+          loading={loading}
+          size={12}
+        />
+      </div>
+      <div
+        className="acorn-no-scrollbar flex-1 overflow-x-hidden overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        {error || rowActions.error ? (
+          <div className="p-3 text-xs text-danger">
+            {error ?? rowActions.error}
+          </div>
+        ) : !listing ? (
+          <PrSkeletonList count={10} />
+        ) : listing.kind === "not_github" ? (
+          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
+        ) : listing.kind === "no_access" ? (
+          <NoAccessBanner
+            slug={listing.slug}
+            accounts={listing.accounts}
+            repoPath={repoPath}
+          />
+        ) : listing.items.length === 0 ? (
+          <Empty
+            msg={rtf(t, "rightPanel.issues.emptyByState", {
+              state: rt(t, issueStateLabelKey(stateFilter)).toLowerCase(),
+            })}
+          />
+        ) : (
+          <ul className="text-xs">
+            {listing.items.map((issue) => (
+              <IssueRow
+                key={issue.number}
+                issue={issue}
+                showAvatar={showAvatars}
+                showLabels={showLabels}
+                onOpen={() => openIssueDetail(issue.number)}
+                onContextMenu={(e) => rowActions.openContextMenu(e, issue)}
+              />
+            ))}
+            {loading && listing.items.length >= limit ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                {rt(t, "rightPanel.loading.more")}
+              </li>
+            ) : null}
+            {reachedMax ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                {rtf(t, "rightPanel.issues.reachedMax", {
+                  count: ISSUE_PAGE_MAX,
+                })}
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </div>
+      {rowActions.overlays}
+      <IssueSearchModal
+        open={searchOpen ? { repoPath } : null}
+        detailOpen={issueDetail !== null}
+        onClose={() => setSearchOpen(false)}
+        onOpenDetail={openIssueDetail}
+      />
+      <IssueDetailModal
+        open={issueDetail}
+        onClose={() => setIssueDetail(null)}
+      />
+    </div>
+  );
+}
+
 const WORKFLOW_RUNS_LIMIT = 50;
 const ALL_WORKFLOWS = "__all__";
 
@@ -3936,7 +4338,7 @@ function NoAccessBanner({
   );
 }
 
-function PrLabelChip({ label }: { label: PullRequestLabel }) {
+function GitHubLabelChip({ label }: { label: PullRequestLabel }) {
   return (
     <Tooltip label={label.name} side="top">
       <span
@@ -3949,6 +4351,116 @@ function PrLabelChip({ label }: { label: PullRequestLabel }) {
         {label.name}
       </span>
     </Tooltip>
+  );
+}
+
+type GitHubRowSurface = "panel" | "dialog";
+
+function GitHubListRow({
+  number,
+  title,
+  author,
+  updatedAt,
+  labels,
+  numberClassName,
+  meta,
+  onOpen,
+  onContextMenu,
+  surface = "panel",
+  showAvatar = false,
+  showLabels = true,
+}: {
+  number: number;
+  title: string;
+  author: string;
+  updatedAt: string;
+  labels: PullRequestLabel[];
+  numberClassName: string;
+  meta?: ReactNode;
+  onOpen: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLLIElement>) => void;
+  surface?: GitHubRowSurface;
+  showAvatar?: boolean;
+  showLabels?: boolean;
+}) {
+  const t = useTranslation();
+  const hoverBg =
+    surface === "dialog"
+      ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
+      : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
+  const titleSize = showAvatar ? "text-[13px]" : "text-xs";
+  const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
+
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      onDoubleClick={onOpen}
+      onContextMenu={onContextMenu}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className={cn(
+        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
+        hoverBg,
+      )}
+    >
+      <span className={cn("flex w-full min-w-0 items-center gap-2", titleSize)}>
+        <span className={cn("shrink-0 font-mono", numberClassName)}>
+          #{number}
+        </span>
+        <Tooltip
+          label={title}
+          side="top"
+          multiline
+          className="flex! min-w-0 flex-1"
+        >
+          <span className="min-w-0 flex-1 truncate text-fg">{title}</span>
+        </Tooltip>
+        {showLabels && labels.length > 0 ? (
+          <span className="flex shrink-0 items-center gap-1">
+            {labels.slice(0, 3).map((label) => (
+              <GitHubLabelChip key={label.name} label={label} />
+            ))}
+            {labels.length > 3 ? (
+              <span className="text-[9px] text-fg-muted">
+                +{labels.length - 3}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </span>
+      <span
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2 text-fg-muted",
+          metaSize,
+        )}
+      >
+        <span className="flex min-w-0 shrink-0 items-center gap-1.5">
+          {showAvatar ? <AuthorAvatar login={author} size={14} /> : null}
+          <span className="truncate">{author}</span>
+        </span>
+        {meta ? (
+          <>
+            <span className="shrink-0 opacity-50">·</span>
+            {meta}
+          </>
+        ) : null}
+        <span className="shrink-0 opacity-50">·</span>
+        <Tooltip
+          label={absoluteTime(toUnixSeconds(updatedAt))}
+          side="top"
+          className="shrink-0"
+        >
+          <span className="whitespace-nowrap font-mono">
+            {relativeTime(toUnixSeconds(updatedAt), t)}
+          </span>
+        </Tooltip>
+      </span>
+    </li>
   );
 }
 
@@ -4009,6 +4521,47 @@ function PrChecksBadge({
   );
 }
 
+function IssueRow({
+  issue,
+  onOpen,
+  onContextMenu,
+  surface = "panel",
+  showAvatar = false,
+  showLabels = true,
+}: {
+  issue: IssueInfo;
+  onOpen: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLLIElement>) => void;
+  surface?: GitHubRowSurface;
+  showAvatar?: boolean;
+  showLabels?: boolean;
+}) {
+  const upper = issue.state.toUpperCase();
+  const numberColor = upper === "OPEN" ? "text-emerald-400" : "text-purple-400";
+  return (
+    <GitHubListRow
+      number={issue.number}
+      title={issue.title}
+      author={issue.author}
+      updatedAt={issue.updated_at}
+      labels={issue.labels}
+      numberClassName={numberColor}
+      surface={surface}
+      showAvatar={showAvatar}
+      showLabels={showLabels}
+      onOpen={onOpen}
+      onContextMenu={onContextMenu}
+      meta={
+        issue.comments > 0 ? (
+          <span className="flex shrink-0 items-center gap-1 font-mono tabular-nums">
+            <MessageSquare size={10} />
+            {issue.comments}
+          </span>
+        ) : undefined
+      }
+    />
+  );
+}
 
 function toUnixSeconds(iso: string): number {
   const ms = Date.parse(iso);
@@ -4039,7 +4592,7 @@ function PrRow({
    * (`bg-bg`), `dialog` is the modal surface (`bg-bg-elevated`) — each
    * needs a different hover color to actually feel interactive.
    */
-  surface?: "panel" | "dialog";
+  surface?: GitHubRowSurface;
   /**
    * Render the author's GitHub avatar to the left of the row. Bumps the
    * row's vertical footprint slightly in exchange for at-a-glance author
@@ -4053,15 +4606,6 @@ function PrRow({
   /** Render CI/check status in the metadata row. */
   showChecks?: boolean;
 }) {
-  const t = useTranslation();
-  const hoverBg =
-    surface === "dialog"
-      ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
-      : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
-  // Avatar rows get a touch more leading + larger text so the avatar
-  // doesn't dominate visually. Plain rows stay compact at the prior size.
-  const titleSize = showAvatar ? "text-[13px]" : "text-xs";
-  const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
   const upper = pr.state.toUpperCase();
   const isDraft = pr.is_draft && upper === "OPEN";
   const numberColor = isDraft
@@ -4071,93 +4615,42 @@ function PrRow({
       : upper === "MERGED"
         ? "text-purple-400"
         : "text-rose-400";
-  return (
-    <li
-      role="button"
-      tabIndex={0}
-      onDoubleClick={onOpen}
-      onContextMenu={onContextMenu}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={cn(
-        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
-        hoverBg,
-      )}
-    >
-      <span
-        className={cn(
-          "flex w-full min-w-0 items-center gap-2",
-          titleSize,
-        )}
-      >
-        <span className={cn("shrink-0 font-mono", numberColor)}>#{pr.number}</span>
-        <Tooltip
-          label={pr.title}
-          side="top"
-          multiline
-          className="flex! min-w-0 flex-1"
-        >
-          <span className="min-w-0 flex-1 truncate text-fg">{pr.title}</span>
-        </Tooltip>
-        {showLabels && pr.labels.length > 0 ? (
-          <span className="flex shrink-0 items-center gap-1">
-            {pr.labels.slice(0, 3).map((label) => (
-              <PrLabelChip key={label.name} label={label} />
-            ))}
-            {pr.labels.length > 3 ? (
-              <span className="text-[9px] text-fg-muted">+{pr.labels.length - 3}</span>
-            ) : null}
-          </span>
-        ) : null}
-      </span>
-      <span
-        className={cn(
-          "flex w-full min-w-0 items-center gap-2 text-fg-muted",
-          metaSize,
-        )}
-      >
-        <span className="flex min-w-0 shrink-0 items-center gap-1.5">
-          {showAvatar ? <AuthorAvatar login={pr.author} size={14} /> : null}
-          <span className="truncate">{pr.author}</span>
-        </span>
-        {showBranches || showChecks ? (
-          <>
-            <span className="opacity-50">·</span>
-            <span className="flex min-w-0 items-center gap-1">
-              {showBranches ? (
-                <Tooltip
-                  label={`${pr.head_branch} → ${pr.base_branch}`}
-                  side="top"
-                  multiline
-                  className="min-w-0"
-                >
-                  <span className="flex min-w-0 items-center gap-1 font-mono">
-                    <span className="truncate">{pr.head_branch}</span>
-                    <span className="shrink-0">→</span>
-                    <span className="truncate">{pr.base_branch}</span>
-                  </span>
-                </Tooltip>
-              ) : null}
-              {showChecks ? <PrChecksBadge checks={pr.checks} /> : null}
+  const meta =
+    showBranches || showChecks ? (
+      <span className="flex min-w-0 items-center gap-1">
+        {showBranches ? (
+          <Tooltip
+            label={`${pr.head_branch} → ${pr.base_branch}`}
+            side="top"
+            multiline
+            className="min-w-0"
+          >
+            <span className="flex min-w-0 items-center gap-1 font-mono">
+              <span className="truncate">{pr.head_branch}</span>
+              <span className="shrink-0">→</span>
+              <span className="truncate">{pr.base_branch}</span>
             </span>
-          </>
+          </Tooltip>
         ) : null}
-        <span className="shrink-0 opacity-50">·</span>
-        <Tooltip
-          label={absoluteTime(toUnixSeconds(pr.updated_at))}
-          side="top"
-          className="shrink-0"
-        >
-          <span className="whitespace-nowrap font-mono">
-            {relativeTime(toUnixSeconds(pr.updated_at), t)}
-          </span>
-        </Tooltip>
+        {showChecks ? <PrChecksBadge checks={pr.checks} /> : null}
       </span>
-    </li>
+    ) : undefined;
+
+  return (
+    <GitHubListRow
+      number={pr.number}
+      title={pr.title}
+      author={pr.author}
+      updatedAt={pr.updated_at}
+      labels={pr.labels}
+      numberClassName={numberColor}
+      meta={meta}
+      surface={surface}
+      showAvatar={showAvatar}
+      showLabels={showLabels}
+      onOpen={onOpen}
+      onContextMenu={onContextMenu}
+    />
   );
 }
 
@@ -4382,6 +4875,204 @@ function PullRequestSearchModal({
               <li className="px-3 py-2 text-[10px] text-fg-muted">
                 {rtf(t, "rightPanel.search.reachedMax", {
                   count: PR_PAGE_MAX,
+                })}
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </div>
+      {rowActions.overlays}
+    </Modal>
+  );
+}
+
+function IssueSearchModal({
+  open,
+  detailOpen,
+  onClose,
+  onOpenDetail,
+}: {
+  open: { repoPath: string } | null;
+  detailOpen: boolean;
+  onClose: () => void;
+  onOpenDetail: (number: number) => void;
+}) {
+  const t = useTranslation();
+  const repoPath = open?.repoPath ?? null;
+  const showAvatars = useSettings((s) => s.settings.github.showAvatars);
+  const showLabels = useSettings((s) => s.settings.github.showLabels);
+  const [rawQuery, setRawQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<IssueStateFilter>("all");
+  const [listing, setListing] = useState<IssueListing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [limit, setLimit] = useState(ISSUE_PAGE_SIZE);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const rowActions = useIssueRowActions(onOpenDetail);
+
+  useDialogShortcuts(open !== null && !detailOpen, { onCancel: onClose });
+
+  useEffect(() => {
+    if (!open) return;
+    setRawQuery("");
+    setDebouncedQuery("");
+    setStateFilter("all");
+    setListing(null);
+    setError(null);
+    setLimit(ISSUE_PAGE_SIZE);
+    queueMicrotask(() => inputRef.current?.focus());
+  }, [open]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(rawQuery.trim()), 250);
+    return () => clearTimeout(t);
+  }, [rawQuery]);
+
+  useEffect(() => {
+    setLimit(ISSUE_PAGE_SIZE);
+    setListing(null);
+  }, [debouncedQuery, stateFilter]);
+
+  useEffect(() => {
+    if (!open || !repoPath) return;
+    if (!debouncedQuery) {
+      setListing(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    const signal = { cancelled: false };
+    setLoading(true);
+    api
+      .listIssues(repoPath, stateFilter, limit, debouncedQuery)
+      .then((result) => {
+        if (signal.cancelled) return;
+        setListing(result);
+        setError(null);
+      })
+      .catch((e) => {
+        if (signal.cancelled) return;
+        setError(String(e));
+      })
+      .finally(() => {
+        if (!signal.cancelled) setLoading(false);
+      });
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [open, repoPath, debouncedQuery, stateFilter, limit]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (loading) return;
+    if (!listing || listing.kind !== "ok") return;
+    if (listing.items.length < limit) return;
+    if (limit >= ISSUE_PAGE_MAX) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+      setLimit((prev) => Math.min(prev + ISSUE_PAGE_SIZE, ISSUE_PAGE_MAX));
+    }
+  }
+
+  const reachedMax =
+    listing?.kind === "ok" &&
+    listing.items.length >= limit &&
+    limit >= ISSUE_PAGE_MAX;
+
+  return (
+    <Modal
+      open={open !== null}
+      onClose={onClose}
+      variant="dialog"
+      size="2xl"
+      ariaLabel={rt(t, "rightPanel.issueSearch.aria")}
+    >
+      <ModalHeader
+        title={rt(t, "rightPanel.issueSearch.aria")}
+        icon={<Search size={14} className="text-fg-muted" />}
+        variant="dialog"
+        onClose={onClose}
+      />
+      <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+        <TextInput
+          ref={inputRef}
+          value={rawQuery}
+          onChange={(e) => setRawQuery(e.currentTarget.value)}
+          placeholder={rt(t, "rightPanel.issueSearch.placeholder")}
+          autoFocus
+        />
+        <div className="flex items-center gap-1 text-[11px]">
+          {ISSUE_STATE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setStateFilter(opt.value)}
+              className={cn(
+                "rounded px-2 py-0.5 transition",
+                stateFilter === opt.value
+                  ? "bg-bg text-fg"
+                  : "text-fg-muted hover:text-fg",
+              )}
+            >
+              {rt(t, issueStateLabelKey(opt.value))}
+            </button>
+          ))}
+          {loading ? (
+            <span className="ml-auto text-fg-muted">
+              {rt(t, "rightPanel.issueSearch.searching")}
+            </span>
+          ) : listing?.kind === "ok" ? (
+            <span className="ml-auto font-mono text-fg-muted">
+              {listing.items.length}
+              {listing.items.length >= limit && limit < ISSUE_PAGE_MAX
+                ? "+"
+                : ""}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div
+        className="acorn-no-scrollbar h-[60vh] overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        {!debouncedQuery ? (
+          <Empty msg={rt(t, "rightPanel.issueSearch.typeToSearch")} />
+        ) : error || rowActions.error ? (
+          <div className="p-3 text-xs text-danger">
+            {error ?? rowActions.error}
+          </div>
+        ) : !listing ? (
+          <PrSkeletonList count={6} />
+        ) : listing.kind === "not_github" ? (
+          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
+        ) : listing.kind === "no_access" ? (
+          <div className="p-3 text-xs text-fg-muted">
+            {rt(t, "rightPanel.issueSearch.noGhAccessThisRepo")}
+          </div>
+        ) : listing.items.length === 0 ? (
+          <Empty msg={rt(t, "rightPanel.issueSearch.noMatches")} />
+        ) : (
+          <ul className="text-xs">
+            {listing.items.map((issue) => (
+              <IssueRow
+                key={issue.number}
+                issue={issue}
+                surface="dialog"
+                showAvatar={showAvatars}
+                showLabels={showLabels}
+                onOpen={() => onOpenDetail(issue.number)}
+                onContextMenu={(e) => rowActions.openContextMenu(e, issue)}
+              />
+            ))}
+            {loading && listing.items.length >= limit ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                {rt(t, "rightPanel.loading.more")}
+              </li>
+            ) : null}
+            {reachedMax ? (
+              <li className="px-3 py-2 text-[10px] text-fg-muted">
+                {rtf(t, "rightPanel.issueSearch.reachedMax", {
+                  count: ISSUE_PAGE_MAX,
                 })}
               </li>
             ) : null}

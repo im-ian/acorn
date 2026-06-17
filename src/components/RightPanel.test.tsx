@@ -10,6 +10,8 @@ import {
 } from "vitest";
 import type {
   AgentHistoryItem,
+  IssueDetailListing,
+  IssueListing,
   PullRequestListing,
   WorkflowRunsListing,
 } from "../lib/types";
@@ -30,6 +32,18 @@ vi.mock("../lib/api", () => ({
           state: string,
           limit: number,
         ) => Promise<PullRequestListing>
+      >(),
+    listIssues:
+      vi.fn<
+        (
+          repoPath: string,
+          state: string,
+          limit: number,
+        ) => Promise<IssueListing>
+      >(),
+    getIssueDetail:
+      vi.fn<
+        (repoPath: string, number: number) => Promise<IssueDetailListing>
       >(),
     listWorkflowRuns:
       vi.fn<(repoPath: string, limit: number) => Promise<WorkflowRunsListing>>(),
@@ -85,6 +99,16 @@ function buttonContaining(container: HTMLElement, text: string): HTMLButtonEleme
   return button;
 }
 
+function roleButtonContaining(container: HTMLElement, text: string): HTMLElement {
+  const element = Array.from(container.querySelectorAll('[role="button"]')).find(
+    (candidate) => candidate.textContent?.includes(text),
+  );
+  if (!(element instanceof HTMLElement)) {
+    throw new Error(`role button containing "${text}" not found`);
+  }
+  return element;
+}
+
 function comboboxWithAria(
   container: HTMLElement,
   label: string,
@@ -137,6 +161,35 @@ const detailedPullRequest = {
   checks: { passed: 1, failed: 0, pending: 1 },
 };
 
+const listedIssue = {
+  number: 301,
+  title: "Render issues in app",
+  state: "OPEN",
+  author: "im-ian",
+  url: "https://github.com/im-ian/acorn/issues/301",
+  created_at: "2026-05-18T00:00:00Z",
+  updated_at: "2026-05-19T00:00:00Z",
+  state_reason: null,
+  comments: 1,
+  labels: [{ name: "enhancement", color: "A2EEEF" }],
+};
+
+const detailedIssue = {
+  ...listedIssue,
+  body: "Detailed issue body",
+  comments: [
+    {
+      author: "im-ian",
+      author_avatar_url: null,
+      body: "First issue comment",
+      created_at: "2026-05-19T01:00:00Z",
+      url: "https://github.com/im-ian/acorn/issues/301#issuecomment-1",
+    },
+  ],
+  assignees: ["im-ian"],
+  milestone: "v1",
+};
+
 async function flushPromises() {
   await act(async () => {
     await Promise.resolve();
@@ -178,6 +231,14 @@ describe("RightPanel background tab loading", () => {
       kind: "ok",
       items: [],
       account: "tester",
+    });
+    mockApi.listIssues.mockResolvedValue({
+      kind: "ok",
+      items: [],
+      account: "tester",
+    });
+    mockApi.getIssueDetail.mockResolvedValue({
+      kind: "not_github",
     });
     mockApi.listWorkflowRuns.mockResolvedValue({
       kind: "ok",
@@ -257,6 +318,29 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).not.toContain("No project selected");
     expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
     expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO, "open", 50);
+    expect(mockApi.listIssues).toHaveBeenCalledWith(REPO, "open", 50);
+  });
+
+  it("orders GitHub sub-tabs as PRs, Issues, Actions", async () => {
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    const labels = Array.from(
+      container.querySelectorAll('nav[aria-label="Right panel sub-tab"] button'),
+    ).map((button) => button.textContent?.trim());
+    expect(labels).toEqual(["Files", "Staged", "Commits"]);
+
+    await act(async () => {
+      buttonContaining(container, "GitHub").click();
+    });
+    await flushPromises();
+
+    const githubLabels = Array.from(
+      container.querySelectorAll('nav[aria-label="Right panel sub-tab"] button'),
+    ).map((button) => button.textContent?.trim());
+    expect(githubLabels).toEqual(["PRs", "Issues", "Actions"]);
   });
 
   it("prefetches other open projects once after startup", async () => {
@@ -305,6 +389,9 @@ describe("RightPanel background tab loading", () => {
     expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO_B, "merged", 50);
     expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO_B, "closed", 50);
     expect(mockApi.listPullRequests).toHaveBeenCalledWith(REPO_B, "all", 50);
+    expect(mockApi.listIssues).toHaveBeenCalledWith(REPO_B, "open", 50);
+    expect(mockApi.listIssues).toHaveBeenCalledWith(REPO_B, "closed", 50);
+    expect(mockApi.listIssues).toHaveBeenCalledWith(REPO_B, "all", 50);
     expect(mockApi.listWorkflowRuns).toHaveBeenCalledWith(REPO_B, 50);
   });
 
@@ -322,6 +409,7 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).not.toContain("GitHub");
     expect(mockApi.githubOriginSlug).not.toHaveBeenCalled();
     expect(mockApi.listPullRequests).not.toHaveBeenCalled();
+    expect(mockApi.listIssues).not.toHaveBeenCalled();
     expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
   });
 
@@ -339,6 +427,7 @@ describe("RightPanel background tab loading", () => {
     expect(container.textContent).not.toContain("GitHub");
     expect(mockApi.githubOriginSlug).toHaveBeenCalledWith(REPO);
     expect(mockApi.listPullRequests).not.toHaveBeenCalled();
+    expect(mockApi.listIssues).not.toHaveBeenCalled();
     expect(mockApi.listWorkflowRuns).not.toHaveBeenCalled();
   });
 
@@ -629,6 +718,42 @@ describe("RightPanel background tab loading", () => {
 
     expect(container.textContent).toContain("Add PR row display options");
     expect(container.textContent).not.toContain("1/2");
+  });
+
+  it("opens issue detail in app from the Issues tab", async () => {
+    useAppStore.setState({ rightTab: "issues" });
+    mockApi.listIssues.mockResolvedValue({
+      kind: "ok",
+      items: [listedIssue],
+      account: "tester",
+    });
+    mockApi.getIssueDetail.mockResolvedValue({
+      kind: "ok",
+      account: "tester",
+      detail: detailedIssue,
+    });
+
+    await act(async () => {
+      root.render(<RightPanel />);
+    });
+    await flushPromises();
+
+    const issueRow = roleButtonContaining(container, "Render issues in app");
+    await act(async () => {
+      issueRow.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          detail: 2,
+        }),
+      );
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(mockApi.getIssueDetail).toHaveBeenCalledWith(REPO, 301);
+    expect(document.body.textContent).toContain("Detailed issue body");
+    expect(document.body.textContent).toContain("First issue comment");
   });
 
   it("updates running Actions run durations every second without refetching", async () => {

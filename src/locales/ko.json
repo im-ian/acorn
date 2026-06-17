@@ -181,20 +181,20 @@
     "github": {
       "refreshInterval": {
         "label": "새로고침 간격",
-        "hint": "PR 및 Actions 탭이 gh에서 자동으로 다시 가져오는 빈도입니다. 값이 낮을수록 더 빠르게 느껴지지만 API 예산을 더 사용합니다."
+        "hint": "PR, Issues 및 Actions 탭이 gh에서 자동으로 다시 가져오는 빈도입니다. 값이 낮을수록 더 빠르게 느껴지지만 API 예산을 더 사용합니다."
       },
       "manualRefresh": "수동 새로고침(각 탭의 아이콘)은 이 간격과 관계없이 항상 작동합니다.",
       "listDensity": {
         "label": "목록 밀도",
-        "hint": "각 PR 행에 표시할 선택 정보를 고릅니다."
+        "hint": "각 PR 또는 이슈 행에 표시할 선택 정보를 고릅니다."
       },
       "showAuthorAvatars": {
         "label": "작성자 아바타 표시",
-        "description": "각 PR 행 옆에 GitHub 아바타를 표시합니다."
+        "description": "각 PR 또는 이슈 행 옆에 GitHub 아바타를 표시합니다."
       },
       "showLabels": {
         "label": "라벨 표시",
-        "description": "각 PR 행 제목 옆에 GitHub 라벨을 표시합니다."
+        "description": "각 PR 또는 이슈 행 제목 옆에 GitHub 라벨을 표시합니다."
       },
       "showBranches": {
         "label": "브랜치 표시",
@@ -334,7 +334,7 @@
         },
         "githubAccount": {
           "label": "GitHub 계정",
-          "description": "활성 저장소의 pull request 목록을 가져오는 데 사용하는 `gh` 계정입니다."
+          "description": "활성 저장소의 GitHub 데이터를 가져오는 데 사용하는 `gh` 계정입니다."
         },
         "workingDirectory": {
           "label": "작업 디렉터리",
@@ -976,6 +976,7 @@
       "commits": "커밋",
       "staged": "스테이징",
       "prs": "PR",
+      "issues": "이슈",
       "activity": "활동",
       "history": "기록",
       "actions": "작업"
@@ -1067,6 +1068,7 @@
       "openDetail": "상세 열기",
       "openInBrowser": "브라우저에서 열기",
       "copyPrNumber": "PR 번호 복사",
+      "copyIssueNumber": "이슈 번호 복사",
       "copyUrl": "URL 복사",
       "copyBranchWithValue": "브랜치 복사({branch})",
       "merge": "병합…",
@@ -1079,9 +1081,18 @@
       "all": "전체",
       "draft": "초안"
     },
+    "issueStates": {
+      "open": "열림",
+      "closed": "닫힘",
+      "all": "전체"
+    },
     "prs": {
       "emptyByState": "{state} PR이 없습니다.",
       "reachedMax": "처음 {count}개를 표시합니다. 더 오래된 PR은 검색으로 찾으세요."
+    },
+    "issues": {
+      "emptyByState": "{state} 이슈가 없습니다.",
+      "reachedMax": "처음 {count}개를 표시합니다. 더 오래된 이슈는 검색으로 찾으세요."
     },
     "search": {
       "aria": "PR 검색",
@@ -1091,6 +1102,15 @@
       "noGhAccessThisRepo": "로그인된 gh 계정으로 이 저장소에 접근할 수 없습니다.",
       "noMatches": "일치하는 PR이 없습니다.",
       "reachedMax": "처음 {count}개를 표시합니다. 더 오래된 PR은 검색어를 좁혀 찾으세요."
+    },
+    "issueSearch": {
+      "aria": "이슈 검색",
+      "placeholder": "제목, 작성자, 라벨 검색…",
+      "searching": "검색 중…",
+      "typeToSearch": "이슈를 검색하려면 입력하세요.",
+      "noGhAccessThisRepo": "로그인된 gh 계정으로 이 저장소에 접근할 수 없습니다.",
+      "noMatches": "일치하는 이슈가 없습니다.",
+      "reachedMax": "처음 {count}개를 표시합니다. 더 오래된 이슈는 검색어를 좁혀 찾으세요."
     },
     "actions": {
       "filterByWorkflow": "워크플로로 필터링",
@@ -1508,6 +1528,24 @@
       "checkNeutral": "중립",
       "checkSkipped": "건너뜀",
       "checkCompleted": "완료"
+    },
+    "issueDetail": {
+      "notGithub": "origin 원격 저장소가 GitHub 저장소가 아닙니다.",
+      "noAccessPrefix": "로그인된",
+      "noAccessSuffix": "계정으로 접근할 수 없습니다:",
+      "openOnGithub": "GitHub에서 열기",
+      "openCommentOnGithub": "GitHub에서 댓글 열기",
+      "created": "생성",
+      "updated": "업데이트",
+      "comments": "댓글",
+      "noComments": "아직 댓글이 없습니다.",
+      "noBody": "이슈 설명이 없습니다.",
+      "empty": "(비어 있음)",
+      "stateOpen": "열림",
+      "stateCompleted": "완료됨",
+      "stateNotPlanned": "계획 없음",
+      "assignees": "담당자:",
+      "milestone": "마일스톤:"
     }
   },
   "commandPalette": {
