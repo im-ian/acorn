@@ -345,4 +345,37 @@ describe("TerminalHost", () => {
       { id: "s4", active: true },
     ]);
   });
+
+  it("keeps off-screen terminals mounted when resident terminal eviction is disabled", async () => {
+    const ids = ["s1", "s2", "s3"];
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          maxMountedTerminals: 1,
+          detachOffscreenTerminals: false,
+        },
+      },
+    });
+    mocks.daemonListSessions.mockResolvedValue(
+      ids.map((id) => ({ id, alive: true })),
+    );
+    installWorkspaceSessions(ids);
+    render();
+    await flushEffects();
+
+    for (const id of ids.slice(1)) {
+      await focusSession(id);
+    }
+    await flushEffects();
+
+    expect(mocks.daemonListSessions).not.toHaveBeenCalled();
+    expect(mocks.markTerminalDetaching).not.toHaveBeenCalled();
+    expect(terminalRows()).toEqual([
+      { id: "s1", active: false },
+      { id: "s2", active: false },
+      { id: "s3", active: true },
+    ]);
+  });
 });

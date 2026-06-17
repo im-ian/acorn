@@ -1,5 +1,6 @@
 import { Minus, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { cn } from "../../lib/cn";
 import { useTranslation } from "../../lib/useTranslation";
 
 interface StepperProps {
@@ -8,6 +9,7 @@ interface StepperProps {
   max: number;
   step?: number;
   unit?: string;
+  disabled?: boolean;
   /**
    * Optional value formatter for floating-point steppers — keeps the
    * displayed number stable (e.g. 1.05 vs 1.0500000000001) without
@@ -28,6 +30,7 @@ export function Stepper({
   max,
   step = 1,
   unit,
+  disabled = false,
   format,
   onChange,
 }: StepperProps) {
@@ -69,11 +72,16 @@ export function Stepper({
   };
 
   return (
-    <div className="inline-flex h-7 w-fit items-stretch self-start overflow-hidden rounded-md border border-border bg-bg">
+    <div
+      className={cn(
+        "inline-flex h-7 w-fit items-stretch self-start overflow-hidden rounded-md border border-border bg-bg",
+        disabled && "opacity-50",
+      )}
+    >
       <button
         type="button"
         onClick={dec}
-        disabled={value <= min}
+        disabled={disabled || value <= min}
         aria-label={t("ui.stepper.decrease")}
         className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
@@ -82,7 +90,8 @@ export function Stepper({
       <div className="flex min-w-[4.25rem] items-center justify-center border-x border-border px-1.5 font-mono text-xs tabular-nums text-fg focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent">
         <input
           aria-label={t("ui.stepper.value")}
-          className="h-full w-12 bg-transparent text-center font-mono text-xs tabular-nums text-fg outline-none"
+          className="h-full w-12 bg-transparent text-center font-mono text-xs tabular-nums text-fg outline-none disabled:cursor-not-allowed"
+          disabled={disabled}
           inputMode="decimal"
           max={max}
           min={min}
@@ -109,7 +118,7 @@ export function Stepper({
       <button
         type="button"
         onClick={inc}
-        disabled={value >= max}
+        disabled={disabled || value >= max}
         aria-label={t("ui.stepper.increase")}
         className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >

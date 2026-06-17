@@ -805,6 +805,24 @@ function SessionSettings() {
       >
         <div className="space-y-4">
           <Field
+            label={st(t, "settings.terminal.detachOffscreenTerminals.label")}
+            hint={st(t, "settings.terminal.detachOffscreenTerminals.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.terminal.detachOffscreenTerminals}
+                onChange={(e) =>
+                  patchTerminal({
+                    detachOffscreenTerminals: e.target.checked,
+                  })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(t, "settings.terminal.detachOffscreenTerminals.checkbox")}
+            </label>
+          </Field>
+          <Field
             label={st(t, "settings.terminal.maxMountedTerminals.label")}
             hint={st(t, "settings.terminal.maxMountedTerminals.hint")}
           >
@@ -812,6 +830,7 @@ function SessionSettings() {
               value={settings.terminal.maxMountedTerminals}
               min={MOUNTED_TERMINAL_LIMIT_MIN}
               max={MOUNTED_TERMINAL_LIMIT_MAX}
+              disabled={!settings.terminal.detachOffscreenTerminals}
               onChange={(n) => patchTerminal({ maxMountedTerminals: n })}
             />
           </Field>

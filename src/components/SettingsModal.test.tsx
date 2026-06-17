@@ -540,6 +540,75 @@ describe("SettingsModal font controls", () => {
     expect(patchTerminal).toHaveBeenCalledWith({ maxMountedTerminals: 9 });
   });
 
+  it("patches the resident terminal limit toggle from the Sessions tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes("Detach off-screen terminals over the limit"),
+    );
+
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(true);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchTerminal).toHaveBeenCalledWith({
+      detachOffscreenTerminals: false,
+    });
+  });
+
+  it("disables the resident terminal limit stepper when the toggle is off", async () => {
+    const settings = cloneSettings();
+    settings.terminal.detachOffscreenTerminals = false;
+    useSettings.setState({
+      settings,
+      patchTerminal: vi.fn(),
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const label = Array.from(document.querySelectorAll("span")).find(
+      (element) => element.textContent === "Resident terminal limit",
+    );
+    const field = label?.parentElement;
+    const increase = Array.from(field?.querySelectorAll("button") ?? []).find(
+      (element) => element.getAttribute("aria-label") === "Increase",
+    );
+    const valueInput = field?.querySelector<HTMLInputElement>(
+      'input[aria-label="Value"]',
+    );
+
+    expect(valueInput?.disabled).toBe(true);
+    expect(increase).toBeInstanceOf(HTMLButtonElement);
+    expect((increase as HTMLButtonElement | undefined)?.disabled).toBe(true);
+  });
+
   it("maps legacy Services deep links to the Sessions tab", async () => {
     useSettings.setState({
       open: false,

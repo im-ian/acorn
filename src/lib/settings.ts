@@ -244,6 +244,11 @@ export interface AcornSettings {
      * sessions that can be re-attached with scrollback replay.
      */
     maxMountedTerminals: number;
+    /**
+     * Detach off-screen daemon-backed terminals when the resident terminal
+     * limit is exceeded. Disable to keep every opened terminal view mounted.
+     */
+    detachOffscreenTerminals: boolean;
   };
   /**
    * The single AI agent acorn uses everywhere AI features fire (currently
@@ -457,6 +462,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     lineHeight: 1.0,
     linkActivation: "click",
     maxMountedTerminals: MOUNTED_TERMINAL_LIMIT_DEFAULT,
+    detachOffscreenTerminals: true,
   },
   agents: {
     selected: "claude",
@@ -900,6 +906,12 @@ function loadSettings(): AcornSettings {
             .maxMountedTerminals,
           DEFAULT_SETTINGS.terminal.maxMountedTerminals,
         ),
+        detachOffscreenTerminals:
+          typeof (terminalRaw as { detachOffscreenTerminals?: unknown })
+            .detachOffscreenTerminals === "boolean"
+            ? (terminalRaw as { detachOffscreenTerminals: boolean })
+                .detachOffscreenTerminals
+            : DEFAULT_SETTINGS.terminal.detachOffscreenTerminals,
       },
       agents: {
         selected,
@@ -1136,6 +1148,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
                   patch.fontSmoothing,
                   s.settings.terminal.fontSmoothing,
                 ),
+          detachOffscreenTerminals:
+            patch.detachOffscreenTerminals === undefined
+              ? s.settings.terminal.detachOffscreenTerminals
+              : typeof patch.detachOffscreenTerminals === "boolean"
+                ? patch.detachOffscreenTerminals
+                : s.settings.terminal.detachOffscreenTerminals,
         },
       };
       persist(next);
