@@ -853,46 +853,7 @@ describe("SettingsModal font controls", () => {
     });
   });
 
-  it("patches the worktree auto-delete session toggle", async () => {
-    const patchSessions = vi.fn();
-    useSettings.setState({
-      settings: cloneSettings(),
-      patchSessions,
-    });
-
-    await act(async () => {
-      root = createRoot(container);
-      root.render(<SettingsModal />);
-    });
-    openSessionsTab();
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const toggle = Array.from(
-      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
-    ).find((input) =>
-      input
-        .closest("label")
-        ?.textContent?.includes("Always delete standalone isolated worktrees"),
-    );
-
-    expect(document.body.textContent).toContain(
-      "Delete isolated worktrees without asking",
-    );
-    expect(toggle).toBeInstanceOf(HTMLInputElement);
-    expect(toggle?.checked).toBe(false);
-
-    act(() => {
-      toggle?.click();
-    });
-
-    expect(patchSessions).toHaveBeenCalledWith({
-      autoDeleteWorktrees: true,
-    });
-  });
-
-  it("patches the empty worktree workspace auto-delete toggle", async () => {
+  it("patches the isolated worktree cleanup prompt toggle", async () => {
     const patchSessions = vi.fn();
     useSettings.setState({
       settings: cloneSettings(),
@@ -914,22 +875,100 @@ describe("SettingsModal font controls", () => {
       input
         .closest("label")
         ?.textContent?.includes(
-          "Always delete empty worktree workspace directories",
+          "Ask before deleting standalone isolated worktrees",
         ),
     );
 
     expect(document.body.textContent).toContain(
-      "Delete empty worktree workspaces without asking",
+      "Isolated worktree cleanup prompt",
     );
     expect(toggle).toBeInstanceOf(HTMLInputElement);
-    expect(toggle?.checked).toBe(false);
+    expect(toggle?.checked).toBe(true);
 
     act(() => {
       toggle?.click();
     });
 
     expect(patchSessions).toHaveBeenCalledWith({
-      autoDeleteEmptyWorktreeWorkspaces: true,
+      confirmDeleteIsolatedWorktrees: false,
+    });
+  });
+
+  it("patches the empty worktree workspace cleanup prompt toggle", async () => {
+    const patchSessions = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchSessions,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes(
+          "Ask before deleting empty worktree workspace directories",
+        ),
+    );
+
+    expect(document.body.textContent).toContain(
+      "Empty worktree workspace cleanup prompt",
+    );
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(true);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchSessions).toHaveBeenCalledWith({
+      confirmDeleteEmptyWorktreeWorkspaces: false,
+    });
+  });
+
+  it("patches the process-exit restart prompt toggle", async () => {
+    const patchSessions = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchSessions,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openSessionsTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes("Show restart prompt after the process exits"),
+    );
+
+    expect(document.body.textContent).toContain("Process-exit restart prompt");
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(true);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchSessions).toHaveBeenCalledWith({
+      showRestartPromptOnExit: false,
     });
   });
 

@@ -123,29 +123,29 @@
         "description": "Acorn이 열려 있거나 재시작되는 동안 장시간 실행되는 터미널을 유지하는 동작입니다."
       },
       "confirmRemove": {
-        "label": "세션 제거 전 확인",
+        "label": "세션 제거 확인",
         "hint": "일반 세션에 적용됩니다. 공유 워크트리 세션은 제거 전에 계속 확인합니다.",
-        "checkbox": "확인 대화상자 표시"
+        "checkbox": "일반 세션을 제거하기 전에 확인 표시"
       },
       "warnBeforeClosingRunning": {
-        "label": "실행 중인 세션을 닫기 전 경고",
+        "label": "실행 중 세션 닫기 경고",
         "hint": "아직 실행 중인 세션을 닫기 전에 경고를 표시합니다. 실행 중인 세션을 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
-        "checkbox": "실행 중 세션 경고 표시"
+        "checkbox": "실행 중인 세션을 닫기 전에 경고 표시"
       },
-      "autoDeleteWorktrees": {
-        "label": "묻지 않고 격리 워크트리 삭제",
-        "hint": "단독 격리 워크트리 세션을 제거할 때 유지/삭제 확인을 건너뛰고 디스크의 워크트리를 삭제합니다. 공유 워크트리 작업공간은 유지됩니다.",
-        "checkbox": "단독 격리 워크트리는 항상 디스크에서도 삭제"
+      "confirmDeleteIsolatedWorktrees": {
+        "label": "격리 워크트리 정리 확인",
+        "hint": "끄면 단독 격리 워크트리를 유지/삭제 확인 없이 디스크에서 삭제합니다. 공유 워크트리 작업공간은 유지됩니다.",
+        "checkbox": "단독 격리 워크트리를 삭제하기 전에 확인 표시"
       },
-      "autoDeleteEmptyWorktreeWorkspaces": {
-        "label": "빈 워크트리 작업공간은 묻지 않고 삭제",
-        "hint": "세션이 없는 워크트리 작업공간을 제거할 때 유지/삭제 확인 없이 디스크의 연결된 워크트리도 삭제합니다.",
-        "checkbox": "빈 워크트리 작업공간 디렉터리 항상 삭제"
+      "confirmDeleteEmptyWorktreeWorkspaces": {
+        "label": "빈 워크트리 작업공간 정리 확인",
+        "hint": "끄면 세션이 없는 워크트리 작업공간 디렉터리를 유지/삭제 확인 없이 디스크에서 삭제합니다.",
+        "checkbox": "빈 워크트리 작업공간 디렉터리를 삭제하기 전에 확인 표시"
       },
-      "closeOnExit": {
-        "label": "프로세스 종료 시 탭 닫기",
-        "hint": "세션의 셸이나 에이전트가 종료되면(예: `exit` 입력) Enter를 눌러 재시작하라는 프롬프트 대신 탭을 자동으로 닫습니다. 단독 격리 세션은 위 워크트리 삭제 설정을 따릅니다.",
-        "checkbox": "종료 시 자동 닫기"
+      "showRestartPromptOnExit": {
+        "label": "프로세스 종료 후 재시작 안내",
+        "hint": "끄면 세션의 셸이나 에이전트가 종료될 때 탭을 자동으로 닫습니다. 워크트리 기반 탭은 위 정리 확인 설정을 따릅니다.",
+        "checkbox": "프로세스가 종료되면 재시작 안내 표시"
       },
       "background": {
         "title": "백그라운드 세션",
@@ -1249,7 +1249,7 @@
       "worktreeWorkspacePath": "이 작업공간은 연결된 Git 워크트리를 사용합니다:",
       "deleteWorkspaceWorktreeQuestion": "이 워크트리도 디스크에서 삭제할까요?",
       "sharedWorktreeWillBeKept": "작업공간 워크트리는 디스크에 유지됩니다.",
-      "rememberDeleteWorktree": "빈 워크트리 작업공간 디렉터리 항상 삭제",
+      "rememberDeleteWorktree": "빈 워크트리 작업공간 디렉터리를 삭제하기 전에 확인 표시",
       "removeFolder": "작업공간 제거",
       "keepWorktree": "워크트리 유지",
       "deleteWorktree": "워크트리 삭제",

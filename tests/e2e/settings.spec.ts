@@ -206,7 +206,7 @@ test.describe("settings modal", () => {
     await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
 
     const checkbox = modal.getByRole("checkbox", {
-      name: /Show running-session warning|실행 중 세션 경고 표시/,
+      name: /Show warning before closing running sessions|실행 중인 세션을 닫기 전에 경고 표시/,
     });
     await expect(checkbox).toBeChecked();
     await checkbox.click();

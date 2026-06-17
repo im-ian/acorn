@@ -739,62 +739,75 @@ function SessionSettings() {
             </label>
           </Field>
           <Field
-            label={st(t, "settings.sessions.autoDeleteWorktrees.label")}
-            hint={st(t, "settings.sessions.autoDeleteWorktrees.hint")}
-          >
-            <label className="flex items-center gap-2 text-xs text-fg">
-              <input
-                type="checkbox"
-                checked={settings.sessions.autoDeleteWorktrees}
-                onChange={(e) =>
-                  patchSessions({ autoDeleteWorktrees: e.target.checked })
-                }
-                className="accent-[var(--color-accent)]"
-              />
-              {st(t, "settings.sessions.autoDeleteWorktrees.checkbox")}
-            </label>
-          </Field>
-          <Field
             label={st(
               t,
-              "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.label",
+              "settings.sessions.confirmDeleteIsolatedWorktrees.label",
             )}
             hint={st(
               t,
-              "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.hint",
+              "settings.sessions.confirmDeleteIsolatedWorktrees.hint",
             )}
           >
             <label className="flex items-center gap-2 text-xs text-fg">
               <input
                 type="checkbox"
-                checked={settings.sessions.autoDeleteEmptyWorktreeWorkspaces}
+                checked={settings.sessions.confirmDeleteIsolatedWorktrees}
                 onChange={(e) =>
                   patchSessions({
-                    autoDeleteEmptyWorktreeWorkspaces: e.target.checked,
+                    confirmDeleteIsolatedWorktrees: e.target.checked,
                   })
                 }
                 className="accent-[var(--color-accent)]"
               />
               {st(
                 t,
-                "settings.sessions.autoDeleteEmptyWorktreeWorkspaces.checkbox",
+                "settings.sessions.confirmDeleteIsolatedWorktrees.checkbox",
               )}
             </label>
           </Field>
           <Field
-            label={st(t, "settings.sessions.closeOnExit.label")}
-            hint={st(t, "settings.sessions.closeOnExit.hint")}
+            label={st(
+              t,
+              "settings.sessions.confirmDeleteEmptyWorktreeWorkspaces.label",
+            )}
+            hint={st(
+              t,
+              "settings.sessions.confirmDeleteEmptyWorktreeWorkspaces.hint",
+            )}
           >
             <label className="flex items-center gap-2 text-xs text-fg">
               <input
                 type="checkbox"
-                checked={settings.sessions.closeOnExit}
+                checked={
+                  settings.sessions.confirmDeleteEmptyWorktreeWorkspaces
+                }
                 onChange={(e) =>
-                  patchSessions({ closeOnExit: e.target.checked })
+                  patchSessions({
+                    confirmDeleteEmptyWorktreeWorkspaces: e.target.checked,
+                  })
                 }
                 className="accent-[var(--color-accent)]"
               />
-              {st(t, "settings.sessions.closeOnExit.checkbox")}
+              {st(
+                t,
+                "settings.sessions.confirmDeleteEmptyWorktreeWorkspaces.checkbox",
+              )}
+            </label>
+          </Field>
+          <Field
+            label={st(t, "settings.sessions.showRestartPromptOnExit.label")}
+            hint={st(t, "settings.sessions.showRestartPromptOnExit.hint")}
+          >
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={settings.sessions.showRestartPromptOnExit}
+                onChange={(e) =>
+                  patchSessions({ showRestartPromptOnExit: e.target.checked })
+                }
+                className="accent-[var(--color-accent)]"
+              />
+              {st(t, "settings.sessions.showRestartPromptOnExit.checkbox")}
             </label>
           </Field>
         </div>
