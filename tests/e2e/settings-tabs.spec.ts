@@ -50,7 +50,7 @@ const TAB_MARKERS: Array<{
     label: "Sessions",
     marker: {
       kind: "text",
-      pattern: /Confirm before removing|세션 제거 전 확인/i,
+      pattern: /Session removal confirmation|세션 제거 확인/i,
     },
   },
   {

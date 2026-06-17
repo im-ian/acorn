@@ -299,8 +299,8 @@ test.describe("session lifecycle", () => {
         JSON.stringify({
           sessions: {
             confirmRemove: true,
-            autoDeleteWorktrees: true,
-            closeOnExit: false,
+            confirmDeleteIsolatedWorktrees: false,
+            showRestartPromptOnExit: true,
           },
         }),
       );
@@ -373,8 +373,8 @@ test.describe("session lifecycle", () => {
         JSON.stringify({
           sessions: {
             confirmRemove: true,
-            autoDeleteWorktrees: true,
-            closeOnExit: false,
+            confirmDeleteIsolatedWorktrees: false,
+            showRestartPromptOnExit: true,
           },
         }),
       );
