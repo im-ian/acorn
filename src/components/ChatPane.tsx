@@ -63,6 +63,8 @@ interface ChatAttachment {
 }
 
 const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+const STREAM_SMOOTH_BASE_CHARS = 3;
+const STREAM_SMOOTH_MAX_CHARS = 48;
 const FORKED_CHAT_DEFAULT_TITLE = "Forked chat";
 const EMPTY_COMPOSER_TITLES = [
   "어떤 작업을 진행할까요?",
@@ -341,6 +343,126 @@ function chatStateUpdatedAtMs(state: ChatSessionState): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function streamingDisplayStep(backlog: number): number {
+  if (backlog <= 0) return 0;
+  if (backlog > 600) {
+    return Math.min(STREAM_SMOOTH_MAX_CHARS, Math.ceil(backlog / 8));
+  }
+  if (backlog > 160) return 18;
+  if (backlog > 60) return 9;
+  return STREAM_SMOOTH_BASE_CHARS;
+}
+
+function requestDisplayFrame(callback: FrameRequestCallback): number {
+  if (typeof window === "undefined" || !window.requestAnimationFrame) {
+    return setTimeout(() => callback(performance.now()), 16);
+  }
+  return window.requestAnimationFrame(callback);
+}
+
+function cancelDisplayFrame(frame: number) {
+  if (typeof window === "undefined" || !window.cancelAnimationFrame) {
+    clearTimeout(frame);
+    return;
+  }
+  window.cancelAnimationFrame(frame);
+}
+
+function useSmoothedStreamingContent(
+  content: string,
+  isStreaming: boolean,
+): string {
+  const initialContent = isStreaming
+    ? content.slice(0, streamingDisplayStep(content.length))
+    : content;
+  const [visibleContent, setVisibleContent] = useState(initialContent);
+  const visibleRef = useRef(initialContent);
+  const targetRef = useRef(content);
+  const frameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) {
+        cancelDisplayFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    targetRef.current = content;
+
+    const flush = (next: string) => {
+      if (frameRef.current !== null) {
+        cancelDisplayFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      visibleRef.current = next;
+      setVisibleContent(next);
+    };
+
+    if (!isStreaming) {
+      flush(content);
+      return;
+    }
+
+    if (
+      visibleRef.current.length > content.length ||
+      !content.startsWith(visibleRef.current)
+    ) {
+      flush(content);
+      return;
+    }
+
+    const tick = () => {
+      frameRef.current = null;
+      const target = targetRef.current;
+      const visible = visibleRef.current;
+      if (visible.length >= target.length) return;
+      if (!target.startsWith(visible)) {
+        flush(target);
+        return;
+      }
+      const backlog = target.length - visible.length;
+      const nextLength = visible.length + streamingDisplayStep(backlog);
+      const next = target.slice(0, Math.min(target.length, nextLength));
+      visibleRef.current = next;
+      setVisibleContent(next);
+      if (next.length < targetRef.current.length) {
+        frameRef.current = requestDisplayFrame(tick);
+      }
+    };
+
+    if (
+      visibleRef.current.length < content.length &&
+      frameRef.current === null
+    ) {
+      frameRef.current = requestDisplayFrame(tick);
+    }
+  }, [content, isStreaming]);
+
+  return visibleContent;
+}
+
+function StreamingChatMessageBody({
+  content,
+  repoPath,
+  isStreaming,
+}: {
+  content: string;
+  repoPath?: string;
+  isStreaming: boolean;
+}) {
+  const displayContent = useSmoothedStreamingContent(content, isStreaming);
+  return (
+    <ChatMessageBody
+      content={displayContent}
+      repoPath={repoPath}
+      isStreaming={isStreaming}
+    />
+  );
 }
 
 function providerLabel(provider: string | null | undefined): string {
@@ -1000,9 +1122,14 @@ export function ChatPane({
               const isSystem = message.role === "system";
               const isError = message.status === "error";
               const isPending = message.status === "pending";
+              const isStreaming = message.status === "streaming";
+              const isRunningMessage = isPending || isStreaming;
               const isCancelled = message.status === "cancelled";
               const canForkBeforeMessage =
-                !isPending && !isUser && index > 0 && Boolean(sourceRepoPath);
+                !isRunningMessage &&
+                !isUser &&
+                index > 0 &&
+                Boolean(sourceRepoPath);
               const headerLabel = messageHeaderLabel(message, stateProvider);
               const messageProvider = providerFromMetadata(message.metadata);
               const agentProvider =
@@ -1028,14 +1155,18 @@ export function ChatPane({
                 cancelling ||
                 hasRunningMessages ||
                 messageActionBusyId !== null;
-              const canEditMessage = isUser && !isPending && isLastMessage;
+              const canEditMessage =
+                isUser && !isRunningMessage && isLastMessage;
               const canRegenerateMessage =
-                message.role === "assistant" && !isPending && isLastMessage;
-              const canDeleteMessage = !isSystem && !isPending && isLastMessage;
+                message.role === "assistant" &&
+                !isRunningMessage &&
+                isLastMessage;
+              const canDeleteMessage =
+                !isSystem && !isRunningMessage && isLastMessage;
               const showMessageMeta =
                 !isSystem &&
-                ((isPending && Boolean(durationLabel)) ||
-                  (!isPending && message.content.trim().length > 0));
+                ((isRunningMessage && Boolean(durationLabel)) ||
+                  (!isRunningMessage && message.content.trim().length > 0));
               const actionLabel = headerLabel ?? message.role;
               const bubbleClass = isUser
                 ? "bg-accent/18 text-fg ring-accent/35"
@@ -1077,9 +1208,17 @@ export function ChatPane({
                         <span>
                           {headerLabel}
                           {isPending ? " - pending" : ""}
+                          {isStreaming ? " - streaming" : ""}
                           {isError ? " - error" : ""}
                           {isCancelled ? " - cancelled" : ""}
                         </span>
+                        {isStreaming ? (
+                          <LoaderCircle
+                            size={11}
+                            className="animate-spin text-fg-muted/75"
+                            data-chat-streaming-spinner
+                          />
+                        ) : null}
                       </div>
                     ) : null}
                     <div
@@ -1089,10 +1228,12 @@ export function ChatPane({
                           : ""
                       }`}
                     >
-                      {isPending ? (
-                        <div className="flex items-center gap-2 text-fg-muted">
-                          <LoaderCircle size={14} className="animate-spin" />
-                          <span>
+                      {isPending || (isStreaming && !message.content) ? (
+                        <div className="flex items-center text-fg-muted">
+                          <span
+                            className="animate-pulse"
+                            data-chat-running-label
+                          >
                             Running {providerLabel(
                               messageProvider ?? stateProvider ?? provider,
                             )}
@@ -1145,10 +1286,10 @@ export function ChatPane({
                           </div>
                         </div>
                       ) : (
-                        <ChatMessageBody
+                        <StreamingChatMessageBody
                           content={message.content}
                           repoPath={repoPath}
-                          isStreaming={message.status === "streaming"}
+                          isStreaming={isStreaming}
                         />
                       )}
                     </div>
@@ -1159,7 +1300,7 @@ export function ChatPane({
                           isUser ? "justify-end" : "justify-start"
                         }`}
                       >
-                        {isPending && durationLabel ? (
+                        {isRunningMessage && durationLabel ? (
                           <span
                             className="self-center font-mono text-[11px] text-fg-muted/75"
                             data-chat-running-duration
@@ -1167,7 +1308,7 @@ export function ChatPane({
                             {durationLabel}
                           </span>
                         ) : null}
-                        {!isPending && timestampLabel ? (
+                        {!isRunningMessage && timestampLabel ? (
                           <>
                             <Tooltip
                               label={timestampTitle ?? timestampLabel}
@@ -1188,7 +1329,7 @@ export function ChatPane({
                             />
                           </>
                         ) : null}
-                        {!isPending && durationLabel ? (
+                        {!isRunningMessage && durationLabel ? (
                           <>
                             <span
                               className="self-center font-mono text-[11px] text-fg-muted/75"
@@ -1203,7 +1344,7 @@ export function ChatPane({
                             />
                           </>
                         ) : null}
-                        {!isPending ? (
+                        {!isRunningMessage ? (
                           <>
                             <Tooltip label="Copy message" side="bottom">
                               <button

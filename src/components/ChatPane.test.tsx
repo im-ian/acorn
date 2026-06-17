@@ -123,6 +123,12 @@ async function nextAnimationFrame() {
   });
 }
 
+async function advanceAnimationFrames(count: number) {
+  for (let i = 0; i < count; i += 1) {
+    await nextAnimationFrame();
+  }
+}
+
 function mockScrollRegion(
   element: HTMLElement,
   {
@@ -779,6 +785,10 @@ describe("ChatPane", () => {
     await settle();
 
     expect(container.textContent).toContain("Running Claude");
+    const runningLabel = container.querySelector("[data-chat-running-label]");
+    expect(runningLabel?.textContent).toContain("Running Claude");
+    expect(runningLabel?.className).toContain("animate-pulse");
+    expect(container.querySelector("[data-chat-streaming-spinner]")).toBeNull();
 
     await act(async () => {
       emitChatState(
@@ -804,6 +814,157 @@ describe("ChatPane", () => {
     });
 
     expect(container.textContent).toContain("response after tab switch");
+  });
+
+  it("renders streaming assistant chunks from chat state updates", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState(
+        "s1",
+        [
+          {
+            id: "u1",
+            role: "user",
+            content: "hello",
+            created_at: "2026-01-01T00:00:00Z",
+            status: "complete",
+            metadata: null,
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            created_at: "2026-01-01T00:00:00Z",
+            status: "pending",
+            metadata: { provider: "claude" },
+          },
+        ],
+        "claude",
+      ),
+    );
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    expect(container.textContent).toContain("Running Claude");
+
+    await act(async () => {
+      emitChatState(
+        chatState(
+          "s1",
+          [
+            {
+              id: "u1",
+              role: "user",
+              content: "hello",
+              created_at: "2026-01-01T00:00:00Z",
+              status: "complete",
+              metadata: null,
+            },
+            {
+              id: "a1",
+              role: "assistant",
+              content: "partial response",
+              created_at: "2026-01-01T00:00:00Z",
+              status: "streaming",
+              metadata: { provider: "claude" },
+            },
+          ],
+          "claude",
+        ),
+      );
+    });
+
+    expect(container.textContent).toContain("par");
+    expect(container.textContent).not.toContain("partial response");
+    expect(container.textContent).toContain("Claude - streaming");
+    expect(
+      container.querySelector("[data-chat-streaming-spinner]"),
+    ).toBeTruthy();
+    expect(
+      container.querySelector('button[aria-label="Copy Claude message"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Regenerate Claude message"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Stop response"]'),
+    ).toBeTruthy();
+
+    await advanceAnimationFrames(6);
+
+    expect(container.textContent).toContain("partial response");
+  });
+
+  it("does not force-scroll when streaming chunks arrive while scrolled back", async () => {
+    const initial = chatState(
+      "s1",
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "partial",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "streaming",
+          metadata: { provider: "claude" },
+        },
+      ],
+      "claude",
+    );
+    mocks.loadChatSessionState.mockResolvedValueOnce(initial);
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const scrollRegion = container.querySelector<HTMLElement>(
+      "[data-chat-scroll-region]",
+    );
+    expect(scrollRegion).toBeTruthy();
+    const scroll = mockScrollRegion(scrollRegion!, {
+      clientHeight: 100,
+      scrollHeight: 420,
+      scrollTop: 0,
+    });
+
+    await act(async () => {
+      scrollRegion!.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    scroll.scrollTo.mockClear();
+
+    const updated = chatState(
+      "s1",
+      [
+        initial.messages[0],
+        {
+          ...initial.messages[1],
+          content: "partial response chunk",
+        } as ChatMessage,
+      ],
+      "claude",
+    );
+    updated.updated_at = "2026-01-01T00:00:01Z";
+    updated.session.updated_at = updated.updated_at;
+
+    await act(async () => {
+      emitChatState(updated);
+    });
+
+    await advanceAnimationFrames(8);
+
+    expect(container.textContent).toContain("partial response chunk");
+    expect(scroll.scrollTop).toBe(0);
+    expect(scroll.scrollTo).not.toHaveBeenCalled();
   });
 
   it("ignores stale pending chat state updates after a completed response", async () => {
