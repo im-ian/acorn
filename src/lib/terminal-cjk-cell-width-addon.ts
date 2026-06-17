@@ -33,6 +33,9 @@ interface DomRenderer {
 interface TerminalInternals {
   cols?: number;
   rows?: number;
+  options?: {
+    letterSpacing?: number;
+  };
   refresh?: (start: number, end: number) => void;
   _core?: {
     _renderService?: {
@@ -56,9 +59,10 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
   }
 
   restoreLegacyCellWidthPatch(renderer);
-  const targetCellWidth = measureTargetCellWidth(renderer, widthCache);
+  const targetCellWidth = measureTargetCellWidth(term, renderer, widthCache);
   if (targetCellWidth === null) {
     restoreTerminalCellMeasurements(renderer, widthCache);
+    restoreDefaultSpacing(renderer);
     return;
   }
 
@@ -76,6 +80,7 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     !renderer.__acornCjkCellPatch &&
     !widthsDiffer(targetCellWidth, getCellWidth(renderer))
   ) {
+    restoreDefaultSpacing(renderer);
     return;
   }
 
@@ -88,9 +93,10 @@ export function patchTerminalCellMeasurements(term: TerminalInternals): void {
     };
     renderer._setDefaultSpacing = () => {
       restoreLegacyCellWidthPatch(renderer);
-      const targetCellWidth = measureTargetCellWidth(renderer, widthCache);
+      const targetCellWidth = measureTargetCellWidth(term, renderer, widthCache);
       if (targetCellWidth === null) {
         restoreTerminalCellMeasurements(renderer, widthCache);
+        restoreDefaultSpacing(renderer);
         return;
       }
       recalibrateDefaultSpacing(term, renderer, widthCache, targetCellWidth);
@@ -203,7 +209,16 @@ function widthsDiffer(a: number, b: number): boolean {
   return Math.abs(a - b) > CELL_WIDTH_EPSILON;
 }
 
+function configuredLetterSpacing(term: TerminalInternals): number {
+  const letterSpacing = term.options?.letterSpacing;
+  if (typeof letterSpacing !== "number" || !Number.isFinite(letterSpacing)) {
+    return 0;
+  }
+  return letterSpacing;
+}
+
 function measureTargetCellWidth(
+  term: TerminalInternals,
   renderer: DomRenderer,
   widthCache: WidthCache,
 ): number | null {
@@ -216,7 +231,14 @@ function measureTargetCellWidth(
   const hangulWidth = widthCache.get("가", false, false);
   if (asciiWidth <= 0 || hangulWidth <= 0) return null;
 
-  return widthsDiffer(asciiWidth, hangulWidth) ? asciiWidth : asciiWidth / 2;
+  const letterSpacing = configuredLetterSpacing(term);
+  return widthsDiffer(asciiWidth, hangulWidth)
+    ? asciiWidth + letterSpacing
+    : asciiWidth / 2 + letterSpacing;
+}
+
+function restoreDefaultSpacing(renderer: DomRenderer): void {
+  renderer._setDefaultSpacing?.();
 }
 
 function recalibrateDefaultSpacing(

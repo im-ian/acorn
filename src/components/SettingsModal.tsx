@@ -57,6 +57,9 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
+  TERMINAL_LETTER_SPACING_MAX,
+  TERMINAL_LETTER_SPACING_MIN,
+  TERMINAL_LETTER_SPACING_STEP,
   TOAST_POSITION_OPTIONS,
   type SelectedAgent,
   type SessionTitleSource,
@@ -462,6 +465,12 @@ export function SettingsModal() {
   );
 }
 
+function formatTerminalLetterSpacing(value: number): string {
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
   const patchTerminal = useSettings((s) => s.patchTerminal);
@@ -488,6 +497,20 @@ function TerminalSettings() {
           max={32}
           unit="px"
           onChange={(n) => patchTerminal({ fontSize: n })}
+        />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.letterSpacing.label")}
+        hint={st(t, "settings.terminal.letterSpacing.hint")}
+      >
+        <Stepper
+          value={settings.terminal.letterSpacing}
+          min={TERMINAL_LETTER_SPACING_MIN}
+          max={TERMINAL_LETTER_SPACING_MAX}
+          step={TERMINAL_LETTER_SPACING_STEP}
+          unit="px"
+          format={formatTerminalLetterSpacing}
+          onChange={(n) => patchTerminal({ letterSpacing: n })}
         />
       </Field>
       <Field
