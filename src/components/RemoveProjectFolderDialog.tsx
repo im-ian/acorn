@@ -34,8 +34,8 @@ export function RemoveProjectFolderDialog({
   onClose,
 }: RemoveProjectFolderDialogProps) {
   const t = useTranslation();
-  const autoDeleteEmptyWorktreeWorkspaces = useSettings(
-    (s) => s.settings.sessions.autoDeleteEmptyWorktreeWorkspaces,
+  const confirmDeleteEmptyWorktreeWorkspaces = useSettings(
+    (s) => s.settings.sessions.confirmDeleteEmptyWorktreeWorkspaces,
   );
   const patchSessions = useSettings((s) => s.patchSessions);
   const sessionCount = sessions.length;
@@ -139,10 +139,10 @@ export function RemoveProjectFolderDialog({
               <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
                 <input
                   type="checkbox"
-                  checked={autoDeleteEmptyWorktreeWorkspaces}
+                  checked={confirmDeleteEmptyWorktreeWorkspaces}
                   onChange={(e) =>
                     patchSessions({
-                      autoDeleteEmptyWorktreeWorkspaces: e.target.checked,
+                      confirmDeleteEmptyWorktreeWorkspaces: e.target.checked,
                     })
                   }
                   className="accent-[var(--color-accent)]"

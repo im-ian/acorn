@@ -2127,10 +2127,12 @@ export function Terminal({
               // briefly flash on the way out.
               return;
             }
-            // User opted into auto-close: drop ordinary sessions immediately,
-            // but route worktree-backed sessions through the same removal
-            // policy as tab close.
-            if (useSettings.getState().settings.sessions.closeOnExit) {
+            // When the restart prompt is disabled, drop ordinary sessions
+            // immediately, but route worktree-backed sessions through the same
+            // removal policy as tab close.
+            if (
+              !useSettings.getState().settings.sessions.showRestartPromptOnExit
+            ) {
               exited = true;
               const store = useAppStore.getState();
               const session =

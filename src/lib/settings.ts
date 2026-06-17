@@ -281,8 +281,7 @@ export interface AcornSettings {
     /**
      * Show the confirmation dialog before removing a non-isolated session.
      * Set false to skip the prompt for plain sessions. Worktree-backed
-     * sessions still ask unless they are standalone isolated worktrees covered
-     * by `autoDeleteWorktrees`.
+     * sessions still ask unless their cleanup prompt is disabled below.
      */
     confirmRemove: boolean;
     /**
@@ -292,25 +291,24 @@ export interface AcornSettings {
      */
     warnBeforeClosingRunning: boolean;
     /**
-     * Remove standalone isolated worktree sessions without asking whether to
-     * keep the worktree directory. Shared worktree workspaces and linked
-     * worktree sessions are preserved unless the user explicitly deletes them.
+     * Ask before deleting a standalone isolated worktree directory when its
+     * session is removed. Shared worktree workspaces and linked worktree
+     * sessions are preserved unless the user explicitly deletes them.
      */
-    autoDeleteWorktrees: boolean;
+    confirmDeleteIsolatedWorktrees: boolean;
     /**
-     * Remove the linked worktree directory when deleting an empty worktree
-     * workspace without asking. Worktree workspaces that still contain
-     * sessions always show the workspace removal confirmation and preserve the
-     * directory.
+     * Ask before deleting the linked worktree directory when removing an
+     * empty worktree workspace. Worktree workspaces that still contain
+     * sessions always show the workspace removal confirmation.
      */
-    autoDeleteEmptyWorktreeWorkspaces: boolean;
+    confirmDeleteEmptyWorktreeWorkspaces: boolean;
     /**
-     * When the session's PTY process exits (e.g. user typed `exit`), close
-     * the session tab automatically instead of showing the
-     * "[process exited — press Enter to restart]" prompt. The worktree is
-     * preserved either way; only the in-app tab is affected.
+     * Show the "[process exited — press Enter to restart]" prompt when the
+     * session's PTY process exits. When false, Acorn closes the session tab
+     * automatically; worktree-backed sessions still pass through the normal
+     * worktree cleanup policy.
      */
-    closeOnExit: boolean;
+    showRestartPromptOnExit: boolean;
   };
   power: {
     /**
@@ -475,9 +473,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   sessions: {
     confirmRemove: true,
     warnBeforeClosingRunning: true,
-    autoDeleteWorktrees: false,
-    autoDeleteEmptyWorktreeWorkspaces: false,
-    closeOnExit: false,
+    confirmDeleteIsolatedWorktrees: true,
+    confirmDeleteEmptyWorktreeWorkspaces: true,
+    showRestartPromptOnExit: true,
   },
   power: {
     preventSleep: false,
@@ -775,6 +773,13 @@ interface LegacyPullRequests {
   showChecks?: boolean;
 }
 
+interface PersistedSessionSettings
+  extends Partial<AcornSettings["sessions"]> {
+  autoDeleteWorktrees?: boolean;
+  autoDeleteEmptyWorktreeWorkspaces?: boolean;
+  closeOnExit?: boolean;
+}
+
 function loadSettings(): AcornSettings {
   if (typeof localStorage === "undefined") return DEFAULT_SETTINGS;
   try {
@@ -788,6 +793,7 @@ function loadSettings(): AcornSettings {
       | null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
+    const sessionsRaw = (parsed.sessions ?? {}) as PersistedSessionSettings;
 
     // Prefer the `agents` block; fall back to values stored under the older
     // `commitMessage` shape, then to the Claude default.
@@ -928,8 +934,33 @@ function loadSettings(): AcornSettings {
         llm: { model: llmModel },
       },
       sessions: {
-        ...DEFAULT_SETTINGS.sessions,
-        ...(parsed.sessions ?? {}),
+        confirmRemove:
+          typeof sessionsRaw.confirmRemove === "boolean"
+            ? sessionsRaw.confirmRemove
+            : DEFAULT_SETTINGS.sessions.confirmRemove,
+        warnBeforeClosingRunning:
+          typeof sessionsRaw.warnBeforeClosingRunning === "boolean"
+            ? sessionsRaw.warnBeforeClosingRunning
+            : DEFAULT_SETTINGS.sessions.warnBeforeClosingRunning,
+        confirmDeleteIsolatedWorktrees:
+          typeof sessionsRaw.confirmDeleteIsolatedWorktrees === "boolean"
+            ? sessionsRaw.confirmDeleteIsolatedWorktrees
+            : typeof sessionsRaw.autoDeleteWorktrees === "boolean"
+              ? !sessionsRaw.autoDeleteWorktrees
+              : DEFAULT_SETTINGS.sessions.confirmDeleteIsolatedWorktrees,
+        confirmDeleteEmptyWorktreeWorkspaces:
+          typeof sessionsRaw.confirmDeleteEmptyWorktreeWorkspaces === "boolean"
+            ? sessionsRaw.confirmDeleteEmptyWorktreeWorkspaces
+            : typeof sessionsRaw.autoDeleteEmptyWorktreeWorkspaces ===
+                "boolean"
+              ? !sessionsRaw.autoDeleteEmptyWorktreeWorkspaces
+              : DEFAULT_SETTINGS.sessions.confirmDeleteEmptyWorktreeWorkspaces,
+        showRestartPromptOnExit:
+          typeof sessionsRaw.showRestartPromptOnExit === "boolean"
+            ? sessionsRaw.showRestartPromptOnExit
+            : typeof sessionsRaw.closeOnExit === "boolean"
+              ? !sessionsRaw.closeOnExit
+              : DEFAULT_SETTINGS.sessions.showRestartPromptOnExit,
       },
       power: {
         preventSleep:

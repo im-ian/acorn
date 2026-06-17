@@ -347,12 +347,15 @@ describe("session removal settings", () => {
     });
   });
 
-  it("keeps worktree auto-delete off by default", () => {
+  it("shows removal and cleanup prompts by default", () => {
     expect(DEFAULT_SETTINGS.sessions.warnBeforeClosingRunning).toBe(true);
-    expect(DEFAULT_SETTINGS.sessions.autoDeleteWorktrees).toBe(false);
-    expect(DEFAULT_SETTINGS.sessions.autoDeleteEmptyWorktreeWorkspaces).toBe(
-      false,
+    expect(DEFAULT_SETTINGS.sessions.confirmDeleteIsolatedWorktrees).toBe(
+      true,
     );
+    expect(DEFAULT_SETTINGS.sessions.confirmDeleteEmptyWorktreeWorkspaces).toBe(
+      true,
+    );
+    expect(DEFAULT_SETTINGS.sessions.showRestartPromptOnExit).toBe(true);
   });
 
   it("loads persisted session removal preferences", async () => {
@@ -361,8 +364,9 @@ describe("session removal settings", () => {
       JSON.stringify({
         sessions: {
           warnBeforeClosingRunning: false,
-          autoDeleteWorktrees: true,
-          autoDeleteEmptyWorktreeWorkspaces: true,
+          confirmDeleteIsolatedWorktrees: false,
+          confirmDeleteEmptyWorktreeWorkspaces: false,
+          showRestartPromptOnExit: false,
         },
       }),
     );
@@ -370,15 +374,79 @@ describe("session removal settings", () => {
     vi.resetModules();
     const { useSettings } = await import("./settings");
 
-    expect(useSettings.getState().settings.sessions.autoDeleteWorktrees).toBe(
-      true,
-    );
+    expect(
+      useSettings.getState().settings.sessions.confirmDeleteIsolatedWorktrees,
+    ).toBe(false);
     expect(
       useSettings.getState().settings.sessions.warnBeforeClosingRunning,
     ).toBe(false);
     expect(
       useSettings.getState().settings.sessions
-        .autoDeleteEmptyWorktreeWorkspaces,
+        .confirmDeleteEmptyWorktreeWorkspaces,
+    ).toBe(false);
+    expect(
+      useSettings.getState().settings.sessions.showRestartPromptOnExit,
+    ).toBe(false);
+  });
+
+  it("migrates persisted automatic cleanup preferences", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        sessions: {
+          warnBeforeClosingRunning: false,
+          autoDeleteWorktrees: true,
+          autoDeleteEmptyWorktreeWorkspaces: true,
+          closeOnExit: true,
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.sessions.confirmDeleteIsolatedWorktrees,
+    ).toBe(false);
+    expect(
+      useSettings.getState().settings.sessions.warnBeforeClosingRunning,
+    ).toBe(false);
+    expect(
+      useSettings.getState().settings.sessions
+        .confirmDeleteEmptyWorktreeWorkspaces,
+    ).toBe(false);
+    expect(
+      useSettings.getState().settings.sessions.showRestartPromptOnExit,
+    ).toBe(false);
+  });
+
+  it("prefers current cleanup prompt preferences over automatic cleanup keys", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        sessions: {
+          confirmDeleteIsolatedWorktrees: true,
+          autoDeleteWorktrees: true,
+          confirmDeleteEmptyWorktreeWorkspaces: true,
+          autoDeleteEmptyWorktreeWorkspaces: true,
+          showRestartPromptOnExit: true,
+          closeOnExit: true,
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.sessions.confirmDeleteIsolatedWorktrees,
+    ).toBe(true);
+    expect(
+      useSettings.getState().settings.sessions
+        .confirmDeleteEmptyWorktreeWorkspaces,
+    ).toBe(true);
+    expect(
+      useSettings.getState().settings.sessions.showRestartPromptOnExit,
     ).toBe(true);
   });
 });

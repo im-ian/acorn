@@ -204,12 +204,16 @@ export function Sidebar() {
   const renameProjectFolder = useAppStore((s) => s.renameProjectFolder);
   const removeProjectFolder = useAppStore((s) => s.removeProjectFolder);
   const removeSession = useAppStore((s) => s.removeSession);
-  const autoDeleteWorktrees = useSettings(
-    (s) => s.settings.sessions.autoDeleteWorktrees,
+  const confirmDeleteIsolatedWorktrees = useSettings(
+    (s) => s.settings.sessions.confirmDeleteIsolatedWorktrees,
   );
-  const autoDeleteEmptyWorktreeWorkspaces = useSettings(
-    (s) => s.settings.sessions.autoDeleteEmptyWorktreeWorkspaces,
+  const confirmDeleteEmptyWorktreeWorkspaces = useSettings(
+    (s) => s.settings.sessions.confirmDeleteEmptyWorktreeWorkspaces,
   );
+  const deleteIsolatedWorktreesWithoutPrompt =
+    !confirmDeleteIsolatedWorktrees;
+  const deleteEmptyWorktreeWorkspacesWithoutPrompt =
+    !confirmDeleteEmptyWorktreeWorkspaces;
   const moveSessionToProjectFolder = useAppStore(
     (s) => s.moveSessionToProjectFolder,
   );
@@ -424,7 +428,7 @@ export function Sidebar() {
       for (const session of folderGroup.sessions) {
         const removedWorktree = await removeSession(
           session.id,
-          autoDeleteWorktrees &&
+          deleteIsolatedWorktreesWithoutPrompt &&
             shouldAutoDeleteSessionWorktree(session, projectFolders),
         );
         if (removedWorktree) {
@@ -491,7 +495,7 @@ export function Sidebar() {
     if (!folderGroup) return;
     if (folderGroup.sessions.length === 0) {
       if (isWorktreeWorkspace(folderGroup.folder)) {
-        if (autoDeleteEmptyWorktreeWorkspaces) {
+        if (deleteEmptyWorktreeWorkspacesWithoutPrompt) {
           void removeProjectFolderAndWorktree(folderGroup.folder);
         } else {
           setPendingRemoveProjectFolderId(folderGroup.folder.id);
@@ -1199,7 +1203,7 @@ export function Sidebar() {
             isWorktreeWorkspace(pendingRemoveProjectFolderGroup.folder),
         )}
         deleteWorktrees={Boolean(
-          autoDeleteWorktrees &&
+          deleteIsolatedWorktreesWithoutPrompt &&
             pendingRemoveProjectFolderGroup?.sessions.some((session) =>
               shouldAutoDeleteSessionWorktree(session, projectFolders),
             ),

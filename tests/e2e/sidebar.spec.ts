@@ -1168,8 +1168,8 @@ test.describe("sidebar: project lifecycle", () => {
         JSON.stringify({
           sessions: {
             confirmRemove: true,
-            autoDeleteWorktrees: true,
-            closeOnExit: false,
+            confirmDeleteIsolatedWorktrees: false,
+            showRestartPromptOnExit: true,
           },
         }),
       );
@@ -1376,20 +1376,18 @@ test.describe("sidebar: project lifecycle", () => {
     );
     await expect(dialog).toContainText("Also delete this worktree from disk?");
     const remember = dialog.getByRole("checkbox", {
-      name: "Always delete empty worktree workspace directories",
+      name: "Ask before deleting empty worktree workspace directories",
     });
-    await expect(remember).not.toBeChecked();
-    await remember.check();
+    await expect(remember).toBeChecked();
+    await remember.uncheck();
     await expect
       .poll(async () =>
         page.evaluate(() =>
-          Boolean(
-            JSON.parse(localStorage.getItem("acorn:settings:v1") ?? "{}")
-              .sessions?.autoDeleteEmptyWorktreeWorkspaces,
-          ),
+          JSON.parse(localStorage.getItem("acorn:settings:v1") ?? "{}")
+            .sessions?.confirmDeleteEmptyWorktreeWorkspaces,
         ),
       )
-      .toBe(true);
+      .toBe(false);
     await dialog.getByRole("button", { name: "Delete worktree" }).click();
 
     const calls = (await page.evaluate(
@@ -1541,9 +1539,9 @@ test.describe("sidebar: project lifecycle", () => {
         JSON.stringify({
           sessions: {
             confirmRemove: true,
-            autoDeleteWorktrees: false,
-            autoDeleteEmptyWorktreeWorkspaces: true,
-            closeOnExit: false,
+            confirmDeleteIsolatedWorktrees: true,
+            confirmDeleteEmptyWorktreeWorkspaces: false,
+            showRestartPromptOnExit: true,
           },
         }),
       );

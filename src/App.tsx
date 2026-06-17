@@ -271,9 +271,11 @@ function App() {
   const confirmRemoveSession = useSettings(
     (s) => s.settings.sessions.confirmRemove,
   );
-  const autoDeleteWorktrees = useSettings(
-    (s) => s.settings.sessions.autoDeleteWorktrees,
+  const confirmDeleteIsolatedWorktrees = useSettings(
+    (s) => s.settings.sessions.confirmDeleteIsolatedWorktrees,
   );
+  const deleteIsolatedWorktreesWithoutPrompt =
+    !confirmDeleteIsolatedWorktrees;
   const settings = useSettings((s) => s.settings);
   const shortcuts = settings.shortcuts;
   const preventSleep = settings.power.preventSleep;
@@ -304,7 +306,8 @@ function App() {
     pendingRemove !== null &&
     !pendingRemoveNeedsRunningWarning &&
     (pendingRemoveKeepsSharedWorktree ||
-      (pendingRemoveAutoDeletesWorktree && autoDeleteWorktrees) ||
+      (pendingRemoveAutoDeletesWorktree &&
+        deleteIsolatedWorktreesWithoutPrompt) ||
       (!pendingRemoveRecordedWorktree && !confirmRemoveSession));
   const sessionIdsKey = useMemo(
     () => sessions.map((session) => session.id).join("\0"),
@@ -1086,10 +1089,10 @@ function App() {
     }
   }, [pendingRemove?.id, runningCloseWarningConfirmedId]);
 
-  // Skip the confirmation dialog when Settings gives a deterministic removal
-  // choice: shared worktree workspace sessions keep the worktree, plain
-  // sessions can skip confirmation, and standalone isolated sessions can opt
-  // into always deleting their worktree from disk.
+  // Skip the confirmation dialog when Settings gives a deterministic removal:
+  // shared worktree workspace sessions keep the worktree, plain sessions can
+  // skip confirmation, and standalone isolated sessions can delete their
+  // worktree automatically when the cleanup prompt is disabled.
   useEffect(() => {
     if (!pendingRemove) return;
     if (pendingRemoveNeedsRunningWarning) return;
@@ -1112,7 +1115,7 @@ function App() {
       pendingRemove,
       projectFolders,
     );
-    if (autoDeleteWorktree && autoDeleteWorktrees) {
+    if (autoDeleteWorktree && deleteIsolatedWorktreesWithoutPrompt) {
       clearPendingRemove();
       void removeSession(pendingRemove.id, true).then((removedWorktree) =>
         showStoreWorktreeRemovalToast(
@@ -1137,7 +1140,7 @@ function App() {
   }, [
     pendingRemove,
     pendingRemoveNeedsRunningWarning,
-    autoDeleteWorktrees,
+    deleteIsolatedWorktreesWithoutPrompt,
     clearPendingRemove,
     confirmRemoveSession,
     projectFolders,
