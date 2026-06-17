@@ -434,6 +434,40 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches terminal letter spacing from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const label = Array.from(document.querySelectorAll("span")).find(
+      (element) => element.textContent === "Letter spacing",
+    );
+    const field = label?.parentElement;
+    const increase = Array.from(field?.querySelectorAll("button") ?? []).find(
+      (element) => element.getAttribute("aria-label") === "Increase",
+    );
+
+    expect(field?.textContent).toContain("0");
+    expect(increase).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      increase?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(patchTerminal).toHaveBeenCalledWith({ letterSpacing: 1 });
+  });
+
   it("patches the resident terminal limit from the Sessions tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({

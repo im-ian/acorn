@@ -57,6 +57,8 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
+  TERMINAL_LETTER_SPACING_MAX,
+  TERMINAL_LETTER_SPACING_MIN,
   TOAST_POSITION_OPTIONS,
   type SelectedAgent,
   type SessionTitleSource,
@@ -488,6 +490,18 @@ function TerminalSettings() {
           max={32}
           unit="px"
           onChange={(n) => patchTerminal({ fontSize: n })}
+        />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.letterSpacing.label")}
+        hint={st(t, "settings.terminal.letterSpacing.hint")}
+      >
+        <Stepper
+          value={settings.terminal.letterSpacing}
+          min={TERMINAL_LETTER_SPACING_MIN}
+          max={TERMINAL_LETTER_SPACING_MAX}
+          unit="px"
+          onChange={(n) => patchTerminal({ letterSpacing: n })}
         />
       </Field>
       <Field

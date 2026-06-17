@@ -71,6 +71,10 @@
         "label": "Font size",
         "hint": "In CSS pixels. Range 8-32."
       },
+      "letterSpacing": {
+        "label": "Letter spacing",
+        "hint": "Horizontal spacing between terminal cells, in whole pixels. Range -2 to 6."
+      },
       "fontWeight": {
         "label": "Font weight",
         "hint": "Weight for normal text. Effective values depend on the chosen font's available weights."

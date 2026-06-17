@@ -78,6 +78,43 @@ describe("terminal CJK cell width patch", () => {
     expect(refreshCalls).toEqual([[0, 5]]);
   });
 
+  it("includes configured letter spacing when calibrating CJK cell width", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const rowElement = document.createElement("div");
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _rowElements: [rowElement],
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) =>
+          chars === "W" || chars === "가" ? 8 : 8,
+      },
+      dimensions: {
+        css: {
+          cell: { width: 10 },
+          canvas: { width: 60 },
+        },
+      },
+    };
+    const terminal = {
+      cols: 6,
+      options: { letterSpacing: 2 },
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer.dimensions.css.cell.width).toBe(6);
+    expect(renderer.dimensions.css.canvas.width).toBe(36);
+    expect(rowElement.style.width).toBe("36px");
+    expect(rowContainer.style.letterSpacing).toBe("-2px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -2 });
+  });
+
   it("leaves spacing untouched when W and Hangul measurements differ", () => {
     const rowContainer = document.createElement("div");
     const rowFactory = {};
@@ -113,6 +150,49 @@ describe("terminal CJK cell width patch", () => {
     expect(renderer.dimensions.css.canvas.width).toBe(48);
     expect(rowContainer.style.letterSpacing).toBe("");
     expect(rowFactory).not.toHaveProperty("defaultSpacing");
+  });
+
+  it("restores xterm default letter spacing when no CJK calibration is needed", () => {
+    const rowContainer = document.createElement("div");
+    const rowFactory = {};
+    const renderer = {
+      _rowContainer: rowContainer,
+      _rowFactory: rowFactory,
+      _setDefaultSpacing: () => {
+        rowContainer.style.letterSpacing = "2px";
+        Object.assign(rowFactory, { defaultSpacing: 2 });
+      },
+      _widthCache: {
+        clear: () => undefined,
+        get: (chars: string, _bold: boolean | number, _italic: boolean | number) => {
+          if (chars === "W") return 8;
+          if (chars === "가") return 16;
+          return 8;
+        },
+      },
+      dimensions: {
+        css: {
+          cell: { width: 10 },
+          canvas: { width: 60 },
+        },
+      },
+    };
+    rowContainer.style.letterSpacing = "2px";
+    const terminal = {
+      cols: 6,
+      options: { letterSpacing: 2 },
+      _core: {
+        _renderService: { _renderer: { value: renderer } },
+      },
+    };
+
+    patchTerminalCellMeasurements(terminal);
+
+    expect(renderer).not.toHaveProperty("__acornCjkCellPatch");
+    expect(renderer.dimensions.css.cell.width).toBe(10);
+    expect(renderer.dimensions.css.canvas.width).toBe(60);
+    expect(rowContainer.style.letterSpacing).toBe("2px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: 2 });
   });
 
   it("keeps repeated automatic calibration stable when W measurement includes existing letter spacing", () => {

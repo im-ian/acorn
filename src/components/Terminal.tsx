@@ -515,6 +515,7 @@ export function Terminal({
       allowTransparency: true,
       fontFamily: initialSettings.terminal.fontFamily,
       fontSize: initialSettings.terminal.fontSize,
+      letterSpacing: initialSettings.terminal.letterSpacing,
       fontWeight: initialSettings.terminal.fontWeight,
       fontWeightBold: initialSettings.terminal.fontWeightBold,
       lineHeight: initialSettings.terminal.lineHeight,
@@ -932,6 +933,10 @@ export function Terminal({
         term.options.fontSize = next.fontSize;
         changed = true;
       }
+      if (next.letterSpacing !== previous.letterSpacing) {
+        term.options.letterSpacing = next.letterSpacing;
+        changed = true;
+      }
       if (next.fontWeight !== previous.fontWeight) {
         term.options.fontWeight = next.fontWeight;
         changed = true;
@@ -1303,12 +1308,16 @@ export function Terminal({
       // from the parent.
       const fontFamily = term.options.fontFamily;
       const fontSize = term.options.fontSize;
+      const letterSpacing = term.options.letterSpacing;
       const fontWeight = term.options.fontWeight;
       if (typeof fontFamily === "string") {
         compositionView.style.fontFamily = fontFamily;
       }
       if (typeof fontSize === "number") {
         compositionView.style.fontSize = `${fontSize}px`;
+      }
+      if (typeof letterSpacing === "number") {
+        compositionView.style.letterSpacing = `${letterSpacing}px`;
       }
       if (typeof fontWeight === "number" || typeof fontWeight === "string") {
         compositionView.style.fontWeight = String(fontWeight);

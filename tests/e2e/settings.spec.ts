@@ -33,6 +33,31 @@ test.describe("settings modal", () => {
     await expect(modal).toHaveCount(0);
   });
 
+  test("adjusts terminal letter spacing and persists it", async ({ page }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const field = modal
+      .getByText("Letter spacing", { exact: true })
+      .locator("..");
+    await expect(field).toContainText("0px");
+
+    await field.getByRole("button", { name: "Increase" }).click();
+
+    await expect(field).toContainText("1px");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).terminal?.letterSpacing : null;
+        }),
+      )
+      .toBe(1);
+  });
+
   test("records a custom shortcut and reset all restores defaults", async ({
     page,
   }) => {
