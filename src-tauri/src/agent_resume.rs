@@ -287,30 +287,9 @@ pub(crate) fn locate_transcript(kind: AgentKind, uuid: &str) -> Option<PathBuf> 
 }
 
 /// Walk the codex sessions root and find the rollout whose filename ends
-/// in `<uuid>`. Codex rolls files into `<root>/<year>/<month>/<day>/`,
-/// so we only need to scan the most recent date directories — older
-/// rollouts for a given UUID never exist (the UUID is freshly minted
-/// each run, never reused).
+/// in `<uuid>`.
 fn locate_codex_transcript(uuid: &str) -> Option<PathBuf> {
-    let root = codex_sessions_root()?;
-    for year in iter_subdirs_desc(&root)?.into_iter().take(2) {
-        for month in iter_subdirs_desc(&year)?.into_iter().take(2) {
-            for day in iter_subdirs_desc(&month)?.into_iter().take(7) {
-                if let Some(p) = find_rollout_for_uuid(&day, uuid) {
-                    return Some(p);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn codex_sessions_root() -> Option<PathBuf> {
-    std::env::var("CODEX_HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
-        .map(|p| p.join("sessions"))
+    acorn_transcript::locate_codex_transcript(uuid)
 }
 
 fn locate_antigravity_transcript(id: &str) -> Option<PathBuf> {
@@ -343,37 +322,6 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
         .map(|profile| root.join(profile).join("brain"))
         .filter(|path| path.is_dir())
         .collect()
-}
-
-fn iter_subdirs_desc(dir: &Path) -> Option<Vec<PathBuf>> {
-    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-    Some(entries)
-}
-
-fn find_rollout_for_uuid(day_dir: &Path, uuid: &str) -> Option<PathBuf> {
-    for entry in fs::read_dir(day_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Some(stem) = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|n| n.strip_suffix(".jsonl"))
-        else {
-            continue;
-        };
-        if stem.ends_with(uuid) {
-            return Some(path);
-        }
-    }
-    None
 }
 
 fn extract_preview(kind: AgentKind, path: &Path) -> io::Result<Option<String>> {
