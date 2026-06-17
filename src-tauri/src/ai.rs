@@ -1,6 +1,8 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::str;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -153,6 +155,29 @@ pub fn run_resolved_oneshot_in_dir_cancellable(
     )
 }
 
+pub fn run_resolved_streaming_in_dir_cancellable<F>(
+    resolved: &ResolvedAiCommand,
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+    cancellation: Option<ChatCancellation>,
+    on_stdout_chunk: F,
+) -> AppResult<String>
+where
+    F: FnMut(&str),
+{
+    run_streaming_in_dir_cancellable_with_transport(
+        resolved.command,
+        &resolved.args,
+        prompt,
+        settings_label,
+        cwd,
+        cancellation,
+        resolved.prompt_transport,
+        on_stdout_chunk,
+    )
+}
+
 fn run_oneshot_in_dir_cancellable_with_transport(
     command: &str,
     args: &[String],
@@ -206,6 +231,78 @@ fn run_oneshot_in_dir_cancellable_with_transport(
     }
 
     let output = wait_with_timeout(command, child, ONESHOT_TIMEOUT, cancellation)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("{command} exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_streaming_in_dir_cancellable_with_transport<F>(
+    command: &str,
+    args: &[String],
+    prompt: &str,
+    settings_label: &str,
+    cwd: Option<&Path>,
+    cancellation: Option<ChatCancellation>,
+    prompt_transport: PromptTransport,
+    mut on_stdout_chunk: F,
+) -> AppResult<String>
+where
+    F: FnMut(&str),
+{
+    let resolved = cli_resolver::resolve(command).map_err(|_| {
+        AppError::Other(format!(
+            "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
+        ))
+    })?;
+    let mut command_args = args.to_vec();
+    if prompt_transport == PromptTransport::Argument {
+        command_args.push(prompt.to_string());
+    }
+    let mut command_builder = Command::new(&resolved);
+    crate::shell_env::apply_to_command(&mut command_builder);
+    command_builder
+        .args(&command_args)
+        .stdin(match prompt_transport {
+            PromptTransport::Stdin => Stdio::piped(),
+            PromptTransport::Argument => Stdio::null(),
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        command_builder.current_dir(cwd);
+    }
+    let mut child = command_builder.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            cli_resolver::invalidate(command);
+            AppError::Other(format!(
+                "`{command}` not found. Install the configured AI CLI or change the provider in {settings_label}."
+            ))
+        } else {
+            AppError::Other(format!("failed to invoke {command}: {e}"))
+        }
+    })?;
+
+    if prompt_transport == PromptTransport::Stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(prompt.as_bytes())
+                .map_err(|e| AppError::Other(format!("failed to write to {command}: {e}")))?;
+        } else {
+            return Err(AppError::Other(format!("{command} stdin missing")));
+        }
+    }
+
+    let output =
+        wait_with_timeout_streaming(command, child, None, cancellation, &mut on_stdout_chunk)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -300,6 +397,236 @@ fn wait_with_timeout(
         .join()
         .map_err(|_| AppError::Other(format!("{command} stdout reader failed")))?
         .map_err(|e| AppError::Other(format!("failed reading {command} stdout: {e}")))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| AppError::Other(format!("{command} stderr reader failed")))?
+        .map_err(|e| AppError::Other(format!("failed reading {command} stderr: {e}")))?;
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+struct Utf8ChunkDecoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8ChunkDecoder {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut out = String::new();
+        loop {
+            match str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    out.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(err) => {
+                    let valid_up_to = err.valid_up_to();
+                    if valid_up_to > 0 {
+                        let valid = str::from_utf8(&self.pending[..valid_up_to])
+                            .expect("valid_up_to must end at a utf8 boundary");
+                        out.push_str(valid);
+                        self.pending.drain(..valid_up_to);
+                    }
+                    if let Some(error_len) = err.error_len() {
+                        out.push_str(&String::from_utf8_lossy(&self.pending[..error_len]));
+                        self.pending.drain(..error_len);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn finish(&mut self) -> String {
+        if self.pending.is_empty() {
+            return String::new();
+        }
+        let trailing = String::from_utf8_lossy(&self.pending).to_string();
+        self.pending.clear();
+        trailing
+    }
+}
+
+fn process_stdout_chunk<F>(
+    command: &str,
+    chunk: io::Result<Vec<u8>>,
+    stdout: &mut Vec<u8>,
+    decoder: &mut Utf8ChunkDecoder,
+    on_stdout_chunk: &mut F,
+) -> AppResult<()>
+where
+    F: FnMut(&str),
+{
+    let chunk =
+        chunk.map_err(|e| AppError::Other(format!("failed reading {command} stdout: {e}")))?;
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    stdout.extend_from_slice(&chunk);
+    let text = decoder.push(&chunk);
+    if !text.is_empty() {
+        on_stdout_chunk(&text);
+    }
+    Ok(())
+}
+
+fn drain_stdout_chunks<F>(
+    command: &str,
+    stdout_rx: &Receiver<io::Result<Vec<u8>>>,
+    stdout: &mut Vec<u8>,
+    decoder: &mut Utf8ChunkDecoder,
+    on_stdout_chunk: &mut F,
+) -> AppResult<()>
+where
+    F: FnMut(&str),
+{
+    loop {
+        match stdout_rx.try_recv() {
+            Ok(chunk) => process_stdout_chunk(command, chunk, stdout, decoder, on_stdout_chunk)?,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
+fn wait_with_timeout_streaming<F>(
+    command: &str,
+    mut child: std::process::Child,
+    timeout: Option<Duration>,
+    cancellation: Option<ChatCancellation>,
+    on_stdout_chunk: &mut F,
+) -> AppResult<Output>
+where
+    F: FnMut(&str),
+{
+    let stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Other(format!("{command} stdout missing")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::Other(format!("{command} stderr missing")))?;
+
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let stdout_reader = thread::spawn(move || {
+        let mut reader = stdout_pipe;
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if stdout_tx.send(Ok(buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = stdout_tx.send(Err(err));
+                    break;
+                }
+            }
+        }
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut reader = stderr;
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).map(|_| buf)
+    });
+
+    let mut stdout = Vec::new();
+    let mut decoder = Utf8ChunkDecoder::new();
+    let started = Instant::now();
+    let status = if let Some(cancellation) = cancellation {
+        cancellation.set_child(child);
+        let status = loop {
+            drain_stdout_chunks(
+                command,
+                &stdout_rx,
+                &mut stdout,
+                &mut decoder,
+                on_stdout_chunk,
+            )?;
+            if cancellation.is_cancelled() {
+                cancellation.kill_and_wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                cancellation.clear_child();
+                return Err(AppError::Other(format!("{command} cancelled")));
+            }
+            match cancellation.try_wait(command)? {
+                Some(status) => break status,
+                None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
+                    cancellation.kill_and_wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    cancellation.clear_child();
+                    let timeout = timeout.expect("timeout checked as some");
+                    return Err(AppError::Other(format!(
+                        "{command} timed out after {} seconds",
+                        timeout.as_secs()
+                    )));
+                }
+                None => thread::sleep(Duration::from_millis(25)),
+            }
+        };
+        cancellation.clear_child();
+        status
+    } else {
+        loop {
+            drain_stdout_chunks(
+                command,
+                &stdout_rx,
+                &mut stdout,
+                &mut decoder,
+                on_stdout_chunk,
+            )?;
+            match child
+                .try_wait()
+                .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?
+            {
+                Some(status) => break status,
+                None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    let timeout = timeout.expect("timeout checked as some");
+                    return Err(AppError::Other(format!(
+                        "{command} timed out after {} seconds",
+                        timeout.as_secs()
+                    )));
+                }
+                None => thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    };
+
+    stdout_reader
+        .join()
+        .map_err(|_| AppError::Other(format!("{command} stdout reader failed")))?;
+    drain_stdout_chunks(
+        command,
+        &stdout_rx,
+        &mut stdout,
+        &mut decoder,
+        on_stdout_chunk,
+    )?;
+    let trailing = decoder.finish();
+    if !trailing.is_empty() {
+        on_stdout_chunk(&trailing);
+    }
     let stderr = stderr_reader
         .join()
         .map_err(|_| AppError::Other(format!("{command} stderr reader failed")))?
@@ -435,5 +762,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(output, "arg= stdin=hello");
+    }
+
+    #[test]
+    fn streams_stdout_chunks_before_returning() {
+        let args = vec![
+            "-c".to_string(),
+            "printf one; sleep 0.05; printf two".to_string(),
+        ];
+        let mut chunks = Vec::new();
+        let output = run_streaming_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "",
+            "test settings",
+            None,
+            None,
+            PromptTransport::Stdin,
+            |chunk| chunks.push(chunk.to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(output, "onetwo");
+        assert_eq!(chunks.concat(), "onetwo");
+        assert!(!chunks.is_empty());
     }
 }

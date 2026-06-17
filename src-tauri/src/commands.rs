@@ -451,6 +451,278 @@ pub(crate) struct ProviderResponse {
 pub(crate) trait ChatProviderAdapter {
     fn capabilities(&self) -> ChatProviderCapabilities;
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse>;
+    fn send_message_streaming(
+        &self,
+        input: ChatProviderInput,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> AppResult<ProviderResponse> {
+        let _ = on_chunk;
+        self.send_message(input)
+    }
+}
+
+fn ignore_chat_streaming_chunk(_: &str) {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatCliOutputMode {
+    Text,
+    ClaudeStreamJson,
+    CodexJson,
+}
+
+struct ChatCliOutputParser {
+    mode: ChatCliOutputMode,
+    pending_line: String,
+    emitted_text: String,
+    final_text: Option<String>,
+}
+
+impl ChatCliOutputParser {
+    fn new(mode: ChatCliOutputMode) -> Self {
+        Self {
+            mode,
+            pending_line: String::new(),
+            emitted_text: String::new(),
+            final_text: None,
+        }
+    }
+
+    fn push_chunk(&mut self, chunk: &str, on_chunk: &mut dyn FnMut(&str)) {
+        match self.mode {
+            ChatCliOutputMode::Text => self.emit_delta(chunk, on_chunk),
+            ChatCliOutputMode::ClaudeStreamJson | ChatCliOutputMode::CodexJson => {
+                self.pending_line.push_str(chunk);
+                while let Some(newline) = self.pending_line.find('\n') {
+                    let line = self.pending_line[..newline].to_string();
+                    self.pending_line.drain(..=newline);
+                    self.process_json_line(&line, on_chunk);
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self, raw: &str) -> String {
+        if self.mode == ChatCliOutputMode::Text {
+            return raw.trim().to_string();
+        }
+        if !self.pending_line.trim().is_empty() {
+            let line = std::mem::take(&mut self.pending_line);
+            let mut ignore_chunk = ignore_chat_streaming_chunk;
+            self.process_json_line(&line, &mut ignore_chunk);
+        }
+        self.final_text
+            .as_deref()
+            .unwrap_or(self.emitted_text.as_str())
+            .trim()
+            .to_string()
+    }
+
+    fn process_json_line(&mut self, line: &str, on_chunk: &mut dyn FnMut(&str)) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return;
+        };
+        let Some(event) = extract_chat_stream_text(self.mode, &value) else {
+            return;
+        };
+        if event.is_final {
+            self.final_text = Some(event.text.clone());
+        }
+        self.emit_text_candidate(&event, on_chunk);
+    }
+
+    fn emit_text_candidate(
+        &mut self,
+        event: &ChatStreamTextEvent,
+        on_chunk: &mut dyn FnMut(&str),
+    ) {
+        let text = event.text.as_str();
+        if text.is_empty() {
+            return;
+        }
+        if let Some(delta) = text.strip_prefix(&self.emitted_text) {
+            self.emit_delta(delta, on_chunk);
+        } else if event.is_final {
+            // Persist normalized final text from finish() without briefly
+            // appending a divergent duplicate to the live stream.
+        } else if event.boundary != ChatStreamTextBoundary::Delta {
+            let separator = message_boundary_separator(&self.emitted_text, text);
+            if !separator.is_empty() {
+                self.emit_delta(separator, on_chunk);
+            }
+            self.emit_delta(text, on_chunk);
+        } else {
+            self.emit_delta(text, on_chunk);
+        }
+    }
+
+    fn emit_delta(&mut self, delta: &str, on_chunk: &mut dyn FnMut(&str)) {
+        if delta.is_empty() {
+            return;
+        }
+        self.emitted_text.push_str(delta);
+        on_chunk(delta);
+    }
+}
+
+struct ChatStreamTextEvent {
+    text: String,
+    boundary: ChatStreamTextBoundary,
+    is_final: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatStreamTextBoundary {
+    Delta,
+    Snapshot,
+    Message,
+}
+
+fn message_boundary_separator(previous: &str, next: &str) -> &'static str {
+    if previous.is_empty()
+        || previous.ends_with('\n')
+        || next.starts_with('\n')
+        || previous.ends_with(' ')
+        || next.starts_with(' ')
+    {
+        ""
+    } else {
+        "\n\n"
+    }
+}
+
+fn extract_chat_stream_text(
+    mode: ChatCliOutputMode,
+    value: &serde_json::Value,
+) -> Option<ChatStreamTextEvent> {
+    match mode {
+        ChatCliOutputMode::Text => None,
+        ChatCliOutputMode::ClaudeStreamJson => extract_claude_stream_text(value),
+        ChatCliOutputMode::CodexJson => extract_codex_stream_text(value),
+    }
+}
+
+fn extract_claude_stream_text(value: &serde_json::Value) -> Option<ChatStreamTextEvent> {
+    let event_type = value.get("type").and_then(serde_json::Value::as_str);
+    match event_type {
+        Some("assistant") => {
+            assistant_message_text(value.get("message")?).map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Snapshot,
+                is_final: false,
+            })
+        }
+        Some("result") => string_field(value, &["result"])
+            .or_else(|| string_field(value, &["message"]))
+            .map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Snapshot,
+                is_final: true,
+            }),
+        Some("content_block_delta") | Some("text_delta") | Some("partial") => {
+            json_delta_text(value).map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Delta,
+                is_final: false,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn extract_codex_stream_text(value: &serde_json::Value) -> Option<ChatStreamTextEvent> {
+    if let Some(event) = extract_codex_event_text(value) {
+        return Some(event);
+    }
+    value
+        .get("msg")
+        .and_then(extract_codex_event_text)
+        .or_else(|| value.get("payload").and_then(extract_codex_event_text))
+}
+
+fn extract_codex_event_text(value: &serde_json::Value) -> Option<ChatStreamTextEvent> {
+    let event_type = value.get("type").and_then(serde_json::Value::as_str);
+    match event_type {
+        Some("agent_message_content_delta") => {
+            json_delta_text(value).map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Delta,
+                is_final: false,
+            })
+        }
+        Some("agent_message") => string_field(value, &["message"])
+            .or_else(|| string_field(value, &["text"]))
+            .or_else(|| assistant_message_text(value))
+            .map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Message,
+                is_final: false,
+            }),
+        Some("response_item") | Some("raw_response_item") => value
+            .get("payload")
+            .and_then(assistant_message_text)
+            .map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Message,
+                is_final: false,
+            }),
+        Some("turn_complete") | Some("task_complete") => {
+            string_field(value, &["last_agent_message"]).map(|text| ChatStreamTextEvent {
+                text,
+                boundary: ChatStreamTextBoundary::Snapshot,
+                is_final: true,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn json_delta_text(value: &serde_json::Value) -> Option<String> {
+    string_field(value, &["delta"])
+        .or_else(|| string_field(value, &["delta", "text"]))
+        .or_else(|| string_field(value, &["delta", "content"]))
+        .or_else(|| string_field(value, &["text"]))
+        .or_else(|| string_field(value, &["content"]))
+}
+
+fn assistant_message_text(value: &serde_json::Value) -> Option<String> {
+    if value
+        .get("role")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|role| role != "assistant")
+    {
+        return None;
+    }
+    if let Some(text) = value.get("content").and_then(serde_json::Value::as_str) {
+        return Some(text.to_string());
+    }
+    let content = value.get("content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter_map(chat_content_part_text)
+        .collect::<String>();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn chat_content_part_text(value: &serde_json::Value) -> Option<&str> {
+    let part_type = value.get("type").and_then(serde_json::Value::as_str);
+    match part_type {
+        Some("text") | Some("output_text") | Some("message") | None => {
+            value.get("text").and_then(serde_json::Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+fn string_field(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut cursor = value;
+    for key in path {
+        cursor = cursor.get(*key)?;
+    }
+    cursor.as_str().map(str::to_string)
 }
 
 struct CliChatProviderAdapter {
@@ -468,28 +740,40 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
                     | crate::ai::AiProvider::Codex
                     | crate::ai::AiProvider::Antigravity
             ),
-            streaming: false,
+            streaming: true,
             attachments: false,
         }
     }
 
     fn send_message(&self, input: ChatProviderInput) -> AppResult<ProviderResponse> {
+        let mut ignore_chunk: fn(&str) = ignore_chat_streaming_chunk;
+        self.send_message_streaming(input, &mut ignore_chunk)
+    }
+
+    fn send_message_streaming(
+        &self,
+        input: ChatProviderInput,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> AppResult<ProviderResponse> {
         let invocation = resolve_chat_cli_invocation(&self.ai, &input)?;
         let started_at = SystemTime::now();
-        let raw = crate::ai::run_resolved_oneshot_in_dir_cancellable(
+        let mut output_parser = ChatCliOutputParser::new(invocation.output_mode);
+        let raw = crate::ai::run_resolved_streaming_in_dir_cancellable(
             &invocation.cli,
             &invocation.prompt,
             "Settings → Agents",
             Some(&self.cwd),
             self.cancellation.clone(),
+            |chunk| output_parser.push_chunk(chunk, on_chunk),
         )?;
+        let content = output_parser.finish(&raw);
         let discovered_thread_id = invocation.transcript_discovery.and_then(|kind| {
             acorn_transcript::find_completed_agent_run(&self.cwd, kind, started_at)
         });
         let native_thread_id = invocation.native_thread_id.or(discovered_thread_id);
         let resume_token = invocation.resume_token.or_else(|| native_thread_id.clone());
         Ok(ProviderResponse {
-            content: raw.trim().to_string(),
+            content,
             native_thread_id,
             resume_token,
             last_response_id: None,
@@ -505,6 +789,7 @@ struct ChatCliInvocation {
     native_thread_id: Option<String>,
     resume_token: Option<String>,
     transcript_discovery: Option<acorn_transcript::AgentKind>,
+    output_mode: ChatCliOutputMode,
 }
 
 fn provider_thread_resume_cursor(thread: Option<&persistence::ProviderThread>) -> Option<String> {
@@ -540,7 +825,9 @@ fn resolve_chat_cli_invocation(
             let mut args = vec![
                 "-p".to_string(),
                 "--output-format".to_string(),
-                "text".to_string(),
+                "stream-json".to_string(),
+                "--verbose".to_string(),
+                "--include-partial-messages".to_string(),
             ];
             let thread_id = match cursor {
                 Some(cursor) => {
@@ -565,6 +852,7 @@ fn resolve_chat_cli_invocation(
                 native_thread_id: Some(thread_id.clone()),
                 resume_token: Some(thread_id),
                 transcript_discovery: None,
+                output_mode: ChatCliOutputMode::ClaudeStreamJson,
             })
         }
         crate::ai::AiProvider::Codex => {
@@ -575,6 +863,7 @@ fn resolve_chat_cli_invocation(
                         args: vec![
                             "exec".to_string(),
                             "--skip-git-repo-check".to_string(),
+                            "--json".to_string(),
                             "resume".to_string(),
                             cursor.clone(),
                             "-".to_string(),
@@ -585,15 +874,24 @@ fn resolve_chat_cli_invocation(
                     native_thread_id: Some(cursor.clone()),
                     resume_token: Some(cursor),
                     transcript_discovery: None,
+                    output_mode: ChatCliOutputMode::CodexJson,
                 })
             } else {
-                let resolved = ai.resolve()?;
                 Ok(ChatCliInvocation {
-                    cli: resolved,
+                    cli: crate::ai::ResolvedAiCommand {
+                        command: "codex",
+                        args: vec![
+                            "exec".to_string(),
+                            "--skip-git-repo-check".to_string(),
+                            "--json".to_string(),
+                        ],
+                        prompt_transport: crate::ai::PromptTransport::Stdin,
+                    },
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
                     transcript_discovery: Some(acorn_transcript::AgentKind::Codex),
+                    output_mode: ChatCliOutputMode::CodexJson,
                 })
             }
         }
@@ -613,6 +911,7 @@ fn resolve_chat_cli_invocation(
                     native_thread_id: Some(cursor.clone()),
                     resume_token: Some(cursor),
                     transcript_discovery: None,
+                    output_mode: ChatCliOutputMode::Text,
                 })
             } else {
                 let resolved = ai.resolve()?;
@@ -622,6 +921,7 @@ fn resolve_chat_cli_invocation(
                     native_thread_id: None,
                     resume_token: None,
                     transcript_discovery: Some(acorn_transcript::AgentKind::Antigravity),
+                    output_mode: ChatCliOutputMode::Text,
                 })
             }
         }
@@ -633,6 +933,7 @@ fn resolve_chat_cli_invocation(
                 native_thread_id: None,
                 resume_token: None,
                 transcript_discovery: None,
+                output_mode: ChatCliOutputMode::Text,
             })
         }
     }
@@ -1067,6 +1368,38 @@ fn finish_chat_turn(
     started.state.session.updated_at = completed_at;
     started.state.updated_at = completed_at;
     started.state
+}
+
+fn append_streaming_chat_chunk(
+    chat_state: &mut persistence::ChatSessionState,
+    assistant_message_id: &str,
+    chunk: &str,
+) -> bool {
+    if chunk.is_empty() {
+        return false;
+    }
+    let Some(message) = chat_state
+        .messages
+        .iter_mut()
+        .find(|message| message.id == assistant_message_id)
+    else {
+        return false;
+    };
+    if message.role != persistence::ChatRole::Assistant {
+        return false;
+    }
+    message.content.push_str(chunk);
+    if matches!(
+        message.status,
+        Some(persistence::ChatMessageStatus::Pending)
+            | Some(persistence::ChatMessageStatus::Streaming)
+    ) {
+        message.status = Some(persistence::ChatMessageStatus::Streaming);
+    }
+    let now = chrono::Utc::now();
+    chat_state.session.updated_at = now;
+    chat_state.updated_at = now;
+    true
 }
 
 fn chat_turn_finish_from_result(
@@ -2436,7 +2769,18 @@ fn send_chat_message_from_state_inner<R: Runtime>(
     persist(state);
     emit_chat_session_state_changed(app, &started.state);
 
-    let provider_result = adapter.send_message(started.input.clone());
+    let provider_input = started.input.clone();
+    let assistant_message_id = started.assistant_message_id.clone();
+    let provider_result = if adapter.capabilities().streaming {
+        let mut on_chunk = |chunk: &str| {
+            if append_streaming_chat_chunk(&mut started.state, &assistant_message_id, chunk) {
+                emit_chat_session_state_changed(app, &started.state);
+            }
+        };
+        adapter.send_message_streaming(provider_input, &mut on_chunk)
+    } else {
+        adapter.send_message(provider_input)
+    };
     let was_cancelled = cancellation.is_cancelled();
     state.chat_runs.finish(&session.id, &started.turn_id);
     let final_session_status = chat_session_status_for_message_status(if was_cancelled {
@@ -5292,6 +5636,171 @@ mod tests {
     }
 
     #[test]
+    fn streaming_chunk_appends_to_pending_assistant_message() {
+        let now = chrono::Utc::now();
+        let mut state = chat_state_for_runtime(vec![
+            chat_message("u1", crate::persistence::ChatRole::User, "hello"),
+            crate::persistence::ChatMessage {
+                id: "a1".to_string(),
+                session_id: None,
+                turn_id: Some("turn-1".to_string()),
+                role: crate::persistence::ChatRole::Assistant,
+                content: String::new(),
+                created_at: now,
+                status: Some(crate::persistence::ChatMessageStatus::Pending),
+                metadata: None,
+            },
+        ]);
+
+        assert!(super::append_streaming_chat_chunk(&mut state, "a1", "hel"));
+        assert!(super::append_streaming_chat_chunk(&mut state, "a1", "lo"));
+
+        let assistant = state.messages.last().unwrap();
+        assert_eq!(assistant.content, "hello");
+        assert_eq!(
+            assistant.status,
+            Some(crate::persistence::ChatMessageStatus::Streaming)
+        );
+        assert!(super::chat_state_has_running_message(&state));
+    }
+
+    #[test]
+    fn chat_stream_parser_extracts_claude_partial_jsonl_without_duplicates() {
+        let mut parser =
+            super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hel"}]}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(r#"{"type":"result","result":"hello"}"#, &mut on_chunk);
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(chunks, vec!["hel", "lo"]);
+        assert_eq!(parser.finish(""), "hello");
+    }
+
+    #[test]
+    fn chat_stream_parser_separates_non_prefix_claude_assistant_messages() {
+        let mut parser =
+            super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"핵심 파일 확인."}]}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"경로 문제. 절대경로로 다시."}]}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(
+            chunks.concat(),
+            "핵심 파일 확인.\n\n경로 문제. 절대경로로 다시."
+        );
+        assert_eq!(
+            parser.finish(""),
+            "핵심 파일 확인.\n\n경로 문제. 절대경로로 다시."
+        );
+    }
+
+    #[test]
+    fn chat_stream_parser_extracts_codex_delta_jsonl_and_final_message() {
+        let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"msg":{"type":"agent_message_content_delta","delta":"hel"}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(
+                r#"{"msg":{"type":"agent_message_content_delta","delta":"lo"}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(
+                r#"{"msg":{"type":"turn_complete","last_agent_message":"hello"}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(chunks.concat(), "hello");
+        assert_eq!(parser.finish(""), "hello");
+    }
+
+    #[test]
+    fn chat_stream_parser_separates_complete_codex_agent_messages() {
+        let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"msg":{"type":"agent_message","message":"디렉토리 + 타입 정의 핵심 파일 확인."}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(
+                r#"{"msg":{"type":"agent_message","message":"경로 문제. 절대경로로 다시."}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(
+            chunks.concat(),
+            "디렉토리 + 타입 정의 핵심 파일 확인.\n\n경로 문제. 절대경로로 다시."
+        );
+        assert_eq!(
+            parser.finish(""),
+            "디렉토리 + 타입 정의 핵심 파일 확인.\n\n경로 문제. 절대경로로 다시."
+        );
+    }
+
+    #[test]
+    fn chat_stream_parser_extracts_codex_response_item_output_text() {
+        let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+            parser.push_chunk(
+                r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"ignored"}]}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(chunks.concat(), "hello");
+        assert_eq!(parser.finish(""), "hello");
+    }
+
+    #[test]
     fn compiled_context_omits_full_transcript_once_over_threshold() {
         let messages = vec![
             chat_message(
@@ -5336,13 +5845,17 @@ mod tests {
         assert!(context.prompt.contains("Earlier summary"));
         assert!(context.prompt.contains("Use adapters"));
         assert!(context.prompt.contains("current question"));
-        assert!(context
-            .included_message_ids
-            .contains(&"current-user".to_string()));
+        assert!(
+            context
+                .included_message_ids
+                .contains(&"current-user".to_string())
+        );
         assert!(!context.prompt.contains("old user content"));
-        assert!(!context
-            .included_message_ids
-            .contains(&"old-user".to_string()));
+        assert!(
+            !context
+                .included_message_ids
+                .contains(&"old-user".to_string())
+        );
     }
 
     #[test]
@@ -5465,6 +5978,10 @@ mod tests {
                 adapter.capabilities().native_thread,
                 "{provider:?} should support provider-native chat continuation"
             );
+            assert!(
+                adapter.capabilities().streaming,
+                "{provider:?} should stream stdout chunks"
+            );
         }
     }
 
@@ -5505,7 +6022,9 @@ mod tests {
             vec![
                 "-p",
                 "--output-format",
-                "text",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
                 "--resume",
                 "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
             ]
@@ -5518,6 +6037,10 @@ mod tests {
         assert_eq!(
             invocation.native_thread_id.as_deref(),
             Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+        assert_eq!(
+            invocation.output_mode,
+            super::ChatCliOutputMode::ClaudeStreamJson
         );
     }
 
@@ -5557,13 +6080,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(invocation.cli.command, "claude");
-        assert_eq!(invocation.cli.args[0..3], ["-p", "--output-format", "text"]);
-        assert_eq!(invocation.cli.args[3], "--session-id");
-        let seeded_id = invocation.cli.args[4].as_str();
+        assert_eq!(
+            invocation.cli.args[0..5],
+            [
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages"
+            ]
+        );
+        assert_eq!(invocation.cli.args[5], "--session-id");
+        let seeded_id = invocation.cli.args[6].as_str();
         Uuid::parse_str(seeded_id).expect("seeded Claude id should be a UUID");
         assert_eq!(invocation.prompt, "compiled first message");
         assert_eq!(invocation.native_thread_id.as_deref(), Some(seeded_id));
         assert_eq!(invocation.resume_token.as_deref(), Some(seeded_id));
+        assert_eq!(
+            invocation.output_mode,
+            super::ChatCliOutputMode::ClaudeStreamJson
+        );
     }
 
     #[test]
@@ -5603,6 +6139,7 @@ mod tests {
             vec![
                 "exec",
                 "--skip-git-repo-check",
+                "--json",
                 "resume",
                 "019e2001-3250-76b0-8410-2e073b38a2c1",
                 "-"
@@ -5613,6 +6150,7 @@ mod tests {
             crate::ai::PromptTransport::Stdin
         );
         assert_eq!(invocation.prompt, "continue codex");
+        assert_eq!(invocation.output_mode, super::ChatCliOutputMode::CodexJson);
     }
 
     #[test]
@@ -5734,22 +6272,28 @@ mod tests {
         let inputs = adapter.inputs.lock().unwrap();
 
         assert!(inputs[0].context.is_some());
-        assert!(inputs[0]
-            .thread
-            .as_ref()
-            .unwrap()
-            .native_thread_id
-            .is_none());
-        assert!(result
-            .final_state
-            .provider_threads
-            .iter()
-            .any(|thread| thread.provider == "codex"));
-        assert!(result
-            .final_state
-            .provider_threads
-            .iter()
-            .any(|thread| thread.provider == "claude"));
+        assert!(
+            inputs[0]
+                .thread
+                .as_ref()
+                .unwrap()
+                .native_thread_id
+                .is_none()
+        );
+        assert!(
+            result
+                .final_state
+                .provider_threads
+                .iter()
+                .any(|thread| thread.provider == "codex")
+        );
+        assert!(
+            result
+                .final_state
+                .provider_threads
+                .iter()
+                .any(|thread| thread.provider == "claude")
+        );
         assert_eq!(
             result.final_state.context_snapshots[0].mode,
             crate::persistence::ContextSnapshotMode::CompiledContext
