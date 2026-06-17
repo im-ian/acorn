@@ -16,11 +16,19 @@ export interface SessionCreationContext {
   activeProjectFolderId?: string | null;
 }
 
-export interface SessionCreateScope {
+export interface SessionCreatePlacement {
   repoPath: string;
-  cwdPath?: string;
   projectScoped: boolean;
   projectFolderId?: string;
+}
+
+export type SessionLaunchCwd =
+  | { kind: "projectRoot" }
+  | { kind: "workspaceCwd"; cwdPath: string };
+
+export interface SessionCreateScope {
+  placement: SessionCreatePlacement;
+  launch: SessionLaunchCwd;
 }
 
 export interface SessionCreateRequest {
@@ -37,7 +45,7 @@ export interface SessionCreateRequest {
 
 export interface BuildSessionCreateOptions {
   repoPath: string;
-  cwdPath?: string;
+  launch?: SessionLaunchCwd;
   isolated?: boolean;
   kind?: SessionKind;
   agentProvider?: SessionAgentProvider | null;
@@ -47,11 +55,34 @@ export interface BuildSessionCreateOptions {
   projectFolderId?: string;
 }
 
+function projectRootLaunch(): SessionLaunchCwd {
+  return { kind: "projectRoot" };
+}
+
+function workspaceLaunch(cwdPath: string): SessionLaunchCwd {
+  return { kind: "workspaceCwd", cwdPath };
+}
+
+function cwdPathForLaunch(repoPath: string, launch: SessionLaunchCwd): string {
+  return launch.kind === "workspaceCwd" ? launch.cwdPath : repoPath;
+}
+
+export function scopeWithProjectRootLaunch(
+  scope: SessionCreateScope,
+): SessionCreateScope {
+  return {
+    placement: scope.placement,
+    launch: projectRootLaunch(),
+  };
+}
+
 export function scopeForSession(session: Session): SessionCreateScope {
   return {
-    repoPath: session.repo_path,
-    cwdPath: session.worktree_path,
-    projectScoped: session.project_scoped !== false,
+    placement: {
+      repoPath: session.repo_path,
+      projectScoped: session.project_scoped !== false,
+    },
+    launch: workspaceLaunch(session.worktree_path),
   };
 }
 
@@ -72,22 +103,31 @@ export function resolveActiveSessionScope(
           ? context.activeProjectFolderId
           : undefined;
       return {
-        ...scope,
-        cwdPath: context.activeWorkspaceCwdPath ?? scope.cwdPath,
-        ...(projectFolderId ? { projectFolderId } : {}),
+        placement: {
+          ...scope.placement,
+          ...(projectFolderId ? { projectFolderId } : {}),
+        },
+        launch: workspaceLaunch(
+          context.activeWorkspaceCwdPath ??
+            cwdPathForLaunch(active.repo_path, scope.launch),
+        ),
       };
     }
     return scope;
   }
   if (!context.activeWorkspaceRepoPath) return null;
   return {
-    repoPath: context.activeWorkspaceRepoPath,
-    cwdPath: context.activeWorkspaceCwdPath ?? context.activeWorkspaceRepoPath,
-    projectScoped: resolveProjectScopedForRepoPath(
-      context,
-      context.activeWorkspaceRepoPath,
+    placement: {
+      repoPath: context.activeWorkspaceRepoPath,
+      projectScoped: resolveProjectScopedForRepoPath(
+        context,
+        context.activeWorkspaceRepoPath,
+      ),
+      projectFolderId: context.activeProjectFolderId ?? undefined,
+    },
+    launch: workspaceLaunch(
+      context.activeWorkspaceCwdPath ?? context.activeWorkspaceRepoPath,
     ),
-    projectFolderId: context.activeProjectFolderId ?? undefined,
   };
 }
 
@@ -116,7 +156,10 @@ export function buildSessionCreateRequest(
   const projectScoped =
     options.projectScoped ??
     resolveProjectScopedForRepoPath(context, options.repoPath);
-  const cwdPath = options.cwdPath ?? options.repoPath;
+  const launch = isolated
+    ? projectRootLaunch()
+    : (options.launch ?? projectRootLaunch());
+  const cwdPath = cwdPathForLaunch(options.repoPath, launch);
   const name =
     options.name ??
     (projectScoped
@@ -155,10 +198,10 @@ export function buildSessionCreateRequestFromScope(
 ): SessionCreateRequest {
   return buildSessionCreateRequest(context, {
     ...options,
-    repoPath: scope.repoPath,
-    cwdPath: options.cwdPath ?? scope.cwdPath,
-    projectScoped: scope.projectScoped,
-    projectFolderId: options.projectFolderId ?? scope.projectFolderId,
+    repoPath: scope.placement.repoPath,
+    launch: options.launch ?? scope.launch,
+    projectScoped: scope.placement.projectScoped,
+    projectFolderId: options.projectFolderId ?? scope.placement.projectFolderId,
   });
 }
 
