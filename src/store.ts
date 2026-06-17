@@ -31,6 +31,7 @@ import {
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
   makeCodeWorkspaceTabTarget,
+  makeWorkSummaryWorkspaceTab,
   type FrontendWorkspaceTab,
 } from "./lib/workspaceTabs";
 import {
@@ -62,6 +63,10 @@ import {
   type SessionFolderAssignments,
 } from "./lib/projectFolders";
 import { canRegenerateSessionTitle } from "./lib/sessionTitle";
+import {
+  summarizeTokenUsage,
+  type WorkSummaryTokenBaseline,
+} from "./lib/workSummary";
 
 export type { RightGroup, RightTab };
 
@@ -86,6 +91,39 @@ interface SessionPlacementIntent {
 
 const sessionPlacementById = new Map<string, SessionPlacementIntent>();
 const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
+
+async function loadWorkSummaryTokenBaseline(
+  session: Session | null | undefined,
+): Promise<WorkSummaryTokenBaseline | undefined> {
+  if (!session) return undefined;
+  try {
+    if (session.mode === "chat") {
+      const chatState = await api.loadChatSessionState(session.id);
+      return {
+        ...summarizeTokenUsage(chatState),
+        capturedAt: new Date().toISOString(),
+      };
+    }
+    if (!session.agent_transcript_id) return undefined;
+    const transcript = await api.agentTranscriptSummary(
+      session.repo_path,
+      session.agent_transcript_id,
+    );
+    if (!transcript) return undefined;
+    return {
+      inputTokens: transcript.token_usage.input_tokens,
+      outputTokens: transcript.token_usage.output_tokens,
+      cacheReadTokens: transcript.token_usage.cache_read_tokens,
+      cacheCreationTokens: transcript.token_usage.cache_creation_tokens,
+      reasoningTokens: transcript.token_usage.reasoning_tokens,
+      totalTokens: transcript.token_usage.total_tokens,
+      messagesWithUsage: transcript.token_usage.messages_with_usage,
+      capturedAt: new Date().toISOString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
@@ -114,6 +152,13 @@ export interface MoveTabArgs {
   toIndex?: number;
   splitDirection?: Direction;
   splitSide?: SplitSide;
+}
+
+export interface WorkSummaryTabScope {
+  sessionId?: string;
+  repoPath?: string;
+  cwdPath?: string;
+  title?: string;
 }
 
 interface AppStateModel {
@@ -298,6 +343,8 @@ interface AppStateModel {
     repoPath?: string,
     target?: { line?: number; column?: number },
   ) => void;
+  /** Open a work summary tab for the current session or a provided worktree. */
+  openWorkSummaryTab: (scope?: WorkSummaryTabScope) => Promise<void>;
   /** Close any frontend-owned tab and remove it from panes. */
   closeWorkspaceTab: (id: string) => void;
 }
@@ -2864,6 +2911,112 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(newWorkspaces, workspaceId),
       };
     });
+  },
+
+  async openWorkSummaryTab(scope = {}) {
+    let baselineTabId: string | null = null;
+    let baselineSession: Session | null = null;
+    let shouldLoadBaseline = false;
+
+    set((s) => {
+      const workspaceId = activeWorkspaceId(s);
+      if (!workspaceId || !s.activeProject) return s;
+      const ws = s.workspaces[workspaceId];
+      if (!ws) return s;
+      const focused = ws.focusedPaneId;
+      const pane = ws.panes[focused];
+      if (!pane) return s;
+
+      const activeSession = scope.sessionId
+        ? s.sessions.find((session) => session.id === scope.sessionId) ?? null
+        : s.activeSessionId
+          ? s.sessions.find((session) => session.id === s.activeSessionId) ?? null
+          : null;
+      const activeWorkspaceTab = pane.activeTabId
+        ? s.workspaceTabs[pane.activeTabId]
+        : undefined;
+      const repoPath =
+        scope.repoPath ??
+        activeSession?.repo_path ??
+        activeWorkspaceTab?.repoPath ??
+        s.activeProject;
+      const cwdPath =
+        scope.cwdPath ??
+        activeSession?.worktree_path ??
+        (activeWorkspaceTab?.kind === "work-summary"
+          ? activeWorkspaceTab.cwdPath
+          : activeWorkspaceTab?.repoPath) ??
+        repoPath;
+      const sessionId = scope.sessionId ?? activeSession?.id;
+      const title =
+        scope.title ??
+        (activeSession ? `${activeSession.name} Summary` : "Work Summary");
+
+      const existing = Object.values(s.workspaceTabs).find(
+        (tab) =>
+          tab.kind === "work-summary" &&
+          tab.repoPath === repoPath &&
+          tab.cwdPath === cwdPath &&
+          (tab.sessionId ?? null) === (sessionId ?? null),
+      );
+      const tab =
+        existing ??
+        makeWorkSummaryWorkspaceTab({
+          repoPath,
+          cwdPath,
+          ...(sessionId ? { sessionId } : {}),
+          title,
+        });
+      baselineTabId = tab.id;
+      baselineSession = activeSession;
+      shouldLoadBaseline = Boolean(
+        activeSession && tab.kind === "work-summary" && !tab.tokenBaseline,
+      );
+      const alreadyInPane = pane.tabIds.includes(tab.id);
+      const newPane: PaneState = alreadyInPane
+        ? activatePaneTab(pane, tab.id)
+        : {
+            ...activatePaneTab(pane, tab.id),
+            tabIds: [...pane.tabIds, tab.id],
+          };
+      const newWs: ProjectWorkspace = {
+        ...ws,
+        panes: { ...ws.panes, [focused]: newPane },
+      };
+      const newWorkspaces = {
+        ...s.workspaces,
+        [workspaceId]: newWs,
+      };
+      return {
+        workspaceTabs: existing
+          ? s.workspaceTabs
+          : { ...s.workspaceTabs, [tab.id]: tab },
+        workspaces: newWorkspaces,
+        ...mirrorActive(newWorkspaces, workspaceId),
+      };
+    });
+
+    if (shouldLoadBaseline && baselineTabId && baselineSession) {
+      const tabId = baselineTabId;
+      void loadWorkSummaryTokenBaseline(baselineSession).then((tokenBaseline) => {
+        if (!tokenBaseline) return;
+        set((s) => {
+          const tab = s.workspaceTabs[tabId];
+          if (!tab || tab.kind !== "work-summary" || tab.tokenBaseline) {
+            return s;
+          }
+          return {
+            workspaceTabs: {
+              ...s.workspaceTabs,
+              [tabId]: {
+                ...tab,
+                tokenBaseline,
+              },
+            },
+          };
+        });
+      });
+    }
   },
 
   closeWorkspaceTab(id) {

@@ -595,6 +595,7 @@ pub fn run() {
             commands::ipc_restart,
             commands::list_system_fonts,
             commands::list_agent_history,
+            commands::agent_transcript_summary,
             commands::list_unscoped_agent_history,
             commands::trash_agent_history_transcript,
             commands::get_claude_resume_candidate,

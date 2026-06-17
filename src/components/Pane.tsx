@@ -1,5 +1,6 @@
 import {
   Bot,
+  BarChart3,
   CircleX,
   Columns2,
   Copy,
@@ -30,6 +31,7 @@ import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { FileViewer } from "./FileViewer";
 import { ChatPane } from "./ChatPane";
+import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
@@ -83,6 +85,7 @@ import {
   makeSessionWorkspaceTab,
   type CodeWorkspaceTab,
   type SessionWorkspaceTab,
+  type WorkSummaryWorkspaceTab,
 } from "../lib/workspaceTabs";
 import {
   beginWorkspaceTabDrag,
@@ -150,7 +153,8 @@ interface PaneProps {
 
 type PaneTab =
   | (SessionWorkspaceTab & { session: Session })
-  | CodeWorkspaceTab;
+  | CodeWorkspaceTab
+  | WorkSummaryWorkspaceTab;
 
 /**
  * A single workspace pane. Hosts a tab strip and a body with the active
@@ -173,6 +177,8 @@ export function Pane({ paneId }: PaneProps) {
   const createSession = useAppStore((s) => s.createSession);
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
+  const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
+  const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
   const closePane = useAppStore((s) => s.closePane);
@@ -225,6 +231,17 @@ export function Pane({ paneId }: PaneProps) {
           lifecycle: workspaceTab.lifecycle,
           path: workspaceTab.path,
           target: workspaceTab.target,
+        });
+      } else if (workspaceTab?.kind === "work-summary") {
+        ordered.push({
+          kind: "work-summary",
+          id: workspaceTab.id,
+          title: workspaceTab.title,
+          repoPath: workspaceTab.repoPath,
+          lifecycle: workspaceTab.lifecycle,
+          cwdPath: workspaceTab.cwdPath,
+          sessionId: workspaceTab.sessionId,
+          tokenBaseline: workspaceTab.tokenBaseline,
         });
       }
     }
@@ -541,6 +558,16 @@ export function Pane({ paneId }: PaneProps) {
             isActive={isFocused}
           />
         ) : null}
+        {active?.kind === "work-summary" ? (
+          <WorkSummaryView
+            tab={active}
+            session={
+              active.sessionId ? sessionsById.get(active.sessionId) ?? null : null
+            }
+            isActive
+            onOpenFile={(path) => openCodeViewerTab(path, active.repoPath)}
+          />
+        ) : null}
         {active ? null : (
           <EmptyPane
             hasProjects={hasProjects}
@@ -573,6 +600,9 @@ export function Pane({ paneId }: PaneProps) {
           onClose: () => closePane(paneId),
           activeProjectFallback: useAppStore.getState().activeProject,
           shortcuts,
+          onOpenWorkSummary: activeSession
+            ? () => void openWorkSummaryTab({ sessionId: activeSession.id })
+            : undefined,
         })}
       />
     </div>
@@ -848,6 +878,7 @@ function TabItem({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const session = tab.kind === "session" ? tab.session : null;
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
@@ -866,7 +897,12 @@ function TabItem({
     showAgentProviderIcons && session
       ? resolveSessionAgentProvider(session)
       : null;
-  const tabPath = tab.kind === "session" ? tab.session.worktree_path : tab.path;
+  const tabPath =
+    tab.kind === "session"
+      ? tab.session.worktree_path
+      : tab.kind === "code"
+        ? tab.path
+        : tab.cwdPath;
   const liveInWorktree = useAppStore((s) =>
     session ? s.liveInWorktree[session.id] : false,
   );
@@ -1131,6 +1167,11 @@ function TabItem({
             onClick: () => void regenerateTitle(),
             disabled: !canRegenerateTitle,
           },
+          {
+            label: paneT(t, "pane.menu.openWorkSummary"),
+            icon: <BarChart3 size={12} />,
+            onClick: () => void openWorkSummaryTab({ sessionId: session.id }),
+          },
         ]
       : []),
     ...(forkItems.length > 0
@@ -1163,7 +1204,9 @@ function TabItem({
     {
       label: session
         ? paneT(t, "pane.menu.openWorktreeInEditor")
-        : paneT(t, "pane.menu.openFileInEditor"),
+        : tab.kind === "code"
+          ? paneT(t, "pane.menu.openFileInEditor")
+          : paneT(t, "pane.menu.openWorktreeInEditor"),
       icon: <PencilLine size={12} />,
       disabled: !editorConfigured,
       onClick: () => {
@@ -1192,7 +1235,9 @@ function TabItem({
         {
           label: session
             ? paneT(t, "pane.menu.worktreePath")
-            : paneT(t, "pane.menu.filePath"),
+            : tab.kind === "code"
+              ? paneT(t, "pane.menu.filePath")
+              : paneT(t, "pane.menu.worktreePath"),
           icon: <Copy size={12} />,
           onClick: () => {
             void copyToClipboard(tabPath);
@@ -1201,7 +1246,9 @@ function TabItem({
         {
           label: session
             ? paneT(t, "pane.menu.worktreeName")
-            : paneT(t, "pane.menu.fileName"),
+            : tab.kind === "code"
+              ? paneT(t, "pane.menu.fileName")
+              : paneT(t, "pane.menu.worktreeName"),
           icon: <Copy size={12} />,
           onClick: () => {
             void copyToClipboard(basename(tabPath));
@@ -1311,6 +1358,13 @@ function TabItem({
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
             />
+          ) : tab.kind === "work-summary" ? (
+            <Tooltip label={paneT(t, "pane.aria.workSummary")} side="bottom">
+              <BarChart3
+                size={12}
+                className="pointer-events-none shrink-0 text-accent"
+              />
+            </Tooltip>
           ) : session?.mode === "chat" ? (
             <Tooltip label={paneT(t, "pane.aria.chatSession")} side="bottom">
               <MessageSquareText
@@ -1567,6 +1621,7 @@ function buildPaneMenuItems({
   onClose,
   activeProjectFallback,
   shortcuts,
+  onOpenWorkSummary,
 }: {
   t: Translator;
   activeSession: Session | null;
@@ -1577,11 +1632,21 @@ function buildPaneMenuItems({
   onClose: () => void;
   activeProjectFallback: string | null;
   shortcuts: Record<HotkeyId, string>;
+  onOpenWorkSummary?: () => void;
 }): ContextMenuItem[] {
   const editorReady = hasConfiguredEditor();
   const worktreeItems: ContextMenuItem[] = activeSession
     ? [
         { type: "separator" },
+        ...(onOpenWorkSummary
+          ? [
+              {
+                label: paneT(t, "pane.menu.openWorkSummary"),
+                icon: <BarChart3 size={12} />,
+                onClick: onOpenWorkSummary,
+              },
+            ]
+          : []),
         {
           label: paneT(t, "pane.menu.openWorktreeInEditor"),
           icon: <PencilLine size={12} />,
