@@ -49,6 +49,7 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequestFromScope,
   resolveActiveSessionScope,
+  scopeWithProjectRootLaunch,
 } from "../lib/sessionCreation";
 import { findProjectFolderById } from "../lib/projectFolders";
 
@@ -1051,7 +1052,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         state.createSession,
         buildSessionCreateRequestFromScope(
           { sessions: state.sessions, projects: state.projects },
-          scope,
+          scopeWithProjectRootLaunch(scope),
           { name },
         ),
       );

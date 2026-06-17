@@ -6,6 +6,7 @@ import {
   resolveActiveSessionScope,
   resolveProjectScopedForRepoPath,
   scopeForSession,
+  scopeWithProjectRootLaunch,
 } from "./sessionCreation";
 import type { Project, Session } from "./types";
 
@@ -80,7 +81,9 @@ describe("session creation policy", () => {
         activeSessionId: "local",
         activeWorkspaceRepoPath: "/repo/app",
       }),
-    ).toMatchObject({ repoPath: "/Users/me", projectScoped: false });
+    ).toMatchObject({
+      placement: { repoPath: "/Users/me", projectScoped: false },
+    });
   });
 
   it("uses the session worktree path for isolated session scope", () => {
@@ -91,9 +94,14 @@ describe("session creation policy", () => {
     });
 
     expect(scopeForSession(isolated)).toEqual({
-      repoPath: "/repo/app",
-      cwdPath: "/repo/app/.acorn/worktrees/feature",
-      projectScoped: true,
+      placement: {
+        repoPath: "/repo/app",
+        projectScoped: true,
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/app/.acorn/worktrees/feature",
+      },
     });
   });
 
@@ -112,8 +120,42 @@ describe("session creation policy", () => {
         activeWorkspaceRepoPath: "/repo/app",
       }),
     ).toEqual({
+      placement: {
+        repoPath: "/repo/app",
+        projectScoped: true,
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/app/.acorn/worktrees/feature",
+      },
+    });
+  });
+
+  it("can root-launch a generic new session from an active worktree scope", () => {
+    const isolated = session("isolated", "/repo/app", {
+      isolated: true,
+      project_scoped: true,
+      worktree_path: "/repo/app/.acorn/worktrees/feature",
+    });
+    const scope = resolveActiveSessionScope({
+      sessions: [isolated],
+      projects: [project("/repo/app")],
+      activeSessionId: "isolated",
+      activeWorkspaceRepoPath: "/repo/app",
+    });
+
+    expect(scope).not.toBeNull();
+    const request = buildSessionCreateRequestFromScope(
+      { sessions: [isolated], projects: [project("/repo/app")] },
+      scopeWithProjectRootLaunch(scope!),
+      { name: "worker" },
+    );
+
+    expect(request).toMatchObject({
+      name: "worker",
       repoPath: "/repo/app",
-      cwdPath: "/repo/app/.acorn/worktrees/feature",
+      cwdPath: "/repo/app",
+      isolated: false,
       projectScoped: true,
     });
   });
@@ -136,10 +178,15 @@ describe("session creation policy", () => {
         activeProjectFolderId: "frontend",
       }),
     ).toEqual({
-      repoPath: "/repo/app",
-      cwdPath: "/repo/app/apps/web",
-      projectScoped: true,
-      projectFolderId: "frontend",
+      placement: {
+        repoPath: "/repo/app",
+        projectScoped: true,
+        projectFolderId: "frontend",
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/app/apps/web",
+      },
     });
   });
 
@@ -161,9 +208,14 @@ describe("session creation policy", () => {
         activeProjectFolderId: "/repo/app",
       }),
     ).toEqual({
-      repoPath: "/repo/app",
-      cwdPath: "/repo/app",
-      projectScoped: true,
+      placement: {
+        repoPath: "/repo/app",
+        projectScoped: true,
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/app",
+      },
     });
   });
 
@@ -177,10 +229,15 @@ describe("session creation policy", () => {
         activeProjectFolderId: "frontend",
       }),
     ).toEqual({
-      repoPath: "/repo/app",
-      cwdPath: "/repo/app/apps/web",
-      projectScoped: true,
-      projectFolderId: "frontend",
+      placement: {
+        repoPath: "/repo/app",
+        projectScoped: true,
+        projectFolderId: "frontend",
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/repo/app/apps/web",
+      },
     });
   });
 
@@ -202,10 +259,15 @@ describe("session creation policy", () => {
         activeProjectFolderId: "scratch",
       }),
     ).toEqual({
-      repoPath: "/Users/me",
-      cwdPath: "/Users/me/scratch",
-      projectScoped: false,
-      projectFolderId: "scratch",
+      placement: {
+        repoPath: "/Users/me",
+        projectScoped: false,
+        projectFolderId: "scratch",
+      },
+      launch: {
+        kind: "workspaceCwd",
+        cwdPath: "/Users/me/scratch",
+      },
     });
   });
 
@@ -234,7 +296,10 @@ describe("session creation policy", () => {
     expect(
       buildSessionCreateRequestFromScope(
         { sessions: [], projects: [] },
-        { repoPath: "/Users/me", projectScoped: false },
+        {
+          placement: { repoPath: "/Users/me", projectScoped: false },
+          launch: { kind: "projectRoot" },
+        },
         { name: "codex-copy", agentProvider: "codex" },
       ),
     ).toMatchObject({
