@@ -478,6 +478,31 @@ describe("SettingsModal font controls", () => {
     expect(patchTerminal).toHaveBeenCalledWith({ letterSpacing: 0.75 });
   });
 
+  it("patches terminal anti-aliasing from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const select = getComboboxByLabel("Anti-aliasing");
+    expect(select.textContent).toContain("Grayscale");
+
+    clickElement(select);
+    clickOption("Subpixel");
+
+    expect(patchTerminal).toHaveBeenCalledWith({ fontSmoothing: "subpixel" });
+  });
+
   it("patches the resident terminal limit from the Sessions tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({

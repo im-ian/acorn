@@ -61,6 +61,32 @@ test.describe("settings modal", () => {
       .toBe(0.75);
   });
 
+  test("changes terminal anti-aliasing and persists it", async ({ page }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const select = modal.getByRole("combobox", {
+      name: /^(Anti-aliasing|안티앨리어싱)$/,
+    });
+    await expect(select).toContainText("Grayscale");
+
+    await select.click();
+    await page.getByRole("option", { name: "Subpixel" }).click();
+
+    await expect(select).toContainText("Subpixel");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).terminal?.fontSmoothing : null;
+        }),
+      )
+      .toBe("subpixel");
+  });
+
   test("records a custom shortcut and reset all restores defaults", async ({
     page,
   }) => {

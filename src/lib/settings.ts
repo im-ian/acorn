@@ -155,6 +155,13 @@ export type TerminalFontWeight =
  * focus to the browser.
  */
 export type TerminalLinkActivation = "click" | "modifier-click";
+export type TerminalFontSmoothing =
+  | "grayscale"
+  | "subpixel"
+  | "system"
+  | "none";
+export const TERMINAL_FONT_SMOOTHING_VALUES: ReadonlyArray<TerminalFontSmoothing> =
+  ["grayscale", "subpixel", "system", "none"];
 
 /**
  * Which field acorn shows as the primary line of a sidebar session row.
@@ -211,6 +218,12 @@ export interface AcornSettings {
      * horizontal room.
      */
     letterSpacing: number;
+    /**
+     * CSS font-smoothing mode applied to terminal text only. xterm.js does
+     * not expose this as a terminal option, so Acorn applies it on the
+     * terminal DOM renderer container.
+     */
+    fontSmoothing: TerminalFontSmoothing;
     fontWeight: TerminalFontWeight;
     fontWeightBold: TerminalFontWeight;
     /**
@@ -438,6 +451,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     ),
     fontSize: 12,
     letterSpacing: 0,
+    fontSmoothing: "grayscale",
     fontWeight: 400,
     fontWeightBold: 700,
     lineHeight: 1.0,
@@ -616,6 +630,16 @@ function normalizeLinkActivation(
 ): TerminalLinkActivation {
   if (v === "click" || v === "modifier-click") return v;
   return fallback;
+}
+
+function normalizeTerminalFontSmoothing(
+  v: unknown,
+  fallback: TerminalFontSmoothing,
+): TerminalFontSmoothing {
+  return typeof v === "string" &&
+    TERMINAL_FONT_SMOOTHING_VALUES.includes(v as TerminalFontSmoothing)
+    ? (v as TerminalFontSmoothing)
+    : fallback;
 }
 
 function normalizeLineHeight(v: unknown, fallback: number): number {
@@ -859,6 +883,10 @@ function loadSettings(): AcornSettings {
           (terminalRaw as { letterSpacing?: unknown }).letterSpacing,
           DEFAULT_SETTINGS.terminal.letterSpacing,
         ),
+        fontSmoothing: normalizeTerminalFontSmoothing(
+          (terminalRaw as { fontSmoothing?: unknown }).fontSmoothing,
+          DEFAULT_SETTINGS.terminal.fontSmoothing,
+        ),
         lineHeight: normalizeLineHeight(
           (terminalRaw as { lineHeight?: unknown }).lineHeight,
           DEFAULT_SETTINGS.terminal.lineHeight,
@@ -1100,6 +1128,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeTerminalLetterSpacing(
                   patch.letterSpacing,
                   s.settings.terminal.letterSpacing,
+                ),
+          fontSmoothing:
+            patch.fontSmoothing === undefined
+              ? s.settings.terminal.fontSmoothing
+              : normalizeTerminalFontSmoothing(
+                  patch.fontSmoothing,
+                  s.settings.terminal.fontSmoothing,
                 ),
         },
       };

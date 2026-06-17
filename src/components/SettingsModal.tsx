@@ -64,9 +64,11 @@ import {
   type SelectedAgent,
   type SessionTitleSource,
   type AcornSettings,
+  type TerminalFontSmoothing,
   type TerminalFontWeight,
   type TerminalLinkActivation,
   type ToastPosition,
+  TERMINAL_FONT_SMOOTHING_VALUES,
   TERMINAL_FONT_WEIGHTS,
   useSettings,
 } from "../lib/settings";
@@ -471,6 +473,22 @@ function formatTerminalLetterSpacing(value: number): string {
     : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function terminalFontSmoothingLabel(
+  t: SettingsTranslator,
+  value: TerminalFontSmoothing,
+): string {
+  switch (value) {
+    case "grayscale":
+      return st(t, "settings.terminal.fontSmoothing.options.grayscale");
+    case "subpixel":
+      return st(t, "settings.terminal.fontSmoothing.options.subpixel");
+    case "system":
+      return st(t, "settings.terminal.fontSmoothing.options.system");
+    case "none":
+      return st(t, "settings.terminal.fontSmoothing.options.none");
+  }
+}
+
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
   const patchTerminal = useSettings((s) => s.patchTerminal);
@@ -512,6 +530,27 @@ function TerminalSettings() {
           format={formatTerminalLetterSpacing}
           onChange={(n) => patchTerminal({ letterSpacing: n })}
         />
+      </Field>
+      <Field
+        label={st(t, "settings.terminal.fontSmoothing.label")}
+        hint={st(t, "settings.terminal.fontSmoothing.hint")}
+      >
+        <Select
+          value={settings.terminal.fontSmoothing}
+          onChange={(e) =>
+            patchTerminal({
+              fontSmoothing: e.target.value as TerminalFontSmoothing,
+            })
+          }
+          className="w-48"
+          aria-label={st(t, "settings.terminal.fontSmoothing.label")}
+        >
+          {TERMINAL_FONT_SMOOTHING_VALUES.map((value) => (
+            <option key={value} value={value}>
+              {terminalFontSmoothingLabel(t, value)}
+            </option>
+          ))}
+        </Select>
       </Field>
       <Field
         label={st(t, "settings.terminal.fontWeight.label")}

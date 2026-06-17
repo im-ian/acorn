@@ -41,6 +41,30 @@
   border-radius: 4px;
 }
 
+.acorn-terminal[data-acorn-font-smoothing="system"],
+.acorn-terminal[data-acorn-font-smoothing="system"] * {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+.acorn-terminal[data-acorn-font-smoothing="grayscale"],
+.acorn-terminal[data-acorn-font-smoothing="grayscale"] * {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.acorn-terminal[data-acorn-font-smoothing="subpixel"],
+.acorn-terminal[data-acorn-font-smoothing="subpixel"] * {
+  -webkit-font-smoothing: subpixel-antialiased;
+  -moz-osx-font-smoothing: auto;
+}
+
+.acorn-terminal[data-acorn-font-smoothing="none"],
+.acorn-terminal[data-acorn-font-smoothing="none"] * {
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: auto;
+}
+
 .acorn-no-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;
