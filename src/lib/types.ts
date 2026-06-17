@@ -371,6 +371,7 @@ export interface TodoItem {
 }
 
 export type PrStateFilter = "open" | "closed" | "merged" | "all";
+export type IssueStateFilter = "open" | "closed" | "all";
 
 export interface PullRequestLabel {
   name: string;
@@ -406,6 +407,53 @@ export interface AccountSummary {
 
 export type PullRequestListing =
   | { kind: "ok"; items: PullRequestInfo[]; account: string }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface IssueInfo {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  state_reason: string | null;
+  comments: number;
+  labels: PullRequestLabel[];
+}
+
+export type IssueListing =
+  | { kind: "ok"; items: IssueInfo[]; account: string }
+  | { kind: "not_github" }
+  | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface IssueComment {
+  author: string;
+  author_avatar_url: string | null;
+  body: string;
+  created_at: string;
+  url: string | null;
+}
+
+export interface IssueDetail {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  author: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  state_reason: string | null;
+  labels: PullRequestLabel[];
+  comments: IssueComment[];
+  assignees: string[];
+  milestone: string | null;
+}
+
+export type IssueDetailListing =
+  | { kind: "ok"; account: string; detail: IssueDetail }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
 

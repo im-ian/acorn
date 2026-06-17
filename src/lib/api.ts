@@ -10,6 +10,9 @@ import type {
   DiffPayload,
   GenerateSessionTitleResult,
   GeneratedCommitMessage,
+  IssueDetailListing,
+  IssueListing,
+  IssueStateFilter,
   MemoryUsage,
   MergeMethod,
   Project,
@@ -353,6 +356,28 @@ export const api = {
       state,
       limit,
       query,
+    });
+  },
+  listIssues(
+    repoPath: string,
+    state: IssueStateFilter = "open",
+    limit = 50,
+    query: string | null = null,
+  ): Promise<IssueListing> {
+    return invoke<IssueListing>("list_issues", {
+      repoPath,
+      state,
+      limit,
+      query,
+    });
+  },
+  getIssueDetail(
+    repoPath: string,
+    number: number,
+  ): Promise<IssueDetailListing> {
+    return invoke<IssueDetailListing>("get_issue_detail", {
+      repoPath,
+      number,
     });
   },
   getPullRequestDetail(

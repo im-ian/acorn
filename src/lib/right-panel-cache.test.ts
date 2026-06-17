@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentHistoryItem,
+  IssueListing,
   PullRequestListing,
   WorkflowRunsListing,
 } from "./types";
@@ -18,6 +19,14 @@ vi.mock("./api", () => ({
           state: string,
           limit: number,
         ) => Promise<PullRequestListing>
+      >(),
+    listIssues:
+      vi.fn<
+        (
+          repoPath: string,
+          state: string,
+          limit: number,
+        ) => Promise<IssueListing>
       >(),
     listWorkflowRuns:
       vi.fn<(repoPath: string, limit: number) => Promise<WorkflowRunsListing>>(),
@@ -67,6 +76,28 @@ describe("rightPanelCache", () => {
     expect(mockApi.listPullRequests).toHaveBeenCalledTimes(1);
   });
 
+  it("dedupes in-flight issue fetches and reuses cached results", async () => {
+    const listing: IssueListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const pending = deferred<IssueListing>();
+    mockApi.listIssues.mockReturnValueOnce(pending.promise);
+
+    const first = rightPanelCache.fetchIssues(REPO, "closed", 50);
+    const second = rightPanelCache.fetchIssues(REPO, "closed", 50);
+    expect(first).toBe(second);
+    expect(mockApi.listIssues).toHaveBeenCalledTimes(1);
+
+    pending.resolve(listing);
+    await expect(first).resolves.toBe(listing);
+    await expect(
+      rightPanelCache.fetchIssues(REPO, "closed", 50),
+    ).resolves.toBe(listing);
+    expect(mockApi.listIssues).toHaveBeenCalledTimes(1);
+  });
+
   it("tracks project prefetch once until the repo is pruned", () => {
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(true);
     expect(rightPanelCache.claimProjectPrefetch(REPO)).toBe(false);
@@ -84,15 +115,23 @@ describe("rightPanelCache", () => {
     };
     mockApi.listAgentHistory.mockResolvedValue(history);
     mockApi.listWorkflowRuns.mockResolvedValue(workflows);
+    mockApi.listIssues.mockResolvedValue({
+      kind: "ok",
+      items: [],
+      account: "tester",
+    });
 
     await rightPanelCache.fetchAgentHistory(REPO);
     await rightPanelCache.fetchWorkflowRuns(REPO, 50);
+    await rightPanelCache.fetchIssues(REPO, "open", 50);
     expect(rightPanelCache.getAgentHistory(REPO)).toBe(history);
     expect(rightPanelCache.getWorkflowRuns(REPO, 50)).toBe(workflows);
+    expect(rightPanelCache.getIssues(REPO, "open", 50)).not.toBeNull();
 
     rightPanelCache.retainRepos([OTHER_REPO]);
     expect(rightPanelCache.getAgentHistory(REPO)).toBeNull();
     expect(rightPanelCache.getWorkflowRuns(REPO, 50)).toBeNull();
+    expect(rightPanelCache.getIssues(REPO, "open", 50)).toBeNull();
   });
 
   it("preserves file explorer expansion by repo until the repo is pruned", () => {
@@ -140,5 +179,22 @@ describe("rightPanelCache", () => {
     await expect(request).resolves.toBe(listing);
 
     expect(rightPanelCache.getPullRequests(REPO, "open", 50)).toBeNull();
+  });
+
+  it("does not repopulate pruned issue data from a stale in-flight request", async () => {
+    const listing: IssueListing = {
+      kind: "ok",
+      items: [],
+      account: "tester",
+    };
+    const pending = deferred<IssueListing>();
+    mockApi.listIssues.mockReturnValueOnce(pending.promise);
+
+    const request = rightPanelCache.fetchIssues(REPO, "open", 50);
+    rightPanelCache.retainRepos([OTHER_REPO]);
+    pending.resolve(listing);
+    await expect(request).resolves.toBe(listing);
+
+    expect(rightPanelCache.getIssues(REPO, "open", 50)).toBeNull();
   });
 });

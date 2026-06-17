@@ -1,4 +1,4 @@
-//! GitHub pull request listing via the `gh` CLI.
+//! GitHub pull request and issue data via the `gh` CLI.
 //!
 //! We shell out to `gh pr list --json ...` rather than calling GitHub's REST
 //! API directly so that the user's existing `gh` auth (keychain, OAuth
@@ -56,6 +56,24 @@ impl PrStateFilter {
             PrStateFilter::Closed => "closed",
             PrStateFilter::Merged => "merged",
             PrStateFilter::All => "all",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueStateFilter {
+    Open,
+    Closed,
+    All,
+}
+
+impl IssueStateFilter {
+    fn as_gh_arg(self) -> &'static str {
+        match self {
+            IssueStateFilter::Open => "open",
+            IssueStateFilter::Closed => "closed",
+            IssueStateFilter::All => "all",
         }
     }
 }
@@ -165,6 +183,120 @@ pub enum PullRequestListing {
     },
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueInfo {
+    pub number: u64,
+    pub title: String,
+    /// Lifecycle state from gh: "OPEN" / "CLOSED".
+    pub state: String,
+    pub author: String,
+    pub url: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// GitHub close reason such as "COMPLETED" / "NOT_PLANNED".
+    pub state_reason: Option<String>,
+    pub comments: u32,
+    pub labels: Vec<PullRequestLabel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhIssue {
+    number: u64,
+    title: String,
+    state: String,
+    #[serde(default)]
+    author: GhAuthor,
+    url: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    #[serde(rename = "stateReason", default)]
+    state_reason: Option<String>,
+    #[serde(default)]
+    comments: GhIssueComments,
+    #[serde(default)]
+    labels: Vec<GhLabel>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum GhIssueComments {
+    Count(u32),
+    Items(Vec<serde_json::Value>),
+}
+
+impl Default for GhIssueComments {
+    fn default() -> Self {
+        GhIssueComments::Count(0)
+    }
+}
+
+impl GhIssueComments {
+    fn count(&self) -> u32 {
+        match self {
+            GhIssueComments::Count(count) => *count,
+            GhIssueComments::Items(items) => items.len().try_into().unwrap_or(u32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IssueListing {
+    Ok {
+        items: Vec<IssueInfo>,
+        account: String,
+    },
+    NotGithub,
+    NoAccess {
+        slug: String,
+        accounts: Vec<AccountSummary>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueComment {
+    pub author: String,
+    pub author_avatar_url: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueDetail {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    /// Lifecycle state from gh: "OPEN" / "CLOSED".
+    pub state: String,
+    pub author: String,
+    pub url: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// GitHub close reason such as "COMPLETED" / "NOT_PLANNED".
+    pub state_reason: Option<String>,
+    pub labels: Vec<PullRequestLabel>,
+    pub comments: Vec<IssueComment>,
+    pub assignees: Vec<String>,
+    pub milestone: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IssueDetailListing {
+    Ok {
+        account: String,
+        detail: IssueDetail,
+    },
+    NotGithub,
+    NoAccess {
+        slug: String,
+        accounts: Vec<AccountSummary>,
+    },
+}
+
 const GH_HOST: &str = "github.com";
 
 /// How long a successful (login, repo) resolution stays trusted before we
@@ -243,6 +375,46 @@ pub fn list_pull_requests(
         }),
         AccountOutcome::NoAccess { accounts } => {
             Ok(PullRequestListing::NoAccess { slug, accounts })
+        }
+    }
+}
+
+pub fn list_issues(
+    repo_path: &Path,
+    state: IssueStateFilter,
+    limit: u32,
+    query: Option<&str>,
+) -> AppResult<IssueListing> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(IssueListing::NotGithub);
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_issue_list(&slug, token, state, limit, query)
+    })? {
+        AccountOutcome::Ok { account, value } => Ok(IssueListing::Ok {
+            items: value,
+            account,
+        }),
+        AccountOutcome::NoAccess { accounts } => Ok(IssueListing::NoAccess { slug, accounts }),
+    }
+}
+
+pub fn get_issue_detail(repo_path: &Path, number: u64) -> AppResult<IssueDetailListing> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Ok(IssueDetailListing::NotGithub);
+    };
+
+    match try_with_account(repo_path, &slug, |token| {
+        let view = run_issue_view(&slug, number, token)?;
+        Ok(build_issue_detail(number, view))
+    })? {
+        AccountOutcome::Ok {
+            account,
+            value: detail,
+        } => Ok(IssueDetailListing::Ok { account, detail }),
+        AccountOutcome::NoAccess { accounts } => {
+            Ok(IssueDetailListing::NoAccess { slug, accounts })
         }
     }
 }
@@ -376,6 +548,159 @@ fn run_pr_list(
             }
         })
         .collect())
+}
+
+fn run_issue_list(
+    slug: &str,
+    token: &str,
+    state: IssueStateFilter,
+    limit: u32,
+    query: Option<&str>,
+) -> AppResult<Vec<IssueInfo>> {
+    let limit = limit.clamp(1, 1000);
+    let limit_s = limit.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "issue",
+            "list",
+            "--repo",
+            slug,
+            "--state",
+            state.as_gh_arg(),
+            "--limit",
+            &limit_s,
+            "--json",
+            "number,title,state,author,url,createdAt,updatedAt,stateReason,comments,labels",
+        ]);
+        if let Some(q) = query {
+            cmd.args(["--search", q]);
+        }
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    let raw: Vec<GhIssue> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
+
+    Ok(raw
+        .into_iter()
+        .map(|issue| IssueInfo {
+            number: issue.number,
+            title: issue.title,
+            state: issue.state,
+            author: issue.author.login.unwrap_or_else(|| "unknown".to_string()),
+            url: issue.url,
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+            state_reason: normalize_optional_string(issue.state_reason),
+            comments: issue.comments.count(),
+            labels: issue
+                .labels
+                .into_iter()
+                .map(|l| PullRequestLabel {
+                    name: l.name,
+                    color: l.color,
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+fn build_issue_detail(number: u64, view: GhIssueView) -> IssueDetail {
+    let actor_avatars = view
+        .actor_avatars
+        .as_ref()
+        .map(|avatars| avatars.by_login.clone())
+        .unwrap_or_default();
+    let comments = view
+        .comments
+        .unwrap_or_default()
+        .into_iter()
+        .map(|comment| {
+            let author = comment
+                .author
+                .login
+                .unwrap_or_else(|| "unknown".to_string());
+            IssueComment {
+                author_avatar_url: actor_avatars.get(&author).cloned(),
+                author,
+                body: comment.body.unwrap_or_default(),
+                created_at: comment.created_at.unwrap_or_default(),
+                url: comment.url,
+            }
+        })
+        .collect();
+
+    IssueDetail {
+        number,
+        title: view.title.unwrap_or_default(),
+        body: view.body.unwrap_or_default(),
+        state: view.state.unwrap_or_default(),
+        author: view
+            .author
+            .unwrap_or_default()
+            .login
+            .unwrap_or_else(|| "unknown".to_string()),
+        url: view.url.unwrap_or_default(),
+        created_at: view.created_at.unwrap_or_default(),
+        updated_at: view.updated_at.unwrap_or_default(),
+        state_reason: normalize_optional_string(view.state_reason),
+        labels: view
+            .labels
+            .into_iter()
+            .map(|label| PullRequestLabel {
+                name: label.name,
+                color: label.color,
+            })
+            .collect(),
+        comments,
+        assignees: view
+            .assignees
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|assignee| assignee.login)
+            .collect(),
+        milestone: view.milestone.and_then(|milestone| milestone.title),
+    }
+}
+
+fn run_issue_view(slug: &str, number: u64, token: &str) -> AppResult<GhIssueView> {
+    let number_s = number.to_string();
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+            "issue",
+            "view",
+            &number_s,
+            "--repo",
+            slug,
+            "--json",
+            "number,title,body,state,author,url,createdAt,updatedAt,stateReason,\
+             comments,labels,assignees,milestone",
+        ]);
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+
+    let mut view: GhIssueView = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
+    view.actor_avatars = Some(resolve_issue_actor_avatars(&view, token));
+    Ok(view)
 }
 
 /// Aggregate `statusCheckRollup` entries into pass/fail/pending counts.
@@ -744,7 +1069,10 @@ pub enum PullRequestDetailListing {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PullRequestDiffListing {
-    Ok { account: String, diff: DiffPayload },
+    Ok {
+        account: String,
+        diff: DiffPayload,
+    },
     NotGithub,
     NoAccess {
         slug: String,
@@ -774,10 +1102,7 @@ pub fn get_pull_request_detail(
     }
 }
 
-pub fn get_pull_request_diff(
-    repo_path: &Path,
-    number: u64,
-) -> AppResult<PullRequestDiffListing> {
+pub fn get_pull_request_diff(repo_path: &Path, number: u64) -> AppResult<PullRequestDiffListing> {
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Ok(PullRequestDiffListing::NotGithub);
     };
@@ -1031,6 +1356,25 @@ fn resolve_pr_actor_avatars(view: &GhPullRequestView, token: &str) -> PrActorAva
     }
     for review in view.reviews.as_deref().unwrap_or(&[]) {
         if let Some(login) = review.author.login.as_deref() {
+            logins.push(login.to_string());
+        }
+    }
+    logins.sort();
+    logins.dedup();
+
+    let mut by_login = HashMap::new();
+    for login in logins {
+        if let Some(url) = resolve_actor_avatar_url(&login, token) {
+            by_login.insert(login, url);
+        }
+    }
+    PrActorAvatars { by_login }
+}
+
+fn resolve_issue_actor_avatars(view: &GhIssueView, token: &str) -> PrActorAvatars {
+    let mut logins = Vec::new();
+    for comment in view.comments.as_deref().unwrap_or(&[]) {
+        if let Some(login) = comment.author.login.as_deref() {
             logins.push(login.to_string());
         }
     }
@@ -1362,6 +1706,43 @@ struct GhPullRequestView {
     commits: Option<Vec<GhCommit>>,
     #[serde(skip)]
     actor_avatars: Option<PrActorAvatars>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhIssueView {
+    title: Option<String>,
+    body: Option<String>,
+    state: Option<String>,
+    author: Option<GhAuthor>,
+    url: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    #[serde(rename = "stateReason")]
+    state_reason: Option<String>,
+    #[serde(default)]
+    labels: Vec<GhLabel>,
+    comments: Option<Vec<GhIssueComment>>,
+    assignees: Option<Vec<GhAuthor>>,
+    milestone: Option<GhMilestone>,
+    #[serde(skip)]
+    actor_avatars: Option<PrActorAvatars>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhIssueComment {
+    #[serde(default)]
+    author: GhAuthor,
+    body: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhMilestone {
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2218,5 +2599,77 @@ mod tests {
             normalize_github_timestamp(Some("2026-05-27T02:42:28Z".to_string())),
             Some("2026-05-27T02:42:28Z".to_string())
         );
+    }
+
+    #[test]
+    fn issue_comments_accept_count_or_comment_array() {
+        let with_array: GhIssue = serde_json::from_str(
+            r##"{
+                "number": 1,
+                "title": "Track issues",
+                "state": "OPEN",
+                "url": "https://github.com/acme/widgets/issues/1",
+                "createdAt": "2026-06-01T00:00:00Z",
+                "updatedAt": "2026-06-02T00:00:00Z",
+                "comments": [{"id": "1"}, {"id": "2"}],
+                "labels": [{"name": "bug", "color": "d73a4a"}]
+            }"##,
+        )
+        .expect("issue with comment array should parse");
+        assert_eq!(with_array.comments.count(), 2);
+
+        let with_count: GhIssue = serde_json::from_str(
+            r##"{
+                "number": 2,
+                "title": "Track issue counts",
+                "state": "CLOSED",
+                "url": "https://github.com/acme/widgets/issues/2",
+                "createdAt": "2026-06-01T00:00:00Z",
+                "updatedAt": "2026-06-02T00:00:00Z",
+                "comments": 4,
+                "labels": []
+            }"##,
+        )
+        .expect("issue with comment count should parse");
+        assert_eq!(with_count.comments.count(), 4);
+    }
+
+    #[test]
+    fn issue_view_builds_detail_with_comments_and_metadata() {
+        let view: GhIssueView = serde_json::from_str(
+            r##"{
+                "number": 7,
+                "title": "Render issue detail",
+                "body": "Issue body",
+                "state": "CLOSED",
+                "author": { "login": "alice" },
+                "url": "https://github.com/acme/widgets/issues/7",
+                "createdAt": "2026-06-01T00:00:00Z",
+                "updatedAt": "2026-06-02T00:00:00Z",
+                "stateReason": "COMPLETED",
+                "labels": [{ "name": "enhancement", "color": "a2eeef" }],
+                "comments": [
+                    {
+                        "author": { "login": "bob" },
+                        "body": "Looks good",
+                        "createdAt": "2026-06-02T01:00:00Z",
+                        "url": "https://github.com/acme/widgets/issues/7#issuecomment-1"
+                    }
+                ],
+                "assignees": [{ "login": "carol" }],
+                "milestone": { "title": "v1" }
+            }"##,
+        )
+        .expect("issue view should parse");
+
+        let detail = build_issue_detail(7, view);
+        assert_eq!(detail.number, 7);
+        assert_eq!(detail.title, "Render issue detail");
+        assert_eq!(detail.state_reason.as_deref(), Some("COMPLETED"));
+        assert_eq!(detail.labels[0].name, "enhancement");
+        assert_eq!(detail.comments[0].author, "bob");
+        assert_eq!(detail.comments[0].body, "Looks good");
+        assert_eq!(detail.assignees, vec!["carol".to_string()]);
+        assert_eq!(detail.milestone.as_deref(), Some("v1"));
     }
 }

@@ -351,15 +351,14 @@ export interface AcornSettings {
     showMemory: boolean;
   };
   github: {
-    /** Auto-refresh cadence for the PRs and Actions tabs in milliseconds. */
+    /** Auto-refresh cadence for the PRs, Issues, and Actions tabs in milliseconds. */
     refreshIntervalMs: number;
     /**
-     * Show the author's GitHub avatar on PR rows. Trades a thicker row
-     * for at-a-glance author recognition, mirroring the PR detail modal
-     * which already shows avatars in its header / conversation.
+     * Show the author's GitHub avatar on PR and issue rows. Trades a thicker
+     * row for at-a-glance author recognition.
      */
     showAvatars: boolean;
-    /** Show GitHub labels next to each PR row title. */
+    /** Show GitHub labels next to each PR or issue row title. */
     showLabels: boolean;
     /** Show source and target branches on each PR row. */
     showBranches: boolean;
