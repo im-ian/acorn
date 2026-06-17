@@ -35,6 +35,7 @@ import type {
   WorkflowRunsListing,
 } from "./types";
 import type { FolderPermissionWarmupResult } from "./permissionWarmup";
+import type { IpcListWorkspacesResponsePayload } from "./ipcWorkspaces";
 
 export type {
   ChatMessage,
@@ -519,6 +520,11 @@ export const api = {
    */
   ipcRestart(): Promise<void> {
     return invoke<void>("ipc_restart");
+  },
+  ipcListWorkspacesResponse(
+    response: IpcListWorkspacesResponsePayload,
+  ): Promise<void> {
+    return invoke<void>("ipc_list_workspaces_response", { response });
   },
   listSystemFonts(): Promise<string[]> {
     return invoke<string[]>("list_system_fonts");

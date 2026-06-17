@@ -2016,6 +2016,25 @@ pub fn ipc_restart<R: Runtime>(
     }
 }
 
+#[tauri::command]
+pub fn ipc_list_workspaces_response(
+    state: State<'_, AppState>,
+    response: crate::ipc::workspaces::ListWorkspacesResponsePayload,
+) -> Result<(), String> {
+    let sender = state
+        .ipc_workspace_requests
+        .lock()
+        .remove(&response.request_id)
+        .ok_or_else(|| format!("no pending IPC workspace request {}", response.request_id))?;
+    let result = match response.error {
+        Some(error) => Err(error),
+        None => Ok(response.workspaces),
+    };
+    sender
+        .send(result)
+        .map_err(|_| "IPC workspace request receiver dropped".to_string())
+}
+
 /// Locations a user might symlink the CLI into, in priority order. The
 /// first one that exists is the canonical install for this user. Kept
 /// macOS/Linux-only because the IPC server is Unix-socket based — Windows
