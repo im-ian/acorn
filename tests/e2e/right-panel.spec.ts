@@ -407,6 +407,156 @@ test.describe("right panel: tab switching", () => {
     // Regression: A's page-1 marker must never appear in B's panel.
     await expect(page.getByText(/leak-marker-AAA/)).toHaveCount(0);
   });
+
+  test("same-project worktree pane focus keeps GitHub tabs mounted", async ({
+    page,
+    tauri,
+  }) => {
+    const repoPath = "/tmp/demo";
+    const worktreeA = "/tmp/demo/.acorn/worktrees/alpha";
+    const worktreeB = "/tmp/demo/.acorn/worktrees/beta";
+
+    await tauri.respond("list_projects", [
+      {
+        repo_path: repoPath,
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-alpha",
+        name: "alpha",
+        repo_path: repoPath,
+        worktree_path: worktreeA,
+        branch: "alpha",
+        isolated: true,
+        in_worktree: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+      {
+        id: "s-beta",
+        name: "beta",
+        repo_path: repoPath,
+        worktree_path: worktreeB,
+        branch: "beta",
+        isolated: true,
+        in_worktree: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_repo_root", (args) => {
+      const sessionId = (args as { sessionId?: string }).sessionId;
+      if (sessionId === "s-alpha") return "/tmp/demo/.acorn/worktrees/alpha/";
+      if (sessionId === "s-beta") return "/tmp/demo/.acorn/worktrees/beta/";
+      return null;
+    });
+    await tauri.handle("list_pull_requests", (args) => {
+      const w = window as unknown as { __prRepoPaths?: string[] };
+      w.__prRepoPaths = w.__prRepoPaths ?? [];
+      w.__prRepoPaths.push((args as { repoPath: string }).repoPath);
+      return { kind: "ok", items: [], account: null };
+    });
+    await tauri.handle("list_issues", (args) => {
+      const w = window as unknown as { __issueRepoPaths?: string[] };
+      w.__issueRepoPaths = w.__issueRepoPaths ?? [];
+      w.__issueRepoPaths.push((args as { repoPath: string }).repoPath);
+      return { kind: "ok", items: [], account: null };
+    });
+    await tauri.handle("list_workflow_runs", (args) => {
+      const w = window as unknown as { __workflowRepoPaths?: string[] };
+      w.__workflowRepoPaths = w.__workflowRepoPaths ?? [];
+      w.__workflowRepoPaths.push((args as { repoPath: string }).repoPath);
+      return { kind: "ok", items: [], account: null };
+    });
+
+    await page.goto("/");
+    await page
+      .locator('[data-panel-id="sidebar"]')
+      .getByRole("button", { name: /^alpha worktree alpha · Idle$/ })
+      .click();
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText(/No open pull requests/i)).toBeVisible();
+
+    const indicator = page.locator("[data-active-pane-indicator]");
+    const alphaPaneId = await indicator.getAttribute(
+      "data-active-pane-indicator",
+    );
+    expect(alphaPaneId).not.toBeNull();
+
+    await pressHotkey(page, { mod: true, key: "d" });
+    await page
+      .locator('[data-panel-id="sidebar"]')
+      .getByRole("button", { name: /^beta worktree beta · Idle$/ })
+      .click();
+    await expect(page.locator("[data-pane-body]")).toHaveCount(2);
+    await expect(page.getByText(/No open pull requests/i)).toBeVisible();
+    await page.getByRole("button", { name: "Closed" }).click();
+    await expect(page.getByText(/No closed pull requests/i)).toBeVisible();
+
+    // Let initial PR/Issues/Actions effects and background prefetch settle,
+    // then prove same-project pane focus does not remount GitHub tabs.
+    await page.waitForTimeout(1_500);
+    const initialCalls = await page.evaluate(() => {
+      const w = window as unknown as {
+        __prRepoPaths?: string[];
+        __issueRepoPaths?: string[];
+        __workflowRepoPaths?: string[];
+      };
+      return [
+        ...(w.__prRepoPaths ?? []),
+        ...(w.__issueRepoPaths ?? []),
+        ...(w.__workflowRepoPaths ?? []),
+      ];
+    });
+    const unexpectedInitialPaths = initialCalls.filter(
+      (path) => path !== repoPath,
+    );
+    expect(initialCalls).toContain(repoPath);
+    expect(unexpectedInitialPaths).toEqual([]);
+
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __prRepoPaths?: string[];
+        __issueRepoPaths?: string[];
+        __workflowRepoPaths?: string[];
+      };
+      w.__prRepoPaths = [];
+      w.__issueRepoPaths = [];
+      w.__workflowRepoPaths = [];
+    });
+
+    await page
+      .locator(`[data-pane-body="${alphaPaneId}"]`)
+      .click({ position: { x: 12, y: 12 } });
+    await expect(page.getByText(/No closed pull requests/i)).toBeVisible();
+    await page.waitForTimeout(300);
+
+    const calls = await page.evaluate(() => {
+      const w = window as unknown as {
+        __prRepoPaths?: string[];
+        __issueRepoPaths?: string[];
+        __workflowRepoPaths?: string[];
+      };
+      return {
+        prs: w.__prRepoPaths ?? [],
+        issues: w.__issueRepoPaths ?? [],
+        workflows: w.__workflowRepoPaths ?? [],
+      };
+    });
+    expect(
+      [...calls.prs, ...calls.issues, ...calls.workflows].filter(
+        (path) => path !== repoPath,
+      ),
+    ).toEqual([]);
+  });
 });
 
 test.describe("right panel: groups", () => {

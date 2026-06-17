@@ -222,25 +222,37 @@ export function RightPanel() {
   // `claude --worktree`, which silently moves the running session into a
   // freshly created worktree. `useLiveRepoPath` asks the backend on demand
   // and falls back to the recorded path when there's no live PTY.
-  const fallbackPath =
+  const fallbackWorktreePath =
     active?.worktree_path ?? activeWorkspaceTab?.repoPath ?? activeProject ?? null;
-  const repoPath = useLiveRepoPath(active?.id ?? null, fallbackPath);
+  const liveRepoPath = useLiveRepoPath(
+    active?.id ?? null,
+    fallbackWorktreePath,
+  );
   const activeIsLocalChat = active?.project_scoped === false;
   const agentHistoryScope =
     activeIsLocalChat || (!active && activeProject === null)
       ? "unscoped"
       : "project";
-  const projectPanelRepoPath = activeIsLocalChat ? null : repoPath;
-  const agentHistoryPath = agentHistoryScope === "project" ? repoPath : null;
+  // Code tabs follow the active worktree; GitHub/history stay anchored to the
+  // project root so same-project pane focus changes do not remount them.
+  const codePanelRepoPath = activeIsLocalChat ? null : liveRepoPath;
+  const projectRootFallbackPath =
+    active?.repo_path ??
+    activeProject ??
+    activeWorkspaceTab?.repoPath ??
+    liveRepoPath;
+  const projectRootRepoPath = activeIsLocalChat ? null : projectRootFallbackPath;
+  const agentHistoryPath =
+    agentHistoryScope === "project" ? projectRootRepoPath : null;
   const localSessionHostPath =
     sessions.find((session) => session.project_scoped === false)?.repo_path ??
     null;
   const sessionHostRepoPath =
     active?.repo_path ??
-    activeWorkspaceTab?.repoPath ??
     activeProject ??
+    activeWorkspaceTab?.repoPath ??
     localSessionHostPath ??
-    repoPath;
+    liveRepoPath;
   const sessionHostProjectScoped = active
     ? scopeForSession(active).placement.projectScoped
     : agentHistoryScope === "unscoped"
@@ -253,12 +265,17 @@ export function RightPanel() {
       : true;
   const [gitRepoProbeVersion, setGitRepoProbeVersion] = useState(0);
   const invalidateGitProbe = useCallback(() => {
-    if (!projectPanelRepoPath) return;
-    invalidateGitRepositoryStatus(projectPanelRepoPath);
+    const paths = new Set(
+      [codePanelRepoPath, projectRootRepoPath].filter(
+        (path): path is string => path !== null,
+      ),
+    );
+    if (paths.size === 0) return;
+    for (const path of paths) invalidateGitRepositoryStatus(path);
     setGitRepoProbeVersion((version) => version + 1);
-  }, [projectPanelRepoPath]);
+  }, [codePanelRepoPath, projectRootRepoPath]);
   const invalidations = useRightPanelInvalidations(
-    projectPanelRepoPath,
+    codePanelRepoPath,
     invalidateGitProbe,
   );
   const [expanded, setExpanded] = useState<ExpandedDiff | null>(null);
@@ -282,24 +299,24 @@ export function RightPanel() {
     active?.worktree_path ?? null,
   );
   const showTodos = todosState.todos.length > 0;
-  const isGitRepo = useIsGitRepository(
-    projectPanelRepoPath,
+  const isCodeGitRepo = useIsGitRepository(
+    codePanelRepoPath,
     gitRepoProbeVersion,
   );
   const isGitHubRepo = useIsGitHubRepo(
-    projectPanelRepoPath,
+    projectRootRepoPath,
     gitRepoProbeVersion,
   );
   const githubVisible = isGitHubRepo === true;
   const gitBackedTabsVisible =
-    projectPanelRepoPath !== null && isGitRepo !== false;
+    codePanelRepoPath !== null && isCodeGitRepo !== false;
 
   const visibleTabsByGroup = useMemo<
     Record<RightGroup, ReadonlyArray<RightTab>>
   >(
     () => ({
       code:
-        projectPanelRepoPath === null
+        codePanelRepoPath === null
           ? []
           : gitBackedTabsVisible
             ? tabsForGroup("code")
@@ -309,7 +326,7 @@ export function RightPanel() {
         ? tabsForGroup("agents")
         : tabsForGroup("agents").filter((tab) => tab !== "todos"),
     }),
-    [gitBackedTabsVisible, githubVisible, projectPanelRepoPath, showTodos],
+    [codePanelRepoPath, gitBackedTabsVisible, githubVisible, showTodos],
   );
   const visibleGroups = useMemo(
     () => RIGHT_GROUPS.filter((g) => visibleTabsByGroup[g].length > 0),
@@ -320,7 +337,7 @@ export function RightPanel() {
     : (visibleGroups[0] ?? "code");
   const visibleTabs = visibleTabsByGroup[activeGroup];
   const shouldLoadGitHubTabs =
-    projectPanelRepoPath !== null && isGitHubRepo === true;
+    projectRootRepoPath !== null && isGitHubRepo === true;
   const projectKey = useMemo(
     () => projects.map((project) => project.repo_path).join("\0"),
     [projects],
@@ -343,7 +360,7 @@ export function RightPanel() {
   // rather than render the panel against a stale selection.
   useEffect(() => {
     if (
-      projectPanelRepoPath === null &&
+      codePanelRepoPath === null &&
       activeProject === null &&
       !active &&
       projects.length === 0 &&
@@ -354,15 +371,15 @@ export function RightPanel() {
     if (visibleTabs.length === 0) return;
     if (!visibleTabs.includes(rightTab)) {
       if (
-        projectPanelRepoPath !== null &&
-        isGitRepo === null &&
+        codePanelRepoPath !== null &&
+        isCodeGitRepo === null &&
         groupOfTab(rightTab) === "code" &&
         rightTab !== "files"
       ) {
         return;
       }
       if (
-        projectPanelRepoPath !== null &&
+        projectRootRepoPath !== null &&
         isGitHubRepo === null &&
         groupOfTab(rightTab) === "github"
       ) {
@@ -372,10 +389,11 @@ export function RightPanel() {
     }
   }, [
     isGitHubRepo,
-    isGitRepo,
+    isCodeGitRepo,
     active,
     activeProject,
-    projectPanelRepoPath,
+    codePanelRepoPath,
+    projectRootRepoPath,
     projects.length,
     rightTab,
     sessions.length,
@@ -464,13 +482,13 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noTodos")} />
           )
         ) : rightTab === "commits" ? (
-          projectPanelRepoPath ? (
+          codePanelRepoPath ? (
             // `key` forces a full remount on project switch so any in-flight
             // git request from the previous repo cannot land its `setState`
             // into the new repo's component (cross-project data leak).
             <CommitsTab
-              key={projectPanelRepoPath}
-              repoPath={projectPanelRepoPath}
+              key={codePanelRepoPath}
+              repoPath={codePanelRepoPath}
               invalidateKey={invalidations.commits}
               onExpand={setExpanded}
             />
@@ -478,10 +496,10 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "staged" ? (
-          projectPanelRepoPath ? (
+          codePanelRepoPath ? (
             <StagedTab
-              key={projectPanelRepoPath}
-              repoPath={projectPanelRepoPath}
+              key={codePanelRepoPath}
+              repoPath={codePanelRepoPath}
               invalidateKey={invalidations.staged}
               onExpand={setExpanded}
             />
@@ -489,10 +507,10 @@ export function RightPanel() {
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : rightTab === "files" ? (
-          projectPanelRepoPath ? (
+          codePanelRepoPath ? (
             <FileExplorer
-              key={projectPanelRepoPath}
-              rootPath={projectPanelRepoPath}
+              key={codePanelRepoPath}
+              rootPath={codePanelRepoPath}
             />
           ) : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
@@ -502,37 +520,37 @@ export function RightPanel() {
             agentHistoryScope === "unscoped" || agentHistoryPath ? null : (
               <Empty msg={rt(t, "rightPanel.empty.noProject")} />
             )
-          ) : projectPanelRepoPath ? null : (
+          ) : projectRootRepoPath ? null : (
             <Empty msg={rt(t, "rightPanel.empty.noProject")} />
           )
         ) : (
           <Empty msg={rt(t, "rightPanel.empty.noProject")} />
         )}
-        {projectPanelRepoPath && shouldLoadGitHubTabs ? (
+        {projectRootRepoPath && shouldLoadGitHubTabs ? (
           <>
             <BackgroundLoadedTab active={rightTab === "prs"}>
               <PullRequestsTab
-                key={`prs:${projectPanelRepoPath}`}
-                repoPath={projectPanelRepoPath}
+                key={`prs:${projectRootRepoPath}`}
+                repoPath={projectRootRepoPath}
                 onOpenDetail={(number) =>
-                  setPrDetail({ repoPath: projectPanelRepoPath, number })
+                  setPrDetail({ repoPath: projectRootRepoPath, number })
                 }
                 onOpenSearch={() =>
-                  setPrSearch({ repoPath: projectPanelRepoPath })
+                  setPrSearch({ repoPath: projectRootRepoPath })
                 }
                 refreshKey={prListVersion}
               />
             </BackgroundLoadedTab>
             <BackgroundLoadedTab active={rightTab === "issues"}>
               <IssuesTab
-                key={`issues:${projectPanelRepoPath}`}
-                repoPath={projectPanelRepoPath}
+                key={`issues:${projectRootRepoPath}`}
+                repoPath={projectRootRepoPath}
               />
             </BackgroundLoadedTab>
             <BackgroundLoadedTab active={rightTab === "actions"}>
               <ActionsTab
-                key={`actions:${projectPanelRepoPath}`}
-                repoPath={projectPanelRepoPath}
+                key={`actions:${projectRootRepoPath}`}
+                repoPath={projectRootRepoPath}
               />
             </BackgroundLoadedTab>
           </>
@@ -559,7 +577,7 @@ export function RightPanel() {
         subtitle={expanded?.subtitle}
         headerActions={expanded?.headerActions}
         body={expanded?.body}
-        cwd={projectPanelRepoPath ?? undefined}
+        cwd={codePanelRepoPath ?? undefined}
         onClose={() => setExpanded(null)}
       />
       <PullRequestSearchModal
@@ -573,7 +591,7 @@ export function RightPanel() {
       />
       <PullRequestDetailModal
         open={prDetail}
-        cwd={projectPanelRepoPath ?? undefined}
+        cwd={projectRootRepoPath ?? undefined}
         onClose={() => setPrDetail(null)}
         onMutated={() => setPrListVersion((v) => v + 1)}
       />
