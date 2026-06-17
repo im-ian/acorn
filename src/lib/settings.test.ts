@@ -7,6 +7,9 @@ import {
   MOUNTED_TERMINAL_LIMIT_MAX,
   MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
+  TERMINAL_LETTER_SPACING_MAX,
+  TERMINAL_LETTER_SPACING_MIN,
+  TERMINAL_LETTER_SPACING_STEP,
   resolveAiCommitRequest,
   resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
@@ -128,6 +131,81 @@ describe("terminal.maxMountedTerminals settings", () => {
     expect(useSettings.getState().settings.terminal.maxMountedTerminals).toBe(
       10,
     );
+  });
+});
+
+describe("terminal.letterSpacing settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to stock xterm letter spacing", () => {
+    expect(DEFAULT_SETTINGS.terminal.letterSpacing).toBe(0);
+  });
+
+  it("loads persisted letter spacing and clamps it", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { letterSpacing: 1.75 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(1.75);
+  });
+
+  it("clamps out-of-range persisted letter spacing", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { letterSpacing: 99 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(
+      TERMINAL_LETTER_SPACING_MAX,
+    );
+  });
+
+  it("preserves patched decimal letter spacing inside the supported range", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings
+      .getState()
+      .patchTerminal({ letterSpacing: TERMINAL_LETTER_SPACING_MIN - 0.4 });
+    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(
+      TERMINAL_LETTER_SPACING_MIN,
+    );
+
+    useSettings.getState().patchTerminal({ letterSpacing: 2.675 });
+    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(2.68);
+  });
+
+  it("uses a fractional UI step for terminal letter spacing", () => {
+    expect(TERMINAL_LETTER_SPACING_STEP).toBe(0.25);
   });
 });
 

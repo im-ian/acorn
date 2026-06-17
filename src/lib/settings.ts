@@ -123,6 +123,9 @@ export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
 export const MOUNTED_TERMINAL_LIMIT_MIN = 1;
 export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
 export const MOUNTED_TERMINAL_LIMIT_MAX = 64;
+export const TERMINAL_LETTER_SPACING_MIN = -2;
+export const TERMINAL_LETTER_SPACING_MAX = 6;
+export const TERMINAL_LETTER_SPACING_STEP = 0.25;
 
 export type ToastPosition = "top" | "bottom";
 
@@ -202,6 +205,12 @@ export interface AcornSettings {
   terminal: {
     fontFamily: string;
     fontSize: number;
+    /**
+     * xterm.js horizontal cell spacing in CSS pixels. Negative values tighten
+     * cramped fonts; positive values give dense terminal output more
+     * horizontal room.
+     */
+    letterSpacing: number;
     fontWeight: TerminalFontWeight;
     fontWeightBold: TerminalFontWeight;
     /**
@@ -428,6 +437,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
       "monospace",
     ),
     fontSize: 12,
+    letterSpacing: 0,
     fontWeight: 400,
     fontWeightBold: 700,
     lineHeight: 1.0,
@@ -613,6 +623,18 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   // Clamp to the same range the Stepper enforces in the UI so a hand-
   // edited localStorage value can't make the terminal unusable.
   return Math.max(1.0, Math.min(2.0, v));
+}
+
+export function normalizeTerminalLetterSpacing(
+  v: unknown,
+  fallback: number,
+): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const clamped = Math.max(
+    TERMINAL_LETTER_SPACING_MIN,
+    Math.min(TERMINAL_LETTER_SPACING_MAX, v),
+  );
+  return Math.round(clamped * 100) / 100;
 }
 
 export function normalizeMountedTerminalLimit(
@@ -832,6 +854,10 @@ function loadSettings(): AcornSettings {
         fontWeightBold: normalizeWeight(
           terminalRaw.fontWeightBold,
           DEFAULT_SETTINGS.terminal.fontWeightBold,
+        ),
+        letterSpacing: normalizeTerminalLetterSpacing(
+          (terminalRaw as { letterSpacing?: unknown }).letterSpacing,
+          DEFAULT_SETTINGS.terminal.letterSpacing,
         ),
         lineHeight: normalizeLineHeight(
           (terminalRaw as { lineHeight?: unknown }).lineHeight,
@@ -1067,6 +1093,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeMountedTerminalLimit(
                   patch.maxMountedTerminals,
                   s.settings.terminal.maxMountedTerminals,
+                ),
+          letterSpacing:
+            patch.letterSpacing === undefined
+              ? s.settings.terminal.letterSpacing
+              : normalizeTerminalLetterSpacing(
+                  patch.letterSpacing,
+                  s.settings.terminal.letterSpacing,
                 ),
         },
       };
