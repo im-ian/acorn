@@ -492,6 +492,9 @@ export function Terminal({
     linkKey: string;
   } | null>(null);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
+  const fontSmoothing = useSettings(
+    (s) => s.settings.terminal.fontSmoothing,
+  );
 
   useEffect(() => {
     pasteAgentProviderRef.current = pasteAgentProvider;
@@ -2550,6 +2553,7 @@ export function Terminal({
         className={`acorn-terminal relative z-10 h-full w-full ${
           isFocusedPane ? "" : "acorn-terminal-inactive"
         }`}
+        data-acorn-font-smoothing={fontSmoothing}
       />
       {isScrolledBack ? (
         <Tooltip label="Scroll terminal to bottom" side="top" delay={150}>

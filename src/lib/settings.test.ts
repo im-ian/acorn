@@ -7,6 +7,7 @@ import {
   MOUNTED_TERMINAL_LIMIT_MAX,
   MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
+  TERMINAL_FONT_SMOOTHING_VALUES,
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
@@ -68,6 +69,88 @@ describe("language settings", () => {
 describe("terminal.linkActivation default", () => {
   it("defaults to plain click so xterm's stock behaviour is preserved", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");
+  });
+});
+
+describe("terminal.fontSmoothing settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults to grayscale font smoothing", () => {
+    expect(DEFAULT_SETTINGS.terminal.fontSmoothing).toBe("grayscale");
+  });
+
+  it("lists the supported terminal font smoothing modes", () => {
+    expect(TERMINAL_FONT_SMOOTHING_VALUES).toEqual([
+      "grayscale",
+      "subpixel",
+      "system",
+      "none",
+    ]);
+  });
+
+  it("loads a persisted terminal font smoothing mode", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { fontSmoothing: "subpixel" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.fontSmoothing).toBe(
+      "subpixel",
+    );
+  });
+
+  it("falls back to the default for unsupported stored terminal font smoothing", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { fontSmoothing: "sharp" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.fontSmoothing).toBe(
+      "grayscale",
+    );
+  });
+
+  it("patches terminal font smoothing and preserves the previous value for invalid patches", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings.getState().patchTerminal({ fontSmoothing: "none" });
+    expect(useSettings.getState().settings.terminal.fontSmoothing).toBe("none");
+
+    const invalidFontSmoothing =
+      "sharp" as unknown as typeof DEFAULT_SETTINGS.terminal.fontSmoothing;
+    useSettings.getState().patchTerminal({
+      fontSmoothing: invalidFontSmoothing,
+    });
+    expect(useSettings.getState().settings.terminal.fontSmoothing).toBe("none");
   });
 });
 

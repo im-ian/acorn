@@ -509,6 +509,39 @@ test.describe("terminal: spawn", () => {
     expect(first.parentLimbo).toBeNull();
   });
 
+  test("applies terminal font smoothing setting to the terminal renderer", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { fontSmoothing: "subpixel" } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+
+    const terminal = page.locator("[data-pane-body] .acorn-terminal");
+    await expect(terminal).toHaveAttribute(
+      "data-acorn-font-smoothing",
+      "subpixel",
+    );
+    await expect
+      .poll(() =>
+        terminal.evaluate((element) =>
+          window
+            .getComputedStyle(element)
+            .getPropertyValue("-webkit-font-smoothing"),
+        ),
+      )
+      .toBe("subpixel-antialiased");
+  });
+
   test("drops desktop file paths into the focused terminal", async ({
     page,
     tauri,
