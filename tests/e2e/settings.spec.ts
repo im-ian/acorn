@@ -43,11 +43,14 @@ test.describe("settings modal", () => {
     const field = modal
       .getByText("Letter spacing", { exact: true })
       .locator("..");
-    await expect(field).toContainText("0px");
+    const valueInput = field.getByRole("textbox", { name: /^(Value|값)$/ });
+    await expect(valueInput).toHaveValue("0");
+    await expect(field).toContainText("px");
 
-    await field.getByRole("button", { name: "Increase" }).click();
+    await valueInput.fill("0.75");
+    await valueInput.press("Enter");
 
-    await expect(field).toContainText("1px");
+    await expect(valueInput).toHaveValue("0.75");
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -55,7 +58,7 @@ test.describe("settings modal", () => {
           return raw ? JSON.parse(raw).terminal?.letterSpacing : null;
         }),
       )
-      .toBe(1);
+      .toBe(0.75);
   });
 
   test("records a custom shortcut and reset all restores defaults", async ({

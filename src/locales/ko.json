@@ -73,7 +73,7 @@
       },
       "letterSpacing": {
         "label": "글자 간격",
-        "hint": "터미널 셀 사이의 가로 간격입니다. 정수 픽셀 단위이며 범위는 -2~6입니다."
+        "hint": "터미널 셀 사이의 가로 간격입니다. 0.25px 단위를 지원하며 범위는 -2~6입니다."
       },
       "fontWeight": {
         "label": "글꼴 두께",
@@ -783,7 +783,8 @@
     "openGitHubProfile": "GitHub 프로필 열기",
     "stepper": {
       "decrease": "감소",
-      "increase": "증가"
+      "increase": "증가",
+      "value": "값"
     },
     "commandHint": {
       "title": "복사하거나 실행하려면 클릭"

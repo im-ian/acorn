@@ -73,7 +73,7 @@
       },
       "letterSpacing": {
         "label": "Letter spacing",
-        "hint": "Horizontal spacing between terminal cells, in whole pixels. Range -2 to 6."
+        "hint": "Horizontal spacing between terminal cells, in pixels. Supports 0.25px steps. Range -2 to 6."
       },
       "fontWeight": {
         "label": "Font weight",
@@ -783,7 +783,8 @@
     "openGitHubProfile": "Open GitHub profile",
     "stepper": {
       "decrease": "Decrease",
-      "increase": "Increase"
+      "increase": "Increase",
+      "value": "Value"
     },
     "commandHint": {
       "title": "Click to copy or run"

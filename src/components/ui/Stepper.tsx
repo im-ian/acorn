@@ -1,4 +1,5 @@
 import { Minus, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "../../lib/useTranslation";
 
 interface StepperProps {
@@ -16,6 +17,11 @@ interface StepperProps {
   onChange: (v: number) => void;
 }
 
+function decimalPlaces(n: number): number {
+  const [, fraction = ""] = String(n).split(".");
+  return fraction.length;
+}
+
 export function Stepper({
   value,
   min,
@@ -26,13 +32,42 @@ export function Stepper({
   onChange,
 }: StepperProps) {
   const t = useTranslation();
+  const precision = decimalPlaces(step);
+  const formatValue = (n: number) => (format ? format(n) : String(n));
   const clamp = (n: number) => Math.max(min, Math.min(max, n));
   // Round-to-step keeps fractional steps (e.g. 0.05) from accumulating
   // FP drift after many clicks.
-  const snap = (n: number) => Math.round(n / step) * step;
+  const snap = (n: number) =>
+    Number((Math.round(n / step) * step).toFixed(precision));
   const dec = () => onChange(clamp(snap(value - step)));
   const inc = () => onChange(clamp(snap(value + step)));
-  const display = format ? format(value) : String(value);
+  const display = formatValue(value);
+  const [draft, setDraft] = useState(display);
+
+  useEffect(() => {
+    setDraft(display);
+  }, [display]);
+
+  const commit = (raw: string) => {
+    const normalized = raw.trim().replace(",", ".");
+    if (!normalized) {
+      setDraft(display);
+      return;
+    }
+
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed)) {
+      setDraft(display);
+      return;
+    }
+
+    const next = clamp(snap(parsed));
+    setDraft(formatValue(next));
+    if (next !== value) {
+      onChange(next);
+    }
+  };
+
   return (
     <div className="inline-flex h-7 w-fit items-stretch self-start overflow-hidden rounded-md border border-border bg-bg">
       <button
@@ -44,8 +79,31 @@ export function Stepper({
       >
         <Minus size={12} />
       </button>
-      <div className="flex min-w-[3.5rem] items-center justify-center border-x border-border px-2 font-mono text-xs tabular-nums text-fg">
-        {display}
+      <div className="flex min-w-[4.25rem] items-center justify-center border-x border-border px-1.5 font-mono text-xs tabular-nums text-fg focus-within:border-accent">
+        <input
+          aria-label={t("ui.stepper.value")}
+          className="h-full w-12 bg-transparent text-center font-mono text-xs tabular-nums text-fg outline-none"
+          inputMode="decimal"
+          max={max}
+          min={min}
+          onBlur={(event) => commit(event.currentTarget.value)}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.currentTarget.value = display;
+              setDraft(display);
+              event.currentTarget.blur();
+            }
+          }}
+          step={step}
+          type="text"
+          value={draft}
+        />
         {unit ? <span className="ml-0.5 text-fg-muted">{unit}</span> : null}
       </div>
       <button

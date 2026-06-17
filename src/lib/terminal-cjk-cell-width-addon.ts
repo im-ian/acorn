@@ -214,7 +214,7 @@ function configuredLetterSpacing(term: TerminalInternals): number {
   if (typeof letterSpacing !== "number" || !Number.isFinite(letterSpacing)) {
     return 0;
   }
-  return Math.round(letterSpacing);
+  return letterSpacing;
 }
 
 function measureTargetCellWidth(

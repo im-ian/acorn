@@ -125,6 +125,7 @@ export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
 export const MOUNTED_TERMINAL_LIMIT_MAX = 64;
 export const TERMINAL_LETTER_SPACING_MIN = -2;
 export const TERMINAL_LETTER_SPACING_MAX = 6;
+export const TERMINAL_LETTER_SPACING_STEP = 0.25;
 
 export type ToastPosition = "top" | "bottom";
 
@@ -205,8 +206,8 @@ export interface AcornSettings {
     fontFamily: string;
     fontSize: number;
     /**
-     * xterm.js horizontal cell spacing in whole CSS pixels. Negative values
-     * tighten cramped fonts; positive values give dense terminal output more
+     * xterm.js horizontal cell spacing in CSS pixels. Negative values tighten
+     * cramped fonts; positive values give dense terminal output more
      * horizontal room.
      */
     letterSpacing: number;
@@ -629,10 +630,11 @@ export function normalizeTerminalLetterSpacing(
   fallback: number,
 ): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
-  return Math.max(
+  const clamped = Math.max(
     TERMINAL_LETTER_SPACING_MIN,
-    Math.min(TERMINAL_LETTER_SPACING_MAX, Math.round(v)),
+    Math.min(TERMINAL_LETTER_SPACING_MAX, v),
   );
+  return Math.round(clamped * 100) / 100;
 }
 
 export function normalizeMountedTerminalLimit(

@@ -9,6 +9,7 @@ import {
   NOTIFICATION_HISTORY_LIMIT_MAX,
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
+  TERMINAL_LETTER_SPACING_STEP,
   resolveAiCommitRequest,
   resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
@@ -165,6 +166,18 @@ describe("terminal.letterSpacing settings", () => {
   it("loads persisted letter spacing and clamps it", async () => {
     localStorage.setItem(
       STORAGE_KEY,
+      JSON.stringify({ terminal: { letterSpacing: 1.75 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(1.75);
+  });
+
+  it("clamps out-of-range persisted letter spacing", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
       JSON.stringify({ terminal: { letterSpacing: 99 } }),
     );
 
@@ -176,7 +189,7 @@ describe("terminal.letterSpacing settings", () => {
     );
   });
 
-  it("rounds patched letter spacing inside the supported range", async () => {
+  it("preserves patched decimal letter spacing inside the supported range", async () => {
     vi.resetModules();
     const { useSettings } = await import("./settings");
 
@@ -187,8 +200,12 @@ describe("terminal.letterSpacing settings", () => {
       TERMINAL_LETTER_SPACING_MIN,
     );
 
-    useSettings.getState().patchTerminal({ letterSpacing: 2.6 });
-    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(3);
+    useSettings.getState().patchTerminal({ letterSpacing: 2.675 });
+    expect(useSettings.getState().settings.terminal.letterSpacing).toBe(2.68);
+  });
+
+  it("uses a fractional UI step for terminal letter spacing", () => {
+    expect(TERMINAL_LETTER_SPACING_STEP).toBe(0.25);
   });
 });
 

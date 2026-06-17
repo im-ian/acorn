@@ -100,7 +100,7 @@ describe("terminal CJK cell width patch", () => {
     };
     const terminal = {
       cols: 6,
-      options: { letterSpacing: 2 },
+      options: { letterSpacing: 1.5 },
       _core: {
         _renderService: { _renderer: { value: renderer } },
       },
@@ -108,11 +108,11 @@ describe("terminal CJK cell width patch", () => {
 
     patchTerminalCellMeasurements(terminal);
 
-    expect(renderer.dimensions.css.cell.width).toBe(6);
-    expect(renderer.dimensions.css.canvas.width).toBe(36);
-    expect(rowElement.style.width).toBe("36px");
-    expect(rowContainer.style.letterSpacing).toBe("-2px");
-    expect(rowFactory).toMatchObject({ defaultSpacing: -2 });
+    expect(renderer.dimensions.css.cell.width).toBe(5.5);
+    expect(renderer.dimensions.css.canvas.width).toBe(33);
+    expect(rowElement.style.width).toBe("33px");
+    expect(rowContainer.style.letterSpacing).toBe("-2.5px");
+    expect(rowFactory).toMatchObject({ defaultSpacing: -2.5 });
   });
 
   it("leaves spacing untouched when W and Hangul measurements differ", () => {
