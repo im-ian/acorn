@@ -227,7 +227,7 @@ export function RightPanel() {
     localSessionHostPath ??
     repoPath;
   const sessionHostProjectScoped = active
-    ? scopeForSession(active).projectScoped
+    ? scopeForSession(active).placement.projectScoped
     : agentHistoryScope === "unscoped"
       ? false
     : sessionHostRepoPath

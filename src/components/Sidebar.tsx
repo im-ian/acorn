@@ -94,6 +94,7 @@ import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
   resolveActiveSessionScope,
+  scopeWithProjectRootLaunch,
   type SessionCreateScope,
 } from "../lib/sessionCreation";
 import {
@@ -387,7 +388,6 @@ export function Sidebar() {
         { sessions, projects },
         {
           repoPath,
-          cwdPath: repoPath,
           isolated: true,
           kind: "regular",
           mode: "terminal",
@@ -537,30 +537,45 @@ export function Sidebar() {
       const scope = activeScope();
       if (isLocalTerminalAreaFocused()) {
         void onNewLocalSessionRef.current(
-          scope?.projectScoped === false ? scope : undefined,
+          scope?.placement.projectScoped === false ? scope : undefined,
         );
         return;
       }
-      void onNewSessionRef.current(false, "regular", scope ?? undefined);
+      void onNewSessionRef.current(
+        false,
+        "regular",
+        scope ? scopeWithProjectRootLaunch(scope) : undefined,
+      );
     };
     const newIsolated = () => {
       const scope = activeScope();
+      const scopedProject =
+        scope && scope.placement.projectScoped !== false ? scope : undefined;
       void onNewSessionRef.current(
         true,
         "regular",
-        scope?.projectScoped === false ? undefined : (scope ?? undefined),
+        scopedProject,
       );
     };
     const newControl = () => {
       const scope = activeScope();
+      const scopedProject =
+        scope && scope.placement.projectScoped !== false
+          ? scopeWithProjectRootLaunch(scope)
+          : undefined;
       void onNewSessionRef.current(
         false,
         "control",
-        scope?.projectScoped === false ? undefined : (scope ?? undefined),
+        scopedProject,
       );
     };
     const newChat = () => {
-      void onNewSessionRef.current(false, "regular", activeScope() ?? undefined, "chat");
+      void onNewSessionRef.current(
+        false,
+        "regular",
+        activeScope() ?? undefined,
+        "chat",
+      );
     };
     const newProject = () => {
       setNewProjectOpen(true);
@@ -620,15 +635,13 @@ export function Sidebar() {
       const request = buildSessionCreateRequest(
         { sessions, projects },
         {
-          repoPath: scopeOverride.repoPath,
-          cwdPath: scopeOverride.cwdPath,
+          repoPath: scopeOverride.placement.repoPath,
+          launch: scopeOverride.launch,
           isolated,
           kind,
           mode,
-          projectScoped:
-            scopeOverride.projectScoped ??
-            (isolated || kind === "control" ? true : undefined),
-          projectFolderId: scopeOverride.projectFolderId,
+          projectScoped: scopeOverride.placement.projectScoped,
+          projectFolderId: scopeOverride.placement.projectFolderId,
         },
       );
       const created = await applySessionCreateRequest(createSession, request);
@@ -650,7 +663,7 @@ export function Sidebar() {
 
   async function onNewLocalSession(scopeOverride?: SessionCreateScope) {
     try {
-      const repoPath = scopeOverride?.repoPath ?? (await homeDir());
+      const repoPath = scopeOverride?.placement.repoPath ?? (await homeDir());
       if (!repoPath) return;
       const created = await applySessionCreateRequest(
         createSession,
@@ -658,9 +671,9 @@ export function Sidebar() {
           { sessions, projects },
           {
             repoPath,
-            cwdPath: scopeOverride?.cwdPath,
+            launch: scopeOverride?.launch,
             projectScoped: false,
-            projectFolderId: scopeOverride?.projectFolderId,
+            projectFolderId: scopeOverride?.placement.projectFolderId,
           },
         ),
       );
@@ -1087,10 +1100,15 @@ export function Sidebar() {
                           isolated,
                           kind,
                           {
-                            repoPath: project.repoPath,
-                            cwdPath: folder.cwdPath,
-                            projectScoped: true,
-                            projectFolderId: folder.id,
+                            placement: {
+                              repoPath: project.repoPath,
+                              projectScoped: true,
+                              projectFolderId: folder.id,
+                            },
+                            launch: {
+                              kind: "workspaceCwd",
+                              cwdPath: folder.cwdPath,
+                            },
                           },
                           mode,
                         )
@@ -1122,10 +1140,15 @@ export function Sidebar() {
             onCreate={() => onNewLocalSession()}
             onCreateInFolder={(folder) =>
               onNewLocalSession({
-                repoPath: folder.repoPath,
-                cwdPath: folder.cwdPath,
-                projectScoped: false,
-                projectFolderId: folder.id,
+                placement: {
+                  repoPath: folder.repoPath,
+                  projectScoped: false,
+                  projectFolderId: folder.id,
+                },
+                launch: {
+                  kind: "workspaceCwd",
+                  cwdPath: folder.cwdPath,
+                },
               })
             }
             onCreateWorkspace={onAddLocalWorkspace}

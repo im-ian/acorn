@@ -78,26 +78,35 @@ export function CommandRunDialog({
 
   const resolvedScope = repoPath
     ? {
-        repoPath,
-        projectScoped: resolveProjectScopedForRepoPath(
-          { sessions, projects },
+        placement: {
           repoPath,
-        ),
+          projectScoped: resolveProjectScopedForRepoPath(
+            { sessions, projects },
+            repoPath,
+          ),
+        },
+        launch: { kind: "projectRoot" as const },
       }
     : (resolveActiveSessionScope({
         sessions,
         projects,
-      activeSessionId,
-      activeWorkspaceRepoPath: activeProject,
-      activeWorkspaceCwdPath:
-        findProjectFolderById(projectFolders, activeProjectFolderId)?.cwdPath ??
-        null,
-      activeProjectFolderId,
-    }) ??
+        activeSessionId,
+        activeWorkspaceRepoPath: activeProject,
+        activeWorkspaceCwdPath:
+          findProjectFolderById(projectFolders, activeProjectFolderId)?.cwdPath ??
+          null,
+        activeProjectFolderId,
+      }) ??
       (projects[0]
-        ? { repoPath: projects[0].repo_path, projectScoped: true }
+        ? {
+            placement: {
+              repoPath: projects[0].repo_path,
+              projectScoped: true,
+            },
+            launch: { kind: "projectRoot" as const },
+          }
         : null));
-  const resolvedRepoPath = resolvedScope?.repoPath ?? null;
+  const resolvedRepoPath = resolvedScope?.placement.repoPath ?? null;
 
   function close() {
     if (busy) return;

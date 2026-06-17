@@ -2786,6 +2786,108 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
+  test("new-session hotkey from a worktree session starts at the project root", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __createdRootSession?: boolean };
+      const baseSession = {
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+      };
+      const rootSession = {
+        ...baseSession,
+        id: "root",
+        name: "root",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        in_worktree: false,
+      };
+      const worktreeSession = {
+        ...baseSession,
+        id: "worker",
+        name: "worker",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/main-copy",
+        in_worktree: true,
+      };
+      const createdSession = {
+        ...baseSession,
+        id: "created-root",
+        name: "demo",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        in_worktree: false,
+      };
+      return w.__createdRootSession
+        ? [rootSession, worktreeSession, createdSession]
+        : [rootSession, worktreeSession];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createdRootSession?: boolean;
+        __createSessionCalls?: unknown[];
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      w.__createdRootSession = true;
+      return {
+        id: "created-root",
+        name: "demo",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^worker worktree main · Idle/ })
+      .click();
+    await pressHotkey(page, { mod: true, key: "t" });
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      repoPath: string;
+      cwdPath?: string;
+      isolated: boolean;
+    }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+    });
+    expect(calls[0].cwdPath).toBeUndefined();
+  });
+
   test("clicking the instant sessions area makes new-session hotkey create a local session", async ({
     page,
     tauri,

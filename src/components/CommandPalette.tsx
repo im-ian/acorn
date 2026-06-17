@@ -106,11 +106,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       const request = buildSessionCreateRequest(
         { sessions: state.sessions, projects: state.projects },
         {
-          repoPath: scope.repoPath,
-          cwdPath: scope.cwdPath,
-          projectScoped: scope.projectScoped,
+          repoPath: scope.placement.repoPath,
+          launch: scope.launch,
+          projectScoped: scope.placement.projectScoped,
           mode: "chat",
-          projectFolderId: scope.projectFolderId,
+          projectFolderId: scope.placement.projectFolderId,
         },
       );
       const cwdPath =

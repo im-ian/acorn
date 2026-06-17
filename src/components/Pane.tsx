@@ -61,6 +61,7 @@ import {
   buildSessionCreateRequestFromScope,
   resolveProjectScopedForRepoPath,
   scopeForSession,
+  scopeWithProjectRootLaunch,
   type SessionCreateScope,
 } from "../lib/sessionCreation";
 import type { Direction, PaneId } from "../lib/layout";
@@ -248,14 +249,19 @@ export function Pane({ paneId }: PaneProps) {
     );
   }, [paneId]);
 
-  function scopeForTab(tab: PaneTab): SessionCreateScope {
-    if (tab.kind === "session") return scopeForSession(tab.session);
+  function rootScopeForTab(tab: PaneTab): SessionCreateScope {
+    if (tab.kind === "session") {
+      return scopeWithProjectRootLaunch(scopeForSession(tab.session));
+    }
     return {
-      repoPath: tab.repoPath,
-      projectScoped: resolveProjectScopedForRepoPath(
-        { sessions, projects },
-        tab.repoPath,
-      ),
+      placement: {
+        repoPath: tab.repoPath,
+        projectScoped: resolveProjectScopedForRepoPath(
+          { sessions, projects },
+          tab.repoPath,
+        ),
+      },
+      launch: { kind: "projectRoot" },
     };
   }
 
@@ -268,11 +274,14 @@ export function Pane({ paneId }: PaneProps) {
     repoPath: string,
     kind: SessionKind = "regular",
     scope: SessionCreateScope = {
-      repoPath,
-      projectScoped: resolveProjectScopedForRepoPath(
-        { sessions, projects },
+      placement: {
         repoPath,
-      ),
+        projectScoped: resolveProjectScopedForRepoPath(
+          { sessions, projects },
+          repoPath,
+        ),
+      },
+      launch: { kind: "projectRoot" },
     },
   ) {
     setFocusedPane(paneId);
@@ -373,7 +382,7 @@ export function Pane({ paneId }: PaneProps) {
   async function handleNewTabFromStrip() {
     if (tabs.length === 0) return;
     const anchor = active ?? tabs[0];
-    await spawnSession(anchor.repoPath, "regular", scopeForTab(anchor));
+    await spawnSession(anchor.repoPath, "regular", rootScopeForTab(anchor));
   }
 
   async function handleNewTabFromEmpty() {
@@ -392,15 +401,19 @@ export function Pane({ paneId }: PaneProps) {
       repoPath,
       "regular",
       anchor
-        ? scopeForTab(anchor)
+        ? rootScopeForTab(anchor)
         : {
-            repoPath,
-            cwdPath: activeFolder?.cwdPath ?? repoPath,
-            projectScoped: resolveProjectScopedForRepoPath(
-              { sessions, projects },
+            placement: {
               repoPath,
-            ),
-            projectFolderId: activeFolder?.id,
+              projectScoped: resolveProjectScopedForRepoPath(
+                { sessions, projects },
+                repoPath,
+              ),
+              projectFolderId: activeFolder?.id,
+            },
+            launch: activeFolder
+              ? { kind: "workspaceCwd", cwdPath: activeFolder.cwdPath }
+              : { kind: "projectRoot" },
           },
     );
   }
