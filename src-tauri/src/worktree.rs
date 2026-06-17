@@ -1,4 +1,4 @@
-use git2::Repository;
+use git2::{Repository, WorktreePruneOptions};
 use serde::Serialize;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -194,7 +194,7 @@ pub fn stage_remove_worktree_at_path(
                 if has_staged_worktree_backup(worktree_path) {
                     return Ok(None);
                 }
-                wt.prune(None)?;
+                prune_missing_registered_worktree(&wt, worktree_path)?;
                 return Ok(None);
             }
             let token = Uuid::new_v4().to_string();
@@ -301,11 +301,20 @@ fn prune_registered_worktree_at_path(repo: &Repository, worktree_path: &Path) ->
     for name in names.iter().flatten() {
         let wt = repo.find_worktree(name)?;
         if same_path(wt.path(), worktree_path) {
-            wt.prune(None)?;
+            prune_missing_registered_worktree(&wt, worktree_path)?;
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn prune_missing_registered_worktree(wt: &git2::Worktree, worktree_path: &Path) -> AppResult<()> {
+    let mut options = WorktreePruneOptions::new();
+    if !worktree_path.exists() {
+        options.locked(true);
+    }
+    wt.prune(Some(&mut options))?;
+    Ok(())
 }
 
 fn removed_worktree_backup_path(worktree_path: &Path, token: &str) -> AppResult<PathBuf> {
@@ -487,6 +496,68 @@ mod tests {
             "discard should prune the linked worktree registration"
         );
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn stage_remove_missing_locked_worktree_prunes_registration() {
+        let root = unique_temp_dir("missing-locked");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "locked-missing").expect("create worktree");
+        {
+            let repo = Repository::open(&root).expect("open repo");
+            let wt = repo.find_worktree("locked-missing").expect("find worktree");
+            wt.lock(Some("claude agent locked-missing (pid 999999)"))
+                .expect("lock worktree");
+        }
+        std::fs::remove_dir_all(&worktree_path).expect("remove worktree dir");
+
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("remove missing locked worktree");
+
+        assert!(removed.is_none());
+        assert!(
+            !list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| same_path(path, &worktree_path)),
+            "missing locked worktree registration should be pruned"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discard_removed_worktree_prunes_locked_registration() {
+        let root = unique_temp_dir("discard-locked");
+        let repo = init_repo_with_tracked_file(&root);
+        drop(repo);
+        let worktree_path = create_worktree(&root, "discard-locked").expect("create worktree");
+        {
+            let repo = Repository::open(&root).expect("open repo");
+            let wt = repo.find_worktree("discard-locked").expect("find worktree");
+            wt.lock(Some("claude agent discard-locked (pid 999999)"))
+                .expect("lock worktree");
+        }
+        let removed = stage_remove_worktree_at_path(&root, &worktree_path)
+            .expect("stage remove")
+            .expect("removal token");
+
+        discard_removed_worktree(
+            Path::new(&removed.repo_path),
+            Path::new(&removed.worktree_path),
+            &removed.token,
+            Path::new(&removed.git_common_dir),
+        )
+        .expect("discard locked worktree");
+
+        assert!(
+            !list_worktree_paths(&root)
+                .expect("list worktrees")
+                .iter()
+                .any(|path| same_path(path, &worktree_path)),
+            "discard should prune locked linked worktree registration"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
