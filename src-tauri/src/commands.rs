@@ -476,6 +476,7 @@ struct ChatCliOutputParser {
     pending_line: String,
     emitted_text: String,
     final_text: Option<String>,
+    usage: Option<serde_json::Value>,
 }
 
 impl ChatCliOutputParser {
@@ -485,6 +486,7 @@ impl ChatCliOutputParser {
             pending_line: String::new(),
             emitted_text: String::new(),
             final_text: None,
+            usage: None,
         }
     }
 
@@ -526,6 +528,9 @@ impl ChatCliOutputParser {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             return;
         };
+        if let Some(usage) = extract_chat_stream_usage(self.mode, &value) {
+            self.usage = Some(usage);
+        }
         let Some(event) = extract_chat_stream_text(self.mode, &value) else {
             return;
         };
@@ -567,6 +572,12 @@ impl ChatCliOutputParser {
         self.emitted_text.push_str(delta);
         on_chunk(delta);
     }
+
+    fn provider_metadata(&self) -> Option<serde_json::Value> {
+        self.usage
+            .as_ref()
+            .map(|usage| serde_json::json!({ "usage": usage }))
+    }
 }
 
 struct ChatStreamTextEvent {
@@ -604,6 +615,45 @@ fn extract_chat_stream_text(
         ChatCliOutputMode::ClaudeStreamJson => extract_claude_stream_text(value),
         ChatCliOutputMode::CodexJson => extract_codex_stream_text(value),
     }
+}
+
+fn extract_chat_stream_usage(
+    mode: ChatCliOutputMode,
+    value: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    match mode {
+        ChatCliOutputMode::Text => None,
+        ChatCliOutputMode::ClaudeStreamJson => extract_claude_stream_usage(value),
+        ChatCliOutputMode::CodexJson => extract_codex_stream_usage(value),
+    }
+}
+
+fn extract_claude_stream_usage(value: &serde_json::Value) -> Option<serde_json::Value> {
+    value
+        .get("usage")
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("usage"))
+        })
+        .cloned()
+}
+
+fn extract_codex_stream_usage(value: &serde_json::Value) -> Option<serde_json::Value> {
+    extract_codex_event_usage(value)
+        .or_else(|| value.get("msg").and_then(extract_codex_event_usage))
+        .or_else(|| value.get("payload").and_then(extract_codex_event_usage))
+}
+
+fn extract_codex_event_usage(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let event_type = value.get("type").and_then(serde_json::Value::as_str);
+    if event_type == Some("token_count") {
+        return value
+            .get("info")
+            .and_then(|info| info.get("total_token_usage").or(Some(info)))
+            .cloned();
+    }
+    value.get("usage").cloned()
 }
 
 fn extract_claude_stream_text(value: &serde_json::Value) -> Option<ChatStreamTextEvent> {
@@ -778,7 +828,7 @@ impl ChatProviderAdapter for CliChatProviderAdapter {
             native_thread_id,
             resume_token,
             last_response_id: None,
-            metadata: None,
+            metadata: output_parser.provider_metadata(),
         })
     }
 }
@@ -1960,6 +2010,17 @@ pub async fn list_agent_history(
 ) -> AppResult<Vec<AgentHistoryItem>> {
     run_blocking("list_agent_history", move || {
         agent_history::list_agent_history(PathBuf::from(repo_path), limit)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn agent_transcript_summary(
+    repo_path: String,
+    transcript_id: String,
+) -> AppResult<Option<agent_history::AgentTranscriptSummary>> {
+    run_blocking("agent_transcript_summary", move || {
+        agent_history::agent_transcript_summary(PathBuf::from(repo_path), transcript_id)
     })
     .await
 }
@@ -5718,6 +5779,32 @@ mod tests {
     }
 
     #[test]
+    fn chat_stream_parser_records_claude_usage_metadata() {
+        let mut parser =
+            super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":11,"output_tokens":3}}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(
+            parser.provider_metadata(),
+            Some(serde_json::json!({
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 3,
+                }
+            }))
+        );
+    }
+
+    #[test]
     fn chat_stream_parser_separates_non_prefix_claude_assistant_messages() {
         let mut parser =
             super::ChatCliOutputParser::new(super::ChatCliOutputMode::ClaudeStreamJson);
@@ -5773,6 +5860,34 @@ mod tests {
 
         assert_eq!(chunks.concat(), "hello");
         assert_eq!(parser.finish(""), "hello");
+    }
+
+    #[test]
+    fn chat_stream_parser_records_codex_token_count_metadata() {
+        let mut parser = super::ChatCliOutputParser::new(super::ChatCliOutputMode::CodexJson);
+        let mut chunks = Vec::new();
+
+        {
+            let mut on_chunk = |chunk: &str| chunks.push(chunk.to_string());
+            parser.push_chunk(
+                r#"{"msg":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":7,"output_tokens":5,"reasoning_output_tokens":2,"total_tokens":32}}}}"#,
+                &mut on_chunk,
+            );
+            parser.push_chunk("\n", &mut on_chunk);
+        }
+
+        assert_eq!(
+            parser.provider_metadata(),
+            Some(serde_json::json!({
+                "usage": {
+                    "input_tokens": 20,
+                    "cached_input_tokens": 7,
+                    "output_tokens": 5,
+                    "reasoning_output_tokens": 2,
+                    "total_tokens": 32,
+                }
+            }))
+        );
     }
 
     #[test]

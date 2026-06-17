@@ -52,6 +52,32 @@ pub struct AgentHistoryWorktree {
     pub exists: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
+pub struct AgentTranscriptTokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
+    pub messages_with_usage: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentTranscriptSummary {
+    pub provider: AgentHistoryProvider,
+    pub id: String,
+    pub transcript_path: String,
+    pub updated_at: u64,
+    pub message_count: u64,
+    pub user_messages: u64,
+    pub assistant_messages: u64,
+    pub turn_count: u64,
+    pub complete_turns: u64,
+    pub running_turns: u64,
+    pub token_usage: AgentTranscriptTokenUsage,
+}
+
 pub fn list_agent_history(
     repo_path: PathBuf,
     limit: Option<usize>,
@@ -70,6 +96,16 @@ pub fn list_agent_history(
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items.truncate(limit);
     Ok(items)
+}
+
+pub fn agent_transcript_summary(
+    repo_path: PathBuf,
+    transcript_id: String,
+) -> AppResult<Option<AgentTranscriptSummary>> {
+    let item = list_agent_history(repo_path, Some(DEFAULT_LIMIT))?
+        .into_iter()
+        .find(|item| item.id == transcript_id);
+    Ok(item.and_then(|item| summarize_agent_history_item(&item)))
 }
 
 pub fn list_unscoped_agent_history(
@@ -436,6 +472,202 @@ pub fn transcript_title_context(
         builder.push(entry);
     }
     builder.finish()
+}
+
+fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscriptSummary> {
+    let path = Path::new(&item.transcript_path);
+    let file = fs::File::open(path).ok()?;
+    let mut message_count = 0_u64;
+    let mut user_messages = 0_u64;
+    let mut assistant_messages = 0_u64;
+    let mut summed_usage = AgentTranscriptTokenUsage::default();
+    let mut cumulative_usage = AgentTranscriptTokenUsage::default();
+
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(entry) = title_context_entry(&item.provider, &value) {
+            match entry.role {
+                "User" => user_messages += 1,
+                "Assistant" => assistant_messages += 1,
+                _ => {}
+            }
+            message_count += 1;
+        }
+        if let Some(usage) = transcript_usage_from_value(&item.provider, &value) {
+            if is_cumulative_usage_event(&item.provider, &value) {
+                cumulative_usage = max_token_usage(cumulative_usage, usage);
+            } else {
+                add_token_usage(&mut summed_usage, usage);
+            }
+        }
+    }
+
+    let token_usage = if cumulative_usage.total_tokens > summed_usage.total_tokens {
+        cumulative_usage
+    } else {
+        summed_usage
+    };
+    let complete_turns = user_messages.min(assistant_messages);
+    let running_turns = user_messages.saturating_sub(assistant_messages);
+    Some(AgentTranscriptSummary {
+        provider: item.provider.clone(),
+        id: item.id.clone(),
+        transcript_path: item.transcript_path.clone(),
+        updated_at: item.updated_at,
+        message_count,
+        user_messages,
+        assistant_messages,
+        turn_count: user_messages,
+        complete_turns,
+        running_turns,
+        token_usage,
+    })
+}
+
+fn transcript_usage_from_value(
+    provider: &AgentHistoryProvider,
+    value: &Value,
+) -> Option<AgentTranscriptTokenUsage> {
+    match provider {
+        AgentHistoryProvider::Claude => value
+            .get("usage")
+            .or_else(|| {
+                value
+                    .get("message")
+                    .and_then(|message| message.get("usage"))
+            })
+            .and_then(token_usage_from_object),
+        AgentHistoryProvider::Codex => codex_usage_from_value(value),
+        AgentHistoryProvider::Antigravity => generic_usage_from_value(value),
+    }
+}
+
+fn codex_usage_from_value(value: &Value) -> Option<AgentTranscriptTokenUsage> {
+    if let Some(event) = codex_token_count_event(value) {
+        return event
+            .get("info")
+            .and_then(|info| info.get("total_token_usage").or(Some(info)))
+            .and_then(token_usage_from_object);
+    }
+    generic_usage_from_value(value)
+}
+
+fn generic_usage_from_value(value: &Value) -> Option<AgentTranscriptTokenUsage> {
+    for key in [
+        "usage",
+        "token_usage",
+        "tokenUsage",
+        "total_token_usage",
+        "totalTokenUsage",
+        "info",
+    ] {
+        if let Some(usage) = value.get(key).and_then(token_usage_from_object) {
+            return Some(usage);
+        }
+    }
+    for key in ["message", "payload", "response"] {
+        if let Some(usage) = value.get(key).and_then(generic_usage_from_value) {
+            return Some(usage);
+        }
+    }
+    token_usage_from_object(value)
+}
+
+fn token_usage_from_object(value: &Value) -> Option<AgentTranscriptTokenUsage> {
+    let input_tokens = first_u64(value, &["input_tokens", "inputTokens", "prompt_tokens"]);
+    let output_tokens = first_u64(
+        value,
+        &["output_tokens", "outputTokens", "completion_tokens"],
+    );
+    let cache_read_tokens = first_u64(
+        value,
+        &[
+            "cache_read_input_tokens",
+            "cacheReadInputTokens",
+            "cached_input_tokens",
+            "cachedInputTokens",
+            "cached_tokens",
+        ],
+    );
+    let cache_creation_tokens = first_u64(
+        value,
+        &["cache_creation_input_tokens", "cacheCreationInputTokens"],
+    );
+    let reasoning_tokens = first_u64(
+        value,
+        &[
+            "reasoning_output_tokens",
+            "reasoningOutputTokens",
+            "reasoning_tokens",
+        ],
+    );
+    let explicit_total = first_u64(value, &["total_tokens", "totalTokens"]);
+    let total_tokens = explicit_total.unwrap_or_else(|| {
+        input_tokens.unwrap_or(0)
+            + output_tokens.unwrap_or(0)
+            + cache_read_tokens.unwrap_or(0)
+            + cache_creation_tokens.unwrap_or(0)
+    });
+    if total_tokens == 0 && reasoning_tokens.unwrap_or(0) == 0 {
+        return None;
+    }
+    Some(AgentTranscriptTokenUsage {
+        input_tokens: input_tokens.unwrap_or(0),
+        output_tokens: output_tokens.unwrap_or(0),
+        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+        cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
+        reasoning_tokens: reasoning_tokens.unwrap_or(0),
+        total_tokens,
+        messages_with_usage: 1,
+    })
+}
+
+fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_u64))
+}
+
+fn is_cumulative_usage_event(provider: &AgentHistoryProvider, value: &Value) -> bool {
+    provider == &AgentHistoryProvider::Codex && codex_token_count_event(value).is_some()
+}
+
+fn codex_token_count_event(value: &Value) -> Option<&Value> {
+    if string_at(Some(value), "type").as_deref() == Some("token_count") {
+        return Some(value);
+    }
+    for key in ["msg", "payload"] {
+        if let Some(event) = value.get(key).and_then(codex_token_count_event) {
+            return Some(event);
+        }
+    }
+    None
+}
+
+fn add_token_usage(total: &mut AgentTranscriptTokenUsage, usage: AgentTranscriptTokenUsage) {
+    total.input_tokens += usage.input_tokens;
+    total.output_tokens += usage.output_tokens;
+    total.cache_read_tokens += usage.cache_read_tokens;
+    total.cache_creation_tokens += usage.cache_creation_tokens;
+    total.reasoning_tokens += usage.reasoning_tokens;
+    total.total_tokens += usage.total_tokens;
+    total.messages_with_usage += usage.messages_with_usage;
+}
+
+fn max_token_usage(
+    current: AgentTranscriptTokenUsage,
+    candidate: AgentTranscriptTokenUsage,
+) -> AgentTranscriptTokenUsage {
+    if candidate.total_tokens > current.total_tokens {
+        candidate
+    } else {
+        current
+    }
 }
 
 fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
@@ -1925,6 +2157,103 @@ mod tests {
         assert!(context.contains("Turn 0"));
         assert!(context.contains("[...]"));
         assert!(context.contains("Turn 19"));
+    }
+
+    #[test]
+    fn transcript_summary_counts_messages_and_uses_codex_cumulative_token_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("rollout-2026-05-21T10-13-44-019e4818-7c15-7e60-9b3b-898a1c7803d6.jsonl");
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "id": "019e4818-7c15-7e60-9b3b-898a1c7803d6",
+                    "cwd": "/tmp/demo",
+                    "role": "user",
+                    "content": "Do it",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "role": "assistant",
+                    "content": "Done",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "msg": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 20,
+                            "cached_input_tokens": 7,
+                            "output_tokens": 5,
+                            "reasoning_output_tokens": 2,
+                            "total_tokens": 32,
+                        },
+                    },
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "msg": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 40,
+                            "cached_input_tokens": 9,
+                            "output_tokens": 10,
+                            "reasoning_output_tokens": 4,
+                            "total_tokens": 59,
+                        },
+                    },
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let item = AgentHistoryItem {
+            provider: AgentHistoryProvider::Codex,
+            id: "019e4818-7c15-7e60-9b3b-898a1c7803d6".to_string(),
+            title: "Do it".to_string(),
+            preview: Some("Done".to_string()),
+            cwd: Some("/tmp/demo".to_string()),
+            worktree: None,
+            transcript_path: transcript.display().to_string(),
+            updated_at: 1_766_000_000,
+            resume_command: None,
+        };
+
+        let summary = summarize_agent_history_item(&item).unwrap();
+
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.user_messages, 1);
+        assert_eq!(summary.assistant_messages, 1);
+        assert_eq!(summary.complete_turns, 1);
+        assert_eq!(summary.token_usage.input_tokens, 40);
+        assert_eq!(summary.token_usage.cache_read_tokens, 9);
+        assert_eq!(summary.token_usage.output_tokens, 10);
+        assert_eq!(summary.token_usage.reasoning_tokens, 4);
+        assert_eq!(summary.token_usage.total_tokens, 59);
+        assert_eq!(summary.token_usage.messages_with_usage, 1);
     }
 
     #[test]

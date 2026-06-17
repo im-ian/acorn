@@ -1,7 +1,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project, Session, SessionStatus } from "../lib/types";
+import type {
+  ChatSessionState,
+  Project,
+  Session,
+  SessionStatus,
+} from "../lib/types";
 
 const mocks = vi.hoisted(() => ({
   createSession: vi.fn(async () => ({}) as Session),
@@ -19,10 +24,15 @@ const mocks = vi.hoisted(() => ({
     binary: false,
   })),
   fsGitDiffLines: vi.fn(async () => []),
+  fsGitStatus: vi.fn(),
+  fsGitDiffStats: vi.fn(),
+  loadChatSessionState: vi.fn(),
+  agentTranscriptSummary: vi.fn(),
   ptyWrite: vi.fn(async () => undefined),
 }));
 
 vi.mock("../lib/api", () => ({
+  CHAT_SESSION_STATE_CHANGED_EVENT: "acorn:chat-session-state-changed",
   FS_CHANGED_EVENT: "acorn:fs-changed",
   api: {
     loadStatus: vi.fn(async () => ({
@@ -36,6 +46,10 @@ vi.mock("../lib/api", () => ({
     ptyInWorktreeAll: mocks.ptyInWorktreeAll,
     fsReadFile: mocks.fsReadFile,
     fsGitDiffLines: mocks.fsGitDiffLines,
+    fsGitStatus: mocks.fsGitStatus,
+    fsGitDiffStats: mocks.fsGitDiffStats,
+    loadChatSessionState: mocks.loadChatSessionState,
+    agentTranscriptSummary: mocks.agentTranscriptSummary,
     ptyWrite: mocks.ptyWrite,
   },
 }));
@@ -60,6 +74,7 @@ import {
   cancelWorkspaceTabDrag,
   getWorkspaceTabDragSession,
 } from "../lib/workspaceTabDrag";
+import { makeWorkSummaryWorkspaceTab } from "../lib/workspaceTabs";
 
 const REPO = "/Users/me/repo";
 const HOME = "/Users/me";
@@ -93,6 +108,27 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
     in_worktree: false,
     ...overrides,
   };
+}
+
+function chatStateWithTokens(totalTokens: number): ChatSessionState {
+  return {
+    messages: [
+      {
+        id: "a1",
+        role: "assistant",
+        metadata: {
+          provider_response: {
+            usage: {
+              input_tokens: totalTokens - 40,
+              output_tokens: 40,
+              total_tokens: totalTokens,
+            },
+          },
+        },
+      },
+    ],
+    turns: [],
+  } as unknown as ChatSessionState;
 }
 
 function resetStore(): void {
@@ -290,6 +326,13 @@ describe("Pane empty state", () => {
     clearFileDropTargetsForTest();
     cancelWorkspaceTabDrag();
     vi.clearAllMocks();
+    mocks.fsGitStatus.mockResolvedValue({
+      statuses: {},
+      huge: false,
+      limit: 500,
+    });
+    mocks.fsGitDiffStats.mockResolvedValue({});
+    mocks.loadChatSessionState.mockResolvedValue(chatStateWithTokens(140));
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -467,6 +510,123 @@ describe("Pane empty state", () => {
       indicator!.compareDocumentPosition(title!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
+  });
+
+  it("passes a work summary token baseline through pane tab rendering", async () => {
+    const active = session("chat-session", { mode: "chat" });
+    const summaryTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: active.worktree_path,
+      sessionId: active.id,
+      title: "Chat Summary",
+      tokenBaseline: {
+        inputTokens: 40,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 50,
+        messagesWithUsage: 1,
+        capturedAt: "2026-01-01T00:00:00Z",
+      },
+    });
+    const pane = {
+      id: "root",
+      tabIds: [summaryTab.id],
+      activeTabId: summaryTab.id,
+    };
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [active],
+      activeProject: REPO,
+      activeProjectFolderId: REPO,
+      activeSessionId: active.id,
+      activeTabId: summaryTab.id,
+      workspaceTabs: { [summaryTab.id]: summaryTab },
+      workspaces: {
+        ...s.workspaces,
+        [REPO]: {
+          layout: { kind: "pane", id: "root" },
+          panes: { root: pane },
+          focusedPaneId: "root",
+        },
+      },
+      panes: { root: pane },
+      focusedPaneId: "root",
+    }));
+
+    await act(async () => {
+      root.render(<Pane paneId="root" />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Session used");
+    expect(container.textContent).toContain("Summary start");
+    expect(container.textContent).toContain("50");
+    expect(container.textContent).toContain("+90");
+  });
+
+  it("loads a visible work summary in an unfocused pane", async () => {
+    const active = session("chat-session", { mode: "chat" });
+    const summaryTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: active.worktree_path,
+      sessionId: active.id,
+      title: "Chat Summary",
+    });
+    const rootPane = {
+      id: "root",
+      tabIds: [active.id],
+      activeTabId: active.id,
+    };
+    const summaryPane = {
+      id: "pane-2",
+      tabIds: [summaryTab.id],
+      activeTabId: summaryTab.id,
+    };
+    const layout = {
+      kind: "split" as const,
+      id: "split-test",
+      direction: "horizontal" as const,
+      a: { kind: "pane" as const, id: "root" },
+      b: { kind: "pane" as const, id: "pane-2" },
+    };
+
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [active],
+      activeProject: REPO,
+      activeProjectFolderId: REPO,
+      activeSessionId: active.id,
+      activeTabId: active.id,
+      workspaceTabs: { [summaryTab.id]: summaryTab },
+      workspaces: {
+        ...s.workspaces,
+        [REPO]: {
+          layout,
+          panes: { root: rootPane, "pane-2": summaryPane },
+          focusedPaneId: "root",
+        },
+      },
+      layout,
+      panes: { root: rootPane, "pane-2": summaryPane },
+      focusedPaneId: "root",
+    }));
+
+    await act(async () => {
+      root.render(<Pane paneId="pane-2" />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("140 tokens");
   });
 
   it("does not enter tab rename while title generation is active", async () => {

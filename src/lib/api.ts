@@ -3,6 +3,7 @@ import type {
   AcornIpcStatus,
   AgentTokenUsageSnapshot,
   AgentHistoryItem,
+  AgentTranscriptSummary,
   CommitInfo,
   ChatMessage,
   ChatMessagePatch,
@@ -527,6 +528,15 @@ export const api = {
     return invoke<AgentHistoryItem[]>("list_agent_history", {
       repoPath,
       limit,
+    });
+  },
+  agentTranscriptSummary(
+    repoPath: string,
+    transcriptId: string,
+  ): Promise<AgentTranscriptSummary | null> {
+    return invoke<AgentTranscriptSummary | null>("agent_transcript_summary", {
+      repoPath,
+      transcriptId,
     });
   },
   listUnscopedAgentHistory(limit = 100): Promise<AgentHistoryItem[]> {
