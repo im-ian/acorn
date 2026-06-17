@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
+use chrono::{Datelike, Local, TimeZone, Utc};
 use parking_lot::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 
@@ -247,6 +248,7 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
         pid: u32,
         cwd: PathBuf,
         start_time: SystemTime,
+        explicit_transcript_id: Option<String>,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
 
@@ -274,12 +276,17 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
                     if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
                         let start_time =
                             SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
+                        let explicit_transcript_id = match kind {
+                            AgentKind::Codex => codex_resume_id_from_process(proc),
+                            AgentKind::Claude | AgentKind::Antigravity => None,
+                        };
                         candidates.push(Candidate {
                             session_id: session.session_id,
                             kind,
                             pid: pid.as_u32(),
                             cwd,
                             start_time,
+                            explicit_transcript_id,
                         });
                     }
                 }
@@ -309,15 +316,23 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
             }
             AgentKind::Codex => {
                 let sole_codex_in_cwd = codex_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
-                find_recent_codex_jsonl(
-                    &c.cwd,
-                    codex_root.as_deref(),
-                    recency_cutoff,
-                    c.start_time,
-                    now,
-                    sole_codex_in_cwd,
-                    &assigned,
-                )
+                // `codex resume <uuid>` may attach to an existing JSONL before
+                // Codex appends a new line, so the normal mtime >= process-start
+                // guard would hide the active transcript.
+                c.explicit_transcript_id
+                    .as_deref()
+                    .and_then(|id| find_codex_jsonl_for_uuid(codex_root.as_deref(), id, &assigned))
+                    .or_else(|| {
+                        find_recent_codex_jsonl(
+                            &c.cwd,
+                            codex_root.as_deref(),
+                            recency_cutoff,
+                            c.start_time,
+                            now,
+                            sole_codex_in_cwd,
+                            &assigned,
+                        )
+                    })
             }
             AgentKind::Antigravity => find_recent_antigravity_jsonl(
                 &antigravity_roots,
@@ -374,6 +389,21 @@ fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
     false
 }
 
+fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    codex_resume_id_from_args(&args)
+}
+
+fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
+    args.windows(2).find_map(|pair| {
+        (pair[0] == "resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
+    })
+}
+
 fn claude_projects_root() -> Option<PathBuf> {
     directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
@@ -386,6 +416,105 @@ fn codex_sessions_root() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().join(".codex")))
         .map(|p| p.join("sessions"))
+}
+
+/// Locate a Codex rollout JSONL by its transcript UUID.
+///
+/// Codex stores rollouts under `<sessions>/<yyyy>/<mm>/<dd>/`, while the
+/// resume command only carries the trailing UUID. Modern Codex UUIDs are v7,
+/// so their first 48 bits identify the rollout's timestamp; check that date
+/// first and keep a small recent fallback for non-v7 or unusual layouts.
+pub fn locate_codex_transcript(uuid: &str) -> Option<PathBuf> {
+    let root = codex_sessions_root()?;
+    locate_codex_transcript_in(&root, uuid)
+}
+
+fn locate_codex_transcript_in(sessions_root: &Path, uuid: &str) -> Option<PathBuf> {
+    if !is_uuid_v4_shape(uuid) {
+        return None;
+    }
+
+    for day_dir in codex_day_dirs_for_uuid(sessions_root, uuid) {
+        if let Some(path) = find_rollout_for_uuid(&day_dir, uuid) {
+            return Some(path);
+        }
+    }
+
+    for year in iter_subdirs_desc(sessions_root)?.into_iter().take(2) {
+        for month in iter_subdirs_desc(&year)?.into_iter().take(2) {
+            for day in iter_subdirs_desc(&month)?.into_iter().take(7) {
+                if let Some(path) = find_rollout_for_uuid(&day, uuid) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn find_codex_jsonl_for_uuid(
+    sessions_root: Option<&Path>,
+    uuid: &str,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    let path = locate_codex_transcript_in(sessions_root?, uuid)?;
+    if assigned.contains(&path) {
+        return None;
+    }
+    Some((path, uuid.to_string()))
+}
+
+fn codex_day_dirs_for_uuid(sessions_root: &Path, uuid: &str) -> Vec<PathBuf> {
+    let Some(ms) = uuid_v7_unix_millis(uuid) else {
+        return Vec::new();
+    };
+    let Ok(ms) = i64::try_from(ms) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    if let Some(dt) = Local.timestamp_millis_opt(ms).single() {
+        dirs.push(codex_day_dir(sessions_root, dt.year(), dt.month(), dt.day()));
+    }
+    if let Some(dt) = Utc.timestamp_millis_opt(ms).single() {
+        let utc = codex_day_dir(sessions_root, dt.year(), dt.month(), dt.day());
+        if !dirs.iter().any(|existing| existing == &utc) {
+            dirs.push(utc);
+        }
+    }
+    dirs
+}
+
+fn codex_day_dir(root: &Path, year: i32, month: u32, day: u32) -> PathBuf {
+    root.join(format!("{year:04}"))
+        .join(format!("{month:02}"))
+        .join(format!("{day:02}"))
+}
+
+fn uuid_v7_unix_millis(uuid: &str) -> Option<u64> {
+    let mut compact = String::with_capacity(32);
+    for ch in uuid.chars() {
+        if ch != '-' {
+            compact.push(ch);
+        }
+    }
+    if compact.len() != 32 || compact.as_bytes().get(12).copied() != Some(b'7') {
+        return None;
+    }
+    u64::from_str_radix(&compact[..12], 16).ok()
+}
+
+fn find_rollout_for_uuid(day_dir: &Path, uuid: &str) -> Option<PathBuf> {
+    let suffix = format!("{uuid}.jsonl");
+    for entry in std::fs::read_dir(day_dir).ok()?.flatten() {
+        let path = entry.path();
+        let Some(filename) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if filename.starts_with("rollout-") && filename.ends_with(&suffix) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn google_agent_storage_root() -> Option<PathBuf> {
@@ -770,6 +899,17 @@ fn newest_subdir(dir: &Path) -> Option<PathBuf> {
     best
 }
 
+fn iter_subdirs_desc(dir: &Path) -> Option<Vec<PathBuf>> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    Some(entries)
+}
+
 fn pick_newest_unassigned_jsonl(
     dir: &Path,
     recency_cutoff: SystemTime,
@@ -977,6 +1117,105 @@ mod tests {
             extract_uuid_from_path(path).as_deref(),
             Some("019e2001-3250-76b0-8410-2e073b38a2c1")
         );
+    }
+
+    #[test]
+    fn codex_resume_id_from_args_reads_resume_subcommand() {
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let args = vec!["codex".to_string(), "resume".to_string(), id.to_string()];
+
+        assert_eq!(codex_resume_id_from_args(&args).as_deref(), Some(id));
+    }
+
+    #[test]
+    fn uuid_v7_unix_millis_reads_codex_rollout_timestamp() {
+        assert_eq!(
+            uuid_v7_unix_millis("019e2001-3250-76b0-8410-2e073b38a2c1"),
+            Some(1_778_653_409_872)
+        );
+        assert_eq!(
+            uuid_v7_unix_millis("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            None
+        );
+    }
+
+    #[test]
+    fn locate_codex_transcript_uses_uuid_date_dir() {
+        use std::fs::{self, File};
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxloc-{}", uuid::Uuid::new_v4().simple()));
+        let sessions = root.join("sessions");
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let day = codex_day_dirs_for_uuid(&sessions, id)
+            .into_iter()
+            .next()
+            .unwrap();
+        fs::create_dir_all(&day).unwrap();
+        let expected = day.join(format!("rollout-2026-05-13T15-23-29-{id}.jsonl"));
+        File::create(&expected).unwrap();
+
+        let newer_day = sessions.join("2099").join("12").join("31");
+        fs::create_dir_all(&newer_day).unwrap();
+        File::create(
+            newer_day
+                .join("rollout-2099-12-31T00-00-00-11111111-2222-7333-8444-555555555555.jsonl"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            locate_codex_transcript_in(&sessions, id).as_deref(),
+            Some(expected.as_path())
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn explicit_codex_resume_finds_transcript_before_first_append() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "acorn-cxresume-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sessions = root.join("sessions");
+        let cwd = root.join("repo");
+        let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
+        let day = codex_day_dirs_for_uuid(&sessions, id)
+            .into_iter()
+            .next()
+            .unwrap();
+        fs::create_dir_all(&day).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let transcript = day.join(format!("rollout-2026-05-13T15-23-29-{id}.jsonl"));
+        let mut file = File::create(&transcript).unwrap();
+        writeln!(file, "{{\"payload\":{{\"cwd\":\"{}\"}}}}", cwd.display()).unwrap();
+
+        let old_mtime = SystemTime::now() - Duration::from_secs(60);
+        set_mtime(&transcript, old_mtime);
+        let process_start = old_mtime + Duration::from_secs(30);
+
+        let recent = find_recent_codex_jsonl(
+            &cwd,
+            Some(&sessions),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+            process_start,
+            true,
+            &HashSet::new(),
+        );
+        assert!(
+            recent.is_none(),
+            "mtime-based live matching rejects a resume before Codex appends"
+        );
+
+        let explicit = find_codex_jsonl_for_uuid(Some(&sessions), id, &HashSet::new());
+        assert_eq!(explicit.map(|(_, found_id)| found_id).as_deref(), Some(id));
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
