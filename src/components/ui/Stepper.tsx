@@ -79,7 +79,7 @@ export function Stepper({
       >
         <Minus size={12} />
       </button>
-      <div className="flex min-w-[4.25rem] items-center justify-center border-x border-border px-1.5 font-mono text-xs tabular-nums text-fg focus-within:border-accent">
+      <div className="flex min-w-[4.25rem] items-center justify-center border-x border-border px-1.5 font-mono text-xs tabular-nums text-fg focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent">
         <input
           aria-label={t("ui.stepper.value")}
           className="h-full w-12 bg-transparent text-center font-mono text-xs tabular-nums text-fg outline-none"
