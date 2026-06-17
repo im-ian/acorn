@@ -64,6 +64,10 @@ layers that fire automatically every time a control-session PTY spawns:
      without the user installing a shim.
    - `ACORN_SESSION_ID` — injected only for sessions already marked as
      control. This remains the primary source id for privileged operations.
+   - `ACORN_WORKSPACE_ID`, `ACORN_WORKSPACE_PATH`, `ACORN_WORKSPACE_NAME` —
+     the frontend workspace that owned the terminal when its PTY spawned.
+     `acorn-ipc new-session --workspace current` uses these to place new
+     sessions back into the same workspace.
    - `ACORN_DAEMON_SOCKET` — injected for control sessions so scripts can
      also reach the background daemon control socket.
 2. **Worktree marker file.** A `.acorn-control.md` is written to the
@@ -95,6 +99,9 @@ Control sessions additionally receive:
 | Env var             | Source                            |
 | ------------------- | --------------------------------- |
 | `ACORN_SESSION_ID`  | The session's UUID                |
+| `ACORN_WORKSPACE_ID` | Current frontend workspace id    |
+| `ACORN_WORKSPACE_PATH` | Current frontend workspace cwd |
+| `ACORN_WORKSPACE_NAME` | Current frontend workspace name |
 | `ACORN_DAEMON_SOCKET` | Path to the daemon control socket |
 
 The `acorn-ipc` binary reads `ACORN_SESSION_ID` first, then falls back to
@@ -128,6 +135,9 @@ explicit directory.
 > env -u ACORN_DATA_DIR \
 >     -u ACORN_IPC_SOCKET \
 >     -u ACORN_DAEMON_SOCKET \
+>     -u ACORN_WORKSPACE_ID \
+>     -u ACORN_WORKSPACE_PATH \
+>     -u ACORN_WORKSPACE_NAME \
 >     -u ACORN_AGENT_STATE_DIR \
 >     -u ACORN_AGENT_WRAPPER_DIR \
 >     -u ACORN_CLI_DIR \
@@ -199,7 +209,8 @@ acorn-ipc --help
 acorn-ipc promote-self
 acorn-ipc context
 acorn-ipc list-sessions
-acorn-ipc new-session   <name> [--isolated] [--owner me|user]
+acorn-ipc list-workspaces
+acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]
 acorn-ipc send-keys     -t <uuid> --data "ls" --enter [--allow-foreign]
 acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]
 acorn-ipc select-session -t <uuid> [--allow-foreign]
@@ -224,12 +235,41 @@ Sessions created from the UI are owned by `user`. Sessions created through
 `acorn-ipc new-session` are owned by the source control session by default
 (`control:<source session id>`), unless the caller passes `--owner user`.
 
+By default, `acorn-ipc new-session` still creates a session at the project
+root. Pass `--workspace current` to create it in the same Acorn workspace as
+the control session, or `--workspace /absolute/path` to target a registered
+project cwd or one of that project's linked worktrees. `--workspace-id` is
+the exact frontend workspace placement hint; it is filled automatically for
+`--workspace current` when Acorn injected `ACORN_WORKSPACE_ID`.
+
+`list-workspaces` is subject to the same authorization gate as every command
+except `promote-self`: the source session must already be `Control`, and the
+result is scoped to the source session's `repo_path`. It asks the loaded
+frontend for named workspace metadata in that project. The response includes
+each workspace's `id`, `name`, `repo_path`, `workspace_path`, whether it is
+the default workspace, whether it is active, whether it owns the source
+control session, and its current session count. Use the returned
+`workspace_path` and `id` together when creating a session in a specific named
+workspace:
+
+```sh
+workspace_id=$(acorn-ipc list-workspaces --json | jq -r '.workspaces[] | select(.name == "Frontend") | .id')
+workspace_path=$(acorn-ipc list-workspaces --json | jq -r '.workspaces[] | select(.name == "Frontend") | .workspace_path')
+acorn-ipc new-session "frontend-worker" --workspace "$workspace_path" --workspace-id "$workspace_id"
+```
+
+Because named workspaces are renderer-owned UI state, `list-workspaces`
+requires the Acorn frontend to be loaded and responsive. If the window is
+reloading or the listener is unavailable, the IPC server returns an internal
+error instead of guessing from backend session paths.
+
 `list-sessions` shows each session's owner and whether it is owned by the
-current controller. By default, `send-keys`, `read-buffer`, `select-session`,
-and `kill-session` only operate on sessions owned by the current controller
-or on the source control session itself. Passing `--allow-foreign` is the
-explicit escape hatch for a direct user request to touch a user-owned session
-or a session owned by another control session.
+current controller, plus the workspace path recorded for each session. By
+default, `send-keys`, `read-buffer`, `select-session`, and `kill-session`
+only operate on sessions owned by the current controller or on the source
+control session itself. Passing `--allow-foreign` is the explicit escape
+hatch for a direct user request to touch a user-owned session or a session
+owned by another control session.
 
 ### Examples
 
@@ -263,6 +303,10 @@ acorn-ipc select-session -t "$new_id"
 - Target lookups are scoped to the source's project (`repo_path`).
   Cross-project requests surface a distinct `OutOfScope` error so the CLI
   can give an accurate diagnostic instead of a misleading "not found".
+- `list-workspaces` is read-only but still requires a control source session.
+  The backend sends the source `repo_path` to the renderer and treats the
+  response as project-scoped workspace metadata, not as permission to touch
+  sessions in other projects.
 - `kill-session` refuses to kill the source control session itself, so a
   badly-written agent can't accidentally remove the only seat it has.
 

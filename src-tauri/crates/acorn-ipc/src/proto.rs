@@ -41,6 +41,10 @@ pub enum Request {
     /// List sessions visible to the source — i.e. sessions in the same
     /// project (`repo_path`) as the calling control session.
     ListSessions,
+    /// List frontend workspaces for the source session's project. Named
+    /// workspace state lives in the renderer, so the app bridges this request
+    /// through a Tauri event before answering the CLI.
+    ListWorkspaces,
     /// Send raw bytes to a target session's PTY stdin. Pure passthrough —
     /// the server does not interpret the bytes. Use `data_b64` to carry
     /// non-UTF-8 sequences (e.g. control characters) cleanly.
@@ -69,6 +73,10 @@ pub enum Request {
         isolated: bool,
         #[serde(default)]
         owner: Option<NewSessionOwner>,
+        #[serde(default)]
+        workspace_path: Option<String>,
+        #[serde(default)]
+        workspace_id: Option<String>,
     },
     /// Ask the app to focus the given session in its pane. Emits a Tauri
     /// event the frontend reacts to.
@@ -103,6 +111,9 @@ pub enum Response {
     },
     Sessions {
         sessions: Vec<SessionSummary>,
+    },
+    Workspaces {
+        workspaces: Vec<WorkspaceSummary>,
     },
     Ack,
     Buffer {
@@ -155,6 +166,8 @@ pub struct SessionSummary {
     pub id: String,
     pub name: String,
     pub repo_path: String,
+    #[serde(default)]
+    pub workspace_path: String,
     pub branch: String,
     pub kind: String,
     pub owner: String,
@@ -163,6 +176,18 @@ pub struct SessionSummary {
     /// True when the source session itself is the one being described —
     /// the CLI uses this to render an arrow / current-session marker.
     pub is_source: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSummary {
+    pub id: String,
+    pub name: String,
+    pub repo_path: String,
+    pub workspace_path: String,
+    pub is_default: bool,
+    pub active: bool,
+    pub source: bool,
+    pub session_count: usize,
 }
 
 #[cfg(test)]
@@ -215,6 +240,37 @@ mod tests {
         };
         let encoded = serde_json::to_string(&env).expect("encode");
         assert!(encoded.contains("\"kind\":\"promote-self\""));
+    }
+
+    #[test]
+    fn list_workspaces_request_uses_kebab_case_kind() {
+        let env = Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            source_session_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            request: Request::ListWorkspaces,
+        };
+        let encoded = serde_json::to_string(&env).expect("encode");
+        assert!(encoded.contains("\"kind\":\"list-workspaces\""));
+    }
+
+    #[test]
+    fn workspaces_response_roundtrips() {
+        let response = Response::Workspaces {
+            workspaces: vec![WorkspaceSummary {
+                id: "project-folder:/repo:frontend".to_string(),
+                name: "Frontend".to_string(),
+                repo_path: "/repo".to_string(),
+                workspace_path: "/repo/packages/web".to_string(),
+                is_default: false,
+                active: true,
+                source: true,
+                session_count: 2,
+            }],
+        };
+        let encoded = serde_json::to_string(&response).expect("encode");
+        assert!(encoded.contains("\"kind\":\"workspaces\""));
+        let decoded: Response = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, response);
     }
 
     #[test]

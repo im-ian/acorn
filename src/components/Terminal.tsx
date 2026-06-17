@@ -99,6 +99,9 @@ interface TerminalProps {
   sessionId: string;
   repoPath: string;
   cwd: string;
+  workspaceId?: string | null;
+  workspaceName?: string | null;
+  workspacePath?: string | null;
   agentProvider?: SessionAgentProvider | null;
   pasteAgentProvider?: SessionAgentProvider | null;
   /**
@@ -474,6 +477,9 @@ export function Terminal({
   sessionId,
   repoPath,
   cwd,
+  workspaceId = null,
+  workspaceName = null,
+  workspacePath = null,
   agentProvider = null,
   pasteAgentProvider = null,
   isActive = true,
@@ -1928,10 +1934,14 @@ export function Terminal({
         // Sessions always drop into $SHELL on the backend.
         const spawnCols = term.cols;
         const spawnRows = term.rows;
+        const env: Record<string, string> = {};
+        if (workspaceId) env.ACORN_WORKSPACE_ID = workspaceId;
+        if (workspaceName) env.ACORN_WORKSPACE_NAME = workspaceName;
+        if (workspacePath) env.ACORN_WORKSPACE_PATH = workspacePath;
         await invoke("pty_spawn", {
           sessionId,
           cwd,
-          env: {},
+          env,
           cols: spawnCols,
           rows: spawnRows,
           // Live daemon-backed attaches replay their raw ring as the source of

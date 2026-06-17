@@ -233,6 +233,10 @@ interface AppStateModel {
     projectFolderId?: string,
     cwdPath?: string,
   ) => Promise<Session | null>;
+  placeSessionInWorkspace: (
+    sessionId: string,
+    workspace: { workspaceId?: string | null; workspacePath?: string | null },
+  ) => void;
   removeSession: (
     id: string,
     removeWorktree?: boolean,
@@ -826,6 +830,77 @@ function resolvePlacementProjectFolderId(
   if (state.workspaces[selectedPath]) return selectedPath;
   const defaultId = defaultProjectFolderId(selectedPath);
   return state.workspaces[defaultId] ? defaultId : null;
+}
+
+function resolveWorkspaceFolderForHint(
+  state: AppStateModel,
+  session: Session,
+  workspace: { workspaceId?: string | null; workspacePath?: string | null },
+): ProjectFolder | null {
+  const workspaceId = workspace.workspaceId?.trim();
+  if (workspaceId) {
+    const folder = findProjectFolder(state, workspaceId);
+    if (folder?.repoPath === session.repo_path) return folder;
+  }
+
+  const workspacePath = workspace.workspacePath?.trim();
+  if (!workspacePath) return null;
+  const folders = state.projectFolders[session.repo_path] ?? [];
+  const matches = folders.filter((folder) =>
+    sameWorkspacePath(folder.cwdPath, workspacePath),
+  );
+  if (matches.length === 0) return null;
+  const defaultFolder = matches.find(isDefaultProjectFolder);
+  if (sameWorkspacePath(workspacePath, session.repo_path)) {
+    return defaultFolder ?? matches[0] ?? null;
+  }
+  return matches.find((folder) => !isDefaultProjectFolder(folder)) ?? matches[0] ?? null;
+}
+
+function applySessionWorkspaceHint(
+  state: AppStateModel,
+  sessionId: string,
+  workspace: { workspaceId?: string | null; workspacePath?: string | null },
+): AppStateModel | Partial<AppStateModel> {
+  const session = state.sessions.find((candidate) => candidate.id === sessionId);
+  if (!session) return state;
+  const folder = resolveWorkspaceFolderForHint(state, session, workspace);
+  if (!folder) return state;
+  const targetFolderId =
+    folder.id === defaultProjectFolderId(session.repo_path) ? null : folder.id;
+  if (!canAssignSessionToProjectFolder(state, session, targetFolderId)) {
+    return state;
+  }
+  const sessionFolderIds = { ...state.sessionFolderIds };
+  if (targetFolderId === null) {
+    delete sessionFolderIds[session.id];
+  } else {
+    sessionFolderIds[session.id] = targetFolderId;
+  }
+  if (
+    (state.sessionFolderIds[session.id] ?? null) ===
+    (sessionFolderIds[session.id] ?? null)
+  ) {
+    return state;
+  }
+  const reconciled = reconcileWorkspaces(
+    state.sessions,
+    state.projects,
+    state.projectFolders,
+    sessionFolderIds,
+    state.workspaces,
+    state.activeProject,
+    state.activeProjectFolderId,
+    true,
+  );
+  return {
+    projectFolders: reconciled.projectFolders,
+    workspaces: reconciled.workspaces,
+    sessionFolderIds: reconciled.sessionFolderIds,
+    activeProject: reconciled.activeProject,
+    activeProjectFolderId: reconciled.activeProjectFolderId,
+    ...mirrorActive(reconciled.workspaces, reconciled.activeProjectFolderId),
+  };
 }
 
 function updateActiveWorkspace(
@@ -2166,6 +2241,10 @@ export const useAppStore = create<AppStateModel>()(
         }
       }
     }
+  },
+
+  placeSessionInWorkspace(sessionId, workspace) {
+    set((s) => applySessionWorkspaceHint(s, sessionId, workspace));
   },
 
   async removeSession(id, removeWorktree = false) {

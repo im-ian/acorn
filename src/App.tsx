@@ -96,6 +96,11 @@ import { extractTabFromEvent } from "./lib/settings-events";
 import { useFileExplorerDragHoverTarget } from "./lib/fileExplorerDrag";
 import { useNativeFileDropBridge } from "./lib/nativeFileDrop";
 import {
+  buildIpcWorkspaceSummaries,
+  IPC_LIST_WORKSPACES_REQUEST_EVENT,
+  parseIpcListWorkspacesRequestPayload,
+} from "./lib/ipcWorkspaces";
+import {
   TERMINAL_PASTE_EVENT,
   type TerminalPasteEventDetail,
 } from "./lib/pasteEvents";
@@ -123,6 +128,27 @@ const RIGHT_PANEL_MIN_SIZE = 16;
 type AppTranslationKey = Extract<TranslationKey, `app.${string}`>;
 
 let lastPreventSleepSync: boolean | null = null;
+
+interface IpcSessionsChangedPayload {
+  action?: string;
+  session_id?: string;
+  workspace_id?: string | null;
+  workspace_path?: string | null;
+}
+
+function ipcSessionsChangedPayload(value: unknown): IpcSessionsChangedPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  return {
+    action: typeof raw.action === "string" ? raw.action : undefined,
+    session_id:
+      typeof raw.session_id === "string" ? raw.session_id : undefined,
+    workspace_id:
+      typeof raw.workspace_id === "string" ? raw.workspace_id : null,
+    workspace_path:
+      typeof raw.workspace_path === "string" ? raw.workspace_path : null,
+  };
+}
 
 function appText(t: Translator, key: AppTranslationKey): string {
   return t(key);
@@ -1251,8 +1277,18 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
-    listen<unknown>("acorn:ipc-sessions-changed", () => {
-      useAppStore.getState().refreshSessions();
+    listen<unknown>("acorn:ipc-sessions-changed", (event) => {
+      const payload = ipcSessionsChangedPayload(event.payload);
+      void useAppStore
+        .getState()
+        .refreshSessions()
+        .then(() => {
+          if (payload?.action !== "created" || !payload.session_id) return;
+          useAppStore.getState().placeSessionInWorkspace(payload.session_id, {
+            workspaceId: payload.workspace_id,
+            workspacePath: payload.workspace_path,
+          });
+        });
     })
       .then((fn) => {
         if (cancelled) {
@@ -1263,6 +1299,47 @@ function App() {
       })
       .catch((err) => {
         console.error("[App] failed to attach ipc-sessions-changed listener", err);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<unknown>(IPC_LIST_WORKSPACES_REQUEST_EVENT, (event) => {
+      const request = parseIpcListWorkspacesRequestPayload(event.payload);
+      if (!request?.request_id) {
+        console.error("[App] received malformed ipc workspace request", event.payload);
+        return;
+      }
+      const state = useAppStore.getState();
+      const response = request.repo_path
+        ? {
+            request_id: request.request_id,
+            workspaces: buildIpcWorkspaceSummaries(state, request),
+            error: null,
+          }
+        : {
+            request_id: request.request_id,
+            workspaces: [],
+            error: "IPC workspace request missing repo_path",
+          };
+      void api.ipcListWorkspacesResponse(response).catch((err) => {
+        console.error("[App] failed to answer ipc workspace request", err);
+      });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.error("[App] failed to attach ipc workspace listener", err);
       });
     return () => {
       cancelled = true;
