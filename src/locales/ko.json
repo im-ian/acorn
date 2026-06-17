@@ -75,6 +75,16 @@
         "label": "글자 간격",
         "hint": "터미널 셀 사이의 가로 간격입니다. 0.25px 단위를 지원하며 범위는 -2~6입니다."
       },
+      "fontSmoothing": {
+        "label": "안티앨리어싱",
+        "hint": "터미널 글꼴 smoothing만 조절합니다. Grayscale은 현재 Acorn 렌더링과 같습니다.",
+        "options": {
+          "grayscale": "Grayscale",
+          "subpixel": "Subpixel",
+          "system": "시스템",
+          "none": "없음"
+        }
+      },
       "fontWeight": {
         "label": "글꼴 두께",
         "hint": "일반 텍스트의 두께입니다. 실제 적용 값은 선택한 글꼴이 제공하는 두께에 따라 달라집니다."
