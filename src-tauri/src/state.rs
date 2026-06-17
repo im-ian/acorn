@@ -8,6 +8,7 @@ use crate::daemon_bridge::DaemonBridge;
 use crate::daemon_stream::StreamRegistry;
 use crate::fs_explorer::WatcherState;
 use crate::ipc::server::IpcServerHandle;
+use crate::ipc::workspaces::PendingWorkspaceRequests;
 use crate::power_assertion::PowerAssertionState;
 use crate::pty_output::PtyOutputRouter;
 use crate::staged_rev_reconcile::StagedRevMismatch;
@@ -33,6 +34,10 @@ pub struct AppState {
     /// `None` when bind failed at boot. `ipc_restart` swaps in a new handle
     /// after signaling the previous listener to exit.
     pub ipc_handle: Arc<Mutex<Option<IpcServerHandle>>>,
+    /// One-shot response channels for IPC workspace-list requests. The
+    /// in-process socket server owns the request and the renderer answers via
+    /// a Tauri command after reading frontend workspace state.
+    pub ipc_workspace_requests: Arc<Mutex<PendingWorkspaceRequests>>,
     /// Bridge to the out-of-process `acornd` daemon. Owns the cached
     /// persistent control connection + the killswitch toggle. Always
     /// constructed; calls short-circuit cleanly when the user has the
@@ -85,6 +90,7 @@ impl AppState {
             sessions_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             projects_loaded_cleanly: Arc::new(AtomicBool::new(true)),
             ipc_handle: Arc::new(Mutex::new(None)),
+            ipc_workspace_requests: Arc::new(Mutex::new(Default::default())),
             daemon_bridge: DaemonBridge::new(),
             stream_registry: StreamRegistry::new(),
             staged_rev_mismatch: Arc::new(Mutex::new(None)),

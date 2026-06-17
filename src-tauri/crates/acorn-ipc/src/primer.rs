@@ -73,6 +73,7 @@ pub fn primer_for(
          IPC socket:      {socket}\n\
          Daemon socket:   {daemon}\n\
          Context command: acorn-ipc context\n\
+         Workspace env:   $ACORN_WORKSPACE_ID / $ACORN_WORKSPACE_PATH\n\
          \n\
          Natural-language mapping:\n\
          - If the user asks you to create, open, spawn, or use a \"new session\", \
@@ -82,6 +83,12 @@ pub fn primer_for(
          controller by default. Only operate on sessions where `list-sessions` \
          shows MINE=yes unless the user explicitly asks you to touch another \
          session.\n\
+         - To create a session in this exact Acorn workspace, pass \
+         `--workspace current`. To target a path explicitly, pass \
+         `--workspace <absolute path>`.\n\
+         - To discover named workspaces first, run `acorn-ipc list-workspaces --json` \
+         and pass both the returned `workspace_path` and `id` to \
+         `new-session --workspace <path> --workspace-id <id>`.\n\
          - Do not repurpose, send input to, read from, focus, or kill user-owned \
          sessions or sessions owned by another control session unless the user \
          made that direct request; then pass `--allow-foreign`.\n\
@@ -91,7 +98,8 @@ pub fn primer_for(
            acorn-ipc promote-self                       # idempotent; already promoted\n\
            acorn-ipc context                             # print this context\n\
            acorn-ipc list-sessions                       # see siblings + self\n\
-           acorn-ipc new-session   <name> [--isolated] [--owner me|user]\n\
+           acorn-ipc list-workspaces                     # see frontend workspaces\n\
+           acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]\n\
            acorn-ipc send-keys     -t <uuid> --data '…' --enter [--allow-foreign]\n\
            acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]\n\
            acorn-ipc select-session -t <uuid> [--allow-foreign]\n\

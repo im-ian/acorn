@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { useSettings } from "../lib/settings";
 import { getTerminalLimbo } from "../lib/terminalLimbo";
 import { isSessionInFocusedPane } from "../lib/multiInput";
+import { findProjectFolderById } from "../lib/projectFolders";
 import { markTerminalDetaching } from "../lib/terminalDetach";
 import { selectTerminalsToEvict } from "../lib/terminalEviction";
 import { useAppStore } from "../store";
@@ -153,6 +154,12 @@ const SESSION_ID_KEY_SEPARATOR = "\u0000";
 
 type AppStateSnapshot = ReturnType<typeof useAppStore.getState>;
 
+interface TerminalWorkspaceContext {
+  id: string;
+  name: string;
+  path: string;
+}
+
 function visibleTerminalSessionIdKey(state: AppStateSnapshot): string {
   const workspaceId = activeWorkspaceId(state);
   if (!workspaceId) return "";
@@ -207,6 +214,13 @@ function PortaledTerminal({ session }: { session: Session }) {
   const isFocusedPane = useAppStore((state) =>
     isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
   );
+  const workspaceKey = useAppStore((state) =>
+    workspaceContextKeyForSession(state, session.id),
+  );
+  const workspace = useMemo(
+    () => parseWorkspaceContextKey(workspaceKey),
+    [workspaceKey],
+  );
 
   // Full unmount removes the stable portal target so we do not leak an
   // orphaned terminal subtree.
@@ -242,6 +256,9 @@ function PortaledTerminal({ session }: { session: Session }) {
       sessionId={session.id}
       repoPath={session.repo_path}
       cwd={session.worktree_path}
+      workspaceId={workspace?.id ?? null}
+      workspaceName={workspace?.name ?? null}
+      workspacePath={workspace?.path ?? null}
       agentProvider={resolveSessionAgentProvider(session)}
       pasteAgentProvider={session.agent_provider ?? null}
       isActive={visiblePaneId !== null}
@@ -260,4 +277,57 @@ function cssEscape(value: string): string {
 
 function activeWorkspaceId(state: AppStateSnapshot): string | null {
   return state.activeProjectFolderId ?? state.activeProject;
+}
+
+function workspaceContextKeyForSession(
+  state: AppStateSnapshot,
+  sessionId: string,
+): string {
+  for (const [workspaceId, ws] of Object.entries(state.workspaces)) {
+    for (const pane of Object.values(ws.panes)) {
+      if (!pane.tabIds.includes(sessionId)) continue;
+      const folder = findProjectFolderById(state.projectFolders, workspaceId);
+      if (folder) {
+        return encodeWorkspaceContext({
+          id: folder.id,
+          name: folder.name,
+          path: folder.cwdPath,
+        });
+      }
+      if (!workspaceId.startsWith("project-folder:")) {
+        return encodeWorkspaceContext({
+          id: workspaceId,
+          name: "Default",
+          path: workspaceId,
+        });
+      }
+      return "";
+    }
+  }
+  return "";
+}
+
+function encodeWorkspaceContext(context: TerminalWorkspaceContext): string {
+  return JSON.stringify(context);
+}
+
+function parseWorkspaceContextKey(key: string): TerminalWorkspaceContext | null {
+  if (!key) return null;
+  try {
+    const value = JSON.parse(key) as Partial<TerminalWorkspaceContext>;
+    if (
+      typeof value.id === "string" &&
+      typeof value.name === "string" &&
+      typeof value.path === "string"
+    ) {
+      return {
+        id: value.id,
+        name: value.name,
+        path: value.path,
+      };
+    }
+  } catch {
+    // Ignore malformed persisted/debug state and fall back to no workspace hint.
+  }
+  return null;
 }

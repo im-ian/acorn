@@ -539,6 +539,41 @@ describe("project folders", () => {
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["web1"]);
   });
 
+  it("places an ipc-created root session into an exact workspace id", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    const created = session("ipc", REPO_A, { worktree_path: REPO_A });
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+
+    await useAppStore.getState().refreshSessions();
+    useAppStore.getState().placeSessionInWorkspace("ipc", {
+      workspaceId: folder.id,
+      workspacePath: REPO_A,
+    });
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.ipc).toBe(folder.id);
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual(["ipc"]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual([]);
+  });
+
+  it("does not guess a named root workspace from a path-only ipc hint", async () => {
+    await seed([project(REPO_A, 0)], []);
+    const folder = useAppStore.getState().createProjectFolder(REPO_A, "Frontend")!;
+    const created = session("ipc", REPO_A, { worktree_path: REPO_A });
+    mockApi.listSessions.mockResolvedValueOnce([created]);
+
+    await useAppStore.getState().refreshSessions();
+    useAppStore.getState().placeSessionInWorkspace("ipc", {
+      workspacePath: REPO_A,
+    });
+
+    const s = useAppStore.getState();
+    expect(s.sessionFolderIds.ipc).toBeUndefined();
+    expect(s.workspaces[folder.id].panes.root.tabIds).toEqual([]);
+    expect(s.workspaces[REPO_A].panes.root.tabIds).toEqual(["ipc"]);
+  });
+
   it("creates a session in a worktree workspace using the project root plus cwd", async () => {
     await seed([project(REPO_A, 0)], []);
     const worktreePath = `${REPO_A}/.acorn/worktrees/repo-a-worktree-123456789abc`;

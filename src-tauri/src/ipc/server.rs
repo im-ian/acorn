@@ -25,20 +25,25 @@
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use acorn_ipc::primer;
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
+    Envelope, ErrorCode, NewSessionOwner, PROTOCOL_VERSION, Request, Response, SessionSummary,
+    WorkspaceSummary,
 };
 use acorn_ipc::socket_path;
 use base64::Engine;
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
 use crate::commands::{create_unique_worktree, sanitize_worktree_name};
+use crate::ipc::workspaces::{LIST_WORKSPACES_REQUEST_EVENT, ListWorkspacesRequestPayload};
 use crate::persistence;
 use crate::state::AppState;
 use crate::worktree;
@@ -55,6 +60,17 @@ const SELECT_SESSION_EVENT: &str = "acorn:ipc-select-session";
 /// affected session's id as a string, mostly for debugging — the
 /// frontend ignores the value today and just triggers a full refresh.
 const SESSIONS_CHANGED_EVENT: &str = "acorn:ipc-sessions-changed";
+
+#[derive(Debug, Clone, Serialize)]
+struct SessionsChangedPayload {
+    action: &'static str,
+    session_id: String,
+    repo_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<String>,
+}
 
 /// Shutdown signal for an active IPC listener. The listener thread polls
 /// `running` between non-blocking `accept` attempts; flipping it to false
@@ -77,6 +93,7 @@ impl IpcServerHandle {
 /// Poll cadence for the accept loop. Trades a tiny amount of idle CPU for a
 /// fast restart: the listener notices a stop signal within this window.
 const ACCEPT_POLL_INTERVAL_MS: u64 = 100;
+const LIST_WORKSPACES_TIMEOUT_MS: u64 = 2_000;
 
 /// Spawn the IPC server on a dedicated background thread. Returns the
 /// shutdown handle on success, or `None` if bind failed (rest of the app
@@ -274,6 +291,7 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
         Request::PromoteSelf => handle_promote_self(&source.id.to_string(), app, state),
         Request::Context => handle_context(&source),
         Request::ListSessions => handle_list_sessions(&source, &state.sessions),
+        Request::ListWorkspaces => handle_list_workspaces(&source, app, state),
         Request::SendKeys {
             target_session_id,
             data_b64,
@@ -288,7 +306,18 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
             name,
             isolated,
             owner,
-        } => handle_new_session(&source, name, isolated, owner, app, state),
+            workspace_path,
+            workspace_id,
+        } => handle_new_session(
+            &source,
+            name,
+            isolated,
+            owner,
+            workspace_path,
+            workspace_id,
+            app,
+            state,
+        ),
         Request::SelectSession {
             target_session_id,
             allow_foreign,
@@ -305,6 +334,7 @@ fn request_label(req: &Request) -> &'static str {
         Request::PromoteSelf => "promote-self",
         Request::Context => "context",
         Request::ListSessions => "list-sessions",
+        Request::ListWorkspaces => "list-workspaces",
         Request::SendKeys { .. } => "send-keys",
         Request::ReadBuffer { .. } => "read-buffer",
         Request::NewSession { .. } => "new-session",
@@ -368,7 +398,16 @@ fn handle_promote_self<R: Runtime>(
         if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
             tracing::warn!(error = %err, "ipc: persist after promote-self failed");
         }
-        if let Err(err) = app.emit(SESSIONS_CHANGED_EVENT, session.id.to_string()) {
+        if let Err(err) = app.emit(
+            SESSIONS_CHANGED_EVENT,
+            SessionsChangedPayload {
+                action: "promoted",
+                session_id: session.id.to_string(),
+                repo_path: session.repo_path.display().to_string(),
+                workspace_path: Some(session.worktree_path.display().to_string()),
+                workspace_id: None,
+            },
+        ) {
             tracing::warn!(
                 error = %err,
                 event = SESSIONS_CHANGED_EVENT,
@@ -462,6 +501,7 @@ fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
                 id: s.id.to_string(),
                 name: s.name,
                 repo_path: s.repo_path.display().to_string(),
+                workspace_path: s.worktree_path.display().to_string(),
                 branch: s.branch,
                 kind: match s.kind {
                     SessionKind::Regular => "regular".to_string(),
@@ -476,6 +516,68 @@ fn handle_list_sessions(source: &Session, sessions: &SessionStore) -> Response {
     Response::Sessions {
         sessions: summaries,
     }
+}
+
+fn handle_list_workspaces<R: Runtime>(
+    source: &Session,
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    state
+        .ipc_workspace_requests
+        .lock()
+        .insert(request_id.clone(), sender);
+
+    let payload = ListWorkspacesRequestPayload {
+        request_id: request_id.clone(),
+        source_session_id: source.id.to_string(),
+        repo_path: source.repo_path.display().to_string(),
+        source_workspace_path: source.worktree_path.display().to_string(),
+    };
+    if let Err(err) = app.emit(LIST_WORKSPACES_REQUEST_EVENT, payload) {
+        state.ipc_workspace_requests.lock().remove(&request_id);
+        return Response::Error {
+            code: ErrorCode::Internal,
+            message: format!("workspace list request emit failed: {err}"),
+        };
+    }
+
+    match receiver.recv_timeout(Duration::from_millis(LIST_WORKSPACES_TIMEOUT_MS)) {
+        Ok(Ok(workspaces)) => Response::Workspaces {
+            workspaces: sanitize_workspace_summaries(source, workspaces),
+        },
+        Ok(Err(message)) => Response::Error {
+            code: ErrorCode::Internal,
+            message,
+        },
+        Err(RecvTimeoutError::Timeout) => {
+            state.ipc_workspace_requests.lock().remove(&request_id);
+            Response::Error {
+                code: ErrorCode::Internal,
+                message: "frontend did not answer workspace list request".to_string(),
+            }
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            state.ipc_workspace_requests.lock().remove(&request_id);
+            Response::Error {
+                code: ErrorCode::Internal,
+                message: "workspace list response channel closed".to_string(),
+            }
+        }
+    }
+}
+
+fn sanitize_workspace_summaries(
+    source: &Session,
+    workspaces: Vec<WorkspaceSummary>,
+) -> Vec<WorkspaceSummary> {
+    let repo_path = source.repo_path.display().to_string();
+    workspaces
+        .into_iter()
+        .filter(|workspace| workspace.repo_path == repo_path)
+        .collect()
 }
 
 fn handle_send_keys(
@@ -531,11 +633,83 @@ fn handle_read_buffer(
     }
 }
 
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn path_is_inside(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
+}
+
+fn canonical_existing_path(path: &Path, label: &str) -> Result<PathBuf, Response> {
+    if !path.is_absolute() {
+        return Err(Response::Error {
+            code: ErrorCode::Invalid,
+            message: format!("{label} must be an absolute path: {}", path.display()),
+        });
+    }
+    path.canonicalize().map_err(|err| Response::Error {
+        code: ErrorCode::Invalid,
+        message: format!("{label} is not accessible: {} ({err})", path.display()),
+    })
+}
+
+fn authorize_new_session_workspace(
+    source: &Session,
+    workspace_path: Option<String>,
+) -> Result<Option<PathBuf>, Response> {
+    let Some(raw_path) = normalize_optional_string(workspace_path) else {
+        return Ok(None);
+    };
+    let cwd = canonical_existing_path(Path::new(&raw_path), "workspace path")?;
+    let repo = source
+        .repo_path
+        .canonicalize()
+        .map_err(|err| Response::Error {
+            code: ErrorCode::Internal,
+            message: format!(
+                "source project path is not accessible: {} ({err})",
+                source.repo_path.display()
+            ),
+        })?;
+    if path_is_inside(&cwd, &repo) {
+        return Ok(Some(cwd));
+    }
+    let worktrees =
+        worktree::list_worktree_paths(&source.repo_path).map_err(|err| Response::Error {
+            code: ErrorCode::Internal,
+            message: format!("could not list project worktrees: {err}"),
+        })?;
+    for worktree in worktrees {
+        if let Ok(worktree) = worktree.canonicalize() {
+            if path_is_inside(&cwd, &worktree) {
+                return Ok(Some(cwd));
+            }
+        }
+    }
+    Err(Response::Error {
+        code: ErrorCode::OutOfScope,
+        message: format!(
+            "workspace path is outside the control session project and its worktrees: {}",
+            cwd.display()
+        ),
+    })
+}
+
 fn handle_new_session<R: Runtime>(
     source: &Session,
     name: String,
     isolated: bool,
     owner: Option<NewSessionOwner>,
+    workspace_path: Option<String>,
+    workspace_id: Option<String>,
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Response {
@@ -545,7 +719,20 @@ fn handle_new_session<R: Runtime>(
             message: "name must not be empty".to_string(),
         };
     }
+    let workspace_id = normalize_optional_string(workspace_id);
+    if isolated
+        && (normalize_optional_string(workspace_path.clone()).is_some() || workspace_id.is_some())
+    {
+        return Response::Error {
+            code: ErrorCode::Invalid,
+            message: "`--isolated` cannot target an existing workspace".to_string(),
+        };
+    }
     let repo = source.repo_path.clone();
+    let workspace_path = match authorize_new_session_workspace(source, workspace_path) {
+        Ok(path) => path,
+        Err(err) => return err,
+    };
     let worktree_path = if isolated {
         let base = sanitize_worktree_name(&name);
         match create_unique_worktree(&repo, &base) {
@@ -558,7 +745,7 @@ fn handle_new_session<R: Runtime>(
             }
         }
     } else {
-        repo.clone()
+        workspace_path.unwrap_or_else(|| repo.clone())
     };
     let branch = worktree::current_branch(&worktree_path).unwrap_or_else(|_| "HEAD".to_string());
     let mut session = Session::new(
@@ -587,7 +774,16 @@ fn handle_new_session<R: Runtime>(
     // without the user clicking around. Best-effort: a failed emit
     // leaves the backend state correct, the user can still reach the
     // session via the next app reload or a manual refresh.
-    if let Err(err) = app.emit(SESSIONS_CHANGED_EVENT, inserted.id.to_string()) {
+    if let Err(err) = app.emit(
+        SESSIONS_CHANGED_EVENT,
+        SessionsChangedPayload {
+            action: "created",
+            session_id: inserted.id.to_string(),
+            repo_path: inserted.repo_path.display().to_string(),
+            workspace_path: Some(inserted.worktree_path.display().to_string()),
+            workspace_id,
+        },
+    ) {
         tracing::warn!(
             error = %err,
             event = SESSIONS_CHANGED_EVENT,
@@ -646,7 +842,16 @@ fn handle_kill_session<R: Runtime>(
     if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
         tracing::warn!(error = %err, "ipc: persist after kill-session failed");
     }
-    if let Err(err) = app.emit(SESSIONS_CHANGED_EVENT, target.id.to_string()) {
+    if let Err(err) = app.emit(
+        SESSIONS_CHANGED_EVENT,
+        SessionsChangedPayload {
+            action: "removed",
+            session_id: target.id.to_string(),
+            repo_path: target.repo_path.display().to_string(),
+            workspace_path: Some(target.worktree_path.display().to_string()),
+            workspace_id: None,
+        },
+    ) {
         tracing::warn!(
             error = %err,
             event = SESSIONS_CHANGED_EVENT,
@@ -673,6 +878,17 @@ mod tests {
         );
         s.status = SessionStatus::Idle;
         s
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("acorn-ipc-{label}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
     }
 
     #[test]
@@ -729,10 +945,88 @@ mod tests {
                 assert_eq!(source.id, ctl.id.to_string());
                 let worker = sessions.iter().find(|s| s.name == "peer").expect("worker");
                 assert_eq!(worker.owner, format!("control:{}", ctl.id));
+                assert_eq!(worker.workspace_path, "/tmp/A");
                 assert!(worker.owned_by_me);
             }
             other => panic!("expected sessions response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn list_workspaces_filters_renderer_response_to_source_project() {
+        let source = make_session("/tmp/A", "ctl", SessionKind::Control);
+        let workspaces = vec![
+            WorkspaceSummary {
+                id: "/tmp/A".to_string(),
+                name: "Default".to_string(),
+                repo_path: "/tmp/A".to_string(),
+                workspace_path: "/tmp/A".to_string(),
+                is_default: true,
+                active: true,
+                source: true,
+                session_count: 1,
+            },
+            WorkspaceSummary {
+                id: "/tmp/B".to_string(),
+                name: "Other".to_string(),
+                repo_path: "/tmp/B".to_string(),
+                workspace_path: "/tmp/B".to_string(),
+                is_default: true,
+                active: false,
+                source: false,
+                session_count: 1,
+            },
+        ];
+
+        let filtered = sanitize_workspace_summaries(&source, workspaces);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].repo_path, "/tmp/A");
+    }
+
+    #[test]
+    fn new_session_workspace_accepts_project_subdirectory() {
+        let repo = unique_temp_dir("repo");
+        let subdir = repo.join("packages").join("web");
+        std::fs::create_dir_all(&subdir).expect("create subdir");
+        let source = Session::new(
+            "ctl".to_string(),
+            repo.clone(),
+            repo.clone(),
+            "main".to_string(),
+            false,
+            SessionKind::Control,
+        );
+
+        let resolved = authorize_new_session_workspace(&source, Some(subdir.display().to_string()))
+            .expect("authorized");
+
+        assert_eq!(resolved, Some(subdir.canonicalize().unwrap()));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn new_session_workspace_rejects_relative_path() {
+        let repo = unique_temp_dir("repo-relative");
+        let source = Session::new(
+            "ctl".to_string(),
+            repo.clone(),
+            repo.clone(),
+            "main".to_string(),
+            false,
+            SessionKind::Control,
+        );
+
+        let result = authorize_new_session_workspace(&source, Some("relative/path".to_string()));
+
+        match result {
+            Err(Response::Error {
+                code: ErrorCode::Invalid,
+                ..
+            }) => {}
+            other => panic!("expected invalid path, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[test]

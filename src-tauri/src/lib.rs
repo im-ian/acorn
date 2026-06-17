@@ -593,6 +593,7 @@ pub fn run() {
             commands::warm_macos_folder_permissions,
             commands::reset_macos_folder_permissions,
             commands::ipc_restart,
+            commands::ipc_list_workspaces_response,
             commands::list_system_fonts,
             commands::list_agent_history,
             commands::list_unscoped_agent_history,

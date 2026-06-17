@@ -19,12 +19,16 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, PROTOCOL_VERSION,
+    Envelope, ErrorCode, NewSessionOwner, PROTOCOL_VERSION, Request, Response, SessionSummary,
+    WorkspaceSummary,
 };
 use acorn_ipc::socket_path;
 
 const ENV_SESSION_ID: &str = "ACORN_SESSION_ID";
 const ENV_RESUME_TOKEN: &str = "ACORN_RESUME_TOKEN";
+const ENV_WORKSPACE_ID: &str = "ACORN_WORKSPACE_ID";
+const ENV_WORKSPACE_PATH: &str = "ACORN_WORKSPACE_PATH";
+const ENV_WORKSPACE_NAME: &str = "ACORN_WORKSPACE_NAME";
 
 #[derive(Parser)]
 #[command(
@@ -64,6 +68,8 @@ enum Command {
     Context,
     /// List the sessions in your project, including this control session.
     ListSessions,
+    /// List frontend workspaces in your project.
+    ListWorkspaces,
     /// Send raw keys to a target session. `<DATA>` is forwarded verbatim;
     /// use `--raw-base64` when the input contains control bytes that the
     /// shell would otherwise interpret.
@@ -115,6 +121,14 @@ enum Command {
         /// Create the session inside a fresh git worktree.
         #[arg(long)]
         isolated: bool,
+        /// Existing workspace cwd to create the session in. Use `current`
+        /// to reuse the workspace context Acorn injected into this PTY.
+        #[arg(long, value_name = "PATH|current")]
+        workspace: Option<String>,
+        /// Frontend workspace id for exact sidebar placement. Usually paired
+        /// with `--workspace`; `--workspace current` fills this automatically.
+        #[arg(long = "workspace-id", value_name = "ID")]
+        workspace_id: Option<String>,
         /// Assign ownership for the created session: `me` (default) marks it as
         /// this controller's worker; `user` opts out of controller ownership.
         #[arg(long, value_parser = ["me", "user"])]
@@ -206,10 +220,18 @@ fn main() -> ExitCode {
 }
 
 fn build_request(cmd: &Command) -> Result<Request, String> {
+    build_request_with_workspace_env(cmd, current_workspace_env())
+}
+
+fn build_request_with_workspace_env(
+    cmd: &Command,
+    workspace_env: WorkspaceEnv,
+) -> Result<Request, String> {
     Ok(match cmd {
         Command::PromoteSelf => Request::PromoteSelf,
         Command::Context => Request::Context,
         Command::ListSessions => Request::ListSessions,
+        Command::ListWorkspaces => Request::ListWorkspaces,
         Command::SendKeys {
             target,
             data,
@@ -252,16 +274,24 @@ fn build_request(cmd: &Command) -> Result<Request, String> {
         Command::NewSession {
             name,
             isolated,
+            workspace,
+            workspace_id,
             owner,
-        } => Request::NewSession {
-            name: name.clone(),
-            isolated: *isolated,
-            owner: match owner.as_deref() {
-                Some("user") => Some(NewSessionOwner::User),
-                Some("me") | None => None,
-                Some(other) => return Err(format!("unsupported --owner value: {other}")),
-            },
-        },
+        } => {
+            let (workspace_path, workspace_id) =
+                resolve_new_session_workspace(workspace, workspace_id, workspace_env)?;
+            Request::NewSession {
+                name: name.clone(),
+                isolated: *isolated,
+                workspace_path,
+                workspace_id,
+                owner: match owner.as_deref() {
+                    Some("user") => Some(NewSessionOwner::User),
+                    Some("me") | None => None,
+                    Some(other) => return Err(format!("unsupported --owner value: {other}")),
+                },
+            }
+        }
         Command::SelectSession {
             target,
             allow_foreign,
@@ -282,6 +312,64 @@ fn build_request(cmd: &Command) -> Result<Request, String> {
             return Err("status is handled out-of-band; this is a bug".to_string());
         }
     })
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WorkspaceEnv {
+    id: Option<String>,
+    path: Option<String>,
+    name: Option<String>,
+}
+
+fn current_workspace_env() -> WorkspaceEnv {
+    WorkspaceEnv {
+        id: non_empty_env(ENV_WORKSPACE_ID),
+        path: non_empty_env(ENV_WORKSPACE_PATH),
+        name: non_empty_env(ENV_WORKSPACE_NAME),
+    }
+}
+
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().and_then(non_empty_string)
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn resolve_new_session_workspace(
+    workspace: &Option<String>,
+    explicit_workspace_id: &Option<String>,
+    workspace_env: WorkspaceEnv,
+) -> Result<(Option<String>, Option<String>), String> {
+    let workspace_id = explicit_workspace_id.clone().and_then(non_empty_string);
+    let Some(workspace) = workspace.as_ref().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) else {
+        return Ok((None, workspace_id));
+    };
+    if workspace == "current" {
+        let path = workspace_env.path;
+        let id = workspace_id.or(workspace_env.id);
+        if path.is_none() && id.is_none() {
+            return Err(
+                "`--workspace current` needs ACORN_WORKSPACE_PATH or ACORN_WORKSPACE_ID"
+                    .to_string(),
+            );
+        }
+        return Ok((path, id));
+    }
+    Ok((Some(workspace), workspace_id))
 }
 
 fn resolve_source_id(explicit: Option<String>) -> Option<String> {
@@ -319,6 +407,7 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
         Err(err) => (false, Some(err.to_string())),
     };
     let source_env = resolve_source_id(None);
+    let workspace_env = current_workspace_env();
     if json {
         let payload = serde_json::json!({
             "socket_path": socket_path.display().to_string(),
@@ -327,6 +416,9 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
             "error": error,
             "protocol_version": PROTOCOL_VERSION,
             "source_session_id_env": source_env,
+            "workspace_id_env": workspace_env.id,
+            "workspace_path_env": workspace_env.path,
+            "workspace_name_env": workspace_env.name,
         });
         match serde_json::to_string_pretty(&payload) {
             Ok(s) => println!("{s}"),
@@ -352,6 +444,18 @@ fn run_status(socket_path: &Path, json: bool) -> ExitCode {
     println!(
         "source env:       {}",
         source_env.as_deref().unwrap_or("(unset)")
+    );
+    println!(
+        "workspace id:     {}",
+        workspace_env.id.as_deref().unwrap_or("(unset)")
+    );
+    println!(
+        "workspace path:   {}",
+        workspace_env.path.as_deref().unwrap_or("(unset)")
+    );
+    println!(
+        "workspace name:   {}",
+        workspace_env.name.as_deref().unwrap_or("(unset)")
     );
     ExitCode::SUCCESS
 }
@@ -393,6 +497,10 @@ fn render(response: &Response, json: bool) -> ExitCode {
         }
         Response::Sessions { sessions } => {
             print_sessions(sessions);
+            ExitCode::SUCCESS
+        }
+        Response::Workspaces { workspaces } => {
+            print_workspaces(workspaces);
             ExitCode::SUCCESS
         }
         Response::Ack => ExitCode::SUCCESS,
@@ -469,8 +577,14 @@ fn print_sessions(sessions: &[SessionSummary]) {
         .max()
         .unwrap_or(6)
         .max(6);
+    let workspace_w = sessions
+        .iter()
+        .map(|s| printable_workspace_path(s).len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
     println!(
-        "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  branch",
+        "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {workspace:<workspace_w$}  branch",
         marker = " ",
         mine = "MINE",
         id = "ID",
@@ -478,12 +592,14 @@ fn print_sessions(sessions: &[SessionSummary]) {
         kind = "KIND",
         owner = "OWNER",
         status = "STATUS",
+        workspace = "WORKSPACE",
     );
     for s in sessions {
         let marker = if s.is_source { "*" } else { " " };
         let mine = if s.owned_by_me { "yes" } else { "no" };
+        let workspace = printable_workspace_path(s);
         println!(
-            "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {branch}",
+            "{marker} {mine:<4}  {id:<id_w$}  {name:<name_w$}  {kind:<kind_w$}  {owner:<owner_w$}  {status:<status_w$}  {workspace:<workspace_w$}  {branch}",
             marker = marker,
             mine = mine,
             id = s.id,
@@ -491,7 +607,66 @@ fn print_sessions(sessions: &[SessionSummary]) {
             kind = s.kind,
             owner = s.owner,
             status = s.status,
+            workspace = workspace,
             branch = s.branch,
+        );
+    }
+}
+
+fn printable_workspace_path(session: &SessionSummary) -> &str {
+    if session.workspace_path.trim().is_empty() {
+        "-"
+    } else {
+        &session.workspace_path
+    }
+}
+
+fn print_workspaces(workspaces: &[WorkspaceSummary]) {
+    if workspaces.is_empty() {
+        println!("(no workspaces)");
+        return;
+    }
+    let id_w = workspaces
+        .iter()
+        .map(|w| w.id.len())
+        .max()
+        .unwrap_or(2)
+        .max(2);
+    let name_w = workspaces
+        .iter()
+        .map(|w| w.name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let workspace_w = workspaces
+        .iter()
+        .map(|w| w.workspace_path.len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
+    println!(
+        "{marker} {source:<6}  {active:<6}  {sessions:<8}  {id:<id_w$}  {name:<name_w$}  {workspace:<workspace_w$}",
+        marker = " ",
+        source = "SOURCE",
+        active = "ACTIVE",
+        sessions = "SESSIONS",
+        id = "ID",
+        name = "NAME",
+        workspace = "WORKSPACE",
+    );
+    for workspace in workspaces {
+        let marker = if workspace.is_default { "*" } else { " " };
+        let source = if workspace.source { "yes" } else { "no" };
+        let active = if workspace.active { "yes" } else { "no" };
+        println!(
+            "{marker} {source:<6}  {active:<6}  {sessions:<8}  {id:<id_w$}  {name:<name_w$}  {workspace_path:<workspace_w$}",
+            marker = marker,
+            source = source,
+            active = active,
+            sessions = workspace.session_count,
+            id = workspace.id,
+            name = workspace.name,
+            workspace_path = workspace.workspace_path,
         );
     }
 }
@@ -596,6 +771,12 @@ mod tests {
     }
 
     #[test]
+    fn list_workspaces_command_builds_request() {
+        let req = build_request(&Command::ListWorkspaces).expect("build");
+        assert!(matches!(req, Request::ListWorkspaces));
+    }
+
+    #[test]
     fn promote_self_command_builds_request() {
         let req = build_request(&Command::PromoteSelf).expect("build");
         assert!(matches!(req, Request::PromoteSelf));
@@ -619,6 +800,8 @@ mod tests {
         let req = build_request(&Command::NewSession {
             name: "worker".to_string(),
             isolated: false,
+            workspace: None,
+            workspace_id: None,
             owner: Some("user".to_string()),
         })
         .expect("build");
@@ -628,6 +811,52 @@ mod tests {
             }
             other => panic!("expected new-session, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn new_session_workspace_current_uses_env_hints() {
+        let req = build_request_with_workspace_env(
+            &Command::NewSession {
+                name: "worker".to_string(),
+                isolated: false,
+                workspace: Some("current".to_string()),
+                workspace_id: None,
+                owner: None,
+            },
+            WorkspaceEnv {
+                id: Some("project-folder:/repo:abc".to_string()),
+                path: Some("/repo/packages/web".to_string()),
+                name: Some("web".to_string()),
+            },
+        )
+        .expect("build");
+        match req {
+            Request::NewSession {
+                workspace_path,
+                workspace_id,
+                ..
+            } => {
+                assert_eq!(workspace_path.as_deref(), Some("/repo/packages/web"));
+                assert_eq!(workspace_id.as_deref(), Some("project-folder:/repo:abc"));
+            }
+            other => panic!("expected new-session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_session_workspace_current_requires_env_hints() {
+        let result = build_request_with_workspace_env(
+            &Command::NewSession {
+                name: "worker".to_string(),
+                isolated: false,
+                workspace: Some("current".to_string()),
+                workspace_id: None,
+                owner: None,
+            },
+            WorkspaceEnv::default(),
+        );
+        let msg = result.expect_err("current workspace without env should fail");
+        assert!(msg.contains("ACORN_WORKSPACE"));
     }
 
     #[test]
