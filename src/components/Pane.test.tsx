@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   fsGitDiffStats: vi.fn(),
   loadChatSessionState: vi.fn(),
   agentTranscriptSummary: vi.fn(),
+  agentTranscriptSummaryAtPath: vi.fn(),
   ptyWrite: vi.fn(async () => undefined),
 }));
 
@@ -50,6 +51,7 @@ vi.mock("../lib/api", () => ({
     fsGitDiffStats: mocks.fsGitDiffStats,
     loadChatSessionState: mocks.loadChatSessionState,
     agentTranscriptSummary: mocks.agentTranscriptSummary,
+    agentTranscriptSummaryAtPath: mocks.agentTranscriptSummaryAtPath,
     ptyWrite: mocks.ptyWrite,
   },
 }));
@@ -570,7 +572,7 @@ describe("Pane empty state", () => {
     expect(container.textContent).toContain("+90");
   });
 
-  it("loads a visible work summary in an unfocused pane", async () => {
+  it("does not load work summary data in an unfocused pane", async () => {
     const active = session("chat-session", { mode: "chat" });
     const summaryTab = makeWorkSummaryWorkspaceTab({
       repoPath: REPO,
@@ -626,7 +628,10 @@ describe("Pane empty state", () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain("140 tokens");
+    expect(container.textContent).toContain("Work Summary");
+    expect(container.textContent).not.toContain("140 tokens");
+    expect(mocks.fsGitStatus).not.toHaveBeenCalled();
+    expect(mocks.loadChatSessionState).not.toHaveBeenCalled();
   });
 
   it("does not enter tab rename while title generation is active", async () => {

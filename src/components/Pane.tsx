@@ -47,6 +47,7 @@ import {
 } from "../lib/editor";
 import { formatHotkey, type HotkeyId } from "../lib/hotkeys";
 import { EQUALIZE_PANES_EVENT } from "../lib/layoutEvents";
+import { basename } from "../lib/pathUtils";
 import {
   useSettings,
   resolveAiExecutionRequest,
@@ -564,7 +565,7 @@ export function Pane({ paneId }: PaneProps) {
             session={
               active.sessionId ? sessionsById.get(active.sessionId) ?? null : null
             }
-            isActive
+            isActive={isFocused}
             onOpenFile={(path) => openCodeViewerTab(path, active.repoPath)}
           />
         ) : null}
@@ -1725,11 +1726,6 @@ function buildPaneMenuItems({
       disabled: totalPanes <= 1,
     },
   ];
-}
-
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] ?? path;
 }
 
 async function copyToClipboard(text: string): Promise<void> {

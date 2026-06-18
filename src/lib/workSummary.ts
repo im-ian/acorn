@@ -3,6 +3,7 @@ import type {
   FsGitStatus,
   FsGitStatusResult,
 } from "./api";
+import { relativePath } from "./pathUtils";
 import type { ChatSessionState } from "./types";
 
 export type WorkSummaryDiffStatsByPath = Record<string, FsGitDiffStatsEntry>;
@@ -253,25 +254,6 @@ export function extractTokenUsage(
     }
   }
   return null;
-}
-
-function relativePath(rootPath: string, path: string): string {
-  const root = normalizePath(rootPath);
-  const normalized = normalizePath(path);
-  if (normalized === root) return basename(path);
-  const prefix = root.endsWith("/") ? root : `${root}/`;
-  return normalized.startsWith(prefix)
-    ? normalized.slice(prefix.length)
-    : path;
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "");
-}
-
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] ?? path;
 }
 
 function collectUsageCandidates(value: unknown): Record<string, unknown>[] {

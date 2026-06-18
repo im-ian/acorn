@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
+  AgentHistoryProvider,
   AgentTokenUsageSnapshot,
   AgentHistoryItem,
   AgentTranscriptSummary,
@@ -538,6 +539,22 @@ export const api = {
       repoPath,
       transcriptId,
     });
+  },
+  agentTranscriptSummaryAtPath(
+    repoPath: string,
+    provider: AgentHistoryProvider,
+    id: string,
+    transcriptPath: string,
+  ): Promise<AgentTranscriptSummary | null> {
+    return invoke<AgentTranscriptSummary | null>(
+      "agent_transcript_summary_at_path",
+      {
+        repoPath,
+        provider,
+        id,
+        transcriptPath,
+      },
+    );
   },
   listUnscopedAgentHistory(limit = 100): Promise<AgentHistoryItem[]> {
     return invoke<AgentHistoryItem[]>("list_unscoped_agent_history", {

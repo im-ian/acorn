@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   fsGitDiffStats: vi.fn(),
   loadChatSessionState: vi.fn(),
   agentTranscriptSummary: vi.fn(),
+  agentTranscriptSummaryAtPath: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ vi.mock("../lib/api", () => ({
     fsGitDiffStats: mocks.fsGitDiffStats,
     loadChatSessionState: mocks.loadChatSessionState,
     agentTranscriptSummary: mocks.agentTranscriptSummary,
+    agentTranscriptSummaryAtPath: mocks.agentTranscriptSummaryAtPath,
   },
 }));
 
@@ -220,11 +222,13 @@ describe("WorkSummaryView", () => {
     });
     mocks.loadChatSessionState.mockResolvedValue(chatState());
     mocks.agentTranscriptSummary.mockResolvedValue(null);
+    mocks.agentTranscriptSummaryAtPath.mockResolvedValue(null);
   });
 
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -458,6 +462,93 @@ describe("WorkSummaryView", () => {
     );
     expect(container.textContent).toContain("4 messages");
     expect(container.textContent).toContain("320 tokens");
+  });
+
+  it("polls a terminal agent transcript by cached path after the initial id lookup", async () => {
+    vi.useFakeTimers();
+    mocks.agentTranscriptSummary.mockResolvedValueOnce({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_000,
+      message_count: 4,
+      user_messages: 2,
+      assistant_messages: 2,
+      turn_count: 2,
+      complete_turns: 2,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 220,
+        output_tokens: 80,
+        cache_read_tokens: 20,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 12,
+        total_tokens: 320,
+        messages_with_usage: 1,
+      },
+    });
+    mocks.agentTranscriptSummaryAtPath.mockResolvedValueOnce({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_015,
+      message_count: 6,
+      user_messages: 3,
+      assistant_messages: 3,
+      turn_count: 3,
+      complete_turns: 3,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 300,
+        output_tokens: 120,
+        cache_read_tokens: 20,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 12,
+        total_tokens: 452,
+        messages_with_usage: 2,
+      },
+    });
+    const tab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: `${REPO}/.worktrees/s1`,
+      sessionId: "s1",
+      title: "Feature runner Summary",
+    });
+
+    await act(async () => {
+      root.render(
+        <WorkSummaryView
+          tab={tab}
+          session={session({
+            mode: "terminal",
+            agent_transcript_id: "transcript-1",
+          })}
+          isActive
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.agentTranscriptSummary).toHaveBeenCalledTimes(1);
+    expect(mocks.agentTranscriptSummaryAtPath).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.agentTranscriptSummaryAtPath).toHaveBeenCalledWith(
+      REPO,
+      "codex",
+      "transcript-1",
+      "/Users/me/.codex/sessions/transcript-1.jsonl",
+    );
+    expect(mocks.agentTranscriptSummary).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("6 messages");
+    expect(container.textContent).toContain("452 tokens");
   });
 
   it("opens a changed file when its row is double-clicked", async () => {

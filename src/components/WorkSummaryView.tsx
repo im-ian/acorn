@@ -10,6 +10,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -25,21 +26,35 @@ import {
 } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
+import { fsChangeTouchesRoot } from "../lib/workSummaryInvalidation";
 import type { Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import {
   buildWorkSummary,
   summarizeChatSession,
   summarizeTokenUsage,
-  tokenUsageDelta,
   type WorkSummary,
   type WorkSummaryChatMetrics,
-  type WorkSummaryKindCounts,
   type WorkSummaryTokenUsage,
 } from "../lib/workSummary";
 import type { WorkSummaryWorkspaceTab } from "../lib/workspaceTabs";
 import type { AgentTranscriptSummary } from "../lib/types";
 import { RefreshButton } from "./ui/RefreshButton";
+import {
+  FileStatusChart,
+  TokenUsageChart,
+} from "./work-summary/WorkSummaryCharts";
+import {
+  ChangedFilesSkeleton,
+  ChartSkeleton,
+  ConversationSkeleton,
+  MetricValueSkeleton,
+  TokenUsageSkeleton,
+} from "./work-summary/WorkSummarySkeletons";
+
+const GIT_STATUS_FILE_LIMIT = 500;
+const SUMMARY_REFRESH_DEBOUNCE_MS = 500;
+const TRANSCRIPT_POLL_INTERVAL_MS = 15_000;
 
 const STATUS_CLASS: Record<FsGitStatus, string> = {
   added: "bg-emerald-500/10 text-emerald-300",
@@ -87,6 +102,12 @@ interface WorkSummaryConversationSnapshot {
   tokens: WorkSummaryTokenUsage | null;
 }
 
+interface AgentTranscriptLocation {
+  provider: AgentTranscriptSummary["provider"];
+  id: string;
+  transcriptPath: string;
+}
+
 export function WorkSummaryView({
   tab,
   session,
@@ -100,10 +121,11 @@ export function WorkSummaryView({
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const transcriptLocationRef = useRef<AgentTranscriptLocation | null>(null);
   const loading = summaryLoading || conversationLoading;
 
   const fetchSummary = useCallback(async (): Promise<WorkSummarySnapshot> => {
-    const status = await api.fsGitStatus(tab.cwdPath, 500);
+    const status = await api.fsGitStatus(tab.cwdPath, GIT_STATUS_FILE_LIMIT);
     const entries: FsGitDiffStatsRequest[] = Object.entries(status.statuses)
       .filter(([, entry]) => entry.kind !== "clean")
       .map(([path, entry]) => ({ path, kind: entry.kind }));
@@ -126,10 +148,12 @@ export function WorkSummaryView({
       };
     }
 
-    if (session.agent_transcript_id) {
-      const transcript = await api.agentTranscriptSummary(
+    const transcriptId = session.agent_transcript_id;
+    if (transcriptId) {
+      const transcript = await fetchAgentTranscriptSummary(
         tab.repoPath,
-        session.agent_transcript_id,
+        transcriptId,
+        transcriptLocationRef,
       );
       return {
         chat: transcript ? chatMetricsFromTranscript(transcript) : null,
@@ -240,9 +264,7 @@ export function WorkSummaryView({
         const snapshot = await fetchSummary();
         if (!cancelled) applySnapshot(snapshot);
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
+        void err;
       }
     }
 
@@ -251,9 +273,7 @@ export function WorkSummaryView({
         const snapshot = await fetchConversation();
         if (!cancelled) applyConversationSnapshot(snapshot);
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
+        void err;
       }
     }
 
@@ -262,7 +282,7 @@ export function WorkSummaryView({
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null;
         void refreshSummarySilently();
-      }, 500);
+      }, SUMMARY_REFRESH_DEBOUNCE_MS);
     }
 
     void listen<FsChangePayload>(FS_CHANGED_EVENT, (event) => {
@@ -289,7 +309,7 @@ export function WorkSummaryView({
     } else if (session?.agent_transcript_id) {
       transcriptPollTimer = window.setInterval(() => {
         void refreshConversationSilently();
-      }, 5_000);
+      }, TRANSCRIPT_POLL_INTERVAL_MS);
     }
 
     return () => {
@@ -462,7 +482,7 @@ export function WorkSummaryView({
                     className={cn(
                       "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2 text-xs",
                       onOpenFile
-                        ? "cursor-default hover:bg-bg-elevated focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent"
+                        ? "cursor-pointer hover:bg-bg-elevated focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent"
                         : null,
                     )}
                     data-work-summary-file-path={file.path}
@@ -592,100 +612,6 @@ export function WorkSummaryView({
   );
 }
 
-function MetricValueSkeleton() {
-  return <SkeletonBlock className="h-5 w-24 bg-fg-muted/15" />;
-}
-
-function ChangedFilesSkeleton() {
-  return (
-    <div
-      className="divide-y divide-border"
-      data-work-summary-section-skeleton="files"
-    >
-      {[0, 1, 2, 3, 4].map((idx) => (
-        <div
-          key={idx}
-          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2"
-        >
-          <div className="flex min-w-0 items-center gap-2">
-            <SkeletonBlock className="h-5 w-10 bg-fg-muted/15" />
-            <SkeletonBlock
-              className={cn(
-                "h-3 min-w-0 bg-fg-muted/10",
-                idx % 3 === 0 ? "w-52" : idx % 3 === 1 ? "w-72" : "w-40",
-              )}
-            />
-          </div>
-          <SkeletonBlock className="h-3 w-16 bg-fg-muted/10" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ConversationSkeleton() {
-  return (
-    <div
-      className="grid grid-cols-2 gap-px bg-border"
-      data-work-summary-section-skeleton="conversation"
-    >
-      {Array.from({ length: 4 }).map((_, idx) => (
-        <div key={idx} className="bg-bg px-4 py-3">
-          <SkeletonBlock className="h-2.5 w-20 bg-fg-muted/10" />
-          <SkeletonBlock className="mt-2 h-4 w-10 bg-fg-muted/15" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TokenUsageSkeleton() {
-  return (
-    <div
-      className="space-y-3 px-4 py-3"
-      data-work-summary-section-skeleton="tokens"
-    >
-      <SkeletonBlock className="h-5 w-24 bg-fg-muted/15" />
-      <div className="space-y-2">
-        {[0, 1, 2, 3].map((idx) => (
-          <SkeletonChartRow key={idx} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ChartSkeleton() {
-  return (
-    <div
-      className="space-y-2 px-4 py-3"
-      data-work-summary-section-skeleton="charts"
-    >
-      {[0, 1, 2].map((idx) => (
-        <SkeletonChartRow key={idx} />
-      ))}
-    </div>
-  );
-}
-
-function SkeletonChartRow() {
-  return (
-    <div className="grid grid-cols-[7rem_minmax(0,1fr)_4.5rem] items-center gap-2">
-      <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/10" />
-      <SkeletonBlock className="h-2 w-full bg-fg-muted/10" />
-      <SkeletonBlock className="h-2.5 w-10 bg-fg-muted/10" />
-    </div>
-  );
-}
-
-function SkeletonBlock({ className }: { className: string }) {
-  return (
-    <span
-      className={cn("block animate-pulse rounded bg-fg-muted/10", className)}
-    />
-  );
-}
-
 function MetricCell({
   icon,
   label,
@@ -748,197 +674,47 @@ function formatDateTime(value: string): string {
   return new Date(ms).toLocaleString();
 }
 
-function TokenUsageChart({
-  tokens,
-  baseline,
-  t,
-}: {
-  tokens: WorkSummaryTokenUsage;
-  baseline?: WorkSummaryTokenUsage & { capturedAt: string };
-  t: Translator;
-}) {
-  const delta = tokenUsageDelta(tokens, baseline);
-  const rows = [
-    {
-      label: wt(t, "workSummary.tokens.input"),
-      value: tokens.inputTokens,
-      className: "bg-sky-400",
-    },
-    {
-      label: wt(t, "workSummary.tokens.output"),
-      value: tokens.outputTokens,
-      className: "bg-emerald-400",
-    },
-    {
-      label: wt(t, "workSummary.tokens.cache"),
-      value: tokens.cacheReadTokens + tokens.cacheCreationTokens,
-      className: "bg-amber-400",
-    },
-    {
-      label: wt(t, "workSummary.tokens.reasoning"),
-      value: tokens.reasoningTokens,
-      className: "bg-violet-400",
-    },
-  ].filter((row) => row.value > 0);
-  const max = Math.max(...rows.map((row) => row.value), 1);
+async function fetchAgentTranscriptSummary(
+  repoPath: string,
+  transcriptId: string,
+  locationRef: { current: AgentTranscriptLocation | null },
+): Promise<AgentTranscriptSummary | null> {
+  const cached = locationRef.current;
+  let transcript: AgentTranscriptSummary | null = null;
 
-  return (
-    <div className="space-y-3 px-4 py-3">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <div className="font-mono text-lg tabular-nums">
-            {formatNumber(tokens.totalTokens)}
-          </div>
-          <div className="text-[11px] text-fg-muted">
-            {wtf(t, "workSummary.tokens.fromMessages", {
-              count: tokens.messagesWithUsage,
-            })}
-          </div>
-        </div>
-      </div>
-      {baseline ? (
-        <div className="grid grid-cols-3 gap-px overflow-hidden rounded border border-border bg-border">
-          <TokenBaselineCell
-            label={wt(t, "workSummary.tokens.sessionUsed")}
-            value={formatNumber(tokens.totalTokens)}
-          />
-          <TokenBaselineCell
-            label={wt(t, "workSummary.tokens.summaryStart")}
-            value={formatNumber(baseline.totalTokens)}
-          />
-          <TokenBaselineCell
-            label={wt(t, "workSummary.tokens.sinceSummary")}
-            value={`+${formatNumber(delta.totalTokens)}`}
-          />
-        </div>
-      ) : null}
-      <div className="space-y-2">
-        {rows.map((row) => (
-          <ChartRow
-            key={row.label}
-            label={row.label}
-            value={formatNumber(row.value)}
-            width={(row.value / max) * 100}
-            className={row.className}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
+  if (cached?.id === transcriptId) {
+    try {
+      transcript = await api.agentTranscriptSummaryAtPath(
+        repoPath,
+        cached.provider,
+        cached.id,
+        cached.transcriptPath,
+      );
+    } catch {
+      transcript = null;
+    }
+    if (!transcript) {
+      locationRef.current = null;
+    }
+  } else if (cached) {
+    locationRef.current = null;
+  }
 
-function TokenBaselineCell({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="min-w-0 bg-bg px-2 py-2">
-      <div className="truncate text-[10px] uppercase text-fg-muted">
-        {label}
-      </div>
-      <div className="mt-0.5 truncate font-mono text-xs tabular-nums">
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function FileStatusChart({
-  counts,
-  total,
-  t,
-}: {
-  counts: WorkSummaryKindCounts;
-  total: number;
-  t: Translator;
-}) {
-  const rows = (Object.keys(counts) as Array<keyof WorkSummaryKindCounts>)
-    .filter((kind) => kind !== "clean" && counts[kind] > 0)
-    .map((kind) => ({
-      label: wt(t, `workSummary.status.${kind}`),
-      value: counts[kind],
-      className:
-        kind === "added"
-          ? "bg-emerald-400"
-          : kind === "deleted"
-            ? "bg-rose-400"
-            : kind === "conflicted"
-              ? "bg-danger"
-              : kind === "renamed"
-                ? "bg-sky-400"
-                : "bg-amber-400",
-    }));
-
-  return (
-    <div className="space-y-2 px-4 py-3">
-      {rows.map((row) => (
-        <ChartRow
-          key={row.label}
-          label={row.label}
-          value={String(row.value)}
-          width={(row.value / total) * 100}
-          className={row.className}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ChartRow({
-  label,
-  value,
-  width,
-  className,
-}: {
-  label: string;
-  value: string;
-  width: number;
-  className: string;
-}) {
-  return (
-    <div className="grid grid-cols-[7rem_minmax(0,1fr)_4.5rem] items-center gap-2 text-[11px]">
-      <span className="truncate text-fg-muted">{label}</span>
-      <div className="h-2 overflow-hidden rounded bg-bg-elevated">
-        <div
-          className={cn("h-full rounded", className)}
-          style={{ width: `${Math.max(4, Math.min(100, width))}%` }}
-        />
-      </div>
-      <span className="text-right font-mono tabular-nums">{value}</span>
-    </div>
-  );
+  if (!transcript) {
+    transcript = await api.agentTranscriptSummary(repoPath, transcriptId);
+  }
+  if (transcript) {
+    locationRef.current = {
+      provider: transcript.provider,
+      id: transcript.id,
+      transcriptPath: transcript.transcript_path,
+    };
+  }
+  return transcript;
 }
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value);
-}
-
-function fsChangeTouchesRoot(payload: FsChangePayload, rootPath: string): boolean {
-  if (payload.overflow && payload.refresh) {
-    return pathsIntersect(payload.refresh.path, rootPath);
-  }
-  if (payload.root && pathsIntersect(payload.root, rootPath)) {
-    return true;
-  }
-  return payload.paths.some((path) => pathsIntersect(path, rootPath));
-}
-
-function pathsIntersect(a: string, b: string): boolean {
-  const left = normalizePath(a);
-  const right = normalizePath(b);
-  return left === right || pathInside(left, right) || pathInside(right, left);
-}
-
-function pathInside(path: string, root: string): boolean {
-  const prefix = root.endsWith("/") ? root : `${root}/`;
-  return path.startsWith(prefix);
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 function chatMetricsFromTranscript(

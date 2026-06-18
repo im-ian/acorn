@@ -40,6 +40,7 @@ vi.mock("./lib/api", () => {
         turns: [],
       }) as unknown as ChatSessionState),
       agentTranscriptSummary: vi.fn(async () => null),
+      agentTranscriptSummaryAtPath: vi.fn(async () => null),
       addProject: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => []),
