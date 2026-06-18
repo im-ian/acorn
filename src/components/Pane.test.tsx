@@ -503,6 +503,173 @@ describe("Pane empty state", () => {
     );
   });
 
+  it("starts tab-strip sessions at the linked session root when the active tab is a work summary", async () => {
+    const worker = session("worker", {
+      name: "worker",
+      repo_path: REPO,
+      worktree_path: WORKTREE,
+      branch: "feature",
+      in_worktree: true,
+    });
+    const summaryTab = makeWorkSummaryWorkspaceTab({
+      repoPath: WORKTREE,
+      cwdPath: WORKTREE,
+      sessionId: worker.id,
+      title: "Worker Summary",
+    });
+    const created = session("new-session", {
+      name: "repo",
+      repo_path: REPO,
+      worktree_path: REPO,
+      branch: "main",
+      in_worktree: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([worker, created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [worker],
+      activeProject: REPO,
+      activeProjectFolderId: REPO,
+      activeSessionId: null,
+      activeTabId: summaryTab.id,
+      workspaceTabs: { [summaryTab.id]: summaryTab },
+      workspaces: {
+        ...s.workspaces,
+        [REPO]: {
+          layout: { kind: "pane", id: "root" },
+          panes: {
+            root: {
+              id: "root",
+              tabIds: [summaryTab.id],
+              activeTabId: summaryTab.id,
+            },
+          },
+          focusedPaneId: "root",
+        },
+      },
+      panes: {
+        root: {
+          id: "root",
+          tabIds: [summaryTab.id],
+          activeTabId: summaryTab.id,
+        },
+      },
+      focusedPaneId: "root",
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const filler = container.querySelector('[data-pane-tab-filler="root"]');
+    expect(filler).not.toBeNull();
+
+    await act(async () => {
+      filler?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "repo",
+      REPO,
+      false,
+      "regular",
+      null,
+    );
+  });
+
+  it("keeps tab-strip double-click creation in linked work summary local scope", async () => {
+    const local = session("local-session", {
+      name: "terminal",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    const projectScopedSibling = session("project-session", {
+      name: "project",
+      repo_path: HOME,
+      worktree_path: `${HOME}/.worktrees/project-session`,
+      project_scoped: true,
+    });
+    const summaryTab = makeWorkSummaryWorkspaceTab({
+      repoPath: HOME,
+      cwdPath: HOME,
+      sessionId: local.id,
+      title: "Local Summary",
+    });
+    const created = session("local-session-2", {
+      name: "terminal-2",
+      repo_path: HOME,
+      worktree_path: HOME,
+      project_scoped: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([
+      local,
+      projectScopedSibling,
+      created,
+    ]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [local, projectScopedSibling],
+      activeProject: HOME,
+      activeSessionId: null,
+      activeTabId: summaryTab.id,
+      workspaceTabs: { [summaryTab.id]: summaryTab },
+      workspaces: {
+        ...s.workspaces,
+        [HOME]: {
+          layout: { kind: "pane", id: "root" },
+          panes: {
+            root: {
+              id: "root",
+              tabIds: [summaryTab.id],
+              activeTabId: summaryTab.id,
+            },
+          },
+          focusedPaneId: "root",
+        },
+      },
+      layout: { kind: "pane", id: "root" },
+      panes: {
+        root: {
+          id: "root",
+          tabIds: [summaryTab.id],
+          activeTabId: summaryTab.id,
+        },
+      },
+      focusedPaneId: "root",
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const filler = container.querySelector('[data-pane-tab-filler="root"]');
+    expect(filler).not.toBeNull();
+
+    await act(async () => {
+      filler?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "terminal-2",
+      HOME,
+      false,
+      "regular",
+      null,
+      false,
+    );
+  });
+
   it("keeps tab-strip double-click creation in local chat scope", async () => {
     const local = session("local-session", {
       name: "terminal",

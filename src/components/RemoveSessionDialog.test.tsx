@@ -31,6 +31,7 @@ describe("RemoveSessionDialog", () => {
   let root: Root;
 
   beforeEach(() => {
+    useSettings.getState().reset();
     useSettings.getState().patchLanguage("en");
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -63,9 +64,59 @@ describe("RemoveSessionDialog", () => {
     expect(document.body.textContent).toContain(
       "This session is using a linked git worktree:",
     );
-    expect(document.body.textContent).toContain("Keep worktree");
-    expect(document.body.textContent).toContain("Delete worktree");
+    expect(document.body.textContent).toContain("Remove only");
+    expect(document.body.textContent).toContain("Remove + delete worktree");
+    expect(document.body.textContent).not.toContain(
+      "Delete standalone isolated worktrees without asking next time",
+    );
     expect(document.body.textContent).not.toContain("Don't ask again");
+  });
+
+  it("lets standalone isolated sessions update the future cleanup setting", () => {
+    const onClose = renderDialog(
+      session({
+        isolated: true,
+        in_worktree: true,
+        worktree_path: "/repo/.acorn/worktrees/session-1",
+      }),
+    );
+
+    expect(document.body.textContent).toContain(
+      "Delete standalone isolated worktrees without asking next time",
+    );
+
+    const checkbox = document.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    expect(checkbox).toBeInstanceOf(HTMLInputElement);
+    expect(checkbox?.checked).toBe(false);
+
+    act(() => {
+      checkbox?.click();
+    });
+
+    expect(checkbox?.checked).toBe(true);
+    expect(
+      useSettings.getState().settings.sessions
+        .confirmDeleteIsolatedWorktrees,
+    ).toBe(true);
+
+    const deleteButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Remove + delete worktree",
+    );
+    expect(deleteButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      deleteButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(
+      useSettings.getState().settings.sessions
+        .confirmDeleteIsolatedWorktrees,
+    ).toBe(false);
+    expect(onClose).toHaveBeenCalledWith("session_and_worktree");
   });
 
   it("keeps shared worktree workspace sessions on disk", () => {
@@ -74,9 +125,12 @@ describe("RemoveSessionDialog", () => {
     expect(document.body.textContent).toContain(
       "This worktree is shared by a workspace and will be kept on disk.",
     );
-    expect(document.body.textContent).not.toContain("Keep worktree");
-    expect(document.body.textContent).not.toContain("Delete worktree");
+    expect(document.body.textContent).not.toContain("Remove only");
+    expect(document.body.textContent).not.toContain("Remove + delete worktree");
     expect(document.body.textContent).toContain("Remove");
+    expect(document.body.textContent).not.toContain(
+      "Delete standalone isolated worktrees without asking next time",
+    );
   });
 
   it("keeps the plain session remove confirmation for non-worktree sessions", () => {
@@ -84,6 +138,6 @@ describe("RemoveSessionDialog", () => {
 
     expect(document.body.textContent).toContain("will not be touched");
     expect(document.body.textContent).toContain("Don't ask again");
-    expect(document.body.textContent).not.toContain("Delete worktree");
+    expect(document.body.textContent).not.toContain("Remove + delete worktree");
   });
 });

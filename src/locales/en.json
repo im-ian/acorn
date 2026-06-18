@@ -1304,13 +1304,14 @@
       "confirmPrefix": "Remove session",
       "isolatedWorktree": "This is an isolated worktree:",
       "linkedWorktree": "This session is using a linked git worktree:",
-      "deleteWorktreeQuestion": "Also delete the worktree from disk?",
+      "deleteWorktreeQuestion": "Remove the session only, or also delete the worktree from disk?",
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
       "keepSharedWorktree": "This worktree is shared by a workspace and will be kept on disk.",
       "dontAskAgain": "Don't ask again (toggle in Settings → Sessions)",
-      "keepWorktree": "Keep worktree",
-      "deleteWorktree": "Delete worktree",
+      "autoDeleteIsolatedWorktreesNextTime": "Delete standalone isolated worktrees without asking next time",
+      "keepWorktree": "Remove only",
+      "deleteWorktree": "Remove + delete worktree",
       "remove": "Remove"
     },
     "runningSessionClose": {
