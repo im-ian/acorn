@@ -33,6 +33,8 @@ use serde::Serialize;
 use tauri_plugin_dialog::DialogExt;
 
 const CHAT_SESSION_STATE_CHANGED_EVENT: &str = "acorn:chat-session-state-changed";
+const WORKTREE_IN_USE_BY_OTHER_SESSIONS: &str =
+    "Close other sessions using this worktree before removing it.";
 
 async fn run_blocking<T, F>(label: &'static str, f: F) -> AppResult<T>
 where
@@ -3176,6 +3178,57 @@ fn terminate_session_pty(state: &AppState, id: &Uuid) {
     }
 }
 
+fn sessions_using_linked_worktree(
+    state: &AppState,
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> Vec<Session> {
+    state
+        .sessions
+        .list()
+        .into_iter()
+        .filter(|session| {
+            worktree::same_path(&session.repo_path, repo_path)
+                && worktree::same_path(&session.worktree_path, worktree_path)
+        })
+        .collect()
+}
+
+fn sessions_using_worktree_path(state: &AppState, worktree_path: &Path) -> Vec<Session> {
+    state
+        .sessions
+        .list()
+        .into_iter()
+        .filter(|session| worktree::same_path(&session.worktree_path, worktree_path))
+        .collect()
+}
+
+fn ensure_no_sessions_using_worktree_path_except(
+    state: &AppState,
+    worktree_path: &Path,
+    except_id: Option<&Uuid>,
+) -> AppResult<()> {
+    let has_conflict = sessions_using_worktree_path(state, worktree_path)
+        .into_iter()
+        .any(|session| except_id != Some(&session.id));
+    if has_conflict {
+        return Err(AppError::Other(
+            WORKTREE_IN_USE_BY_OTHER_SESSIONS.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn worktree_path_used_outside_project(
+    state: &AppState,
+    repo_path: &Path,
+    worktree_path: &Path,
+) -> bool {
+    sessions_using_worktree_path(state, worktree_path)
+        .into_iter()
+        .any(|session| !worktree::same_path(&session.repo_path, repo_path))
+}
+
 #[tauri::command]
 pub async fn remove_project(
     state: State<'_, AppState>,
@@ -3200,6 +3253,19 @@ pub async fn remove_project(
         for session in session_ids {
             terminate_session_pty(&app_state, &session.id);
             if drop_worktrees && staged_worktree_paths.insert(session.worktree_path.clone()) {
+                if worktree_path_used_outside_project(
+                    &app_state,
+                    &path,
+                    &session.worktree_path,
+                ) {
+                    tracing::warn!(
+                        repo_path = %session.repo_path.display(),
+                        worktree_path = %session.worktree_path.display(),
+                        "skipping linked worktree removal because another project still has a session there"
+                    );
+                    app_state.sessions.remove(&session.id).ok();
+                    continue;
+                }
                 match stage_remove_linked_worktree_blocking(
                     session.repo_path.clone(),
                     session.worktree_path.clone(),
@@ -3242,6 +3308,13 @@ pub async fn remove_session(
     let app_state = state.inner().clone();
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = app_state.sessions.get(&id)?;
+    if remove_worktree.unwrap_or(false) {
+        ensure_no_sessions_using_worktree_path_except(
+            &app_state,
+            &session.worktree_path,
+            Some(&id),
+        )?;
+    }
     terminate_session_pty(&app_state, &id);
     if let Ok(dir) = persistence::data_dir() {
         scrollback::delete(&dir, &id.to_string()).ok();
@@ -3730,7 +3803,18 @@ pub async fn remove_worktree(
     let app_state = state.inner().clone();
     let repo_path = PathBuf::from(repo_path);
     let worktree_path = PathBuf::from(worktree_path);
-    if remove_sessions.unwrap_or(false) {
+    let remove_sessions = remove_sessions.unwrap_or(false);
+    if remove_sessions {
+        let matching_sessions = sessions_using_worktree_path(&app_state, &worktree_path);
+        if matching_sessions.len() > 1
+            || matching_sessions
+                .iter()
+                .any(|session| !worktree::same_path(&session.repo_path, &repo_path))
+        {
+            return Err(AppError::Other(
+                WORKTREE_IN_USE_BY_OTHER_SESSIONS.to_string(),
+            ));
+        }
         return stage_remove_linked_worktree_and_sessions_blocking(
             app_state,
             repo_path,
@@ -3738,6 +3822,7 @@ pub async fn remove_worktree(
         )
         .await;
     }
+    ensure_no_sessions_using_worktree_path_except(&app_state, &worktree_path, None)?;
     stage_remove_linked_worktree_blocking(repo_path, worktree_path).await
 }
 
@@ -5344,15 +5429,7 @@ fn stage_remove_linked_worktree_at_path_and_sessions(
     repo_path: &Path,
     worktree_path: &Path,
 ) -> AppResult<Option<worktree::RemovedWorktree>> {
-    let sessions: Vec<_> = state
-        .sessions
-        .list()
-        .into_iter()
-        .filter(|session| {
-            worktree::same_path(&session.repo_path, repo_path)
-                && worktree::same_path(&session.worktree_path, worktree_path)
-        })
-        .collect();
+    let sessions = sessions_using_linked_worktree(state, repo_path, worktree_path);
 
     let removed = stage_remove_linked_worktree_at_path(repo_path, worktree_path)?;
 
@@ -5609,6 +5686,19 @@ mod tests {
             SessionKind::Regular,
         );
         session.project_scoped = project_scoped;
+        session
+    }
+
+    fn worktree_session(id: &str, repo_path: &str, worktree_path: &str) -> Session {
+        let mut session = Session::new(
+            id.to_string(),
+            PathBuf::from(repo_path),
+            PathBuf::from(worktree_path),
+            "main".to_string(),
+            true,
+            SessionKind::Regular,
+        );
+        session.in_worktree = true;
         session
     }
 
@@ -7235,6 +7325,87 @@ mod tests {
             "linked project root should be removed when explicitly requested"
         );
         std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[test]
+    fn worktree_delete_guard_rejects_peer_session_on_same_worktree_path() {
+        let state = crate::state::AppState::default();
+        let root = std::env::temp_dir().join(format!(
+            "acorn-worktree-guard-{}",
+            Uuid::new_v4().simple()
+        ));
+        let repo = root.join("repo");
+        let other_repo = root.join("other");
+        let worktree = repo.join(".acorn/worktrees/shared");
+        std::fs::create_dir_all(&worktree).expect("create worktree path");
+        let active = state.sessions.insert(worktree_session(
+            "active",
+            &repo.display().to_string(),
+            &worktree.display().to_string(),
+        ));
+        state.sessions.insert(worktree_session(
+            "peer",
+            &other_repo.display().to_string(),
+            &format!("{}/", worktree.display()),
+        ));
+
+        let err = super::ensure_no_sessions_using_worktree_path_except(
+            &state,
+            &worktree,
+            Some(&active.id),
+        )
+        .expect_err("peer session should block worktree deletion");
+
+        assert_eq!(err.to_string(), super::WORKTREE_IN_USE_BY_OTHER_SESSIONS);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn worktree_delete_guard_detects_sessions_outside_project() {
+        let state = crate::state::AppState::default();
+        let repo = Path::new("/tmp/acorn-worktree-guard-project");
+        let other_repo = Path::new("/tmp/acorn-worktree-guard-project-other");
+        let worktree = repo.join(".acorn/worktrees/shared");
+        state.sessions.insert(worktree_session(
+            "active",
+            &repo.display().to_string(),
+            &worktree.display().to_string(),
+        ));
+        state.sessions.insert(worktree_session(
+            "peer",
+            &other_repo.display().to_string(),
+            &worktree.display().to_string(),
+        ));
+
+        assert!(super::worktree_path_used_outside_project(
+            &state,
+            repo,
+            &worktree,
+        ));
+        assert!(!super::worktree_path_used_outside_project(
+            &state,
+            other_repo,
+            &other_repo.join(".acorn/worktrees/solo"),
+        ));
+    }
+
+    #[test]
+    fn worktree_delete_guard_allows_target_session_only() {
+        let state = crate::state::AppState::default();
+        let repo = Path::new("/tmp/acorn-worktree-guard-solo");
+        let worktree = repo.join(".acorn/worktrees/solo");
+        let active = state.sessions.insert(worktree_session(
+            "active",
+            &repo.display().to_string(),
+            &worktree.display().to_string(),
+        ));
+
+        super::ensure_no_sessions_using_worktree_path_except(
+            &state,
+            &worktree,
+            Some(&active.id),
+        )
+        .expect("target session should not block its own worktree deletion");
     }
 
     #[test]

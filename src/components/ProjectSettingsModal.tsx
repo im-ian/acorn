@@ -12,8 +12,8 @@ import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
 import {
-  otherSessionsUsingProjectWorktree,
   sessionsUsingProjectWorktree,
+  sessionsUsingWorktreePath,
 } from "../lib/sessionWorktree";
 import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
@@ -81,6 +81,23 @@ function formatModifiedTime(value: number | null): string | null {
   }).format(date);
 }
 
+function blockingSessionsForProjectWorktree(
+  sessions: readonly Session[],
+  repoPath: string,
+  worktreePath: string,
+  activeSessionId: string | null,
+): Session[] {
+  const targetSessions = sessionsUsingProjectWorktree(
+    sessions,
+    repoPath,
+    worktreePath,
+  );
+  const targetIds = new Set(targetSessions.map((session) => session.id));
+  return sessionsUsingWorktreePath(sessions, worktreePath).filter(
+    (session) => !targetIds.has(session.id) || session.id !== activeSessionId,
+  );
+}
+
 interface ProjectSettingsModalProps {
   project: { name: string; repoPath: string } | null;
   initialTab?: ProjectSettingsTab;
@@ -124,7 +141,7 @@ export function ProjectSettingsModal({
       : [];
   const confirmRemoveOtherSessions =
     project && confirmRemove
-      ? otherSessionsUsingProjectWorktree(
+      ? blockingSessionsForProjectWorktree(
           sessions,
           project.repoPath,
           confirmRemove.path,
@@ -261,10 +278,13 @@ export function ProjectSettingsModal({
       project.repoPath,
       target.path,
     );
-    const otherSessions = targetSessions.filter(
-      (session) => session.id !== activeSessionId,
+    const blockingSessions = blockingSessionsForProjectWorktree(
+      sessions,
+      project.repoPath,
+      target.path,
+      activeSessionId,
     );
-    if (otherSessions.length > 0) {
+    if (blockingSessions.length > 0) {
       setConfirmRemove(null);
       return;
     }
@@ -287,13 +307,13 @@ export function ProjectSettingsModal({
 
   function requestRemoveWorktree(worktree: ProjectWorktree) {
     if (!project) return;
-    const otherSessions = otherSessionsUsingProjectWorktree(
+    const blockingSessions = blockingSessionsForProjectWorktree(
       sessions,
       project.repoPath,
       worktree.path,
       activeSessionId,
     );
-    if (otherSessions.length > 0) return;
+    if (blockingSessions.length > 0) return;
     setConfirmRemove(worktree);
   }
 
@@ -528,15 +548,18 @@ function ProjectWorktreeList({
           {worktrees.map((worktree) => {
             const modified = formatModifiedTime(worktree.modified_ms);
             const isRemoving = removingPath === worktree.path;
-            const usedBySessions = sessionsUsingProjectWorktree(
+            const usedBySessions = sessionsUsingWorktreePath(
               sessions,
-              repoPath,
               worktree.path,
             );
             const sessionCount = usedBySessions.length;
-            const removeBlockedByOtherSessions = usedBySessions.some(
-              (session) => session.id !== activeSessionId,
-            );
+            const removeBlockedByOtherSessions =
+              blockingSessionsForProjectWorktree(
+                sessions,
+                repoPath,
+                worktree.path,
+                activeSessionId,
+              ).length > 0;
             return (
               <li key={worktree.path} className="px-3 py-2">
                 <div className="flex items-start justify-between gap-3">

@@ -5,7 +5,9 @@ import {
   hasRecordedWorktree,
   isSessionInWorktreeWorkspace,
   otherSessionsUsingProjectWorktree,
+  otherSessionsUsingWorktreePath,
   sessionsUsingProjectWorktree,
+  sessionsUsingWorktreePath,
   shouldAutoDeleteSessionWorktree,
 } from "./sessionWorktree";
 
@@ -73,6 +75,27 @@ describe("worktree deletion policy", () => {
     expect(isSessionInWorktreeWorkspace(target, foldersByRepo)).toBe(false);
     expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
     expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
+  });
+
+  it("preserves worktrees that another session still uses", () => {
+    const target = session({
+      id: "target",
+      isolated: true,
+      worktree_path: "/repo/.acorn/worktrees/solo",
+    });
+    const peer = session({
+      id: "peer",
+      repo_path: "/other",
+      isolated: true,
+      worktree_path: "/repo/.acorn/worktrees/solo/",
+    });
+
+    expect(canDeleteSessionWorktree(target, foldersByRepo, [target, peer])).toBe(
+      false,
+    );
+    expect(
+      shouldAutoDeleteSessionWorktree(target, foldersByRepo, [target, peer]),
+    ).toBe(false);
   });
 
   it("preserves isolated sessions that are backing a worktree workspace", () => {
@@ -158,5 +181,36 @@ describe("sessionsUsingProjectWorktree", () => {
         "active",
       ).map((candidate) => candidate.id),
     ).toEqual(["other"]);
+  });
+});
+
+describe("sessionsUsingWorktreePath", () => {
+  it("matches sessions by worktree path even when repo paths differ", () => {
+    const sessions = [
+      session({
+        id: "active",
+        repo_path: "/repo",
+        worktree_path: "/repo/.acorn/worktrees/feature",
+      }),
+      session({
+        id: "peer",
+        repo_path: "/other",
+        worktree_path: "/repo/.acorn/worktrees/feature/",
+      }),
+    ];
+
+    expect(
+      sessionsUsingWorktreePath(
+        sessions,
+        "/repo/.acorn/worktrees/feature",
+      ).map((candidate) => candidate.id),
+    ).toEqual(["active", "peer"]);
+    expect(
+      otherSessionsUsingWorktreePath(
+        sessions,
+        "/repo/.acorn/worktrees/feature",
+        "active",
+      ).map((candidate) => candidate.id),
+    ).toEqual(["peer"]);
   });
 });

@@ -426,10 +426,15 @@ export function Sidebar() {
     try {
       const removedWorktrees: WorktreeRemoval[] = [];
       for (const session of folderGroup.sessions) {
+        const currentState = useAppStore.getState();
         const removedWorktree = await removeSession(
           session.id,
           deleteIsolatedWorktreesWithoutPrompt &&
-            shouldAutoDeleteSessionWorktree(session, projectFolders),
+            shouldAutoDeleteSessionWorktree(
+              session,
+              currentState.projectFolders,
+              currentState.sessions,
+            ),
         );
         if (removedWorktree) {
           removedWorktrees.push(removedWorktree);
@@ -1205,7 +1210,11 @@ export function Sidebar() {
         deleteWorktrees={Boolean(
           deleteIsolatedWorktreesWithoutPrompt &&
             pendingRemoveProjectFolderGroup?.sessions.some((session) =>
-              shouldAutoDeleteSessionWorktree(session, projectFolders),
+              shouldAutoDeleteSessionWorktree(
+                session,
+                projectFolders,
+                sessions,
+              ),
             ),
         )}
         onClose={(choice) => {

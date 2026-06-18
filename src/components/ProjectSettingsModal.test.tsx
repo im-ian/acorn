@@ -478,4 +478,91 @@ describe("ProjectSettingsModal", () => {
     );
     expect(mockApi.removeWorktree).not.toHaveBeenCalled();
   });
+
+  it("blocks worktree deletion while another project session uses the same path", async () => {
+    mockApi.getProjectSettings.mockResolvedValue({
+      key: "github:im-ian/acorn",
+      settings: {
+        remember_after_close: true,
+        pull_requests: {
+          generation_prompt: "Use concise release-note style.",
+        },
+      },
+    });
+    mockApi.listProjectWorktrees.mockResolvedValue([
+      {
+        name: "feature-alpha",
+        path: "/repo/acorn/.acorn/worktrees/feature-alpha",
+        modified_ms: null,
+      },
+    ]);
+    useAppStore.setState({
+      sessions: [
+        session({
+          id: "s-alpha-1",
+          name: "alpha terminal",
+          worktree_path: "/repo/acorn/.acorn/worktrees/feature-alpha",
+          in_worktree: true,
+        }),
+        session({
+          id: "s-other-1",
+          name: "other project chat",
+          repo_path: "/repo/other",
+          worktree_path: "/repo/acorn/.acorn/worktrees/feature-alpha/",
+          in_worktree: true,
+        }),
+      ],
+      activeSessionId: "s-alpha-1",
+      projects: [
+        {
+          repo_path: "/repo/acorn",
+          name: "acorn",
+          created_at: "2026-01-01T00:00:00Z",
+          position: 0,
+        },
+      ],
+    });
+
+    await act(async () => {
+      root.render(
+        <ProjectSettingsModal
+          project={{ name: "acorn", repoPath: "/repo/acorn" }}
+          onClose={() => {}}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const worktreesTab = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Worktrees");
+    await act(async () => {
+      worktreesTab!.click();
+    });
+    await flushPromises();
+
+    expect(document.body.textContent).toContain("Used by 2 sessions");
+    expect(document.body.textContent).toContain(
+      "Close other sessions using this worktree before removing it.",
+    );
+
+    const remove = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ).find(
+      (button) =>
+        button.getAttribute("aria-label") ===
+        "Remove feature-alpha worktree",
+    );
+    expect(remove).toBeDefined();
+    expect(remove?.disabled).toBe(true);
+
+    await act(async () => {
+      remove!.click();
+    });
+
+    expect(document.body.textContent).not.toContain(
+      "Remove sessions and delete worktree",
+    );
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+  });
 });
