@@ -2276,6 +2276,64 @@ describe("removeProjectWorktree", () => {
       "Close other sessions using this worktree before removing it.",
     );
   });
+
+  it("refuses to delete a worktree while another project session uses the same path", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo, project(REPO_A, 1)],
+      [
+        session("b1", REPO_B, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+        }),
+        session("a1", REPO_A, {
+          worktree_path: `${worktreePath}/`,
+          in_worktree: true,
+        }),
+      ],
+    );
+    useAppStore.getState().selectSession("b1");
+
+    await expect(
+      useAppStore.getState().removeProjectWorktree(REPO_B, worktreePath, true),
+    ).rejects.toThrow("Close other sessions using this worktree");
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+    expect(state.sessions.map((candidate) => candidate.id)).toEqual([
+      "b1",
+      "a1",
+    ]);
+    expect(state.error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
+
+  it("refuses to delete a worktree path used only by another project session", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo, project(REPO_A, 1)],
+      [
+        session("a1", REPO_A, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+        }),
+      ],
+    );
+
+    await expect(
+      useAppStore.getState().removeProjectWorktree(REPO_B, worktreePath, false),
+    ).rejects.toThrow("Close other sessions using this worktree");
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+    expect(state.sessions.map((candidate) => candidate.id)).toEqual(["a1"]);
+    expect(state.error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
 });
 
 describe("requestRemoveProject", () => {

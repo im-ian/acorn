@@ -1173,6 +1173,7 @@ function App() {
     confirmRemoveSession,
     projectFolders,
     removeSession,
+    sessions,
     showStoreOperationToast,
   ]);
 
