@@ -574,6 +574,69 @@ describe("Pane empty state", () => {
     );
   });
 
+  it("creates root sessions from a work summary tab", async () => {
+    const summaryTab = makeWorkSummaryWorkspaceTab({
+      repoPath: REPO,
+      cwdPath: WORKTREE,
+      title: "Work Summary",
+    });
+    const created = session("new-session", {
+      name: "repo",
+      repo_path: REPO,
+      worktree_path: REPO,
+      branch: "main",
+      in_worktree: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    const pane = {
+      id: "root",
+      tabIds: [summaryTab.id],
+      activeTabId: summaryTab.id,
+    };
+    useAppStore.setState((s) => ({
+      ...s,
+      sessions: [],
+      activeProject: REPO,
+      activeProjectFolderId: REPO,
+      activeSessionId: null,
+      activeTabId: summaryTab.id,
+      workspaceTabs: { [summaryTab.id]: summaryTab },
+      workspaces: {
+        ...s.workspaces,
+        [REPO]: {
+          layout: { kind: "pane", id: "root" },
+          panes: { root: pane },
+          focusedPaneId: "root",
+        },
+      },
+      panes: { root: pane },
+      focusedPaneId: "root",
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const filler = container.querySelector('[data-pane-tab-filler="root"]');
+    expect(filler).not.toBeNull();
+
+    await act(async () => {
+      filler?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "repo",
+      REPO,
+      false,
+      "regular",
+      null,
+    );
+  });
+
   it("shows a session-title generation indicator on the tab", async () => {
     const active = session("agent-session", { agent_provider: "codex" });
     useAppStore.setState((s) => ({

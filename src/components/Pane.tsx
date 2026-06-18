@@ -293,7 +293,10 @@ export function Pane({ paneId }: PaneProps) {
         launch: { kind: "projectRoot" },
       };
     }
-    const repoPath = repoPathForCodeTabSession(tab, sessions);
+    const repoPath =
+      tab.kind === "code"
+        ? repoPathForCodeTabSession(tab, sessions)
+        : tab.repoPath;
     const projectScoped = resolveProjectScopedForRepoPath(
       { sessions, projects },
       repoPath,
