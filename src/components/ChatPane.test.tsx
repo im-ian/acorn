@@ -188,6 +188,12 @@ function emitChatState(state: ChatSessionState) {
   }
 }
 
+function renderedMessageText(container: HTMLElement) {
+  return Array.from(container.querySelectorAll(".acorn-chat-message-enter"))
+    .map((element) => element.textContent ?? "")
+    .join(" ");
+}
+
 function session(overrides: Partial<Session> = {}): Session {
   return {
     id: "s1",
@@ -630,6 +636,178 @@ describe("ChatPane", () => {
     });
     await settle();
 
+    expect(useAppStore.getState().sessions[0]?.status).toBe("needs_input");
+  });
+
+  it("rolls back the optimistic first message when sending fails", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockRejectedValueOnce(new Error("send failed"));
+    useAppStore.setState({ sessions: [session()] });
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      changeTextareaValue(textarea!, "first failed message");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    expect(mocks.sendChatMessage).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ provider: "claude" }),
+      "first failed message",
+    );
+    expect(container.textContent).toContain("Error: send failed");
+    expect(renderedMessageText(container)).not.toContain(
+      "first failed message",
+    );
+    expect(textarea!.value).toBe("first failed message");
+    expect(container.textContent).not.toContain("Running Claude");
+    expect(
+      container.querySelector('button[aria-label="Stop response"]'),
+    ).toBeNull();
+    expect(useAppStore.getState().sessions[0]?.status).toBe("failed");
+  });
+
+  it("preserves existing messages when a follow-up send fails", async () => {
+    mocks.loadChatSessionState.mockResolvedValueOnce(
+      chatState("s1", [
+        {
+          id: "u1",
+          role: "user",
+          content: "previous question",
+          created_at: "2026-01-01T00:00:00Z",
+          status: "complete",
+          metadata: null,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "previous answer",
+          created_at: "2026-01-01T00:00:01Z",
+          status: "complete",
+          metadata: null,
+        },
+      ]),
+    );
+    mocks.sendChatMessage.mockRejectedValueOnce(new Error("follow-up failed"));
+    useAppStore.setState({ sessions: [session()] });
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+    expect(container.textContent).toContain("previous answer");
+
+    await act(async () => {
+      changeTextareaValue(textarea!, "new failed question");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+
+    const messageText = renderedMessageText(container);
+    expect(messageText).toContain("previous answer");
+    expect(messageText).not.toContain("new failed question");
+    expect(textarea!.value).toBe("new failed question");
+    expect(container.textContent).toContain("Error: follow-up failed");
+    expect(container.textContent).not.toContain("Running Claude");
+    expect(
+      container.querySelector('button[aria-label="Stop response"]'),
+    ).toBeNull();
+    expect(useAppStore.getState().sessions[0]?.status).toBe("failed");
+  });
+
+  it("keeps newer backend chat state when a send rejects after an event", async () => {
+    let rejectSend!: (error: Error) => void;
+    mocks.loadChatSessionState.mockResolvedValueOnce(chatState("s1"));
+    mocks.sendChatMessage.mockReturnValueOnce(
+      new Promise<ChatSessionState>((_resolve, reject) => {
+        rejectSend = reject;
+      }),
+    );
+    useAppStore.setState({ sessions: [session()] });
+
+    await act(async () => {
+      root.render(<ChatPane sessionId="s1" />);
+    });
+    await settle();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Chat message"]',
+    );
+    const form = container.querySelector("form");
+    expect(textarea).toBeTruthy();
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      changeTextareaValue(textarea!, "late reject question");
+      form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+    expect(useAppStore.getState().sessions[0]?.status).toBe("running");
+
+    await act(async () => {
+      emitChatState(
+        chatState(
+          "s1",
+          [
+            {
+              id: "u1",
+              role: "user",
+              content: "late reject question",
+              created_at: "2026-01-01T00:00:00Z",
+              status: "complete",
+              metadata: null,
+            },
+            {
+              id: "a1",
+              role: "assistant",
+              content: "backend response wins",
+              created_at: "2026-01-01T00:00:01Z",
+              status: "complete",
+              metadata: null,
+            },
+          ],
+          "claude",
+        ),
+      );
+    });
+
+    await act(async () => {
+      rejectSend(new Error("late transport failure"));
+      await Promise.resolve();
+    });
+    await settle();
+
+    const messageText = renderedMessageText(container);
+    expect(messageText).toContain("backend response wins");
+    expect(messageText).toContain("late reject question");
+    expect(textarea!.value).toBe("");
+    expect(container.textContent).toContain("Error: late transport failure");
+    expect(container.textContent).not.toContain("Running Claude");
     expect(useAppStore.getState().sessions[0]?.status).toBe("needs_input");
   });
 
