@@ -102,9 +102,11 @@ pub fn agent_transcript_summary(
     repo_path: PathBuf,
     transcript_id: String,
 ) -> AppResult<Option<AgentTranscriptSummary>> {
-    let item = list_agent_history(repo_path, Some(DEFAULT_LIMIT))?
-        .into_iter()
-        .find(|item| item.id == transcript_id);
+    let repo = normalize_path(&repo_path);
+    if repo.as_os_str().is_empty() {
+        return Err(AppError::InvalidPath(repo_path.display().to_string()));
+    }
+    let item = find_agent_history_item_by_id(&repo, &transcript_id);
     Ok(item.and_then(|item| summarize_agent_history_item(&item)))
 }
 
@@ -305,6 +307,124 @@ fn scan_antigravity(scope: HistoryScope<'_>, limit: usize) -> Vec<AgentHistoryIt
     files.sort_by(|a, b| file_updated_at(b).cmp(&file_updated_at(a)));
     files.truncate(MAX_DISCOVERED_FILES_PER_PROVIDER);
     parse_recent_files(files, limit, |path| parse_antigravity_file(path, scope))
+}
+
+fn find_agent_history_item_by_id(repo: &Path, transcript_id: &str) -> Option<AgentHistoryItem> {
+    let scope = HistoryScope::Project(repo);
+    find_codex_history_item_by_filename_id(scope, transcript_id)
+        .or_else(|| find_claude_history_item_by_stem_id(scope, transcript_id))
+        .or_else(|| find_antigravity_history_item_by_path_id(scope, transcript_id))
+        .or_else(|| find_codex_history_item_by_parsed_id(scope, transcript_id))
+        .or_else(|| find_claude_history_item_by_parsed_id(scope, transcript_id))
+        .or_else(|| find_antigravity_history_item_by_parsed_id(scope, transcript_id))
+}
+
+fn find_codex_history_item_by_filename_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    let root = codex_sessions_root()?;
+    let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
+    find_history_item_in_files(
+        files
+            .iter()
+            .filter(|path| codex_id_from_filename(path).as_deref() == Some(transcript_id))
+            .cloned(),
+        transcript_id,
+        |path| parse_codex_file(path, scope),
+    )
+}
+
+fn find_claude_history_item_by_stem_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    let root = claude_projects_root()?;
+    let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
+    find_history_item_in_files(
+        files
+            .into_iter()
+            .filter(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(transcript_id)),
+        transcript_id,
+        |path| parse_claude_file(path, scope),
+    )
+}
+
+fn find_antigravity_history_item_by_path_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    if Uuid::parse_str(transcript_id).is_err() {
+        return None;
+    }
+    for root in antigravity_brain_roots() {
+        let path = root
+            .join(transcript_id)
+            .join(".system_generated/logs/transcript.jsonl");
+        if !path.is_file() || !is_antigravity_transcript_path(&path) {
+            continue;
+        }
+        if let Some(item) =
+            parse_antigravity_file(&path, scope).filter(|item| item.id == transcript_id)
+        {
+            return Some(item);
+        }
+    }
+    None
+}
+
+fn find_codex_history_item_by_parsed_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    let root = codex_sessions_root()?;
+    let files = collect_files(&root, |path| is_codex_transcript_path(path, &root));
+    find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
+        parse_codex_file(path, scope)
+    })
+}
+
+fn find_claude_history_item_by_parsed_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    let root = claude_projects_root()?;
+    let files = collect_files(&root, |path| is_claude_transcript_path(path, &root));
+    find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
+        parse_claude_file(path, scope)
+    })
+}
+
+fn find_antigravity_history_item_by_parsed_id(
+    scope: HistoryScope<'_>,
+    transcript_id: &str,
+) -> Option<AgentHistoryItem> {
+    for root in antigravity_brain_roots() {
+        let files = collect_files(&root, is_antigravity_transcript_path);
+        if let Some(item) =
+            find_history_item_in_files(parse_budget_files(files), transcript_id, |path| {
+                parse_antigravity_file(path, scope)
+            })
+        {
+            return Some(item);
+        }
+    }
+    None
+}
+
+fn parse_budget_files(files: Vec<PathBuf>) -> impl Iterator<Item = PathBuf> {
+    files.into_iter().take(parse_file_budget(DEFAULT_LIMIT))
+}
+
+fn find_history_item_in_files(
+    files: impl IntoIterator<Item = PathBuf>,
+    transcript_id: &str,
+    mut parse: impl FnMut(&Path) -> Option<AgentHistoryItem>,
+) -> Option<AgentHistoryItem> {
+    files
+        .into_iter()
+        .filter_map(|path| parse(&path))
+        .find(|item| item.id == transcript_id)
 }
 
 fn collect_files(root: &Path, accept: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
@@ -2412,6 +2532,142 @@ mod tests {
         );
         assert_eq!(summary.message_count, 2);
         assert_eq!(summary.token_usage.total_tokens, 32);
+    }
+
+    #[test]
+    fn transcript_summary_finds_codex_transcript_outside_default_history_limit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let codex_home = dir.path().join("codex-home");
+        let sessions_day = codex_home.join("sessions/2026/05/21");
+        fs::create_dir_all(&sessions_day).unwrap();
+        let _home_env = EnvVarGuard::set("HOME", dir.path());
+        let _codex_env = EnvVarGuard::set("CODEX_HOME", &codex_home);
+
+        fn write_codex_transcript(path: &Path, id: &str, repo: &Path, user: &str, assistant: &str) {
+            let mut file = fs::File::create(path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "payload": {
+                        "id": id,
+                        "cwd": repo.display().to_string(),
+                        "role": "user",
+                        "content": user,
+                    },
+                })
+            )
+            .unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "payload": {
+                        "role": "assistant",
+                        "content": assistant,
+                    },
+                })
+            )
+            .unwrap();
+        }
+
+        let target_id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let target = sessions_day.join(format!("rollout-2026-05-21T10-13-44-{target_id}.jsonl"));
+        write_codex_transcript(
+            &target,
+            target_id,
+            &repo,
+            "Summarize the older release transcript",
+            "Older transcript summary target",
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        for idx in 0..DEFAULT_LIMIT {
+            let id = format!("019e4818-7c15-7e60-9b3b-{idx:012x}");
+            let transcript =
+                sessions_day.join(format!("rollout-2026-05-21T10-14-{idx:02}-{id}.jsonl"));
+            write_codex_transcript(
+                &transcript,
+                &id,
+                &repo,
+                &format!("Newer transcript {idx}"),
+                "Newer response",
+            );
+        }
+
+        let listed = list_agent_history(repo.clone(), Some(DEFAULT_LIMIT)).unwrap();
+        assert_eq!(listed.len(), DEFAULT_LIMIT);
+        assert!(
+            listed.iter().all(|item| item.id != target_id),
+            "target should be outside the default visible history limit"
+        );
+
+        let summary = agent_transcript_summary(repo, target_id.to_string())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.provider, AgentHistoryProvider::Codex);
+        assert_eq!(summary.id, target_id);
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.user_messages, 1);
+        assert_eq!(summary.assistant_messages, 1);
+        assert_eq!(summary.transcript_path, target.display().to_string());
+    }
+
+    #[test]
+    fn transcript_summary_finds_codex_payload_id_when_filename_differs() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let codex_home = dir.path().join("codex-home");
+        let sessions_day = codex_home.join("sessions/2026/05/21");
+        fs::create_dir_all(&sessions_day).unwrap();
+        let _home_env = EnvVarGuard::set("HOME", dir.path());
+        let _codex_env = EnvVarGuard::set("CODEX_HOME", &codex_home);
+
+        let filename_id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let payload_id = "payload-only-session";
+        let transcript =
+            sessions_day.join(format!("rollout-2026-05-21T10-13-44-{filename_id}.jsonl"));
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "id": payload_id,
+                    "cwd": repo.display().to_string(),
+                    "role": "user",
+                    "content": "Find me by payload id",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "role": "assistant",
+                    "content": "Found by fallback",
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        let summary = agent_transcript_summary(repo, payload_id.to_string())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.provider, AgentHistoryProvider::Codex);
+        assert_eq!(summary.id, payload_id);
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.transcript_path, transcript.display().to_string());
     }
 
     #[test]
