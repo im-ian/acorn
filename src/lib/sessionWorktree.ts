@@ -6,11 +6,36 @@ export function hasRecordedWorktree(session: Session): boolean {
 }
 
 function normalizeWorkspacePath(path: string): string {
-  return path.replace(/[\\/]+$/, "");
+  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
 function sameWorkspacePath(a: string, b: string): boolean {
   return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+}
+
+export function sessionsUsingProjectWorktree(
+  sessions: readonly Session[],
+  repoPath: string,
+  worktreePath: string,
+): Session[] {
+  return sessions.filter(
+    (session) =>
+      sameWorkspacePath(session.repo_path, repoPath) &&
+      sameWorkspacePath(session.worktree_path, worktreePath),
+  );
+}
+
+export function otherSessionsUsingProjectWorktree(
+  sessions: readonly Session[],
+  repoPath: string,
+  worktreePath: string,
+  activeSessionId: string | null,
+): Session[] {
+  return sessionsUsingProjectWorktree(
+    sessions,
+    repoPath,
+    worktreePath,
+  ).filter((session) => session.id !== activeSessionId);
 }
 
 export function isSessionInWorktreeWorkspace(

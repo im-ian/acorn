@@ -48,6 +48,10 @@ import {
   buildSessionCreateRequest,
 } from "./lib/sessionCreation";
 import {
+  otherSessionsUsingProjectWorktree,
+  sessionsUsingProjectWorktree,
+} from "./lib/sessionWorktree";
+import {
   DEFAULT_PROJECT_FOLDER_NAME,
   basenamePath,
   defaultProjectFolderId,
@@ -72,6 +76,8 @@ export type { RightGroup, RightTab };
 
 const ROOT_PANE_ID: PaneId = "root";
 const SESSION_TITLE_GENERATING_MIN_MS = 900;
+const WORKTREE_IN_USE_BY_OTHER_SESSIONS =
+  "Close other sessions using this worktree before removing it.";
 
 let statusPollRunning = false;
 let statusPollChain: Promise<void> | null = null;
@@ -2449,6 +2455,28 @@ export const useAppStore = create<AppStateModel>()(
 
   async removeProjectWorktree(repoPath, worktreePath, removeSessions = false) {
     try {
+      if (removeSessions) {
+        const state = get();
+        const otherSessions = otherSessionsUsingProjectWorktree(
+          state.sessions,
+          repoPath,
+          worktreePath,
+          state.activeSessionId,
+        );
+        const targetSessions = sessionsUsingProjectWorktree(
+          state.sessions,
+          repoPath,
+          worktreePath,
+        );
+        const canRemoveSessions =
+          targetSessions.length === 0 ||
+          (targetSessions.length === 1 &&
+            targetSessions[0]?.id === state.activeSessionId);
+        if (otherSessions.length > 0 || !canRemoveSessions) {
+          set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
+          throw new Error(WORKTREE_IN_USE_BY_OTHER_SESSIONS);
+        }
+      }
       const removedWorktree = await api.removeWorktree(
         repoPath,
         worktreePath,

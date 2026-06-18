@@ -96,7 +96,7 @@ test.describe("project settings", () => {
     ]);
   });
 
-  test("confirms before deleting a worktree used by sidebar sessions", async ({
+  test("confirms before deleting a worktree used by the active sidebar session", async ({
     page,
     tauri,
   }) => {
@@ -225,5 +225,103 @@ test.describe("project settings", () => {
         removeSessions: true,
       },
     ]);
+  });
+
+  test("does not open the delete confirmation while another session uses the worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/acorn",
+        name: "acorn",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "s-alpha",
+        name: "alpha terminal",
+        repo_path: "/tmp/acorn",
+        worktree_path: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: true,
+      },
+      {
+        id: "s-alpha-other",
+        name: "alpha reviewer",
+        repo_path: "/tmp/acorn",
+        worktree_path: "/tmp/acorn/.acorn/worktrees/feature-alpha/",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        title_source: "default",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: true,
+      },
+    ]);
+    await tauri.handle("list_project_worktrees", () => [
+      {
+        name: "feature-alpha",
+        path: "/tmp/acorn/.acorn/worktrees/feature-alpha",
+        modified_ms: null,
+      },
+    ]);
+    await tauri.handle("remove_worktree", (args) => {
+      const w = window as unknown as { __removeWorktreeCalls?: unknown[] };
+      w.__removeWorktreeCalls = w.__removeWorktreeCalls ?? [];
+      w.__removeWorktreeCalls.push(args);
+      return undefined;
+    });
+
+    await page.goto("/");
+
+    await page
+      .getByRole("button", { name: "Project acorn" })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Project Settings" }).click();
+
+    const modal = page.getByRole("dialog", { name: "Project Settings" });
+    await modal.getByRole("button", { name: "Worktrees" }).click();
+
+    const alphaRow = modal.getByRole("listitem").filter({
+      hasText: "feature-alpha",
+    });
+    await expect(alphaRow).toContainText("Used by 2 sessions");
+    await expect(alphaRow).toContainText(
+      "Close other sessions using this worktree before removing it.",
+    );
+    await expect(
+      alphaRow.getByRole("button", {
+        name: "Remove feature-alpha worktree",
+      }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("dialog", { name: "Delete worktree" }),
+    ).toHaveCount(0);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeWorktreeCalls?: unknown[] })
+          .__removeWorktreeCalls ?? [],
+    )) as unknown[];
+    expect(calls).toEqual([]);
   });
 });

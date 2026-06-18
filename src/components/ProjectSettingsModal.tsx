@@ -11,6 +11,10 @@ import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
+import {
+  otherSessionsUsingProjectWorktree,
+  sessionsUsingProjectWorktree,
+} from "../lib/sessionWorktree";
 import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
@@ -77,27 +81,6 @@ function formatModifiedTime(value: number | null): string | null {
   }).format(date);
 }
 
-function normalizePath(path: string): string {
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
-  return normalized.length > 0 ? normalized : "/";
-}
-
-function samePath(left: string, right: string): boolean {
-  return normalizePath(left) === normalizePath(right);
-}
-
-function sessionsUsingWorktree(
-  sessions: readonly Session[],
-  repoPath: string,
-  worktreePath: string,
-): Session[] {
-  return sessions.filter(
-    (session) =>
-      samePath(session.repo_path, repoPath) &&
-      samePath(session.worktree_path, worktreePath),
-  );
-}
-
 interface ProjectSettingsModalProps {
   project: { name: string; repoPath: string } | null;
   initialTab?: ProjectSettingsTab;
@@ -111,6 +94,7 @@ export function ProjectSettingsModal({
 }: ProjectSettingsModalProps) {
   const t = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
   const removeProjectWorktree = useAppStore((s) => s.removeProjectWorktree);
   const [tab, setTab] = useState<ProjectSettingsTab>(initialTab);
   const [settings, setSettings] = useState<ProjectSettings>(() =>
@@ -132,20 +116,39 @@ export function ProjectSettingsModal({
 
   const confirmRemoveSessions =
     project && confirmRemove
-      ? sessionsUsingWorktree(sessions, project.repoPath, confirmRemove.path)
+      ? sessionsUsingProjectWorktree(
+          sessions,
+          project.repoPath,
+          confirmRemove.path,
+        )
       : [];
+  const confirmRemoveOtherSessions =
+    project && confirmRemove
+      ? otherSessionsUsingProjectWorktree(
+          sessions,
+          project.repoPath,
+          confirmRemove.path,
+          activeSessionId,
+        )
+      : [];
+  const canShowConfirmRemove =
+    confirmRemove !== null && confirmRemoveOtherSessions.length === 0;
 
   useDialogShortcuts(project !== null && confirmRemove === null, {
     onCancel: onClose,
     onConfirm: () => {},
   });
 
-  useDialogShortcuts(confirmRemove !== null, {
+  useDialogShortcuts(canShowConfirmRemove, {
     onCancel: () => setConfirmRemove(null),
     onConfirm: () => {
       void removeConfirmedWorktree();
     },
   });
+
+  useEffect(() => {
+    if (confirmRemoveOtherSessions.length > 0) setConfirmRemove(null);
+  }, [confirmRemoveOtherSessions.length]);
 
   useEffect(() => {
     setTab(initialTab);
@@ -253,11 +256,18 @@ export function ProjectSettingsModal({
   async function removeConfirmedWorktree() {
     if (!project || !confirmRemove || removingPath !== null) return;
     const target = confirmRemove;
-    const targetSessions = sessionsUsingWorktree(
+    const targetSessions = sessionsUsingProjectWorktree(
       sessions,
       project.repoPath,
       target.path,
     );
+    const otherSessions = targetSessions.filter(
+      (session) => session.id !== activeSessionId,
+    );
+    if (otherSessions.length > 0) {
+      setConfirmRemove(null);
+      return;
+    }
     setRemovingPath(target.path);
     setWorktreeError(null);
     try {
@@ -273,6 +283,18 @@ export function ProjectSettingsModal({
     } finally {
       setRemovingPath(null);
     }
+  }
+
+  function requestRemoveWorktree(worktree: ProjectWorktree) {
+    if (!project) return;
+    const otherSessions = otherSessionsUsingProjectWorktree(
+      sessions,
+      project.repoPath,
+      worktree.path,
+      activeSessionId,
+    );
+    if (otherSessions.length > 0) return;
+    setConfirmRemove(worktree);
   }
 
   return (
@@ -390,10 +412,11 @@ export function ProjectSettingsModal({
                     repoPath={project.repoPath}
                     worktrees={worktrees}
                     sessions={sessions}
+                    activeSessionId={activeSessionId}
                     loading={worktreesLoading}
                     removingPath={removingPath}
                     error={worktreeError}
-                    onRequestRemove={setConfirmRemove}
+                    onRequestRemove={requestRemoveWorktree}
                     t={t}
                   />
                 </ProjectSettingsGroup>
@@ -427,7 +450,7 @@ export function ProjectSettingsModal({
             </button>
           </footer>
           <RemoveWorktreeConfirmDialog
-            worktree={confirmRemove}
+            worktree={canShowConfirmRemove ? confirmRemove : null}
             sessions={confirmRemoveSessions}
             removing={removingPath === confirmRemove?.path}
             onCancel={() => setConfirmRemove(null)}
@@ -468,6 +491,7 @@ function ProjectWorktreeList({
   repoPath,
   worktrees,
   sessions,
+  activeSessionId,
   loading,
   removingPath,
   error,
@@ -477,6 +501,7 @@ function ProjectWorktreeList({
   repoPath: string;
   worktrees: ProjectWorktree[];
   sessions: Session[];
+  activeSessionId: string | null;
   loading: boolean;
   removingPath: string | null;
   error: { kind: "load" | "remove"; message: string } | null;
@@ -503,12 +528,15 @@ function ProjectWorktreeList({
           {worktrees.map((worktree) => {
             const modified = formatModifiedTime(worktree.modified_ms);
             const isRemoving = removingPath === worktree.path;
-            const usedBySessions = sessionsUsingWorktree(
+            const usedBySessions = sessionsUsingProjectWorktree(
               sessions,
               repoPath,
               worktree.path,
             );
             const sessionCount = usedBySessions.length;
+            const removeBlockedByOtherSessions = usedBySessions.some(
+              (session) => session.id !== activeSessionId,
+            );
             return (
               <li key={worktree.path} className="px-3 py-2">
                 <div className="flex items-start justify-between gap-3">
@@ -541,6 +569,14 @@ function ProjectWorktreeList({
                         )}
                       </p>
                     ) : null}
+                    {removeBlockedByOtherSessions ? (
+                      <p className="text-[11px] text-fg-muted">
+                        {dt(
+                          t,
+                          "dialogs.projectSettings.removeWorktreeBlockedByOtherSessions",
+                        )}
+                      </p>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -549,8 +585,18 @@ function ProjectWorktreeList({
                       "dialogs.projectSettings.removeWorktreeAria",
                       { name: worktree.name },
                     )}
+                    title={
+                      removeBlockedByOtherSessions
+                        ? dt(
+                            t,
+                            "dialogs.projectSettings.removeWorktreeBlockedByOtherSessions",
+                          )
+                        : undefined
+                    }
                     onClick={() => onRequestRemove(worktree)}
-                    disabled={removingPath !== null}
+                    disabled={
+                      removingPath !== null || removeBlockedByOtherSessions
+                    }
                     className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-danger disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {isRemoving ? (
