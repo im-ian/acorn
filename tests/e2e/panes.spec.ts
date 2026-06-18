@@ -38,6 +38,212 @@ test.describe("pane / sidebar shortcuts", () => {
     ).toBeVisible();
   });
 
+  test("double-clicking an empty worktree workspace pane creates a project-root session", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn-workspaces",
+        JSON.stringify({
+          state: {
+            activeProject: "/tmp/demo",
+            activeProjectFolderId: "project-folder:/tmp/demo:feature",
+            projectFolders: {
+              "/tmp/demo": [
+                {
+                  id: "/tmp/demo",
+                  repoPath: "/tmp/demo",
+                  name: "Default",
+                  cwdPath: "/tmp/demo",
+                  position: 0,
+                },
+                {
+                  id: "project-folder:/tmp/demo:feature",
+                  repoPath: "/tmp/demo",
+                  name: "Feature",
+                  cwdPath: "/tmp/demo/.acorn/worktrees/feature",
+                  position: 1,
+                },
+              ],
+            },
+            sessionFolderIds: {},
+          },
+          version: 4,
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __createdRootSession?: boolean };
+      return w.__createdRootSession
+        ? [
+            {
+              id: "created-root",
+              name: "demo",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo",
+              branch: "main",
+              isolated: false,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              last_message: null,
+              kind: "regular",
+              owner: { kind: "user" },
+              position: null,
+              in_worktree: false,
+            },
+          ]
+        : [];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createdRootSession?: boolean;
+        __createSessionCalls?: unknown[];
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      w.__createdRootSession = true;
+      return {
+        id: "created-root",
+        name: "demo",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+    });
+
+    await page.goto("/");
+    await expect(
+      page.locator("aside").getByRole("button", { name: /Feature/ }),
+    ).toBeVisible();
+
+    const emptyPane = page.getByText(/Drop a tab here or double-click/i);
+    await expect(emptyPane).toBeVisible();
+    await emptyPane.dblclick();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      repoPath: string;
+      cwdPath?: string;
+      isolated: boolean;
+    }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+    });
+    expect(calls[0].cwdPath).toBeUndefined();
+    await expect(
+      page.locator("aside").getByRole("button", { name: /^demo main · Idle/ }),
+    ).toBeVisible();
+  });
+
+  test("double-clicking a tab strip beside a worktree session creates a project-root session", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __createdRootSession?: boolean };
+      const worker = {
+        id: "worker",
+        name: "worker",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/feature",
+        branch: "feature",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: true,
+      };
+      const created = {
+        id: "created-root",
+        name: "demo",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+      return w.__createdRootSession ? [worker, created] : [worker];
+    });
+    await tauri.handle("create_session", (args) => {
+      const w = window as unknown as {
+        __createdRootSession?: boolean;
+        __createSessionCalls?: unknown[];
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(args);
+      w.__createdRootSession = true;
+      return {
+        id: "created-root",
+        name: (args as { name?: string })?.name ?? "demo",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+    });
+
+    await page.goto("/");
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /^worker worktree feature · Idle/ })
+      .click();
+
+    await page.locator('[data-pane-tab-filler="root"]').dblclick();
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __createSessionCalls?: unknown[] })
+          .__createSessionCalls,
+    )) as Array<{
+      repoPath: string;
+      cwdPath?: string;
+      isolated: boolean;
+    }>;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      repoPath: "/tmp/demo",
+      isolated: false,
+    });
+    expect(calls[0].cwdPath).toBeUndefined();
+  });
+
   // react-resizable-panels publishes the current size on `data-panel-size`
   // (string, e.g. "18.0" for the default 18%). Collapsed panels get "0.0".
   test("$mod+B collapses then re-expands the sidebar", async ({ page }) => {

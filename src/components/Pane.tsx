@@ -58,10 +58,13 @@ import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
+  defaultProjectFolderId,
+  isPathInsideOrEqual,
+} from "../lib/projectFolders";
+import {
   buildSessionCreateRequestFromScope,
   resolveProjectScopedForRepoPath,
   scopeForSession,
-  scopeWithProjectRootLaunch,
   type SessionCreateScope,
 } from "../lib/sessionCreation";
 import type { Direction, PaneId } from "../lib/layout";
@@ -74,6 +77,7 @@ import { PaneDropOverlay } from "./PaneDropOverlay";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 import type {
+  Project,
   Session,
   SessionAgentProvider,
   SessionKind,
@@ -251,15 +255,38 @@ export function Pane({ paneId }: PaneProps) {
 
   function rootScopeForTab(tab: PaneTab): SessionCreateScope {
     if (tab.kind === "session") {
-      return scopeWithProjectRootLaunch(scopeForSession(tab.session));
+      const projectScoped = tab.session.project_scoped !== false;
+      const repoPath = repoPathForSessionRootLaunch(tab.session, projects);
+      if (!projectScoped) {
+        return {
+          placement: {
+            repoPath,
+            projectScoped: false,
+          },
+          launch: { kind: "projectRoot" },
+        };
+      }
+      return {
+        placement: {
+          repoPath,
+          projectScoped,
+          projectFolderId: defaultProjectFolderId(repoPath),
+        },
+        launch: { kind: "projectRoot" },
+      };
     }
+    const repoPath = repoPathForCodeTabSession(tab, sessions);
+    const projectScoped = resolveProjectScopedForRepoPath(
+      { sessions, projects },
+      repoPath,
+    );
     return {
       placement: {
-        repoPath: tab.repoPath,
-        projectScoped: resolveProjectScopedForRepoPath(
-          { sessions, projects },
-          tab.repoPath,
-        ),
+        repoPath,
+        projectScoped,
+        ...(projectScoped
+          ? { projectFolderId: defaultProjectFolderId(repoPath) }
+          : {}),
       },
       launch: { kind: "projectRoot" },
     };
@@ -397,6 +424,20 @@ export function Pane({ paneId }: PaneProps) {
           .flat()
           .find((folder) => folder.id === state.activeProjectFolderId)
       : null;
+    const projectScoped = resolveProjectScopedForRepoPath(
+      { sessions, projects },
+      repoPath,
+    );
+    const activeFolderUsesProjectRoot =
+      activeFolder &&
+      sameWorkspacePath(activeFolder.cwdPath, activeFolder.repoPath);
+    const activeFolderIsProjectWorktree =
+      projectScoped &&
+      activeFolder &&
+      !activeFolderUsesProjectRoot;
+    const projectFolderId = activeFolderIsProjectWorktree
+      ? defaultProjectFolderId(repoPath)
+      : activeFolder?.id;
     await spawnSession(
       repoPath,
       "regular",
@@ -405,15 +446,13 @@ export function Pane({ paneId }: PaneProps) {
         : {
             placement: {
               repoPath,
-              projectScoped: resolveProjectScopedForRepoPath(
-                { sessions, projects },
-                repoPath,
-              ),
-              projectFolderId: activeFolder?.id,
+              projectScoped,
+              projectFolderId,
             },
-            launch: activeFolder
-              ? { kind: "workspaceCwd", cwdPath: activeFolder.cwdPath }
-              : { kind: "projectRoot" },
+            launch:
+              activeFolder && !activeFolderIsProjectWorktree
+                ? { kind: "workspaceCwd", cwdPath: activeFolder.cwdPath }
+                : { kind: "projectRoot" },
           },
     );
   }
@@ -631,6 +670,60 @@ function isNonTerminalTextEditingTarget(target: EventTarget | null): boolean {
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return target.isContentEditable;
+}
+
+function normalizeWorkspacePath(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function sameWorkspacePath(a: string, b: string): boolean {
+  return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+}
+
+function repoPathForSessionRootLaunch(
+  session: Session,
+  projects: readonly Project[],
+): string {
+  if (session.project_scoped === false) return session.repo_path;
+  const state = useAppStore.getState();
+  const workspaceFolder = Object.values(state.projectFolders)
+    .flat()
+    .find(
+      (folder) =>
+        !sameWorkspacePath(folder.cwdPath, folder.repoPath) &&
+        sameWorkspacePath(folder.cwdPath, session.worktree_path),
+    );
+  if (workspaceFolder) return workspaceFolder.repoPath;
+
+  const containingProject = [...projects]
+    .filter((project) =>
+      isPathInsideOrEqual(session.worktree_path, project.repo_path),
+    )
+    .sort(
+      (a, b) =>
+        normalizeWorkspacePath(b.repo_path).length -
+        normalizeWorkspacePath(a.repo_path).length,
+    )[0];
+  return containingProject?.repo_path ?? session.repo_path;
+}
+
+function repoPathForCodeTabSession(
+  tab: CodeWorkspaceTab,
+  sessions: readonly Session[],
+): string {
+  const exactSession = sessions.find((session) =>
+    sameWorkspacePath(session.worktree_path, tab.repoPath),
+  );
+  if (exactSession) return exactSession.repo_path;
+
+  const containingSession = [...sessions]
+    .filter((session) => isPathInsideOrEqual(tab.path, session.worktree_path))
+    .sort(
+      (a, b) =>
+        normalizeWorkspacePath(b.worktree_path).length -
+        normalizeWorkspacePath(a.worktree_path).length,
+    )[0];
+  return containingSession?.repo_path ?? tab.repoPath;
 }
 
 function isTabStripMouseDownTarget(target: EventTarget | null): boolean {
