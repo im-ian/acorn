@@ -363,6 +363,113 @@ test.describe("session lifecycle", () => {
     expect(calls[0]).toEqual({ id: "s-1", removeWorktree: true });
   });
 
+  test("standalone isolated worktree prompt can enable future auto-delete", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          sessions: {
+            confirmRemove: true,
+            confirmDeleteIsolatedWorktrees: true,
+            showRestartPromptOnExit: true,
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as { __sessionRemoved?: boolean };
+      return w.__sessionRemoved
+        ? []
+        : [
+            {
+              id: "s-1",
+              name: "alpha",
+              repo_path: "/tmp/demo",
+              worktree_path: "/tmp/demo/.acorn/worktrees/alpha",
+              branch: "main",
+              isolated: true,
+              in_worktree: true,
+              status: "idle",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:05Z",
+              last_message: null,
+            },
+          ];
+    });
+    await tauri.handle("remove_session", (args) => {
+      const w = window as unknown as {
+        __removeCalls?: unknown[];
+        __sessionRemoved?: boolean;
+      };
+      w.__removeCalls = w.__removeCalls ?? [];
+      w.__removeCalls.push(args);
+      w.__sessionRemoved = true;
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator('[data-panel-id="sidebar"]');
+    const row = sidebar
+      .getByRole("button", { name: /^alpha worktree main · Idle/ })
+      .first();
+    await expect(row).toBeVisible();
+
+    await row.hover();
+    await sidebar
+      .getByRole("button", { name: "Remove session", exact: true })
+      .click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("heading", { name: "Remove session" }),
+    ).toBeVisible();
+
+    const remember = dialog.getByRole("checkbox", {
+      name: "Delete standalone isolated worktrees without asking next time",
+    });
+    await expect(remember).not.toBeChecked();
+    await remember.check();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __removeCalls?: unknown[] }).__removeCalls
+              ?.length ?? 0,
+        ),
+      )
+      .toBe(0);
+
+    await dialog
+      .getByRole("button", { name: "Remove + delete worktree" })
+      .click();
+
+    await expect(
+      sidebar.getByRole("button", { name: /^alpha worktree main · Idle/ }),
+    ).toHaveCount(0);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __removeCalls?: unknown[] }).__removeCalls,
+    )) as Array<{ id: string; removeWorktree: boolean }>;
+    expect(calls).toEqual([{ id: "s-1", removeWorktree: true }]);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw
+            ? JSON.parse(raw).sessions?.confirmDeleteIsolatedWorktrees
+            : null;
+        }),
+      )
+      .toBe(false);
+  });
+
   test("shared worktree workspace session removal skips the confirmation", async ({
     page,
     tauri,

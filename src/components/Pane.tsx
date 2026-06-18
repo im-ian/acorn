@@ -273,27 +273,16 @@ export function Pane({ paneId }: PaneProps) {
 
   function rootScopeForTab(tab: PaneTab): SessionCreateScope {
     if (tab.kind === "session") {
-      const projectScoped = tab.session.project_scoped !== false;
-      const repoPath = repoPathForSessionRootLaunch(tab.session, projects);
-      if (!projectScoped) {
-        return {
-          placement: {
-            repoPath,
-            projectScoped: false,
-          },
-          launch: { kind: "projectRoot" },
-        };
-      }
-      return {
-        placement: {
-          repoPath,
-          projectScoped,
-          projectFolderId: defaultProjectFolderId(repoPath),
-        },
-        launch: { kind: "projectRoot" },
-      };
+      return projectRootScopeForSession(tab.session, projects);
     }
-    const repoPath = repoPathForCodeTabSession(tab, sessions);
+    if (tab.kind === "work-summary" && tab.sessionId) {
+      const session = sessionsById.get(tab.sessionId);
+      if (session) return projectRootScopeForSession(session, projects);
+    }
+    const repoPath =
+      tab.kind === "code"
+        ? repoPathForCodeTabSession(tab, sessions)
+        : tab.repoPath;
     const projectScoped = resolveProjectScopedForRepoPath(
       { sessions, projects },
       repoPath,
@@ -709,6 +698,31 @@ function normalizeWorkspacePath(path: string): string {
 
 function sameWorkspacePath(a: string, b: string): boolean {
   return normalizeWorkspacePath(a) === normalizeWorkspacePath(b);
+}
+
+function projectRootScopeForSession(
+  session: Session,
+  projects: readonly Project[],
+): SessionCreateScope {
+  const projectScoped = session.project_scoped !== false;
+  const repoPath = repoPathForSessionRootLaunch(session, projects);
+  if (!projectScoped) {
+    return {
+      placement: {
+        repoPath,
+        projectScoped: false,
+      },
+      launch: { kind: "projectRoot" },
+    };
+  }
+  return {
+    placement: {
+      repoPath,
+      projectScoped,
+      projectFolderId: defaultProjectFolderId(repoPath),
+    },
+    launch: { kind: "projectRoot" },
+  };
 }
 
 function repoPathForSessionRootLaunch(
