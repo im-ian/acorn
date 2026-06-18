@@ -1260,6 +1260,32 @@ describe("removeSession", () => {
     expect(s.activeSessionId).toBe("a1");
   });
 
+  it("refuses to delete a worktree while another session still uses it", async () => {
+    const worktreePath = `${REPO_A}/.worktrees/shared`;
+    const a1 = session("a1", REPO_A, {
+      isolated: true,
+      worktree_path: worktreePath,
+    });
+    const a2 = session("a2", REPO_A, {
+      repo_path: REPO_B,
+      isolated: true,
+      worktree_path: `${worktreePath}/`,
+    });
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], [a1, a2]);
+
+    const removed = await useAppStore.getState().removeSession("a1", true);
+
+    expect(removed).toBeNull();
+    expect(mockApi.removeSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual([
+      "a1",
+      "a2",
+    ]);
+    expect(useAppStore.getState().error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
+
   it("collapses an empty split pane before the backend worktree delete finishes", async () => {
     const a1 = session("a1", REPO_A);
     const a2 = session("a2", REPO_A);
@@ -2246,6 +2272,64 @@ describe("removeProjectWorktree", () => {
       "b1",
       "b2",
     ]);
+    expect(state.error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
+
+  it("refuses to delete a worktree while another project session uses the same path", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo, project(REPO_A, 1)],
+      [
+        session("b1", REPO_B, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+        }),
+        session("a1", REPO_A, {
+          worktree_path: `${worktreePath}/`,
+          in_worktree: true,
+        }),
+      ],
+    );
+    useAppStore.getState().selectSession("b1");
+
+    await expect(
+      useAppStore.getState().removeProjectWorktree(REPO_B, worktreePath, true),
+    ).rejects.toThrow("Close other sessions using this worktree");
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+    expect(state.sessions.map((candidate) => candidate.id)).toEqual([
+      "b1",
+      "a1",
+    ]);
+    expect(state.error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
+
+  it("refuses to delete a worktree path used only by another project session", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo, project(REPO_A, 1)],
+      [
+        session("a1", REPO_A, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+        }),
+      ],
+    );
+
+    await expect(
+      useAppStore.getState().removeProjectWorktree(REPO_B, worktreePath, false),
+    ).rejects.toThrow("Close other sessions using this worktree");
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+    expect(state.sessions.map((candidate) => candidate.id)).toEqual(["a1"]);
     expect(state.error).toBe(
       "Close other sessions using this worktree before removing it.",
     );

@@ -315,12 +315,12 @@ function App() {
     pendingRemove !== null && hasRecordedWorktree(pendingRemove);
   const pendingRemoveCanDeleteWorktree =
     pendingRemove !== null &&
-    canDeleteSessionWorktree(pendingRemove, projectFolders);
+    canDeleteSessionWorktree(pendingRemove, projectFolders, sessions);
   const pendingRemoveKeepsSharedWorktree =
     pendingRemoveRecordedWorktree && !pendingRemoveCanDeleteWorktree;
   const pendingRemoveAutoDeletesWorktree =
     pendingRemove !== null &&
-    shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders);
+    shouldAutoDeleteSessionWorktree(pendingRemove, projectFolders, sessions);
   const [runningCloseWarningConfirmedId, setRunningCloseWarningConfirmedId] =
     useState<string | null>(null);
   const pendingRemoveNeedsRunningWarning =
@@ -1126,6 +1126,7 @@ function App() {
     const canDeleteWorktree = canDeleteSessionWorktree(
       pendingRemove,
       projectFolders,
+      sessions,
     );
     if (recordedWorktree && !canDeleteWorktree) {
       clearPendingRemove();
@@ -1140,6 +1141,7 @@ function App() {
     const autoDeleteWorktree = shouldAutoDeleteSessionWorktree(
       pendingRemove,
       projectFolders,
+      sessions,
     );
     if (autoDeleteWorktree && deleteIsolatedWorktreesWithoutPrompt) {
       clearPendingRemove();
@@ -1171,6 +1173,7 @@ function App() {
     confirmRemoveSession,
     projectFolders,
     removeSession,
+    sessions,
     showStoreOperationToast,
   ]);
 

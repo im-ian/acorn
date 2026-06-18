@@ -48,8 +48,9 @@ import {
   buildSessionCreateRequest,
 } from "./lib/sessionCreation";
 import {
-  otherSessionsUsingProjectWorktree,
+  otherSessionsUsingWorktreePath,
   sessionsUsingProjectWorktree,
+  sessionsUsingWorktreePath,
 } from "./lib/sessionWorktree";
 import {
   DEFAULT_PROJECT_FOLDER_NAME,
@@ -2301,6 +2302,21 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async removeSession(id, removeWorktree = false) {
+    if (removeWorktree) {
+      const state = get();
+      const target = state.sessions.find((session) => session.id === id);
+      if (target) {
+        const otherSessions = otherSessionsUsingWorktreePath(
+          state.sessions,
+          target.worktree_path,
+          target.id,
+        );
+        if (otherSessions.length > 0) {
+          set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
+          return null;
+        }
+      }
+    }
     const owning = findTabOwner(get(), id);
     sessionPlacementById.delete(id);
     set((s) => {
@@ -2534,27 +2550,32 @@ export const useAppStore = create<AppStateModel>()(
 
   async removeProjectWorktree(repoPath, worktreePath, removeSessions = false) {
     try {
-      if (removeSessions) {
-        const state = get();
-        const otherSessions = otherSessionsUsingProjectWorktree(
-          state.sessions,
-          repoPath,
-          worktreePath,
-          state.activeSessionId,
-        );
-        const targetSessions = sessionsUsingProjectWorktree(
-          state.sessions,
-          repoPath,
-          worktreePath,
-        );
-        const canRemoveSessions =
-          targetSessions.length === 0 ||
-          (targetSessions.length === 1 &&
-            targetSessions[0]?.id === state.activeSessionId);
-        if (otherSessions.length > 0 || !canRemoveSessions) {
-          set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
-          throw new Error(WORKTREE_IN_USE_BY_OTHER_SESSIONS);
-        }
+      const state = get();
+      const targetSessions = sessionsUsingProjectWorktree(
+        state.sessions,
+        repoPath,
+        worktreePath,
+      );
+      const targetSessionIds = new Set(
+        targetSessions.map((session) => session.id),
+      );
+      const sessionsOutsideProject = sessionsUsingWorktreePath(
+        state.sessions,
+        worktreePath,
+      ).filter((session) => !targetSessionIds.has(session.id));
+      const canRemoveSessions =
+        targetSessions.length === 0 ||
+        (targetSessions.length === 1 &&
+          targetSessions[0]?.id === state.activeSessionId);
+      const removingRequiredSessions =
+        targetSessions.length === 0 || removeSessions;
+      if (
+        sessionsOutsideProject.length > 0 ||
+        !canRemoveSessions ||
+        !removingRequiredSessions
+      ) {
+        set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
+        throw new Error(WORKTREE_IN_USE_BY_OTHER_SESSIONS);
       }
       const removedWorktree = await api.removeWorktree(
         repoPath,

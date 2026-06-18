@@ -25,6 +25,15 @@ export function sessionsUsingProjectWorktree(
   );
 }
 
+export function sessionsUsingWorktreePath(
+  sessions: readonly Session[],
+  worktreePath: string,
+): Session[] {
+  return sessions.filter((session) =>
+    sameWorkspacePath(session.worktree_path, worktreePath),
+  );
+}
+
 export function otherSessionsUsingProjectWorktree(
   sessions: readonly Session[],
   repoPath: string,
@@ -36,6 +45,16 @@ export function otherSessionsUsingProjectWorktree(
     repoPath,
     worktreePath,
   ).filter((session) => session.id !== activeSessionId);
+}
+
+export function otherSessionsUsingWorktreePath(
+  sessions: readonly Session[],
+  worktreePath: string,
+  activeSessionId: string | null,
+): Session[] {
+  return sessionsUsingWorktreePath(sessions, worktreePath).filter(
+    (session) => session.id !== activeSessionId,
+  );
 }
 
 export function isSessionInWorktreeWorkspace(
@@ -52,16 +71,25 @@ export function isSessionInWorktreeWorkspace(
 export function canDeleteSessionWorktree(
   session: Session,
   foldersByRepo: ProjectFoldersByRepo,
+  sessions: readonly Session[] = [session],
 ): boolean {
   return (
     hasRecordedWorktree(session) &&
-    !isSessionInWorktreeWorkspace(session, foldersByRepo)
+    !isSessionInWorktreeWorkspace(session, foldersByRepo) &&
+    otherSessionsUsingWorktreePath(
+      sessions,
+      session.worktree_path,
+      session.id,
+    ).length === 0
   );
 }
 
 export function shouldAutoDeleteSessionWorktree(
   session: Session,
   foldersByRepo: ProjectFoldersByRepo,
+  sessions: readonly Session[] = [session],
 ): boolean {
-  return session.isolated && canDeleteSessionWorktree(session, foldersByRepo);
+  return (
+    session.isolated && canDeleteSessionWorktree(session, foldersByRepo, sessions)
+  );
 }
