@@ -1260,6 +1260,32 @@ describe("removeSession", () => {
     expect(s.activeSessionId).toBe("a1");
   });
 
+  it("refuses to delete a worktree while another session still uses it", async () => {
+    const worktreePath = `${REPO_A}/.worktrees/shared`;
+    const a1 = session("a1", REPO_A, {
+      isolated: true,
+      worktree_path: worktreePath,
+    });
+    const a2 = session("a2", REPO_A, {
+      repo_path: REPO_B,
+      isolated: true,
+      worktree_path: `${worktreePath}/`,
+    });
+    await seed([project(REPO_A, 0), project(REPO_B, 1)], [a1, a2]);
+
+    const removed = await useAppStore.getState().removeSession("a1", true);
+
+    expect(removed).toBeNull();
+    expect(mockApi.removeSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual([
+      "a1",
+      "a2",
+    ]);
+    expect(useAppStore.getState().error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
+
   it("collapses an empty split pane before the backend worktree delete finishes", async () => {
     const a1 = session("a1", REPO_A);
     const a2 = session("a2", REPO_A);

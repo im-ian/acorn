@@ -48,6 +48,7 @@ import {
   buildSessionCreateRequest,
 } from "./lib/sessionCreation";
 import {
+  otherSessionsUsingWorktreePath,
   otherSessionsUsingProjectWorktree,
   sessionsUsingProjectWorktree,
 } from "./lib/sessionWorktree";
@@ -2301,6 +2302,21 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async removeSession(id, removeWorktree = false) {
+    if (removeWorktree) {
+      const state = get();
+      const target = state.sessions.find((session) => session.id === id);
+      if (target) {
+        const otherSessions = otherSessionsUsingWorktreePath(
+          state.sessions,
+          target.worktree_path,
+          target.id,
+        );
+        if (otherSessions.length > 0) {
+          set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
+          return null;
+        }
+      }
+    }
     const owning = findTabOwner(get(), id);
     sessionPlacementById.delete(id);
     set((s) => {
