@@ -1475,6 +1475,10 @@ pub fn resolve_commit_logins(
     let Some(slug) = github_owner_repo(repo_path)? else {
         return Ok(HashMap::new());
     };
+    let (owner, name) = validate_github_slug(&slug)?;
+    for sha in &shas {
+        validate_commit_oid(sha)?;
+    }
 
     let cache = commit_login_cache();
     let mut result: HashMap<String, Option<String>> = HashMap::new();
@@ -1496,29 +1500,23 @@ pub fn resolve_commit_logins(
         return Ok(result);
     }
 
-    let (owner, name) = slug
-        .split_once('/')
-        .ok_or_else(|| AppError::Other(format!("invalid slug: {slug}")))?;
-    let mut query = String::from("query{repository(owner:\"");
-    query.push_str(owner);
-    query.push_str("\",name:\"");
-    query.push_str(name);
-    query.push_str("\"){");
-    for (i, sha) in needed.iter().enumerate() {
-        query.push_str(&format!(
-            "c{i}:object(oid:\"{sha}\"){{...on Commit{{author{{user{{login}}}}}}}}",
-        ));
-    }
-    query.push_str("}}");
+    let query = build_commit_login_query(needed.len());
 
     match try_with_account(repo_path, &slug, |token| {
         let output = cli_resolver::run("gh", |cmd| {
-            cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
-                "api",
-                "graphql",
-                "-f",
-                &format!("query={query}"),
-            ]);
+            cmd.env("GH_TOKEN", token)
+                .env("GH_HOST", GH_HOST)
+                .arg("api")
+                .arg("graphql")
+                .arg("-f")
+                .arg(format!("query={query}"))
+                .arg("-f")
+                .arg(format!("owner={owner}"))
+                .arg("-f")
+                .arg(format!("name={name}"));
+            for (i, sha) in needed.iter().enumerate() {
+                cmd.arg("-f").arg(format!("oid{i}={sha}"));
+            }
         })?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1555,6 +1553,49 @@ pub fn resolve_commit_logins(
         }
         AccountOutcome::NoAccess { .. } => Ok(result),
     }
+}
+
+fn validate_github_slug(slug: &str) -> AppResult<(&str, &str)> {
+    let (owner, name) = slug
+        .split_once('/')
+        .ok_or_else(|| AppError::Other(format!("invalid GitHub slug: {slug}")))?;
+    if owner.is_empty()
+        || name.is_empty()
+        || owner.contains('/')
+        || name.contains('/')
+        || !owner.bytes().all(is_github_slug_part_byte)
+        || !name.bytes().all(is_github_slug_part_byte)
+    {
+        return Err(AppError::Other(format!("invalid GitHub slug: {slug}")));
+    }
+    Ok((owner, name))
+}
+
+fn is_github_slug_part_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+}
+
+fn validate_commit_oid(oid: &str) -> AppResult<()> {
+    if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!("invalid commit oid: {oid}")))
+    }
+}
+
+fn build_commit_login_query(count: usize) -> String {
+    let mut query = String::from("query($owner:String!,$name:String!");
+    for i in 0..count {
+        query.push_str(&format!(",$oid{i}:GitObjectID!"));
+    }
+    query.push_str("){repository(owner:$owner,name:$name){");
+    for i in 0..count {
+        query.push_str(&format!(
+            "c{i}:object(oid:$oid{i}){{...on Commit{{author{{user{{login}}}}}}}}",
+        ));
+    }
+    query.push_str("}}");
+    query
 }
 
 fn commit_login_cache() -> &'static Mutex<HashMap<(String, String), Option<String>>> {
@@ -2599,6 +2640,37 @@ mod tests {
             normalize_github_timestamp(Some("2026-05-27T02:42:28Z".to_string())),
             Some("2026-05-27T02:42:28Z".to_string())
         );
+    }
+
+    #[test]
+    fn commit_login_query_uses_graphql_variables() {
+        let query = build_commit_login_query(2);
+
+        assert!(query.contains("$owner:String!"));
+        assert!(query.contains("$name:String!"));
+        assert!(query.contains("$oid0:GitObjectID!"));
+        assert!(query.contains("repository(owner:$owner,name:$name)"));
+        assert!(query.contains("c0:object(oid:$oid0)"));
+        assert!(query.contains("c1:object(oid:$oid1)"));
+        assert!(!query.contains("acme"));
+        assert!(!query.contains("0123456789abcdef0123456789abcdef01234567"));
+    }
+
+    #[test]
+    fn commit_login_input_validation_rejects_graphql_fragments() {
+        assert_eq!(
+            validate_github_slug("acme/widgets").unwrap(),
+            ("acme", "widgets")
+        );
+        assert!(validate_github_slug("acme/widgets.rs").is_ok());
+        assert!(validate_github_slug("acme\"/widgets").is_err());
+        assert!(validate_github_slug("acme/widgets\") { viewer { login } }").is_err());
+        assert!(validate_github_slug("acme/widgets\nnext").is_err());
+
+        assert!(validate_commit_oid("0123456789abcdef0123456789ABCDEF01234567").is_ok());
+        assert!(validate_commit_oid("0123456789abcdef0123456789abcdef0123456").is_err());
+        assert!(validate_commit_oid("0123456789abcdef0123456789abcdef0123456\"").is_err());
+        assert!(validate_commit_oid("0123456789abcdef0123456789abcdef0123456g").is_err());
     }
 
     #[test]
