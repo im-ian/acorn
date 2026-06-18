@@ -596,6 +596,8 @@ pub fn run() {
             commands::ipc_list_workspaces_response,
             commands::list_system_fonts,
             commands::list_agent_history,
+            commands::agent_transcript_summary,
+            commands::agent_transcript_summary_at_path,
             commands::list_unscoped_agent_history,
             commands::trash_agent_history_transcript,
             commands::get_claude_resume_candidate,

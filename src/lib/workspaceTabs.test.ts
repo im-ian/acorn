@@ -7,6 +7,7 @@ import {
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
   makeSessionWorkspaceTab,
+  makeWorkSummaryWorkspaceTab,
 } from "./workspaceTabs";
 
 afterEach(() => {
@@ -24,6 +25,12 @@ describe("workspace tab identity", () => {
     expect(isSessionTabId("code-viewer:abc")).toBe(false);
     expect(isWorkspaceTabId("code-viewer:abc")).toBe(true);
     expect(activeSessionIdFromTabId("code-viewer:abc")).toBeNull();
+  });
+
+  it("treats work-summary ids as frontend-owned workspace tab ids", () => {
+    expect(isSessionTabId("work-summary:abc")).toBe(false);
+    expect(isWorkspaceTabId("work-summary:abc")).toBe(true);
+    expect(activeSessionIdFromTabId("work-summary:abc")).toBeNull();
   });
 });
 
@@ -83,5 +90,29 @@ describe("workspace tab lifecycle", () => {
       column: 7,
       token: "00000000-0000-4000-8000-000000000002",
     });
+  });
+
+  it("creates work summary tabs scoped to a session worktree", () => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(
+      "00000000-0000-4000-8000-000000000003",
+    );
+
+    const tab = makeWorkSummaryWorkspaceTab({
+      repoPath: "/repo",
+      cwdPath: "/repo/.worktrees/feature",
+      sessionId: "s1",
+      title: "s1 summary",
+    });
+
+    expect(tab).toMatchObject({
+      id: "work-summary:00000000-0000-4000-8000-000000000003",
+      kind: "work-summary",
+      lifecycle: "ephemeral",
+      repoPath: "/repo",
+      cwdPath: "/repo/.worktrees/feature",
+      sessionId: "s1",
+      title: "s1 summary",
+    });
+    expect(isRestorableWorkspaceTab(tab)).toBe(false);
   });
 });

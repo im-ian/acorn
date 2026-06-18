@@ -130,6 +130,12 @@ export const tauriMockSource = `
     if (cmd === 'load_chat_session_state') {
       return Promise.resolve(chatState(args?.sessionId, null, []));
     }
+    if (cmd === 'agent_transcript_summary') {
+      return Promise.resolve(null);
+    }
+    if (cmd === 'agent_transcript_summary_at_path') {
+      return Promise.resolve(null);
+    }
     if (cmd === 'save_chat_session_state') {
       return Promise.resolve(args?.chatState || null);
     }
@@ -315,6 +321,7 @@ export const tauriMockSource = `
     if (cmd === 'fs_open_default') return Promise.resolve(undefined);
     if (cmd === 'fs_shell_editor') return Promise.resolve('');
     if (cmd === 'fs_git_status') return Promise.resolve({ statuses: {}, huge: false, limit: 10000 });
+    if (cmd === 'fs_git_diff_stats') return Promise.resolve({});
     if (cmd === 'fs_git_branch') return Promise.resolve('');
     if (cmd === 'fs_file_exists') return Promise.resolve(false);
     if (cmd === 'fs_grant_external_file') return Promise.resolve(undefined);
