@@ -2182,6 +2182,39 @@ describe("removeProjectWorktree", () => {
     ).toBe(false);
     expect(state.workspaces[folder!.id]).toBeUndefined();
   });
+
+  it("refuses to delete a worktree while another session uses it", async () => {
+    const worktreePath = `${REPO_B}/.acorn/worktrees/feature-alpha`;
+    const repo = project(REPO_B, 0);
+    await seed(
+      [repo],
+      [
+        session("b1", REPO_B, {
+          worktree_path: worktreePath,
+          in_worktree: true,
+        }),
+        session("b2", REPO_B, {
+          worktree_path: `${worktreePath}/`,
+          in_worktree: true,
+        }),
+      ],
+    );
+    useAppStore.getState().selectSession("b1");
+
+    await expect(
+      useAppStore.getState().removeProjectWorktree(REPO_B, worktreePath, true),
+    ).rejects.toThrow("Close other sessions using this worktree");
+
+    const state = useAppStore.getState();
+    expect(mockApi.removeWorktree).not.toHaveBeenCalled();
+    expect(state.sessions.map((candidate) => candidate.id)).toEqual([
+      "b1",
+      "b2",
+    ]);
+    expect(state.error).toBe(
+      "Close other sessions using this worktree before removing it.",
+    );
+  });
 });
 
 describe("requestRemoveProject", () => {

@@ -4,6 +4,8 @@ import {
   canDeleteSessionWorktree,
   hasRecordedWorktree,
   isSessionInWorktreeWorkspace,
+  otherSessionsUsingProjectWorktree,
+  sessionsUsingProjectWorktree,
   shouldAutoDeleteSessionWorktree,
 } from "./sessionWorktree";
 
@@ -94,5 +96,67 @@ describe("worktree deletion policy", () => {
 
     expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
     expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
+  });
+});
+
+describe("sessionsUsingProjectWorktree", () => {
+  it("matches sessions by repo and normalized worktree path", () => {
+    const sessions = [
+      session({
+        id: "active",
+        worktree_path: "/repo/.acorn/worktrees/feature",
+      }),
+      session({
+        id: "trailing",
+        worktree_path: "/repo/.acorn/worktrees/feature/",
+      }),
+      session({
+        id: "other-repo",
+        repo_path: "/other",
+        worktree_path: "/repo/.acorn/worktrees/feature",
+      }),
+      session({
+        id: "windows",
+        repo_path: "C:\\repo",
+        worktree_path: "C:\\repo\\.acorn\\worktrees\\feature",
+      }),
+    ];
+
+    expect(
+      sessionsUsingProjectWorktree(
+        sessions,
+        "/repo",
+        "/repo/.acorn/worktrees/feature/",
+      ).map((candidate) => candidate.id),
+    ).toEqual(["active", "trailing"]);
+    expect(
+      sessionsUsingProjectWorktree(
+        sessions,
+        "C:/repo",
+        "C:/repo/.acorn/worktrees/feature/",
+      ).map((candidate) => candidate.id),
+    ).toEqual(["windows"]);
+  });
+
+  it("reports only non-active sessions as other users", () => {
+    const sessions = [
+      session({
+        id: "active",
+        worktree_path: "/repo/.acorn/worktrees/feature",
+      }),
+      session({
+        id: "other",
+        worktree_path: "/repo/.acorn/worktrees/feature",
+      }),
+    ];
+
+    expect(
+      otherSessionsUsingProjectWorktree(
+        sessions,
+        "/repo",
+        "/repo/.acorn/worktrees/feature",
+        "active",
+      ).map((candidate) => candidate.id),
+    ).toEqual(["other"]);
   });
 });
