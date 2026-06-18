@@ -1381,6 +1381,7 @@
       "usedBySessions": "{count}개 세션에서 사용 중",
       "removeWorktree": "제거",
       "removeWorktreeAria": "{name} 워크트리 제거",
+      "removeWorktreeBlockedByOtherSessions": "이 워크트리를 사용하는 다른 세션을 모두 닫은 뒤 제거할 수 있습니다.",
       "confirmRemoveDialog": "워크트리 삭제",
       "confirmRemoveTitle": "{name} 삭제",
       "confirmRemoveBody": "연결된 Git 워크트리 디렉터리를 디스크에서 제거합니다. 이 워크트리를 사용하는 세션은 메인 프로젝트에서 다시 열어야 할 수 있습니다.",
