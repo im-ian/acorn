@@ -176,44 +176,85 @@ export async function highlightCode(
 }
 
 /**
- * Highlight a parsed diff. Splits into the new-side (ctx + add) and old-side
- * (ctx + del) virtual files so the lexer keeps coherent state per side, then
- * maps tokens back to the original line order.
- *
- * Returns one entry per input line. `null` means render plain text (hunk/meta
- * headers, or unsupported languages).
+ * Highlight a parsed diff. Each hunk is tokenized independently because
+ * unified diffs omit unchanged ranges between hunks, so lexer state cannot
+ * safely cross hunk boundaries.
  */
 export async function highlightDiff(
   lines: ParsedLine[],
   lang: BundledLanguage,
   mode: ThemeMode = "dark",
 ): Promise<(string | null)[]> {
-  const newLines: string[] = [];
-  const oldLines: string[] = [];
-  const map: ({ side: "new" | "old"; idx: number } | null)[] = lines.map((l) => {
-    if (l.kind === "add") {
-      newLines.push(l.text);
-      return { side: "new", idx: newLines.length - 1 };
-    }
-    if (l.kind === "del") {
-      oldLines.push(l.text);
-      return { side: "old", idx: oldLines.length - 1 };
-    }
-    if (l.kind === "ctx") {
-      newLines.push(l.text);
-      oldLines.push(l.text);
-      return { side: "new", idx: newLines.length - 1 };
-    }
-    return null;
-  });
+  const html: (string | null)[] = new Array(lines.length).fill(null);
+  const segments: DiffHighlightSegment[] = [];
+  let segment = createDiffHighlightSegment();
 
-  const [newHtml, oldHtml] = await Promise.all([
-    renderLines(newLines, lang, mode),
-    renderLines(oldLines, lang, mode),
-  ]);
+  const flush = () => {
+    if (segment.refs.length > 0) segments.push(segment);
+    segment = createDiffHighlightSegment();
+  };
 
-  return map.map((m) => {
-    if (!m) return null;
-    return (m.side === "new" ? newHtml[m.idx] : oldHtml[m.idx]) ?? null;
+  lines.forEach((line, lineIndex) => {
+    if (line.kind === "hunk" || line.kind === "meta") {
+      flush();
+      return;
+    }
+    if (line.kind === "add") {
+      segment.newLines.push(line.text);
+      segment.refs.push({
+        lineIndex,
+        side: "new",
+        sourceIndex: segment.newLines.length - 1,
+      });
+      return;
+    }
+    if (line.kind === "del") {
+      segment.oldLines.push(line.text);
+      segment.refs.push({
+        lineIndex,
+        side: "old",
+        sourceIndex: segment.oldLines.length - 1,
+      });
+      return;
+    }
+    segment.newLines.push(line.text);
+    segment.oldLines.push(line.text);
+    segment.refs.push({
+      lineIndex,
+      side: "new",
+      sourceIndex: segment.newLines.length - 1,
+    });
   });
+  flush();
+
+  await Promise.all(
+    segments.map(async (part) => {
+      const [newHtml, oldHtml] = await Promise.all([
+        renderLines(part.newLines, lang, mode),
+        renderLines(part.oldLines, lang, mode),
+      ]);
+      for (const ref of part.refs) {
+        const rendered = ref.side === "new" ? newHtml : oldHtml;
+        html[ref.lineIndex] = rendered[ref.sourceIndex] ?? null;
+      }
+    }),
+  );
+
+  return html;
+}
+
+interface DiffHighlightSegment {
+  newLines: string[];
+  oldLines: string[];
+  refs: DiffHighlightRef[];
+}
+
+interface DiffHighlightRef {
+  lineIndex: number;
+  side: "new" | "old";
+  sourceIndex: number;
+}
+
+function createDiffHighlightSegment(): DiffHighlightSegment {
+  return { newLines: [], oldLines: [], refs: [] };
 }
