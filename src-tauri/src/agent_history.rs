@@ -108,6 +108,29 @@ pub fn agent_transcript_summary(
     Ok(item.and_then(|item| summarize_agent_history_item(&item)))
 }
 
+pub fn agent_transcript_summary_at_path(
+    repo_path: PathBuf,
+    provider: AgentHistoryProvider,
+    id: String,
+    transcript_path: PathBuf,
+) -> AppResult<Option<AgentTranscriptSummary>> {
+    let repo = normalize_path(&repo_path);
+    if repo.as_os_str().is_empty() {
+        return Err(AppError::InvalidPath(repo_path.display().to_string()));
+    }
+    let path = canonical_agent_transcript_path(transcript_path)?;
+    validate_agent_transcript_identity(&provider, &id, &path)?;
+    let scope = HistoryScope::Project(&repo);
+    let item = match provider {
+        AgentHistoryProvider::Codex => parse_codex_file(&path, scope),
+        AgentHistoryProvider::Claude => parse_claude_file(&path, scope),
+        AgentHistoryProvider::Antigravity => parse_antigravity_file(&path, scope),
+    };
+    Ok(item
+        .filter(|item| item.id == id)
+        .and_then(|item| summarize_agent_history_item(&item)))
+}
+
 pub fn list_unscoped_agent_history(
     project_paths: Vec<PathBuf>,
     limit: Option<usize>,
@@ -136,6 +159,13 @@ pub fn trash_agent_history_transcript(
     id: String,
     transcript_path: PathBuf,
 ) -> AppResult<()> {
+    let path = canonical_agent_transcript_path(transcript_path)?;
+    validate_agent_transcript_identity(&provider, &id, &path)?;
+    move_to_trash(&path)?;
+    Ok(())
+}
+
+fn canonical_agent_transcript_path(transcript_path: PathBuf) -> AppResult<PathBuf> {
     let path = transcript_path.canonicalize().map_err(|_| {
         AppError::InvalidPath(format!("transcript missing: {}", transcript_path.display()))
     })?;
@@ -151,19 +181,26 @@ pub fn trash_agent_history_transcript(
             path.display()
         )));
     }
+    Ok(path)
+}
 
+fn validate_agent_transcript_identity(
+    provider: &AgentHistoryProvider,
+    id: &str,
+    path: &Path,
+) -> AppResult<()> {
     match provider {
         AgentHistoryProvider::Codex => {
             let root = codex_sessions_root()
                 .and_then(|p| p.canonicalize().ok())
                 .ok_or_else(|| AppError::InvalidPath("Codex sessions root missing".to_string()))?;
-            if !is_codex_transcript_path(&path, &root) {
+            if !is_codex_transcript_path(path, &root) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Codex sessions: {}",
                     path.display()
                 )));
             }
-            if !codex_transcript_matches_id(&path, &id) {
+            if !codex_transcript_matches_id(path, id) {
                 return Err(AppError::InvalidPath(
                     "transcript id does not match selected Codex session".to_string(),
                 ));
@@ -173,14 +210,14 @@ pub fn trash_agent_history_transcript(
             let root = claude_projects_root()
                 .and_then(|p| p.canonicalize().ok())
                 .ok_or_else(|| AppError::InvalidPath("Claude projects root missing".to_string()))?;
-            if !is_claude_transcript_path(&path, &root) {
+            if !is_claude_transcript_path(path, &root) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Claude projects: {}",
                     path.display()
                 )));
             }
             let stem = path.file_stem().and_then(|s| s.to_str());
-            if stem != Some(id.as_str()) {
+            if stem != Some(id) {
                 return Err(AppError::InvalidPath(
                     "transcript id does not match selected Claude session".to_string(),
                 ));
@@ -202,12 +239,12 @@ pub fn trash_agent_history_transcript(
                     path.display()
                 )));
             }
-            if !antigravity_transcript_matches_id(&path, &id) {
+            if !antigravity_transcript_matches_id(path, id) {
                 return Err(AppError::InvalidPath(
                     "transcript id does not match selected Antigravity session".to_string(),
                 ));
             }
-            if !is_antigravity_transcript_path(&path) {
+            if !is_antigravity_transcript_path(path) {
                 return Err(AppError::InvalidPath(format!(
                     "transcript is outside Antigravity sessions: {}",
                     path.display()
@@ -215,8 +252,6 @@ pub fn trash_agent_history_transcript(
             }
         }
     }
-
-    move_to_trash(&path)?;
     Ok(())
 }
 
@@ -475,7 +510,18 @@ pub fn transcript_title_context(
 }
 
 fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscriptSummary> {
-    let path = Path::new(&item.transcript_path);
+    summarize_agent_transcript(
+        item.provider.clone(),
+        item.id.clone(),
+        Path::new(&item.transcript_path),
+    )
+}
+
+fn summarize_agent_transcript(
+    provider: AgentHistoryProvider,
+    id: String,
+    path: &Path,
+) -> Option<AgentTranscriptSummary> {
     let file = fs::File::open(path).ok()?;
     let mut message_count = 0_u64;
     let mut user_messages = 0_u64;
@@ -491,7 +537,7 @@ fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscri
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(entry) = title_context_entry(&item.provider, &value) {
+        if let Some(entry) = title_context_entry(&provider, &value) {
             match entry.role {
                 "User" => user_messages += 1,
                 "Assistant" => assistant_messages += 1,
@@ -499,8 +545,8 @@ fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscri
             }
             message_count += 1;
         }
-        if let Some(usage) = transcript_usage_from_value(&item.provider, &value) {
-            if is_cumulative_usage_event(&item.provider, &value) {
+        if let Some(usage) = transcript_usage_from_value(&provider, &value) {
+            if is_cumulative_usage_event(&provider, &value) {
                 cumulative_usage = max_token_usage(cumulative_usage, usage);
             } else {
                 add_token_usage(&mut summed_usage, usage);
@@ -516,10 +562,10 @@ fn summarize_agent_history_item(item: &AgentHistoryItem) -> Option<AgentTranscri
     let complete_turns = user_messages.min(assistant_messages);
     let running_turns = user_messages.saturating_sub(assistant_messages);
     Some(AgentTranscriptSummary {
-        provider: item.provider.clone(),
-        id: item.id.clone(),
-        transcript_path: item.transcript_path.clone(),
-        updated_at: item.updated_at,
+        provider,
+        id,
+        transcript_path: path.display().to_string(),
+        updated_at: file_updated_at(path),
         message_count,
         user_messages,
         assistant_messages,
@@ -1542,7 +1588,42 @@ fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::io::Write;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: This test module serializes environment mutation through
+            // ENV_LOCK and restores the previous value on drop.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: The guard is only created while ENV_LOCK is held, so the
+            // matching restore runs under the same serialized test section.
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     #[test]
     fn codex_transcript_match_accepts_payload_id_when_filename_differs() {
@@ -2254,6 +2335,83 @@ mod tests {
         assert_eq!(summary.token_usage.reasoning_tokens, 4);
         assert_eq!(summary.token_usage.total_tokens, 59);
         assert_eq!(summary.token_usage.messages_with_usage, 1);
+    }
+
+    #[test]
+    fn transcript_summary_at_path_reads_validated_codex_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let codex_home = dir.path().join("codex-home");
+        let id = "019e4818-7c15-7e60-9b3b-898a1c7803d6";
+        let transcript = codex_home
+            .join("sessions/2026/05/21")
+            .join(format!("rollout-2026-05-21T10-13-44-{id}.jsonl"));
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut file = fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "id": id,
+                    "cwd": repo.display().to_string(),
+                    "role": "user",
+                    "content": "Do it",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "payload": {
+                    "role": "assistant",
+                    "content": "Done",
+                },
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "msg": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 20,
+                            "cached_input_tokens": 7,
+                            "output_tokens": 5,
+                            "total_tokens": 32,
+                        },
+                    },
+                },
+            })
+        )
+        .unwrap();
+        drop(file);
+        let _env = EnvVarGuard::set("CODEX_HOME", &codex_home);
+
+        let summary = agent_transcript_summary_at_path(
+            repo,
+            AgentHistoryProvider::Codex,
+            id.to_string(),
+            transcript.clone(),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(summary.provider, AgentHistoryProvider::Codex);
+        assert_eq!(summary.id, id);
+        assert_eq!(
+            summary.transcript_path,
+            transcript.canonicalize().unwrap().display().to_string()
+        );
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.token_usage.total_tokens, 32);
     }
 
     #[test]

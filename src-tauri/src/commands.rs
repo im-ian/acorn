@@ -2026,6 +2026,24 @@ pub async fn agent_transcript_summary(
 }
 
 #[tauri::command]
+pub async fn agent_transcript_summary_at_path(
+    repo_path: String,
+    provider: agent_history::AgentHistoryProvider,
+    id: String,
+    transcript_path: String,
+) -> AppResult<Option<agent_history::AgentTranscriptSummary>> {
+    run_blocking("agent_transcript_summary_at_path", move || {
+        agent_history::agent_transcript_summary_at_path(
+            PathBuf::from(repo_path),
+            provider,
+            id,
+            PathBuf::from(transcript_path),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_unscoped_agent_history(
     state: State<'_, AppState>,
     limit: Option<usize>,

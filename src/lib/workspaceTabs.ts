@@ -1,4 +1,5 @@
 import type { WorkSummaryTokenBaseline } from "./workSummary";
+import { basename } from "./pathUtils";
 
 export type WorkspaceTabId = string;
 export type WorkspaceTabKind = "session" | "code" | "work-summary";
@@ -147,9 +148,4 @@ export function isProcessBackedWorkspaceTab(
   tab: WorkspaceTab,
 ): tab is ProcessBackedWorkspaceTab {
   return tab.lifecycle === "process-backed";
-}
-
-export function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] ?? path;
 }

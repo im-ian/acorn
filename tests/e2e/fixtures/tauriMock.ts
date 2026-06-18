@@ -133,6 +133,9 @@ export const tauriMockSource = `
     if (cmd === 'agent_transcript_summary') {
       return Promise.resolve(null);
     }
+    if (cmd === 'agent_transcript_summary_at_path') {
+      return Promise.resolve(null);
+    }
     if (cmd === 'save_chat_session_state') {
       return Promise.resolve(args?.chatState || null);
     }
