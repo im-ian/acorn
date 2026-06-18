@@ -63,6 +63,7 @@ import {
 
 const REPO = "/Users/me/repo";
 const HOME = "/Users/me";
+const WORKTREE = `${REPO}/.acorn/worktrees/feature`;
 
 function project(repoPath: string): Project {
   return {
@@ -330,6 +331,120 @@ describe("Pane empty state", () => {
           bubbles: true,
           cancelable: true,
         }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "repo",
+      REPO,
+      false,
+      "regular",
+      null,
+    );
+  });
+
+  it("starts empty-pane project sessions at the project root from an active worktree workspace", async () => {
+    const folderId = `project-folder:${REPO}:feature`;
+    const created = session("new-session", {
+      name: "repo",
+      worktree_path: REPO,
+      branch: "main",
+      in_worktree: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    useAppStore.setState((s) => ({
+      ...s,
+      projectFolders: {
+        [REPO]: [
+          {
+            id: REPO,
+            repoPath: REPO,
+            name: "Default",
+            cwdPath: REPO,
+            position: 0,
+          },
+          {
+            id: folderId,
+            repoPath: REPO,
+            name: "Feature",
+            cwdPath: WORKTREE,
+            position: 1,
+          },
+        ],
+      },
+      activeProject: REPO,
+      activeProjectFolderId: folderId,
+      workspaces: {
+        ...s.workspaces,
+        [folderId]: {
+          layout: { kind: "pane", id: "root" },
+          panes: { root: { id: "root", tabIds: [], activeTabId: null } },
+          focusedPaneId: "root",
+        },
+      },
+      layout: { kind: "pane", id: "root" },
+      panes: { root: { id: "root", tabIds: [], activeTabId: null } },
+      focusedPaneId: "root",
+      activeTabId: null,
+      activeSessionId: null,
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const emptyPane = container.querySelector('[role="button"]');
+    expect(emptyPane).not.toBeNull();
+
+    await act(async () => {
+      emptyPane?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      "repo",
+      REPO,
+      false,
+      "regular",
+      null,
+    );
+  });
+
+  it("starts tab-strip sessions at the project root when the active tab is a worktree session", async () => {
+    const worker = session("worker", {
+      name: "worker",
+      repo_path: REPO,
+      worktree_path: WORKTREE,
+      branch: "feature",
+      in_worktree: true,
+    });
+    const created = session("new-session", {
+      name: "repo",
+      repo_path: REPO,
+      worktree_path: REPO,
+      branch: "main",
+      in_worktree: false,
+    });
+    mocks.createSession.mockResolvedValueOnce(created);
+    mocks.listSessions.mockResolvedValueOnce([worker, created]);
+    mocks.listProjects.mockResolvedValueOnce([project(REPO)]);
+    seedActivePaneWithTab(worker);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const filler = container.querySelector('[data-pane-tab-filler="root"]');
+    expect(filler).not.toBeNull();
+
+    await act(async () => {
+      filler?.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
       );
     });
 
