@@ -30,13 +30,25 @@ export function RemoveSessionDialog({
   const isolated = session?.isolated ?? false;
   const recordedWorktree = session ? hasRecordedWorktree(session) : false;
   const showWorktreeDeleteChoice = recordedWorktree && canDeleteWorktree;
+  const showIsolatedCleanupSetting = isolated && canDeleteWorktree;
+  const confirmDeleteIsolatedWorktrees = useSettings(
+    (s) => s.settings.sessions.confirmDeleteIsolatedWorktrees,
+  );
   const patchSessions = useSettings((s) => s.patchSessions);
   const [dontAskAgain, setDontAskAgain] = useState(false);
+  const [
+    autoDeleteIsolatedWorktreesNextTime,
+    setAutoDeleteIsolatedWorktreesNextTime,
+  ] = useState(false);
 
-  // Reset checkbox each time dialog opens for a new session.
+  // Reset checkboxes each time dialog opens for a new session.
   useEffect(() => {
-    if (session) setDontAskAgain(false);
-  }, [session?.id]);
+    if (!session) return;
+    setDontAskAgain(false);
+    setAutoDeleteIsolatedWorktreesNextTime(
+      !confirmDeleteIsolatedWorktrees,
+    );
+  }, [confirmDeleteIsolatedWorktrees, session?.id]);
 
   // Keep Enter conservative for non-isolated linked worktrees, which may be
   // user-managed outside Acorn even though the session path is a real worktree.
@@ -45,8 +57,20 @@ export function RemoveSessionDialog({
     : "session_only";
 
   function commit(choice: RemoveChoice) {
-    if (choice !== "cancel" && dontAskAgain && !recordedWorktree) {
-      patchSessions({ confirmRemove: false });
+    if (choice !== "cancel") {
+      if (dontAskAgain && !recordedWorktree) {
+        patchSessions({ confirmRemove: false });
+      }
+      if (
+        showIsolatedCleanupSetting &&
+        autoDeleteIsolatedWorktreesNextTime !==
+          !confirmDeleteIsolatedWorktrees
+      ) {
+        patchSessions({
+          confirmDeleteIsolatedWorktrees:
+            !autoDeleteIsolatedWorktreesNextTime,
+        });
+      }
     }
     onClose(choice);
   }
@@ -99,7 +123,22 @@ export function RemoveSessionDialog({
                 {dt(t, "dialogs.removeSession.willNotBeTouched")}
               </p>
             )}
-            {!recordedWorktree ? (
+            {showIsolatedCleanupSetting ? (
+              <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
+                <input
+                  type="checkbox"
+                  checked={autoDeleteIsolatedWorktreesNextTime}
+                  onChange={(e) =>
+                    setAutoDeleteIsolatedWorktreesNextTime(e.target.checked)
+                  }
+                  className="accent-[var(--color-accent)]"
+                />
+                {dt(
+                  t,
+                  "dialogs.removeSession.autoDeleteIsolatedWorktreesNextTime",
+                )}
+              </label>
+            ) : !recordedWorktree ? (
               <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
                 <input
                   type="checkbox"
