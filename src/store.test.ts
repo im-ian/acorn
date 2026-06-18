@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GenerateSessionTitleResult,
+  ChatSessionState,
   Project,
   Session,
   SessionNotification,
@@ -34,6 +35,12 @@ vi.mock("./lib/api", () => {
             session: {} as Session,
           }) as GenerateSessionTitleResult,
       ),
+      loadChatSessionState: vi.fn(async () => ({
+        messages: [],
+        turns: [],
+      }) as unknown as ChatSessionState),
+      agentTranscriptSummary: vi.fn(async () => null),
+      agentTranscriptSummaryAtPath: vi.fn(async () => null),
       addProject: vi.fn(async () => ({}) as Project),
       createNewProject: vi.fn(async () => ({}) as Project),
       removeProject: vi.fn(async () => []),
@@ -114,6 +121,45 @@ function notification(
   };
 }
 
+function chatStateWithTokenTotal(totalTokens: number): ChatSessionState {
+  return {
+    schema_version: 1,
+    session_id: "a1",
+    session: {
+      id: "a1",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+    messages: [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "done",
+        created_at: "2026-01-01T00:00:00Z",
+        metadata: {
+          provider_response: {
+            usage: {
+              input_tokens: totalTokens,
+              total_tokens: totalTokens,
+            },
+          },
+        },
+      },
+    ],
+    turns: [],
+    provider_threads: [],
+    context_snapshots: [],
+    memory: {
+      session_id: "a1",
+      important_decisions: [],
+      facts: [],
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 /**
  * Reset the zustand store to a clean slate. We re-import the initial-shape
  * fields directly since zustand has no built-in reset.
@@ -175,6 +221,12 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+async function flushPromises(times = 3): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 beforeEach(() => {
   // resetAllMocks clears both call history *and* the queued
   // mockResolvedValueOnce return values; clearAllMocks leaves the queue
@@ -191,6 +243,11 @@ beforeEach(() => {
   mockApi.removeSession.mockResolvedValue(null);
   mockApi.removeWorktree.mockResolvedValue(null);
   mockApi.removeProject.mockResolvedValue([]);
+  mockApi.loadChatSessionState.mockResolvedValue({
+    messages: [],
+    turns: [],
+  } as unknown as ChatSessionState);
+  mockApi.agentTranscriptSummary.mockResolvedValue(null);
   useSettings.setState({
     settings: structuredClone(DEFAULT_SETTINGS),
     open: false,
@@ -850,6 +907,167 @@ describe("workspace tabs", () => {
     });
   });
 
+  it("opens a work summary tab for the active session worktree", async () => {
+    const active = session("a1", REPO_A, {
+      name: "Feature runner",
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+      mode: "chat",
+    });
+    await seed([project(REPO_A, 0)], [active]);
+    mockApi.loadChatSessionState.mockResolvedValueOnce(
+      chatStateWithTokenTotal(120),
+    );
+
+    await useAppStore.getState().openWorkSummaryTab();
+    await flushPromises();
+
+    const s = useAppStore.getState();
+    expect(s.activeSessionId).toBeNull();
+    expect(s.activeTabId).toMatch(/^work-summary:/);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", s.activeTabId]);
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "work-summary",
+      lifecycle: "ephemeral",
+      repoPath: REPO_A,
+      cwdPath: `${REPO_A}/.worktrees/a1`,
+      sessionId: "a1",
+      title: "Feature runner Summary",
+      tokenBaseline: expect.objectContaining({
+        inputTokens: 120,
+        totalTokens: 120,
+        messagesWithUsage: 1,
+      }),
+    });
+  });
+
+  it("records a work summary token baseline from a terminal agent transcript", async () => {
+    const active = session("a1", REPO_A, {
+      name: "Feature runner",
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+      mode: "terminal",
+      agent_transcript_id: "transcript-1",
+    });
+    await seed([project(REPO_A, 0)], [active]);
+    mockApi.agentTranscriptSummary.mockResolvedValueOnce({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_000,
+      message_count: 4,
+      user_messages: 2,
+      assistant_messages: 2,
+      turn_count: 2,
+      complete_turns: 2,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 220,
+        output_tokens: 80,
+        cache_read_tokens: 20,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 12,
+        total_tokens: 320,
+        messages_with_usage: 1,
+      },
+    });
+
+    await useAppStore.getState().openWorkSummaryTab();
+    await flushPromises();
+
+    const s = useAppStore.getState();
+    expect(mockApi.agentTranscriptSummary).toHaveBeenCalledWith(
+      REPO_A,
+      "transcript-1",
+    );
+    expect(s.workspaceTabs[s.activeTabId!]).toMatchObject({
+      kind: "work-summary",
+      sessionId: "a1",
+      tokenBaseline: expect.objectContaining({
+        inputTokens: 220,
+        outputTokens: 80,
+        cacheReadTokens: 20,
+        reasoningTokens: 12,
+        totalTokens: 320,
+        messagesWithUsage: 1,
+      }),
+    });
+  });
+
+  it("opens a work summary tab before terminal token baseline loading finishes", async () => {
+    const active = session("a1", REPO_A, {
+      name: "Feature runner",
+      worktree_path: `${REPO_A}/.worktrees/a1`,
+      mode: "terminal",
+      agent_transcript_id: "transcript-1",
+    });
+    await seed([project(REPO_A, 0)], [active]);
+    const pendingSummary = deferred<Awaited<
+      ReturnType<typeof mockApi.agentTranscriptSummary>
+    >>();
+    mockApi.agentTranscriptSummary.mockReturnValueOnce(pendingSummary.promise);
+
+    const openPromise = useAppStore.getState().openWorkSummaryTab();
+    await Promise.resolve();
+
+    let state = useAppStore.getState();
+    expect(state.activeTabId).toMatch(/^work-summary:/);
+    const tabId = state.activeTabId!;
+    expect(state.workspaceTabs[tabId]).toMatchObject({
+      kind: "work-summary",
+      sessionId: "a1",
+    });
+    expect(state.workspaceTabs[tabId]).not.toHaveProperty("tokenBaseline");
+
+    pendingSummary.resolve({
+      provider: "codex",
+      id: "transcript-1",
+      transcript_path: "/Users/me/.codex/sessions/transcript-1.jsonl",
+      updated_at: 1_766_000_000,
+      message_count: 4,
+      user_messages: 2,
+      assistant_messages: 2,
+      turn_count: 2,
+      complete_turns: 2,
+      running_turns: 0,
+      token_usage: {
+        input_tokens: 220,
+        output_tokens: 80,
+        cache_read_tokens: 20,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 12,
+        total_tokens: 320,
+        messages_with_usage: 1,
+      },
+    });
+    await openPromise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    state = useAppStore.getState();
+    expect(state.workspaceTabs[tabId]).toMatchObject({
+      tokenBaseline: expect.objectContaining({
+        totalTokens: 320,
+      }),
+    });
+  });
+
+  it("reuses an existing work summary tab for the same session", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    await useAppStore.getState().openWorkSummaryTab();
+    const tabId = useAppStore.getState().activeTabId!;
+    useAppStore.getState().selectSession("a1");
+    await useAppStore.getState().openWorkSummaryTab();
+
+    const s = useAppStore.getState();
+    expect(s.activeTabId).toBe(tabId);
+    expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", tabId]);
+    expect(
+      Object.values(s.workspaceTabs).filter(
+        (tab) => tab.kind === "work-summary",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("scopes code viewer tabs to the active session worktree", async () => {
     const s1 = session("a1", REPO_A, {
       worktree_path: `${REPO_A}/.worktrees/a1`,
@@ -875,17 +1093,21 @@ describe("workspace tabs", () => {
       .getState()
       .openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A, { line: 78 });
     const tabId = useAppStore.getState().activeTabId!;
-    const firstTarget = useAppStore.getState().workspaceTabs[tabId].target;
+    const firstTab = useAppStore.getState().workspaceTabs[tabId];
+    if (firstTab?.kind !== "code") throw new Error("expected code tab");
+    const firstTarget = firstTab.target;
 
     useAppStore
       .getState()
       .openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A, { line: 12 });
 
     const s = useAppStore.getState();
+    const updatedTab = s.workspaceTabs[tabId];
+    if (updatedTab?.kind !== "code") throw new Error("expected code tab");
     expect(s.activeTabId).toBe(tabId);
     expect(s.panes[s.focusedPaneId].tabIds).toEqual(["a1", tabId]);
-    expect(s.workspaceTabs[tabId].target).toMatchObject({ line: 12 });
-    expect(s.workspaceTabs[tabId].target?.token).not.toBe(firstTarget?.token);
+    expect(updatedTab.target).toMatchObject({ line: 12 });
+    expect(updatedTab.target?.token).not.toBe(firstTarget?.token);
   });
 
   it("reselects a worktree-scoped code tab after switching projects", async () => {

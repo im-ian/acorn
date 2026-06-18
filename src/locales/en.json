@@ -919,6 +919,7 @@
       "worktree": "worktree",
       "controlSession": "control session",
       "chatSession": "chat session",
+      "workSummary": "work summary",
       "generatingSessionTitle": "Generating session title",
       "closeSession": "Close session",
       "closeTab": "Close tab"
@@ -934,6 +935,7 @@
     "menu": {
       "rename": "Rename",
       "regenerateName": "Regenerate Name",
+      "openWorkSummary": "Open Work Summary",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
@@ -962,6 +964,77 @@
       "closeAll": "Close All",
       "newSessionInThisPane": "New Session in This Pane",
       "closePane": "Close Pane"
+    }
+  },
+  "workSummary": {
+    "title": "Work Summary",
+    "refresh": "Refresh summary",
+    "loading": "Loading...",
+    "notAvailable": "N/A",
+    "metrics": {
+      "files": "Changed files",
+      "lines": "Line delta",
+      "messages": "Conversation",
+      "tokens": "Tokens"
+    },
+    "values": {
+      "files": "{count} files",
+      "messages": "{count} messages",
+      "turns": "{count} turns",
+      "tokens": "{count} tokens"
+    },
+    "metadata": {
+      "scope": "Scope",
+      "session": "Session",
+      "branch": "Branch",
+      "status": "Status",
+      "mode": "Mode",
+      "transcript": "Transcript",
+      "updated": "Updated"
+    },
+    "files": {
+      "title": "Changed Files",
+      "empty": "No working tree changes",
+      "huge": "Showing first {limit} files",
+      "openFile": "Open {path}"
+    },
+    "details": {
+      "title": "Details"
+    },
+    "conversation": {
+      "title": "Conversation",
+      "user": "User",
+      "assistant": "Assistant",
+      "turns": "Turns",
+      "completeTurns": "Complete turns",
+      "runningTurns": "Running",
+      "terminalHint": "Conversation counts are available for native chat sessions."
+    },
+    "tokens": {
+      "title": "Token Usage",
+      "empty": "No token usage metadata is available yet.",
+      "input": "Input",
+      "output": "Output",
+      "cache": "Cache",
+      "reasoning": "Reasoning",
+      "start": "Start",
+      "current": "Current",
+      "sinceStart": "Since start",
+      "sessionUsed": "Session used",
+      "summaryStart": "Summary start",
+      "sinceSummary": "Since summary",
+      "fromMessages": "from {count} assistant messages"
+    },
+    "charts": {
+      "title": "Change Breakdown"
+    },
+    "status": {
+      "added": "Added",
+      "clean": "Clean",
+      "conflicted": "Conflicted",
+      "deleted": "Deleted",
+      "modified": "Modified",
+      "renamed": "Renamed"
     }
   },
   "rightPanel": {

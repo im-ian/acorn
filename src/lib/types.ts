@@ -287,6 +287,30 @@ export interface AgentHistoryItem {
   resume_command: string | null;
 }
 
+export interface AgentTranscriptTokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  messages_with_usage: number;
+}
+
+export interface AgentTranscriptSummary {
+  provider: AgentHistoryProvider;
+  id: string;
+  transcript_path: string;
+  updated_at: number;
+  message_count: number;
+  user_messages: number;
+  assistant_messages: number;
+  turn_count: number;
+  complete_turns: number;
+  running_turns: number;
+  token_usage: AgentTranscriptTokenUsage;
+}
+
 export interface CommitInfo {
   sha: string;
   short_sha: string;
