@@ -621,6 +621,7 @@ export function ChatPane({
   session,
 }: ChatPaneProps) {
   const [state, setState] = useState<ChatSessionState | null>(null);
+  const latestChatStateRef = useRef<ChatSessionState | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -691,6 +692,7 @@ export function ChatPane({
       return false;
     }
     latestChatStateUpdatedAtRef.current = loadedAt ?? currentAt;
+    latestChatStateRef.current = loaded;
     setState(loaded);
     setProvider(
       providerFromString(loaded.provider) ??
@@ -837,6 +839,7 @@ export function ChatPane({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (sending) return;
+    const submittedDraft = draft;
     const submittedAttachments = attachments;
     const content = composeChatMessageContent(
       draft,
@@ -845,8 +848,15 @@ export function ChatPane({
     );
     if (!content) return;
 
-    const baseState = state ?? emptyChatState(sessionId);
+    const previousState =
+      latestChatStateRef.current?.session_id === sessionId
+        ? latestChatStateRef.current
+        : state?.session_id === sessionId
+          ? state
+          : null;
+    const baseState = previousState ?? emptyChatState(sessionId);
     const now = new Date().toISOString();
+    let optimisticState: ChatSessionState | null = null;
     forceScrollToBottomRef.current = true;
     setDraft("");
     setAttachments([]);
@@ -855,7 +865,7 @@ export function ChatPane({
 
     try {
       await prepareStartupWorktreeIfNeeded();
-      setState({
+      optimisticState = {
         ...baseState,
         provider,
         messages: [
@@ -882,7 +892,9 @@ export function ChatPane({
           },
         ],
         updated_at: now,
-      });
+      };
+      latestChatStateRef.current = optimisticState;
+      setState(optimisticState);
       setLocalChatSessionStatus(sessionId, "running");
       const saved = await api.sendChatMessage(
         sessionId,
@@ -892,8 +904,24 @@ export function ChatPane({
       applyChatState(saved);
       setLocalChatSessionStatus(sessionId, sessionStatusFromChatState(saved));
     } catch (err) {
+      const latestState = latestChatStateRef.current;
+      const shouldRollback =
+        optimisticState === null
+          ? latestState === previousState
+          : latestState === optimisticState;
+      if (shouldRollback) {
+        latestChatStateRef.current = previousState;
+        setState(previousState);
+        setDraft(submittedDraft);
+        setAttachments(submittedAttachments);
+        setLocalChatSessionStatus(sessionId, "failed");
+      } else if (latestState?.session_id === sessionId) {
+        setLocalChatSessionStatus(
+          sessionId,
+          sessionStatusFromChatState(latestState),
+        );
+      }
       setError(String(err));
-      setLocalChatSessionStatus(sessionId, "failed");
     } finally {
       setSending(false);
     }
@@ -1111,10 +1139,13 @@ export function ChatPane({
           composerIsCentered ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
       >
+        {!loading && error ? (
+          <div className="mx-auto mb-3 w-full max-w-4xl text-sm text-danger">
+            {error}
+          </div>
+        ) : null}
         {loading ? (
           <div className="text-sm text-fg-muted">Loading...</div>
-        ) : error ? (
-          <div className="text-sm text-danger">{error}</div>
         ) : hasMessages ? (
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
             {messages.map((message, index) => {
@@ -1446,9 +1477,9 @@ export function ChatPane({
               );
             })}
           </div>
-        ) : (
+        ) : !error ? (
           <div aria-hidden="true" className="h-full" />
-        )}
+        ) : null}
       </div>
       {hasMessages && isScrolledBack ? (
         <Tooltip label="Scroll chat to bottom" side="top" delay={150}>
