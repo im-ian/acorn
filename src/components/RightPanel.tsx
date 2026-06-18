@@ -2981,15 +2981,15 @@ function PullRequestsTab({
   const [listsByState, setListsByState] = useState(() =>
     initialPrListStates(repoPath),
   );
-  const [loadingKeys, setLoadingKeys] = useState<string[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState<Record<string, number>>({});
+  const requestSeqByListRef = useRef<Record<string, number>>({});
   const setPrAccountForRepo = useAppStore((s) => s.setPrAccountForRepo);
   const activeList = listsByState[stateFilter] ?? emptyPrListState();
   const listing = activeList.listing;
   const error = activeList.error;
   const limit = activeList.limit;
-  const loading = loadingKeys.some((key) =>
-    key.startsWith(`${repoPath}:${stateFilter}:`),
-  );
+  const activeLoadingKey = `${repoPath}:${stateFilter}:${limit}`;
+  const loading = loadingKeys[activeLoadingKey] !== undefined;
 
   const fetchPrs = useCallback(
     async (
@@ -2998,7 +2998,10 @@ function PullRequestsTab({
       signal?: { cancelled: boolean },
     ) => {
       const key = `${repoPath}:${filter}:${requestedLimit}`;
-      setLoadingKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      const listKey = `${repoPath}:${filter}`;
+      const requestSeq = (requestSeqByListRef.current[listKey] ?? 0) + 1;
+      requestSeqByListRef.current[listKey] = requestSeq;
+      setLoadingKeys((prev) => ({ ...prev, [key]: requestSeq }));
       try {
         const result = await fetchPullRequestsCached(
           repoPath,
@@ -3006,7 +3009,12 @@ function PullRequestsTab({
           requestedLimit,
           { force: true },
         );
-        if (signal?.cancelled) return;
+        if (
+          signal?.cancelled ||
+          requestSeqByListRef.current[listKey] !== requestSeq
+        ) {
+          return;
+        }
         setListsByState((prev) => ({
           ...prev,
           [filter]: {
@@ -3020,7 +3028,12 @@ function PullRequestsTab({
           result.kind === "ok" ? result.account : null,
         );
       } catch (e) {
-        if (signal?.cancelled) return;
+        if (
+          signal?.cancelled ||
+          requestSeqByListRef.current[listKey] !== requestSeq
+        ) {
+          return;
+        }
         setListsByState((prev) => ({
           ...prev,
           [filter]: {
@@ -3030,7 +3043,12 @@ function PullRequestsTab({
           },
         }));
       } finally {
-        setLoadingKeys((prev) => prev.filter((candidate) => candidate !== key));
+        setLoadingKeys((prev) => {
+          if (prev[key] !== requestSeq) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       }
     },
     [repoPath, setPrAccountForRepo],
@@ -3044,7 +3062,8 @@ function PullRequestsTab({
   // first page cached so switching Open → Merged can be instant once the
   // background prefetch lands.
   useEffect(() => {
-    setLoadingKeys([]);
+    requestSeqByListRef.current = {};
+    setLoadingKeys({});
     setListsByState(initialPrListStates(repoPath));
   }, [repoPath]);
 
@@ -3369,7 +3388,8 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
   const [listsByState, setListsByState] = useState(() =>
     initialIssueListStates(repoPath),
   );
-  const [loadingKeys, setLoadingKeys] = useState<string[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState<Record<string, number>>({});
+  const requestSeqByListRef = useRef<Record<string, number>>({});
   const [searchOpen, setSearchOpen] = useState(false);
   const [issueDetail, setIssueDetail] = useState<{
     repoPath: string;
@@ -3379,9 +3399,8 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
   const listing = activeList.listing;
   const error = activeList.error;
   const limit = activeList.limit;
-  const loading = loadingKeys.some((key) =>
-    key.startsWith(`${repoPath}:${stateFilter}:`),
-  );
+  const activeLoadingKey = `${repoPath}:${stateFilter}:${limit}`;
+  const loading = loadingKeys[activeLoadingKey] !== undefined;
 
   const fetchIssues = useCallback(
     async (
@@ -3390,7 +3409,10 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
       signal?: { cancelled: boolean },
     ) => {
       const key = `${repoPath}:${filter}:${requestedLimit}`;
-      setLoadingKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      const listKey = `${repoPath}:${filter}`;
+      const requestSeq = (requestSeqByListRef.current[listKey] ?? 0) + 1;
+      requestSeqByListRef.current[listKey] = requestSeq;
+      setLoadingKeys((prev) => ({ ...prev, [key]: requestSeq }));
       try {
         const result = await fetchIssuesCached(
           repoPath,
@@ -3398,7 +3420,12 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
           requestedLimit,
           { force: true },
         );
-        if (signal?.cancelled) return;
+        if (
+          signal?.cancelled ||
+          requestSeqByListRef.current[listKey] !== requestSeq
+        ) {
+          return;
+        }
         setListsByState((prev) => ({
           ...prev,
           [filter]: {
@@ -3408,7 +3435,12 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
           },
         }));
       } catch (e) {
-        if (signal?.cancelled) return;
+        if (
+          signal?.cancelled ||
+          requestSeqByListRef.current[listKey] !== requestSeq
+        ) {
+          return;
+        }
         setListsByState((prev) => ({
           ...prev,
           [filter]: {
@@ -3418,7 +3450,12 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
           },
         }));
       } finally {
-        setLoadingKeys((prev) => prev.filter((candidate) => candidate !== key));
+        setLoadingKeys((prev) => {
+          if (prev[key] !== requestSeq) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       }
     },
     [repoPath],
@@ -3430,7 +3467,8 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
   );
 
   useEffect(() => {
-    setLoadingKeys([]);
+    requestSeqByListRef.current = {};
+    setLoadingKeys({});
     setListsByState(initialIssueListStates(repoPath));
   }, [repoPath]);
 
