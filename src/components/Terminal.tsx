@@ -67,6 +67,7 @@ import {
   terminalPasteAction,
   type ClipboardImageFile,
 } from "../lib/terminalPaste";
+import { normalizeShellCommandWhitespace } from "../lib/shellCommandWhitespace";
 import { saveClipboardImageAttachment } from "../lib/clipboardImageAttachment";
 import {
   createTerminalFileLinkProvider,
@@ -1139,6 +1140,8 @@ export function Terminal({
           return null;
         }
       };
+    const normalizeTerminalUnicodeSpaces = () =>
+      useSettings.getState().settings.experiments.normalizeTerminalUnicodeSpaces;
     const pasteNativeClipboard = async () => {
       const observedInputVersion = terminalInputVersion;
       const snapshot = await api.clipboardSnapshot();
@@ -1151,6 +1154,7 @@ export function Terminal({
       const action = terminalPasteAction({
         text: snapshot.text ?? "",
         hasImagePayload: Boolean(imageFile),
+        normalizeUnicodeSpaces: normalizeTerminalUnicodeSpaces(),
       });
       if (action.kind === "pasteText") {
         term.paste(action.text);
@@ -1384,6 +1388,35 @@ export function Terminal({
       hideComposing();
     };
 
+    const normalizedTextInsertion = (
+      value: string | null | undefined,
+    ): string | null => {
+      if (!normalizeTerminalUnicodeSpaces()) return null;
+      if (!value) return null;
+      const normalized = normalizeShellCommandWhitespace(value);
+      return normalized === value ? null : normalized;
+    };
+
+    const normalizedSpaceKey = (ev: KeyboardEvent): string | null => {
+      if (ev.ctrlKey || ev.metaKey) return null;
+      const key =
+        ev.key && ev.key.length === 1
+          ? ev.key
+          : ev.charCode
+            ? String.fromCharCode(ev.charCode)
+            : "";
+      const normalized = normalizedTextInsertion(key);
+      return normalized === " " ? normalized : null;
+    };
+
+    const sendCapturedUserInputToPty = (data: string) => {
+      terminalInputVersion += 1;
+      sendUserInputToPty(data);
+    };
+
+    let normalizedSpaceKeypressHandled = false;
+    let normalizedSpaceKeypressTimer: number | null = null;
+
     const onInput = (e: Event) => {
       const ev = e as InputEvent;
       const ta = container.querySelector<HTMLTextAreaElement>(
@@ -1418,6 +1451,29 @@ export function Terminal({
         }
 
         case "insertText": {
+          const normalizedText = normalizedTextInsertion(ev.data);
+          if (normalizedText) {
+            if (normalizedSpaceKeypressHandled) {
+              normalizedSpaceKeypressHandled = false;
+              if (normalizedSpaceKeypressTimer !== null) {
+                window.clearTimeout(normalizedSpaceKeypressTimer);
+                normalizedSpaceKeypressTimer = null;
+              }
+            } else {
+              if (lastKeyCode229 && composing) {
+                commitComposition();
+              }
+              sendCapturedUserInputToPty(normalizedText);
+            }
+            lastKeyCode229 = false;
+            hideComposing();
+            composing = false;
+            if (ta) ta.value = "";
+            sentPrefix = "";
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            return;
+          }
           // Distinguish plain ASCII from an IME first-jamo: treat as
           // IME when a keyCode-229 keydown was just observed OR
           // `ev.data` is a CJK character. The data check covers the
@@ -1507,7 +1563,11 @@ export function Terminal({
         const TERMINATOR_KEYS = new Set([
           "Enter", "Tab", "Escape", "Backspace", " ", "Spacebar",
         ]);
-        const isTerminator = TERMINATOR_KEYS.has(ev.key);
+        const isSpaceLikeTerminator =
+          ev.key.length === 1 &&
+          normalizeShellCommandWhitespace(ev.key) === " ";
+        const isTerminator =
+          TERMINATOR_KEYS.has(ev.key) || isSpaceLikeTerminator;
         if (!isTerminator) {
           lastKeyCode229 = true;
           ev.stopImmediatePropagation();
@@ -1582,10 +1642,39 @@ export function Terminal({
       }
     };
 
+    const onKeypress = (e: Event) => {
+      const ev = e as KeyboardEvent;
+      const normalizedSpace = normalizedSpaceKey(ev);
+      if (!normalizedSpace) return;
+      if (lastKeyCode229 && composing) {
+        commitComposition();
+      }
+      sendCapturedUserInputToPty(normalizedSpace);
+      lastKeyCode229 = false;
+      hideComposing();
+      composing = false;
+      normalizedSpaceKeypressHandled = true;
+      if (normalizedSpaceKeypressTimer !== null) {
+        window.clearTimeout(normalizedSpaceKeypressTimer);
+      }
+      normalizedSpaceKeypressTimer = window.setTimeout(() => {
+        normalizedSpaceKeypressHandled = false;
+        normalizedSpaceKeypressTimer = null;
+      }, 0);
+      const ta = container.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (ta) ta.value = "";
+      sentPrefix = "";
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    };
+
     // Register on `container` (ancestor of helperTextarea) with capture=true
     // so we run before xterm's textarea-capture listeners.
     container.addEventListener("input", onInput, true);
     container.addEventListener("keydown", onKeydown, true);
+    container.addEventListener("keypress", onKeypress, true);
 
     // Own the paste path for text. xterm's built-in listener emits the
     // pasted text but only calls `stopPropagation()` — it never
@@ -1615,6 +1704,7 @@ export function Terminal({
       const action = terminalPasteAction({
         text,
         hasImagePayload: Boolean(imageFile) || hasClipboardImagePayload(cd),
+        normalizeUnicodeSpaces: normalizeTerminalUnicodeSpaces(),
       });
       if (action.kind === "deferImageAttachment") {
         scheduleClipboardImageFallback(imageFile, terminalInputVersion);
@@ -2375,10 +2465,15 @@ export function Terminal({
         window.clearTimeout(resizeTimer);
         resizeTimer = null;
       }
+      if (normalizedSpaceKeypressTimer !== null) {
+        window.clearTimeout(normalizedSpaceKeypressTimer);
+        normalizedSpaceKeypressTimer = null;
+      }
       resizeObserver.disconnect();
       commandSizeSyncScheduler.dispose();
       container.removeEventListener("input", onInput, true);
       container.removeEventListener("keydown", onKeydown, true);
+      container.removeEventListener("keypress", onKeypress, true);
       container.removeEventListener("paste", onPaste, true);
       window.removeEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
       container.removeEventListener("dragover", onDragOver);

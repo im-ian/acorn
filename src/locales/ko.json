@@ -611,6 +611,10 @@
       "resumeModal": {
         "label": "콜드 부팅 시 \"이전 대화 재개\" 모달 표시",
         "description": "Acorn 실행 시 저장된 모든 세션에서 끝나지 않은 claude 또는 codex transcript를 확인하고, 해당 세션에 포커스하면 한 번만 표시되는 모달을 띄워 이전 작업을 이어갈 수 있게 합니다. 끄면 모달을 완전히 표시하지 않습니다."
+      },
+      "normalizeTerminalUnicodeSpaces": {
+        "label": "터미널 입력의 Unicode 공백 정규화",
+        "description": "입력하거나 붙여넣은 터미널 텍스트의 NBSP류 Unicode 구분자를 일반 공백으로 바꿔 셸 명령이 여러 단어로 파싱되도록 합니다. TUI, REPL, 테스트에서 실제 Unicode 공백을 보존해야 하면 끄세요."
       }
     },
     "about": {

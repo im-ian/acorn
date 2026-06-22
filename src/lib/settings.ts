@@ -441,6 +441,12 @@ export interface AcornSettings {
      * for future debugging).
      */
     resumeModal: boolean;
+    /**
+     * Convert Unicode space separators that reach interactive terminal input
+     * boundaries into ASCII space so shells keep parsing commands as separate
+     * words. Disable to preserve literal NBSP-like characters in TUIs or REPLs.
+     */
+    normalizeTerminalUnicodeSpaces: boolean;
   };
 }
 
@@ -542,6 +548,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     stickyPrompt: false,
     cjkCellWidthHeuristic: false,
     resumeModal: true,
+    normalizeTerminalUnicodeSpaces: true,
   },
 };
 
@@ -1063,6 +1070,10 @@ function loadSettings(): AcornSettings {
           typeof parsed.experiments?.resumeModal === "boolean"
             ? parsed.experiments.resumeModal
             : DEFAULT_SETTINGS.experiments.resumeModal,
+        normalizeTerminalUnicodeSpaces:
+          typeof parsed.experiments?.normalizeTerminalUnicodeSpaces === "boolean"
+            ? parsed.experiments.normalizeTerminalUnicodeSpaces
+            : DEFAULT_SETTINGS.experiments.normalizeTerminalUnicodeSpaces,
       },
     };
   } catch {
