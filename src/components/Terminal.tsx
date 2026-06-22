@@ -2650,7 +2650,7 @@ export function Terminal({
       className="acorn-terminal-shell relative h-full w-full"
       data-acorn-link-hover={linkTooltip ? "true" : undefined}
       style={{
-        padding: "18px 12px",
+        padding: "8px 12px",
         overflow: "hidden",
       }}
     >
