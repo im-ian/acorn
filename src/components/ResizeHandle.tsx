@@ -173,7 +173,7 @@ export function ResizeHandle({
                 : "h-3 cursor-row-resize",
         )}
       >
-        {showDivider || (dragging && !showHandleVisual) ? (
+        {showDivider || (dragging && !showHandleVisual && !gap) ? (
           <span
             aria-hidden="true"
             className={cn(
@@ -186,18 +186,24 @@ export function ResizeHandle({
         <span
           aria-hidden="true"
           className={cn(
-            "pointer-events-none rounded-full bg-white transition-opacity duration-150",
-            // Fixed mid-size grip; only opacity changes between hover/drag
-            // so the user gets a steady visual instead of a resizing pill.
+            "pointer-events-none rounded-full transition duration-150",
+            // Fixed mid-size grip; only opacity/color changes between
+            // hover/drag so the user gets a steady rounded visual. For a gap
+            // gutter the grip turns accent on drag, replacing the square line.
             isHorizontal ? "h-10 w-[3px]" : "h-[3px] w-10",
+            showGapHint && dragging ? "bg-accent" : "bg-white",
             showHandleVisual
               ? dragging
                 ? "opacity-100"
                 : hovered
                   ? "opacity-70"
                   : "opacity-0"
-              : showGapHint && hovered && !dragging
-                ? "opacity-60"
+              : showGapHint
+                ? dragging
+                  ? "opacity-100"
+                  : hovered
+                    ? "opacity-60"
+                    : "opacity-0"
                 : "opacity-0",
           )}
         />
