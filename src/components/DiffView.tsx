@@ -126,7 +126,7 @@ function DiffFileAccordion({ file, collapsed, onToggle }: DiffFileAccordionProps
   const highlighted = useHighlightedDiff(lines, path);
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-bg">
+    <div className="overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
       <button
         type="button"
         onClick={onToggle}
