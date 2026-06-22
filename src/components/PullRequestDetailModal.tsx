@@ -1420,7 +1420,7 @@ function CommitDetailView({
   }, [repoPath, commit.oid]);
 
   const diffSection = (
-    <div className="h-full min-h-0 overflow-hidden p-1.5">
+    <div className="h-full min-h-0 overflow-hidden">
       {error ? (
         <div className="flex h-full items-center justify-center px-4 text-center text-xs text-danger">
           {error}
@@ -1522,7 +1522,7 @@ function CommitDetailView({
           className="h-full"
         >
           <Panel id="info" order={1} defaultSize={24} minSize={12} maxSize={70}>
-            <div className="h-full p-1.5">{infoCard}</div>
+            {infoCard}
           </Panel>
           <ResizeHandle direction="vertical" gap />
           <Panel id="diff" order={2} defaultSize={76} minSize={20}>
@@ -1530,8 +1530,8 @@ function CommitDetailView({
           </Panel>
         </PanelGroup>
       ) : (
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="shrink-0 p-1.5 pb-0">{infoCard}</div>
+        <div className="flex h-full min-h-0 flex-col gap-1.5">
+          <div className="shrink-0">{infoCard}</div>
           <div className="min-h-0 flex-1">{diffSection}</div>
         </div>
       )}
