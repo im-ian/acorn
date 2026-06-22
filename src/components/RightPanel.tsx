@@ -11,6 +11,7 @@ import {
   Activity,
   Bot,
   Check,
+  ChevronRight,
   CircleAlert,
   Code2,
   CircleCheck,
@@ -4056,7 +4057,7 @@ function WorkflowRunDetailModal({
 function WorkflowRunDetailSkeleton() {
   return (
     <div className="space-y-3 animate-pulse">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--acorn-pane-radius)] border border-border/60 bg-bg/40 p-3 text-[11px]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--acorn-pane-radius)] bg-bg-sidebar/40 p-3 text-[11px]">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="contents">
             <dt>
@@ -4077,7 +4078,7 @@ function WorkflowRunDetailSkeleton() {
           {Array.from({ length: 3 }).map((_, i) => (
             <li
               key={i}
-              className="flex items-center gap-2 rounded-md border border-border/60 bg-bg/40 px-2.5 py-2"
+              className="flex items-center gap-2 rounded-md border border-border bg-bg-elevated/40 px-2.5 py-2"
             >
               <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-border/60" />
               <span
@@ -4112,7 +4113,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
   );
   return (
     <div className="space-y-3">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[var(--acorn-pane-radius)] border border-border/60 bg-bg/40 p-3 text-[11px] text-fg-muted">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[var(--acorn-pane-radius)] bg-bg-sidebar/40 p-3 text-[11px] text-fg-muted">
         <dt className="opacity-70">{rt(t, "rightPanel.actions.status")}</dt>
         <dd className="text-fg">
           {detail.status}
@@ -4190,15 +4191,23 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
     nowUnix,
   );
   return (
-    <li className="overflow-hidden rounded-md border border-border/60 bg-bg/40">
+    <li className="overflow-hidden rounded-md border border-border bg-bg-elevated/40">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-2 px-2.5 py-2 text-left transition hover:bg-bg-elevated",
+          "flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left transition hover:bg-bg-elevated",
           expanded ? "border-b border-border/40" : "",
         )}
       >
+        <ChevronRight
+          size={12}
+          aria-hidden
+          className={cn(
+            "shrink-0 text-fg-muted transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
         <WorkflowRunStatusIcon
           status={job.status}
           conclusion={job.conclusion}
