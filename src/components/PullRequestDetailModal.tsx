@@ -507,7 +507,7 @@ function DetailBody({
         </ResizableBody>
       ) : null}
 
-      <nav className="flex shrink-0 border-b border-border">
+      <nav className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1">
         <DetailTabButton
           icon={<MessagesSquare size={13} />}
           label={dt(t, "dialogs.pullRequestDetail.tabConversation")}
@@ -745,7 +745,7 @@ function DetailSkeleton({
         className="h-1.5 shrink-0 border-b border-border bg-bg-sidebar/40"
       />
 
-      <nav className="flex shrink-0 border-b border-border">
+      <nav className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1">
         {[
           { icon: <MessagesSquare size={13} />, w: "w-20" },
           { icon: <GitCommit size={13} />, w: "w-14" },
@@ -833,10 +833,10 @@ function DetailTabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition",
+        "relative flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition",
         active
-          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
-          : "text-fg-muted hover:text-fg",
+          ? "acorn-tab-active-bg text-fg"
+          : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
       )}
     >
       {icon}
@@ -1320,7 +1320,7 @@ function CommitsPane({
     >
       <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
         <aside className="flex h-full flex-col overflow-y-auto border-r border-border text-xs">
-          <ul className="flex flex-col">
+          <ul className="flex flex-col px-1 py-1">
             {orderedCommits.map((c) => (
               <CommitListItem
                 key={c.oid}
@@ -1402,7 +1402,7 @@ function CommitListItem({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
-          "block w-full border-b border-border/40 px-3 py-2 text-left transition",
+          "block w-full rounded-md px-3 py-2 text-left transition",
           selected
             ? "bg-accent/15 text-fg"
             : "text-fg-muted hover:bg-bg-elevated hover:text-fg",
@@ -1647,7 +1647,7 @@ function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
     );
   }
   return (
-    <ul className="flex h-full flex-col overflow-y-auto text-xs">
+    <ul className="flex h-full flex-col overflow-y-auto px-1 py-1 text-xs">
       {checks.map((c, i) => (
         <CheckRow key={`${c.name}-${i}`} check={c} nowUnix={nowUnix} />
       ))}
@@ -1665,7 +1665,7 @@ function CheckRow({
   const t = useTranslation();
   const duration = formatCheckDuration(check, t, nowUnix);
   return (
-    <li className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
+    <li className="flex items-center gap-2 rounded-md px-3 py-2">
       <CheckIcon status={check.status} conclusion={check.conclusion} />
       <span className="min-w-0 flex-1 truncate text-fg">
         {check.workflow_name ? (
