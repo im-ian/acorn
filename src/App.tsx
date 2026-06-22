@@ -613,6 +613,35 @@ function App() {
   }, [appearance.uiScalePercent]);
 
   useEffect(() => {
+    // Cmd/Ctrl + wheel zooms the UI scale, mirroring the keyboard zoom
+    // hotkeys. Registered on window in the capture phase with passive:false
+    // so it runs before the terminal's own wheel handler — otherwise the
+    // pointer sitting over a pane (xterm) would scroll the terminal instead
+    // of zooming. A macOS trackpad pinch arrives as a ctrlKey wheel event,
+    // so this path covers pinch-to-zoom as well.
+    const WHEEL_STEP_THRESHOLD = 80;
+    let accum = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      e.preventDefault();
+      // Normalize line/page deltas to pixels so non-pixel wheels step sanely.
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+      accum += e.deltaY * unit;
+      while (Math.abs(accum) >= WHEEL_STEP_THRESHOLD) {
+        // Scroll up (deltaY < 0) zooms in, matching native zoom convention.
+        const direction = accum > 0 ? -1 : 1;
+        updateUiScalePercent(direction * UI_SCALE_PERCENT_STEP);
+        accum -= Math.sign(accum) * WHEEL_STEP_THRESHOLD;
+      }
+    };
+    window.addEventListener("wheel", onWheel, {
+      capture: true,
+      passive: false,
+    });
+    return () => window.removeEventListener("wheel", onWheel, true);
+  }, []);
+
+  useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
     // first reconcile can run. If the backend reports sessions.json failed
     // to load (corrupt/IO error), the guard prevents the empty session list
