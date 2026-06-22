@@ -1451,7 +1451,7 @@ function TabItem({
           "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-0.5 text-[13px] leading-5 transition",
           isDraggingThisTab && "opacity-40",
           active
-            ? "bg-bg-elevated text-fg"
+            ? "acorn-tab-active-bg text-fg"
             : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         )}
       >
