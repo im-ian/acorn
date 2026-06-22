@@ -1507,7 +1507,7 @@ function CommitDetailView({
   );
 
   const bodySection = (
-    <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-2">
+    <div className="acorn-selectable h-full overflow-y-auto px-4 py-3">
       <Markdown content={commit.message_body} />
     </div>
   );
