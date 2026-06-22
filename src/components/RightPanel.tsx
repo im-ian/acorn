@@ -4875,10 +4875,10 @@ function PullRequestSearchModal({
               type="button"
               onClick={() => setStateFilter(opt.value)}
               className={cn(
-                "rounded px-2 py-0.5 transition",
+                "rounded-md px-2 py-0.5 transition",
                 stateFilter === opt.value
-                  ? "bg-bg text-fg"
-                  : "text-fg-muted hover:text-fg",
+                  ? "bg-bg-elevated text-fg"
+                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
               )}
             >
               {rt(t, prStateLabelKey(opt.value))}
@@ -5073,10 +5073,10 @@ function IssueSearchModal({
               type="button"
               onClick={() => setStateFilter(opt.value)}
               className={cn(
-                "rounded px-2 py-0.5 transition",
+                "rounded-md px-2 py-0.5 transition",
                 stateFilter === opt.value
-                  ? "bg-bg text-fg"
-                  : "text-fg-muted hover:text-fg",
+                  ? "bg-bg-elevated text-fg"
+                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
               )}
             >
               {rt(t, issueStateLabelKey(opt.value))}
