@@ -190,7 +190,11 @@ export function ResizeHandle({
             // Fixed mid-size grip; only opacity/color changes between
             // hover/drag so the user gets a steady rounded visual. For a gap
             // gutter the grip turns accent on drag, replacing the square line.
-            isHorizontal ? "h-10 w-[3px]" : "h-[3px] w-10",
+            // The mask fades the bar's ends to transparent while keeping the
+            // fill color.
+            isHorizontal
+              ? "acorn-resize-grip-v h-10 w-[3px]"
+              : "acorn-resize-grip-h h-[3px] w-10",
             showGapHint && dragging ? "bg-accent" : "bg-white",
             showHandleVisual
               ? dragging
