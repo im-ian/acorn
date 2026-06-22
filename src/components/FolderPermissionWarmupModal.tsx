@@ -147,12 +147,12 @@ export function FolderPermissionWarmupModal({
         <p>{dt(t, "dialogs.folderPermissionWarmup.reason")}</p>
         <p>{dt(t, "dialogs.folderPermissionWarmup.bodyPrompt")}</p>
         {error ? (
-          <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+          <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
             {error}
           </p>
         ) : null}
         {results ? (
-          <div className="rounded border border-border bg-bg">
+          <div className="rounded-md border border-border bg-bg">
             {results.map((result) => (
               <div
                 key={result.id}
@@ -176,7 +176,7 @@ export function FolderPermissionWarmupModal({
           </div>
         ) : null}
         {hasDeniedResult ? (
-          <p className="rounded border border-border bg-bg-elevated/40 px-3 py-2 text-fg-muted">
+          <p className="rounded-md border border-border bg-bg-elevated/40 px-3 py-2 text-fg-muted">
             {dt(t, "dialogs.folderPermissionWarmup.deniedHint")}
           </p>
         ) : null}
@@ -187,7 +187,7 @@ export function FolderPermissionWarmupModal({
             type="button"
             onClick={() => void resetAndRunWarmup()}
             disabled={busy || resetting}
-            className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
             {resetting ? <Loader2 size={12} className="animate-spin" /> : null}
             {resetting
@@ -199,7 +199,7 @@ export function FolderPermissionWarmupModal({
           type="button"
           onClick={onClose}
           disabled={busy || resetting}
-          className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
+          className="rounded-md px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
         >
           {results || error
             ? dt(t, "dialogs.folderPermissionWarmup.done")
@@ -210,7 +210,7 @@ export function FolderPermissionWarmupModal({
             type="button"
             onClick={() => void runWarmup()}
             disabled={busy || resetting}
-            className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
           >
             {busy ? (
               <Loader2 size={12} className="animate-spin" />

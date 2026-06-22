@@ -161,7 +161,7 @@ export function AgentResumeModal({
             “{candidate.preview}”
           </blockquote>
         ) : null}
-        <div className="rounded border border-border bg-bg-elevated/60 px-2.5 py-1.5 font-mono text-[11px] text-fg-muted">
+        <div className="rounded-md border border-border bg-bg-elevated/60 px-2.5 py-1.5 font-mono text-[11px] text-fg-muted">
           {candidate.uuid}
         </div>
       </div>
@@ -169,14 +169,14 @@ export function AgentResumeModal({
         <button
           type="button"
           onClick={handleCancelWithHint}
-          className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          className="rounded-md px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           {dt(t, "dialogs.common.cancel")}
         </button>
         <button
           type="button"
           onClick={handleCopy}
-          className="inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           <Copy size={12} />
           {dt(t, "dialogs.agentResume.copyId")}
@@ -184,7 +184,7 @@ export function AgentResumeModal({
         <button
           type="button"
           onClick={handleResume}
-          className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90"
+          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90"
         >
           <Play size={12} />
           {dt(t, "dialogs.agentResume.resume")}
