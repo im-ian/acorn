@@ -4056,7 +4056,7 @@ function WorkflowRunDetailModal({
 function WorkflowRunDetailSkeleton() {
   return (
     <div className="space-y-3 animate-pulse">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--acorn-pane-radius)] border border-border/60 bg-bg/40 p-3 text-[11px]">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="contents">
             <dt>
@@ -4077,7 +4077,7 @@ function WorkflowRunDetailSkeleton() {
           {Array.from({ length: 3 }).map((_, i) => (
             <li
               key={i}
-              className="flex items-center gap-2 rounded-[var(--acorn-pane-radius)] border border-border/60 bg-bg/40 px-2 py-2"
+              className="flex items-center gap-2 rounded-md border border-border/60 bg-bg/40 px-2.5 py-2"
             >
               <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-border/60" />
               <span
@@ -4112,7 +4112,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
   );
   return (
     <div className="space-y-3">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-fg-muted">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[var(--acorn-pane-radius)] border border-border/60 bg-bg/40 p-3 text-[11px] text-fg-muted">
         <dt className="opacity-70">{rt(t, "rightPanel.actions.status")}</dt>
         <dd className="text-fg">
           {detail.status}
@@ -4168,7 +4168,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
             {rt(t, "rightPanel.actions.noJobs")}
           </div>
         ) : (
-          <ul className="rounded-[var(--acorn-pane-radius)] border border-border/60 divide-y divide-border/40">
+          <ul className="space-y-1">
             {detail.jobs.map((job) => (
               <WorkflowJobRow key={job.id} job={job} nowUnix={nowUnix} />
             ))}
@@ -4190,13 +4190,12 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
     nowUnix,
   );
   return (
-    <li className="bg-bg/40">
+    <li className="overflow-hidden rounded-md border border-border/60 bg-bg/40">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-2 px-2 py-1.5 text-left transition",
-          "sticky top-0 z-10 bg-bg-elevated hover:bg-bg-sidebar",
+          "flex w-full items-center gap-2 px-2.5 py-2 text-left transition hover:bg-bg-elevated",
           expanded ? "border-b border-border/40" : "",
         )}
       >
@@ -4237,7 +4236,7 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
         ) : null}
       </button>
       {expanded && job.steps.length > 0 ? (
-        <ol className="space-y-0.5 px-2 py-1.5 text-xs">
+        <ol className="space-y-0.5 px-2.5 py-2 text-xs">
           {job.steps.map((step) => (
             <WorkflowStepRow key={`${step.number}-${step.name}`} step={step} />
           ))}
