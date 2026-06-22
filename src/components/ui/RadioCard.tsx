@@ -33,7 +33,7 @@ export function RadioCard<T extends string>({
         value={value}
         checked={active}
         onChange={() => onSelect(value)}
-        className="mt-0.5 accent-[var(--color-accent)]"
+        className="acorn-radio mt-0.5"
       />
       <span className="flex flex-col">
         <span className="text-xs font-medium text-fg">{label}</span>

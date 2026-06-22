@@ -159,7 +159,7 @@ export function NewProjectDialog({
                   setIgnoreSafeName(e.target.checked);
                   setError(null);
                 }}
-                className="size-3 accent-accent"
+                className="acorn-check"
               />
               <span>{dt(t, "dialogs.newProject.ignoreSafeName")}</span>
             </label>

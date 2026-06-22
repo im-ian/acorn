@@ -78,7 +78,7 @@ export function RunningSessionCloseWarningDialog({
                 type="checkbox"
                 checked={dontWarnAgain}
                 onChange={(e) => setDontWarnAgain(e.target.checked)}
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {dt(t, "dialogs.runningSessionClose.dontWarnAgain")}
             </label>

@@ -28,7 +28,7 @@ export function CheckboxRow({
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-[var(--color-accent)]"
+        className="acorn-check mt-0.5"
       />
       <span className="flex flex-col">
         <span className="text-xs font-medium text-fg">{label}</span>

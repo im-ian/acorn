@@ -145,7 +145,7 @@ export function RemoveProjectFolderDialog({
                       confirmDeleteEmptyWorktreeWorkspaces: e.target.checked,
                     })
                   }
-                  className="accent-[var(--color-accent)]"
+                  className="acorn-check"
                 />
                 {dt(
                   t,

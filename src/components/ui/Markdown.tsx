@@ -232,7 +232,7 @@ const baseComponents: Components = {
           checked={!!checked}
           disabled={disabled ?? true}
           readOnly
-          className="mr-1 align-middle accent-accent"
+          className="mr-1 align-middle acorn-check"
         />
       );
     }
@@ -282,7 +282,7 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
               checked={!!checked}
               disabled={disabled ?? true}
               readOnly
-              className="mr-1 align-middle accent-accent"
+              className="mr-1 align-middle acorn-check"
             />
           );
         }
@@ -306,7 +306,7 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
               if (!Number.isFinite(index) || index < 0) return;
               onTaskToggle(index, e.currentTarget.checked);
             }}
-            className="mr-1 cursor-pointer align-middle accent-accent"
+            className="mr-1 cursor-pointer align-middle acorn-check"
           />
         );
       },

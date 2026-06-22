@@ -717,7 +717,7 @@ function SessionSettings() {
                 onChange={(e) =>
                   patchSessions({ confirmRemove: e.target.checked })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.sessions.confirmRemove.checkbox")}
             </label>
@@ -733,7 +733,7 @@ function SessionSettings() {
                 onChange={(e) =>
                   patchSessions({ warnBeforeClosingRunning: e.target.checked })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.sessions.warnBeforeClosingRunning.checkbox")}
             </label>
@@ -757,7 +757,7 @@ function SessionSettings() {
                     confirmDeleteIsolatedWorktrees: e.target.checked,
                   })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(
                 t,
@@ -786,7 +786,7 @@ function SessionSettings() {
                     confirmDeleteEmptyWorktreeWorkspaces: e.target.checked,
                   })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(
                 t,
@@ -805,7 +805,7 @@ function SessionSettings() {
                 onChange={(e) =>
                   patchSessions({ showRestartPromptOnExit: e.target.checked })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.sessions.showRestartPromptOnExit.checkbox")}
             </label>
@@ -830,7 +830,7 @@ function SessionSettings() {
                     detachOffscreenTerminals: e.target.checked,
                   })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.terminal.detachOffscreenTerminals.checkbox")}
             </label>
@@ -1663,7 +1663,7 @@ function SessionDisplaySection({
             type="checkbox"
             checked={sessionDisplay.showDetailsOnHover}
             onChange={(e) => patch({ showDetailsOnHover: e.target.checked })}
-            className="accent-[var(--color-accent)]"
+            className="acorn-check"
           />
           {st(t, "settings.appearance.sessionDisplay.hover.checkbox")}
         </label>
@@ -1839,7 +1839,7 @@ function NotificationSettings() {
             onChange={(e) =>
               patchNotifications({ enabled: e.target.checked })
             }
-            className="accent-[var(--color-accent)]"
+            className="acorn-check"
           />
           {st(t, "settings.notifications.system.enable")}
         </label>
@@ -2024,7 +2024,7 @@ function AgentSettings({
               onChange={(e) =>
                 patchAgents({ autoGenerateSessionTitles: e.target.checked })
               }
-              className="accent-[var(--color-accent)]"
+              className="acorn-check"
             />
             <span className="truncate">
               {st(t, "settings.agents.sessionTitles.checkbox")}

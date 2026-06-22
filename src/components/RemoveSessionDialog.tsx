@@ -131,7 +131,7 @@ export function RemoveSessionDialog({
                   onChange={(e) =>
                     setAutoDeleteIsolatedWorktreesNextTime(e.target.checked)
                   }
-                  className="accent-[var(--color-accent)]"
+                  className="acorn-check"
                 />
                 {dt(
                   t,
@@ -144,7 +144,7 @@ export function RemoveSessionDialog({
                   type="checkbox"
                   checked={dontAskAgain}
                   onChange={(e) => setDontAskAgain(e.target.checked)}
-                  className="accent-[var(--color-accent)]"
+                  className="acorn-check"
                 />
                 {dt(t, "dialogs.removeSession.dontAskAgain")}
               </label>

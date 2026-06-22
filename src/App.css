@@ -33,6 +33,83 @@
   background-color: var(--acorn-canvas);
 }
 
+/* Custom checkbox / radio: native appearance off, themed box with an
+   accent fill + checkmark (checkbox) or accent dot (radio). */
+.acorn-check,
+.acorn-radio {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  width: 0.95rem;
+  height: 0.95rem;
+  border: 1px solid color-mix(in oklab, var(--color-fg-muted) 55%, transparent);
+  background: var(--color-bg);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.acorn-check {
+  border-radius: 0.3rem;
+}
+
+.acorn-radio {
+  border-radius: 9999px;
+}
+
+.acorn-check:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.acorn-radio:checked {
+  border-color: var(--color-accent);
+}
+
+.acorn-check:checked::after {
+  content: "";
+  width: 0.3rem;
+  height: 0.52rem;
+  margin-top: -0.1rem;
+  border: solid var(--color-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.acorn-radio::after {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  transform: scale(0);
+  transition: transform 120ms ease;
+}
+
+.acorn-radio:checked::after {
+  transform: scale(1);
+}
+
+.acorn-check:not(:disabled):hover,
+.acorn-radio:not(:disabled):hover {
+  border-color: color-mix(in oklab, var(--color-accent) 70%, transparent);
+}
+
+.acorn-check:disabled,
+.acorn-radio:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.acorn-check:focus-visible,
+.acorn-radio:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 50%, transparent);
+  outline-offset: 1px;
+}
+
 /* Active tab pill: a touch lighter than the elevated surface — mixes a
    little white into the theme's elevated token so the active tab reads as
    a brighter raised chip, while staying theme-adaptive. */
