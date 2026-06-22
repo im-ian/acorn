@@ -431,7 +431,7 @@ export function RightPanel() {
     <aside className="flex h-full w-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
       <nav
         className={cn(
-          "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border",
+          "flex shrink-0 gap-0.5 overflow-x-auto whitespace-nowrap border-b border-border px-1.5 py-1",
           "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
         aria-label="Right panel group"
@@ -449,7 +449,7 @@ export function RightPanel() {
       {visibleTabs.length > 0 ? (
         <nav
           className={cn(
-            "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border bg-bg-elevated/30",
+            "flex shrink-0 gap-0.5 overflow-x-auto whitespace-nowrap border-b border-border bg-bg-elevated/30 px-1.5 py-1",
             "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           )}
           aria-label="Right panel sub-tab"
@@ -631,10 +631,10 @@ function TabButton({ icon, label, active, onClick, badge, className }: TabButton
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex shrink-0 items-center justify-center gap-1.5 px-3 py-2 text-xs transition",
+        "relative flex shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition",
         active
-          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
-          : "text-fg-muted hover:text-fg",
+          ? "acorn-tab-active-bg text-fg"
+          : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         className,
       )}
     >
@@ -664,10 +664,10 @@ function SubTabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex shrink-0 items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] transition",
+        "relative flex shrink-0 items-center justify-center gap-1.5 rounded px-2 py-1 text-[11px] transition",
         active
-          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-accent/40"
-          : "text-fg-muted/80 hover:text-fg",
+          ? "bg-bg-elevated text-fg"
+          : "text-fg-muted/80 hover:bg-bg-elevated/40 hover:text-fg",
       )}
     >
       {icon}
