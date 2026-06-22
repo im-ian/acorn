@@ -894,7 +894,7 @@ function TabStrip({
     <div
       ref={stripRef}
       data-pane-tab-strip={paneId}
-      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-1.5"
+      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-1 pt-px"
     >
       {tabs.map((tab, i) => (
         <TabItem
