@@ -717,7 +717,7 @@ function BackgroundSessionTooltipRow({
     <div className="flex min-w-0 items-start gap-2">
       <span
         aria-hidden="true"
-        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-md border border-border/70 bg-bg/60 text-fg-muted"
+        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border border-border/70 bg-bg/60 text-fg-muted"
       >
         {icon}
       </span>
@@ -760,7 +760,7 @@ function RowButton({
       onClick={onClick}
       disabled={busy || disabled}
       className={cn(
-        "flex h-6 w-6 items-center justify-center rounded-md border border-border bg-bg transition",
+        "flex h-6 w-6 items-center justify-center rounded border border-border bg-bg transition",
         "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-40",
         tone === "danger" ? "text-danger" : "text-fg",
       )}
