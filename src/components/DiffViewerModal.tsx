@@ -72,7 +72,7 @@ export function DiffViewerModal({
                     <Markdown content={body!} />
                   </div>
                 </Panel>
-                <ResizeHandle direction="vertical" thin />
+                <ResizeHandle direction="vertical" gap />
                 <Panel id="diff" order={2} defaultSize={75} minSize={20}>
                   <DiffSplitView payload={payload} cwd={cwd} />
                 </Panel>

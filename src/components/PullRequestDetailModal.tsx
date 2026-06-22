@@ -1333,7 +1333,7 @@ function CommitsPane({
           </ul>
         </aside>
       </Panel>
-      <ResizeHandle thin />
+      <ResizeHandle gap />
       <Panel id="detail" order={2} defaultSize={72} minSize={40}>
         <div className="flex h-full min-w-0 flex-col">
           {selected ? (
@@ -1583,7 +1583,7 @@ function CommitDetailView({
             <Panel id="body" order={1} defaultSize={20} minSize={8} maxSize={70}>
               {bodySection}
             </Panel>
-            <ResizeHandle direction="vertical" thin />
+            <ResizeHandle direction="vertical" gap />
             <Panel id="diff" order={2} defaultSize={80} minSize={20}>
               {diffSection}
             </Panel>
