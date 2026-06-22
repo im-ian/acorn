@@ -60,7 +60,7 @@ export function DiffViewerModal({
             actions={headerActions}
             onClose={onClose}
           />
-          <div className="min-h-0 flex-1 overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden p-1.5">
             {hasBody ? (
               <PanelGroup
                 direction="vertical"
@@ -68,7 +68,7 @@ export function DiffViewerModal({
                 className="h-full"
               >
                 <Panel id="body" order={1} defaultSize={25} minSize={8} maxSize={70}>
-                  <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-2">
+                  <div className="acorn-selectable h-full overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 px-4 py-2">
                     <Markdown content={body!} />
                   </div>
                 </Panel>
