@@ -179,8 +179,8 @@ export function ResizeHandle({
                 isHorizontal ? "to bottom" : "to right"
               }, transparent, ${
                 dragging
-                  ? "color-mix(in oklab, var(--color-accent) 55%, transparent)"
-                  : "color-mix(in oklab, #ffffff 10%, transparent)"
+                  ? "color-mix(in oklab, var(--color-accent) 65%, transparent)"
+                  : "color-mix(in oklab, #ffffff 15%, transparent)"
               }, transparent)`,
             }}
           />
