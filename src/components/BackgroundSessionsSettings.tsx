@@ -199,7 +199,7 @@ export function BackgroundSessionsSettings() {
         label={t("backgroundSessions.status.label")}
         hint={t("backgroundSessions.status.hint")}
       >
-        <div className="rounded border border-border bg-bg-elevated p-3 text-xs">
+        <div className="rounded-md border border-border bg-bg-elevated p-3 text-xs">
           <div className="flex items-center gap-2">
             <span className={cn("font-medium", indicator.className)}>
               ● {indicator.label}
@@ -247,7 +247,7 @@ export function BackgroundSessionsSettings() {
             onClick={() => void handleRestart()}
             disabled={!enabled || busy !== null}
             className={cn(
-              "flex items-center gap-1 rounded border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
+              "flex items-center gap-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
               "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
             )}
           >
@@ -269,7 +269,7 @@ export function BackgroundSessionsSettings() {
                 !enabled || !running || inactiveSessionCount === 0 || busy !== null
               }
               className={cn(
-                "flex items-center gap-1 rounded border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
+                "flex items-center gap-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1 text-xs transition",
                 "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
               )}
             >
@@ -282,7 +282,7 @@ export function BackgroundSessionsSettings() {
             </button>
           </Tooltip>
           {confirmShutdown ? (
-            <div className="flex items-center gap-2 rounded border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
+            <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
               <span>
                 {t("backgroundSessions.controls.confirmShutdownPrompt")}
               </span>
@@ -290,7 +290,7 @@ export function BackgroundSessionsSettings() {
                 type="button"
                 onClick={() => void handleShutdown()}
                 disabled={busy !== null}
-                className="rounded bg-danger px-2 py-0.5 font-medium text-bg disabled:opacity-50"
+                className="rounded-md bg-danger px-2 py-0.5 font-medium text-bg disabled:opacity-50"
               >
                 {busy === "shutdown" ? (
                   <Loader2 size={10} className="animate-spin" />
@@ -313,7 +313,7 @@ export function BackgroundSessionsSettings() {
               onClick={() => setConfirmShutdown(true)}
               disabled={!enabled || !running || busy !== null}
               className={cn(
-                "flex items-center gap-1 rounded border border-border bg-bg-elevated px-2.5 py-1 text-xs text-danger transition",
+                "flex items-center gap-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1 text-xs text-danger transition",
                 "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-50",
               )}
             >
@@ -453,7 +453,7 @@ function SessionsList({
   }
   return (
     <div className="space-y-2">
-      <ul className="divide-y divide-border rounded border border-border bg-bg-elevated text-xs">
+      <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated text-xs">
         {sessions.map((s) => {
           const busy = rowBusy === s.id;
           const app = appById.get(s.id);
@@ -503,7 +503,7 @@ function SessionsList({
                 ) : null}
               </span>
               {s.agent_kind ? (
-                <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-fg-muted">
+                <span className="rounded-md bg-bg px-1.5 py-0.5 text-[10px] text-fg-muted">
                   {s.agent_kind}
                 </span>
               ) : null}
@@ -684,7 +684,7 @@ function renderAppMetaTooltip(
         valueClassName="break-all font-mono text-fg-muted"
       />
       {!app ? (
-        <div className="flex items-center gap-1.5 rounded border border-warning/30 bg-warning/10 px-1.5 py-1 text-[10px] leading-none text-warning">
+        <div className="flex items-center gap-1.5 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-1 text-[10px] leading-none text-warning">
           <AlertCircle size={11} aria-hidden="true" className="shrink-0" />
           {t("backgroundSessions.metadata.orphaned")}
         </div>
@@ -717,7 +717,7 @@ function BackgroundSessionTooltipRow({
     <div className="flex min-w-0 items-start gap-2">
       <span
         aria-hidden="true"
-        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border border-border/70 bg-bg/60 text-fg-muted"
+        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-md border border-border/70 bg-bg/60 text-fg-muted"
       >
         {icon}
       </span>
@@ -760,7 +760,7 @@ function RowButton({
       onClick={onClick}
       disabled={busy || disabled}
       className={cn(
-        "flex h-6 w-6 items-center justify-center rounded border border-border bg-bg transition",
+        "flex h-6 w-6 items-center justify-center rounded-md border border-border bg-bg transition",
         "hover:bg-bg-elevated/70 disabled:cursor-default disabled:opacity-40",
         tone === "danger" ? "text-danger" : "text-fg",
       )}
