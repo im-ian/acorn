@@ -4,7 +4,7 @@ import {
   CircleX,
   Columns2,
   Copy,
-  Files,
+  File as FileIcon,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -1494,7 +1494,7 @@ function TabItem({
             </Tooltip>
           ) : tab.kind === "code" ? (
             <Tooltip label={tabPath} side="bottom">
-              <Files
+              <FileIcon
                 size={12}
                 className="pointer-events-none shrink-0 text-fg-muted"
               />
@@ -1647,7 +1647,7 @@ function WorkspaceTabDragGhost({
           )}
         />
       ) : tab.kind === "code" ? (
-        <Files
+        <FileIcon
           size={11}
           className="pointer-events-none shrink-0 text-fg-muted"
         />
