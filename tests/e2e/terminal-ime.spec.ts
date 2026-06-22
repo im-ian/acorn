@@ -178,6 +178,31 @@ test.describe("terminal: IME (PR #104 regression)", () => {
     expect(writes.join("")).not.toContain("한한");
   });
 
+  test("Korean syllable + no-break-space terminator commits the syllable", async ({
+    page,
+    tauri,
+  }) => {
+    await seed(tauri);
+    await activateTerminal(page);
+
+    await runIme(page, [
+      { type: "keydown", key: "Process", keyCode: 229 },
+      { type: "input", inputType: "insertText", data: "한", taValue: "한" },
+      { type: "keydown", key: "\u00a0", keyCode: 229 },
+      {
+        type: "input",
+        inputType: "insertText",
+        data: "\u00a0",
+        taValue: "\u00a0",
+      },
+    ]);
+
+    const writes = await getWrites(page);
+    expect(writes.filter((w) => w === "한").length).toBe(1);
+    expect(writes.join("")).toBe("한 ");
+    expect(writes.join("")).not.toContain("한한");
+  });
+
   test("insertFromComposition arriving before any terminator still commits once", async ({
     page,
     tauri,

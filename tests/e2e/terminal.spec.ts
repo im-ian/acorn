@@ -351,6 +351,19 @@ async function enableCjkCellWidthHeuristic(page: Page): Promise<void> {
   });
 }
 
+async function disableTerminalUnicodeSpaceNormalization(
+  page: Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        experiments: { normalizeTerminalUnicodeSpaces: false },
+      }),
+    );
+  });
+}
+
 async function terminalEmojiLetterSpacing(
   page: Page,
   marker: string,
@@ -540,6 +553,153 @@ test.describe("terminal: spawn", () => {
         ),
       )
       .toBe("subpixel-antialiased");
+  });
+
+  test("normalizes no-break spaces when pasting shell commands", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await page.evaluate(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!ta) throw new Error("xterm helper textarea missing");
+      const event = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          getData: (type: string) =>
+            type === "text/plain" ? "pnpm\u00a0run\u202fdev" : "",
+          files: { length: 0 },
+          items: { length: 0 },
+          types: ["text/plain"],
+        },
+      });
+      ta.dispatchEvent(event);
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual(["pnpm run dev"]);
+  });
+
+  test("normalizes no-break spaces from direct terminal input", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.insertText("pnpm\u00a0run\u202fdev");
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? []
+          ).join(""),
+        ),
+      )
+      .toBe("pnpm run dev");
+  });
+
+  test("preserves no-break spaces when terminal Unicode space normalization is disabled", async ({
+    page,
+    tauri,
+  }) => {
+    await disableTerminalUnicodeSpaceNormalization(page);
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.insertText("pnpm\u00a0run\u202fdev");
+
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? []
+          ).join(""),
+        ),
+      )
+      .toBe("pnpm\u00a0run\u202fdev");
+  });
+
+  test("normalizes no-break space keypresses before xterm handles them", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await page.evaluate(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>(
+        ".xterm-helper-textarea",
+      );
+      if (!ta) throw new Error("xterm helper textarea missing");
+      const event = new KeyboardEvent("keypress", {
+        key: "\u00a0",
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "charCode", { get: () => 0xa0 });
+      Object.defineProperty(event, "which", { get: () => 0xa0 });
+      ta.dispatchEvent(event);
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual([" "]);
   });
 
   test("drops desktop file paths into the focused terminal", async ({

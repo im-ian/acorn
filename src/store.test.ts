@@ -2706,6 +2706,16 @@ describe("pendingTerminalInput", () => {
     });
   });
 
+  it("preserves Unicode spaces in queued commands", () => {
+    const { setPendingTerminalInput, consumePendingTerminalInput } =
+      useAppStore.getState();
+    setPendingTerminalInput("sess-1", "cd '/tmp/a\u00a0b'\n");
+    expect(consumePendingTerminalInput("sess-1")).toEqual({
+      command: "cd '/tmp/a\u00a0b'\n",
+      adoptWorktreeOnExit: false,
+    });
+  });
+
   it("does not cross-contaminate session ids", () => {
     const { setPendingTerminalInput, consumePendingTerminalInput } =
       useAppStore.getState();

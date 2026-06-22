@@ -38,6 +38,25 @@ describe("terminalPasteAction", () => {
       }),
     ).toEqual({ kind: "pasteText", text: "hello" });
   });
+
+  it("normalizes Unicode shell separators in pasted text", () => {
+    expect(
+      terminalPasteAction({
+        text: "pnpm\u00a0run\u202fdev",
+        hasImagePayload: false,
+      }),
+    ).toEqual({ kind: "pasteText", text: "pnpm run dev" });
+  });
+
+  it("preserves Unicode shell separators when normalization is disabled", () => {
+    expect(
+      terminalPasteAction({
+        text: "pnpm\u00a0run\u202fdev",
+        hasImagePayload: false,
+        normalizeUnicodeSpaces: false,
+      }),
+    ).toEqual({ kind: "pasteText", text: "pnpm\u00a0run\u202fdev" });
+  });
 });
 
 describe("clipboard image detection", () => {
