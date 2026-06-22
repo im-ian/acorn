@@ -1335,7 +1335,7 @@ function CommitsPane({
       </Panel>
       <ResizeHandle gap />
       <Panel id="detail" order={2} defaultSize={72} minSize={40}>
-        <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
+        <div className="flex h-full min-w-0 flex-col">
           {selected ? (
             <CommitDetailView
               commit={selected}
@@ -1487,7 +1487,7 @@ function CommitDetailView({
   }, [repoPath, commit.oid]);
 
   const diffSection = (
-    <div className="h-full min-h-0 overflow-hidden">
+    <div className="h-full min-h-0 overflow-hidden p-1.5">
       {error ? (
         <div className="flex h-full items-center justify-center px-4 text-center text-xs text-danger">
           {error}
@@ -1506,93 +1506,103 @@ function CommitDetailView({
     </div>
   );
 
-  const bodySection = (
-    <div className="acorn-selectable h-full overflow-y-auto px-4 py-3">
+  const summaryBody = (
+    <div className="acorn-selectable border-t border-border/60 px-4 py-3">
       <Markdown content={commit.message_body} />
     </div>
   );
 
-  return (
-    <>
-      <header className="flex shrink-0 items-start gap-2 border-b border-border bg-bg-sidebar/40 px-4 py-2.5">
-        <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
-        <div className="min-w-0 flex-1">
-          <Tooltip
-            label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
-            side="bottom"
-            multiline
-            className="min-w-0 w-full"
-          >
-            <div className="w-full truncate text-[13px] font-semibold tracking-tight text-fg">
-              {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
-            </div>
-          </Tooltip>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
-            {primaryAuthor ? (
-              <AuthorTag
-                login={primaryAuthor.login}
-                fallbackName={primaryAuthor.name || dt(t, "dialogs.pullRequestDetail.unknown")}
-                size={16}
-                nameClass="text-[11px] text-fg-muted"
-              />
-            ) : null}
-            {commit.authors.length > 1 ? (
-              <span className="opacity-70">
-                +{commit.authors.length - 1}
-              </span>
-            ) : null}
-            <span className="opacity-50">·</span>
-            <span className="font-mono opacity-70">
-              {formatTimestamp(commit.committed_date)}
-            </span>
+  const commitHeader = (
+    <header className="flex shrink-0 items-start gap-2 px-4 py-2.5">
+      <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
+      <div className="min-w-0 flex-1">
+        <Tooltip
+          label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
+          side="bottom"
+          multiline
+          className="min-w-0 w-full"
+        >
+          <div className="w-full truncate text-[13px] font-semibold tracking-tight text-fg">
+            {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
           </div>
+        </Tooltip>
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
+          {primaryAuthor ? (
+            <AuthorTag
+              login={primaryAuthor.login}
+              fallbackName={primaryAuthor.name || dt(t, "dialogs.pullRequestDetail.unknown")}
+              size={16}
+              nameClass="text-[11px] text-fg-muted"
+            />
+          ) : null}
+          {commit.authors.length > 1 ? (
+            <span className="opacity-70">+{commit.authors.length - 1}</span>
+          ) : null}
+          <span className="opacity-50">·</span>
+          <span className="font-mono opacity-70">
+            {formatTimestamp(commit.committed_date)}
+          </span>
         </div>
-        <Tooltip label={dt(t, "dialogs.pullRequestDetail.copySha")} side="bottom">
+      </div>
+      <Tooltip label={dt(t, "dialogs.pullRequestDetail.copySha")} side="bottom">
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(commit.oid);
+          }}
+          className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+        >
+          {shortOid}
+        </button>
+      </Tooltip>
+      {commitUrl ? (
+        <Tooltip
+          label={dt(t, "dialogs.pullRequestDetail.openCommitOnGithub")}
+          side="bottom"
+        >
           <button
             type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(commit.oid);
-            }}
-            className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            onClick={() => void openUrl(commitUrl)}
+            className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
-            {shortOid}
+            <ExternalLink size={12} />
           </button>
         </Tooltip>
-        {commitUrl ? (
-          <Tooltip
-            label={dt(t, "dialogs.pullRequestDetail.openCommitOnGithub")}
-            side="bottom"
-          >
-            <button
-              type="button"
-              onClick={() => void openUrl(commitUrl)}
-              className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-            >
-              <ExternalLink size={12} />
-            </button>
-          </Tooltip>
-        ) : null}
-      </header>
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {hasBody ? (
-          <PanelGroup
-            direction="vertical"
-            autoSaveId="acorn:pr-commit-body-diff"
-            className="h-full"
-          >
-            <Panel id="body" order={1} defaultSize={20} minSize={8} maxSize={70}>
-              {bodySection}
-            </Panel>
-            <ResizeHandle direction="vertical" gap />
-            <Panel id="diff" order={2} defaultSize={80} minSize={20}>
-              {diffSection}
-            </Panel>
-          </PanelGroup>
-        ) : (
-          diffSection
-        )}
-      </div>
-    </>
+      ) : null}
+    </header>
+  );
+
+  // Header + summary live in one card; the diff is a separate card below.
+  const infoCard = (
+    <div className="flex h-full flex-col overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40">
+      {commitHeader}
+      {hasBody ? summaryBody : null}
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      {hasBody ? (
+        <PanelGroup
+          direction="vertical"
+          autoSaveId="acorn:pr-commit-body-diff"
+          className="h-full"
+        >
+          <Panel id="info" order={1} defaultSize={24} minSize={12} maxSize={70}>
+            <div className="h-full p-1.5">{infoCard}</div>
+          </Panel>
+          <ResizeHandle direction="vertical" gap />
+          <Panel id="diff" order={2} defaultSize={76} minSize={20}>
+            {diffSection}
+          </Panel>
+        </PanelGroup>
+      ) : (
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="shrink-0 p-1.5 pb-0">{infoCard}</div>
+          <div className="min-h-0 flex-1">{diffSection}</div>
+        </div>
+      )}
+    </div>
   );
 }
 
