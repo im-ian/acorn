@@ -123,7 +123,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               <span className="text-[oklch(62%_0.22_25)]">-{totals.del}</span>
             </span>
           </header>
-          <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+          <ul className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
             {entries.map((entry) => {
               const active = entry.index === selected.index;
               const dir = dirnameOf(entry.path);
@@ -145,7 +145,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
                         setMenu({ x: e.clientX, y: e.clientY, entry });
                       }}
                       className={cn(
-                        "flex w-full flex-col items-stretch gap-0.5 px-3 py-1.5 text-left font-mono text-xs transition",
+                        "flex w-full flex-col items-stretch gap-0.5 rounded-md px-3 py-1.5 text-left font-mono text-xs transition",
                         active
                           ? "bg-bg-elevated text-fg"
                           : "text-fg-muted hover:bg-bg-elevated/60 hover:text-fg",
