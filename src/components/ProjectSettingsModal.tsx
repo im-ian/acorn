@@ -341,16 +341,16 @@ export function ProjectSettingsModal({
             onClose={onClose}
           />
           <div className="flex h-[28rem]">
-            <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
+            <nav className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
               {PROJECT_SETTINGS_TABS.map((tabMeta) => (
                 <button
                   key={tabMeta.id}
                   type="button"
                   onClick={() => setTab(tabMeta.id)}
                   className={cn(
-                    "px-4 py-1.5 text-left text-xs transition",
+                    "rounded-md px-3 py-1.5 text-left text-xs transition",
                     tab === tabMeta.id
-                      ? "bg-bg-elevated text-fg"
+                      ? "acorn-tab-active-bg text-fg"
                       : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
                   )}
                 >
@@ -544,7 +544,7 @@ function ProjectWorktreeList({
           {dt(t, "dialogs.projectSettings.noWorktrees")}
         </p>
       ) : (
-        <ul className="divide-y divide-border rounded-md border border-border bg-bg">
+        <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
           {worktrees.map((worktree) => {
             const modified = formatModifiedTime(worktree.modified_ms);
             const isRemoving = removingPath === worktree.path;
@@ -715,7 +715,7 @@ function RemoveWorktreeConfirmDialog({
                   {sessions.map((session) => (
                     <li
                       key={session.id}
-                      className="truncate rounded bg-bg/60 px-2 py-1 text-[11px] text-fg"
+                      className="truncate rounded-md bg-bg/60 px-2 py-1 text-[11px] text-fg"
                     >
                       {session.name}
                     </li>
