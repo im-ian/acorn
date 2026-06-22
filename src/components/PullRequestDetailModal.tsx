@@ -1319,7 +1319,7 @@ function CommitsPane({
       className="h-full min-h-0"
     >
       <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
-        <aside className="flex h-full flex-col overflow-y-auto border-r border-border text-xs">
+        <aside className="flex h-full flex-col overflow-y-auto text-xs">
           <ul className="flex flex-col px-1 py-1">
             {orderedCommits.map((c) => (
               <CommitListItem
@@ -1404,8 +1404,8 @@ function CommitListItem({
         className={cn(
           "block w-full rounded-md px-3 py-2 text-left transition",
           selected
-            ? "bg-accent/15 text-fg"
-            : "text-fg-muted hover:bg-bg-elevated hover:text-fg",
+            ? "bg-bg-elevated text-fg"
+            : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         )}
       >
         <Tooltip
