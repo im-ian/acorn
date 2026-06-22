@@ -494,8 +494,12 @@ export function Pane({ paneId }: PaneProps) {
 
   return (
     <div
-      className="relative flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg"
+      className={cn(
+        "relative flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border bg-bg transition-colors",
+        isFocused ? "border-accent" : "border-border",
+      )}
       data-pane-root={paneId}
+      data-active-pane-indicator={isFocused ? paneId : undefined}
       onMouseDown={(e) => {
         if (e.button === 0 && isTabStripMouseDownTarget(e.target)) return;
         if (!isFocused) setFocusedPane(paneId);
@@ -557,13 +561,6 @@ export function Pane({ paneId }: PaneProps) {
           setPaneMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {isFocused ? (
-          <span
-            aria-hidden
-            data-active-pane-indicator={paneId}
-            className="pointer-events-none absolute left-0 top-0 z-10 h-10 w-0.5 rounded-r bg-accent/80"
-          />
-        ) : null}
         {/*
           The actual <Terminal> for the active session lives in <TerminalHost>
           at App level. It is portaled into a per-session target div which
