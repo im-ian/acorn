@@ -4460,7 +4460,7 @@ function GitHubListRow({
         }
       }}
       className={cn(
-        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
+        "mx-1 my-0.5 flex flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left transition focus-visible:outline-none",
         hoverBg,
       )}
     >

@@ -1948,7 +1948,7 @@ function EntryRow({
             onContextMenu(e, entry);
           }}
           className={cn(
-            "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
+            "flex w-full items-center gap-1 whitespace-nowrap rounded-md py-0.5 pr-2 text-left transition",
             isSelected
               ? "bg-accent/25 text-fg"
               : isActive
