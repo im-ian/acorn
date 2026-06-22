@@ -553,7 +553,7 @@ function DetailBody({
         />
       </nav>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden p-1.5">
         {tab === "conversation" ? (
           <ConversationPane
             comments={detail.comments}
@@ -1319,7 +1319,7 @@ function CommitsPane({
       className="h-full min-h-0"
     >
       <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
-        <aside className="flex h-full flex-col overflow-y-auto text-xs">
+        <aside className="flex h-full flex-col overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar text-xs">
           <ul className="flex flex-col px-1 py-1">
             {orderedCommits.map((c) => (
               <CommitListItem
@@ -1335,7 +1335,7 @@ function CommitsPane({
       </Panel>
       <ResizeHandle gap />
       <Panel id="detail" order={2} defaultSize={72} minSize={40}>
-        <div className="flex h-full min-w-0 flex-col">
+        <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
           {selected ? (
             <CommitDetailView
               commit={selected}
