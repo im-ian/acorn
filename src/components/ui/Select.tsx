@@ -468,7 +468,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
         ? createPortal(
             <div
               ref={listboxRef}
-              className="fixed z-[60] overflow-hidden rounded-md border border-border bg-bg-elevated font-mono text-xs text-fg shadow-xl"
+              className="fixed z-[60] overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated font-mono text-xs text-fg shadow-xl"
               style={{
                 left: listboxRect.left,
                 minWidth: listboxRect.width,
@@ -503,7 +503,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
                 id={listboxId}
                 role="listbox"
                 aria-multiselectable={multiple || undefined}
-                className="max-h-56 overflow-y-auto py-1"
+                className="max-h-56 overflow-y-auto px-1 py-1"
               >
                 {visibleGroups.length > 0 ? (
                   visibleGroups.map((group, groupIndex) => (
@@ -538,7 +538,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
                             aria-disabled={option.disabled || undefined}
                             aria-selected={selected}
                             className={cn(
-                              "flex min-h-7 cursor-default items-center gap-2 px-2 py-1.5",
+                              "flex min-h-7 cursor-default items-center gap-2 rounded-md px-2 py-1.5",
                               option.disabled && "opacity-50",
                               active && "bg-accent/15 text-fg",
                               !active && "text-fg",
