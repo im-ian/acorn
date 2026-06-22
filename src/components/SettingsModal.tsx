@@ -406,14 +406,14 @@ export function SettingsModal() {
         onClose={() => setOpen(false)}
       />
       <div className="flex h-[28rem]">
-        <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
+        <nav className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
           {TABS.map((tabMeta) => (
             <button
               key={tabMeta.id}
               type="button"
               onClick={() => setTab(tabMeta.id)}
               className={cn(
-                "px-4 py-1.5 text-left text-xs transition",
+                "rounded-md px-3 py-1.5 text-left text-xs transition",
                 tab === tabMeta.id
                   ? "bg-bg-elevated text-fg"
                   : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
@@ -422,7 +422,7 @@ export function SettingsModal() {
               {t(tabMeta.labelKey)}
             </button>
           ))}
-          <div className="mt-auto px-4 pb-2">
+          <div className="mt-auto px-2 pb-1 pt-2">
             <button
               type="button"
               onClick={reset}
