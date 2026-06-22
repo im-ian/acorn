@@ -753,7 +753,7 @@ function Empty({ msg }: { msg: string }) {
 function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
   return (
     <div
-      className="flex items-center gap-2 border-b border-border/40 px-3 py-2"
+      className="flex items-center gap-2 rounded-md px-3 py-2"
       style={{ animationDelay: `${pulseDelayMs}ms` }}
     >
       <span className="h-3 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
@@ -765,7 +765,7 @@ function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
 
 function SkeletonList({ count = 6 }: { count?: number }) {
   return (
-    <div className="text-xs">
+    <div className="px-1 py-1 text-xs">
       {Array.from({ length: count }).map((_, i) => (
         <SkeletonRow key={i} pulseDelayMs={i * 80} />
       ))}
@@ -788,7 +788,7 @@ function PrSkeletonRow({ index }: { index: number }) {
   const titleW = titleWidths[index % titleWidths.length];
   const branchW = branchWidths[index % branchWidths.length];
   return (
-    <div className="flex flex-col gap-1.5 border-b border-border/40 px-3 py-2">
+    <div className="flex flex-col gap-1.5 rounded-md px-3 py-2">
       <div className="flex w-full items-center gap-2">
         <span className="h-3 w-8 shrink-0 animate-pulse rounded bg-fg-muted/15" />
         <span className="h-4 w-12 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
@@ -813,7 +813,7 @@ function PrSkeletonRow({ index }: { index: number }) {
 
 function PrSkeletonList({ count = 6 }: { count?: number }) {
   return (
-    <div className="text-xs">
+    <div className="px-1 py-1 text-xs">
       {Array.from({ length: count }).map((_, i) => (
         <PrSkeletonRow key={i} index={i} />
       ))}
@@ -842,7 +842,7 @@ function HistorySkeletonRow({
   return (
     <div
       aria-hidden="true"
-      className="flex items-start gap-2 border-b border-border/40 px-3 py-2.5"
+      className="flex items-start gap-2 rounded-md px-3 py-2.5"
       style={{ animationDelay: `${index * 60}ms` }}
     >
       <span
@@ -1709,7 +1709,7 @@ function AgentHistoryTab({
         ) : visibleItems.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.emptyForFilter")} />
         ) : (
-          <div className="divide-y divide-border/50">
+          <div className="space-y-0.5 px-1 py-1">
             {visibleItems.map((item) => {
               const providerTone =
                 item.provider === "codex"
@@ -1720,7 +1720,7 @@ function AgentHistoryTab({
               return (
                 <div
                   key={`${item.provider}:${item.id}:${item.transcript_path}`}
-                  className="group cursor-default px-3 py-2.5 hover:bg-bg-elevated/60"
+                  className="group cursor-default rounded-md px-3 py-2.5 hover:bg-bg-elevated/60"
                   onDoubleClick={() => void runSession(item)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -2248,6 +2248,7 @@ function CommitsTab({
                 key={vi.key}
                 data-index={vi.index}
                 ref={virtualizer.measureElement}
+                className="px-1"
                 style={{
                   position: "absolute",
                   top: 0,
@@ -2272,7 +2273,7 @@ function CommitsTab({
                       setMenu({ x: e.clientX, y: e.clientY, commit: c });
                     }}
                     className={cn(
-                      "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left text-xs transition",
+                      "flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-xs transition",
                       selected === c.sha
                         ? "bg-bg-elevated"
                         : "hover:bg-bg-elevated/50",
@@ -2597,7 +2598,7 @@ function StagedTab({
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
-        <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
+        <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto px-1 py-1">
           {files.map((f) => {
             const canOpen = !isDeleted(f);
             return (
@@ -2615,7 +2616,7 @@ function StagedTab({
                   openInCodeViewer(f);
                 }}
                 className={cn(
-                  "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
+                  "flex cursor-default items-center gap-2 rounded-md px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
                   selectedPath === f.path && "bg-bg-elevated",
                 )}
               >
@@ -3772,7 +3773,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
             }
           />
         ) : (
-          <ul className="text-xs">
+          <ul className="px-1 py-1 text-xs">
             {visibleItems.map((run) => (
               <WorkflowRunRow
                 key={run.id}
@@ -3835,7 +3836,7 @@ function WorkflowRunRow({
             }
           }}
           className={cn(
-            "flex w-full items-start gap-2 border-b border-border/40 px-3 py-2 text-left",
+            "flex w-full items-start gap-2 rounded-md px-3 py-2 text-left",
             "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
           )}
         >
