@@ -118,7 +118,7 @@ export const UI_SCALE_PERCENT_MIN = 75;
 export const UI_SCALE_PERCENT_MAX = 150;
 export const UI_SCALE_PERCENT_STEP = 5;
 export const NOTIFICATION_HISTORY_LIMIT_MIN = 1;
-export const NOTIFICATION_HISTORY_LIMIT_DEFAULT = 50;
+export const NOTIFICATION_HISTORY_LIMIT_DEFAULT = 20;
 export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
 export const MOUNTED_TERMINAL_LIMIT_MIN = 1;
 export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
@@ -469,7 +469,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
   agents: {
     selected: "claude",
-    autoGenerateSessionTitles: false,
+    autoGenerateSessionTitles: true,
     sessionTitlePrompt: DEFAULT_SESSION_TITLE_PROMPT,
     customCommand: "",
     ollama: { model: "" },
@@ -491,7 +491,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   notifications: {
     enabled: true,
     maxHistory: NOTIFICATION_HISTORY_LIMIT_DEFAULT,
-    autoDeleteRead: false,
+    autoDeleteRead: true,
     events: {
       needsInput: true,
       failed: true,
@@ -503,8 +503,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     showSessionCount: true,
     showSessionStatus: true,
     showGithubAccount: true,
-    showWorkingDirectory: true,
-    showAgentTokenUsage: false,
+    showWorkingDirectory: false,
+    showAgentTokenUsage: true,
     showMemory: true,
   },
   github: {

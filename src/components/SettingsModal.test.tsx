@@ -750,14 +750,14 @@ describe("SettingsModal font controls", () => {
     });
 
     expect(input).toBeInstanceOf(HTMLInputElement);
-    expect(input?.checked).toBe(false);
+    expect(input?.checked).toBe(true);
 
     act(() => {
       if (!input) throw new Error("Agent token usage checkbox not found");
       input.click();
     });
 
-    expect(patchStatusBar).toHaveBeenCalledWith({ showAgentTokenUsage: true });
+    expect(patchStatusBar).toHaveBeenCalledWith({ showAgentTokenUsage: false });
   });
 
   it("renders the Interface language selector in Korean and patches changes", async () => {
@@ -1078,14 +1078,14 @@ describe("SettingsModal font controls", () => {
       ),
     ).toBeInstanceOf(HTMLButtonElement);
     expect(toggle).toBeInstanceOf(HTMLInputElement);
-    expect(toggle?.checked).toBe(false);
+    expect(toggle?.checked).toBe(true);
 
     act(() => {
       toggle?.click();
     });
 
     expect(patchAgents).toHaveBeenCalledWith({
-      autoGenerateSessionTitles: true,
+      autoGenerateSessionTitles: false,
     });
   });
 

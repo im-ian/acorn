@@ -597,16 +597,16 @@ describe("notification settings", () => {
     });
   });
 
-  it("defaults notification history to 50 records", () => {
-    expect(DEFAULT_SETTINGS.notifications.maxHistory).toBe(50);
-    expect(DEFAULT_SETTINGS.notifications.autoDeleteRead).toBe(false);
+  it("defaults notification history to 20 records and auto-deletes read items", () => {
+    expect(DEFAULT_SETTINGS.notifications.maxHistory).toBe(20);
+    expect(DEFAULT_SETTINGS.notifications.autoDeleteRead).toBe(true);
   });
 
   it("loads persisted notification history settings and clamps the limit", async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        notifications: { maxHistory: 200, autoDeleteRead: true },
+        notifications: { maxHistory: 200, autoDeleteRead: false },
       }),
     );
 
@@ -617,7 +617,7 @@ describe("notification settings", () => {
       NOTIFICATION_HISTORY_LIMIT_MAX,
     );
     expect(useSettings.getState().settings.notifications.autoDeleteRead).toBe(
-      true,
+      false,
     );
   });
 });
@@ -651,8 +651,9 @@ describe("status bar settings", () => {
     expect(DEFAULT_SETTINGS.statusBar.showSessionActivity).toBe(true);
   });
 
-  it("keeps agent token usage hidden by default", () => {
-    expect(DEFAULT_SETTINGS.statusBar.showAgentTokenUsage).toBe(false);
+  it("shows agent token usage and hides the working directory by default", () => {
+    expect(DEFAULT_SETTINGS.statusBar.showAgentTokenUsage).toBe(true);
+    expect(DEFAULT_SETTINGS.statusBar.showWorkingDirectory).toBe(false);
   });
 
   it("loads a persisted session activity shortcut preference", async () => {
@@ -672,14 +673,14 @@ describe("status bar settings", () => {
   it("loads a persisted agent token usage preference", async () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ statusBar: { showAgentTokenUsage: true } }),
+      JSON.stringify({ statusBar: { showAgentTokenUsage: false } }),
     );
 
     vi.resetModules();
     const { useSettings } = await import("./settings");
 
     expect(useSettings.getState().settings.statusBar.showAgentTokenUsage).toBe(
-      true,
+      false,
     );
   });
 });
@@ -743,14 +744,14 @@ describe("shortcut settings", () => {
 });
 
 describe("AI commit command resolution", () => {
-  it("keeps automatic session title generation off by default", () => {
-    expect(DEFAULT_SETTINGS.agents.autoGenerateSessionTitles).toBe(false);
+  it("enables automatic session title generation by default", () => {
+    expect(DEFAULT_SETTINGS.agents.autoGenerateSessionTitles).toBe(true);
   });
 
   it("loads a persisted automatic session title preference", async () => {
     localStorage.setItem(
       "acorn:settings:v1",
-      JSON.stringify({ agents: { autoGenerateSessionTitles: true } }),
+      JSON.stringify({ agents: { autoGenerateSessionTitles: false } }),
     );
 
     vi.resetModules();
@@ -758,7 +759,7 @@ describe("AI commit command resolution", () => {
 
     expect(
       useSettings.getState().settings.agents.autoGenerateSessionTitles,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("keeps the default session title prompt in settings", () => {

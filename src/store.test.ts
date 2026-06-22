@@ -272,13 +272,15 @@ describe("sessionNotifications", () => {
       useAppStore.getState().addSessionNotification(notification(`n${i}`));
     }
 
+    const maxHistory = DEFAULT_SETTINGS.notifications.maxHistory;
     const items = useAppStore.getState().sessionNotifications;
-    expect(items).toHaveLength(50);
+    expect(items).toHaveLength(maxHistory);
     expect(items[0]?.id).toBe("n104");
-    expect(items[items.length - 1]?.id).toBe("n55");
+    expect(items[items.length - 1]?.id).toBe(`n${105 - maxHistory}`);
   });
 
-  it("marks individual and all notifications read, then clears read items", () => {
+  it("marks individual and all notifications read, then clears read items when auto-delete is disabled", () => {
+    useSettings.getState().patchNotifications({ autoDeleteRead: false });
     useAppStore.getState().addSessionNotification(notification("n1"));
     useAppStore.getState().addSessionNotification(notification("n2"));
 
