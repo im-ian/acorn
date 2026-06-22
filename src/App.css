@@ -37,7 +37,7 @@
    little white into the theme's elevated token so the active tab reads as
    a brighter raised chip, while staying theme-adaptive. */
 .acorn-tab-active-bg {
-  background-color: color-mix(in oklab, var(--color-bg-elevated) 85%, #fff);
+  background-color: color-mix(in oklab, var(--color-bg-elevated) 92%, #fff);
 }
 
 /* With a background image active, surfaces go translucent — the canvas
