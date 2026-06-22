@@ -33,43 +33,6 @@
   background-color: var(--acorn-canvas);
 }
 
-/* Pane resize grip: keep the fill color but fade the ends to transparent
-   so the handle reads as a soft gradient bar instead of a hard pill.
-   `-webkit-mask-image` is required for WKWebView (Tauri on macOS). */
-.acorn-resize-grip-v {
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent,
-    #000 32%,
-    #000 68%,
-    transparent
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent,
-    #000 32%,
-    #000 68%,
-    transparent
-  );
-}
-
-.acorn-resize-grip-h {
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 32%,
-    #000 68%,
-    transparent
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 32%,
-    #000 68%,
-    transparent
-  );
-}
-
 /* With a background image active, surfaces go translucent — the canvas
    gutter must too, so the image shows through the gaps between cards. */
 :root[data-bg-app="on"] .acorn-canvas {

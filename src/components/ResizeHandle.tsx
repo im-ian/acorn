@@ -153,13 +153,7 @@ export function ResizeHandle({
         onDragging={setDragging}
         onDoubleClick={handleDoubleClick}
         className={cn(
-          "relative flex shrink-0 items-center justify-center transition-colors duration-150",
-          // Faint white tint on hover for both the re-expand affordance and
-          // the open-gap resize hint. The accent line below takes over during
-          // an active drag.
-          (showHandleVisual || showGapHint) && hovered && !dragging
-            ? "bg-white/5"
-            : "bg-transparent",
+          "relative flex shrink-0 items-center justify-center bg-transparent transition-colors duration-150",
           isHorizontal
             ? gap
               ? "w-1.5 cursor-col-resize"
@@ -173,6 +167,24 @@ export function ResizeHandle({
                 : "h-3 cursor-row-resize",
         )}
       >
+        {(showHandleVisual || showGapHint) && (hovered || dragging) ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 transition-opacity duration-150"
+            style={{
+              // Gradient sits behind the grip in the gutter: keep the state
+              // color (white on hover, accent on drag) but fade the top and
+              // bottom ends to transparent.
+              backgroundImage: `linear-gradient(${
+                isHorizontal ? "to bottom" : "to right"
+              }, transparent, ${
+                dragging
+                  ? "color-mix(in oklab, var(--color-accent) 55%, transparent)"
+                  : "color-mix(in oklab, #ffffff 10%, transparent)"
+              }, transparent)`,
+            }}
+          />
+        ) : null}
         {showDivider || (dragging && !showHandleVisual && !gap) ? (
           <span
             aria-hidden="true"
@@ -190,11 +202,7 @@ export function ResizeHandle({
             // Fixed mid-size grip; only opacity/color changes between
             // hover/drag so the user gets a steady rounded visual. For a gap
             // gutter the grip turns accent on drag, replacing the square line.
-            // The mask fades the bar's ends to transparent while keeping the
-            // fill color.
-            isHorizontal
-              ? "acorn-resize-grip-v h-10 w-[3px]"
-              : "acorn-resize-grip-h h-[3px] w-10",
+            isHorizontal ? "h-10 w-[3px]" : "h-[3px] w-10",
             showGapHint && dragging ? "bg-accent" : "bg-white",
             showHandleVisual
               ? dragging
