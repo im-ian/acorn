@@ -415,7 +415,7 @@ export function SettingsModal() {
               className={cn(
                 "rounded-md px-3 py-1.5 text-left text-xs transition",
                 tab === tabMeta.id
-                  ? "bg-bg-elevated text-fg"
+                  ? "acorn-tab-active-bg text-fg"
                   : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
               )}
             >
