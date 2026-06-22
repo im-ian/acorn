@@ -219,11 +219,11 @@ function IssueDetailBody({
         <div className="space-y-4 px-4 py-3">
           <IssueMeta detail={detail} />
           {detail.body.trim().length > 0 ? (
-            <section className="rounded border border-border bg-bg-elevated/30 px-3 py-2">
+            <section className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30 px-3 py-2">
               <Markdown content={detail.body} />
             </section>
           ) : (
-            <div className="rounded border border-border bg-bg-elevated/30 px-3 py-2 text-xs text-fg-muted">
+            <div className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30 px-3 py-2 text-xs text-fg-muted">
               {dt(t, "dialogs.issueDetail.noBody")}
             </div>
           )}
@@ -233,7 +233,7 @@ function IssueDetailBody({
               {dt(t, "dialogs.issueDetail.comments")} ({detail.comments.length})
             </div>
             {detail.comments.length === 0 ? (
-              <div className="rounded border border-border/60 px-3 py-2 text-xs text-fg-muted">
+              <div className="rounded-[var(--acorn-pane-radius)] border border-border/60 px-3 py-2 text-xs text-fg-muted">
                 {dt(t, "dialogs.issueDetail.noComments")}
               </div>
             ) : (
@@ -307,7 +307,7 @@ function IssueCommentBlock({ comment }: { comment: IssueComment }) {
       ? comment.body
       : dt(t, "dialogs.issueDetail.empty");
   return (
-    <li className="rounded border border-border bg-bg-elevated/30">
+    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30">
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-[11px] text-fg-muted">
         <AuthorTag
           login={comment.author}
@@ -403,7 +403,7 @@ function IssueDetailSkeleton({
       />
       <div className="space-y-3 px-4 py-3 animate-pulse">
         <span className="block h-3 w-36 rounded bg-fg-muted/15" />
-        <div className="rounded border border-border bg-bg-elevated/30 p-3">
+        <div className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30 p-3">
           {Array.from({ length: 6 }).map((_, index) => (
             <span
               key={index}
@@ -417,7 +417,7 @@ function IssueDetailSkeleton({
           {Array.from({ length: 2 }).map((_, index) => (
             <div
               key={index}
-              className="rounded border border-border bg-bg-elevated/30 p-3"
+              className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30 p-3"
             >
               <span className="mb-2 block h-3 w-28 rounded bg-fg-muted/15" />
               <span className="block h-3 w-4/5 rounded bg-fg-muted/10" />

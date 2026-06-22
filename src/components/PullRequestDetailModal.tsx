@@ -779,7 +779,7 @@ function DetailSkeleton({
           ].map((row, i) => (
             <li
               key={i}
-              className="rounded border border-border bg-bg-sidebar/40 p-3"
+              className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3"
             >
               <div className="mb-2 flex items-center gap-2">
                 <span className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
@@ -1175,7 +1175,7 @@ function SortToggle({
 function CommentBlock({ comment }: { comment: PullRequestComment }) {
   const t = useTranslation();
   return (
-    <li className="rounded border border-border bg-bg-sidebar/40 p-3">
+    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={comment.author}
@@ -1206,7 +1206,7 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
 function ReviewBlock({ review }: { review: PullRequestReview }) {
   const t = useTranslation();
   return (
-    <li className="rounded border border-border bg-bg-sidebar/40 p-3">
+    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={review.author}
