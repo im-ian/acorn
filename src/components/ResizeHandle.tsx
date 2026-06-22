@@ -137,20 +137,27 @@ export function ResizeHandle({
   // to col/row resize so the resize action is discoverable without any
   // chrome of our own.
   const showHandleVisual = collapsedPanelId !== null;
+  // Floating-card gutter with both neighbours open: there's no border to
+  // grab, so hovering the transparent gap surfaces a faint grip to hint the
+  // resize affordance. (A collapsed neighbour uses `showHandleVisual` for
+  // the louder re-expand grip instead.)
+  const showGapHint = gap && !showHandleVisual;
 
   return (
     <>
       <PanelResizeHandle
         id={handleId}
-        hitAreaMargins={thin ? { coarse: 12, fine: 6 } : { coarse: 0, fine: 0 }}
+        hitAreaMargins={
+          thin || gap ? { coarse: 12, fine: 6 } : { coarse: 0, fine: 0 }
+        }
         onDragging={setDragging}
         onDoubleClick={handleDoubleClick}
         className={cn(
           "relative flex shrink-0 items-center justify-center transition-colors duration-150",
-          // Closed state: faint white tint on hover (re-expand affordance).
-          // Open state stays transparent — the thin accent line below
-          // surfaces during drag instead of a full-bar fill.
-          showHandleVisual && hovered && !dragging
+          // Faint white tint on hover for both the re-expand affordance and
+          // the open-gap resize hint. The accent line below takes over during
+          // an active drag.
+          (showHandleVisual || showGapHint) && hovered && !dragging
             ? "bg-white/5"
             : "bg-transparent",
           isHorizontal
@@ -189,7 +196,9 @@ export function ResizeHandle({
                 : hovered
                   ? "opacity-70"
                   : "opacity-0"
-              : "opacity-0",
+              : showGapHint && hovered && !dragging
+                ? "opacity-60"
+                : "opacity-0",
           )}
         />
       </PanelResizeHandle>
