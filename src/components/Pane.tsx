@@ -1492,6 +1492,13 @@ function TabItem({
                 )}
               />
             </Tooltip>
+          ) : tab.kind === "code" ? (
+            <Tooltip label={tabPath} side="bottom">
+              <Files
+                size={12}
+                className="pointer-events-none shrink-0 text-fg-muted"
+              />
+            </Tooltip>
           ) : (
             <span
               className={cn(
