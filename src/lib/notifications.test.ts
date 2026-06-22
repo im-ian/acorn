@@ -156,7 +156,8 @@ describe("notifications", () => {
     dispose();
   });
 
-  it("marks in-app activity read when its session tab is focused", async () => {
+  it("marks in-app activity read when its session tab is focused and auto-delete is disabled", async () => {
+    useSettings.getState().patchNotifications({ autoDeleteRead: false });
     const disposeActivity = startSessionActivityInboxWatcher();
     const disposeFocusedRead = startFocusedSessionNotificationReadWatcher();
 
