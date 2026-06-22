@@ -4869,21 +4869,23 @@ function PullRequestSearchModal({
           autoFocus
         />
         <div className="flex items-center gap-1 text-[11px]">
-          {PR_SEARCH_STATE_OPTIONS.map((opt) => (
+          <div className="flex items-center gap-0.5 rounded-md bg-bg p-0.5">
+            {PR_SEARCH_STATE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
               onClick={() => setStateFilter(opt.value)}
               className={cn(
-                "rounded-md px-2 py-0.5 transition",
+                "rounded px-2 py-0.5 transition",
                 stateFilter === opt.value
-                  ? "bg-bg-elevated text-fg"
-                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+                  ? "bg-bg-elevated text-fg shadow-sm"
+                  : "text-fg-muted hover:text-fg",
               )}
             >
               {rt(t, prStateLabelKey(opt.value))}
             </button>
-          ))}
+            ))}
+          </div>
           {loading ? (
             <span className="ml-auto text-fg-muted">
               {rt(t, "rightPanel.search.searching")}
@@ -5067,21 +5069,23 @@ function IssueSearchModal({
           autoFocus
         />
         <div className="flex items-center gap-1 text-[11px]">
-          {ISSUE_STATE_OPTIONS.map((opt) => (
+          <div className="flex items-center gap-0.5 rounded-md bg-bg p-0.5">
+            {ISSUE_STATE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
               onClick={() => setStateFilter(opt.value)}
               className={cn(
-                "rounded-md px-2 py-0.5 transition",
+                "rounded px-2 py-0.5 transition",
                 stateFilter === opt.value
-                  ? "bg-bg-elevated text-fg"
-                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+                  ? "bg-bg-elevated text-fg shadow-sm"
+                  : "text-fg-muted hover:text-fg",
               )}
             >
               {rt(t, issueStateLabelKey(opt.value))}
             </button>
-          ))}
+            ))}
+          </div>
           {loading ? (
             <span className="ml-auto text-fg-muted">
               {rt(t, "rightPanel.issueSearch.searching")}
