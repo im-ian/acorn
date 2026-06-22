@@ -611,6 +611,10 @@
       "resumeModal": {
         "label": "Show \"Resume previous conversation\" modal at cold boot",
         "description": "On Acorn launch, probes every persisted session for an unfinished claude or codex transcript and pops a one-shot modal when you focus the session so you can pick up where you left off. Disable to suppress the modal entirely."
+      },
+      "normalizeTerminalUnicodeSpaces": {
+        "label": "Normalize Unicode spaces in terminal input",
+        "description": "Converts NBSP-like Unicode separators in typed and pasted terminal text into regular spaces so shell commands keep parsing as separate words. Turn off to preserve literal Unicode spaces in TUIs, REPLs, or tests."
       }
     },
     "about": {

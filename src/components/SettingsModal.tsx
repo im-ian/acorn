@@ -2489,6 +2489,20 @@ function ExperimentsSettings() {
         )}
       />
       <CheckboxRow
+        checked={experiments.normalizeTerminalUnicodeSpaces}
+        onChange={(checked) =>
+          patchExperiments({ normalizeTerminalUnicodeSpaces: checked })
+        }
+        label={st(
+          t,
+          "settings.experiments.normalizeTerminalUnicodeSpaces.label",
+        )}
+        description={st(
+          t,
+          "settings.experiments.normalizeTerminalUnicodeSpaces.description",
+        )}
+      />
+      <CheckboxRow
         checked={experiments.resumeModal}
         onChange={(checked) => patchExperiments({ resumeModal: checked })}
         label={st(t, "settings.experiments.resumeModal.label")}

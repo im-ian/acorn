@@ -1,8 +1,11 @@
+import { normalizeShellCommandWhitespace } from "./shellCommandWhitespace";
+
 export const AGENT_IMAGE_PASTE_CONTROL = "\x16";
 
 type TerminalPasteInput = {
   text: string;
   hasImagePayload: boolean;
+  normalizeUnicodeSpaces?: boolean;
 };
 
 type ClipboardFilePayloadInput = {
@@ -122,9 +125,15 @@ export function hasClipboardImagePayload(
 export function terminalPasteAction({
   text,
   hasImagePayload,
+  normalizeUnicodeSpaces = true,
 }: TerminalPasteInput): TerminalPasteAction {
   if (text) {
-    return { kind: "pasteText", text };
+    return {
+      kind: "pasteText",
+      text: normalizeUnicodeSpaces
+        ? normalizeShellCommandWhitespace(text)
+        : text,
+    };
   }
   if (hasImagePayload) {
     return { kind: "deferImageAttachment" };
