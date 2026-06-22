@@ -202,7 +202,7 @@ export function ResizeHandle({
             // Fixed mid-size grip; only opacity/color changes between
             // hover/drag so the user gets a steady rounded visual. For a gap
             // gutter the grip turns accent on drag, replacing the square line.
-            isHorizontal ? "h-10 w-[3px]" : "h-[3px] w-10",
+            isHorizontal ? "h-10 w-[2px]" : "h-[2px] w-10",
             showGapHint && dragging ? "bg-accent" : "bg-white",
             showHandleVisual
               ? dragging
