@@ -1305,7 +1305,7 @@ function ServicesDropdown({
       ref={ref}
       role="menu"
       style={{ position: "fixed", left: position.left, bottom: position.bottom, zIndex: 60 }}
-      className="w-64 overflow-hidden rounded-md border border-border bg-bg-elevated shadow-2xl"
+      className="w-64 overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated shadow-2xl"
     >
       <ul className="divide-y divide-border text-[11px]">
         <li>
