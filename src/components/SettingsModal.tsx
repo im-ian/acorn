@@ -2354,7 +2354,7 @@ function StorageSettings() {
         </p>
       </header>
 
-      <ul className="divide-y divide-border rounded border border-border">
+      <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border">
         {CACHE_CATEGORIES.map((cat) => {
           const size = sizes[cat.id];
           return (
@@ -2376,7 +2376,7 @@ function StorageSettings() {
       </ul>
 
       {confirming ? (
-        <div className="space-y-2 rounded border border-warning/40 bg-warning/10 p-3">
+        <div className="space-y-2 rounded-[var(--acorn-pane-radius)] border border-warning/40 bg-warning/10 p-3">
           <p className="text-[11px] text-fg">
             {stf(t, "settings.storage.confirm.message", {
               size: formatBytes(totalBytes),
@@ -2811,7 +2811,7 @@ function AboutSettings() {
         </p>
       </header>
 
-      <div className="rounded border border-border">
+      <div className="rounded-[var(--acorn-pane-radius)] border border-border">
         <div className="flex items-baseline justify-between gap-3 px-3 py-2.5">
           <span className="text-xs font-medium text-fg">
             {st(t, "settings.about.currentVersion")}
@@ -2873,13 +2873,13 @@ function AboutSettings() {
       </div>
 
       {error ? (
-        <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <p className="rounded-[var(--acorn-pane-radius)] border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
           {error}
         </p>
       ) : null}
 
       {notesError ? (
-        <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <p className="rounded-[var(--acorn-pane-radius)] border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
           {notesError}
         </p>
       ) : null}

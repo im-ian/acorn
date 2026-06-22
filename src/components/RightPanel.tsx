@@ -4077,7 +4077,7 @@ function WorkflowRunDetailSkeleton() {
           {Array.from({ length: 3 }).map((_, i) => (
             <li
               key={i}
-              className="flex items-center gap-2 rounded border border-border/60 bg-bg/40 px-2 py-2"
+              className="flex items-center gap-2 rounded-[var(--acorn-pane-radius)] border border-border/60 bg-bg/40 px-2 py-2"
             >
               <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-border/60" />
               <span
@@ -4168,7 +4168,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
             {rt(t, "rightPanel.actions.noJobs")}
           </div>
         ) : (
-          <ul className="rounded border border-border/60 divide-y divide-border/40">
+          <ul className="rounded-[var(--acorn-pane-radius)] border border-border/60 divide-y divide-border/40">
             {detail.jobs.map((job) => (
               <WorkflowJobRow key={job.id} job={job} nowUnix={nowUnix} />
             ))}
