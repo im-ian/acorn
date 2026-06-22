@@ -44,6 +44,11 @@
   "settings": {
     "title": "설정",
     "reset": "기본값으로 재설정",
+    "resetConfirm": {
+      "title": "기본값으로 되돌릴까요?",
+      "message": "모든 설정이 기본값으로 복원됩니다. 되돌릴 수 없습니다.",
+      "confirm": "재설정"
+    },
     "tabs": {
       "interface": "인터페이스",
       "appearance": "모양",

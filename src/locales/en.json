@@ -44,6 +44,11 @@
   "settings": {
     "title": "Settings",
     "reset": "Reset to defaults",
+    "resetConfirm": {
+      "title": "Reset to defaults?",
+      "message": "This restores every setting to its default value. This can't be undone.",
+      "confirm": "Reset"
+    },
     "tabs": {
       "interface": "Interface",
       "appearance": "Appearance",

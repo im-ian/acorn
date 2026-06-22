@@ -360,6 +360,7 @@ export function SettingsModal() {
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("interface");
   const [sessionTitlePromptOpen, setSessionTitlePromptOpen] = useState(false);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
@@ -385,9 +386,12 @@ export function SettingsModal() {
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step. While a child settings dialog
   // is open, let that dialog own Escape.
-  useDialogShortcuts(open && !sessionTitlePromptOpen, {
+  useDialogShortcuts(open && !sessionTitlePromptOpen && !confirmResetOpen, {
     onCancel: () => setOpen(false),
     onConfirm: () => setOpen(false),
+  });
+  useDialogShortcuts(confirmResetOpen, {
+    onCancel: () => setConfirmResetOpen(false),
   });
 
   return (
@@ -425,7 +429,7 @@ export function SettingsModal() {
           <div className="mt-auto px-2 pb-1 pt-2">
             <button
               type="button"
-              onClick={reset}
+              onClick={() => setConfirmResetOpen(true)}
               className="text-[11px] text-fg-muted transition hover:text-danger"
             >
               {t("settings.reset")}
@@ -463,6 +467,41 @@ export function SettingsModal() {
           )}
         </div>
       </div>
+      <Modal
+        open={confirmResetOpen}
+        onClose={() => setConfirmResetOpen(false)}
+        variant="dialog"
+        size="sm"
+        ariaLabel={t("settings.resetConfirm.title")}
+      >
+        <ModalHeader
+          title={t("settings.resetConfirm.title")}
+          variant="dialog"
+          onClose={() => setConfirmResetOpen(false)}
+        />
+        <p className="px-4 py-3 text-xs text-fg-muted">
+          {t("settings.resetConfirm.message")}
+        </p>
+        <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setConfirmResetOpen(false)}
+            className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+          >
+            {t("dialogs.common.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              reset();
+              setConfirmResetOpen(false);
+            }}
+            className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+          >
+            {t("settings.resetConfirm.confirm")}
+          </button>
+        </footer>
+      </Modal>
     </Modal>
   );
 }
