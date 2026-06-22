@@ -1451,7 +1451,7 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-1 text-[13px] leading-5 transition",
+          "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-0.5 text-[13px] leading-5 transition",
           isDraggingThisTab && "opacity-40",
           active
             ? "bg-bg-elevated text-fg"
@@ -1459,7 +1459,7 @@ function TabItem({
         )}
       >
         <div
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-3"
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-2"
           data-tab-drag-handle={tab.id}
         >
           {isGeneratingTitle ? (
@@ -1563,7 +1563,7 @@ function TabItem({
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
-            "ml-1 mr-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+            "ml-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
             active
               ? "opacity-70 hover:opacity-100"
               : "opacity-0 group-hover:opacity-70 hover:opacity-100",
