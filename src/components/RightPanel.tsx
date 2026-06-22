@@ -3154,10 +3154,10 @@ function PullRequestsTab({
             type="button"
             onClick={() => setStateFilter(opt.value)}
             className={cn(
-              "rounded px-2 py-0.5 text-[11px] transition",
+              "rounded-md px-2 py-0.5 text-[11px] transition",
               stateFilter === opt.value
                 ? "bg-bg-elevated text-fg"
-                : "text-fg-muted hover:text-fg",
+                : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
             )}
           >
             {rt(t, prStateLabelKey(opt.value))}
@@ -3544,10 +3544,10 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
             type="button"
             onClick={() => setStateFilter(opt.value)}
             className={cn(
-              "rounded px-2 py-0.5 text-[11px] transition",
+              "rounded-md px-2 py-0.5 text-[11px] transition",
               stateFilter === opt.value
                 ? "bg-bg-elevated text-fg"
-                : "text-fg-muted hover:text-fg",
+                : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
             )}
           >
             {rt(t, issueStateLabelKey(opt.value))}
