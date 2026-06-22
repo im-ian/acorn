@@ -1060,7 +1060,7 @@ export function Sidebar() {
               items={projectIds}
               strategy={verticalListSortingStrategy}
             >
-              <ul className="flex flex-col divide-y divide-border/40 [&>li]:py-1.5 [&>li:first-child]:pt-0.5 [&>li:last-child]:pb-0.5">
+              <ul className="flex flex-col gap-1.5">
                 {projectGroups.map((project) => {
                   return (
                     <ProjectGroupView
@@ -1835,7 +1835,10 @@ function ProjectGroupView({
     <li
       ref={setNodeRef}
       style={style}
-      className={cn("relative", isDragging && "opacity-40")}
+      className={cn(
+        "relative overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/10",
+        isDragging && "opacity-40",
+      )}
     >
       <div
         ref={setProjectHeaderNodeRef}
@@ -1862,8 +1865,8 @@ function ProjectGroupView({
         }}
         aria-label={`${sidebarText(t, "sidebar.aria.project")} ${project.name}`}
         className={cn(
-          "group flex min-h-8 items-center gap-1 rounded-md bg-bg-elevated/10 px-1 py-1.5 transition hover:bg-bg-elevated/20",
-          isActiveProject && "bg-bg-elevated/30",
+          "group flex min-h-8 items-center gap-1 bg-bg-elevated/20 px-2 py-1.5 transition hover:bg-bg-elevated/30",
+          isActiveProject && "bg-bg-elevated/40",
         )}
       >
         <button
@@ -2014,7 +2017,7 @@ function ProjectGroupView({
         ]}
       />
       {!collapsed ? (
-        <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
+        <ul className="ml-3 flex flex-col gap-0.5 border-l border-border pb-1.5 pl-1 pr-1.5 pt-1">
           <SortableContext
             items={topLevelItemIds}
             strategy={verticalListSortingStrategy}
