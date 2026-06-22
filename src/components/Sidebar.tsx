@@ -1008,7 +1008,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex h-full w-full flex-col bg-bg-sidebar">
+    <aside className="flex h-full w-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
       <header className="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
         <h2 className="text-xs font-medium text-fg-muted">
           {sidebarText(t, "sidebar.projects.title")}

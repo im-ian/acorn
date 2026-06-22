@@ -1691,13 +1691,13 @@ function App() {
   useHotkeys(bindings);
 
   return (
-    <div className="acorn-app-shell relative flex h-screen w-screen flex-col bg-bg text-fg">
+    <div className="acorn-app-shell acorn-canvas relative flex h-screen w-screen flex-col text-fg">
       <div className="acorn-bg-app" aria-hidden="true" />
       <div className="relative z-10">
         <UpdateBanner />
       </div>
       <ToastHost />
-      <div className="relative z-10 flex min-h-0 flex-1">
+      <div className="relative z-10 flex min-h-0 flex-1 p-1.5">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
             ref={sidebarPanelRef}
@@ -1711,11 +1711,11 @@ function App() {
           >
             <Sidebar />
           </Panel>
-          <ResizeHandle thin />
+          <ResizeHandle gap />
           <Panel id="main" order={2} defaultSize={56} minSize={30}>
             <LayoutRenderer node={layout} />
           </Panel>
-          <ResizeHandle thin />
+          <ResizeHandle gap />
           <Panel
             ref={rightPanelRef}
             id="right"

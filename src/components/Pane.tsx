@@ -494,7 +494,7 @@ export function Pane({ paneId }: PaneProps) {
 
   return (
     <div
-      className="relative flex h-full flex-col bg-bg"
+      className="relative flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg"
       data-pane-root={paneId}
       onMouseDown={(e) => {
         if (e.button === 0 && isTabStripMouseDownTarget(e.target)) return;
@@ -894,7 +894,7 @@ function TabStrip({
     <div
       ref={stripRef}
       data-pane-tab-strip={paneId}
-      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
+      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-1.5"
     >
       {tabs.map((tab, i) => (
         <TabItem
@@ -1451,11 +1451,11 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pr-1 text-[13px] leading-5 transition",
+          "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-1 text-[13px] leading-5 transition",
           isDraggingThisTab && "opacity-40",
           active
-            ? "bg-bg text-fg"
-            : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
+            ? "bg-bg-elevated text-fg"
+            : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         )}
       >
         <div
@@ -1571,9 +1571,6 @@ function TabItem({
         >
           <X size={11} />
         </button>
-        {active ? (
-          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent/30" />
-        ) : null}
         {isDraggingThisTab ? (
           <WorkspaceTabDragGhost
             drag={tabDrag}

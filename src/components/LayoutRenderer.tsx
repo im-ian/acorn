@@ -74,7 +74,7 @@ export function LayoutRenderer({ node }: LayoutRendererProps) {
       <Panel id={`${node.id}:a`} order={1} defaultSize={leftPct} minSize={10}>
         <LayoutRenderer node={node.a} />
       </Panel>
-      <ResizeHandle direction={handleDirection} showDivider thin />
+      <ResizeHandle direction={handleDirection} gap />
       <Panel id={`${node.id}:b`} order={2} defaultSize={rightPct} minSize={10}>
         <LayoutRenderer node={node.b} />
       </Panel>

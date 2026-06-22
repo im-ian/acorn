@@ -11,6 +11,13 @@ interface ResizeHandleProps {
   direction?: "horizontal" | "vertical";
   showDivider?: boolean;
   thin?: boolean;
+  /**
+   * Floating-card gap: the handle becomes a transparent ~6px gutter so the
+   * darker canvas shows through between pane cards. Distinct from `thin`
+   * (a 1px divider reused by modals/diff views) — only the app layout opts
+   * into `gap` so those other surfaces stay unaffected.
+   */
+  gap?: boolean;
 }
 
 /**
@@ -37,6 +44,7 @@ export function ResizeHandle({
   direction = "horizontal",
   showDivider = false,
   thin = false,
+  gap = false,
 }: ResizeHandleProps) {
   const isHorizontal = direction === "horizontal";
   const handleId = useId();
@@ -146,12 +154,16 @@ export function ResizeHandle({
             ? "bg-white/5"
             : "bg-transparent",
           isHorizontal
-            ? thin
-              ? "w-px cursor-col-resize"
-              : "w-3 cursor-col-resize"
-            : thin
-              ? "h-px cursor-row-resize"
-              : "h-3 cursor-row-resize",
+            ? gap
+              ? "w-1.5 cursor-col-resize"
+              : thin
+                ? "w-px cursor-col-resize"
+                : "w-3 cursor-col-resize"
+            : gap
+              ? "h-1.5 cursor-row-resize"
+              : thin
+                ? "h-px cursor-row-resize"
+                : "h-3 cursor-row-resize",
         )}
       >
         {showDivider || (dragging && !showHandleVisual) ? (

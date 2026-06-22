@@ -428,7 +428,7 @@ export function RightPanel() {
   }, [retainedRepoPaths]);
 
   return (
-    <aside className="flex h-full w-full flex-col bg-bg-sidebar">
+    <aside className="flex h-full w-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
       <nav
         className={cn(
           "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border",

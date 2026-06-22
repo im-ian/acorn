@@ -19,6 +19,24 @@
 
 :root {
   --acorn-status-bar-height: 1.75rem;
+  /*
+   * Canvas is the darker gutter the pane cards float on. Derived from the
+   * active theme's darkest surface so it adapts per theme without each
+   * theme file having to define it — keeps the floating-card chrome
+   * theme-agnostic.
+   */
+  --acorn-canvas: color-mix(in oklab, var(--color-bg-sidebar) 82%, #000);
+  --acorn-pane-radius: 0.5rem;
+}
+
+.acorn-canvas {
+  background-color: var(--acorn-canvas);
+}
+
+/* With a background image active, surfaces go translucent — the canvas
+   gutter must too, so the image shows through the gaps between cards. */
+:root[data-bg-app="on"] .acorn-canvas {
+  background-color: transparent;
 }
 
 .acorn-terminal .xterm-viewport {
