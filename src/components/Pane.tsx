@@ -939,7 +939,7 @@ function TabStrip({
       */}
       <div
         data-pane-tab-filler={paneId}
-        className="min-w-[2.5rem] flex-1"
+        className="min-w-[2.5rem] flex-1 self-stretch"
         onDoubleClick={(e) => {
           if (e.target !== e.currentTarget) return;
           onNewTab();
