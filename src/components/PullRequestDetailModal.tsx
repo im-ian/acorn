@@ -394,6 +394,83 @@ function DetailBody({
   const totalChecks = effectiveChecks;
   const fileCount = detail.changed_files;
   const commitCount = detail.commits.length;
+  const hasBody = body.trim().length > 0;
+
+  const mainSection = (
+    <>
+      <nav className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1">
+        <DetailTabButton
+          icon={<MessagesSquare size={13} />}
+          label={dt(t, "dialogs.pullRequestDetail.tabConversation")}
+          badge={conversationCount > 0 ? conversationCount : null}
+          active={tab === "conversation"}
+          onClick={() => onTab("conversation")}
+        />
+        <DetailTabButton
+          icon={<GitCommit size={13} />}
+          label={dt(t, "dialogs.pullRequestDetail.tabCommits")}
+          badge={commitCount > 0 ? commitCount : null}
+          active={tab === "commits"}
+          onClick={() => onTab("commits")}
+        />
+        <DetailTabButton
+          icon={<CheckCircle2 size={13} />}
+          label={dt(t, "dialogs.pullRequestDetail.tabChecks")}
+          badge={
+            allChecksPassed ? (
+              <Check size={11} strokeWidth={3} className="text-emerald-300" />
+            ) : allChecksFailed ? (
+              <X size={11} strokeWidth={3} className="text-rose-300" />
+            ) : checksPartial ? (
+              `${checkCounts.passed}/${totalChecks}`
+            ) : null
+          }
+          badgeTone={
+            allChecksPassed
+              ? "success"
+              : allChecksFailed
+                ? "danger"
+                : "default"
+          }
+          active={tab === "checks"}
+          onClick={() => onTab("checks")}
+        />
+        <DetailTabButton
+          icon={<GitPullRequest size={13} />}
+          label={dt(t, "dialogs.pullRequestDetail.tabFiles")}
+          badge={fileCount > 0 ? fileCount : null}
+          active={tab === "files"}
+          onClick={() => onTab("files")}
+        />
+      </nav>
+
+      <div className="min-h-0 flex-1 overflow-hidden p-1.5">
+        {tab === "conversation" ? (
+          <ConversationPane
+            comments={detail.comments}
+            reviews={detail.reviews}
+          />
+        ) : tab === "commits" ? (
+          <CommitsPane
+            commits={detail.commits}
+            prUrl={detail.url}
+            repoPath={repoPath}
+            cwd={cwd}
+          />
+        ) : tab === "checks" ? (
+          <ChecksPane checks={detail.checks} />
+        ) : (
+          <PullRequestFilesPane
+            active={tab === "files"}
+            repoPath={repoPath}
+            number={detail.number}
+            cwd={cwd}
+            reloadKey={diffReloadKey}
+          />
+        )}
+      </div>
+    </>
+  );
 
   return (
     <>
@@ -495,89 +572,31 @@ function DetailBody({
         </div>
       </header>
 
-      {body.trim().length > 0 ? (
-        <ResizableBody>
-          <Markdown content={body} onTaskToggle={onTaskToggle} />
-          {bodySaveError ? (
-            <p className="mt-2 text-[10.5px] text-danger">
-              {dt(t, "dialogs.pullRequestDetail.checkboxSaveFailed")}{" "}
-              {bodySaveError}
-            </p>
-          ) : null}
-        </ResizableBody>
-      ) : null}
-
-      <nav className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1">
-        <DetailTabButton
-          icon={<MessagesSquare size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabConversation")}
-          badge={conversationCount > 0 ? conversationCount : null}
-          active={tab === "conversation"}
-          onClick={() => onTab("conversation")}
-        />
-        <DetailTabButton
-          icon={<GitCommit size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabCommits")}
-          badge={commitCount > 0 ? commitCount : null}
-          active={tab === "commits"}
-          onClick={() => onTab("commits")}
-        />
-        <DetailTabButton
-          icon={<CheckCircle2 size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabChecks")}
-          badge={
-            allChecksPassed ? (
-              <Check size={11} strokeWidth={3} className="text-emerald-300" />
-            ) : allChecksFailed ? (
-              <X size={11} strokeWidth={3} className="text-rose-300" />
-            ) : checksPartial ? (
-              `${checkCounts.passed}/${totalChecks}`
-            ) : null
-          }
-          badgeTone={
-            allChecksPassed
-              ? "success"
-              : allChecksFailed
-                ? "danger"
-                : "default"
-          }
-          active={tab === "checks"}
-          onClick={() => onTab("checks")}
-        />
-        <DetailTabButton
-          icon={<GitPullRequest size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabFiles")}
-          badge={fileCount > 0 ? fileCount : null}
-          active={tab === "files"}
-          onClick={() => onTab("files")}
-        />
-      </nav>
-
-      <div className="min-h-0 flex-1 overflow-hidden p-1.5">
-        {tab === "conversation" ? (
-          <ConversationPane
-            comments={detail.comments}
-            reviews={detail.reviews}
-          />
-        ) : tab === "commits" ? (
-          <CommitsPane
-            commits={detail.commits}
-            prUrl={detail.url}
-            repoPath={repoPath}
-            cwd={cwd}
-          />
-        ) : tab === "checks" ? (
-          <ChecksPane checks={detail.checks} />
-        ) : (
-          <PullRequestFilesPane
-            active={tab === "files"}
-            repoPath={repoPath}
-            number={detail.number}
-            cwd={cwd}
-            reloadKey={diffReloadKey}
-          />
-        )}
-      </div>
+      {hasBody ? (
+        <PanelGroup
+          direction="vertical"
+          autoSaveId="acorn:pr-detail-body-main"
+          className="min-h-0 flex-1"
+        >
+          <Panel id="pr-body" order={1} defaultSize={22} minSize={10} maxSize={60}>
+            <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-3">
+              <Markdown content={body} onTaskToggle={onTaskToggle} />
+              {bodySaveError ? (
+                <p className="mt-2 text-[10.5px] text-danger">
+                  {dt(t, "dialogs.pullRequestDetail.checkboxSaveFailed")}{" "}
+                  {bodySaveError}
+                </p>
+              ) : null}
+            </div>
+          </Panel>
+          <ResizeHandle direction="vertical" gap />
+          <Panel id="pr-main" order={2} defaultSize={78} minSize={30}>
+            <div className="flex h-full min-h-0 flex-col">{mainSection}</div>
+          </Panel>
+        </PanelGroup>
+      ) : (
+        mainSection
+      )}
     </>
   );
 }
@@ -933,93 +952,7 @@ function MergeActionButton({
   );
 }
 
-const BODY_HEIGHT_STORAGE_KEY = "acorn:pr-detail-body-height";
 const BODY_HEIGHT_DEFAULT = 192;
-const BODY_HEIGHT_MIN = 64;
-const BODY_HEIGHT_MAX = 600;
-
-function readStoredBodyHeight(): number {
-  if (typeof window === "undefined") return BODY_HEIGHT_DEFAULT;
-  try {
-    const raw = window.localStorage.getItem(BODY_HEIGHT_STORAGE_KEY);
-    if (!raw) return BODY_HEIGHT_DEFAULT;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return BODY_HEIGHT_DEFAULT;
-    return Math.min(BODY_HEIGHT_MAX, Math.max(BODY_HEIGHT_MIN, n));
-  } catch {
-    return BODY_HEIGHT_DEFAULT;
-  }
-}
-
-function ResizableBody({ children }: { children: React.ReactNode }) {
-  const t = useTranslation();
-  const [height, setHeight] = useState<number>(() => readStoredBodyHeight());
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(BODY_HEIGHT_STORAGE_KEY, String(height));
-    } catch {
-      // ignore — non-persistent height is fine
-    }
-  }, [height]);
-
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      dragRef.current = { startY: e.clientY, startH: height };
-      e.currentTarget.setPointerCapture(e.pointerId);
-    },
-    [height],
-  );
-
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const next = Math.min(
-      BODY_HEIGHT_MAX,
-      Math.max(BODY_HEIGHT_MIN, drag.startH + (e.clientY - drag.startY)),
-    );
-    setHeight(next);
-  }, []);
-
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    dragRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-  }, []);
-
-  return (
-    <>
-      <div
-        className="acorn-selectable shrink-0 overflow-y-auto border-b border-border bg-bg-sidebar/40 px-4 py-3"
-        style={{ height }}
-      >
-        {children}
-      </div>
-      <Tooltip
-        label={dt(t, "dialogs.pullRequestDetail.resizeHint")}
-        side="top"
-        className="flex w-full shrink-0"
-      >
-        <span
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label={dt(t, "dialogs.pullRequestDetail.resizePrBody")}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onDoubleClick={() => setHeight(BODY_HEIGHT_DEFAULT)}
-          className="group relative flex h-1.5 w-full shrink-0 cursor-row-resize items-center justify-center border-b border-border bg-bg-sidebar/40 transition hover:bg-accent/30"
-        >
-          <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
-        </span>
-      </Tooltip>
-    </>
-  );
-}
 
 function PrDetailLabelChip({ label }: { label: PullRequestLabel }) {
   const hex = label.color.replace(/^#/, "");
