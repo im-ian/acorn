@@ -5,6 +5,10 @@ import {
   Columns2,
   Copy,
   File as FileIcon,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileVideo,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -30,6 +34,7 @@ import {
 import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { FileViewer } from "./FileViewer";
+import { mediaKindFromPath } from "../lib/mediaFiles";
 import { ChatPane } from "./ChatPane";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
@@ -948,6 +953,21 @@ function TabStrip({
   );
 }
 
+function fileTabIcon(path: string) {
+  switch (mediaKindFromPath(path)) {
+    case "image":
+      return FileImage;
+    case "video":
+      return FileVideo;
+    case "audio":
+      return FileAudio;
+    case "pdf":
+      return FileText;
+    default:
+      return FileIcon;
+  }
+}
+
 interface TabItemProps {
   tab: PaneTab;
   paneId: PaneId;
@@ -1494,10 +1514,15 @@ function TabItem({
             </Tooltip>
           ) : tab.kind === "code" ? (
             <Tooltip label={tabPath} side="bottom">
-              <FileIcon
-                size={12}
-                className="pointer-events-none shrink-0 text-fg-muted"
-              />
+              {(() => {
+                const TabFileIcon = fileTabIcon(tab.path);
+                return (
+                  <TabFileIcon
+                    size={12}
+                    className="pointer-events-none shrink-0 text-fg-muted"
+                  />
+                );
+              })()}
             </Tooltip>
           ) : (
             <span
@@ -1647,10 +1672,15 @@ function WorkspaceTabDragGhost({
           )}
         />
       ) : tab.kind === "code" ? (
-        <FileIcon
-          size={11}
-          className="pointer-events-none shrink-0 text-fg-muted"
-        />
+        (() => {
+          const TabFileIcon = fileTabIcon(tab.path);
+          return (
+            <TabFileIcon
+              size={11}
+              className="pointer-events-none shrink-0 text-fg-muted"
+            />
+          );
+        })()
       ) : (
         <span
           className={cn(
