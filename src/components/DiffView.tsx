@@ -79,7 +79,7 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
             <button
               type="button"
               onClick={allCollapsed ? expandAll : collapseAll}
-              className="rounded px-2 py-0.5 text-[10px] uppercase tracking-wide transition hover:bg-bg-elevated hover:text-fg"
+              className="rounded-md px-2 py-0.5 text-[10px] uppercase tracking-wide transition hover:bg-bg-elevated hover:text-fg"
             >
               {allCollapsed
                 ? t("diffView.expandAll")
@@ -91,7 +91,7 @@ export function DiffView({ payload, onExpand }: DiffViewProps) {
               <button
                 type="button"
                 onClick={onExpand}
-                className="rounded p-1 transition hover:bg-bg-elevated hover:text-fg"
+                className="rounded-md p-1 transition hover:bg-bg-elevated hover:text-fg"
                 aria-label={t("diffView.openFullDiff")}
               >
                 <Maximize2 size={12} />
@@ -318,7 +318,7 @@ export function DiffLine({
   if (line.kind === "hunk") {
     return (
       <div
-        className="bg-[oklch(28%_0.04_250)] px-3 py-0.5 text-[oklch(70%_0.05_250)] whitespace-pre"
+        className="bg-bg-elevated/60 px-3 py-0.5 text-fg-muted whitespace-pre"
         {...lineDataProps(index)}
       >
         <span {...lineTextContentProps()}>{line.text}</span>
