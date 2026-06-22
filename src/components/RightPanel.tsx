@@ -2218,7 +2218,7 @@ function CommitsTab({
             <SkeletonList count={8} />
           </div>
         </Panel>
-        <ResizeHandle direction="vertical" thin />
+        <ResizeHandle direction="vertical" gap />
         <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
           <div className="acorn-no-scrollbar h-full overflow-y-auto p-3">
             <div className="h-3 w-1/2 animate-pulse rounded bg-fg-muted/15" />
@@ -2327,7 +2327,7 @@ function CommitsTab({
         </div>
         </div>
       </Panel>
-      <ResizeHandle direction="vertical" thin />
+      <ResizeHandle direction="vertical" gap />
       <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selected && diff ? (
@@ -2643,7 +2643,7 @@ function StagedTab({
           })}
         </ul>
       </Panel>
-      <ResizeHandle direction="vertical" thin />
+      <ResizeHandle direction="vertical" gap />
       <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selectedDiff ? (
