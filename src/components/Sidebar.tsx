@@ -2017,7 +2017,7 @@ function ProjectGroupView({
         ]}
       />
       {!collapsed ? (
-        <ul className="ml-3 flex flex-col gap-0.5 pb-1.5 pl-1 pr-1.5 pt-1">
+        <ul className="flex flex-col gap-0.5 pb-1.5 pt-1">
           <SortableContext
             items={topLevelItemIds}
             strategy={verticalListSortingStrategy}
