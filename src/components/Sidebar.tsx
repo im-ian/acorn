@@ -2755,8 +2755,8 @@ function SessionRow({
       className={cn(
         "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
         active
-          ? "bg-bg-elevated/70"
-          : "bg-bg-elevated/30 hover:bg-bg-elevated/50",
+          ? "bg-bg-elevated shadow-sm"
+          : "hover:bg-bg-elevated/40",
         isDragging && "opacity-40",
       )}
     >
@@ -3610,8 +3610,8 @@ function LocalSessionRow({
       className={cn(
         "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
         active
-          ? "bg-bg-elevated/70"
-          : "bg-bg-elevated/30 hover:bg-bg-elevated/50",
+          ? "bg-bg-elevated shadow-sm"
+          : "hover:bg-bg-elevated/40",
         isDragging && "opacity-40",
       )}
     >
