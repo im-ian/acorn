@@ -140,7 +140,7 @@ function ContextMenuItemButton({
       onMouseEnter={onMouseEnter}
       onFocus={onFocus}
       className={cn(
-        "flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition",
+        "flex w-full items-center gap-1.5 rounded-md px-2.5 py-1 text-left transition",
         disabled
           ? "cursor-not-allowed text-fg-muted/50"
           : "text-fg hover:bg-bg-sidebar",
@@ -230,9 +230,9 @@ function ContextMenuPanel({
         zIndex: 60,
       }}
       onMouseLeave={() => setActiveSubmenu(null)}
-      className="min-w-[11rem] rounded-md border border-border bg-bg-elevated shadow-2xl"
+      className="min-w-[11rem] rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated p-1 shadow-xl"
     >
-      <ul className="py-1 text-[12px]">
+      <ul className="text-[12px]">
         {items.map((item, i) => {
           if (item.type === "separator") {
             return (
