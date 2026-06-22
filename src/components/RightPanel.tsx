@@ -4718,10 +4718,10 @@ const PR_SEARCH_STATE_OPTIONS: { value: PrStateFilter }[] = [
 ];
 
 /**
- * Modal-scoped PR search. Queries gh server-side via `--search`, so it
- * reaches every PR in the repo rather than filtering the (capped) list that
- * the PRs tab currently displays. Empty query → no fetch; results paginate
- * by growing `limit` on scroll, mirroring the main tab's pattern.
+ * Modal-scoped PR search. Uses the backend list endpoint rather than
+ * filtering the PRs tab's capped list, so backend search and fallback logic
+ * stay in one place. Empty query → no fetch; results paginate by growing
+ * `limit` on scroll, mirroring the main tab's pattern.
  */
 function PullRequestSearchModal({
   open,

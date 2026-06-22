@@ -298,6 +298,8 @@ pub enum IssueDetailListing {
 }
 
 const GH_HOST: &str = "github.com";
+const PR_PLAIN_TEXT_FALLBACK_SCAN_LIMIT: u32 = 1000;
+const PR_PLAIN_TEXT_FALLBACK_MIN_CHARS: usize = 3;
 
 /// How long a successful (login, repo) resolution stays trusted before we
 /// re-probe access. Picked to be long enough to make periodic refreshes
@@ -477,6 +479,32 @@ fn run_pr_list(
     query: Option<&str>,
 ) -> AppResult<Vec<PullRequestInfo>> {
     let limit = limit.clamp(1, 1000);
+    let items = run_pr_list_page(slug, token, state, limit, query)?;
+    if !items.is_empty() {
+        return Ok(items);
+    }
+
+    let Some(terms) = query.and_then(plain_text_pr_search_terms) else {
+        return Ok(items);
+    };
+
+    let scan_limit = PR_PLAIN_TEXT_FALLBACK_SCAN_LIMIT.max(limit).clamp(1, 1000);
+    let fallback_items = run_pr_list_page(slug, token, state, scan_limit, None)?;
+    Ok(fallback_items
+        .into_iter()
+        .filter(|pr| pull_request_matches_plain_text_terms(pr, &terms))
+        .take(limit as usize)
+        .collect())
+}
+
+fn run_pr_list_page(
+    slug: &str,
+    token: &str,
+    state: PrStateFilter,
+    limit: u32,
+    query: Option<&str>,
+) -> AppResult<Vec<PullRequestInfo>> {
+    let limit = limit.clamp(1, 1000);
     let limit_s = limit.to_string();
     let output = cli_resolver::run("gh", |cmd| {
         cmd.env("GH_TOKEN", token)
@@ -516,38 +544,73 @@ fn run_pr_list(
     let raw: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)
         .map_err(|e| AppError::Other(format!("failed to parse gh output: {e}")))?;
 
-    Ok(raw
-        .into_iter()
-        .map(|pr| {
-            let checks = pr.status_check_rollup.as_deref().and_then(|rollup| {
-                if rollup.is_empty() {
-                    None
-                } else {
-                    Some(summarize_checks(rollup))
-                }
-            });
-            PullRequestInfo {
-                number: pr.number,
-                title: pr.title,
-                state: pr.state,
-                author: pr.author.login.unwrap_or_else(|| "unknown".to_string()),
-                head_branch: pr.head_ref_name,
-                base_branch: pr.base_ref_name,
-                url: pr.url,
-                updated_at: pr.updated_at,
-                is_draft: pr.is_draft,
-                checks,
-                labels: pr
-                    .labels
-                    .into_iter()
-                    .map(|l| PullRequestLabel {
-                        name: l.name,
-                        color: l.color,
-                    })
-                    .collect(),
-            }
-        })
-        .collect())
+    Ok(raw.into_iter().map(pull_request_info_from_gh).collect())
+}
+
+fn pull_request_info_from_gh(pr: GhPullRequest) -> PullRequestInfo {
+    let checks = pr.status_check_rollup.as_deref().and_then(|rollup| {
+        if rollup.is_empty() {
+            None
+        } else {
+            Some(summarize_checks(rollup))
+        }
+    });
+    PullRequestInfo {
+        number: pr.number,
+        title: pr.title,
+        state: pr.state,
+        author: pr.author.login.unwrap_or_else(|| "unknown".to_string()),
+        head_branch: pr.head_ref_name,
+        base_branch: pr.base_ref_name,
+        url: pr.url,
+        updated_at: pr.updated_at,
+        is_draft: pr.is_draft,
+        checks,
+        labels: pr
+            .labels
+            .into_iter()
+            .map(|l| PullRequestLabel {
+                name: l.name,
+                color: l.color,
+            })
+            .collect(),
+    }
+}
+
+fn plain_text_pr_search_terms(query: &str) -> Option<Vec<String>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || trimmed.contains(':') || trimmed.contains('"') {
+        return None;
+    }
+
+    let terms: Vec<String> = trimmed
+        .split_whitespace()
+        .map(|term| term.to_lowercase())
+        .collect();
+    if terms.iter().any(|term| {
+        term.chars().filter(|c| c.is_alphanumeric()).count() >= PR_PLAIN_TEXT_FALLBACK_MIN_CHARS
+    }) {
+        Some(terms)
+    } else {
+        None
+    }
+}
+
+fn pull_request_matches_plain_text_terms(pr: &PullRequestInfo, terms: &[String]) -> bool {
+    terms
+        .iter()
+        .all(|term| pull_request_field_contains(pr, term))
+}
+
+fn pull_request_field_contains(pr: &PullRequestInfo, term: &str) -> bool {
+    pr.title.to_lowercase().contains(term)
+        || pr.author.to_lowercase().contains(term)
+        || pr.head_branch.to_lowercase().contains(term)
+        || pr.base_branch.to_lowercase().contains(term)
+        || pr
+            .labels
+            .iter()
+            .any(|label| label.name.to_lowercase().contains(term))
 }
 
 fn run_issue_list(
@@ -2596,6 +2659,60 @@ mod tests {
             body: Some("Let users steer generated merge messages.".to_string()),
             ..Default::default()
         }
+    }
+
+    fn fake_pr_info() -> PullRequestInfo {
+        PullRequestInfo {
+            number: 42,
+            title: "refactor(ui): separate context submenu affordance".to_string(),
+            state: "OPEN".to_string(),
+            author: "jtf-ian".to_string(),
+            head_branch: "context-refactor".to_string(),
+            base_branch: "main".to_string(),
+            url: "https://github.com/im-ian/acorn/pull/42".to_string(),
+            updated_at: "2026-06-22T00:00:00Z".to_string(),
+            is_draft: false,
+            checks: None,
+            labels: vec![PullRequestLabel {
+                name: "frontend".to_string(),
+                color: "a2eeef".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn plain_text_pr_search_matches_partial_title_terms() {
+        let pr = fake_pr_info();
+        let terms = plain_text_pr_search_terms("refac").expect("plain text terms");
+
+        assert!(pull_request_matches_plain_text_terms(&pr, &terms));
+    }
+
+    #[test]
+    fn plain_text_pr_search_matches_author_branch_and_label_terms() {
+        let pr = fake_pr_info();
+
+        for query in ["jtf", "context-refac", "front"] {
+            let terms = plain_text_pr_search_terms(query).expect("plain text terms");
+            assert!(
+                pull_request_matches_plain_text_terms(&pr, &terms),
+                "{query} should match"
+            );
+        }
+
+        let terms = plain_text_pr_search_terms("backend").expect("plain text terms");
+        assert!(!pull_request_matches_plain_text_terms(&pr, &terms));
+    }
+
+    #[test]
+    fn plain_text_pr_search_keeps_advanced_queries_on_github_search() {
+        assert!(plain_text_pr_search_terms("label:fix").is_none());
+        assert!(plain_text_pr_search_terms("\"exact title\"").is_none());
+        assert!(plain_text_pr_search_terms("ui").is_none());
+        assert_eq!(
+            plain_text_pr_search_terms("  REFAC  "),
+            Some(vec!["refac".to_string()])
+        );
     }
 
     #[test]
