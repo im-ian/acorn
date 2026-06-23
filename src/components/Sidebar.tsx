@@ -2832,7 +2832,12 @@ function SessionRow({
   return (
     <li ref={setNodeRef} style={style}>
       {hoverDetails ? (
-        <Tooltip label={hoverDetails} side="right" multiline className="w-full">
+        <Tooltip
+          label={hoverDetails}
+          side="right"
+          multiline
+          className="flex! w-full"
+        >
           {row}
         </Tooltip>
       ) : (
@@ -3724,7 +3729,12 @@ function LocalSessionRow({
   return (
     <li ref={setNodeRef} style={style}>
       {hoverDetails ? (
-        <Tooltip label={hoverDetails} side="right" multiline className="w-full">
+        <Tooltip
+          label={hoverDetails}
+          side="right"
+          multiline
+          className="flex! w-full"
+        >
           {row}
         </Tooltip>
       ) : (

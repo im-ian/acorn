@@ -2557,7 +2557,7 @@ test.describe("sidebar: project lifecycle", () => {
     const terminalBox = await terminalRow.boundingBox();
     expect(terminalBox).not.toBeNull();
     await page.mouse.click(
-      terminalBox!.x + Math.min(terminalBox!.width - 40, 140),
+      terminalBox!.x + terminalBox!.width - 40,
       terminalBox!.y + terminalBox!.height / 2,
     );
 

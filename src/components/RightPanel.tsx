@@ -3961,69 +3961,69 @@ function WorkflowRunRow({
 
   return (
     <li>
-      <Tooltip
-        label={rt(t, "rightPanel.actions.doubleClickDetails")}
-        side="top"
-        className="w-full"
+      <button
+        type="button"
+        onDoubleClick={onOpenDetail}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onOpenDetail();
+          }
+        }}
+        className={listRowClassName({
+          interactive: true,
+          className: "flex w-full items-start gap-2 text-left",
+        })}
       >
-        <button
-          type="button"
-          onDoubleClick={onOpenDetail}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onOpenDetail();
-            }
-          }}
-          className={listRowClassName({
-            interactive: true,
-            className: "flex w-full items-start gap-2 text-left",
-          })}
-        >
-          <span className="mt-0.5 flex shrink-0 items-center">
-            <WorkflowRunStatusIcon
-              status={run.status}
-              conclusion={run.conclusion}
-            />
-          </span>
-          <div className="min-w-0 flex-1">
+        <span className="mt-0.5 flex shrink-0 items-center">
+          <WorkflowRunStatusIcon
+            status={run.status}
+            conclusion={run.conclusion}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <Tooltip
+            label={rt(t, "rightPanel.actions.doubleClickDetails")}
+            side="top"
+            className="min-w-0 w-full"
+          >
             <div className="truncate text-fg">{title}</div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
-              <span className="truncate">{run.workflow_name}</span>
-              <span className="opacity-50">·</span>
-              <span className="truncate">{run.event}</span>
-              {branch ? (
-                <>
-                  <span className="opacity-50">·</span>
-                  <span className="truncate font-mono">{branch}</span>
-                </>
-              ) : null}
-              {run.attempt > 1 ? (
-                <>
-                  <span className="opacity-50">·</span>
-                  <span>
-                    {rtf(t, "rightPanel.actions.retryAttempt", {
-                      attempt: run.attempt,
-                    })}
-                  </span>
-                </>
-              ) : null}
-            </div>
+          </Tooltip>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
+            <span className="truncate">{run.workflow_name}</span>
+            <span className="opacity-50">·</span>
+            <span className="truncate">{run.event}</span>
+            {branch ? (
+              <>
+                <span className="opacity-50">·</span>
+                <span className="truncate font-mono">{branch}</span>
+              </>
+            ) : null}
+            {run.attempt > 1 ? (
+              <>
+                <span className="opacity-50">·</span>
+                <span>
+                  {rtf(t, "rightPanel.actions.retryAttempt", {
+                    attempt: run.attempt,
+                  })}
+                </span>
+              </>
+            ) : null}
           </div>
-          {startedRelative ? (
-            <Tooltip label={startedAbsolute}>
-              <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
-                {startedRelative}
-              </span>
-            </Tooltip>
-          ) : null}
-          {duration ? (
-            <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
-              {duration}
+        </div>
+        {startedRelative ? (
+          <Tooltip label={startedAbsolute}>
+            <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
+              {startedRelative}
             </span>
-          ) : null}
-        </button>
-      </Tooltip>
+          </Tooltip>
+        ) : null}
+        {duration ? (
+          <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
+            {duration}
+          </span>
+        ) : null}
+      </button>
     </li>
   );
 }

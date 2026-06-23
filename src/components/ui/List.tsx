@@ -108,9 +108,10 @@ export function listRowClassName({
     "rounded-md",
     LIST_ROW_DENSITY_CLASS[density],
     interactive && "transition focus-visible:outline-none",
+    interactive && !disabled && "cursor-pointer",
     interactive && LIST_ROW_INTERACTIVE_CLASS[surface],
     selected && selectedClassName,
-    disabled && "opacity-60",
+    disabled && "cursor-not-allowed opacity-60",
     className,
   );
 }
@@ -230,7 +231,7 @@ export function ListActionRow({
   const handleKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
     onKeyDown?.(event);
     if (event.defaultPrevented) return;
-    if (event.key === "Enter") {
+    if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onOpen();
     }

@@ -130,49 +130,49 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               const dir = dirnameOf(entry.path);
               return (
                 <li key={entry.index}>
-                  <Tooltip
-                    label={entry.path}
-                    side="right"
-                    multiline
-                    className="w-full"
+                  <ListRowButton
+                    onClick={() => setSelectedIndex(entry.index)}
+                    onContextMenu={(e) => {
+                      if (!cwd) return;
+                      e.preventDefault();
+                      setSelectedIndex(entry.index);
+                      setMenu({ x: e.clientX, y: e.clientY, entry });
+                    }}
+                    density="compact"
+                    surface="subtle"
+                    selected={active}
+                    selectedClassName="bg-bg-elevated text-fg"
+                    className={cn(
+                      "flex flex-col items-stretch gap-0.5 font-mono text-xs",
+                      !active && "text-fg-muted hover:text-fg",
+                    )}
                   >
-                    <ListRowButton
-                      onClick={() => setSelectedIndex(entry.index)}
-                      onContextMenu={(e) => {
-                        if (!cwd) return;
-                        e.preventDefault();
-                        setSelectedIndex(entry.index);
-                        setMenu({ x: e.clientX, y: e.clientY, entry });
-                      }}
-                      density="compact"
-                      surface="subtle"
-                      selected={active}
-                      selectedClassName="bg-bg-elevated text-fg"
-                      className={cn(
-                        "flex flex-col items-stretch gap-0.5 font-mono text-xs",
-                        !active && "text-fg-muted hover:text-fg",
-                      )}
-                    >
-                      <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-2">
+                      <Tooltip
+                        label={entry.path}
+                        side="right"
+                        multiline
+                        className="min-w-0 flex-1"
+                      >
                         <span className="min-w-0 flex-1 truncate">
                           {basenameOf(entry.path)}
                         </span>
-                        <span className="flex shrink-0 gap-1.5 text-[10px]">
-                          <span className="text-[oklch(72%_0.16_145)]">
-                            +{entry.add}
-                          </span>
-                          <span className="text-[oklch(62%_0.22_25)]">
-                            -{entry.del}
-                          </span>
+                      </Tooltip>
+                      <span className="flex shrink-0 gap-1.5 text-[10px]">
+                        <span className="text-[oklch(72%_0.16_145)]">
+                          +{entry.add}
+                        </span>
+                        <span className="text-[oklch(62%_0.22_25)]">
+                          -{entry.del}
                         </span>
                       </span>
-                      {dir ? (
-                        <span className="block truncate text-[10px] text-fg-muted/70">
-                          {dir}
-                        </span>
-                      ) : null}
-                    </ListRowButton>
-                  </Tooltip>
+                    </span>
+                    {dir ? (
+                      <span className="block truncate text-[10px] text-fg-muted/70">
+                        {dir}
+                      </span>
+                    ) : null}
+                  </ListRowButton>
                 </li>
               );
             })}
