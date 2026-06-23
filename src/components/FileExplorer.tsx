@@ -1920,52 +1920,46 @@ function EntryRow({
 
   return (
     <>
-      <Tooltip
-        label={entry.path}
-        side="right"
-        multiline
-        className="w-full"
-      >
-        <button
-          type="button"
-          onPointerDown={onEntryPointerDown}
-          onClick={(e) => {
-            if (suppressNextClickRef.current) {
-              suppressNextClickRef.current = false;
-              e.preventDefault();
-              e.stopPropagation();
-              return;
-            }
-            onEntryClick(entry, e);
-          }}
-          onDoubleClick={(e) => {
-            if (suppressNextClickRef.current) {
-              suppressNextClickRef.current = false;
-              e.preventDefault();
-              e.stopPropagation();
-              return;
-            }
+      <button
+        type="button"
+        onPointerDown={onEntryPointerDown}
+        onClick={(e) => {
+          if (suppressNextClickRef.current) {
+            suppressNextClickRef.current = false;
             e.preventDefault();
-            onEntryDoubleClick(entry);
-          }}
-          onContextMenu={(e) => {
             e.stopPropagation();
-            onContextMenu(e, entry);
-          }}
-          className={listRowClassName({
-            density: "none",
-            className: cn(
-              "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
-              isSelected
-                ? "bg-accent/25 text-fg"
-                : isActive
+            return;
+          }
+          onEntryClick(entry, e);
+        }}
+        onDoubleClick={(e) => {
+          if (suppressNextClickRef.current) {
+            suppressNextClickRef.current = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          e.preventDefault();
+          onEntryDoubleClick(entry);
+        }}
+        onContextMenu={(e) => {
+          e.stopPropagation();
+          onContextMenu(e, entry);
+        }}
+        className={listRowClassName({
+          density: "none",
+          className: cn(
+            "flex w-full cursor-pointer items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
+            isSelected
+              ? "bg-accent/25 text-fg"
+              : isActive
                 ? "bg-accent/15 text-fg"
                 : "text-fg hover:bg-fg-muted/10",
-              entry.gitignored ? "opacity-60" : "",
-            ),
-          })}
-          style={{ paddingLeft: 8 }}
-        >
+            entry.gitignored ? "opacity-60" : "",
+          ),
+        })}
+        style={{ paddingLeft: 8 }}
+      >
         {Array.from({ length: depth }).map((_, i) => (
           <span
             key={i}
@@ -1995,12 +1989,16 @@ function EntryRow({
             <FileIcon size={13} />
           )}
         </span>
-        <span className={cn("whitespace-nowrap", nameClass, folderRollupClass)}>
-          {entry.name}
-          {entry.is_symlink ? (
-            <span className="ml-1 text-fg-muted">↪</span>
-          ) : null}
-        </span>
+        <Tooltip label={entry.path} side="right" multiline>
+          <span
+            className={cn("whitespace-nowrap", nameClass, folderRollupClass)}
+          >
+            {entry.name}
+            {entry.is_symlink ? (
+              <span className="ml-1 text-fg-muted">↪</span>
+            ) : null}
+          </span>
+        </Tooltip>
         {statusLetter ? (
           <span
             className={cn(
@@ -2025,8 +2023,7 @@ function EntryRow({
             </span>
           </span>
         ) : null}
-        </button>
-      </Tooltip>
+      </button>
       {children}
     </>
   );

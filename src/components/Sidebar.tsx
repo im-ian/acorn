@@ -2745,6 +2745,7 @@ function SessionRow({
       {...attributes}
       role="button"
       tabIndex={0}
+      onMouseDown={(e) => e.stopPropagation()}
       onClick={editing ? undefined : onSelect}
       onPointerDown={(e) => {
         if (editing) return;
@@ -2778,7 +2779,7 @@ function SessionRow({
         selectedClassName: "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
-          "group flex w-full items-start gap-1.5 text-left",
+          "group flex w-full cursor-pointer items-start gap-1.5 text-left",
           isDragging && "opacity-40",
         ),
       })}
@@ -3632,6 +3633,7 @@ function LocalSessionRow({
       {...attributes}
       role="button"
       tabIndex={0}
+      onMouseDown={(e) => e.stopPropagation()}
       onClick={editing ? undefined : onSelect}
       onPointerDown={(e) => {
         if (editing) return;
@@ -3665,7 +3667,7 @@ function LocalSessionRow({
         selectedClassName: "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
-          "group flex w-full items-start gap-1.5 text-left",
+          "group flex w-full cursor-pointer items-start gap-1.5 text-left",
           isDragging && "opacity-40",
         ),
       })}
