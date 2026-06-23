@@ -13,6 +13,15 @@
   --color-danger: oklch(62% 0.22 25);
   --color-warning: oklch(78% 0.16 75);
 
+  /*
+   * Subtle contrast fills for borderless surfaces (neutral/ghost buttons,
+   * inputs). Derived from the foreground token so they invert automatically
+   * per theme — light alpha on dark themes, dark alpha on light themes — and
+   * need no per-theme definition (same trick as --acorn-canvas).
+   */
+  --color-fill: color-mix(in oklab, var(--color-fg) 6%, transparent);
+  --color-fill-hover: color-mix(in oklab, var(--color-fg) 12%, transparent);
+
   --font-sans: "Inter", "SF Pro Text", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
 }
