@@ -59,6 +59,7 @@ export function RemoveProjectFolderDialog({
         <>
           <ModalHeader
             title={dt(t, "dialogs.removeProjectFolder.title")}
+            subtitle={folder.name}
             titleId="acorn-remove-project-folder-title"
             icon={<AlertTriangle size={16} className="text-warning" />}
             variant="dialog"

@@ -52,6 +52,7 @@ export function RemoveProjectDialog({
         <>
           <ModalHeader
             title={dt(t, "dialogs.removeProject.title")}
+            subtitle={project.name}
             icon={<AlertTriangle size={16} className="text-warning" />}
             variant="dialog"
             onClose={() => onClose("cancel")}

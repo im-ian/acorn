@@ -91,6 +91,7 @@ export function RemoveSessionDialog({
         <>
           <ModalHeader
             title={dt(t, "dialogs.removeSession.title")}
+            subtitle={session.name}
             icon={<AlertTriangle size={16} className="text-warning" />}
             variant="dialog"
             onClose={() => commit("cancel")}
