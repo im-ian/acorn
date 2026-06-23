@@ -54,6 +54,12 @@ import {
   Modal,
   ModalHeader,
   RefreshButton,
+  SegmentedControl,
+  SkeletonBlock,
+  SkeletonCircle,
+  SkeletonText,
+  StatusBadge,
+  type StatusTone,
 } from "./ui";
 
 type DetailTab = "conversation" | "commits" | "checks" | "files";
@@ -407,51 +413,49 @@ function DetailBody({
 
   const mainSection = (
     <>
-      <nav className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1">
-        <DetailTabButton
-          icon={<MessagesSquare size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabConversation")}
-          badge={conversationCount > 0 ? conversationCount : null}
-          active={tab === "conversation"}
-          onClick={() => onTab("conversation")}
-        />
-        <DetailTabButton
-          icon={<GitCommit size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabCommits")}
-          badge={commitCount > 0 ? commitCount : null}
-          active={tab === "commits"}
-          onClick={() => onTab("commits")}
-        />
-        <DetailTabButton
-          icon={<CheckCircle2 size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabChecks")}
-          badge={
-            allChecksPassed ? (
-              <Check size={11} strokeWidth={3} className="text-emerald-300" />
+      <SegmentedControl
+        activeId={tab}
+        items={[
+          {
+            id: "conversation",
+            icon: <MessagesSquare size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabConversation"),
+            badge: conversationCount > 0 ? conversationCount : null,
+          },
+          {
+            id: "commits",
+            icon: <GitCommit size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabCommits"),
+            badge: commitCount > 0 ? commitCount : null,
+          },
+          {
+            id: "checks",
+            icon: <CheckCircle2 size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabChecks"),
+            badge: allChecksPassed ? (
+              <Check size={11} strokeWidth={3} />
             ) : allChecksFailed ? (
-              <X size={11} strokeWidth={3} className="text-rose-300" />
+              <X size={11} strokeWidth={3} />
             ) : checksPartial ? (
               `${checkCounts.passed}/${totalChecks}`
-            ) : null
-          }
-          badgeTone={
-            allChecksPassed
+            ) : null,
+            badgeTone: allChecksPassed
               ? "success"
               : allChecksFailed
                 ? "danger"
-                : "default"
-          }
-          active={tab === "checks"}
-          onClick={() => onTab("checks")}
-        />
-        <DetailTabButton
-          icon={<GitPullRequest size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabFiles")}
-          badge={fileCount > 0 ? fileCount : null}
-          active={tab === "files"}
-          onClick={() => onTab("files")}
-        />
-      </nav>
+                : "neutral",
+          },
+          {
+            id: "files",
+            icon: <GitPullRequest size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabFiles"),
+            badge: fileCount > 0 ? fileCount : null,
+          },
+        ]}
+        onChange={onTab}
+        ariaLabel="Pull request detail tabs"
+        className="shrink-0 border-b border-border px-1.5 py-1"
+      />
 
       <div className="min-h-0 flex-1 overflow-hidden p-1.5">
         {tab === "conversation" ? (
@@ -725,21 +729,21 @@ function DetailSkeleton({
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="h-3.5 w-3.5 shrink-0 animate-pulse rounded-full bg-fg-muted/20" />
+            <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/20" />
             <span className="font-mono text-xs text-fg-muted">#{number}</span>
-            <span className="h-3.5 w-[55%] animate-pulse rounded bg-fg-muted/15" />
+            <SkeletonBlock className="h-3.5 w-[55%] bg-fg-muted/15" />
           </div>
           <div className="mt-2 flex items-center gap-1.5">
-            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-16 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-40 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-40 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
-            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-8 shrink-0" />
+            <SkeletonBlock className="h-2.5 w-8 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-14 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-14 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-16 shrink-0" />
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -760,12 +764,16 @@ function DetailSkeleton({
         style={{ height: BODY_HEIGHT_DEFAULT }}
       >
         <div className="flex flex-col gap-2">
-          <span className="h-3 w-[85%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[72%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[40%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="mt-2 h-3 w-[60%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[78%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[35%] animate-pulse rounded bg-fg-muted/10" />
+          <SkeletonText
+            className="gap-2"
+            lines={3}
+            widths={["85%", "72%", "40%"]}
+          />
+          <SkeletonText
+            className="mt-2 gap-2"
+            lines={3}
+            widths={["60%", "78%", "35%"]}
+          />
         </div>
       </div>
       <div
@@ -785,9 +793,7 @@ function DetailSkeleton({
             className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs text-fg-muted/60"
           >
             {tab.icon}
-            <span
-              className={cn("h-2.5 animate-pulse rounded bg-fg-muted/15", tab.w)}
-            />
+            <SkeletonBlock className={cn("h-2.5 bg-fg-muted/15", tab.w)} />
           </div>
         ))}
       </nav>
@@ -795,8 +801,8 @@ function DetailSkeleton({
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
           <div className="flex items-center gap-1 px-1.5 py-0.5">
-            <span className="h-3 w-3 shrink-0 animate-pulse rounded-sm bg-fg-muted/15" />
-            <span className="h-2.5 w-16 animate-pulse rounded bg-fg-muted/15" />
+            <SkeletonBlock className="h-3 w-3 shrink-0 rounded-sm bg-fg-muted/15" />
+            <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
           </div>
         </div>
         <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
@@ -810,82 +816,22 @@ function DetailSkeleton({
               className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3"
             >
               <div className="mb-2 flex items-center gap-2">
-                <span className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
-                <span
-                  className={cn(
-                    "h-3 animate-pulse rounded bg-fg-muted/15",
-                    row.titleW,
-                  )}
+                <SkeletonCircle className="h-7 w-7 shrink-0 bg-fg-muted/15" />
+                <SkeletonBlock
+                  className={cn("h-3 bg-fg-muted/15", row.titleW)}
                 />
-                <span className="h-2.5 w-14 animate-pulse rounded bg-fg-muted/10" />
-                <span className="h-2.5 w-20 animate-pulse rounded bg-fg-muted/10" />
+                <SkeletonBlock className="h-2.5 w-14" />
+                <SkeletonBlock className="h-2.5 w-20" />
               </div>
-              <div className="flex flex-col gap-1.5">
-                {row.bodyWidths.map((w, j) => (
-                  <span
-                    key={j}
-                    className="h-3 animate-pulse rounded bg-fg-muted/10"
-                    style={{ width: w }}
-                  />
-                ))}
-              </div>
+              <SkeletonText
+                lines={row.bodyWidths.length}
+                widths={row.bodyWidths}
+              />
             </li>
           ))}
         </ul>
       </div>
     </>
-  );
-}
-
-type BadgeTone = "default" | "success" | "danger";
-
-interface DetailTabButtonProps {
-  icon: React.ReactNode;
-  label: string;
-  badge?: React.ReactNode;
-  badgeTone?: BadgeTone;
-  active: boolean;
-  onClick: () => void;
-}
-
-function DetailTabButton({
-  icon,
-  label,
-  badge,
-  badgeTone = "default",
-  active,
-  onClick,
-}: DetailTabButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "relative flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition",
-        active
-          ? "acorn-tab-active-bg text-fg"
-          : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
-      )}
-    >
-      {icon}
-      {label}
-      {badge != null && badge !== false ? (
-        <span
-          className={cn(
-            "flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-medium tabular-nums",
-            badgeTone === "danger"
-              ? "bg-rose-500/20 text-rose-300"
-              : badgeTone === "success"
-                ? "bg-emerald-500/20 text-emerald-300"
-                : active
-                  ? "bg-accent/20 text-fg"
-                  : "bg-fg-muted/15 text-fg-muted",
-          )}
-        >
-          {badge}
-        </span>
-      ) : null}
-    </button>
   );
 }
 
@@ -1177,14 +1123,12 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
 function ReviewStateBadge({ state }: { state: string }) {
   const t = useTranslation();
   const upper = state.toUpperCase();
-  const tone =
+  const tone: StatusTone =
     upper === "APPROVED"
-      ? "bg-emerald-500/15 text-emerald-400"
+      ? "success"
       : upper === "CHANGES_REQUESTED"
-        ? "bg-rose-500/15 text-rose-400"
-        : upper === "DISMISSED"
-          ? "bg-fg-muted/15 text-fg-muted line-through"
-          : "bg-fg-muted/15 text-fg-muted";
+        ? "danger"
+        : "neutral";
   const label =
     upper === "APPROVED"
       ? dt(t, "dialogs.pullRequestDetail.reviewApproved")
@@ -1194,14 +1138,16 @@ function ReviewStateBadge({ state }: { state: string }) {
           ? dt(t, "dialogs.pullRequestDetail.reviewDismissed")
           : upper.replace("_", " ").toLowerCase();
   return (
-    <span
+    <StatusBadge
+      tone={tone}
+      size="xs"
       className={cn(
-        "rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
-        tone,
+        "uppercase tracking-wide",
+        upper === "DISMISSED" && "line-through",
       )}
     >
       {label}
-    </span>
+    </StatusBadge>
   );
 }
 
@@ -1678,8 +1624,9 @@ function CheckStatusLabel({
   conclusion: string | null;
 }) {
   const t = useTranslation();
+  const completed = status.toUpperCase() === "COMPLETED";
   const raw =
-    status.toUpperCase() === "COMPLETED"
+    completed
       ? (conclusion ?? "completed")
       : status;
   const normalized = raw.toUpperCase();
@@ -1702,8 +1649,29 @@ function CheckStatusLabel({
                     ? dt(t, "dialogs.pullRequestDetail.checkCompleted")
                     : raw.toLowerCase().replace(/_/g, " ");
   return (
-    <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
+    <StatusBadge
+      tone={checkStatusTone(normalized, completed)}
+      size="xs"
+      pulse={!completed}
+      className="font-mono"
+    >
+      {text}
+    </StatusBadge>
   );
+}
+
+function checkStatusTone(normalized: string, completed: boolean): StatusTone {
+  if (!completed) return "neutral";
+  switch (normalized) {
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+    case "TIMED_OUT":
+    case "ACTION_REQUIRED":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 function formatCheckDuration(
