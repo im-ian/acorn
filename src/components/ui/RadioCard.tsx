@@ -21,7 +21,7 @@ export function RadioCard<T extends string>({
   return (
     <label
       className={cn(
-        "flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 transition",
+        "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition",
         active
           ? "border-accent/60 bg-accent/10"
           : "border-border bg-bg hover:border-fg-muted/40",

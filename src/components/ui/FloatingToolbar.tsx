@@ -15,7 +15,7 @@ export interface FloatingToolbarClassNameOptions {
 }
 
 const FLOATING_TOOLBAR_BASE_CLASS =
-  "absolute z-20 flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-md border border-border bg-bg-elevated/95 p-1 shadow-lg backdrop-blur";
+  "absolute z-20 flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-lg border border-border bg-bg-elevated/95 p-1 shadow-lg backdrop-blur";
 
 const FLOATING_TOOLBAR_POSITION_CLASS: Record<
   FloatingToolbarPosition,

@@ -21,7 +21,7 @@ export interface NoticeClassNameOptions {
   className?: ClassValue;
 }
 
-const NOTICE_BASE_CLASS = "rounded-md border leading-snug";
+const NOTICE_BASE_CLASS = "rounded-lg border leading-snug";
 
 const NOTICE_DENSITY_CLASS: Record<NoticeDensity, string> = {
   default: "px-3 py-2 text-xs",
