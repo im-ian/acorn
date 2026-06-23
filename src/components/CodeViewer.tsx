@@ -22,7 +22,7 @@ import {
   type VirtualizedLineListHandle,
 } from "./VirtualizedLines";
 import { Tooltip } from "./Tooltip";
-import { Button, IconButton, Markdown } from "./ui";
+import { Button, FloatingToolbar, IconButton, Markdown } from "./ui";
 import type { CodeWorkspaceTabTarget } from "../lib/workspaceTabs";
 
 interface CodeViewerProps {
@@ -455,7 +455,7 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
         />
       )}
       {searchOpen ? (
-        <div className="absolute right-3 top-3 z-30 flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-md border border-border bg-bg-elevated/95 p-1 shadow-lg backdrop-blur">
+        <FloatingToolbar aria-label={t("codeViewer.findControls")} zIndex={30}>
           <Search size={13} className="ml-1 text-fg-muted" />
           <input
             ref={searchInputRef}
@@ -520,7 +520,7 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
               <X size={14} />
             </IconButton>
           </Tooltip>
-        </div>
+        </FloatingToolbar>
       ) : null}
       {canPreviewMarkdown ? (
         <Button

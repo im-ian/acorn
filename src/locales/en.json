@@ -758,6 +758,7 @@
     "close": "Close"
   },
   "mediaViewer": {
+    "zoomControls": "Image zoom controls",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "resetZoom": "Reset zoom"
@@ -770,6 +771,7 @@
     "showPreview": "Preview",
     "showSource": "Source",
     "findInFile": "Find in file",
+    "findControls": "Find controls",
     "findPrompt": "Find",
     "noMatches": "No matches",
     "matchCount": "{current}/{total}",

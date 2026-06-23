@@ -758,6 +758,7 @@
     "close": "닫기"
   },
   "mediaViewer": {
+    "zoomControls": "이미지 확대/축소 컨트롤",
     "zoomIn": "확대",
     "zoomOut": "축소",
     "resetZoom": "확대/축소 초기화"
@@ -770,6 +771,7 @@
     "showPreview": "미리보기",
     "showSource": "소스",
     "findInFile": "파일에서 찾기",
+    "findControls": "찾기 컨트롤",
     "findPrompt": "찾기",
     "noMatches": "일치 없음",
     "matchCount": "{current}/{total}",

@@ -12,7 +12,7 @@ import { basenameFromPath, type MediaFileKind } from "../lib/mediaFiles";
 import { cn } from "../lib/cn";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
-import { IconButton } from "./ui";
+import { FloatingToolbar, IconButton } from "./ui";
 
 interface MediaViewerProps {
   path: string;
@@ -222,7 +222,7 @@ function ImageZoomControls({
   const resetLabel = t("mediaViewer.resetZoom");
 
   return (
-    <div className="absolute right-3 top-3 z-20 flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-md border border-border bg-bg-elevated/95 p-1 shadow-lg backdrop-blur">
+    <FloatingToolbar aria-label={t("mediaViewer.zoomControls")}>
       <Tooltip label={zoomOutLabel} side="bottom">
         <IconButton
           aria-label={zoomOutLabel}
@@ -265,7 +265,7 @@ function ImageZoomControls({
           <RotateCcw size={14} />
         </IconButton>
       </Tooltip>
-    </div>
+    </FloatingToolbar>
   );
 }
 
