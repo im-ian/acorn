@@ -4,7 +4,7 @@ import { cn } from "../../lib/cn";
 type TextInputProps = InputHTMLAttributes<HTMLInputElement>;
 
 export const TEXT_INPUT_CLASS =
-  "h-7 w-full rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none focus:border-accent";
+  "h-7 w-full rounded-lg border border-transparent bg-fill px-2.5 font-mono text-xs text-fg outline-none focus:border-accent focus:bg-fill-hover";
 
 export const TextInput = forwardRef<HTMLInputElement, TextInputProps>(
   function TextInput({ className, type = "text", spellCheck = false, ...rest }, ref) {
