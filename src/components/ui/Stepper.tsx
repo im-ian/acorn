@@ -74,7 +74,7 @@ export function Stepper({
   return (
     <div
       className={cn(
-        "inline-flex h-7 w-fit items-stretch self-start overflow-hidden rounded-lg bg-fill",
+        "inline-flex h-8 w-fit items-stretch self-start overflow-hidden rounded-lg bg-fill",
         disabled && "opacity-50",
       )}
     >

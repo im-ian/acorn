@@ -25,7 +25,7 @@ export const IconInput = forwardRef<HTMLInputElement, IconInputProps>(
     return (
       <div
         className={cn(
-          "flex h-7 items-center gap-1 rounded-lg border border-transparent bg-fill px-2.5 focus-within:border-accent focus-within:bg-fill-hover",
+          "flex h-8 items-center gap-1 rounded-lg border border-transparent bg-fill px-2.5 focus-within:border-accent focus-within:bg-fill-hover",
           invalid ? "border-rose-500/60" : "",
           className,
         )}
