@@ -27,18 +27,30 @@ export interface ButtonClassNameOptions {
 }
 
 const BUTTON_BASE_CLASS =
-  "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50";
 
 const BUTTON_SIZE_CLASS: Record<ButtonSize, string> = {
-  xs: "px-2 py-1 text-[11px]",
-  sm: "px-3 py-1 text-xs",
-  md: "px-3 py-1.5 text-xs",
+  xs: "h-6 px-2 text-[11px]",
+  sm: "h-7 px-3 text-xs",
+  md: "h-8 px-3.5 text-xs",
 };
 
 function neutralHoverClass(surface: ButtonSurface): string {
   return surface === "dialog"
-    ? "hover:bg-bg-sidebar hover:text-fg"
-    : "hover:bg-bg-elevated hover:text-fg";
+    ? "hover:bg-bg-sidebar/90 hover:text-fg"
+    : "hover:bg-bg-elevated/90 hover:text-fg";
+}
+
+function neutralFillClass(surface: ButtonSurface): string {
+  return surface === "dialog"
+    ? "border-border/70 bg-bg-sidebar/70 text-fg shadow-sm shadow-black/5 hover:border-fg-muted/30 hover:bg-bg-sidebar"
+    : "border-border/70 bg-bg-elevated/70 text-fg shadow-sm shadow-black/5 hover:border-fg-muted/30 hover:bg-bg-elevated";
+}
+
+function neutralDisabledClass(surface: ButtonSurface): string {
+  return surface === "dialog"
+    ? "disabled:hover:border-border/70 disabled:hover:bg-bg-sidebar/70"
+    : "disabled:hover:border-border/70 disabled:hover:bg-bg-elevated/70";
 }
 
 function buttonVariantClass(
@@ -48,29 +60,26 @@ function buttonVariantClass(
   switch (variant) {
     case "ghost":
       return cn(
-        "text-fg-muted disabled:hover:bg-transparent disabled:hover:text-fg-muted",
+        "bg-transparent text-fg-muted shadow-none disabled:hover:bg-transparent disabled:hover:text-fg-muted",
         neutralHoverClass(surface),
       );
     case "neutral":
       return cn(
-        "text-fg disabled:hover:bg-transparent",
-        surface === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated",
+        neutralFillClass(surface),
+        neutralDisabledClass(surface),
       );
     case "outline":
-      return cn(
-        "border border-border bg-bg text-fg disabled:hover:bg-bg",
-        surface === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated",
-      );
+      return "border-border bg-transparent text-fg shadow-none hover:border-accent/45 hover:bg-accent/10 disabled:hover:border-border disabled:hover:bg-transparent";
     case "primary":
-      return "bg-accent font-medium text-white hover:bg-accent/90 disabled:hover:bg-accent";
+      return "border-accent bg-accent text-on-accent shadow-sm shadow-accent/20 hover:border-accent-hover hover:bg-accent-hover disabled:hover:border-accent disabled:hover:bg-accent";
     case "accentSoft":
-      return "bg-accent/15 font-medium text-accent hover:bg-accent/25 disabled:hover:bg-accent/15";
+      return "border-accent/25 bg-accent/15 text-accent hover:border-accent/45 hover:bg-accent/25 disabled:hover:border-accent/25 disabled:hover:bg-accent/15";
     case "dangerSoft":
-      return "bg-danger/15 font-medium text-danger hover:bg-danger/25 disabled:hover:bg-danger/15";
+      return "border-danger/25 bg-danger/15 text-danger hover:border-danger/45 hover:bg-danger/25 disabled:hover:border-danger/25 disabled:hover:bg-danger/15";
     case "danger":
-      return "bg-danger font-medium text-white hover:bg-danger/90 disabled:hover:bg-danger";
+      return "border-danger bg-danger text-white shadow-sm shadow-danger/20 hover:bg-danger/90 disabled:hover:bg-danger";
     case "dangerGhost":
-      return "text-fg-muted hover:bg-danger/10 hover:text-danger disabled:hover:bg-transparent disabled:hover:text-fg-muted";
+      return "bg-transparent text-fg-muted shadow-none hover:border-danger/30 hover:bg-danger/10 hover:text-danger disabled:hover:border-transparent disabled:hover:bg-transparent disabled:hover:text-fg-muted";
   }
 }
 
@@ -137,7 +146,7 @@ export interface IconButtonClassNameOptions {
 }
 
 const ICON_BUTTON_BASE_CLASS =
-  "inline-flex shrink-0 items-center justify-center rounded transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex shrink-0 items-center justify-center rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50";
 
 const ICON_BUTTON_SIZE_CLASS: Record<IconButtonSize, string> = {
   xs: "size-5",
@@ -153,25 +162,22 @@ function iconButtonVariantClass(
   switch (variant) {
     case "ghost":
       return cn(
-        "text-fg-muted disabled:hover:bg-transparent disabled:hover:text-fg-muted",
+        "bg-transparent text-fg-muted shadow-none disabled:hover:bg-transparent disabled:hover:text-fg-muted",
         neutralHoverClass(surface),
       );
     case "neutral":
       return cn(
-        "text-fg disabled:hover:bg-transparent",
-        surface === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated",
+        neutralFillClass(surface),
+        neutralDisabledClass(surface),
       );
     case "outline":
-      return cn(
-        "border border-border bg-bg text-fg disabled:hover:bg-bg",
-        surface === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated",
-      );
+      return "border-border bg-transparent text-fg shadow-none hover:border-accent/45 hover:bg-accent/10 disabled:hover:border-border disabled:hover:bg-transparent";
     case "primary":
-      return "bg-accent text-white hover:bg-accent/90 disabled:hover:bg-accent";
+      return "border-accent bg-accent text-on-accent shadow-sm shadow-accent/20 hover:border-accent-hover hover:bg-accent-hover disabled:hover:border-accent disabled:hover:bg-accent";
     case "dangerGhost":
-      return "text-fg-muted hover:bg-danger/10 hover:text-danger disabled:hover:bg-transparent disabled:hover:text-fg-muted";
+      return "bg-transparent text-fg-muted shadow-none hover:border-danger/30 hover:bg-danger/10 hover:text-danger disabled:hover:border-transparent disabled:hover:bg-transparent disabled:hover:text-fg-muted";
     case "dangerSoft":
-      return "bg-danger/15 text-danger hover:bg-danger/25 disabled:hover:bg-danger/15";
+      return "border-danger/25 bg-danger/15 text-danger hover:border-danger/45 hover:bg-danger/25 disabled:hover:border-danger/25 disabled:hover:bg-danger/15";
   }
 }
 
