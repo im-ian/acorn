@@ -1708,6 +1708,7 @@
     },
     "actions": {
       "killPty": "Kill PTY",
+      "open": "Open session",
       "openTooltip": "Open this session in its project tab",
       "restoreTooltip": "Adopt this session back into Acorn's sidebar",
       "restore": "Restore session",
@@ -1736,6 +1737,8 @@
       "shutdown": "Daemon shut down.",
       "shutdownFailed": "Failed to quit daemon:",
       "sessionKilled": "PTY killed.",
+      "sessionKillStillRunning": "PTY is still running after the kill request.",
+      "sessionOpened": "Session opened.",
       "sessionRestored": "Session restored.",
       "sessionForgotten": "Session removed from daemon list.",
       "inactiveCleared": "Inactive daemon sessions cleared.",
