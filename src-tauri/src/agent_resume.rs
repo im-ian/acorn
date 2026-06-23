@@ -150,6 +150,17 @@ pub fn live_transcript(session_id: uuid::Uuid) -> Option<LiveTranscript> {
     live_transcript_at(&base, session_id)
 }
 
+/// Resolve only the marker for `kind`. Status polling uses this when the
+/// current PTY tree already tells us which live provider owns the tab, so a
+/// nested peer agent from another provider cannot steal the session status.
+pub fn live_transcript_for_kind(
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+) -> Option<LiveTranscript> {
+    let base = acorn_daemon::paths::data_dir().ok()?;
+    live_transcript_for_kind_at(&base, session_id, kind)
+}
+
 fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscript> {
     let dir = session_state_dir_if_exists_at(base, session_id)
         .ok()
@@ -168,20 +179,42 @@ fn live_transcript_at(base: &Path, session_id: uuid::Uuid) -> Option<LiveTranscr
     })
     .collect::<Vec<_>>();
     markers.sort_by(|a, b| b.1.cmp(&a.1));
-    let resolve = |kind: AgentKind| -> Option<LiveTranscript> {
-        let file = match kind {
-            AgentKind::Claude => CLAUDE_ID_FILE,
-            AgentKind::Codex => CODEX_ID_FILE,
-            AgentKind::Antigravity => ANTIGRAVITY_ID_FILE,
-        };
-        let id = fs::read_to_string(dir.join(file)).ok()?.trim().to_string();
-        if id.is_empty() {
-            return None;
-        }
-        let path = locate_transcript(kind, &id)?;
-        Some(LiveTranscript { id, path, kind })
+    markers
+        .into_iter()
+        .find_map(|(kind, _)| live_transcript_for_kind_in_dir(&dir, kind))
+}
+
+fn live_transcript_for_kind_at(
+    base: &Path,
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+) -> Option<LiveTranscript> {
+    let dir = session_state_dir_if_exists_at(base, session_id)
+        .ok()
+        .flatten()?;
+    live_transcript_for_kind_in_dir(&dir, kind)
+}
+
+fn live_transcript_for_kind_in_dir(dir: &Path, kind: AgentKind) -> Option<LiveTranscript> {
+    live_transcript_for_kind_in_dir_with_locator(dir, kind, &locate_transcript)
+}
+
+fn live_transcript_for_kind_in_dir_with_locator(
+    dir: &Path,
+    kind: AgentKind,
+    locate: &dyn Fn(AgentKind, &str) -> Option<PathBuf>,
+) -> Option<LiveTranscript> {
+    let file = match kind {
+        AgentKind::Claude => CLAUDE_ID_FILE,
+        AgentKind::Codex => CODEX_ID_FILE,
+        AgentKind::Antigravity => ANTIGRAVITY_ID_FILE,
     };
-    markers.into_iter().find_map(|(kind, _)| resolve(kind))
+    let id = fs::read_to_string(dir.join(file)).ok()?.trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let path = locate(kind, &id)?;
+    Some(LiveTranscript { id, path, kind })
 }
 
 /// Mark the current `claude.id` value as seen so the modal stops popping
@@ -668,5 +701,26 @@ mod tests {
         );
         // No fixture JSONL exists for that UUID under ~/.claude/projects.
         assert!(live_transcript_at(base.path(), sid).is_none());
+    }
+
+    #[test]
+    fn live_transcript_for_kind_reads_only_requested_provider_marker() {
+        let base = ScratchDir::new("live-for-kind");
+        let sid = uuid::Uuid::new_v4();
+        let claude_id = "11111111-1111-1111-1111-111111111111";
+        let codex_id = "22222222-2222-2222-2222-222222222222";
+        write_id(base.path(), sid, CLAUDE_ID_FILE, claude_id);
+        write_id(base.path(), sid, CODEX_ID_FILE, codex_id);
+        let dir = base.path().join(AGENT_STATE_DIR_NAME).join(sid.to_string());
+
+        let found =
+            live_transcript_for_kind_in_dir_with_locator(&dir, AgentKind::Codex, &|kind, id| {
+                Some(base.path().join(format!("{kind:?}-{id}.jsonl")))
+            })
+            .expect("codex marker resolves");
+
+        assert_eq!(found.kind, AgentKind::Codex);
+        assert_eq!(found.id, codex_id);
+        assert!(found.path.ends_with(format!("Codex-{codex_id}.jsonl")));
     }
 }

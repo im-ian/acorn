@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -4892,12 +4892,23 @@ fn detect_session_statuses_blocking(
                     }
                 }
             });
+            let root_pid_value = root_pid.map(|(pid, _)| pid);
+            let live_agent_kind = root_pid_value.and_then(|pid| {
+                live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
+            });
             // Resolve the live transcript via the persister's resume markers
             // first (covers claude/codex/antigravity run inside a shell session — JSONL
-            // is named after the agent's own UUID, not Acorn's). Fall back
-            // to the legacy Acorn-UUID-named JSONL so any direct claude
-            // session-id caller keeps working.
-            let live = parsed_id.and_then(agent_resume::live_transcript);
+            // is named after the agent's own UUID, not Acorn's). When the PTY
+            // tree already exposes a live provider, only trust that provider's
+            // marker. A nested peer agent from another provider can update its
+            // own marker while the parent agent is still the session owner.
+            let live = parsed_id.and_then(|uuid| match live_agent_kind {
+                Some(kind) => agent_resume::live_transcript_for_kind(
+                    uuid,
+                    status_agent_kind_to_resume_kind(kind),
+                ),
+                None => agent_resume::live_transcript(uuid),
+            });
             let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
             let transcript = match live.as_ref() {
                 Some(t) => {
@@ -4910,15 +4921,14 @@ fn detect_session_statuses_blocking(
                     };
                     Some((t.path.clone(), kind))
                 }
-                None => todos::locate_transcript_for(&id)
-                    .ok()
-                    .flatten()
-                    .map(|p| (p, acorn_session::status::AgentKind::Claude)),
+                None if matches!(live_agent_kind, None | Some(StatusAgentKind::Claude)) => {
+                    todos::locate_transcript_for(&id)
+                        .ok()
+                        .flatten()
+                        .map(|p| (p, acorn_session::status::AgentKind::Claude))
+                }
+                None => None,
             };
-            let root_pid_value = root_pid.map(|(pid, _)| pid);
-            let live_agent_kind = root_pid_value.and_then(|pid| {
-                live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
-            });
             let shell_hint = refine_shell_hint_for_unpaired_agent(
                 shell_hint,
                 transcript.is_some(),
@@ -5029,6 +5039,14 @@ fn status_agent_kind_to_provider(kind: StatusAgentKind) -> SessionAgentProvider 
     }
 }
 
+fn status_agent_kind_to_resume_kind(kind: StatusAgentKind) -> agent_resume::AgentKind {
+    match kind {
+        StatusAgentKind::Claude => agent_resume::AgentKind::Claude,
+        StatusAgentKind::Codex => agent_resume::AgentKind::Codex,
+        StatusAgentKind::Antigravity => agent_resume::AgentKind::Antigravity,
+    }
+}
+
 /// One pass over `sys.processes()` that yields parent→children adjacency.
 /// Built once per poll so the per-session BFS does not rescan the whole
 /// table for every PTY root.
@@ -5063,24 +5081,46 @@ fn live_agent_kind_in_descendants(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
 ) -> Option<StatusAgentKind> {
-    let mut stack = children.get(&root).cloned().unwrap_or_default();
-    while let Some(pid) = stack.pop() {
-        if let Some(proc) = sys.process(pid) {
-            if process_basename_matches(proc, "codex") {
-                return Some(StatusAgentKind::Codex);
-            }
-            if process_basename_matches(proc, "claude") {
-                return Some(StatusAgentKind::Claude);
-            }
-            if process_basename_matches(proc, "agy")
-                || process_basename_matches(proc, "antigravity")
-                || process_basename_matches(proc, "antigravity-cli")
-            {
-                return Some(StatusAgentKind::Antigravity);
-            }
+    nearest_agent_kind_in_tree(children, root, |pid| {
+        let proc = sys.process(pid)?;
+        if process_basename_matches(proc, "codex") {
+            return Some(StatusAgentKind::Codex);
+        }
+        if process_basename_matches(proc, "claude") {
+            return Some(StatusAgentKind::Claude);
+        }
+        if process_basename_matches(proc, "agy")
+            || process_basename_matches(proc, "antigravity")
+            || process_basename_matches(proc, "antigravity-cli")
+        {
+            return Some(StatusAgentKind::Antigravity);
+        }
+        None
+    })
+}
+
+fn nearest_agent_kind_in_tree<F>(
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    mut kind_for_pid: F,
+) -> Option<StatusAgentKind>
+where
+    F: FnMut(Pid) -> Option<StatusAgentKind>,
+{
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&root) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct);
+    }
+    while let Some(pid) = queue.pop_front() {
+        if let Some(kind) = kind_for_pid(pid) {
+            return Some(kind);
         }
         if let Some(kids) = children.get(&pid) {
-            stack.extend(kids.iter().copied());
+            let mut kids = kids.clone();
+            kids.sort_by_key(|pid| pid.as_u32());
+            queue.extend(kids);
         }
     }
     None
@@ -5139,6 +5179,42 @@ mod status_hint_tests {
             ),
             Some(acorn_pty::ShellHint::Running),
         );
+    }
+
+    #[test]
+    fn nearest_agent_kind_prefers_shallow_provider_over_nested_peer() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let wrapper = Pid::from_u32(3);
+        let nested_claude = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![wrapper, codex]);
+        children.insert(wrapper, vec![nested_claude]);
+
+        let kind = nearest_agent_kind_in_tree(&children, root, |pid| {
+            if pid == codex {
+                Some(StatusAgentKind::Codex)
+            } else if pid == nested_claude {
+                Some(StatusAgentKind::Claude)
+            } else {
+                None
+            }
+        });
+
+        assert_eq!(kind, Some(StatusAgentKind::Codex));
+    }
+
+    #[test]
+    fn has_live_descendant_tracks_root_subtree_liveness() {
+        let root = Pid::from_u32(1);
+        let child = Pid::from_u32(2);
+        let grandchild = Pid::from_u32(3);
+        let mut children = HashMap::new();
+        children.insert(root, vec![child]);
+        children.insert(child, vec![grandchild]);
+
+        assert!(has_live_descendant(&children, root));
+        assert!(!has_live_descendant(&children, grandchild));
     }
 }
 
