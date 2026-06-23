@@ -30,6 +30,48 @@ test.describe("about tab: what's new button", () => {
     ).toBeVisible();
   });
 
+  test("clicking the button opens the modal before release notes finish loading", async ({
+    page,
+  }) => {
+    let releaseFetch!: () => void;
+    const releaseFetchPromise = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    await page.route(
+      "https://api.github.com/repos/im-ian/acorn/releases/tags/v0.0.0-test",
+      async (route) => {
+        await releaseFetchPromise;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            tag_name: "v0.0.0-test",
+            body: "## Highlights\n\n- Delayed release body",
+            html_url: "https://github.com/im-ian/acorn/releases/tag/v0.0.0-test",
+            published_at: "2026-05-11T07:00:00Z",
+          }),
+        });
+      },
+    );
+
+    const modal = await openAboutTab(page);
+    await modal
+      .getByRole("button", {
+        name: new RegExp(`What's new in ${TEST_VERSION}`),
+      })
+      .click();
+
+    const dialog = page.getByRole("dialog", {
+      name: new RegExp(`What's new in Acorn ${TEST_VERSION}`),
+    });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("Loading release notes...")).toBeVisible();
+
+    releaseFetch();
+    await expect(dialog.getByText(/Delayed release body/)).toBeVisible();
+    await expect(dialog.getByLabel("Loading release notes...")).toHaveCount(0);
+  });
+
   test("clicking the button fetches release notes from GitHub and opens the modal", async ({
     page,
   }) => {
@@ -129,7 +171,7 @@ test.describe("about tab: what's new button", () => {
     ).toBeVisible();
   });
 
-  test("surfaces a network/rate-limit error inline without opening the modal", async ({
+  test("surfaces a network/rate-limit error inside the open modal", async ({
     page,
     errorTracker,
   }) => {
@@ -152,9 +194,13 @@ test.describe("about tab: what's new button", () => {
       .click();
 
     await expect(modal.getByText(/GitHub releases request failed: 403/)).toBeVisible();
-    // The dialog must not have opened on failure.
+    const dialog = page.getByRole("dialog", {
+      name: new RegExp(`What's new in Acorn ${TEST_VERSION}`),
+    });
+    await expect(dialog).toBeVisible();
     await expect(
-      page.getByRole("dialog", { name: /What's new in Acorn/ }),
-    ).toHaveCount(0);
+      dialog.getByText(/GitHub releases request failed: 403/),
+    ).toBeVisible();
+    await expect(dialog.getByLabel("Loading release notes...")).toHaveCount(0);
   });
 });

@@ -14,10 +14,29 @@ function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
 }
 
+function CloseDialogSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={label}
+      className="space-y-3 px-4 py-3 text-sm text-fg"
+    >
+      <div className="h-3 w-48 animate-pulse rounded bg-bg-sidebar" />
+      <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
+        <div className="h-3 w-3/4 animate-pulse rounded bg-bg-elevated" />
+        <div className="h-3 w-1/2 animate-pulse rounded bg-bg-elevated" />
+      </div>
+    </div>
+  );
+}
+
 interface ClosePullRequestDialogProps {
   open: boolean;
   repoPath: string;
+  number?: number;
   detail: PullRequestDetail | null;
+  loading?: boolean;
+  loadError?: string | null;
   onClose: () => void;
   onClosed: () => void;
 }
@@ -25,7 +44,10 @@ interface ClosePullRequestDialogProps {
 export function ClosePullRequestDialog({
   open,
   repoPath,
+  number,
   detail,
+  loading = false,
+  loadError = null,
   onClose,
   onClosed,
 }: ClosePullRequestDialogProps) {
@@ -64,12 +86,46 @@ export function ClosePullRequestDialog({
     }
   }
 
+  const dialogNumber = detail?.number ?? number;
+  const dialogTitle = `${dt(t, "dialogs.closePullRequest.titlePrefix")}${
+    dialogNumber ? ` #${dialogNumber}` : ""
+  }`;
+
   return (
     <Modal open={open} onClose={onClose} variant="dialog" size="md">
-      {detail ? (
+      {!detail ? (
         <>
           <ModalHeader
-            title={`${dt(t, "dialogs.closePullRequest.titlePrefix")} #${detail.number}`}
+            title={dialogTitle}
+            icon={<GitPullRequestClosed size={16} className="text-rose-400" />}
+            variant="dialog"
+            onClose={onClose}
+          />
+          {loadError && !loading ? (
+            <div className="space-y-3 px-4 py-3 text-xs text-fg">
+              <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+                {loadError}
+              </p>
+            </div>
+          ) : (
+            <CloseDialogSkeleton
+              label={dt(t, "dialogs.closePullRequest.loadingDetails")}
+            />
+          )}
+          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+            >
+              {dt(t, "dialogs.common.cancel")}
+            </button>
+          </footer>
+        </>
+      ) : (
+        <>
+          <ModalHeader
+            title={dialogTitle}
             icon={
               <GitPullRequestClosed size={16} className="text-rose-400" />
             }
@@ -117,7 +173,7 @@ export function ClosePullRequestDialog({
             </button>
           </footer>
         </>
-      ) : null}
+      )}
     </Modal>
   );
 }
