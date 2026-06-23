@@ -106,11 +106,18 @@ import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 import {
   CommandHint,
+  ListActionRow,
+  ListBox,
+  ListEmptyState,
+  ListRow,
   Modal,
   ModalHeader,
   RefreshButton,
   Select,
   TextInput,
+  listBoxClassName,
+  listRowClassName,
+  type ListRowDensity,
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -139,6 +146,7 @@ interface ExpandedDiff {
 
 const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
+const COMMIT_LIST_PADDING_Y = 4;
 const BACKGROUND_LOADED_TABS = new Set<RightTab>([
   "prs",
   "issues",
@@ -739,11 +747,7 @@ function tabLabelKey(tab: RightTab): RightPanelTranslationKey {
 }
 
 function Empty({ msg }: { msg: string }) {
-  return (
-    <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs leading-5 text-fg-muted">
-      {msg}
-    </div>
-  );
+  return <ListEmptyState>{msg}</ListEmptyState>;
 }
 
 /**
@@ -754,7 +758,7 @@ function Empty({ msg }: { msg: string }) {
 function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
   return (
     <div
-      className="flex items-center gap-2 rounded-md px-3 py-2"
+      className={listRowClassName({ className: "flex items-center gap-2" })}
       style={{ animationDelay: `${pulseDelayMs}ms` }}
     >
       <span className="h-3 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
@@ -766,7 +770,7 @@ function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
 
 function SkeletonList({ count = 6 }: { count?: number }) {
   return (
-    <div className="px-1 py-1 text-xs">
+    <div className={listBoxClassName()}>
       {Array.from({ length: count }).map((_, i) => (
         <SkeletonRow key={i} pulseDelayMs={i * 80} />
       ))}
@@ -789,7 +793,11 @@ function PrSkeletonRow({ index }: { index: number }) {
   const titleW = titleWidths[index % titleWidths.length];
   const branchW = branchWidths[index % branchWidths.length];
   return (
-    <div className="flex flex-col gap-1.5 rounded-md px-3 py-2">
+    <div
+      className={listRowClassName({
+        className: "flex flex-col gap-1.5",
+      })}
+    >
       <div className="flex w-full items-center gap-2">
         <span className="h-3 w-8 shrink-0 animate-pulse rounded bg-fg-muted/15" />
         <span className="h-4 w-12 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
@@ -814,7 +822,7 @@ function PrSkeletonRow({ index }: { index: number }) {
 
 function PrSkeletonList({ count = 6 }: { count?: number }) {
   return (
-    <div className="px-1 py-1 text-xs">
+    <div className={listBoxClassName()}>
       {Array.from({ length: count }).map((_, i) => (
         <PrSkeletonRow key={i} index={i} />
       ))}
@@ -843,7 +851,7 @@ function HistorySkeletonRow({
   return (
     <div
       aria-hidden="true"
-      className="flex items-start gap-2 rounded-md px-3 py-2.5"
+      className={listRowClassName({ className: "flex items-start gap-2" })}
       style={{ animationDelay: `${index * 60}ms` }}
     >
       <span
@@ -1223,11 +1231,11 @@ function TodosTab({ todos }: { todos: TodoItem[] }) {
           </span>
         ) : null}
       </div>
-      <ul className="acorn-no-scrollbar flex-1 overflow-y-auto p-2 text-xs">
+      <ListBox className="acorn-no-scrollbar flex-1 overflow-y-auto">
         {todos.map((t, i) => (
           <TodoRow key={`${i}-${t.content}`} todo={t} />
         ))}
-      </ul>
+      </ListBox>
     </div>
   );
 }
@@ -1239,11 +1247,10 @@ function TodoRow({ todo }: { todo: TodoItem }) {
       ? todo.activeForm
       : todo.content;
   return (
-    <li
-      className={cn(
-        "flex items-start gap-2 rounded px-2 py-1.5",
-        status === "in_progress" && "bg-bg-elevated/40",
-      )}
+    <ListRow
+      className="flex items-start gap-2"
+      selected={status === "in_progress"}
+      selectedClassName="bg-bg-elevated/40"
     >
       <span className="mt-0.5 shrink-0">{statusGlyph(status)}</span>
       <span
@@ -1256,7 +1263,7 @@ function TodoRow({ todo }: { todo: TodoItem }) {
       >
         {display}
       </span>
-    </li>
+    </ListRow>
   );
 }
 
@@ -1350,11 +1357,11 @@ function ActivityTab() {
       {notifications.length === 0 ? (
         <Empty msg={rt(t, "rightPanel.activity.empty")} />
       ) : (
-        <ul className="acorn-no-scrollbar flex-1 overflow-y-auto p-2 text-xs">
+        <ListBox className="acorn-no-scrollbar flex-1 overflow-y-auto">
           {notifications.map((notification) => (
             <ActivityRow key={notification.id} notification={notification} />
           ))}
-        </ul>
+        </ListBox>
       )}
     </div>
   );
@@ -1377,12 +1384,11 @@ function ActivityRow({
   };
 
   return (
-    <li
-      className={cn(
-        "group mb-1 flex items-start gap-2 rounded px-2 py-2 transition",
-        "hover:bg-bg-elevated/60",
-        unread && "bg-warning/5",
-      )}
+    <ListRow
+      interactive
+      className="group flex items-start gap-2"
+      selected={unread}
+      selectedClassName="bg-warning/5"
     >
       <button
         type="button"
@@ -1429,7 +1435,7 @@ function ActivityRow({
           <X size={12} />
         </button>
       </Tooltip>
-    </li>
+    </ListRow>
   );
 }
 
@@ -1710,7 +1716,7 @@ function AgentHistoryTab({
         ) : visibleItems.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.emptyForFilter")} />
         ) : (
-          <div className="space-y-0.5 px-1 py-1">
+          <div className={listBoxClassName({ text: "none" })}>
             {visibleItems.map((item) => {
               const providerTone =
                 item.provider === "codex"
@@ -1721,7 +1727,10 @@ function AgentHistoryTab({
               return (
                 <div
                   key={`${item.provider}:${item.id}:${item.transcript_path}`}
-                  className="group cursor-default rounded-md px-3 py-2.5 hover:bg-bg-elevated/60"
+                  className={listRowClassName({
+                    interactive: true,
+                    className: "group cursor-default",
+                  })}
                   onDoubleClick={() => void runSession(item)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -2198,6 +2207,8 @@ function CommitsTab({
     count: rowCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => COMMIT_ROW_HEIGHT,
+    paddingStart: COMMIT_LIST_PADDING_Y,
+    paddingEnd: COMMIT_LIST_PADDING_Y,
     overscan: 8,
   });
 
@@ -2273,12 +2284,13 @@ function CommitsTab({
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, commit: c });
                     }}
-                    className={cn(
-                      "flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-xs transition",
-                      selected === c.sha
-                        ? "bg-bg-elevated"
-                        : "hover:bg-bg-elevated/50",
-                    )}
+                    className={listRowClassName({
+                      interactive: true,
+                      selected: selected === c.sha,
+                      surface: "subtle",
+                      className:
+                        "flex w-full flex-col items-start gap-0.5 text-left text-xs",
+                    })}
                     style={{ height: COMMIT_ROW_HEIGHT }}
                   >
                     <span className="flex w-full min-w-0 items-center gap-2">
@@ -2599,11 +2611,11 @@ function StagedTab({
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
-        <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto px-1 py-1">
+        <ListBox className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
           {files.map((f) => {
             const canOpen = !isDeleted(f);
             return (
-              <li
+              <ListRow
                 key={f.path}
                 aria-disabled={!canOpen}
                 onClick={() => setSelectedPath(f.path)}
@@ -2616,10 +2628,11 @@ function StagedTab({
                   if (!canOpen) return;
                   openInCodeViewer(f);
                 }}
-                className={cn(
-                  "flex cursor-default items-center gap-2 rounded-md px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
-                  selectedPath === f.path && "bg-bg-elevated",
-                )}
+                density="compact"
+                interactive
+                selected={selectedPath === f.path}
+                surface="subtle"
+                className="flex cursor-default items-center gap-2 font-mono text-xs"
               >
                 <span className="w-24 shrink-0 truncate text-fg-muted">
                   {f.status}
@@ -2639,10 +2652,10 @@ function StagedTab({
                     {f.path}
                   </span>
                 </Tooltip>
-              </li>
+              </ListRow>
             );
           })}
-        </ul>
+        </ListBox>
       </Panel>
       <ResizeHandle direction="vertical" gap />
       <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
@@ -3208,7 +3221,7 @@ function PullRequestsTab({
             })}
           />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((pr) => (
               <PrRow
                 key={pr.number}
@@ -3233,7 +3246,7 @@ function PullRequestsTab({
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}
@@ -3598,7 +3611,7 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
             })}
           />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((issue) => (
               <IssueRow
                 key={issue.number}
@@ -3621,7 +3634,7 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}
@@ -3774,7 +3787,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
             }
           />
         ) : (
-          <ul className="px-1 py-1 text-xs">
+          <ListBox>
             {visibleItems.map((run) => (
               <WorkflowRunRow
                 key={run.id}
@@ -3783,7 +3796,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
                 onOpenDetail={() => setDetailRunId(run.id)}
               />
             ))}
-          </ul>
+          </ListBox>
         )}
       </div>
       <WorkflowRunDetailModal
@@ -3836,10 +3849,10 @@ function WorkflowRunRow({
               onOpenDetail();
             }
           }}
-          className={cn(
-            "flex w-full items-start gap-2 rounded-md px-3 py-2 text-left",
-            "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
-          )}
+          className={listRowClassName({
+            interactive: true,
+            className: "flex w-full items-start gap-2 text-left",
+          })}
         >
           <span className="mt-0.5 flex shrink-0 items-center">
             <WorkflowRunStatusIcon
@@ -4420,7 +4433,6 @@ function GitHubLabelChip({ label }: { label: PullRequestLabel }) {
 }
 
 type GitHubRowSurface = "panel" | "dialog";
-
 function GitHubListRow({
   number,
   title,
@@ -4432,6 +4444,7 @@ function GitHubListRow({
   onOpen,
   onContextMenu,
   surface = "panel",
+  rowDensity = "default",
   showAvatar = false,
   showLabels = true,
 }: {
@@ -4445,33 +4458,21 @@ function GitHubListRow({
   onOpen: () => void;
   onContextMenu?: (e: React.MouseEvent<HTMLLIElement>) => void;
   surface?: GitHubRowSurface;
+  rowDensity?: ListRowDensity;
   showAvatar?: boolean;
   showLabels?: boolean;
 }) {
   const t = useTranslation();
-  const hoverBg =
-    surface === "dialog"
-      ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
-      : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
   const titleSize = showAvatar ? "text-[13px]" : "text-xs";
   const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
 
   return (
-    <li
-      role="button"
-      tabIndex={0}
-      onDoubleClick={onOpen}
+    <ListActionRow
+      onOpen={onOpen}
       onContextMenu={onContextMenu}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={cn(
-        "mx-1 my-0.5 flex flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left transition focus-visible:outline-none",
-        hoverBg,
-      )}
+      surface={surface === "dialog" ? "dialog" : "subtle"}
+      density={rowDensity}
+      className="flex flex-col items-start gap-0.5 text-left"
     >
       <span className={cn("flex w-full min-w-0 items-center gap-2", titleSize)}>
         <span className={cn("shrink-0 font-mono", numberClassName)}>
@@ -4525,7 +4526,7 @@ function GitHubListRow({
           </span>
         </Tooltip>
       </span>
-    </li>
+    </ListActionRow>
   );
 }
 
@@ -4919,7 +4920,7 @@ function PullRequestSearchModal({
         ) : listing.items.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.search.noMatches")} />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((pr) => (
               <PrRow
                 key={pr.number}
@@ -4945,7 +4946,7 @@ function PullRequestSearchModal({
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}
@@ -5121,7 +5122,7 @@ function IssueSearchModal({
         ) : listing.items.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.issueSearch.noMatches")} />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((issue) => (
               <IssueRow
                 key={issue.number}
@@ -5145,7 +5146,7 @@ function IssueSearchModal({
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}

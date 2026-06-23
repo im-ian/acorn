@@ -11,6 +11,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffLineList, useHighlightedDiff } from "./DiffView";
 import { ResizeHandle } from "./ResizeHandle";
 import { useTranslation } from "../lib/useTranslation";
+import { ListBox, ListRowButton } from "./ui";
 
 interface DiffSplitViewProps {
   payload: DiffPayload;
@@ -123,7 +124,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
               <span className="text-[oklch(62%_0.22_25)]">-{totals.del}</span>
             </span>
           </header>
-          <ul className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+          <ListBox className="min-h-0 flex-1 overflow-y-auto">
             {entries.map((entry) => {
               const active = entry.index === selected.index;
               const dir = dirnameOf(entry.path);
@@ -135,8 +136,7 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
                     multiline
                     className="w-full"
                   >
-                    <button
-                      type="button"
+                    <ListRowButton
                       onClick={() => setSelectedIndex(entry.index)}
                       onContextMenu={(e) => {
                         if (!cwd) return;
@@ -144,11 +144,13 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
                         setSelectedIndex(entry.index);
                         setMenu({ x: e.clientX, y: e.clientY, entry });
                       }}
+                      density="compact"
+                      surface="subtle"
+                      selected={active}
+                      selectedClassName="bg-bg-elevated text-fg"
                       className={cn(
-                        "flex w-full flex-col items-stretch gap-0.5 rounded-md px-3 py-1.5 text-left font-mono text-xs transition",
-                        active
-                          ? "bg-bg-elevated text-fg"
-                          : "text-fg-muted hover:bg-bg-elevated/60 hover:text-fg",
+                        "flex flex-col items-stretch gap-0.5 font-mono text-xs",
+                        !active && "text-fg-muted hover:text-fg",
                       )}
                     >
                       <span className="flex items-center gap-2">
@@ -169,12 +171,12 @@ export function DiffSplitView({ payload, cwd }: DiffSplitViewProps) {
                           {dir}
                         </span>
                       ) : null}
-                    </button>
+                    </ListRowButton>
                   </Tooltip>
                 </li>
               );
             })}
-          </ul>
+          </ListBox>
         </aside>
       </Panel>
       <ResizeHandle gap />

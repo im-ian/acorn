@@ -42,7 +42,7 @@ import {
   updateFileExplorerDrag,
 } from "../lib/fileExplorerDrag";
 import { Tooltip } from "./Tooltip";
-import { IconInput, TextInput } from "./ui";
+import { IconInput, TextInput, listBoxClassName, listRowClassName } from "./ui";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import {
@@ -1340,7 +1340,12 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
           onClose={() => setSearchOpen(false)}
         />
       ) : null}
-      <div className="flex-1 overflow-auto py-1 text-[12px]">
+      <div
+        className={listBoxClassName({
+          text: "none",
+          className: "flex-1 overflow-auto text-[12px]",
+        })}
+      >
         <div className="w-max min-w-full">
         <DirNode
           path={rootPath}
@@ -1947,15 +1952,18 @@ function EntryRow({
             e.stopPropagation();
             onContextMenu(e, entry);
           }}
-          className={cn(
-            "flex w-full items-center gap-1 whitespace-nowrap rounded-md py-0.5 pr-2 text-left transition",
-            isSelected
-              ? "bg-accent/25 text-fg"
-              : isActive
-              ? "bg-accent/15 text-fg"
-              : "text-fg hover:bg-fg-muted/10",
-            entry.gitignored ? "opacity-60" : "",
-          )}
+          className={listRowClassName({
+            density: "none",
+            className: cn(
+              "flex w-full items-center gap-1 whitespace-nowrap py-0.5 pr-2 text-left transition",
+              isSelected
+                ? "bg-accent/25 text-fg"
+                : isActive
+                ? "bg-accent/15 text-fg"
+                : "text-fg hover:bg-fg-muted/10",
+              entry.gitignored ? "opacity-60" : "",
+            ),
+          })}
           style={{ paddingLeft: 8 }}
         >
         {Array.from({ length: depth }).map((_, i) => (
@@ -2049,7 +2057,10 @@ function EditRow({
   }, []);
   return (
     <div
-      className="flex w-full items-center gap-1 py-0.5 pr-2"
+      className={listRowClassName({
+        density: "none",
+        className: "flex w-full items-center gap-1 py-0.5 pr-2",
+      })}
       style={{ paddingLeft: 8 }}
     >
       {Array.from({ length: depth }).map((_, i) => (

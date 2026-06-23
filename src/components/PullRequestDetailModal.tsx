@@ -45,7 +45,16 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
-import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
+import {
+  ListBox,
+  ListEmptyState,
+  ListRow,
+  ListRowButton,
+  Markdown,
+  Modal,
+  ModalHeader,
+  RefreshButton,
+} from "./ui";
 
 type DetailTab = "conversation" | "commits" | "checks" | "files";
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
@@ -1253,7 +1262,7 @@ function CommitsPane({
     >
       <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
         <aside className="flex h-full flex-col overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar text-xs">
-          <ul className="flex flex-col px-1 py-1">
+          <ListBox layout="flex" text="none">
             {orderedCommits.map((c) => (
               <CommitListItem
                 key={c.oid}
@@ -1263,7 +1272,7 @@ function CommitsPane({
                 onSelect={() => setSelectedOid(c.oid)}
               />
             ))}
-          </ul>
+          </ListBox>
         </aside>
       </Panel>
       <ResizeHandle gap />
@@ -1326,20 +1335,17 @@ function CommitListItem({
 
   return (
     <li>
-      <button
-        type="button"
+      <ListRowButton
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        className={cn(
-          "block w-full rounded-md px-3 py-2 text-left transition",
-          selected
-            ? "bg-bg-elevated text-fg"
-            : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
-        )}
+        selected={selected}
+        selectedClassName="bg-bg-elevated text-fg"
+        surface="subtle"
+        className={cn("block", !selected && "text-fg-muted hover:text-fg")}
       >
         <Tooltip
           label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
@@ -1365,7 +1371,7 @@ function CommitListItem({
             {formatRelativeTime(commit.committed_date, t)}
           </span>
         </div>
-      </button>
+      </ListRowButton>
       <ContextMenu
         open={menu !== null}
         x={menu?.x ?? 0}
@@ -1584,17 +1590,15 @@ function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
   );
   if (checks.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        {dt(t, "dialogs.pullRequestDetail.noChecks")}
-      </div>
+      <ListEmptyState>{dt(t, "dialogs.pullRequestDetail.noChecks")}</ListEmptyState>
     );
   }
   return (
-    <ul className="flex h-full flex-col overflow-y-auto px-1 py-1 text-xs">
+    <ListBox layout="flex" className="h-full overflow-y-auto">
       {checks.map((c, i) => (
         <CheckRow key={`${c.name}-${i}`} check={c} nowUnix={nowUnix} />
       ))}
-    </ul>
+    </ListBox>
   );
 }
 
@@ -1608,7 +1612,7 @@ function CheckRow({
   const t = useTranslation();
   const duration = formatCheckDuration(check, t, nowUnix);
   return (
-    <li className="flex items-center gap-2 rounded-md px-3 py-2">
+    <ListRow className="flex items-center gap-2">
       <CheckIcon status={check.status} conclusion={check.conclusion} />
       <span className="min-w-0 flex-1 truncate text-fg">
         {check.workflow_name ? (
@@ -1635,7 +1639,7 @@ function CheckRow({
           </button>
         </Tooltip>
       ) : null}
-    </li>
+    </ListRow>
   );
 }
 

@@ -121,6 +121,7 @@ import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { RemoveProjectFolderDialog } from "./RemoveProjectFolderDialog";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
+import { listBoxClassName, listRowClassName } from "./ui";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
   idle: "bg-fg-muted",
@@ -2017,7 +2018,13 @@ function ProjectGroupView({
         ]}
       />
       {!collapsed ? (
-        <ul className="flex flex-col gap-0.5 px-1.5 pb-1.5 pt-1">
+        <ul
+          className={listBoxClassName({
+            layout: "flex",
+            inset: "sidebar",
+            text: "none",
+          })}
+        >
           <SortableContext
             items={topLevelItemIds}
             strategy={verticalListSortingStrategy}
@@ -2457,7 +2464,14 @@ function ProjectFolderView({
           items={sessionIds}
           strategy={verticalListSortingStrategy}
         >
-          <ul className="ml-4 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
+          <ul
+            className={listBoxClassName({
+              layout: "flex",
+              inset: "nested",
+              text: "none",
+              className: "ml-4 border-l border-border",
+            })}
+          >
             {folderGroup.sessions.length === 0 ? (
               <li
                 className="flex items-center justify-center rounded px-3 py-2 text-center text-[11px] text-fg-muted select-none"
@@ -2752,13 +2766,17 @@ function SessionRow({
         e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      className={cn(
-        "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
-        active
-          ? "bg-bg-elevated shadow-sm"
-          : "hover:bg-bg-elevated/40",
-        isDragging && "opacity-40",
-      )}
+      className={listRowClassName({
+        density: "sidebar",
+        interactive: true,
+        selected: active,
+        selectedClassName: "bg-bg-elevated shadow-sm",
+        surface: "sidebar",
+        className: cn(
+          "group flex w-full items-start gap-1.5 text-left",
+          isDragging && "opacity-40",
+        ),
+      })}
     >
       {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
         <SessionStatusMarker
@@ -3109,7 +3127,13 @@ function LocalTerminalArea({
             items={sessionIds}
             strategy={verticalListSortingStrategy}
           >
-            <ul className="flex flex-col gap-0.5">
+            <ul
+              className={listBoxClassName({
+                layout: "flex",
+                inset: "none",
+                text: "none",
+              })}
+            >
               {sessions.map((session) => (
                 <LocalSessionRow
                   key={session.id}
@@ -3124,7 +3148,13 @@ function LocalTerminalArea({
         </div>
       ) : null}
       {hasNamedWorkspaces ? (
-        <ul className="flex flex-col gap-0.5">
+        <ul
+          className={listBoxClassName({
+            layout: "flex",
+            inset: "none",
+            text: "none",
+          })}
+        >
           {groups.map((group) => {
             const defaultFolderGroup =
               group.folders.find((folderGroup) =>
@@ -3142,7 +3172,13 @@ function LocalTerminalArea({
                     )}
                     strategy={verticalListSortingStrategy}
                   >
-                    <ul className="flex flex-col gap-0.5">
+                    <ul
+                      className={listBoxClassName({
+                        layout: "flex",
+                        inset: "none",
+                        text: "none",
+                      })}
+                    >
                       {defaultFolderGroup.sessions.map((session) => (
                         <SessionRow
                           key={session.id}
@@ -3441,7 +3477,14 @@ function LocalWorkspaceView({
           items={sessionIds}
           strategy={verticalListSortingStrategy}
         >
-          <ul className="ml-4 flex flex-col gap-0.5 border-l border-border pl-1 pt-0.5">
+          <ul
+            className={listBoxClassName({
+              layout: "flex",
+              inset: "nested",
+              text: "none",
+              className: "ml-4 border-l border-border",
+            })}
+          >
             {folderGroup.sessions.length === 0 ? (
               <li className="flex items-center justify-center rounded px-3 py-2 text-center text-[11px] text-fg-muted select-none">
                 {sidebarText(t, "sidebar.emptyProjectFolder.noSessions")}
@@ -3607,13 +3650,17 @@ function LocalSessionRow({
         e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      className={cn(
-        "group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left transition",
-        active
-          ? "bg-bg-elevated shadow-sm"
-          : "hover:bg-bg-elevated/40",
-        isDragging && "opacity-40",
-      )}
+      className={listRowClassName({
+        density: "sidebar",
+        interactive: true,
+        selected: active,
+        selectedClassName: "bg-bg-elevated shadow-sm",
+        surface: "sidebar",
+        className: cn(
+          "group flex w-full items-start gap-1.5 text-left",
+          isDragging && "opacity-40",
+        ),
+      })}
     >
       {sessionDisplay.icons.statusDot || isGeneratingTitle ? (
         <SessionStatusMarker
