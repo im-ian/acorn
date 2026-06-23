@@ -240,11 +240,15 @@ function IssueDetailBody({
               {dt(t, "dialogs.issueDetail.comments")} ({detail.comments.length})
             </div>
             {detail.comments.length === 0 ? (
-              <div className="rounded-[var(--acorn-pane-radius)] border border-border/60 px-3 py-2 text-xs text-fg-muted">
+              <div className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 px-4 py-5 text-center text-xs text-fg-muted">
+                <MessageSquare
+                  size={14}
+                  className="mx-auto mb-2 text-fg-muted/70"
+                />
                 {dt(t, "dialogs.issueDetail.noComments")}
               </div>
             ) : (
-              <ul className="space-y-2">
+              <ul className="space-y-3">
                 {detail.comments.map((comment, index) => (
                   <IssueCommentBlock
                     key={`${comment.created_at}:${comment.author}:${index}`}
@@ -309,21 +313,17 @@ function IssueMeta({ detail }: { detail: IssueDetail }) {
 function IssueCommentBlock({ comment }: { comment: IssueComment }) {
   const t = useTranslation();
   const created = toUnixSeconds(comment.created_at);
-  const content =
-    comment.body.trim().length > 0
-      ? comment.body
-      : dt(t, "dialogs.issueDetail.empty");
+  const hasBody = comment.body.trim().length > 0;
   return (
-    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30">
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-[11px] text-fg-muted">
+    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
+      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={comment.author}
           avatarUrl={comment.author_avatar_url}
-          size={18}
-          nameClass="text-[11px] text-fg"
+          size={28}
+          nameClass="text-[12.5px] font-semibold tracking-tight"
         />
-        <span className="opacity-50">·</span>
-        <span>{absoluteTime(created)}</span>
+        <span className="font-mono opacity-60">{absoluteTime(created)}</span>
         {comment.url ? (
           <Tooltip
             label={dt(t, "dialogs.issueDetail.openCommentOnGithub")}
@@ -333,16 +333,22 @@ function IssueCommentBlock({ comment }: { comment: IssueComment }) {
             <button
               type="button"
               onClick={() => void openUrl(comment.url ?? "")}
-              className="rounded p-0.5 text-fg-muted transition hover:bg-bg hover:text-fg"
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
             >
               <ExternalLink size={12} />
             </button>
           </Tooltip>
         ) : null}
       </div>
-      <div className="px-3 py-2">
-        <Markdown content={content} />
-      </div>
+      {hasBody ? (
+        <div className="acorn-selectable">
+          <Markdown content={comment.body} />
+        </div>
+      ) : (
+        <p className="text-[11px] text-fg-muted">
+          {dt(t, "dialogs.issueDetail.empty")}
+        </p>
+      )}
     </li>
   );
 }
