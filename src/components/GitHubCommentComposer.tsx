@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Eye, PencilLine, SendHorizontal } from "lucide-react";
 import { cn } from "../lib/cn";
-import { Markdown } from "./ui";
+import { Button, Markdown, SegmentedControl } from "./ui";
 
 interface GitHubCommentComposerProps {
   body: string;
@@ -63,34 +63,16 @@ export function GitHubCommentComposer({
       )}
     >
       <div className="mb-1.5 inline-flex rounded-md border border-border bg-bg p-0.5">
-        <button
-          type="button"
-          aria-pressed={mode === "write"}
-          onClick={() => setMode("write")}
-          className={cn(
-            "inline-flex items-center gap-1 rounded px-2 py-1 text-[10.5px] font-medium transition",
-            mode === "write"
-              ? "bg-bg-elevated text-fg"
-              : "text-fg-muted hover:bg-bg-elevated/60 hover:text-fg",
-          )}
-        >
-          <PencilLine size={11} />
-          {writeLabel}
-        </button>
-        <button
-          type="button"
-          aria-pressed={mode === "preview"}
-          onClick={() => setMode("preview")}
-          className={cn(
-            "inline-flex items-center gap-1 rounded px-2 py-1 text-[10.5px] font-medium transition",
-            mode === "preview"
-              ? "bg-bg-elevated text-fg"
-              : "text-fg-muted hover:bg-bg-elevated/60 hover:text-fg",
-          )}
-        >
-          <Eye size={11} />
-          {previewLabel}
-        </button>
+        <SegmentedControl
+          size="xs"
+          surface="subtle"
+          activeId={mode}
+          onChange={setMode}
+          items={[
+            { id: "write", label: writeLabel, icon: <PencilLine size={11} /> },
+            { id: "preview", label: previewLabel, icon: <Eye size={11} /> },
+          ]}
+        />
       </div>
       {mode === "write" ? (
         <textarea
@@ -123,15 +105,15 @@ export function GitHubCommentComposer({
         <div className="min-w-0 text-[10.5px] text-danger">
           {error ? `${errorPrefix} ${error}` : null}
         </div>
-        <button
-          type="button"
+        <Button
           onClick={() => void handleSubmit()}
           disabled={!canSubmit}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-accent/20 px-2.5 py-1 text-[11px] font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:bg-bg-elevated disabled:text-fg-muted disabled:opacity-70"
+          variant="accentSoft"
+          size="xs"
         >
           <SendHorizontal size={12} />
           {submitting ? submittingLabel : submitLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );

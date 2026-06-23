@@ -30,7 +30,7 @@ import { useAppStore } from "../store";
 import type { Session } from "../lib/types";
 import { useToasts } from "../lib/toasts";
 import { Tooltip } from "./Tooltip";
-import { CheckboxRow, Field } from "./ui";
+import { Button, CheckboxRow, CodeValue, Field, Notice } from "./ui";
 
 type BackgroundSessionsTranslator = Translator;
 
@@ -226,14 +226,20 @@ export function BackgroundSessionsSettings() {
           {status?.log_path ? (
             <div className="mt-2 text-fg-muted">
               {t("backgroundSessions.status.log")}:{" "}
-              <code className="font-mono">{status.log_path}</code>
+              <CodeValue display="inline" surface="muted" tone="muted">
+                {status.log_path}
+              </CodeValue>
             </div>
           ) : null}
           {statusError ? (
-            <div className="mt-2 flex items-start gap-1 text-danger">
-              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            <Notice
+              tone="danger"
+              density="compact"
+              className="mt-2"
+              icon={<AlertTriangle size={12} />}
+            >
               <span className="font-mono">{statusError}</span>
-            </div>
+            </Notice>
           ) : null}
         </div>
       </Field>
@@ -283,31 +289,35 @@ export function BackgroundSessionsSettings() {
             </button>
           </Tooltip>
           {confirmShutdown ? (
-            <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
+            <Notice
+              tone="danger"
+              density="compact"
+              className="flex items-center gap-2"
+            >
               <span>
                 {t("backgroundSessions.controls.confirmShutdownPrompt")}
               </span>
-              <button
-                type="button"
+              <Button
                 onClick={() => void handleShutdown()}
                 disabled={busy !== null}
-                className="rounded-md bg-danger px-2 py-0.5 font-medium text-bg disabled:opacity-50"
+                variant="danger"
+                size="xs"
               >
                 {busy === "shutdown" ? (
                   <Loader2 size={10} className="animate-spin" />
                 ) : (
                   t("backgroundSessions.controls.confirm")
                 )}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
                 onClick={() => setConfirmShutdown(false)}
                 disabled={busy !== null}
-                className="px-2 py-0.5 hover:text-fg"
+                variant="ghost"
+                size="xs"
               >
                 {t("backgroundSessions.controls.cancel")}
-              </button>
-            </div>
+              </Button>
+            </Notice>
           ) : (
             <button
               type="button"
@@ -723,10 +733,13 @@ function renderAppMetaTooltip(
         valueClassName="break-all font-mono text-fg-muted"
       />
       {!app ? (
-        <div className="flex items-center gap-1.5 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-1 text-[10px] leading-none text-warning">
-          <AlertCircle size={11} aria-hidden="true" className="shrink-0" />
+        <Notice
+          tone="warning"
+          density="compact"
+          icon={<AlertCircle size={11} aria-hidden="true" />}
+        >
           {t("backgroundSessions.metadata.orphaned")}
-        </div>
+        </Notice>
       ) : null}
       {rows.map((r) => (
         <BackgroundSessionTooltipRow

@@ -2411,33 +2411,33 @@ function StorageSettings() {
       </ul>
 
       {confirming ? (
-        <div className="space-y-2 rounded-[var(--acorn-pane-radius)] border border-warning/40 bg-warning/10 p-3">
+        <Notice tone="warning" className="space-y-2">
           <p className="text-[11px] text-fg">
             {stf(t, "settings.storage.confirm.message", {
               size: formatBytes(totalBytes),
             })}
           </p>
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
+            <Button
               onClick={() => setConfirming(false)}
               disabled={busy}
-              className="rounded border border-border px-2 py-1 text-[11px] text-fg-muted transition hover:text-fg disabled:opacity-50"
+              variant="ghost"
+              size="xs"
             >
               {st(t, "settings.storage.confirm.cancel")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => void handleClear()}
               disabled={busy}
-              className="rounded bg-danger px-2 py-1 text-[11px] font-medium text-white transition hover:bg-danger/90 disabled:opacity-50"
+              variant="danger"
+              size="xs"
             >
               {busy
                 ? st(t, "settings.storage.clear.clearing")
                 : st(t, "settings.storage.clear.button")}
-            </button>
+            </Button>
           </div>
-        </div>
+        </Notice>
       ) : (
         <div className="flex items-center justify-between gap-3">
           <span className="text-[11px] text-fg-muted">
