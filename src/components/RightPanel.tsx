@@ -114,6 +114,9 @@ import {
   ModalHeader,
   RefreshButton,
   Select,
+  SkeletonBlock,
+  SkeletonCircle,
+  SkeletonList,
   TextInput,
   listBoxClassName,
   listRowClassName,
@@ -751,34 +754,6 @@ function Empty({ msg }: { msg: string }) {
 }
 
 /**
- * Shimmer placeholder row used while a tab's initial fetch is in flight.
- * Switching projects clears and refetches all the right-panel tabs at once;
- * without these the panel goes briefly blank and the click feels janky.
- */
-function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
-  return (
-    <div
-      className={listRowClassName({ className: "flex items-center gap-2" })}
-      style={{ animationDelay: `${pulseDelayMs}ms` }}
-    >
-      <span className="h-3 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
-      <span className="h-3 w-full max-w-[60%] animate-pulse rounded bg-fg-muted/10" />
-      <span className="h-3 w-10 shrink-0 animate-pulse rounded bg-fg-muted/10 ml-auto" />
-    </div>
-  );
-}
-
-function SkeletonList({ count = 6 }: { count?: number }) {
-  return (
-    <div className={listBoxClassName()}>
-      {Array.from({ length: count }).map((_, i) => (
-        <SkeletonRow key={i} pulseDelayMs={i * 80} />
-      ))}
-    </div>
-  );
-}
-
-/**
  * Shaped placeholder for the Pull Requests tab. Mirrors the real PR row
  * layout — two lines, with `#number`, state badge, title on top and
  * author · branches · time underneath — so the panel doesn't reflow when
@@ -799,22 +774,22 @@ function PrSkeletonRow({ index }: { index: number }) {
       })}
     >
       <div className="flex w-full items-center gap-2">
-        <span className="h-3 w-8 shrink-0 animate-pulse rounded bg-fg-muted/15" />
-        <span className="h-4 w-12 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
-        <span
-          className="h-3 min-w-0 flex-1 animate-pulse rounded bg-fg-muted/10"
+        <SkeletonBlock className="h-3 w-8 shrink-0 bg-fg-muted/15" />
+        <SkeletonBlock className="h-4 w-12 shrink-0 rounded-full bg-fg-muted/15" />
+        <SkeletonBlock
+          className="h-3 min-w-0 flex-1"
           style={{ width: titleW }}
         />
       </div>
       <div className="flex w-full items-center gap-2">
-        <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+        <SkeletonBlock className="h-2.5 w-16 shrink-0" />
         <span className="text-[10px] text-fg-muted/40">·</span>
-        <span
-          className="h-2.5 animate-pulse rounded bg-fg-muted/10"
+        <SkeletonBlock
+          className="h-2.5"
           style={{ width: branchW }}
         />
         <span className="text-[10px] text-fg-muted/40">·</span>
-        <span className="h-2.5 w-10 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+        <SkeletonBlock className="h-2.5 w-10 shrink-0" />
       </div>
     </div>
   );
@@ -854,25 +829,25 @@ function HistorySkeletonRow({
       className={listRowClassName({ className: "flex items-start gap-2" })}
       style={{ animationDelay: `${index * 60}ms` }}
     >
-      <span
+      <SkeletonBlock
         className={cn(
-          "mt-0.5 shrink-0 animate-pulse rounded bg-fg-muted/15",
+          "mt-0.5 shrink-0 bg-fg-muted/15",
           showAgentProviderIcons ? "size-5" : "h-4 w-12",
         )}
       />
       <div className="min-w-0 flex-1 space-y-1.5">
-        <span
-          className="block h-3 animate-pulse rounded bg-fg-muted/15"
+        <SkeletonBlock
+          className="h-3 bg-fg-muted/15"
           style={{ width: titleW }}
         />
-        <span
-          className="block h-2.5 animate-pulse rounded bg-fg-muted/10"
+        <SkeletonBlock
+          className="h-2.5"
           style={{ width: previewW }}
         />
         {showWorktree ? (
-          <span className="block h-2.5 w-24 animate-pulse rounded bg-fg-muted/10" />
+          <SkeletonBlock className="h-2.5 w-24" />
         ) : null}
-        <span className="block h-2 w-12 animate-pulse rounded bg-fg-muted/10" />
+        <SkeletonBlock className="h-2 w-12" />
       </div>
     </div>
   );
@@ -2233,9 +2208,9 @@ function CommitsTab({
         <ResizeHandle direction="vertical" gap />
         <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
           <div className="acorn-no-scrollbar h-full overflow-y-auto p-3">
-            <div className="h-3 w-1/2 animate-pulse rounded bg-fg-muted/15" />
-            <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-fg-muted/10" />
-            <div className="mt-2 h-3 w-2/3 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-3 w-1/2 bg-fg-muted/15" />
+            <SkeletonBlock className="mt-2 h-3 w-3/4" />
+            <SkeletonBlock className="mt-2 h-3 w-2/3" />
           </div>
         </Panel>
       </PanelGroup>
@@ -4069,16 +4044,16 @@ function WorkflowRunDetailModal({
 
 function WorkflowRunDetailSkeleton() {
   return (
-    <div className="space-y-3 animate-pulse">
+    <div className="space-y-3">
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--acorn-pane-radius)] bg-bg-sidebar/40 p-3 text-[11px]">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="contents">
             <dt>
-              <span className="block h-3 w-16 rounded bg-border/60" />
+              <SkeletonBlock className="h-3 w-16 bg-border/60" />
             </dt>
             <dd>
-              <span
-                className="block h-3 rounded bg-border/40"
+              <SkeletonBlock
+                className="h-3 bg-border/40"
                 style={{ width: `${40 + ((i * 37) % 50)}%` }}
               />
             </dd>
@@ -4086,19 +4061,19 @@ function WorkflowRunDetailSkeleton() {
         ))}
       </dl>
       <div>
-        <span className="mb-1.5 block h-3 w-20 rounded bg-border/60" />
+        <SkeletonBlock className="mb-1.5 h-3 w-20 bg-border/60" />
         <ul className="space-y-1.5">
           {Array.from({ length: 3 }).map((_, i) => (
             <li
               key={i}
               className="flex items-center gap-2 rounded-md border border-border bg-bg-elevated/40 px-2.5 py-2"
             >
-              <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-border/60" />
-              <span
-                className="h-3 rounded bg-border/40"
+              <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-border/60" />
+              <SkeletonBlock
+                className="h-3 bg-border/40"
                 style={{ width: `${50 + ((i * 23) % 30)}%` }}
               />
-              <span className="ml-auto h-3 w-10 rounded bg-border/40" />
+              <SkeletonBlock className="ml-auto h-3 w-10 bg-border/40" />
             </li>
           ))}
         </ul>

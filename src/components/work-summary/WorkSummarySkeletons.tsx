@@ -1,4 +1,5 @@
 import { cn } from "../../lib/cn";
+import { SkeletonBlock } from "../ui";
 
 export function MetricValueSkeleton() {
   return <SkeletonBlock className="h-5 w-24 bg-fg-muted/15" />;
@@ -83,13 +84,5 @@ function SkeletonChartRow() {
       <SkeletonBlock className="h-2 w-full bg-fg-muted/10" />
       <SkeletonBlock className="h-2.5 w-10 bg-fg-muted/10" />
     </div>
-  );
-}
-
-function SkeletonBlock({ className }: { className: string }) {
-  return (
-    <span
-      className={cn("block animate-pulse rounded bg-fg-muted/10", className)}
-    />
   );
 }

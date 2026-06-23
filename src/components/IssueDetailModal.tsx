@@ -20,7 +20,14 @@ import type {
 import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag } from "./AuthorTag";
 import { Tooltip } from "./Tooltip";
-import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
+import {
+  Markdown,
+  Modal,
+  ModalHeader,
+  RefreshButton,
+  SkeletonBlock,
+  SkeletonText,
+} from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -401,26 +408,27 @@ function IssueDetailSkeleton({
         actions={<RefreshButton onClick={onRefresh} loading={refreshing} size={14} />}
         onClose={onClose}
       />
-      <div className="space-y-3 px-4 py-3 animate-pulse">
-        <span className="block h-3 w-36 rounded bg-fg-muted/15" />
+      <div className="space-y-3 px-4 py-3">
+        <SkeletonBlock className="h-3 w-36 bg-fg-muted/15" />
         <div className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30 p-3">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <span
-              key={index}
-              className="mb-2 block h-3 rounded bg-fg-muted/10"
-              style={{ width: `${42 + ((index * 17) % 45)}%` }}
-            />
-          ))}
+          <SkeletonText
+            className="gap-2"
+            lines={6}
+            widths={Array.from(
+              { length: 6 },
+              (_, index) => `${42 + ((index * 17) % 45)}%`,
+            )}
+          />
         </div>
-        <span className="block h-3 w-24 rounded bg-fg-muted/15" />
+        <SkeletonBlock className="h-3 w-24 bg-fg-muted/15" />
         <div className="space-y-2">
           {Array.from({ length: 2 }).map((_, index) => (
             <div
               key={index}
               className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/30 p-3"
             >
-              <span className="mb-2 block h-3 w-28 rounded bg-fg-muted/15" />
-              <span className="block h-3 w-4/5 rounded bg-fg-muted/10" />
+              <SkeletonBlock className="mb-2 h-3 w-28 bg-fg-muted/15" />
+              <SkeletonBlock className="h-3 w-4/5" />
             </div>
           ))}
         </div>
