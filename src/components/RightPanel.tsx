@@ -4104,29 +4104,6 @@ function WorkflowRunDetailModal({
     detail?.display_title.trim().length
       ? detail.display_title
       : detail?.workflow_name ?? rt(t, "rightPanel.actions.workflowRun");
-  const subtitle = detail ? (
-    <span className="flex flex-wrap items-center gap-1.5">
-      <span>{detail.workflow_name}</span>
-      <span className="opacity-50">·</span>
-      <span>{detail.event}</span>
-      {detail.head_branch ? (
-        <>
-          <span className="opacity-50">·</span>
-          <span className="font-mono">{detail.head_branch}</span>
-        </>
-      ) : null}
-      {detail.attempt > 1 ? (
-        <>
-          <span className="opacity-50">·</span>
-          <span>
-            {rtf(t, "rightPanel.actions.retryAttempt", {
-              attempt: detail.attempt,
-            })}
-          </span>
-        </>
-      ) : null}
-    </span>
-  ) : undefined;
 
   return (
     <Modal
@@ -4136,24 +4113,56 @@ function WorkflowRunDetailModal({
       size="2xl"
       className="flex h-[36rem] flex-col"
     >
-      <ModalHeader
-        title={title}
-        subtitle={subtitle}
-        variant="dialog"
-        icon={
-          <span className="mt-0.5 flex self-start">
-            {detail ? (
-              <WorkflowRunStatusIcon
-                status={detail.status}
-                conclusion={detail.conclusion}
-              />
-            ) : (
-              <Activity size={14} className="text-fg-muted" />
-            )}
-          </span>
-        }
-        actions={
-          detail?.url ? (
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="mt-0.5 flex shrink-0">
+              {detail ? (
+                <WorkflowRunStatusIcon
+                  status={detail.status}
+                  conclusion={detail.conclusion}
+                />
+              ) : (
+                <Activity size={14} className="text-fg-muted" />
+              )}
+            </span>
+            <Tooltip
+              label={title}
+              side="bottom"
+              multiline
+              className="min-w-0 flex-1"
+            >
+              <h3 className="truncate text-sm font-semibold leading-5 tracking-tight text-fg">
+                {title}
+              </h3>
+            </Tooltip>
+          </div>
+          {detail ? (
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-fg-muted">
+              <span>{detail.workflow_name}</span>
+              <span className="opacity-50">·</span>
+              <span>{detail.event}</span>
+              {detail.head_branch ? (
+                <>
+                  <span className="opacity-50">·</span>
+                  <span className="font-mono">{detail.head_branch}</span>
+                </>
+              ) : null}
+              {detail.attempt > 1 ? (
+                <>
+                  <span className="opacity-50">·</span>
+                  <span>
+                    {rtf(t, "rightPanel.actions.retryAttempt", {
+                      attempt: detail.attempt,
+                    })}
+                  </span>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {detail?.url ? (
             <Tooltip
               label={rt(t, "rightPanel.tooltips.openOnGitHub")}
               side="bottom"
@@ -4161,17 +4170,23 @@ function WorkflowRunDetailModal({
               <button
                 type="button"
                 onClick={() => void openUrl(detail.url)}
-                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+                className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               >
-                <ExternalLink size={12} />
-                {rt(t, "rightPanel.actions.github")}
+                <ExternalLink size={14} />
               </button>
             </Tooltip>
-          ) : null
-        }
-        onClose={onClose}
-      />
-      <div className="acorn-no-scrollbar flex-1 min-h-0 overflow-y-auto text-xs">
+          ) : null}
+          <button
+            type="button"
+            aria-label={t("dialogs.common.close")}
+            onClick={onClose}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </header>
+      <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">
         <div className="px-4 py-3">
         {error ? (
           <div className="p-2 text-danger">{error}</div>
