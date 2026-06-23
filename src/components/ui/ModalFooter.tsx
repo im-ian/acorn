@@ -29,7 +29,7 @@ export function modalFooterClassName({
   className,
 }: ModalFooterClassNameOptions = {}): string {
   return cn(
-    "flex items-center gap-2 border-t border-border px-4 py-3",
+    "flex items-center gap-2 px-4 py-3",
     MODAL_FOOTER_VARIANT_CLASS[variant],
     MODAL_FOOTER_ALIGN_CLASS[align],
     className,

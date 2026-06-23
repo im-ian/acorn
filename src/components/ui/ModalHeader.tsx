@@ -36,6 +36,50 @@ export function ModalHeader({
   onClose,
 }: ModalHeaderProps) {
   const t = useTranslation();
+  const closeButton = (
+    <div className="flex shrink-0 items-center gap-1">
+      {actions}
+      <IconButton
+        aria-label={dt(t, "dialogs.common.close")}
+        onClick={onClose}
+        size="sm"
+        surface={variant}
+      >
+        <X size={14} />
+      </IconButton>
+    </div>
+  );
+
+  // Dialog: Soft Minimal seamless header — no divider, the icon sits in a
+  // neutral chip centered against the title block, larger title.
+  if (variant === "dialog") {
+    return (
+      <header className="flex shrink-0 items-start justify-between gap-3 px-4 pt-4 pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {icon ? (
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-fill">
+              {icon}
+            </span>
+          ) : null}
+          <div className="min-w-0">
+            <h3
+              id={titleId}
+              className="truncate text-base font-semibold tracking-tight text-fg"
+            >
+              {title}
+            </h3>
+            {subtitle ? (
+              <div className="truncate text-xs text-fg-muted">{subtitle}</div>
+            ) : null}
+          </div>
+        </div>
+        {closeButton}
+      </header>
+    );
+  }
+
+  // Panel: full-height content viewers keep a structural divider so scrolled
+  // body content stays separated from the header.
   return (
     <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
       <div className="flex min-w-0 items-start gap-2">
@@ -54,17 +98,7 @@ export function ModalHeader({
           ) : null}
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {actions}
-        <IconButton
-          aria-label={dt(t, "dialogs.common.close")}
-          onClick={onClose}
-          size="sm"
-          surface={variant}
-        >
-          <X size={14} />
-        </IconButton>
-      </div>
+      {closeButton}
     </header>
   );
 }
