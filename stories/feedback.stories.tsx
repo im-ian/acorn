@@ -6,6 +6,7 @@ import { FileDropHoverOverlay } from "../src/components/FileDropHoverOverlay";
 import { SessionTitleGeneratingIndicator } from "../src/components/SessionTitleGeneratingIndicator";
 import { StickyUserPrompt } from "../src/components/StickyUserPrompt";
 import { Tooltip } from "../src/components/Tooltip";
+import { Button } from "../src/components/ui/Button";
 
 const meta = {
   title: "Components/Feedback",
@@ -43,16 +44,16 @@ export const TooltipPlacements: Story = {
   render: () => (
     <div className="grid grid-cols-2 gap-5 rounded-lg border border-border bg-bg-elevated p-6 text-xs text-fg">
       <Tooltip label="Appears above" side="top" delay={150}>
-        <button className="rounded border border-border px-3 py-2">Top</button>
+        <Button variant="outline">Top</Button>
       </Tooltip>
       <Tooltip label="Appears below" side="bottom" delay={150}>
-        <button className="rounded border border-border px-3 py-2">Bottom</button>
+        <Button variant="outline">Bottom</Button>
       </Tooltip>
       <Tooltip label="Appears left" side="left" delay={150}>
-        <button className="rounded border border-border px-3 py-2">Left</button>
+        <Button variant="outline">Left</Button>
       </Tooltip>
       <Tooltip label="Appears right" side="right" delay={150}>
-        <button className="rounded border border-border px-3 py-2">Right</button>
+        <Button variant="outline">Right</Button>
       </Tooltip>
     </div>
   ),
@@ -66,13 +67,9 @@ export const OpenContextMenu: Story = {
     const [open, setOpen] = useState(true);
     return (
       <div className="h-screen bg-bg p-8 text-fg">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs"
-        >
+        <Button onClick={() => setOpen(true)} variant="primary">
           Show menu
-        </button>
+        </Button>
         <ContextMenu
           open={open}
           x={72}

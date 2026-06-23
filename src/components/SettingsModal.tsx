@@ -81,11 +81,15 @@ import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import {
+  Button,
   CheckboxRow,
+  CodeValue,
   CommandHint,
   Field,
   Modal,
+  ModalFooter,
   ModalHeader,
+  Notice,
   RadioCard,
   Select,
   Stepper,
@@ -360,6 +364,7 @@ export function SettingsModal() {
   const consumePendingTab = useSettings((s) => s.consumePendingTab);
   const [tab, setTab] = useState<Tab>("interface");
   const [sessionTitlePromptOpen, setSessionTitlePromptOpen] = useState(false);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const t = useTranslation();
 
   // When the store reports a pending tab (e.g. StatusBar daemon button
@@ -385,9 +390,12 @@ export function SettingsModal() {
   // Esc cancels, Enter (outside inputs) closes — settings autosave on every
   // change so there is no separate confirm step. While a child settings dialog
   // is open, let that dialog own Escape.
-  useDialogShortcuts(open && !sessionTitlePromptOpen, {
+  useDialogShortcuts(open && !sessionTitlePromptOpen && !confirmResetOpen, {
     onCancel: () => setOpen(false),
     onConfirm: () => setOpen(false),
+  });
+  useDialogShortcuts(confirmResetOpen, {
+    onCancel: () => setConfirmResetOpen(false),
   });
 
   return (
@@ -406,26 +414,26 @@ export function SettingsModal() {
         onClose={() => setOpen(false)}
       />
       <div className="flex h-[28rem]">
-        <nav className="flex w-40 shrink-0 flex-col border-r border-border bg-bg-sidebar/40 py-2">
+        <nav className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
           {TABS.map((tabMeta) => (
             <button
               key={tabMeta.id}
               type="button"
               onClick={() => setTab(tabMeta.id)}
               className={cn(
-                "px-4 py-1.5 text-left text-xs transition",
+                "rounded-md px-3 py-1.5 text-left text-xs transition",
                 tab === tabMeta.id
-                  ? "bg-bg-elevated text-fg"
+                  ? "acorn-tab-active-bg text-fg"
                   : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
               )}
             >
               {t(tabMeta.labelKey)}
             </button>
           ))}
-          <div className="mt-auto px-4 pb-2">
+          <div className="mt-auto px-2 pb-1 pt-2">
             <button
               type="button"
-              onClick={reset}
+              onClick={() => setConfirmResetOpen(true)}
               className="text-[11px] text-fg-muted transition hover:text-danger"
             >
               {t("settings.reset")}
@@ -463,6 +471,42 @@ export function SettingsModal() {
           )}
         </div>
       </div>
+      <Modal
+        open={confirmResetOpen}
+        onClose={() => setConfirmResetOpen(false)}
+        variant="dialog"
+        size="sm"
+        ariaLabel={t("settings.resetConfirm.title")}
+      >
+        <ModalHeader
+          title={t("settings.resetConfirm.title")}
+          variant="dialog"
+          onClose={() => setConfirmResetOpen(false)}
+        />
+        <p className="px-4 py-3 text-xs text-fg-muted">
+          {t("settings.resetConfirm.message")}
+        </p>
+        <ModalFooter variant="sidebar">
+          <Button
+            onClick={() => setConfirmResetOpen(false)}
+            size="md"
+            surface="dialog"
+          >
+            {t("dialogs.common.cancel")}
+          </Button>
+          <Button
+            onClick={() => {
+              reset();
+              setConfirmResetOpen(false);
+            }}
+            variant="dangerSoft"
+            size="md"
+            surface="dialog"
+          >
+            {t("settings.resetConfirm.confirm")}
+          </Button>
+        </ModalFooter>
+      </Modal>
     </Modal>
   );
 }
@@ -717,7 +761,7 @@ function SessionSettings() {
                 onChange={(e) =>
                   patchSessions({ confirmRemove: e.target.checked })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.sessions.confirmRemove.checkbox")}
             </label>
@@ -733,7 +777,7 @@ function SessionSettings() {
                 onChange={(e) =>
                   patchSessions({ warnBeforeClosingRunning: e.target.checked })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.sessions.warnBeforeClosingRunning.checkbox")}
             </label>
@@ -757,7 +801,7 @@ function SessionSettings() {
                     confirmDeleteIsolatedWorktrees: e.target.checked,
                   })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(
                 t,
@@ -786,7 +830,7 @@ function SessionSettings() {
                     confirmDeleteEmptyWorktreeWorkspaces: e.target.checked,
                   })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(
                 t,
@@ -805,7 +849,7 @@ function SessionSettings() {
                 onChange={(e) =>
                   patchSessions({ showRestartPromptOnExit: e.target.checked })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.sessions.showRestartPromptOnExit.checkbox")}
             </label>
@@ -830,7 +874,7 @@ function SessionSettings() {
                     detachOffscreenTerminals: e.target.checked,
                   })
                 }
-                className="accent-[var(--color-accent)]"
+                className="acorn-check"
               />
               {st(t, "settings.terminal.detachOffscreenTerminals.checkbox")}
             </label>
@@ -974,9 +1018,9 @@ function ControlSessionInstallSection() {
                 : st(t, "settings.sessions.controlCli.missing")}
             </span>
           </div>
-          <code className="mt-1 block truncate font-mono text-fg">
+          <CodeValue overflow="truncate" className="mt-1">
             {status.bundled_path || "(unknown)"}
-          </code>
+          </CodeValue>
         </div>
         <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
           <div className="flex items-center justify-between">
@@ -996,9 +1040,9 @@ function ControlSessionInstallSection() {
                 : st(t, "settings.sessions.controlCli.notInstalled")}
             </span>
           </div>
-          <code className="mt-1 block truncate font-mono text-fg">
+          <CodeValue overflow="truncate" className="mt-1">
             {activeShim ? activeShim.path : installTarget}
-          </code>
+          </CodeValue>
         </div>
         {!activeShim && status.bundled_exists && installCommand ? (
           <CommandHint command={installCommand} repoPath={null} />
@@ -1663,7 +1707,7 @@ function SessionDisplaySection({
             type="checkbox"
             checked={sessionDisplay.showDetailsOnHover}
             onChange={(e) => patch({ showDetailsOnHover: e.target.checked })}
-            className="accent-[var(--color-accent)]"
+            className="acorn-check"
           />
           {st(t, "settings.appearance.sessionDisplay.hover.checkbox")}
         </label>
@@ -1839,7 +1883,7 @@ function NotificationSettings() {
             onChange={(e) =>
               patchNotifications({ enabled: e.target.checked })
             }
-            className="accent-[var(--color-accent)]"
+            className="acorn-check"
           />
           {st(t, "settings.notifications.system.enable")}
         </label>
@@ -1917,30 +1961,21 @@ function NotificationSettings() {
         hint={st(t, "settings.notifications.test.hint")}
       >
         <div className="flex flex-col items-start gap-2">
-          <button
-            type="button"
+          <Button
             onClick={() => void handleTest()}
             disabled={testing}
-            className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-fg transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+            variant="accentSoft"
+            size="md"
+            className="text-fg"
           >
             {testing
               ? st(t, "settings.notifications.test.sending")
               : st(t, "settings.notifications.test.send")}
-          </button>
+          </Button>
           {testResult ? (
-            <p
-              className={cn(
-                "rounded-md border px-3 py-1.5 text-[11px]",
-                testResult.tone === "success" &&
-                  "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-                testResult.tone === "warning" &&
-                  "border-warning/40 bg-warning/10 text-warning",
-                testResult.tone === "danger" &&
-                  "border-danger/40 bg-danger/10 text-danger",
-              )}
-            >
+            <Notice tone={testResult.tone} density="compact">
               {testResult.text}
-            </p>
+            </Notice>
           ) : null}
         </div>
       </Field>
@@ -2024,7 +2059,7 @@ function AgentSettings({
               onChange={(e) =>
                 patchAgents({ autoGenerateSessionTitles: e.target.checked })
               }
-              className="accent-[var(--color-accent)]"
+              className="acorn-check"
             />
             <span className="truncate">
               {st(t, "settings.agents.sessionTitles.checkbox")}
@@ -2354,7 +2389,7 @@ function StorageSettings() {
         </p>
       </header>
 
-      <ul className="divide-y divide-border rounded border border-border">
+      <ul className="divide-y divide-border rounded-[var(--acorn-pane-radius)] border border-border">
         {CACHE_CATEGORIES.map((cat) => {
           const size = sizes[cat.id];
           return (
@@ -2376,7 +2411,7 @@ function StorageSettings() {
       </ul>
 
       {confirming ? (
-        <div className="space-y-2 rounded border border-warning/40 bg-warning/10 p-3">
+        <div className="space-y-2 rounded-[var(--acorn-pane-radius)] border border-warning/40 bg-warning/10 p-3">
           <p className="text-[11px] text-fg">
             {stf(t, "settings.storage.confirm.message", {
               size: formatBytes(totalBytes),
@@ -2467,10 +2502,10 @@ function ExperimentsSettings() {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
+      <Notice tone="warning" density="compact" className="text-fg-muted">
         <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
         {st(t, "settings.experiments.warning")}
-      </div>
+      </Notice>
       <CheckboxRow
         checked={experiments.stickyPrompt}
         onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
@@ -2588,12 +2623,13 @@ function ShortcutsSettings() {
         </button>
       </div>
       {recordingError ? (
-        <div
+        <Notice
           role="alert"
-          className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-snug text-danger"
+          tone="danger"
+          density="compact"
         >
           {recordingError}
-        </div>
+        </Notice>
       ) : null}
       <div className="space-y-3">
         {SHORTCUT_GROUPS.map((group) => (
@@ -2834,7 +2870,7 @@ function AboutSettings() {
         </p>
       </header>
 
-      <div className="rounded border border-border">
+      <div className="rounded-[var(--acorn-pane-radius)] border border-border">
         <div className="flex items-baseline justify-between gap-3 px-3 py-2.5">
           <span className="text-xs font-medium text-fg">
             {st(t, "settings.about.currentVersion")}
@@ -2899,15 +2935,23 @@ function AboutSettings() {
       </div>
 
       {error ? (
-        <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <Notice
+          tone="danger"
+          density="compact"
+          className="rounded-[var(--acorn-pane-radius)]"
+        >
           {error}
-        </p>
+        </Notice>
       ) : null}
 
       {notesError ? (
-        <p className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <Notice
+          tone="danger"
+          density="compact"
+          className="rounded-[var(--acorn-pane-radius)]"
+        >
           {notesError}
-        </p>
+        </Notice>
       ) : null}
 
       <div className="flex items-center justify-between gap-2">

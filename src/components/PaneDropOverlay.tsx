@@ -105,30 +105,25 @@ export function PaneDropOverlay({ paneId }: PaneDropOverlayProps) {
 
 function ZoneHighlight({ zone }: { zone: DropZone | null }) {
   if (!zone) return null;
+  // Floating rounded accent card matching the pane chrome: inset from the
+  // edges with the same corner radius, instead of a flat edge-to-edge fill.
+  const base =
+    "pointer-events-none absolute rounded-[var(--acorn-pane-radius)] bg-accent/15 ring-1 ring-inset ring-accent/60";
   if (zone.kind === "center") {
-    return (
-      <div className="pointer-events-none absolute inset-0 bg-accent/15 ring-2 ring-inset ring-accent/60" />
-    );
+    return <div className={cn(base, "inset-1.5")} />;
   }
-  // Edge: highlight the half of the pane where the new pane will appear.
+  // Edge: preview the half of the pane where the new pane will appear.
   const cls = (() => {
     if (zone.direction === "horizontal" && zone.side === "before") {
-      return "left-0 top-0 h-full w-1/2";
+      return "left-1.5 top-1.5 bottom-1.5 w-[calc(50%-0.75rem)]";
     }
     if (zone.direction === "horizontal" && zone.side === "after") {
-      return "right-0 top-0 h-full w-1/2";
+      return "right-1.5 top-1.5 bottom-1.5 w-[calc(50%-0.75rem)]";
     }
     if (zone.direction === "vertical" && zone.side === "before") {
-      return "left-0 top-0 h-1/2 w-full";
+      return "left-1.5 right-1.5 top-1.5 h-[calc(50%-0.75rem)]";
     }
-    return "left-0 bottom-0 h-1/2 w-full";
+    return "left-1.5 right-1.5 bottom-1.5 h-[calc(50%-0.75rem)]";
   })();
-  return (
-    <div
-      className={cn(
-        "pointer-events-none absolute bg-accent/20 ring-2 ring-inset ring-accent/70",
-        cls,
-      )}
-    />
-  );
+  return <div className={cn(base, cls)} />;
 }

@@ -5,7 +5,7 @@ import { useToasts } from "../lib/toasts";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import { Button, CodeValue, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
 import {
   applySessionCreateRequest,
   buildSessionCreateRequestFromScope,
@@ -187,9 +187,14 @@ export function CommandRunDialog({
         <p className="text-fg">
           {dt(t, "dialogs.commandRun.description")}
         </p>
-        <pre className="overflow-x-auto rounded-md border border-border bg-bg-sidebar/70 px-3 py-2 font-mono text-[12px] text-fg">
+        <CodeValue
+          as="pre"
+          surface="muted"
+          overflow="scroll"
+          className="px-3 py-2 text-[12px]"
+        >
           {command}
-        </pre>
+        </CodeValue>
         {resolvedRepoPath ? (
           <p>
             <span className="opacity-70">
@@ -203,41 +208,43 @@ export function CommandRunDialog({
           </p>
         )}
         {error ? (
-          <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+          <Notice tone="danger" density="compact">
             {error}
-          </p>
+          </Notice>
         ) : null}
       </div>
-      <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-        <button
-          type="button"
+      <ModalFooter variant="sidebar">
+        <Button
           onClick={close}
           disabled={busy}
-          className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+          size="md"
+          surface="dialog"
         >
           {dt(t, "dialogs.common.cancel")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => void handleCopy()}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+          variant="outline"
+          size="md"
+          surface="dialog"
         >
           <Copy size={12} />
           {dt(t, "dialogs.common.copy")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => void handleRun()}
           disabled={busy || !resolvedRepoPath}
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+          variant="accentSoft"
+          size="md"
+          surface="dialog"
         >
           <Play size={12} />
           {busy
             ? dt(t, "dialogs.commandRun.running")
             : dt(t, "dialogs.commandRun.run")}
-        </button>
-      </footer>
+        </Button>
+      </ModalFooter>
     </Modal>
   );
 }

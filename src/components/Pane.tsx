@@ -4,7 +4,11 @@ import {
   CircleX,
   Columns2,
   Copy,
-  Files,
+  File as FileIcon,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileVideo,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -30,6 +34,7 @@ import {
 import { createPortal } from "react-dom";
 import { selectSessionsById, useAppStore } from "../store";
 import { FileViewer } from "./FileViewer";
+import { mediaKindFromPath } from "../lib/mediaFiles";
 import { ChatPane } from "./ChatPane";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
@@ -79,6 +84,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
+import { StatusDot, type StatusTone } from "./ui";
 import type {
   Project,
   Session,
@@ -102,12 +108,12 @@ import {
   type WorkspaceTabDragSession,
 } from "../lib/workspaceTabDrag";
 
-const STATUS_DOT: Record<SessionStatus, string> = {
-  idle: "bg-fg-muted",
-  running: "bg-accent animate-pulse",
-  needs_input: "bg-warning",
-  failed: "bg-danger",
-  completed: "bg-accent/60",
+const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
+  idle: "neutral",
+  running: "accent",
+  needs_input: "warning",
+  failed: "danger",
+  completed: "accent",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
@@ -494,8 +500,12 @@ export function Pane({ paneId }: PaneProps) {
 
   return (
     <div
-      className="relative flex h-full flex-col bg-bg"
+      className={cn(
+        "relative flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border bg-bg transition-colors",
+        isFocused ? "border-accent/60" : "border-border",
+      )}
       data-pane-root={paneId}
+      data-active-pane-indicator={isFocused ? paneId : undefined}
       onMouseDown={(e) => {
         if (e.button === 0 && isTabStripMouseDownTarget(e.target)) return;
         if (!isFocused) setFocusedPane(paneId);
@@ -557,13 +567,6 @@ export function Pane({ paneId }: PaneProps) {
           setPaneMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {isFocused ? (
-          <span
-            aria-hidden
-            data-active-pane-indicator={paneId}
-            className="pointer-events-none absolute left-0 top-0 z-10 h-10 w-0.5 rounded-r bg-accent/80"
-          />
-        ) : null}
         {/*
           The actual <Terminal> for the active session lives in <TerminalHost>
           at App level. It is portaled into a per-session target div which
@@ -894,7 +897,7 @@ function TabStrip({
     <div
       ref={stripRef}
       data-pane-tab-strip={paneId}
-      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border"
+      className="acorn-no-scrollbar relative flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-1 pt-px"
     >
       {tabs.map((tab, i) => (
         <TabItem
@@ -939,7 +942,7 @@ function TabStrip({
       */}
       <div
         data-pane-tab-filler={paneId}
-        className="min-w-[2.5rem] flex-1"
+        className="min-w-[2.5rem] flex-1 self-stretch"
         onDoubleClick={(e) => {
           if (e.target !== e.currentTarget) return;
           onNewTab();
@@ -947,6 +950,21 @@ function TabStrip({
       />
     </div>
   );
+}
+
+function fileTabIcon(path: string) {
+  switch (mediaKindFromPath(path)) {
+    case "image":
+      return FileImage;
+    case "video":
+      return FileVideo;
+    case "audio":
+      return FileAudio;
+    case "pdf":
+      return FileText;
+    default:
+      return FileIcon;
+  }
 }
 
 interface TabItemProps {
@@ -1451,15 +1469,15 @@ function TabItem({
           }
         }}
         className={cn(
-          "group relative flex min-w-[96px] shrink-0 cursor-pointer select-none items-center border-r border-border pr-1 text-[13px] leading-5 transition",
+          "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-0.5 text-[13px] leading-5 transition",
           isDraggingThisTab && "opacity-40",
           active
-            ? "bg-bg text-fg"
-            : "bg-bg-elevated/40 text-fg-muted hover:bg-bg-elevated/70 hover:text-fg",
+            ? "acorn-tab-active-bg text-fg"
+            : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         )}
       >
         <div
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-3"
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch pl-2"
           data-tab-drag-handle={tab.id}
         >
           {isGeneratingTitle ? (
@@ -1493,11 +1511,27 @@ function TabItem({
                 )}
               />
             </Tooltip>
+          ) : tab.kind === "code" ? (
+            <Tooltip label={tabPath} side="bottom">
+              {(() => {
+                const TabFileIcon = fileTabIcon(tab.path);
+                return (
+                  <TabFileIcon
+                    size={12}
+                    className="pointer-events-none shrink-0 text-fg-muted"
+                  />
+                );
+              })()}
+            </Tooltip>
           ) : (
-            <span
+            <StatusDot
+              tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
+              size="sm"
+              pulse={session?.status === "running"}
               className={cn(
-                "pointer-events-none size-1.5 shrink-0 rounded-full",
-                session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
+                "pointer-events-none",
+                !session && "opacity-70",
+                session?.status === "completed" && "opacity-60",
               )}
             />
           )}
@@ -1563,7 +1597,7 @@ function TabItem({
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
-            "ml-1 mr-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
+            "ml-0.5 flex size-6 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg",
             active
               ? "opacity-70 hover:opacity-100"
               : "opacity-0 group-hover:opacity-70 hover:opacity-100",
@@ -1571,9 +1605,6 @@ function TabItem({
         >
           <X size={11} />
         </button>
-        {active ? (
-          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent/30" />
-        ) : null}
         {isDraggingThisTab ? (
           <WorkspaceTabDragGhost
             drag={tabDrag}
@@ -1644,15 +1675,24 @@ function WorkspaceTabDragGhost({
           )}
         />
       ) : tab.kind === "code" ? (
-        <Files
-          size={11}
-          className="pointer-events-none shrink-0 text-fg-muted"
-        />
+        (() => {
+          const TabFileIcon = fileTabIcon(tab.path);
+          return (
+            <TabFileIcon
+              size={11}
+              className="pointer-events-none shrink-0 text-fg-muted"
+            />
+          );
+        })()
       ) : (
-        <span
+        <StatusDot
+          tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
+          size="sm"
+          pulse={session?.status === "running"}
           className={cn(
-            "pointer-events-none size-1.5 shrink-0 rounded-full",
-            session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
+            "pointer-events-none",
+            !session && "opacity-70",
+            session?.status === "completed" && "opacity-60",
           )}
         />
       )}

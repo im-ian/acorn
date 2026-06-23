@@ -1,8 +1,12 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ExternalLink, Terminal } from "lucide-react";
+import { Button } from "../../src/components/ui/Button";
+import { CodeValue } from "../../src/components/ui/CodeValue";
 import { Modal } from "../../src/components/ui/Modal";
+import { ModalFooter } from "../../src/components/ui/ModalFooter";
 import { ModalHeader } from "../../src/components/ui/ModalHeader";
+import { Notice } from "../../src/components/ui/Notice";
 
 const meta = {
   title: "UI/Modal",
@@ -20,14 +24,15 @@ export const Dialog: Story = {
     const [open, setOpen] = useState(true);
     return (
       <div className="h-screen bg-bg p-8 text-fg">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg"
-        >
+        <Button onClick={() => setOpen(true)} variant="primary">
           Open dialog
-        </button>
-        <Modal open={open} onClose={() => setOpen(false)} variant="dialog" size="md">
+        </Button>
+        <Modal
+          open={open}
+          onClose={() => setOpen(false)}
+          variant="dialog"
+          size="md"
+        >
           <ModalHeader
             title="Run command"
             subtitle="Preview of the shared dialog shell"
@@ -36,28 +41,21 @@ export const Dialog: Story = {
             onClose={() => setOpen(false)}
           />
           <div className="space-y-3 px-4 py-4 text-sm">
-            <p className="text-fg-muted">
+            <Notice tone="neutral" density="compact">
               Dialog modals use the elevated surface and compact header.
-            </p>
-            <div className="rounded-md border border-border bg-bg-sidebar p-3 font-mono text-xs">
+            </Notice>
+            <CodeValue as="pre" surface="muted" overflow="scroll">
               pnpm run storybook
-            </div>
+            </CodeValue>
           </div>
-          <footer className="flex justify-end gap-2 border-t border-border px-4 py-3">
-            <button
-              type="button"
-              className="rounded px-3 py-1 text-xs text-fg-muted hover:bg-bg-sidebar"
-              onClick={() => setOpen(false)}
-            >
+          <ModalFooter variant="sidebar">
+            <Button onClick={() => setOpen(false)} surface="dialog">
               Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded bg-accent px-3 py-1 text-xs font-medium text-white"
-            >
+            </Button>
+            <Button variant="primary" surface="dialog">
               Run
-            </button>
-          </footer>
+            </Button>
+          </ModalFooter>
         </Modal>
       </div>
     );
@@ -69,14 +67,15 @@ export const Panel: Story = {
     const [open, setOpen] = useState(true);
     return (
       <div className="h-screen bg-bg p-8 text-fg">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg"
-        >
+        <Button onClick={() => setOpen(true)} variant="primary">
           Open panel
-        </button>
-        <Modal open={open} onClose={() => setOpen(false)} variant="panel" size="3xl">
+        </Button>
+        <Modal
+          open={open}
+          onClose={() => setOpen(false)}
+          variant="panel"
+          size="3xl"
+        >
           <ModalHeader
             title="Pull request details"
             subtitle="Panel variant for larger workflows"

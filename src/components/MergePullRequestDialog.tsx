@@ -26,7 +26,14 @@ import type {
 import { useTranslation } from "../lib/useTranslation";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { Tooltip } from "./Tooltip";
-import { Modal, ModalHeader } from "./ui";
+import {
+  Button,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+  SkeletonBlock,
+} from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
   value: MergeMethod;
@@ -109,20 +116,20 @@ function MergeDialogSkeleton({ label }: { label: string }) {
       className="space-y-4 px-4 py-3 text-xs text-fg"
     >
       <div className="space-y-2">
-        <div className="h-3 w-24 animate-pulse rounded bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-24 bg-bg-sidebar" />
         <div className="grid grid-cols-3 gap-2">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div
+            <SkeletonBlock
               key={i}
-              className="h-14 animate-pulse rounded-md border border-border bg-bg-sidebar/60"
+              className="h-14 rounded-md border border-border bg-bg-sidebar/60"
             />
           ))}
         </div>
       </div>
       <div className="space-y-2">
-        <div className="h-3 w-28 animate-pulse rounded bg-bg-sidebar" />
-        <div className="h-8 animate-pulse rounded-md border border-border bg-bg-sidebar/60" />
-        <div className="h-28 animate-pulse rounded-md border border-border bg-bg-sidebar/60" />
+        <SkeletonBlock className="h-3 w-28 bg-bg-sidebar" />
+        <SkeletonBlock className="h-8 rounded-md border border-border bg-bg-sidebar/60" />
+        <SkeletonBlock className="h-28 rounded-md border border-border bg-bg-sidebar/60" />
       </div>
     </div>
   );
@@ -318,24 +325,24 @@ export function MergePullRequestDialog({
             />
             {loadError && !loading ? (
               <div className="space-y-3 px-4 py-3 text-xs text-fg">
-                <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+                <Notice tone="danger" density="compact">
                   {loadError}
-                </p>
+                </Notice>
               </div>
             ) : (
               <MergeDialogSkeleton
                 label={dt(t, "dialogs.mergePullRequest.loadingDetails")}
               />
             )}
-            <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-              <button
-                type="button"
+            <ModalFooter variant="sidebar">
+              <Button
                 onClick={onClose}
-                className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+                size="md"
+                surface="dialog"
               >
                 {dt(t, "dialogs.common.cancel")}
-              </button>
-            </footer>
+              </Button>
+            </ModalFooter>
           </>
         ) : (
           <>
@@ -441,18 +448,19 @@ export function MergePullRequestDialog({
                 />
               </div>
             ) : (
-              <p className="rounded-md border border-border bg-bg-sidebar/40 px-3 py-2 text-[11px] text-fg-muted">
+              <Notice tone="neutral" density="compact">
                 {dt(t, "dialogs.mergePullRequest.rebaseMessageLocked")}
-              </p>
+              </Notice>
             )}
 
             {checksBlock.blocked ? (
-              <div className="space-y-2 rounded-md border border-warning/45 bg-warning/10 px-3 py-2 text-[11px] text-fg">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle
-                    size={12}
-                    className="mt-0.5 shrink-0 text-warning"
-                  />
+              <Notice
+                tone="warning"
+                density="compact"
+                icon={<AlertTriangle size={12} />}
+                className="text-fg"
+              >
+                <div className="space-y-2">
                   <div className="space-y-0.5">
                     {checksBlock.failed > 0 ? (
                       <p>
@@ -474,44 +482,44 @@ export function MergePullRequestDialog({
                       {dt(t, "dialogs.mergePullRequest.checksBlocking")}
                     </p>
                   </div>
+                  <label className="flex cursor-pointer items-start gap-2 rounded border border-warning/40 bg-bg-sidebar/70 px-2 py-1.5 text-fg transition hover:bg-warning/15">
+                    <input
+                      type="checkbox"
+                      checked={adminMerge}
+                      onChange={(e) => setAdminMerge(e.target.checked)}
+                      disabled={busy}
+                      className="mt-0.5 h-3 w-3 cursor-pointer accent-warning"
+                    />
+                    <span className="flex flex-col gap-0.5">
+                      <span className="flex items-center gap-1 font-medium">
+                        <ShieldAlert size={11} className="text-warning" />
+                        {dt(t, "dialogs.mergePullRequest.adminMerge")}
+                      </span>
+                      <span className="text-[10px] leading-snug text-fg-muted">
+                        {dt(t, "dialogs.mergePullRequest.adminMergeHint")}
+                      </span>
+                    </span>
+                  </label>
                 </div>
-                <label className="flex cursor-pointer items-start gap-2 rounded border border-warning/40 bg-bg-sidebar/70 px-2 py-1.5 text-fg transition hover:bg-warning/15">
-                  <input
-                    type="checkbox"
-                    checked={adminMerge}
-                    onChange={(e) => setAdminMerge(e.target.checked)}
-                    disabled={busy}
-                    className="mt-0.5 h-3 w-3 cursor-pointer accent-warning"
-                  />
-                  <span className="flex flex-col gap-0.5">
-                    <span className="flex items-center gap-1 font-medium">
-                      <ShieldAlert size={11} className="text-warning" />
-                      {dt(t, "dialogs.mergePullRequest.adminMerge")}
-                    </span>
-                    <span className="text-[10px] leading-snug text-fg-muted">
-                      {dt(t, "dialogs.mergePullRequest.adminMergeHint")}
-                    </span>
-                  </span>
-                </label>
-              </div>
+              </Notice>
             ) : null}
 
             {error ? (
-              <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+              <Notice tone="danger" density="compact">
                 {error}
-              </p>
+              </Notice>
             ) : null}
           </div>
 
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+          <ModalFooter variant="sidebar">
+            <Button
               onClick={onClose}
               disabled={submitting}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
+            </Button>
             <button
               type="button"
               onClick={() => void handleMerge()}
@@ -527,7 +535,7 @@ export function MergePullRequestDialog({
                 ? dt(t, "dialogs.mergePullRequest.merging")
                 : dt(t, "dialogs.mergePullRequest.merge")}
             </button>
-          </footer>
+          </ModalFooter>
           </>
         )}
       </Modal>

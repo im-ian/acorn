@@ -2,9 +2,16 @@ import { Download, ExternalLink, Sparkles } from "lucide-react";
 import type { ReactElement } from "react";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal } from "./ui/Modal";
-import { ModalHeader } from "./ui/ModalHeader";
-import { Markdown } from "./ui/Markdown";
+import {
+  Button,
+  Markdown,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+  SkeletonBlock,
+  buttonClassName,
+} from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -54,14 +61,14 @@ function ReleaseNotesSkeleton({ label }: { label: string }) {
       className="space-y-4"
     >
       <div className="space-y-2">
-        <div className="h-4 w-40 animate-pulse rounded bg-bg-sidebar" />
-        <div className="h-3 w-full animate-pulse rounded bg-bg-sidebar" />
-        <div className="h-3 w-5/6 animate-pulse rounded bg-bg-sidebar" />
+        <SkeletonBlock className="h-4 w-40 bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-full bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-5/6 bg-bg-sidebar" />
       </div>
       <div className="space-y-2">
-        <div className="h-4 w-28 animate-pulse rounded bg-bg-sidebar" />
-        <div className="h-3 w-11/12 animate-pulse rounded bg-bg-sidebar" />
-        <div className="h-3 w-2/3 animate-pulse rounded bg-bg-sidebar" />
+        <SkeletonBlock className="h-4 w-28 bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-11/12 bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-2/3 bg-bg-sidebar" />
       </div>
     </div>
   );
@@ -136,43 +143,45 @@ export function WhatsNewModal({
         )}
       </div>
       {error ? (
-        <p className="border-t border-danger/40 bg-danger/10 px-4 py-2 text-[11px] text-danger">
+        <Notice
+          tone="danger"
+          density="compact"
+          className="rounded-none border-x-0 border-b-0 px-4 py-2"
+        >
           {error}
-        </p>
+        </Notice>
       ) : null}
-      <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+      <ModalFooter>
         {htmlUrl ? (
           <a
             href={htmlUrl}
             target="_blank"
             rel="noreferrer noopener"
-            className="inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            className={buttonClassName()}
           >
             <ExternalLink size={12} />
             {dt(t, "dialogs.whatsNew.viewOnGithub")}
           </a>
         ) : null}
-        <button
-          type="button"
+        <Button
           onClick={onClose}
-          className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           {dt(t, "dialogs.common.close")}
-        </button>
+        </Button>
         {showInstall && onInstall ? (
-          <button
-            type="button"
+          <Button
             onClick={onInstall}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            variant="primary"
+            className="disabled:opacity-50"
           >
             <Download size={12} />
             {busy
               ? dt(t, "dialogs.whatsNew.installing")
               : dt(t, "dialogs.whatsNew.installRelaunch")}
-          </button>
+          </Button>
         ) : null}
-      </footer>
+      </ModalFooter>
     </Modal>
   );
 }

@@ -35,7 +35,6 @@ import type {
   PullRequestCommit,
   PullRequestDetail,
   PullRequestDetailListing,
-  PullRequestLabel,
   PullRequestReview,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
@@ -43,9 +42,25 @@ import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
+import { GitHubLabelChip } from "./GitHubLabelChip";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
-import { Markdown, Modal, ModalHeader, RefreshButton } from "./ui";
+import {
+  ListBox,
+  ListEmptyState,
+  ListRow,
+  ListRowButton,
+  Markdown,
+  Modal,
+  ModalHeader,
+  RefreshButton,
+  SegmentedControl,
+  SkeletonBlock,
+  SkeletonCircle,
+  SkeletonText,
+  StatusBadge,
+  type StatusTone,
+} from "./ui";
 
 type DetailTab = "conversation" | "commits" | "checks" | "files";
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
@@ -394,6 +409,81 @@ function DetailBody({
   const totalChecks = effectiveChecks;
   const fileCount = detail.changed_files;
   const commitCount = detail.commits.length;
+  const hasBody = body.trim().length > 0;
+
+  const mainSection = (
+    <>
+      <SegmentedControl
+        activeId={tab}
+        items={[
+          {
+            id: "conversation",
+            icon: <MessagesSquare size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabConversation"),
+            badge: conversationCount > 0 ? conversationCount : null,
+          },
+          {
+            id: "commits",
+            icon: <GitCommit size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabCommits"),
+            badge: commitCount > 0 ? commitCount : null,
+          },
+          {
+            id: "checks",
+            icon: <CheckCircle2 size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabChecks"),
+            badge: allChecksPassed ? (
+              <Check size={11} strokeWidth={3} />
+            ) : allChecksFailed ? (
+              <X size={11} strokeWidth={3} />
+            ) : checksPartial ? (
+              `${checkCounts.passed}/${totalChecks}`
+            ) : null,
+            badgeTone: allChecksPassed
+              ? "success"
+              : allChecksFailed
+                ? "danger"
+                : "neutral",
+          },
+          {
+            id: "files",
+            icon: <GitPullRequest size={13} />,
+            label: dt(t, "dialogs.pullRequestDetail.tabFiles"),
+            badge: fileCount > 0 ? fileCount : null,
+          },
+        ]}
+        onChange={onTab}
+        ariaLabel="Pull request detail tabs"
+        className="shrink-0 border-b border-border px-1.5 py-1"
+      />
+
+      <div className="min-h-0 flex-1 overflow-hidden p-1.5">
+        {tab === "conversation" ? (
+          <ConversationPane
+            comments={detail.comments}
+            reviews={detail.reviews}
+          />
+        ) : tab === "commits" ? (
+          <CommitsPane
+            commits={detail.commits}
+            prUrl={detail.url}
+            repoPath={repoPath}
+            cwd={cwd}
+          />
+        ) : tab === "checks" ? (
+          <ChecksPane checks={detail.checks} />
+        ) : (
+          <PullRequestFilesPane
+            active={tab === "files"}
+            repoPath={repoPath}
+            number={detail.number}
+            cwd={cwd}
+            reloadKey={diffReloadKey}
+          />
+        )}
+      </div>
+    </>
+  );
 
   return (
     <>
@@ -451,7 +541,7 @@ function DetailBody({
               <>
                 <span className="opacity-50">·</span>
                 {detail.labels.map((label) => (
-                  <PrDetailLabelChip key={label.name} label={label} />
+                  <GitHubLabelChip key={label.name} label={label} />
                 ))}
               </>
             ) : null}
@@ -495,89 +585,31 @@ function DetailBody({
         </div>
       </header>
 
-      {body.trim().length > 0 ? (
-        <ResizableBody>
-          <Markdown content={body} onTaskToggle={onTaskToggle} />
-          {bodySaveError ? (
-            <p className="mt-2 text-[10.5px] text-danger">
-              {dt(t, "dialogs.pullRequestDetail.checkboxSaveFailed")}{" "}
-              {bodySaveError}
-            </p>
-          ) : null}
-        </ResizableBody>
-      ) : null}
-
-      <nav className="flex shrink-0 border-b border-border">
-        <DetailTabButton
-          icon={<MessagesSquare size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabConversation")}
-          badge={conversationCount > 0 ? conversationCount : null}
-          active={tab === "conversation"}
-          onClick={() => onTab("conversation")}
-        />
-        <DetailTabButton
-          icon={<GitCommit size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabCommits")}
-          badge={commitCount > 0 ? commitCount : null}
-          active={tab === "commits"}
-          onClick={() => onTab("commits")}
-        />
-        <DetailTabButton
-          icon={<CheckCircle2 size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabChecks")}
-          badge={
-            allChecksPassed ? (
-              <Check size={11} strokeWidth={3} className="text-emerald-300" />
-            ) : allChecksFailed ? (
-              <X size={11} strokeWidth={3} className="text-rose-300" />
-            ) : checksPartial ? (
-              `${checkCounts.passed}/${totalChecks}`
-            ) : null
-          }
-          badgeTone={
-            allChecksPassed
-              ? "success"
-              : allChecksFailed
-                ? "danger"
-                : "default"
-          }
-          active={tab === "checks"}
-          onClick={() => onTab("checks")}
-        />
-        <DetailTabButton
-          icon={<GitPullRequest size={13} />}
-          label={dt(t, "dialogs.pullRequestDetail.tabFiles")}
-          badge={fileCount > 0 ? fileCount : null}
-          active={tab === "files"}
-          onClick={() => onTab("files")}
-        />
-      </nav>
-
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === "conversation" ? (
-          <ConversationPane
-            comments={detail.comments}
-            reviews={detail.reviews}
-          />
-        ) : tab === "commits" ? (
-          <CommitsPane
-            commits={detail.commits}
-            prUrl={detail.url}
-            repoPath={repoPath}
-            cwd={cwd}
-          />
-        ) : tab === "checks" ? (
-          <ChecksPane checks={detail.checks} />
-        ) : (
-          <PullRequestFilesPane
-            active={tab === "files"}
-            repoPath={repoPath}
-            number={detail.number}
-            cwd={cwd}
-            reloadKey={diffReloadKey}
-          />
-        )}
-      </div>
+      {hasBody ? (
+        <PanelGroup
+          direction="vertical"
+          autoSaveId="acorn:pr-detail-body-main"
+          className="min-h-0 flex-1"
+        >
+          <Panel id="pr-body" order={1} defaultSize={22} minSize={10} maxSize={60}>
+            <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-3">
+              <Markdown content={body} onTaskToggle={onTaskToggle} />
+              {bodySaveError ? (
+                <p className="mt-2 text-[10.5px] text-danger">
+                  {dt(t, "dialogs.pullRequestDetail.checkboxSaveFailed")}{" "}
+                  {bodySaveError}
+                </p>
+              ) : null}
+            </div>
+          </Panel>
+          <ResizeHandle direction="vertical" gap />
+          <Panel id="pr-main" order={2} defaultSize={78} minSize={30}>
+            <div className="flex h-full min-h-0 flex-col">{mainSection}</div>
+          </Panel>
+        </PanelGroup>
+      ) : (
+        mainSection
+      )}
     </>
   );
 }
@@ -694,28 +726,37 @@ function DetailSkeleton({
   const t = useTranslation();
   return (
     <>
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+      <header
+        className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3"
+        data-pr-detail-skeleton="header"
+      >
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="h-3.5 w-3.5 shrink-0 animate-pulse rounded-full bg-fg-muted/20" />
+          <div className="flex min-w-0 items-center gap-2">
+            <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/20" />
             <span className="font-mono text-xs text-fg-muted">#{number}</span>
-            <span className="h-3.5 w-[55%] animate-pulse rounded bg-fg-muted/15" />
+            <SkeletonBlock className="h-3.5 w-[55%] min-w-0 bg-fg-muted/15" />
           </div>
-          <div className="mt-2 flex items-center gap-1.5">
-            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <SkeletonCircle className="h-4 w-4 shrink-0 bg-fg-muted/15" />
+            <SkeletonBlock className="h-2.5 w-16 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-40 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-40 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
-            <span className="h-2.5 w-8 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-8 shrink-0" />
+            <SkeletonBlock className="h-2.5 w-8 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-14 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-2.5 w-14 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-4 w-11 shrink-0 rounded-full bg-fg-muted/10" />
+            <SkeletonBlock className="h-4 w-14 shrink-0 rounded-full bg-fg-muted/10" />
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <SkeletonBlock className="h-6 w-14 rounded-md bg-fg-muted/10" />
+          <SkeletonBlock className="h-6 w-12 rounded-md bg-fg-muted/10" />
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
           <button
             type="button"
             aria-label={dt(t, "dialogs.common.close")}
@@ -730,14 +771,26 @@ function DetailSkeleton({
       <div
         className="shrink-0 overflow-hidden border-b border-border bg-bg-sidebar/40 px-4 py-3"
         style={{ height: BODY_HEIGHT_DEFAULT }}
+        data-pr-detail-skeleton="body"
       >
-        <div className="flex flex-col gap-2">
-          <span className="h-3 w-[85%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[72%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[40%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="mt-2 h-3 w-[60%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[78%] animate-pulse rounded bg-fg-muted/10" />
-          <span className="h-3 w-[35%] animate-pulse rounded bg-fg-muted/10" />
+        <div className="flex h-full flex-col gap-2">
+          <div className="mb-1 flex items-center gap-2">
+            <SkeletonBlock className="h-3 w-3 rounded-sm bg-fg-muted/15" />
+            <SkeletonBlock className="h-3 w-32 bg-fg-muted/15" />
+          </div>
+          <SkeletonText
+            className="gap-2"
+            lines={4}
+            widths={["86%", "74%", "54%", "42%"]}
+          />
+          <div className="mt-1 grid gap-1.5">
+            {[0, 1].map((item) => (
+              <div key={item} className="flex items-center gap-2">
+                <SkeletonBlock className="h-3 w-3 rounded-sm bg-fg-muted/15" />
+                <SkeletonBlock className="h-3 w-[42%]" />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
       <div
@@ -745,119 +798,78 @@ function DetailSkeleton({
         className="h-1.5 shrink-0 border-b border-border bg-bg-sidebar/40"
       />
 
-      <nav className="flex shrink-0 border-b border-border">
+      <nav
+        className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1"
+        data-pr-detail-skeleton="tabs"
+      >
         {[
-          { icon: <MessagesSquare size={13} />, w: "w-20" },
-          { icon: <GitCommit size={13} />, w: "w-14" },
-          { icon: <CheckCircle2 size={13} />, w: "w-12" },
-          { icon: <GitPullRequest size={13} />, w: "w-10" },
+          { icon: <MessagesSquare size={13} />, w: "w-20", active: true },
+          { icon: <GitCommit size={13} />, w: "w-14", active: false },
+          { icon: <CheckCircle2 size={13} />, w: "w-12", active: false },
+          { icon: <GitPullRequest size={13} />, w: "w-10", active: false },
         ].map((tab, i) => (
           <div
             key={i}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs text-fg-muted/60"
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-xs",
+              tab.active
+                ? "acorn-tab-active-bg text-fg"
+                : "text-fg-muted/60",
+            )}
           >
             {tab.icon}
-            <span
-              className={cn("h-2.5 animate-pulse rounded bg-fg-muted/15", tab.w)}
+            <SkeletonBlock
+              className={cn(
+                "h-2.5",
+                tab.active ? "bg-fg-muted/20" : "bg-fg-muted/15",
+                tab.w,
+              )}
             />
+            {i === 0 ? (
+              <SkeletonBlock className="h-4 w-5 rounded-full bg-fg-muted/15" />
+            ) : null}
           </div>
         ))}
       </nav>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
-          <div className="flex items-center gap-1 px-1.5 py-0.5">
-            <span className="h-3 w-3 shrink-0 animate-pulse rounded-sm bg-fg-muted/15" />
-            <span className="h-2.5 w-16 animate-pulse rounded bg-fg-muted/15" />
+          <div className="flex items-center gap-1 rounded px-1.5 py-0.5">
+            <SkeletonBlock className="h-3 w-3 shrink-0 rounded-sm bg-fg-muted/15" />
+            <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
           </div>
         </div>
         <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
           {[
-            { titleW: "w-24", bodyWidths: ["95%", "82%", "60%"] },
-            { titleW: "w-32", bodyWidths: ["70%", "45%"] },
-            { titleW: "w-20", bodyWidths: ["88%", "76%", "52%", "30%"] },
+            { titleW: "w-24", metaW: "w-14", bodyWidths: ["95%", "82%", "60%"] },
+            { titleW: "w-32", metaW: "w-20", bodyWidths: ["70%", "45%"] },
+            {
+              titleW: "w-20",
+              metaW: "w-16",
+              bodyWidths: ["88%", "76%", "52%", "30%"],
+            },
           ].map((row, i) => (
             <li
               key={i}
-              className="rounded border border-border bg-bg-sidebar/40 p-3"
+              className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3"
             >
               <div className="mb-2 flex items-center gap-2">
-                <span className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
-                <span
-                  className={cn(
-                    "h-3 animate-pulse rounded bg-fg-muted/15",
-                    row.titleW,
-                  )}
+                <SkeletonCircle className="h-7 w-7 shrink-0 bg-fg-muted/15" />
+                <SkeletonBlock
+                  className={cn("h-3 bg-fg-muted/15", row.titleW)}
                 />
-                <span className="h-2.5 w-14 animate-pulse rounded bg-fg-muted/10" />
-                <span className="h-2.5 w-20 animate-pulse rounded bg-fg-muted/10" />
+                <SkeletonBlock className={cn("h-4 rounded-full", row.metaW)} />
+                <SkeletonBlock className="h-2.5 w-20" />
               </div>
-              <div className="flex flex-col gap-1.5">
-                {row.bodyWidths.map((w, j) => (
-                  <span
-                    key={j}
-                    className="h-3 animate-pulse rounded bg-fg-muted/10"
-                    style={{ width: w }}
-                  />
-                ))}
-              </div>
+              <SkeletonText
+                lines={row.bodyWidths.length}
+                widths={row.bodyWidths}
+              />
             </li>
           ))}
         </ul>
       </div>
     </>
-  );
-}
-
-type BadgeTone = "default" | "success" | "danger";
-
-interface DetailTabButtonProps {
-  icon: React.ReactNode;
-  label: string;
-  badge?: React.ReactNode;
-  badgeTone?: BadgeTone;
-  active: boolean;
-  onClick: () => void;
-}
-
-function DetailTabButton({
-  icon,
-  label,
-  badge,
-  badgeTone = "default",
-  active,
-  onClick,
-}: DetailTabButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition",
-        active
-          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
-          : "text-fg-muted hover:text-fg",
-      )}
-    >
-      {icon}
-      {label}
-      {badge != null && badge !== false ? (
-        <span
-          className={cn(
-            "flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-medium tabular-nums",
-            badgeTone === "danger"
-              ? "bg-rose-500/20 text-rose-300"
-              : badgeTone === "success"
-                ? "bg-emerald-500/20 text-emerald-300"
-                : active
-                  ? "bg-accent/20 text-fg"
-                  : "bg-fg-muted/15 text-fg-muted",
-          )}
-        >
-          {badge}
-        </span>
-      ) : null}
-    </button>
   );
 }
 
@@ -933,108 +945,7 @@ function MergeActionButton({
   );
 }
 
-const BODY_HEIGHT_STORAGE_KEY = "acorn:pr-detail-body-height";
 const BODY_HEIGHT_DEFAULT = 192;
-const BODY_HEIGHT_MIN = 64;
-const BODY_HEIGHT_MAX = 600;
-
-function readStoredBodyHeight(): number {
-  if (typeof window === "undefined") return BODY_HEIGHT_DEFAULT;
-  try {
-    const raw = window.localStorage.getItem(BODY_HEIGHT_STORAGE_KEY);
-    if (!raw) return BODY_HEIGHT_DEFAULT;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return BODY_HEIGHT_DEFAULT;
-    return Math.min(BODY_HEIGHT_MAX, Math.max(BODY_HEIGHT_MIN, n));
-  } catch {
-    return BODY_HEIGHT_DEFAULT;
-  }
-}
-
-function ResizableBody({ children }: { children: React.ReactNode }) {
-  const t = useTranslation();
-  const [height, setHeight] = useState<number>(() => readStoredBodyHeight());
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(BODY_HEIGHT_STORAGE_KEY, String(height));
-    } catch {
-      // ignore — non-persistent height is fine
-    }
-  }, [height]);
-
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      dragRef.current = { startY: e.clientY, startH: height };
-      e.currentTarget.setPointerCapture(e.pointerId);
-    },
-    [height],
-  );
-
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const next = Math.min(
-      BODY_HEIGHT_MAX,
-      Math.max(BODY_HEIGHT_MIN, drag.startH + (e.clientY - drag.startY)),
-    );
-    setHeight(next);
-  }, []);
-
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    dragRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-  }, []);
-
-  return (
-    <>
-      <div
-        className="acorn-selectable shrink-0 overflow-y-auto border-b border-border bg-bg-sidebar/40 px-4 py-3"
-        style={{ height }}
-      >
-        {children}
-      </div>
-      <Tooltip
-        label={dt(t, "dialogs.pullRequestDetail.resizeHint")}
-        side="top"
-        className="flex w-full shrink-0"
-      >
-        <span
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label={dt(t, "dialogs.pullRequestDetail.resizePrBody")}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onDoubleClick={() => setHeight(BODY_HEIGHT_DEFAULT)}
-          className="group relative flex h-1.5 w-full shrink-0 cursor-row-resize items-center justify-center border-b border-border bg-bg-sidebar/40 transition hover:bg-accent/30"
-        >
-          <span className="h-0.5 w-8 rounded-full bg-fg-muted/0 transition group-hover:bg-fg-muted/40" />
-        </span>
-      </Tooltip>
-    </>
-  );
-}
-
-function PrDetailLabelChip({ label }: { label: PullRequestLabel }) {
-  const hex = label.color.replace(/^#/, "");
-  return (
-    <span
-      className="rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-      style={{
-        backgroundColor: `#${hex}26`,
-        color: `#${hex}`,
-      }}
-    >
-      {label.name}
-    </span>
-  );
-}
 
 function PrStateGlyph({
   state,
@@ -1175,7 +1086,7 @@ function SortToggle({
 function CommentBlock({ comment }: { comment: PullRequestComment }) {
   const t = useTranslation();
   return (
-    <li className="rounded border border-border bg-bg-sidebar/40 p-3">
+    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={comment.author}
@@ -1206,7 +1117,7 @@ function CommentBlock({ comment }: { comment: PullRequestComment }) {
 function ReviewBlock({ review }: { review: PullRequestReview }) {
   const t = useTranslation();
   return (
-    <li className="rounded border border-border bg-bg-sidebar/40 p-3">
+    <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
         <AuthorTag
           login={review.author}
@@ -1235,14 +1146,12 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
 function ReviewStateBadge({ state }: { state: string }) {
   const t = useTranslation();
   const upper = state.toUpperCase();
-  const tone =
+  const tone: StatusTone =
     upper === "APPROVED"
-      ? "bg-emerald-500/15 text-emerald-400"
+      ? "success"
       : upper === "CHANGES_REQUESTED"
-        ? "bg-rose-500/15 text-rose-400"
-        : upper === "DISMISSED"
-          ? "bg-fg-muted/15 text-fg-muted line-through"
-          : "bg-fg-muted/15 text-fg-muted";
+        ? "danger"
+        : "neutral";
   const label =
     upper === "APPROVED"
       ? dt(t, "dialogs.pullRequestDetail.reviewApproved")
@@ -1252,14 +1161,16 @@ function ReviewStateBadge({ state }: { state: string }) {
           ? dt(t, "dialogs.pullRequestDetail.reviewDismissed")
           : upper.replace("_", " ").toLowerCase();
   return (
-    <span
+    <StatusBadge
+      tone={tone}
+      size="xs"
       className={cn(
-        "rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
-        tone,
+        "uppercase tracking-wide",
+        upper === "DISMISSED" && "line-through",
       )}
     >
       {label}
-    </span>
+    </StatusBadge>
   );
 }
 
@@ -1319,8 +1230,8 @@ function CommitsPane({
       className="h-full min-h-0"
     >
       <Panel id="list" order={1} defaultSize={28} minSize={18} maxSize={50}>
-        <aside className="flex h-full flex-col overflow-y-auto border-r border-border text-xs">
-          <ul className="flex flex-col">
+        <aside className="flex h-full flex-col overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar text-xs">
+          <ListBox layout="flex" text="none">
             {orderedCommits.map((c) => (
               <CommitListItem
                 key={c.oid}
@@ -1330,10 +1241,10 @@ function CommitsPane({
                 onSelect={() => setSelectedOid(c.oid)}
               />
             ))}
-          </ul>
+          </ListBox>
         </aside>
       </Panel>
-      <ResizeHandle thin />
+      <ResizeHandle gap />
       <Panel id="detail" order={2} defaultSize={72} minSize={40}>
         <div className="flex h-full min-w-0 flex-col">
           {selected ? (
@@ -1393,20 +1304,17 @@ function CommitListItem({
 
   return (
     <li>
-      <button
-        type="button"
+      <ListRowButton
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        className={cn(
-          "block w-full border-b border-border/40 px-3 py-2 text-left transition",
-          selected
-            ? "bg-accent/15 text-fg"
-            : "text-fg-muted hover:bg-bg-elevated hover:text-fg",
-        )}
+        selected={selected}
+        selectedClassName="bg-bg-elevated text-fg"
+        surface="subtle"
+        className={cn("block", !selected && "text-fg-muted hover:text-fg")}
       >
         <Tooltip
           label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
@@ -1432,7 +1340,7 @@ function CommitListItem({
             {formatRelativeTime(commit.committed_date, t)}
           </span>
         </div>
-      </button>
+      </ListRowButton>
       <ContextMenu
         open={menu !== null}
         x={menu?.x ?? 0}
@@ -1506,93 +1414,103 @@ function CommitDetailView({
     </div>
   );
 
-  const bodySection = (
-    <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-2">
+  const summaryBody = (
+    <div className="acorn-selectable border-t border-border/60 px-4 py-3">
       <Markdown content={commit.message_body} />
     </div>
   );
 
-  return (
-    <>
-      <header className="flex shrink-0 items-start gap-2 border-b border-border bg-bg-sidebar/40 px-4 py-2.5">
-        <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
-        <div className="min-w-0 flex-1">
-          <Tooltip
-            label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
-            side="bottom"
-            multiline
-            className="min-w-0 w-full"
-          >
-            <div className="w-full truncate text-[13px] font-semibold tracking-tight text-fg">
-              {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
-            </div>
-          </Tooltip>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
-            {primaryAuthor ? (
-              <AuthorTag
-                login={primaryAuthor.login}
-                fallbackName={primaryAuthor.name || dt(t, "dialogs.pullRequestDetail.unknown")}
-                size={16}
-                nameClass="text-[11px] text-fg-muted"
-              />
-            ) : null}
-            {commit.authors.length > 1 ? (
-              <span className="opacity-70">
-                +{commit.authors.length - 1}
-              </span>
-            ) : null}
-            <span className="opacity-50">·</span>
-            <span className="font-mono opacity-70">
-              {formatTimestamp(commit.committed_date)}
-            </span>
+  const commitHeader = (
+    <header className="flex shrink-0 items-start gap-2 px-4 py-2.5">
+      <GitCommit size={14} className="mt-[3px] shrink-0 text-fg-muted" />
+      <div className="min-w-0 flex-1">
+        <Tooltip
+          label={commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
+          side="bottom"
+          multiline
+          className="min-w-0 w-full"
+        >
+          <div className="w-full truncate text-[13px] font-semibold tracking-tight text-fg">
+            {commit.message_headline || dt(t, "dialogs.pullRequestDetail.noMessage")}
           </div>
+        </Tooltip>
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
+          {primaryAuthor ? (
+            <AuthorTag
+              login={primaryAuthor.login}
+              fallbackName={primaryAuthor.name || dt(t, "dialogs.pullRequestDetail.unknown")}
+              size={16}
+              nameClass="text-[11px] text-fg-muted"
+            />
+          ) : null}
+          {commit.authors.length > 1 ? (
+            <span className="opacity-70">+{commit.authors.length - 1}</span>
+          ) : null}
+          <span className="opacity-50">·</span>
+          <span className="font-mono opacity-70">
+            {formatTimestamp(commit.committed_date)}
+          </span>
         </div>
-        <Tooltip label={dt(t, "dialogs.pullRequestDetail.copySha")} side="bottom">
+      </div>
+      <Tooltip label={dt(t, "dialogs.pullRequestDetail.copySha")} side="bottom">
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(commit.oid);
+          }}
+          className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+        >
+          {shortOid}
+        </button>
+      </Tooltip>
+      {commitUrl ? (
+        <Tooltip
+          label={dt(t, "dialogs.pullRequestDetail.openCommitOnGithub")}
+          side="bottom"
+        >
           <button
             type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(commit.oid);
-            }}
-            className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            onClick={() => void openUrl(commitUrl)}
+            className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
           >
-            {shortOid}
+            <ExternalLink size={12} />
           </button>
         </Tooltip>
-        {commitUrl ? (
-          <Tooltip
-            label={dt(t, "dialogs.pullRequestDetail.openCommitOnGithub")}
-            side="bottom"
-          >
-            <button
-              type="button"
-              onClick={() => void openUrl(commitUrl)}
-              className="shrink-0 rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-            >
-              <ExternalLink size={12} />
-            </button>
-          </Tooltip>
-        ) : null}
-      </header>
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {hasBody ? (
-          <PanelGroup
-            direction="vertical"
-            autoSaveId="acorn:pr-commit-body-diff"
-            className="h-full"
-          >
-            <Panel id="body" order={1} defaultSize={20} minSize={8} maxSize={70}>
-              {bodySection}
-            </Panel>
-            <ResizeHandle direction="vertical" thin />
-            <Panel id="diff" order={2} defaultSize={80} minSize={20}>
-              {diffSection}
-            </Panel>
-          </PanelGroup>
-        ) : (
-          diffSection
-        )}
-      </div>
-    </>
+      ) : null}
+    </header>
+  );
+
+  // Header + summary live in one card; the diff is a separate card below.
+  const infoCard = (
+    <div className="flex h-full flex-col overflow-y-auto rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40">
+      {commitHeader}
+      {hasBody ? summaryBody : null}
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      {hasBody ? (
+        <PanelGroup
+          direction="vertical"
+          autoSaveId="acorn:pr-commit-body-diff"
+          className="h-full"
+        >
+          <Panel id="info" order={1} defaultSize={24} minSize={12} maxSize={70}>
+            {infoCard}
+          </Panel>
+          <ResizeHandle direction="vertical" gap />
+          <Panel id="diff" order={2} defaultSize={76} minSize={20}>
+            {diffSection}
+          </Panel>
+        </PanelGroup>
+      ) : (
+        <div className="flex h-full min-h-0 flex-col gap-1.5">
+          <div className="shrink-0">{infoCard}</div>
+          <div className="min-h-0 flex-1">{diffSection}</div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1641,17 +1559,15 @@ function ChecksPane({ checks }: { checks: PullRequestCheck[] }) {
   );
   if (checks.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center text-xs text-fg-muted">
-        {dt(t, "dialogs.pullRequestDetail.noChecks")}
-      </div>
+      <ListEmptyState>{dt(t, "dialogs.pullRequestDetail.noChecks")}</ListEmptyState>
     );
   }
   return (
-    <ul className="flex h-full flex-col overflow-y-auto text-xs">
+    <ListBox layout="flex" className="h-full overflow-y-auto">
       {checks.map((c, i) => (
         <CheckRow key={`${c.name}-${i}`} check={c} nowUnix={nowUnix} />
       ))}
-    </ul>
+    </ListBox>
   );
 }
 
@@ -1665,7 +1581,7 @@ function CheckRow({
   const t = useTranslation();
   const duration = formatCheckDuration(check, t, nowUnix);
   return (
-    <li className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
+    <ListRow className="flex items-center gap-2">
       <CheckIcon status={check.status} conclusion={check.conclusion} />
       <span className="min-w-0 flex-1 truncate text-fg">
         {check.workflow_name ? (
@@ -1692,7 +1608,7 @@ function CheckRow({
           </button>
         </Tooltip>
       ) : null}
-    </li>
+    </ListRow>
   );
 }
 
@@ -1731,8 +1647,9 @@ function CheckStatusLabel({
   conclusion: string | null;
 }) {
   const t = useTranslation();
+  const completed = status.toUpperCase() === "COMPLETED";
   const raw =
-    status.toUpperCase() === "COMPLETED"
+    completed
       ? (conclusion ?? "completed")
       : status;
   const normalized = raw.toUpperCase();
@@ -1755,8 +1672,29 @@ function CheckStatusLabel({
                     ? dt(t, "dialogs.pullRequestDetail.checkCompleted")
                     : raw.toLowerCase().replace(/_/g, " ");
   return (
-    <span className="shrink-0 font-mono text-[10px] text-fg-muted">{text}</span>
+    <StatusBadge
+      tone={checkStatusTone(normalized, completed)}
+      size="xs"
+      pulse={!completed}
+      className="font-mono"
+    >
+      {text}
+    </StatusBadge>
   );
+}
+
+function checkStatusTone(normalized: string, completed: boolean): StatusTone {
+  if (!completed) return "neutral";
+  switch (normalized) {
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+    case "TIMED_OUT":
+    case "ACTION_REQUIRED":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 function formatCheckDuration(

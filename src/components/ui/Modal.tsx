@@ -34,7 +34,7 @@ const BACKDROP_DIALOG = "flex items-start justify-center px-4 pt-24";
 const BACKDROP_PANEL = "flex flex-col px-4 py-6";
 
 const CONTENT_DIALOG =
-  "w-full overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-2xl";
+  "w-full overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-2xl";
 const CONTENT_PANEL =
   "mx-auto flex h-full w-full flex-col overflow-hidden rounded-lg border border-border bg-bg shadow-2xl";
 
@@ -77,7 +77,7 @@ export function Modal({
       aria-labelledby={ariaLabelledBy}
       aria-label={ariaLabel}
       className={cn(
-        "fixed inset-0 z-50 bg-black/55",
+        "fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px]",
         isDialog ? BACKDROP_DIALOG : BACKDROP_PANEL,
       )}
       onClick={(e) => {

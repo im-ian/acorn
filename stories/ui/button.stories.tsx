@@ -10,134 +10,291 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  Button,
+  IconButton,
+  buttonClassName,
+  type ButtonSize,
+  type ButtonSurface,
+  type ButtonVariant,
+  type IconButtonSize,
+  type IconButtonVariant,
+} from "../../src/components/ui/Button";
 import { cn } from "../../src/lib/cn";
 
-type ButtonTone = "primary" | "secondary" | "ghost" | "danger";
-type ButtonSize = "sm" | "md" | "icon";
+const buttonVariants = [
+  "ghost",
+  "neutral",
+  "outline",
+  "primary",
+  "accentSoft",
+  "dangerSoft",
+  "danger",
+  "dangerGhost",
+] satisfies ButtonVariant[];
 
-interface ButtonExampleProps {
-  tone?: ButtonTone;
-  size?: ButtonSize;
-  disabled?: boolean;
-  children?: React.ReactNode;
-  icon?: React.ReactNode;
-}
+const buttonSizes = ["xs", "sm", "md"] satisfies ButtonSize[];
+const buttonSurfaces = ["panel", "dialog"] satisfies ButtonSurface[];
 
-const toneClass: Record<ButtonTone, string> = {
-  primary:
-    "bg-accent px-3 py-1.5 font-medium text-bg hover:opacity-90 focus-visible:ring-accent/60",
-  secondary:
-    "border border-border bg-bg-elevated px-3 py-1.5 text-fg hover:bg-bg-sidebar focus-visible:ring-accent/50",
-  ghost:
-    "px-3 py-1.5 text-fg-muted hover:bg-bg-sidebar hover:text-fg focus-visible:ring-accent/50",
-  danger:
-    "bg-danger/15 px-3 py-1.5 font-medium text-danger hover:bg-danger/25 focus-visible:ring-danger/50",
-};
+const iconButtonVariants = [
+  "ghost",
+  "neutral",
+  "outline",
+  "primary",
+  "dangerGhost",
+  "dangerSoft",
+] satisfies IconButtonVariant[];
 
-const sizeClass: Record<ButtonSize, string> = {
-  sm: "h-7 rounded-md text-xs",
-  md: "h-8 rounded-md text-sm",
-  icon: "size-7 rounded",
-};
-
-function ButtonExample({
-  tone = "secondary",
-  size = "sm",
-  disabled = false,
-  children,
-  icon,
-}: ButtonExampleProps) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 transition focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50",
-        toneClass[tone],
-        sizeClass[size],
-      )}
-    >
-      {icon}
-      {size === "icon" ? null : children}
-    </button>
-  );
-}
+const iconButtonSizes = ["xs", "sm", "md", "lg"] satisfies IconButtonSize[];
 
 const meta = {
   title: "UI/Button",
+  component: Button,
   parameters: {
     layout: "centered",
   },
+  argTypes: {
+    variant: {
+      control: "select",
+      options: buttonVariants,
+    },
+    size: {
+      control: "select",
+      options: buttonSizes,
+    },
+    surface: {
+      control: "select",
+      options: buttonSurfaces,
+    },
+    disabled: {
+      control: "boolean",
+    },
+  },
+  args: {
+    variant: "primary",
+    size: "sm",
+    surface: "panel",
+    disabled: false,
+    children: "Run",
+  },
   decorators: [
     (Story) => (
-      <div className="w-[520px] rounded-lg border border-border bg-bg-elevated p-5 text-fg shadow-xl">
+      <div className="w-[760px] rounded-lg border border-border bg-bg-elevated p-5 text-fg shadow-xl">
         <Story />
       </div>
     ),
   ],
-} satisfies Meta;
+} satisfies Meta<typeof Button>;
 
 export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-export const Variants: Story = {
+export const Default: Story = {
+  render: (args) => (
+    <Button {...args}>
+      <Play size={13} />
+      {args.children}
+    </Button>
+  ),
+};
+
+export const ButtonVariants: Story = {
   render: () => (
-    <div className="flex flex-wrap items-center gap-3">
-      <ButtonExample tone="primary" icon={<Play size={13} />}>
-        Run
-      </ButtonExample>
-      <ButtonExample tone="secondary" icon={<Download size={13} />}>
-        Export
-      </ButtonExample>
-      <ButtonExample tone="ghost" icon={<ExternalLink size={13} />}>
-        Open
-      </ButtonExample>
-      <ButtonExample tone="danger" icon={<Trash2 size={13} />}>
-        Remove
-      </ButtonExample>
+    <div className="grid gap-5">
+      {buttonSurfaces.map((surface) => (
+        <SurfaceFrame key={surface} surface={surface}>
+          <div className="grid gap-3">
+            {buttonSizes.map((size) => (
+              <div
+                key={size}
+                className="grid grid-cols-[4rem_minmax(0,1fr)] items-center gap-3"
+              >
+                <div className="font-mono text-[11px] text-fg-muted">
+                  {size}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {buttonVariants.map((variant) => (
+                    <Button
+                      key={variant}
+                      variant={variant}
+                      size={size}
+                      surface={surface}
+                    >
+                      {buttonIcon(variant)}
+                      {variant}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </SurfaceFrame>
+      ))}
     </div>
   ),
 };
 
-export const IconButtons: Story = {
+export const IconButtonVariants: Story = {
   render: () => (
-    <div className="flex items-center gap-2">
-      <ButtonExample size="icon" tone="ghost" icon={<Settings size={14} />} />
-      <ButtonExample size="icon" tone="secondary" icon={<RefreshCw size={14} />} />
-      <ButtonExample size="icon" tone="secondary" icon={<Copy size={14} />} />
-      <ButtonExample size="icon" tone="danger" icon={<X size={14} />} />
+    <div className="grid gap-5">
+      {buttonSurfaces.map((surface) => (
+        <SurfaceFrame key={surface} surface={surface}>
+          <div className="grid gap-3">
+            {iconButtonSizes.map((size) => (
+              <div
+                key={size}
+                className="grid grid-cols-[4rem_minmax(0,1fr)] items-center gap-3"
+              >
+                <div className="font-mono text-[11px] text-fg-muted">
+                  {size}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {iconButtonVariants.map((variant) => (
+                    <IconButton
+                      key={variant}
+                      aria-label={`${variant} ${size}`}
+                      title={`${variant} ${size}`}
+                      variant={variant}
+                      size={size}
+                      surface={surface}
+                    >
+                      {iconButtonIcon(variant)}
+                    </IconButton>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </SurfaceFrame>
+      ))}
     </div>
   ),
 };
 
-export const States: Story = {
+export const DisabledStates: Story = {
   render: () => (
-    <div className="grid gap-3">
-      <div className="flex items-center gap-3">
-        <ButtonExample tone="primary" icon={<Check size={13} />}>
-          Ready
-        </ButtonExample>
-        <ButtonExample tone="primary" disabled icon={<Play size={13} />}>
-          Disabled
-        </ButtonExample>
-      </div>
-      <div className="flex items-center gap-3">
-        <ButtonExample tone="secondary" icon={<RefreshCw size={13} />}>
-          Refresh
-        </ButtonExample>
-        <ButtonExample tone="secondary" disabled icon={<RefreshCw size={13} />}>
-          Refreshing
-        </ButtonExample>
-      </div>
-      <div className="flex items-center gap-3">
-        <ButtonExample tone="danger" icon={<Trash2 size={13} />}>
-          Delete
-        </ButtonExample>
-        <ButtonExample tone="danger" disabled icon={<Trash2 size={13} />}>
-          Locked
-        </ButtonExample>
-      </div>
+    <div className="grid gap-5">
+      {buttonSurfaces.map((surface) => (
+        <SurfaceFrame key={surface} surface={surface}>
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {buttonVariants.map((variant) => (
+                <Button
+                  key={variant}
+                  disabled
+                  variant={variant}
+                  size="md"
+                  surface={surface}
+                >
+                  {buttonIcon(variant)}
+                  {variant}
+                </Button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {iconButtonVariants.map((variant) => (
+                <IconButton
+                  key={variant}
+                  disabled
+                  aria-label={`${variant} disabled`}
+                  title={`${variant} disabled`}
+                  variant={variant}
+                  size="md"
+                  surface={surface}
+                >
+                  {iconButtonIcon(variant)}
+                </IconButton>
+              ))}
+            </div>
+          </div>
+        </SurfaceFrame>
+      ))}
     </div>
   ),
 };
+
+export const LinkClassNameHelper: Story = {
+  render: () => (
+    <div className="grid gap-5">
+      {buttonSurfaces.map((surface) => (
+        <SurfaceFrame key={surface} surface={surface}>
+          <div className="flex flex-wrap items-center gap-2">
+            {buttonVariants.map((variant) => (
+              <a
+                key={variant}
+                href="#"
+                onClick={(event) => event.preventDefault()}
+                className={buttonClassName({
+                  variant,
+                  size: "sm",
+                  surface,
+                })}
+              >
+                <ExternalLink size={12} />
+                {variant}
+              </a>
+            ))}
+          </div>
+        </SurfaceFrame>
+      ))}
+    </div>
+  ),
+};
+
+function SurfaceFrame({
+  surface,
+  children,
+}: {
+  surface: ButtonSurface;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={cn(
+        "rounded-md border border-border p-3",
+        surface === "dialog" ? "bg-bg-elevated" : "bg-bg",
+      )}
+    >
+      <div className="mb-3 font-mono text-[11px] uppercase tracking-wide text-fg-muted">
+        {surface}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function buttonIcon(variant: ButtonVariant): ReactNode {
+  switch (variant) {
+    case "primary":
+    case "accentSoft":
+      return <Play size={12} />;
+    case "danger":
+    case "dangerSoft":
+    case "dangerGhost":
+      return <Trash2 size={12} />;
+    case "outline":
+      return <Download size={12} />;
+    case "neutral":
+      return <Copy size={12} />;
+    case "ghost":
+      return <ExternalLink size={12} />;
+  }
+}
+
+function iconButtonIcon(variant: IconButtonVariant): ReactNode {
+  switch (variant) {
+    case "primary":
+      return <Check size={14} />;
+    case "dangerSoft":
+    case "dangerGhost":
+      return <X size={14} />;
+    case "outline":
+      return <RefreshCw size={14} />;
+    case "neutral":
+      return <Copy size={14} />;
+    case "ghost":
+      return <Settings size={14} />;
+  }
+}

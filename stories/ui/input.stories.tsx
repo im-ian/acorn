@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Eye, FolderOpen, Search, X } from "lucide-react";
 import { Field } from "../../src/components/ui/Field";
+import { IconButton } from "../../src/components/ui/Button";
 import { IconInput } from "../../src/components/ui/IconInput";
 import { TextInput } from "../../src/components/ui/TextInput";
 
@@ -52,14 +53,14 @@ export const IconInputs: Story = {
             leading={<Search size={13} />}
             trailing={
               query ? (
-                <button
-                  type="button"
+                <IconButton
                   aria-label="Clear search"
                   onClick={() => setQuery("")}
-                  className="rounded p-0.5 text-fg-muted hover:bg-bg-sidebar hover:text-fg"
+                  size="xs"
+                  surface="dialog"
                 >
                   <X size={12} />
-                </button>
+                </IconButton>
               ) : null
             }
             value={query}

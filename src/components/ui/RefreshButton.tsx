@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, RefreshCw } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { Tooltip } from "../Tooltip";
+import { IconButton } from "./Button";
 
 interface RefreshButtonProps {
   onClick: () => void | Promise<void>;
@@ -62,15 +63,12 @@ export function RefreshButton({
 
   return (
     <Tooltip label={title} side="bottom">
-      <button
-        type="button"
+      <IconButton
         onClick={onClick}
         disabled={loading}
         aria-label={ariaLabel ?? title}
-        className={cn(
-          "relative inline-flex items-center justify-center rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-not-allowed disabled:opacity-60",
-          className,
-        )}
+        size="sm"
+        className={cn("relative", className)}
       >
         {/* Reserve space so the absolute icons don't collapse the button. */}
         <span
@@ -98,7 +96,7 @@ export function RefreshButton({
           )}
           style={{ transitionDuration: `${FADE_MS}ms` }}
         />
-      </button>
+      </IconButton>
     </Tooltip>
   );
 }

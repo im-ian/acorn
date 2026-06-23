@@ -13,12 +13,123 @@
   --color-danger: oklch(62% 0.22 25);
   --color-warning: oklch(78% 0.16 75);
 
+  /*
+   * Subtle contrast fills for borderless surfaces (neutral/ghost buttons,
+   * inputs). Derived from the foreground token so they invert automatically
+   * per theme — light alpha on dark themes, dark alpha on light themes — and
+   * need no per-theme definition (same trick as --acorn-canvas).
+   */
+  --color-fill: color-mix(in oklab, var(--color-fg) 6%, transparent);
+  --color-fill-hover: color-mix(in oklab, var(--color-fg) 12%, transparent);
+
   --font-sans: "Inter", "SF Pro Text", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
 }
 
 :root {
   --acorn-status-bar-height: 1.75rem;
+  /*
+   * Canvas is the darker gutter the pane cards float on. Derived from the
+   * active theme's darkest surface so it adapts per theme without each
+   * theme file having to define it — keeps the floating-card chrome
+   * theme-agnostic.
+   */
+  --acorn-canvas: color-mix(in oklab, var(--color-bg-sidebar) 82%, #000);
+  --acorn-pane-radius: 0.5rem;
+}
+
+.acorn-canvas {
+  background-color: var(--acorn-canvas);
+}
+
+/* Custom checkbox / radio: native appearance off, themed box with an
+   accent fill + checkmark (checkbox) or accent dot (radio). */
+.acorn-check,
+.acorn-radio {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 1px solid color-mix(in oklab, var(--color-fg-muted) 55%, transparent);
+  background: var(--color-bg);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.acorn-check {
+  border-radius: 0.3rem;
+}
+
+.acorn-radio {
+  border-radius: 9999px;
+}
+
+.acorn-check:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.acorn-radio:checked {
+  border-color: var(--color-accent);
+}
+
+.acorn-check:checked::after {
+  content: "";
+  width: 0.26rem;
+  height: 0.46rem;
+  margin-top: -0.1rem;
+  border: solid var(--color-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.acorn-radio::after {
+  content: "";
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  transform: scale(0);
+  transition: transform 120ms ease;
+}
+
+.acorn-radio:checked::after {
+  transform: scale(1);
+}
+
+.acorn-check:not(:disabled):hover,
+.acorn-radio:not(:disabled):hover {
+  border-color: color-mix(in oklab, var(--color-accent) 70%, transparent);
+}
+
+.acorn-check:disabled,
+.acorn-radio:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.acorn-check:focus-visible,
+.acorn-radio:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 50%, transparent);
+  outline-offset: 1px;
+}
+
+/* Active tab pill: a touch lighter than the elevated surface — mixes a
+   little white into the theme's elevated token so the active tab reads as
+   a brighter raised chip, while staying theme-adaptive. */
+.acorn-tab-active-bg {
+  background-color: color-mix(in oklab, var(--color-bg-elevated) 95%, #fff);
+}
+
+/* With a background image active, surfaces go translucent — the canvas
+   gutter must too, so the image shows through the gaps between cards. */
+:root[data-bg-app="on"] .acorn-canvas {
+  background-color: transparent;
 }
 
 .acorn-terminal .xterm-viewport {

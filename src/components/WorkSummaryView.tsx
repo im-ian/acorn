@@ -39,6 +39,7 @@ import {
 } from "../lib/workSummary";
 import type { WorkSummaryWorkspaceTab } from "../lib/workspaceTabs";
 import type { AgentTranscriptSummary } from "../lib/types";
+import { Notice } from "./ui/Notice";
 import { RefreshButton } from "./ui/RefreshButton";
 import {
   FileStatusChart,
@@ -385,17 +386,16 @@ export function WorkSummaryView({
       </header>
 
       <div
-        className="min-h-0 flex-1 overflow-auto"
+        className="min-h-0 flex-1 space-y-3 overflow-auto p-3"
         aria-busy={loading ? true : undefined}
       >
         {error ? (
-          <div className="m-4 flex items-start gap-2 rounded border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
+          <Notice tone="danger" icon={<AlertTriangle size={14} />}>
+            {error}
+          </Notice>
         ) : null}
 
-        <section className="grid grid-cols-2 border-b border-border md:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <MetricCell
             icon={<Files size={14} />}
             label={wt(t, "workSummary.metrics.files")}
@@ -456,8 +456,8 @@ export function WorkSummaryView({
           />
         </section>
 
-        <section className="grid gap-0 border-b border-border lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <div className="min-w-0 border-b border-border lg:border-b-0 lg:border-r">
+        <section className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <Card className="min-w-0">
             <SectionHeader
               title={wt(t, "workSummary.files.title")}
               detail={
@@ -475,12 +475,12 @@ export function WorkSummaryView({
             ) : summary.files.length === 0 ? (
               <EmptyLine>{wt(t, "workSummary.files.empty")}</EmptyLine>
             ) : (
-              <div className="divide-y divide-border">
+              <div className="space-y-0.5 p-1">
                 {summary.files.map((file) => (
                   <div
                     key={file.path}
                     className={cn(
-                      "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2 text-xs",
+                      "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-3 py-1.5 text-xs",
                       onOpenFile
                         ? "cursor-pointer hover:bg-bg-elevated focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent"
                         : null,
@@ -526,13 +526,13 @@ export function WorkSummaryView({
                 ))}
               </div>
             )}
-          </div>
+          </Card>
 
-          <aside className="min-w-0">
+          <Card as="aside" className="min-w-0">
             <SectionHeader title={wt(t, "workSummary.details.title")} />
-            <dl className="divide-y divide-border">
+            <dl className="space-y-2 px-4 py-3">
               {metadata.map((row) => (
-                <div key={row.label} className="px-4 py-2">
+                <div key={row.label}>
                   <dt className="text-[10px] uppercase text-fg-muted">
                     {row.label}
                   </dt>
@@ -542,58 +542,56 @@ export function WorkSummaryView({
                 </div>
               ))}
             </dl>
-          </aside>
+          </Card>
         </section>
 
-        <section>
-          <div className="grid gap-0 border-b border-border lg:grid-cols-2">
-            <div className="border-b border-border lg:border-b-0 lg:border-r">
-              <SectionHeader title={wt(t, "workSummary.conversation.title")} />
-              {conversationPending ? (
-                <ConversationSkeleton />
-              ) : chat ? (
-                <div className="grid grid-cols-2 gap-px bg-border">
-                  <ConversationStat
-                    label={wt(t, "workSummary.conversation.user")}
-                    value={chat.userMessages}
-                  />
-                  <ConversationStat
-                    label={wt(t, "workSummary.conversation.assistant")}
-                    value={chat.assistantMessages}
-                  />
-                  <ConversationStat
-                    label={wt(t, "workSummary.conversation.turns")}
-                    value={chat.turnCount}
-                  />
-                  <ConversationStat
-                    label={wt(t, "workSummary.conversation.runningTurns")}
-                    value={chat.runningTurns}
-                  />
-                </div>
-              ) : (
-                <EmptyLine>
-                  {wt(t, "workSummary.conversation.terminalHint")}
-                </EmptyLine>
-              )}
-            </div>
-            <div>
-              <SectionHeader title={wt(t, "workSummary.tokens.title")} />
-              {conversationPending ? (
-                <TokenUsageSkeleton />
-              ) : tokens && tokens.totalTokens > 0 ? (
-                <TokenUsageChart
-                  tokens={tokens}
-                  baseline={tab.tokenBaseline}
-                  t={t}
+        <section className="grid gap-3 lg:grid-cols-2">
+          <Card>
+            <SectionHeader title={wt(t, "workSummary.conversation.title")} />
+            {conversationPending ? (
+              <ConversationSkeleton />
+            ) : chat ? (
+              <div className="grid grid-cols-2 gap-2 p-3">
+                <ConversationStat
+                  label={wt(t, "workSummary.conversation.user")}
+                  value={chat.userMessages}
                 />
-              ) : (
-                <EmptyLine>{wt(t, "workSummary.tokens.empty")}</EmptyLine>
-              )}
-            </div>
-          </div>
+                <ConversationStat
+                  label={wt(t, "workSummary.conversation.assistant")}
+                  value={chat.assistantMessages}
+                />
+                <ConversationStat
+                  label={wt(t, "workSummary.conversation.turns")}
+                  value={chat.turnCount}
+                />
+                <ConversationStat
+                  label={wt(t, "workSummary.conversation.runningTurns")}
+                  value={chat.runningTurns}
+                />
+              </div>
+            ) : (
+              <EmptyLine>
+                {wt(t, "workSummary.conversation.terminalHint")}
+              </EmptyLine>
+            )}
+          </Card>
+          <Card>
+            <SectionHeader title={wt(t, "workSummary.tokens.title")} />
+            {conversationPending ? (
+              <TokenUsageSkeleton />
+            ) : tokens && tokens.totalTokens > 0 ? (
+              <TokenUsageChart
+                tokens={tokens}
+                baseline={tab.tokenBaseline}
+                t={t}
+              />
+            ) : (
+              <EmptyLine>{wt(t, "workSummary.tokens.empty")}</EmptyLine>
+            )}
+          </Card>
         </section>
 
-        <section>
+        <Card as="section">
           <SectionHeader title={wt(t, "workSummary.charts.title")} />
           {summaryPending ? (
             <ChartSkeleton />
@@ -606,9 +604,30 @@ export function WorkSummaryView({
           ) : (
             <EmptyLine>{wt(t, "workSummary.files.empty")}</EmptyLine>
           )}
-        </section>
+        </Card>
       </div>
     </div>
+  );
+}
+
+function Card({
+  children,
+  className,
+  as: Tag = "div",
+}: {
+  children: ReactNode;
+  className?: string;
+  as?: "div" | "section" | "aside";
+}) {
+  return (
+    <Tag
+      className={cn(
+        "overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/40",
+        className,
+      )}
+    >
+      {children}
+    </Tag>
   );
 }
 
@@ -622,7 +641,7 @@ function MetricCell({
   value: ReactNode;
 }) {
   return (
-    <div className="min-w-0 border-r border-border px-4 py-3 last:border-r-0">
+    <div className="min-w-0 rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/40 px-4 py-3">
       <div className="flex items-center gap-2 text-[11px] text-fg-muted">
         {icon}
         <span className="truncate">{label}</span>
@@ -661,7 +680,7 @@ function ConversationStat({
   value: number;
 }) {
   return (
-    <div className="bg-bg px-4 py-3">
+    <div className="rounded-md bg-bg-sidebar/40 px-3 py-2">
       <div className="text-[11px] text-fg-muted">{label}</div>
       <div className="mt-1 font-mono text-base tabular-nums">{value}</div>
     </div>

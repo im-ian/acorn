@@ -613,6 +613,35 @@ function App() {
   }, [appearance.uiScalePercent]);
 
   useEffect(() => {
+    // Cmd/Ctrl + wheel zooms the UI scale, mirroring the keyboard zoom
+    // hotkeys. Registered on window in the capture phase with passive:false
+    // so it runs before the terminal's own wheel handler — otherwise the
+    // pointer sitting over a pane (xterm) would scroll the terminal instead
+    // of zooming. A macOS trackpad pinch arrives as a ctrlKey wheel event,
+    // so this path covers pinch-to-zoom as well.
+    const WHEEL_STEP_THRESHOLD = 80;
+    let accum = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      e.preventDefault();
+      // Normalize line/page deltas to pixels so non-pixel wheels step sanely.
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+      accum += e.deltaY * unit;
+      while (Math.abs(accum) >= WHEEL_STEP_THRESHOLD) {
+        // Scroll up (deltaY < 0) zooms in, matching native zoom convention.
+        const direction = accum > 0 ? -1 : 1;
+        updateUiScalePercent(direction * UI_SCALE_PERCENT_STEP);
+        accum -= Math.sign(accum) * WHEEL_STEP_THRESHOLD;
+      }
+    };
+    window.addEventListener("wheel", onWheel, {
+      capture: true,
+      passive: false,
+    });
+    return () => window.removeEventListener("wheel", onWheel, true);
+  }, []);
+
+  useEffect(() => {
     // Order matters: `loadInitialStatus` arms the pane-wipe guard before the
     // first reconcile can run. If the backend reports sessions.json failed
     // to load (corrupt/IO error), the guard prevents the empty session list
@@ -1691,13 +1720,13 @@ function App() {
   useHotkeys(bindings);
 
   return (
-    <div className="acorn-app-shell relative flex h-screen w-screen flex-col bg-bg text-fg">
+    <div className="acorn-app-shell acorn-canvas relative flex h-screen w-screen flex-col text-fg">
       <div className="acorn-bg-app" aria-hidden="true" />
       <div className="relative z-10">
         <UpdateBanner />
       </div>
       <ToastHost />
-      <div className="relative z-10 flex min-h-0 flex-1">
+      <div className="relative z-10 flex min-h-0 flex-1 p-1.5">
         <PanelGroup direction="horizontal" autoSaveId="acorn:layout:root">
           <Panel
             ref={sidebarPanelRef}
@@ -1711,11 +1740,11 @@ function App() {
           >
             <Sidebar />
           </Panel>
-          <ResizeHandle thin />
+          <ResizeHandle gap />
           <Panel id="main" order={2} defaultSize={56} minSize={30}>
             <LayoutRenderer node={layout} />
           </Panel>
-          <ResizeHandle thin />
+          <ResizeHandle gap />
           <Panel
             ref={rightPanelRef}
             id="right"
