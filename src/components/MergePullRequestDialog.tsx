@@ -101,10 +101,40 @@ function formatCount(template: string, count: number): string {
   return template.replace("{count}", String(count));
 }
 
+function MergeDialogSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={label}
+      className="space-y-4 px-4 py-3 text-xs text-fg"
+    >
+      <div className="space-y-2">
+        <div className="h-3 w-24 animate-pulse rounded bg-bg-sidebar" />
+        <div className="grid grid-cols-3 gap-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-14 animate-pulse rounded-md border border-border bg-bg-sidebar/60"
+            />
+          ))}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <div className="h-3 w-28 animate-pulse rounded bg-bg-sidebar" />
+        <div className="h-8 animate-pulse rounded-md border border-border bg-bg-sidebar/60" />
+        <div className="h-28 animate-pulse rounded-md border border-border bg-bg-sidebar/60" />
+      </div>
+    </div>
+  );
+}
+
 interface MergePullRequestDialogProps {
   open: boolean;
   repoPath: string;
+  number?: number;
   detail: PullRequestDetail | null;
+  loading?: boolean;
+  loadError?: string | null;
   onClose: () => void;
   onMerged: () => void;
 }
@@ -112,7 +142,10 @@ interface MergePullRequestDialogProps {
 export function MergePullRequestDialog({
   open,
   repoPath,
+  number,
   detail,
+  loading = false,
+  loadError = null,
   onClose,
   onMerged,
 }: MergePullRequestDialogProps) {
@@ -251,6 +284,10 @@ export function MergePullRequestDialog({
   const providerLabel = aiCommitProviderLabel(settings);
   const busy = submitting || generating;
   const mergeBlocked = checksBlock.blocked && !adminMerge;
+  const dialogNumber = detail?.number ?? number;
+  const dialogTitle = `${dt(t, "dialogs.mergePullRequest.titlePrefix")}${
+    dialogNumber ? ` #${dialogNumber}` : ""
+  }`;
 
   function handleMethodSelect(nextMethod: MergeMethod) {
     setMethod(nextMethod);
@@ -271,10 +308,39 @@ export function MergePullRequestDialog({
   return (
     <>
       <Modal open={open} onClose={onClose} variant="dialog" size="lg">
-        {detail ? (
+        {!detail ? (
           <>
             <ModalHeader
-              title={`${dt(t, "dialogs.mergePullRequest.titlePrefix")} #${detail.number}`}
+              title={dialogTitle}
+              icon={<GitMerge size={16} className="text-emerald-400" />}
+              variant="dialog"
+              onClose={onClose}
+            />
+            {loadError && !loading ? (
+              <div className="space-y-3 px-4 py-3 text-xs text-fg">
+                <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+                  {loadError}
+                </p>
+              </div>
+            ) : (
+              <MergeDialogSkeleton
+                label={dt(t, "dialogs.mergePullRequest.loadingDetails")}
+              />
+            )}
+            <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              >
+                {dt(t, "dialogs.common.cancel")}
+              </button>
+            </footer>
+          </>
+        ) : (
+          <>
+            <ModalHeader
+              title={dialogTitle}
               icon={<GitMerge size={16} className="text-emerald-400" />}
               variant="dialog"
               onClose={() => {
@@ -463,7 +529,7 @@ export function MergePullRequestDialog({
             </button>
           </footer>
           </>
-        ) : null}
+        )}
       </Modal>
       <ProjectSettingsModal
         project={

@@ -86,6 +86,81 @@ test.describe("right panel: tab switching", () => {
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
 
+  test("double-clicking a commit opens the diff modal before the diff finishes loading", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_commits", [
+      {
+        sha: "abc1234567890abcdef1234567890abcdef1234",
+        short_sha: "abc1234",
+        author: "Test Author",
+        author_email: "test@example.com",
+        summary: "Large diff commit",
+        body: "",
+        timestamp: 1_700_000_000,
+        pushed: true,
+      },
+    ]);
+    await tauri.handle("commit_diff", (args) => {
+      const w = window as unknown as {
+        __commitDiffCalls?: unknown[];
+        __releaseCommitDiff?: boolean;
+      };
+      w.__commitDiffCalls = w.__commitDiffCalls ?? [];
+      w.__commitDiffCalls.push(args);
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (w.__releaseCommitDiff) {
+            resolve({
+              files: [
+                {
+                  old_path: "src/old.ts",
+                  new_path: "src/new.ts",
+                  patch: "@@ -1 +1 @@\n-old\n+new\n",
+                  is_image: false,
+                },
+              ],
+            });
+            return;
+          }
+          setTimeout(tick, 20);
+        };
+        tick();
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("Large diff commit")).toBeVisible();
+
+    await page.getByText("Large diff commit").dblclick();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __commitDiffCalls?: unknown[] })
+              .__commitDiffCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Large diff commit" }),
+    });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("loading diff...")).toBeVisible();
+
+    await page.evaluate(() => {
+      (window as unknown as { __releaseCommitDiff?: boolean })
+        .__releaseCommitDiff = true;
+    });
+    await expect(
+      dialog.getByRole("button", { name: /new\.ts\s+\+1\s+-1\s+src/ }),
+    ).toBeVisible();
+    await expect(dialog.getByLabel("loading diff...")).toHaveCount(0);
+  });
+
   test("double-clicking an issue opens its in-app detail modal", async ({
     page,
     tauri,
@@ -144,6 +219,213 @@ test.describe("right panel: tab switching", () => {
 
     await expect(page.getByText("Loaded issue body from gh.")).toBeVisible();
     await expect(page.getByText("First in-app issue comment.")).toBeVisible();
+  });
+
+  test("opening PR merge from the context menu shows a skeleton before details load", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 17,
+          title: "Slow merge PR",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/slow-merge",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/17",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("get_pull_request_detail", (args) => {
+      const w = window as unknown as {
+        __prDetailCalls?: unknown[];
+        __releasePrDetail?: boolean;
+      };
+      w.__prDetailCalls = w.__prDetailCalls ?? [];
+      w.__prDetailCalls.push(args);
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (w.__releasePrDetail) {
+            resolve({
+              kind: "ok",
+              account: "test-account",
+              detail: {
+                number: 17,
+                title: "Slow merge PR",
+                body: "Merge body",
+                state: "OPEN",
+                is_draft: false,
+                author: "im-ian",
+                head_branch: "feature/slow-merge",
+                base_branch: "main",
+                url: "https://github.com/im-ian/acorn/pull/17",
+                created_at: "2026-05-18T00:00:00Z",
+                updated_at: "2026-05-19T00:00:00Z",
+                merged_at: null,
+                additions: 12,
+                deletions: 3,
+                changed_files: 2,
+                mergeable: "MERGEABLE",
+                labels: [],
+                comments: [],
+                reviews: [],
+                checks: [],
+                commits: [],
+              },
+            });
+            return;
+          }
+          setTimeout(tick, 20);
+        };
+        tick();
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText("Slow merge PR")).toBeVisible();
+    await page.getByText("Slow merge PR").click({ button: "right" });
+    await page.getByRole("menuitem", { name: /^Merge…$/ }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __prDetailCalls?: unknown[] })
+              .__prDetailCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Merge #17" }),
+    });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByLabel("Loading pull request details..."),
+    ).toBeVisible();
+
+    await page.evaluate(() => {
+      (window as unknown as { __releasePrDetail?: boolean }).__releasePrDetail =
+        true;
+    });
+    await expect(dialog.locator("input")).toHaveValue("Slow merge PR");
+    await expect(
+      dialog.getByLabel("Loading pull request details..."),
+    ).toHaveCount(0);
+  });
+
+  test("opening PR close from the context menu shows a skeleton before details load", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 18,
+          title: "Slow close PR",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/slow-close",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/18",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("get_pull_request_detail", (args) => {
+      const w = window as unknown as {
+        __prDetailCalls?: unknown[];
+        __releasePrDetail?: boolean;
+      };
+      w.__prDetailCalls = w.__prDetailCalls ?? [];
+      w.__prDetailCalls.push(args);
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (w.__releasePrDetail) {
+            resolve({
+              kind: "ok",
+              account: "test-account",
+              detail: {
+                number: 18,
+                title: "Slow close PR",
+                body: "Close body",
+                state: "OPEN",
+                is_draft: false,
+                author: "im-ian",
+                head_branch: "feature/slow-close",
+                base_branch: "main",
+                url: "https://github.com/im-ian/acorn/pull/18",
+                created_at: "2026-05-18T00:00:00Z",
+                updated_at: "2026-05-19T00:00:00Z",
+                merged_at: null,
+                additions: 8,
+                deletions: 1,
+                changed_files: 1,
+                mergeable: "MERGEABLE",
+                labels: [],
+                comments: [],
+                reviews: [],
+                checks: [],
+                commits: [],
+              },
+            });
+            return;
+          }
+          setTimeout(tick, 20);
+        };
+        tick();
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await expect(page.getByText("Slow close PR")).toBeVisible();
+    await page.getByText("Slow close PR").click({ button: "right" });
+    await page.getByRole("menuitem", { name: /^Close…$/ }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __prDetailCalls?: unknown[] })
+              .__prDetailCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Close #18" }),
+    });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByLabel("Loading pull request details..."),
+    ).toBeVisible();
+
+    await page.evaluate(() => {
+      (window as unknown as { __releasePrDetail?: boolean }).__releasePrDetail =
+        true;
+    });
+    await expect(dialog.getByText("Slow close PR")).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "Close PR" }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByLabel("Loading pull request details..."),
+    ).toHaveCount(0);
   });
 
   test("hotkey $mod+Shift+S routes to Staged tab", async ({ page, tauri }) => {

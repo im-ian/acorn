@@ -2451,7 +2451,7 @@ type WhatsNewSource =
       kind: "current";
       version: string;
       body: string;
-      htmlUrl: string;
+      htmlUrl?: string;
       /**
        * True when the running version doesn't have its own public
        * release and we're showing the latest published one as a
@@ -2718,6 +2718,7 @@ function AboutSettings() {
   const [currentNotes, setCurrentNotes] = useState<ReleaseNotes | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
+  const notesRequestRef = useRef(0);
   const showToast = useToasts((s) => s.show);
 
   useEffect(() => {
@@ -2728,9 +2729,11 @@ function AboutSettings() {
 
   const openCurrentNotes = useCallback(async () => {
     if (!currentVersion) return;
+    const requestId = ++notesRequestRef.current;
     setNotesError(null);
     // Cache: skip the fetch if we already have notes for this version.
     if (currentNotes && currentNotes.version === currentVersion) {
+      setNotesLoading(false);
       setWhatsNewSource({
         kind: "current",
         version: currentNotes.version,
@@ -2740,9 +2743,16 @@ function AboutSettings() {
       });
       return;
     }
+    setWhatsNewSource({
+      kind: "current",
+      version: currentVersion,
+      body: "",
+      isFallback: false,
+    });
     setNotesLoading(true);
     try {
       const notes = await fetchReleaseNotes(currentVersion);
+      if (notesRequestRef.current !== requestId) return;
       if (notes !== null) {
         setCurrentNotes(notes);
         setWhatsNewSource({
@@ -2759,6 +2769,7 @@ function AboutSettings() {
       // latest published release so the user still sees something meaningful
       // instead of an empty placeholder.
       const latest = await fetchLatestReleaseNotes();
+      if (notesRequestRef.current !== requestId) return;
       setWhatsNewSource({
         kind: "current",
         version: latest.version,
@@ -2769,12 +2780,24 @@ function AboutSettings() {
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to fetch release notes";
-      setNotesError(message);
-      showToast(`${st(t, "settings.about.toasts.releaseNotesFailed")} ${message}`);
+      if (notesRequestRef.current === requestId) {
+        setNotesError(message);
+        showToast(
+          `${st(t, "settings.about.toasts.releaseNotesFailed")} ${message}`,
+        );
+      }
     } finally {
-      setNotesLoading(false);
+      if (notesRequestRef.current === requestId) {
+        setNotesLoading(false);
+      }
     }
   }, [currentVersion, currentNotes, showToast, t]);
+
+  const closeWhatsNew = useCallback(() => {
+    notesRequestRef.current += 1;
+    setNotesLoading(false);
+    setWhatsNewSource(null);
+  }, []);
 
   const handleCheck = useCallback(async () => {
     await check();
@@ -2844,13 +2867,16 @@ function AboutSettings() {
               {hasNotes && available ? (
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    notesRequestRef.current += 1;
+                    setNotesLoading(false);
+                    setNotesError(null);
                     setWhatsNewSource({
                       kind: "update",
                       version: available.version,
                       body: available.body ?? "",
-                    })
-                  }
+                    });
+                  }}
                   className="rounded px-2 py-1 text-[11px] text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
                 >
                   {st(t, "settings.about.whatsNew")}
@@ -2915,13 +2941,20 @@ function AboutSettings() {
 
       <WhatsNewModal
         open={whatsNewSource !== null}
-        onClose={() => setWhatsNewSource(null)}
+        onClose={closeWhatsNew}
         version={whatsNewSource?.version ?? ""}
         body={whatsNewSource?.body ?? ""}
         currentVersion={currentVersion}
         showInstall={whatsNewSource?.kind === "update"}
         busy={busy}
-        error={whatsNewSource?.kind === "update" ? error : null}
+        loading={whatsNewSource?.kind === "current" ? notesLoading : false}
+        error={
+          whatsNewSource?.kind === "current"
+            ? notesError
+            : whatsNewSource?.kind === "update"
+              ? error
+              : null
+        }
         onInstall={
           whatsNewSource?.kind === "update"
             ? () => void handleInstall()

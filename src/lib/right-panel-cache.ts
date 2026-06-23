@@ -42,6 +42,8 @@ class RightPanelCacheManager {
   private issueListInFlight = new Map<string, Promise<IssueListing>>();
   private workflowRunsCache = new Map<string, WorkflowRunsListing>();
   private workflowRunsInFlight = new Map<string, Promise<WorkflowRunsListing>>();
+  private commitDiffCache = new Map<string, DiffPayload>();
+  private commitDiffInFlight = new Map<string, Promise<DiffPayload>>();
 
   claimProjectPrefetch(repoPath: string): boolean {
     if (this.prefetchedProjectRepos.has(repoPath)) return false;
@@ -69,6 +71,8 @@ class RightPanelCacheManager {
     this.collectRemovedJsonKeys(this.issueListInFlight, next, removed);
     this.collectRemovedJsonKeys(this.workflowRunsCache, next, removed);
     this.collectRemovedJsonKeys(this.workflowRunsInFlight, next, removed);
+    this.collectRemovedJsonKeys(this.commitDiffCache, next, removed);
+    this.collectRemovedJsonKeys(this.commitDiffInFlight, next, removed);
     for (const repoPath of removed) this.bumpRepoVersion(repoPath);
 
     this.retainedRepos = next;
@@ -84,6 +88,8 @@ class RightPanelCacheManager {
     this.pruneJsonKeyedMap(this.issueListInFlight, next);
     this.pruneJsonKeyedMap(this.workflowRunsCache, next);
     this.pruneJsonKeyedMap(this.workflowRunsInFlight, next);
+    this.pruneJsonKeyedMap(this.commitDiffCache, next);
+    this.pruneJsonKeyedMap(this.commitDiffInFlight, next);
   }
 
   getAgentHistory(repoPath: string): AgentHistoryItem[] | null {
@@ -155,6 +161,32 @@ class RightPanelCacheManager {
   setCommits(repoPath: string, entry: CommitsCacheEntry): void {
     if (!this.canStore(repoPath)) return;
     this.commitsCache.set(repoPath, entry);
+  }
+
+  getCommitDiff(repoPath: string, sha: string): DiffPayload | null {
+    return this.commitDiffCache.get(this.commitDiffKey(repoPath, sha)) ?? null;
+  }
+
+  fetchCommitDiff(repoPath: string, sha: string): Promise<DiffPayload> {
+    const key = this.commitDiffKey(repoPath, sha);
+    const cached = this.commitDiffCache.get(key);
+    if (cached) return Promise.resolve(cached);
+    const existing = this.commitDiffInFlight.get(key);
+    if (existing) return existing;
+    const version = this.repoVersion(repoPath);
+    const promise = api
+      .commitDiff(repoPath, sha)
+      .then((payload) => {
+        if (this.isCurrentRepoVersion(repoPath, version)) {
+          this.commitDiffCache.set(key, payload);
+        }
+        return payload;
+      })
+      .finally(() => {
+        this.commitDiffInFlight.delete(key);
+      });
+    this.commitDiffInFlight.set(key, promise);
+    return promise;
   }
 
   getStaged(repoPath: string): StagedCacheEntry | null {
@@ -292,6 +324,8 @@ class RightPanelCacheManager {
     this.issueListInFlight.clear();
     this.workflowRunsCache.clear();
     this.workflowRunsInFlight.clear();
+    this.commitDiffCache.clear();
+    this.commitDiffInFlight.clear();
   }
 
   private canStore(repoPath: string): boolean {
@@ -328,6 +362,10 @@ class RightPanelCacheManager {
 
   private workflowRunsKey(repoPath: string, limit: number): string {
     return JSON.stringify([repoPath, limit]);
+  }
+
+  private commitDiffKey(repoPath: string, sha: string): string {
+    return JSON.stringify([repoPath, sha]);
   }
 
   private pruneStringKeyedMap<T>(map: Map<string, T>, retained: Set<string>): void {
