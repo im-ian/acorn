@@ -3,8 +3,7 @@ import { RefreshCw, Terminal } from "lucide-react";
 import { api, type StagedRevMismatch } from "../lib/api";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal } from "./ui/Modal";
-import { ModalHeader } from "./ui/ModalHeader";
+import { Button, Modal, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -97,19 +96,18 @@ export function StagedRevMismatchModal({
         </p>
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-        <button
-          type="button"
+        <Button
           onClick={handleLater}
           disabled={restarting}
-          className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
+          className="disabled:opacity-50"
         >
           {dt(t, "dialogs.stagedRevMismatch.later")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={handleRestart}
           disabled={restarting}
-          className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+          variant="primary"
+          className="disabled:opacity-50"
         >
           <RefreshCw
             size={12}
@@ -118,7 +116,7 @@ export function StagedRevMismatchModal({
           {restarting
             ? dt(t, "dialogs.stagedRevMismatch.restarting")
             : dt(t, "dialogs.stagedRevMismatch.restartSessions")}
-        </button>
+        </Button>
       </footer>
     </Modal>
   );

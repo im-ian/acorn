@@ -5,8 +5,7 @@ import { buildAgentResumeCommand } from "../lib/agentProvider";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal } from "./ui/Modal";
-import { ModalHeader } from "./ui/ModalHeader";
+import { Button, Modal, ModalHeader } from "./ui";
 
 interface AgentResumeModalProps {
   /** Session whose previous agent conversation is being offered. */
@@ -166,29 +165,26 @@ export function AgentResumeModal({
         </div>
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-        <button
-          type="button"
+        <Button
           onClick={handleCancelWithHint}
-          className="rounded-md px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          surface="panel"
         >
           {dt(t, "dialogs.common.cancel")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={handleCopy}
-          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          surface="panel"
         >
           <Copy size={12} />
           {dt(t, "dialogs.agentResume.copyId")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={handleResume}
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90"
+          variant="primary"
         >
           <Play size={12} />
           {dt(t, "dialogs.agentResume.resume")}
-        </button>
+        </Button>
       </footer>
     </Modal>
   );

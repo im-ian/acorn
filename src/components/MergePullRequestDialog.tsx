@@ -26,7 +26,7 @@ import type {
 import { useTranslation } from "../lib/useTranslation";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { Tooltip } from "./Tooltip";
-import { Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalHeader } from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
   value: MergeMethod;
@@ -438,14 +438,14 @@ export function MergePullRequestDialog({
           </div>
 
           <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+            <Button
               onClick={onClose}
               disabled={submitting}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
+            </Button>
             <button
               type="button"
               onClick={() => void handleMerge()}

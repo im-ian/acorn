@@ -6,7 +6,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { validateProjectName } from "../lib/projectName";
 import { cn } from "../lib/cn";
 import { useTranslation } from "../lib/useTranslation";
-import { Field, Modal, ModalHeader, TextInput } from "./ui";
+import { Button, Field, Modal, ModalHeader, TextInput } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -173,13 +173,14 @@ export function NewProjectDialog({
                 aria-label={dt(t, "dialogs.newProject.locationAriaLabel")}
                 className="min-w-0 flex-1"
               />
-              <button
-                type="button"
+              <Button
                 onClick={() => void chooseLocation()}
-                className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
+                variant="outline"
+                size="md"
+                surface="dialog"
               >
                 {dt(t, "dialogs.newProject.choose")}
-              </button>
+              </Button>
             </div>
           </Field>
           {finalPath ? (
@@ -197,23 +198,27 @@ export function NewProjectDialog({
           ) : null}
         </div>
         <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-          <button
-            type="button"
+          <Button
             disabled={pending}
             onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:opacity-50"
+            size="md"
+            surface="dialog"
+            className="disabled:opacity-50"
           >
             {dt(t, "dialogs.common.cancel")}
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
             disabled={!canCreate}
-            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            variant="primary"
+            size="md"
+            surface="dialog"
+            className="text-bg hover:opacity-90 disabled:opacity-50"
           >
             {pending
               ? dt(t, "dialogs.newProject.creating")
               : dt(t, "dialogs.newProject.createProject")}
-          </button>
+          </Button>
         </footer>
       </form>
     </Modal>

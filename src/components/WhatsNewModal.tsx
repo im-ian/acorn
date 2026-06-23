@@ -2,9 +2,7 @@ import { Download, ExternalLink, Sparkles } from "lucide-react";
 import type { ReactElement } from "react";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal } from "./ui/Modal";
-import { ModalHeader } from "./ui/ModalHeader";
-import { Markdown } from "./ui/Markdown";
+import { Button, Markdown, Modal, ModalHeader, buttonClassName } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -118,31 +116,29 @@ export function WhatsNewModal({
             href={htmlUrl}
             target="_blank"
             rel="noreferrer noopener"
-            className="inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            className={buttonClassName()}
           >
             <ExternalLink size={12} />
             {dt(t, "dialogs.whatsNew.viewOnGithub")}
           </a>
         ) : null}
-        <button
-          type="button"
+        <Button
           onClick={onClose}
-          className="rounded px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
         >
           {dt(t, "dialogs.common.close")}
-        </button>
+        </Button>
         {showInstall && onInstall ? (
-          <button
-            type="button"
+          <Button
             onClick={onInstall}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            variant="primary"
+            className="disabled:opacity-50"
           >
             <Download size={12} />
             {busy
               ? dt(t, "dialogs.whatsNew.installing")
               : dt(t, "dialogs.whatsNew.installRelaunch")}
-          </button>
+          </Button>
         ) : null}
       </footer>
     </Modal>

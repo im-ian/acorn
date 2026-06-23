@@ -4,6 +4,7 @@ import { selectShouldNotify, useUpdater } from "../lib/updater-store";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import { WhatsNewModal } from "./WhatsNewModal";
+import { Button, IconButton } from "./ui";
 
 /**
  * Top-of-app non-blocking banner that surfaces an available update.
@@ -49,26 +50,27 @@ export function UpdateBanner(): ReactElement | null {
           >
             {t("updateBanner.whatsNew")}
           </button>
-          <button
-            type="button"
+          <Button
             onClick={() => void install()}
             disabled={busy}
-            className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            variant="primary"
+            size="xs"
+            className="text-[11px] disabled:opacity-50"
           >
             {busy
               ? t("updateBanner.installing")
               : t("updateBanner.installRelaunch")}
-          </button>
+          </Button>
           <Tooltip label={t("updateBanner.hideUntilNextVersion")} side="bottom">
-            <button
-              type="button"
+            <IconButton
               onClick={dismiss}
               disabled={busy}
               aria-label={t("updateBanner.hideUntilNextVersion")}
-              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
+              size="sm"
+              className="disabled:opacity-50"
             >
               <X size={14} />
-            </button>
+            </IconButton>
           </Tooltip>
         </div>
         {error ? (

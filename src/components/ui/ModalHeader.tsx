@@ -1,8 +1,8 @@
 import { X } from "lucide-react";
 import { type ReactNode } from "react";
-import { cn } from "../../lib/cn";
 import type { TranslationKey, Translator } from "../../lib/i18n";
 import { useTranslation } from "../../lib/useTranslation";
+import { IconButton } from "./Button";
 import { type ModalVariant } from "./Modal";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
@@ -36,8 +36,6 @@ export function ModalHeader({
   onClose,
 }: ModalHeaderProps) {
   const t = useTranslation();
-  const hoverBg =
-    variant === "dialog" ? "hover:bg-bg-sidebar" : "hover:bg-bg-elevated";
   return (
     <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
       <div className="flex min-w-0 items-start gap-2">
@@ -58,17 +56,14 @@ export function ModalHeader({
       </div>
       <div className="flex shrink-0 items-center gap-1">
         {actions}
-        <button
-          type="button"
+        <IconButton
           aria-label={dt(t, "dialogs.common.close")}
           onClick={onClose}
-          className={cn(
-            "rounded p-1 text-fg-muted transition hover:text-fg",
-            hoverBg,
-          )}
+          size="sm"
+          surface={variant}
         >
           <X size={14} />
-        </button>
+        </IconButton>
       </div>
     </header>
   );

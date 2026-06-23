@@ -8,8 +8,7 @@ import {
 } from "../lib/permissionWarmup";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal } from "./ui/Modal";
-import { ModalHeader } from "./ui/ModalHeader";
+import { Button, Modal, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -183,34 +182,33 @@ export function FolderPermissionWarmupModal({
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
         {hasDeniedResult ? (
-          <button
-            type="button"
+          <Button
             onClick={() => void resetAndRunWarmup()}
             disabled={busy || resetting}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            variant="primary"
+            className="disabled:opacity-50"
           >
             {resetting ? <Loader2 size={12} className="animate-spin" /> : null}
             {resetting
               ? dt(t, "dialogs.folderPermissionWarmup.resetting")
               : dt(t, "dialogs.folderPermissionWarmup.reset")}
-          </button>
+          </Button>
         ) : null}
-        <button
-          type="button"
+        <Button
           onClick={onClose}
           disabled={busy || resetting}
-          className="rounded-md px-3 py-1 text-xs text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:opacity-50"
+          className="disabled:opacity-50"
         >
           {results || error
             ? dt(t, "dialogs.folderPermissionWarmup.done")
             : dt(t, "dialogs.folderPermissionWarmup.skip")}
-        </button>
+        </Button>
         {!results && !error ? (
-          <button
-            type="button"
+          <Button
             onClick={() => void runWarmup()}
             disabled={busy || resetting}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+            variant="primary"
+            className="disabled:opacity-50"
           >
             {busy ? (
               <Loader2 size={12} className="animate-spin" />
@@ -220,7 +218,7 @@ export function FolderPermissionWarmupModal({
             {busy
               ? dt(t, "dialogs.folderPermissionWarmup.checking")
               : dt(t, "dialogs.folderPermissionWarmup.check")}
-          </button>
+          </Button>
         ) : null}
       </footer>
     </Modal>

@@ -5,7 +5,7 @@ import { useToasts } from "../lib/toasts";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalHeader } from "./ui";
 import {
   applySessionCreateRequest,
   buildSessionCreateRequestFromScope,
@@ -209,34 +209,36 @@ export function CommandRunDialog({
         ) : null}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-        <button
-          type="button"
+        <Button
           onClick={close}
           disabled={busy}
-          className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+          size="md"
+          surface="dialog"
         >
           {dt(t, "dialogs.common.cancel")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => void handleCopy()}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+          variant="outline"
+          size="md"
+          surface="dialog"
         >
           <Copy size={12} />
           {dt(t, "dialogs.common.copy")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           onClick={() => void handleRun()}
           disabled={busy || !resolvedRepoPath}
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+          variant="accentSoft"
+          size="md"
+          surface="dialog"
         >
           <Play size={12} />
           {busy
             ? dt(t, "dialogs.commandRun.running")
             : dt(t, "dialogs.commandRun.run")}
-        </button>
+        </Button>
       </footer>
     </Modal>
   );

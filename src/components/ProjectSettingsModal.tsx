@@ -18,7 +18,7 @@ import {
 import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
-import { CheckboxRow, Field, Modal, ModalHeader } from "./ui";
+import { Button, CheckboxRow, Field, Modal, ModalHeader } from "./ui";
 
 const PROMPT_MAX_CHARS = 2_000;
 
@@ -450,24 +450,25 @@ export function ProjectSettingsModal({
             </div>
           </div>
           <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+            <Button
               onClick={onClose}
               disabled={saving}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => void save()}
               disabled={loading || saving}
-              className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+              variant="accentSoft"
+              size="md"
+              surface="dialog"
             >
               {saving
                 ? dt(t, "dialogs.projectSettings.saving")
                 : dt(t, "dialogs.projectSettings.save")}
-            </button>
+            </Button>
           </footer>
           <RemoveWorktreeConfirmDialog
             worktree={canShowConfirmRemove ? confirmRemove : null}
@@ -601,8 +602,7 @@ function ProjectWorktreeList({
                       </p>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
+                  <Button
                     aria-label={dtf(
                       t,
                       "dialogs.projectSettings.removeWorktreeAria",
@@ -620,7 +620,9 @@ function ProjectWorktreeList({
                     disabled={
                       removingPath !== null || removeBlockedByOtherSessions
                     }
-                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-bg px-2 text-[11px] text-fg-muted transition hover:text-danger disabled:cursor-not-allowed disabled:opacity-60"
+                    variant="outline"
+                    size="xs"
+                    className="h-7 gap-1 text-[11px] text-fg-muted hover:text-danger"
                   >
                     {isRemoving ? (
                       <Loader2 size={12} className="animate-spin" />
@@ -630,7 +632,7 @@ function ProjectWorktreeList({
                     {isRemoving
                       ? dt(t, "dialogs.projectSettings.deletingWorktree")
                       : dt(t, "dialogs.projectSettings.removeWorktree")}
-                  </button>
+                  </Button>
                 </div>
               </li>
             );
@@ -725,19 +727,21 @@ function RemoveWorktreeConfirmDialog({
             ) : null}
           </div>
           <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+            <Button
               onClick={onCancel}
               disabled={removing}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.projectSettings.cancelRemove")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={onConfirm}
               disabled={removing}
-              className="inline-flex items-center gap-1 rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25 disabled:cursor-not-allowed disabled:opacity-60"
+              variant="dangerSoft"
+              size="md"
+              surface="dialog"
+              className="gap-1"
             >
               {removing ? <Loader2 size={12} className="animate-spin" /> : null}
               {removing
@@ -745,7 +749,7 @@ function RemoveWorktreeConfirmDialog({
                 : hasSessions
                   ? dt(t, "dialogs.projectSettings.deleteWorktreeAndSessions")
                   : dt(t, "dialogs.projectSettings.deleteWorktree")}
-            </button>
+            </Button>
           </footer>
         </>
       ) : null}

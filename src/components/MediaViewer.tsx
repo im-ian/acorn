@@ -12,6 +12,7 @@ import { basenameFromPath, type MediaFileKind } from "../lib/mediaFiles";
 import { cn } from "../lib/cn";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
+import { IconButton } from "./ui";
 
 interface MediaViewerProps {
   path: string;
@@ -223,43 +224,46 @@ function ImageZoomControls({
   return (
     <div className="absolute right-3 top-3 z-20 flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-md border border-border bg-bg-elevated/95 p-1 shadow-lg backdrop-blur">
       <Tooltip label={zoomOutLabel} side="bottom">
-        <button
-          type="button"
+        <IconButton
           aria-label={zoomOutLabel}
           title={zoomOutLabel}
           onClick={onZoomOut}
           disabled={zoom <= IMAGE_ZOOM_MIN}
-          className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+          size="md"
+          surface="dialog"
+          className="disabled:cursor-default disabled:opacity-40"
         >
           <ZoomOut size={14} />
-        </button>
+        </IconButton>
       </Tooltip>
       <span className="flex h-7 w-12 shrink-0 items-center justify-center font-mono text-[11px] tabular-nums text-fg-muted">
         {formatImageZoom(zoom)}
       </span>
       <Tooltip label={zoomInLabel} side="bottom">
-        <button
-          type="button"
+        <IconButton
           aria-label={zoomInLabel}
           title={zoomInLabel}
           onClick={onZoomIn}
           disabled={zoom >= IMAGE_ZOOM_MAX}
-          className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+          size="md"
+          surface="dialog"
+          className="disabled:cursor-default disabled:opacity-40"
         >
           <ZoomIn size={14} />
-        </button>
+        </IconButton>
       </Tooltip>
       <Tooltip label={resetLabel} side="bottom">
-        <button
-          type="button"
+        <IconButton
           aria-label={resetLabel}
           title={resetLabel}
           onClick={onReset}
           disabled={zoom === 1}
-          className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+          size="md"
+          surface="dialog"
+          className="disabled:cursor-default disabled:opacity-40"
         >
           <RotateCcw size={14} />
-        </button>
+        </IconButton>
       </Tooltip>
     </div>
   );

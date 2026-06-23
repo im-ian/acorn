@@ -5,7 +5,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import type { Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -84,20 +84,21 @@ export function RunningSessionCloseWarningDialog({
             </label>
           </div>
           <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+            <Button
               onClick={onCancel}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={commitContinue}
-              className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+              variant="dangerSoft"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.runningSessionClose.continue")}
-            </button>
+            </Button>
           </footer>
         </>
       ) : null}

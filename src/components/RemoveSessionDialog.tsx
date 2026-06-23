@@ -6,7 +6,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalHeader } from "./ui";
 
 type RemoveChoice = "session_only" | "session_and_worktree" | "cancel";
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
@@ -151,38 +151,41 @@ export function RemoveSessionDialog({
             ) : null}
           </div>
           <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+            <Button
               onClick={() => commit("cancel")}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
+            </Button>
             {showWorktreeDeleteChoice ? (
               <>
-                <button
-                  type="button"
+                <Button
                   onClick={() => commit("session_only")}
-                  className="rounded-md px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
+                  variant="neutral"
+                  size="md"
+                  surface="dialog"
                 >
                   {dt(t, "dialogs.removeSession.keepWorktree")}
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
                   onClick={() => commit("session_and_worktree")}
-                  className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+                  variant="dangerSoft"
+                  size="md"
+                  surface="dialog"
                 >
                   {dt(t, "dialogs.removeSession.deleteWorktree")}
-                </button>
+                </Button>
               </>
             ) : (
-              <button
-                type="button"
+              <Button
                 onClick={() => commit("session_only")}
-                className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+                variant="dangerSoft"
+                size="md"
+                surface="dialog"
               >
                 {dt(t, "dialogs.removeSession.remove")}
-              </button>
+              </Button>
             )}
           </footer>
         </>

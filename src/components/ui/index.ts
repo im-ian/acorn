@@ -15,6 +15,21 @@ export { Stepper } from "./Stepper";
 export { CheckboxRow } from "./CheckboxRow";
 export { RadioCard } from "./RadioCard";
 export {
+  Button,
+  IconButton,
+  buttonClassName,
+  iconButtonClassName,
+  type ButtonClassNameOptions,
+  type ButtonProps,
+  type ButtonSize,
+  type ButtonSurface,
+  type ButtonVariant,
+  type IconButtonClassNameOptions,
+  type IconButtonProps,
+  type IconButtonSize,
+  type IconButtonVariant,
+} from "./Button";
+export {
   ListActionRow,
   ListBox,
   ListEmptyState,

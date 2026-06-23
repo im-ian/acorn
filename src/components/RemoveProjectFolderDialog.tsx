@@ -5,7 +5,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import type { Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalHeader } from "./ui";
 
 type RemoveProjectFolderChoice =
   | "folder_only"
@@ -155,44 +155,47 @@ export function RemoveProjectFolderDialog({
             ) : null}
           </div>
           <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+            <Button
               onClick={() => onClose("cancel")}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
+            </Button>
             {canChooseWorktreeRemoval ? (
               <>
-                <button
-                  type="button"
+                <Button
                   onClick={() => onClose("folder_only")}
-                  className="rounded-md px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
+                  variant="neutral"
+                  size="md"
+                  surface="dialog"
                 >
                   {dt(t, "dialogs.removeProjectFolder.keepWorktree")}
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
                   onClick={() => onClose("folder_and_worktree")}
-                  className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+                  variant="dangerSoft"
+                  size="md"
+                  surface="dialog"
                 >
                   {dt(t, "dialogs.removeProjectFolder.deleteWorktree")}
-                </button>
+                </Button>
               </>
             ) : (
-              <button
-                type="button"
+              <Button
                 onClick={() =>
                   onClose(
                     sessionCount > 0 ? "folder_and_sessions" : "folder_only",
                   )
                 }
-                className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+                variant="dangerSoft"
+                size="md"
+                surface="dialog"
               >
                 {sessionCount > 0
                   ? dt(t, "dialogs.removeProjectFolder.removeWithSessions")
                   : dt(t, "dialogs.removeProjectFolder.removeFolder")}
-              </button>
+              </Button>
             )}
           </footer>
         </>

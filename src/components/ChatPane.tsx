@@ -45,7 +45,7 @@ import type {
 } from "../lib/types";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
 import { Tooltip } from "./Tooltip";
-import { Modal, ModalHeader, Select } from "./ui";
+import { Button, Modal, ModalHeader, Select } from "./ui";
 
 interface ChatPaneProps {
   sessionId: string;
@@ -1739,32 +1739,34 @@ function ForkWorktreeDialog({
         ) : null}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-        <button
-          type="button"
+        <Button
           onClick={onClose}
           disabled={busy}
-          className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+          size="md"
+          surface="dialog"
         >
           Cancel
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           aria-label="Fork in same directory"
           onClick={() => onChoose("same")}
           disabled={busy}
-          className="rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+          variant="outline"
+          size="md"
+          surface="dialog"
         >
           Same directory
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           aria-label="Fork in new worktree"
           onClick={() => onChoose("new")}
           disabled={busy || !canUseNewWorktree}
-          className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+          variant="accentSoft"
+          size="md"
+          surface="dialog"
         >
           New worktree
-        </button>
+        </Button>
       </footer>
     </Modal>
   );

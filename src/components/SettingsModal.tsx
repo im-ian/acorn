@@ -81,6 +81,7 @@ import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import {
+  Button,
   CheckboxRow,
   CommandHint,
   Field,
@@ -483,23 +484,24 @@ export function SettingsModal() {
           {t("settings.resetConfirm.message")}
         </p>
         <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-          <button
-            type="button"
+          <Button
             onClick={() => setConfirmResetOpen(false)}
-            className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+            size="md"
+            surface="dialog"
           >
             {t("dialogs.common.cancel")}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             onClick={() => {
               reset();
               setConfirmResetOpen(false);
             }}
-            className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+            variant="dangerSoft"
+            size="md"
+            surface="dialog"
           >
             {t("settings.resetConfirm.confirm")}
-          </button>
+          </Button>
         </footer>
       </Modal>
     </Modal>
@@ -1956,16 +1958,17 @@ function NotificationSettings() {
         hint={st(t, "settings.notifications.test.hint")}
       >
         <div className="flex flex-col items-start gap-2">
-          <button
-            type="button"
+          <Button
             onClick={() => void handleTest()}
             disabled={testing}
-            className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-fg transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+            variant="accentSoft"
+            size="md"
+            className="text-fg"
           >
             {testing
               ? st(t, "settings.notifications.test.sending")
               : st(t, "settings.notifications.test.send")}
-          </button>
+          </Button>
           {testResult ? (
             <p
               className={cn(

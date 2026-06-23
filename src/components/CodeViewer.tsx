@@ -22,7 +22,7 @@ import {
   type VirtualizedLineListHandle,
 } from "./VirtualizedLines";
 import { Tooltip } from "./Tooltip";
-import { Markdown } from "./ui/Markdown";
+import { Button, IconButton, Markdown } from "./ui";
 import type { CodeWorkspaceTabTarget } from "../lib/workspaceTabs";
 
 interface CodeViewerProps {
@@ -487,51 +487,55 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
                     .replace("{total}", String(currentMatchCount))}
           </span>
           <Tooltip label={t("codeViewer.previousMatch")} side="bottom">
-            <button
-              type="button"
+            <IconButton
               onClick={() => stepMatch(-1)}
               disabled={currentMatchCount === 0}
               aria-label={t("codeViewer.previousMatch")}
-              className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+              size="md"
+              surface="dialog"
+              className="disabled:cursor-default disabled:opacity-40"
             >
               <ChevronUp size={14} />
-            </button>
+            </IconButton>
           </Tooltip>
           <Tooltip label={t("codeViewer.nextMatch")} side="bottom">
-            <button
-              type="button"
+            <IconButton
               onClick={() => stepMatch(1)}
               disabled={currentMatchCount === 0}
               aria-label={t("codeViewer.nextMatch")}
-              className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+              size="md"
+              surface="dialog"
+              className="disabled:cursor-default disabled:opacity-40"
             >
               <ChevronDown size={14} />
-            </button>
+            </IconButton>
           </Tooltip>
           <Tooltip label={t("codeViewer.closeFind")} side="bottom">
-            <button
-              type="button"
+            <IconButton
               onClick={closeSearch}
               aria-label={t("codeViewer.closeFind")}
-              className="inline-flex size-7 items-center justify-center rounded text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              size="md"
+              surface="dialog"
             >
               <X size={14} />
-            </button>
+            </IconButton>
           </Tooltip>
         </div>
       ) : null}
       {canPreviewMarkdown ? (
-        <button
-          type="button"
+        <Button
           aria-pressed={previewMarkdown}
           onClick={() => setPreviewMarkdown((v) => !v)}
-          className="absolute bottom-3 right-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-elevated/95 px-2.5 py-1.5 text-[11px] text-fg-muted shadow-lg backdrop-blur transition hover:bg-bg-sidebar hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/60"
+          variant="outline"
+          size="xs"
+          surface="dialog"
+          className="absolute bottom-3 right-3 z-20 bg-bg-elevated/95 px-2.5 py-1.5 text-[11px] text-fg-muted shadow-lg backdrop-blur focus:outline-none focus:ring-2 focus:ring-accent/60"
         >
           {previewMarkdown ? <Code2 size={13} /> : <Eye size={13} />}
           {previewMarkdown
             ? t("codeViewer.showSource")
             : t("codeViewer.showPreview")}
-        </button>
+        </Button>
       ) : null}
     </div>
   );
