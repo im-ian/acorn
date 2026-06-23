@@ -120,6 +120,7 @@ import {
   SkeletonBlock,
   SkeletonCircle,
   SkeletonList,
+  SkeletonText,
   TextInput,
   listBoxClassName,
   listRowClassName,
@@ -4104,6 +4105,7 @@ function WorkflowRunDetailModal({
     detail?.display_title.trim().length
       ? detail.display_title
       : detail?.workflow_name ?? rt(t, "rightPanel.actions.workflowRun");
+  const showSkeleton = !error && (loading || !listing);
 
   return (
     <Modal
@@ -4113,69 +4115,129 @@ function WorkflowRunDetailModal({
       size="2xl"
       className="flex h-[36rem] flex-col"
     >
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="mt-0.5 flex shrink-0">
+      {showSkeleton ? (
+        <WorkflowRunDetailSkeleton onClose={onClose} />
+      ) : (
+        <>
+          <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="mt-0.5 flex shrink-0">
+                  {detail ? (
+                    <WorkflowRunStatusIcon
+                      status={detail.status}
+                      conclusion={detail.conclusion}
+                    />
+                  ) : (
+                    <Activity size={14} className="text-fg-muted" />
+                  )}
+                </span>
+                <Tooltip
+                  label={title}
+                  side="bottom"
+                  multiline
+                  className="min-w-0 flex-1"
+                >
+                  <h3 className="truncate text-sm font-semibold leading-5 tracking-tight text-fg">
+                    {title}
+                  </h3>
+                </Tooltip>
+              </div>
               {detail ? (
-                <WorkflowRunStatusIcon
-                  status={detail.status}
-                  conclusion={detail.conclusion}
-                />
-              ) : (
-                <Activity size={14} className="text-fg-muted" />
-              )}
-            </span>
-            <Tooltip
-              label={title}
-              side="bottom"
-              multiline
-              className="min-w-0 flex-1"
-            >
-              <h3 className="truncate text-sm font-semibold leading-5 tracking-tight text-fg">
-                {title}
-              </h3>
-            </Tooltip>
-          </div>
-          {detail ? (
-            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-fg-muted">
-              <span>{detail.workflow_name}</span>
-              <span className="opacity-50">·</span>
-              <span>{detail.event}</span>
-              {detail.head_branch ? (
-                <>
+                <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-fg-muted">
+                  <span>{detail.workflow_name}</span>
                   <span className="opacity-50">·</span>
-                  <span className="font-mono">{detail.head_branch}</span>
-                </>
-              ) : null}
-              {detail.attempt > 1 ? (
-                <>
-                  <span className="opacity-50">·</span>
-                  <span>
-                    {rtf(t, "rightPanel.actions.retryAttempt", {
-                      attempt: detail.attempt,
-                    })}
-                  </span>
-                </>
+                  <span>{detail.event}</span>
+                  {detail.head_branch ? (
+                    <>
+                      <span className="opacity-50">·</span>
+                      <span className="font-mono">{detail.head_branch}</span>
+                    </>
+                  ) : null}
+                  {detail.attempt > 1 ? (
+                    <>
+                      <span className="opacity-50">·</span>
+                      <span>
+                        {rtf(t, "rightPanel.actions.retryAttempt", {
+                          attempt: detail.attempt,
+                        })}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
               ) : null}
             </div>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {detail?.url ? (
-            <Tooltip
-              label={rt(t, "rightPanel.tooltips.openOnGitHub")}
-              side="bottom"
-            >
+            <div className="flex shrink-0 items-center gap-1">
+              {detail?.url ? (
+                <Tooltip
+                  label={rt(t, "rightPanel.tooltips.openOnGitHub")}
+                  side="bottom"
+                >
+                  <button
+                    type="button"
+                    onClick={() => void openUrl(detail.url)}
+                    className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                </Tooltip>
+              ) : null}
               <button
                 type="button"
-                onClick={() => void openUrl(detail.url)}
+                aria-label={t("dialogs.common.close")}
+                onClick={onClose}
                 className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               >
-                <ExternalLink size={14} />
+                <X size={16} />
               </button>
-            </Tooltip>
-          ) : null}
+            </div>
+          </header>
+          <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">
+            <div className="px-4 py-3">
+              {error ? (
+                <div className="p-2 text-danger">{error}</div>
+              ) : listing?.kind === "not_github" ? (
+                <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
+              ) : listing?.kind === "no_access" ? (
+                <NoAccessBanner
+                  slug={listing.slug}
+                  accounts={listing.accounts}
+                  repoPath={repoPath}
+                />
+              ) : listing?.kind === "ok" ? (
+                <WorkflowRunDetailBody detail={listing.detail} />
+              ) : null}
+            </div>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function WorkflowRunDetailSkeleton({ onClose }: { onClose: () => void }) {
+  const t = useTranslation();
+  return (
+    <>
+      <header
+        className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3"
+        data-workflow-run-detail-skeleton="header"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/20" />
+            <SkeletonBlock className="h-3.5 w-[58%] min-w-0 bg-fg-muted/15" />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <SkeletonBlock className="h-2.5 w-20 shrink-0" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <SkeletonBlock className="h-2.5 w-14 shrink-0" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <SkeletonBlock className="h-2.5 w-24 shrink-0" />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
           <button
             type="button"
             aria-label={t("dialogs.common.close")}
@@ -4187,65 +4249,60 @@ function WorkflowRunDetailModal({
         </div>
       </header>
       <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">
-        <div className="px-4 py-3">
-        {error ? (
-          <div className="p-2 text-danger">{error}</div>
-        ) : loading || !listing ? (
-          <WorkflowRunDetailSkeleton />
-        ) : listing.kind === "not_github" ? (
-          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
-        ) : listing.kind === "no_access" ? (
-          <NoAccessBanner
-            slug={listing.slug}
-            accounts={listing.accounts}
-            repoPath={repoPath}
-          />
-        ) : (
-          <WorkflowRunDetailBody detail={listing.detail} />
-        )}
+        <div
+          className="space-y-3 px-4 py-3"
+          data-workflow-run-detail-skeleton="body"
+        >
+          <section className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-[11px]">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="contents">
+                  <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
+                  <SkeletonBlock
+                    className="h-2.5 bg-fg-muted/10"
+                    style={{ width: `${38 + ((index * 29) % 42)}%` }}
+                  />
+                </div>
+              ))}
+            </div>
+          </section>
+          <section>
+            <div className="mb-1.5 flex items-center gap-2">
+              <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
+              <SkeletonBlock className="h-4 w-8 rounded-full bg-fg-muted/10" />
+            </div>
+            <ul className="space-y-1.5">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <li
+                  key={index}
+                  className="overflow-hidden rounded-md border border-border bg-bg-elevated/40"
+                >
+                  <div className="flex items-center gap-2 px-2.5 py-2">
+                    <SkeletonBlock className="h-3 w-3 shrink-0 rounded-sm bg-fg-muted/10" />
+                    <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/15" />
+                    <SkeletonBlock
+                      className="h-3 min-w-0 flex-1 bg-fg-muted/15"
+                      style={{ width: `${48 + ((index * 17) % 30)}%` }}
+                    />
+                    <SkeletonBlock className="ml-auto h-2.5 w-12 shrink-0" />
+                  </div>
+                  {index === 0 ? (
+                    <div className="border-t border-border/40 px-2.5 py-2">
+                      <SkeletonText
+                        className="gap-1.5"
+                        lineClassName="h-2.5"
+                        lines={3}
+                        widths={["64%", "52%", "40%"]}
+                      />
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
       </div>
-    </Modal>
-  );
-}
-
-function WorkflowRunDetailSkeleton() {
-  return (
-    <div className="space-y-3">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--acorn-pane-radius)] bg-bg-sidebar/40 p-3 text-[11px]">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="contents">
-            <dt>
-              <SkeletonBlock className="h-3 w-16 bg-border/60" />
-            </dt>
-            <dd>
-              <SkeletonBlock
-                className="h-3 bg-border/40"
-                style={{ width: `${40 + ((i * 37) % 50)}%` }}
-              />
-            </dd>
-          </div>
-        ))}
-      </dl>
-      <div>
-        <SkeletonBlock className="mb-1.5 h-3 w-20 bg-border/60" />
-        <ul className="space-y-1.5">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <li
-              key={i}
-              className="flex items-center gap-2 rounded-md border border-border bg-bg-elevated/40 px-2.5 py-2"
-            >
-              <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-border/60" />
-              <SkeletonBlock
-                className="h-3 bg-border/40"
-                style={{ width: `${50 + ((i * 23) % 30)}%` }}
-              />
-              <SkeletonBlock className="ml-auto h-3 w-10 bg-border/40" />
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
+    </>
   );
 }
 
