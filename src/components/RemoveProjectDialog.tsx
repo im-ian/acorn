@@ -4,7 +4,7 @@ import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalHeader } from "./ui";
+import { Button, CodeValue, Modal, ModalFooter, ModalHeader } from "./ui";
 
 type RemoveProjectChoice =
   | "project_only"
@@ -61,10 +61,10 @@ export function RemoveProjectDialog({
               {dt(t, "dialogs.removeProject.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{project.name}</span>?
             </p>
-            <div className="space-y-1 rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
-              <p className="break-all font-mono text-fg-muted">
+            <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
+              <CodeValue tone="muted" overflow="breakAll">
                 {project.repo_path}
-              </p>
+              </CodeValue>
               <p className="text-fg-muted">
                 {sessions.length}{" "}
                 {sessions.length === 1
@@ -82,7 +82,7 @@ export function RemoveProjectDialog({
               </p>
             </div>
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <ModalFooter variant="sidebar">
             <Button
               onClick={() => onClose("cancel")}
               size="md"
@@ -114,7 +114,7 @@ export function RemoveProjectDialog({
                 ? dt(t, "dialogs.removeProject.closeDeleteWorktrees")
                 : dt(t, "dialogs.removeProject.closeProject")}
             </Button>
-          </footer>
+          </ModalFooter>
         </>
       ) : null}
     </Modal>

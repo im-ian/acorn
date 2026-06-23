@@ -2,7 +2,7 @@ import { useState, type ReactElement } from "react";
 import { Bot } from "lucide-react";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, CheckboxRow, Modal, ModalHeader } from "./ui";
+import { Button, CheckboxRow, Modal, ModalFooter, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -80,14 +80,14 @@ export function ControlSessionGuideModal({
           onChange={setDontShowAgain}
         />
       </div>
-      <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+      <ModalFooter>
         <Button
           onClick={dismiss}
           variant="primary"
         >
           {dt(t, "dialogs.common.gotIt")}
         </Button>
-      </footer>
+      </ModalFooter>
     </Modal>
   );
 }

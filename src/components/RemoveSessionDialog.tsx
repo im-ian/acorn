@@ -6,7 +6,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
 
 type RemoveChoice = "session_only" | "session_and_worktree" | "cancel";
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
@@ -150,7 +150,7 @@ export function RemoveSessionDialog({
               </label>
             ) : null}
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <ModalFooter variant="sidebar">
             <Button
               onClick={() => commit("cancel")}
               size="md"
@@ -187,7 +187,7 @@ export function RemoveSessionDialog({
                 {dt(t, "dialogs.removeSession.remove")}
               </Button>
             )}
-          </footer>
+          </ModalFooter>
         </>
       ) : null}
     </Modal>

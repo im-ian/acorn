@@ -45,7 +45,7 @@ import type {
 } from "../lib/types";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
 import { Tooltip } from "./Tooltip";
-import { Button, Modal, ModalHeader, Select } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader, Select } from "./ui";
 
 interface ChatPaneProps {
   sessionId: string;
@@ -1738,7 +1738,7 @@ function ForkWorktreeDialog({
           </p>
         ) : null}
       </div>
-      <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+      <ModalFooter variant="sidebar">
         <Button
           onClick={onClose}
           disabled={busy}
@@ -1767,7 +1767,7 @@ function ForkWorktreeDialog({
         >
           New worktree
         </Button>
-      </footer>
+      </ModalFooter>
     </Modal>
   );
 }

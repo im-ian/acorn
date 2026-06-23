@@ -3,7 +3,7 @@ import { RefreshCw, Terminal } from "lucide-react";
 import { api, type StagedRevMismatch } from "../lib/api";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -95,7 +95,7 @@ export function StagedRevMismatchModal({
           {dt(t, "dialogs.stagedRevMismatch.bodyRestart")}
         </p>
       </div>
-      <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+      <ModalFooter>
         <Button
           onClick={handleLater}
           disabled={restarting}
@@ -117,7 +117,7 @@ export function StagedRevMismatchModal({
             ? dt(t, "dialogs.stagedRevMismatch.restarting")
             : dt(t, "dialogs.stagedRevMismatch.restartSessions")}
         </Button>
-      </footer>
+      </ModalFooter>
     </Modal>
   );
 }

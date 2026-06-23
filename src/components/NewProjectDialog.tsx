@@ -6,7 +6,15 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { validateProjectName } from "../lib/projectName";
 import { cn } from "../lib/cn";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Field, Modal, ModalHeader, TextInput } from "./ui";
+import {
+  Button,
+  CodeValue,
+  Field,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  TextInput,
+} from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -184,11 +192,17 @@ export function NewProjectDialog({
             </div>
           </Field>
           {finalPath ? (
-            <div className="rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
-              <div className="mb-1 text-fg-muted">
+            <div className="space-y-1 text-xs">
+              <div className="text-fg-muted">
                 {dt(t, "dialogs.newProject.creates")}
               </div>
-              <div className="break-all font-mono text-fg">{finalPath}</div>
+              <CodeValue
+                surface="muted"
+                overflow="breakAll"
+                className="px-3 py-2"
+              >
+                {finalPath}
+              </CodeValue>
             </div>
           ) : null}
           {error ? (
@@ -197,7 +211,7 @@ export function NewProjectDialog({
             </div>
           ) : null}
         </div>
-        <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+        <ModalFooter variant="sidebar">
           <Button
             disabled={pending}
             onClick={onClose}
@@ -219,7 +233,7 @@ export function NewProjectDialog({
               ? dt(t, "dialogs.newProject.creating")
               : dt(t, "dialogs.newProject.createProject")}
           </Button>
-        </footer>
+        </ModalFooter>
       </form>
     </Modal>
   );

@@ -2,7 +2,14 @@ import { Download, ExternalLink, Sparkles } from "lucide-react";
 import type { ReactElement } from "react";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Markdown, Modal, ModalHeader, buttonClassName } from "./ui";
+import {
+  Button,
+  Markdown,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  buttonClassName,
+} from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -110,7 +117,7 @@ export function WhatsNewModal({
           {error}
         </p>
       ) : null}
-      <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+      <ModalFooter>
         {htmlUrl ? (
           <a
             href={htmlUrl}
@@ -140,7 +147,7 @@ export function WhatsNewModal({
               : dt(t, "dialogs.whatsNew.installRelaunch")}
           </Button>
         ) : null}
-      </footer>
+      </ModalFooter>
     </Modal>
   );
 }

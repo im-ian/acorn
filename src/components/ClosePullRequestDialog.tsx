@@ -6,7 +6,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import type { PullRequestDetail } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -91,12 +91,12 @@ export function ClosePullRequestDialog({
               </p>
             </div>
             {error ? (
-              <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+              <Notice tone="danger" density="compact">
                 {error}
-              </p>
+              </Notice>
             ) : null}
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <ModalFooter variant="sidebar">
             <Button
               onClick={onClose}
               disabled={submitting}
@@ -116,7 +116,7 @@ export function ClosePullRequestDialog({
                 ? dt(t, "dialogs.closePullRequest.closing")
                 : dt(t, "dialogs.closePullRequest.closePr")}
             </Button>
-          </footer>
+          </ModalFooter>
         </>
       ) : null}
     </Modal>

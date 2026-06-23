@@ -5,7 +5,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import type { Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -83,7 +83,7 @@ export function RunningSessionCloseWarningDialog({
               {dt(t, "dialogs.runningSessionClose.dontWarnAgain")}
             </label>
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <ModalFooter variant="sidebar">
             <Button
               onClick={onCancel}
               size="md"
@@ -99,7 +99,7 @@ export function RunningSessionCloseWarningDialog({
             >
               {dt(t, "dialogs.runningSessionClose.continue")}
             </Button>
-          </footer>
+          </ModalFooter>
         </>
       ) : null}
     </Modal>
