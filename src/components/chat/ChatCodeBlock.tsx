@@ -6,6 +6,7 @@ import { highlightCode, langFromPath } from "../../lib/highlight";
 import { useSettings } from "../../lib/settings";
 import { resolveThemeMode, useThemes } from "../../lib/themes";
 import { Tooltip } from "../Tooltip";
+import { IconButton } from "../ui";
 
 interface ChatCodeBlockProps {
   code: string;
@@ -162,25 +163,23 @@ export function ChatCodeBlock({
               label={expanded ? "Collapse code block" : "Expand code block"}
               side="bottom"
             >
-              <button
-                type="button"
+              <IconButton
+                size="sm"
                 aria-label={expanded ? "Collapse code block" : "Expand code block"}
-                className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
                 onClick={() => setExpanded((value) => !value)}
               >
                 {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-              </button>
+              </IconButton>
             </Tooltip>
           ) : null}
           <Tooltip label="Copy code" side="bottom">
-            <button
-              type="button"
+            <IconButton
+              size="sm"
               aria-label="Copy code block"
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
               onClick={() => void copyCode()}
             >
               {copied ? <Check size={13} /> : <Copy size={13} />}
-            </button>
+            </IconButton>
           </Tooltip>
         </span>
       </div>
