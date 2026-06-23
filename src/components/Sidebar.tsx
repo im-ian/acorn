@@ -121,14 +121,19 @@ import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { RemoveProjectFolderDialog } from "./RemoveProjectFolderDialog";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
-import { listBoxClassName, listRowClassName } from "./ui";
+import {
+  StatusDot,
+  listBoxClassName,
+  listRowClassName,
+  type StatusTone,
+} from "./ui";
 
-const STATUS_DOT: Record<SessionStatus, string> = {
-  idle: "bg-fg-muted",
-  running: "bg-accent animate-pulse",
-  needs_input: "bg-warning",
-  failed: "bg-danger",
-  completed: "bg-accent/60",
+const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
+  idle: "neutral",
+  running: "accent",
+  needs_input: "warning",
+  failed: "danger",
+  completed: "accent",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
@@ -2944,8 +2949,11 @@ function SessionStatusMarker({
           />
         </Tooltip>
       ) : (
-        <span
-          className={cn("size-1.5 rounded-full", STATUS_DOT[session.status])}
+        <StatusDot
+          tone={SESSION_STATUS_TONE[session.status]}
+          size="sm"
+          pulse={session.status === "running"}
+          className={session.status === "completed" ? "opacity-60" : undefined}
         />
       )}
     </span>

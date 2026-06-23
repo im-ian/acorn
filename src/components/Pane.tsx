@@ -84,6 +84,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { PaneDropOverlay } from "./PaneDropOverlay";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
+import { StatusDot, type StatusTone } from "./ui";
 import type {
   Project,
   Session,
@@ -107,12 +108,12 @@ import {
   type WorkspaceTabDragSession,
 } from "../lib/workspaceTabDrag";
 
-const STATUS_DOT: Record<SessionStatus, string> = {
-  idle: "bg-fg-muted",
-  running: "bg-accent animate-pulse",
-  needs_input: "bg-warning",
-  failed: "bg-danger",
-  completed: "bg-accent/60",
+const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
+  idle: "neutral",
+  running: "accent",
+  needs_input: "warning",
+  failed: "danger",
+  completed: "accent",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
@@ -1523,10 +1524,14 @@ function TabItem({
               })()}
             </Tooltip>
           ) : (
-            <span
+            <StatusDot
+              tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
+              size="sm"
+              pulse={session?.status === "running"}
               className={cn(
-                "pointer-events-none size-1.5 shrink-0 rounded-full",
-                session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
+                "pointer-events-none",
+                !session && "opacity-70",
+                session?.status === "completed" && "opacity-60",
               )}
             />
           )}
@@ -1680,10 +1685,14 @@ function WorkspaceTabDragGhost({
           );
         })()
       ) : (
-        <span
+        <StatusDot
+          tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
+          size="sm"
+          pulse={session?.status === "running"}
           className={cn(
-            "pointer-events-none size-1.5 shrink-0 rounded-full",
-            session ? STATUS_DOT[session.status] : "bg-fg-muted/50",
+            "pointer-events-none",
+            !session && "opacity-70",
+            session?.status === "completed" && "opacity-60",
           )}
         />
       )}

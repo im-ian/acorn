@@ -43,6 +43,7 @@ import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
 import { Tooltip } from "./Tooltip";
+import { StatusDot, type StatusTone } from "./ui";
 
 const MEMORY_POLL_MS = 2000;
 const TOKEN_USAGE_POLL_MS = 60_000;
@@ -970,20 +971,15 @@ function formatNotificationTime(value: string): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function StatusDot({ state }: { state: DotState }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "inline-block h-1.5 w-1.5 rounded-full",
-        state === "ok"
-          ? "bg-accent"
-          : state === "down"
-            ? "bg-danger"
-            : "bg-fg-muted/60",
-      )}
-    />
-  );
+function dotStateTone(state: DotState): StatusTone {
+  switch (state) {
+    case "ok":
+      return "accent";
+    case "down":
+      return "danger";
+    case "muted":
+      return "neutral";
+  }
 }
 
 function ServicesStatusButton() {
@@ -1102,7 +1098,7 @@ function ServicesStatusButton() {
           )}
         >
           <Activity size={12} />
-          <StatusDot state={aggregate} />
+          <StatusDot tone={dotStateTone(aggregate)} size="sm" />
         </button>
       </Tooltip>
       {open ? (
@@ -1384,7 +1380,7 @@ function ServiceRow({
   return (
     <div className="flex flex-col gap-1 px-2.5 py-2">
       <div className="flex items-start gap-2">
-        <StatusDot state={dot} />
+        <StatusDot tone={dotStateTone(dot)} size="sm" />
         <div className="min-w-0 flex-1">
           <div className="font-mono text-[11px] text-fg">{label}</div>
           <div className="font-mono text-[10px] text-fg-muted">{statusText}</div>
