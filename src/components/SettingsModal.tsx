@@ -83,10 +83,13 @@ import { useAppStore } from "../store";
 import {
   Button,
   CheckboxRow,
+  CodeValue,
   CommandHint,
   Field,
   Modal,
+  ModalFooter,
   ModalHeader,
+  Notice,
   RadioCard,
   Select,
   Stepper,
@@ -483,7 +486,7 @@ export function SettingsModal() {
         <p className="px-4 py-3 text-xs text-fg-muted">
           {t("settings.resetConfirm.message")}
         </p>
-        <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+        <ModalFooter variant="sidebar">
           <Button
             onClick={() => setConfirmResetOpen(false)}
             size="md"
@@ -502,7 +505,7 @@ export function SettingsModal() {
           >
             {t("settings.resetConfirm.confirm")}
           </Button>
-        </footer>
+        </ModalFooter>
       </Modal>
     </Modal>
   );
@@ -1015,9 +1018,9 @@ function ControlSessionInstallSection() {
                 : st(t, "settings.sessions.controlCli.missing")}
             </span>
           </div>
-          <code className="mt-1 block truncate font-mono text-fg">
+          <CodeValue overflow="truncate" className="mt-1">
             {status.bundled_path || "(unknown)"}
-          </code>
+          </CodeValue>
         </div>
         <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px]">
           <div className="flex items-center justify-between">
@@ -1037,9 +1040,9 @@ function ControlSessionInstallSection() {
                 : st(t, "settings.sessions.controlCli.notInstalled")}
             </span>
           </div>
-          <code className="mt-1 block truncate font-mono text-fg">
+          <CodeValue overflow="truncate" className="mt-1">
             {activeShim ? activeShim.path : installTarget}
-          </code>
+          </CodeValue>
         </div>
         {!activeShim && status.bundled_exists && installCommand ? (
           <CommandHint command={installCommand} repoPath={null} />
@@ -1970,19 +1973,9 @@ function NotificationSettings() {
               : st(t, "settings.notifications.test.send")}
           </Button>
           {testResult ? (
-            <p
-              className={cn(
-                "rounded-md border px-3 py-1.5 text-[11px]",
-                testResult.tone === "success" &&
-                  "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-                testResult.tone === "warning" &&
-                  "border-warning/40 bg-warning/10 text-warning",
-                testResult.tone === "danger" &&
-                  "border-danger/40 bg-danger/10 text-danger",
-              )}
-            >
+            <Notice tone={testResult.tone} density="compact">
               {testResult.text}
-            </p>
+            </Notice>
           ) : null}
         </div>
       </Field>
@@ -2509,10 +2502,10 @@ function ExperimentsSettings() {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-fg-muted">
+      <Notice tone="warning" density="compact" className="text-fg-muted">
         <Sparkles size={11} className="mr-1 inline align-text-bottom text-warning" />
         {st(t, "settings.experiments.warning")}
-      </div>
+      </Notice>
       <CheckboxRow
         checked={experiments.stickyPrompt}
         onChange={(checked) => patchExperiments({ stickyPrompt: checked })}
@@ -2630,12 +2623,13 @@ function ShortcutsSettings() {
         </button>
       </div>
       {recordingError ? (
-        <div
+        <Notice
           role="alert"
-          className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-snug text-danger"
+          tone="danger"
+          density="compact"
         >
           {recordingError}
-        </div>
+        </Notice>
       ) : null}
       <div className="space-y-3">
         {SHORTCUT_GROUPS.map((group) => (
@@ -2915,15 +2909,23 @@ function AboutSettings() {
       </div>
 
       {error ? (
-        <p className="rounded-[var(--acorn-pane-radius)] border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <Notice
+          tone="danger"
+          density="compact"
+          className="rounded-[var(--acorn-pane-radius)]"
+        >
           {error}
-        </p>
+        </Notice>
       ) : null}
 
       {notesError ? (
-        <p className="rounded-[var(--acorn-pane-radius)] border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <Notice
+          tone="danger"
+          density="compact"
+          className="rounded-[var(--acorn-pane-radius)]"
+        >
           {notesError}
-        </p>
+        </Notice>
       ) : null}
 
       <div className="flex items-center justify-between gap-2">

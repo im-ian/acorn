@@ -4,7 +4,7 @@ import { selectShouldNotify, useUpdater } from "../lib/updater-store";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import { WhatsNewModal } from "./WhatsNewModal";
-import { Button, IconButton } from "./ui";
+import { Button, IconButton, Notice } from "./ui";
 
 /**
  * Top-of-app non-blocking banner that surfaces an available update.
@@ -74,7 +74,11 @@ export function UpdateBanner(): ReactElement | null {
           </Tooltip>
         </div>
         {error ? (
-          <div className="flex items-start gap-2 border-t border-danger/30 bg-danger/10 px-4 py-1.5 text-[11px] text-danger">
+          <Notice
+            tone="danger"
+            density="compact"
+            className="flex items-start gap-2 rounded-none border-x-0 border-b-0 border-danger/30 px-4 py-1.5"
+          >
             <span className="flex-1 break-words">{error}</span>
             <button
               type="button"
@@ -84,7 +88,7 @@ export function UpdateBanner(): ReactElement | null {
             >
               <X size={12} />
             </button>
-          </div>
+          </Notice>
         ) : null}
       </div>
       <WhatsNewModal

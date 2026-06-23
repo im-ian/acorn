@@ -7,7 +7,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { STANDARD_PR_GENERATION_PROMPT } from "../lib/project-settings";
@@ -18,7 +17,17 @@ import {
 import type { ProjectSettings, ProjectWorktree, Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { useAppStore } from "../store";
-import { Button, CheckboxRow, Field, Modal, ModalHeader } from "./ui";
+import {
+  Button,
+  CheckboxRow,
+  CodeValue,
+  Field,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+  SegmentedControl,
+} from "./ui";
 
 const PROMPT_MAX_CHARS = 2_000;
 
@@ -341,23 +350,18 @@ export function ProjectSettingsModal({
             onClose={onClose}
           />
           <div className="flex h-[28rem]">
-            <nav className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-border bg-bg-sidebar/40 px-1.5 py-2">
-              {PROJECT_SETTINGS_TABS.map((tabMeta) => (
-                <button
-                  key={tabMeta.id}
-                  type="button"
-                  onClick={() => setTab(tabMeta.id)}
-                  className={cn(
-                    "rounded-md px-3 py-1.5 text-left text-xs transition",
-                    tab === tabMeta.id
-                      ? "acorn-tab-active-bg text-fg"
-                      : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
-                  )}
-                >
-                  {dt(t, tabMeta.labelKey)}
-                </button>
-              ))}
-            </nav>
+            <SegmentedControl
+              activeId={tab}
+              items={PROJECT_SETTINGS_TABS.map((tabMeta) => ({
+                id: tabMeta.id,
+                label: dt(t, tabMeta.labelKey),
+              }))}
+              onChange={setTab}
+              orientation="vertical"
+              surface="dialog"
+              ariaLabel={dt(t, "dialogs.projectSettings.title")}
+              className="w-40 shrink-0 border-r border-border bg-bg-sidebar/40 px-1.5 py-2"
+            />
             <div className="flex-1 overflow-y-auto p-4 text-xs text-fg">
               {tab === "general" ? (
                 <ProjectSettingsGroup
@@ -443,13 +447,13 @@ export function ProjectSettingsModal({
               )}
 
               {error ? (
-                <p className="mt-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+                <Notice tone="danger" density="compact" className="mt-4">
                   {error}
-                </p>
+                </Notice>
               ) : null}
             </div>
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <ModalFooter variant="sidebar">
             <Button
               onClick={onClose}
               disabled={saving}
@@ -469,7 +473,7 @@ export function ProjectSettingsModal({
                 ? dt(t, "dialogs.projectSettings.saving")
                 : dt(t, "dialogs.projectSettings.save")}
             </Button>
-          </footer>
+          </ModalFooter>
           <RemoveWorktreeConfirmDialog
             worktree={canShowConfirmRemove ? confirmRemove : null}
             sessions={confirmRemoveSessions}
@@ -640,7 +644,7 @@ function ProjectWorktreeList({
         </ul>
       )}
       {error ? (
-        <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+        <Notice tone="danger" density="compact">
           {dt(
             t,
             error.kind === "load"
@@ -648,7 +652,7 @@ function ProjectWorktreeList({
               : "dialogs.projectSettings.removeWorktreeFailed",
           )}{" "}
           {error.message}
-        </p>
+        </Notice>
       ) : null}
     </div>
   );
@@ -697,13 +701,15 @@ function RemoveWorktreeConfirmDialog({
                   })
                 : dt(t, "dialogs.projectSettings.confirmRemoveBody")}
             </p>
-            <div className="rounded-md border border-border bg-bg px-3 py-2">
-              <p className="break-all font-mono text-[10px] leading-relaxed text-fg-muted">
-                {worktree.path}
-              </p>
-            </div>
+            <CodeValue
+              tone="muted"
+              overflow="breakAll"
+              className="px-3 py-2 text-[10px] leading-relaxed"
+            >
+              {worktree.path}
+            </CodeValue>
             {hasSessions ? (
-              <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+              <Notice tone="warning" density="compact">
                 <p className="text-[11px] font-medium text-warning">
                   {dtf(
                     t,
@@ -723,10 +729,10 @@ function RemoveWorktreeConfirmDialog({
                     </li>
                   ))}
                 </ul>
-              </div>
+              </Notice>
             ) : null}
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
+          <ModalFooter variant="sidebar">
             <Button
               onClick={onCancel}
               disabled={removing}
@@ -750,7 +756,7 @@ function RemoveWorktreeConfirmDialog({
                   ? dt(t, "dialogs.projectSettings.deleteWorktreeAndSessions")
                   : dt(t, "dialogs.projectSettings.deleteWorktree")}
             </Button>
-          </footer>
+          </ModalFooter>
         </>
       ) : null}
     </Modal>

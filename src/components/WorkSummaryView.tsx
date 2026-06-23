@@ -39,6 +39,7 @@ import {
 } from "../lib/workSummary";
 import type { WorkSummaryWorkspaceTab } from "../lib/workspaceTabs";
 import type { AgentTranscriptSummary } from "../lib/types";
+import { Notice } from "./ui/Notice";
 import { RefreshButton } from "./ui/RefreshButton";
 import {
   FileStatusChart,
@@ -389,10 +390,9 @@ export function WorkSummaryView({
         aria-busy={loading ? true : undefined}
       >
         {error ? (
-          <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
+          <Notice tone="danger" icon={<AlertTriangle size={14} />}>
+            {error}
+          </Notice>
         ) : null}
 
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
