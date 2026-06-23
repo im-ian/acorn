@@ -210,11 +210,20 @@ test.describe("right panel: tab switching", () => {
         labels: [{ name: "enhancement", color: "a2eeef" }],
         comments: [
           {
+            id: 4201,
             author: "im-ian",
             author_avatar_url: null,
-            body: "First in-app issue comment.",
+            body: "Older in-app issue comment.",
             created_at: "2026-05-19T01:00:00Z",
             url: "https://github.com/im-ian/acorn/issues/42#issuecomment-1",
+          },
+          {
+            id: 4202,
+            author: "botlesun",
+            author_avatar_url: null,
+            body: "Newer in-app issue comment.",
+            created_at: "2026-05-19T02:00:00Z",
+            url: "https://github.com/im-ian/acorn/issues/42#issuecomment-2",
           },
         ],
         assignees: ["im-ian"],
@@ -230,8 +239,196 @@ test.describe("right panel: tab switching", () => {
       .locator("xpath=ancestor::li[@role='button'][1]");
     await dblclickRowRightSide(page, issueRow);
 
-    await expect(page.getByText("Loaded issue body from gh.")).toBeVisible();
-    await expect(page.getByText("First in-app issue comment.")).toBeVisible();
+    const dialog = page.locator('[role="dialog"]').filter({
+      has: page.getByRole("heading", { name: "Render issue detail in app" }),
+    });
+    await expect(dialog.getByText("Loaded issue body from gh.")).toBeVisible();
+    const comments = dialog.locator("section ul > li");
+    await expect(comments.nth(0)).toContainText("Older in-app issue comment.");
+    await expect(comments.nth(1)).toContainText("Newer in-app issue comment.");
+
+    await dialog.getByRole("button", { name: "Oldest first" }).click();
+    await expect(comments.nth(0)).toContainText("Newer in-app issue comment.");
+    await expect(comments.nth(1)).toContainText("Older in-app issue comment.");
+  });
+
+  test("posting from the issue detail modal appends a comment", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_issues", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 43,
+          title: "Comment from issue modal",
+          state: "OPEN",
+          author: "im-ian",
+          url: "https://github.com/im-ian/acorn/issues/43",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          state_reason: null,
+          comments: 0,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("get_issue_detail", () => {
+      const w = window as unknown as {
+        __issueModalComments?: Array<{ id: number; body: string }>;
+      };
+      const comments = w.__issueModalComments ?? [];
+      return {
+        kind: "ok",
+        account: "im-ian",
+        detail: {
+          number: 43,
+          title: "Comment from issue modal",
+          body: "Issue body",
+          state: "OPEN",
+          author: "im-ian",
+          url: "https://github.com/im-ian/acorn/issues/43",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          state_reason: null,
+          labels: [],
+          comments: comments.map((comment, index) => ({
+            id: comment.id,
+            author: "im-ian",
+            author_avatar_url: null,
+            body: comment.body,
+            created_at: `2026-05-19T01:0${index}:00Z`,
+            url: `https://github.com/im-ian/acorn/issues/43#issuecomment-${comment.id}`,
+          })),
+          assignees: [],
+          milestone: null,
+        },
+      };
+    });
+    await tauri.handle("add_issue_comment", (args) => {
+      const w = window as unknown as {
+        __issueModalComments?: Array<{ id: number; body: string }>;
+        __issueCommentArgs?: unknown[];
+      };
+      w.__issueModalComments = w.__issueModalComments ?? [];
+      w.__issueCommentArgs = w.__issueCommentArgs ?? [];
+      w.__issueCommentArgs.push(args);
+      w.__issueModalComments.push({
+        id: 4300 + w.__issueModalComments.length,
+        body: (args as { body?: string }).body ?? "missing body",
+      });
+      return undefined;
+    });
+    await tauri.handle("update_github_comment", (args) => {
+      const w = window as unknown as {
+        __issueModalComments?: Array<{ id: number; body: string }>;
+        __issueCommentUpdateArgs?: unknown[];
+      };
+      w.__issueModalComments = w.__issueModalComments ?? [];
+      w.__issueCommentUpdateArgs = w.__issueCommentUpdateArgs ?? [];
+      w.__issueCommentUpdateArgs.push(args);
+      const comment = w.__issueModalComments.find(
+        (item) => item.id === (args as { commentId?: number }).commentId,
+      );
+      if (comment) comment.body = (args as { body?: string }).body ?? comment.body;
+      return undefined;
+    });
+    await tauri.handle("delete_github_comment", (args) => {
+      const w = window as unknown as {
+        __issueModalComments?: Array<{ id: number; body: string }>;
+        __issueCommentDeleteArgs?: unknown[];
+      };
+      w.__issueModalComments = w.__issueModalComments ?? [];
+      w.__issueCommentDeleteArgs = w.__issueCommentDeleteArgs ?? [];
+      w.__issueCommentDeleteArgs.push(args);
+      w.__issueModalComments = w.__issueModalComments.filter(
+        (item) => item.id !== (args as { commentId?: number }).commentId,
+      );
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "Issues" }).click();
+    const issueRow = page
+      .getByText("Comment from issue modal")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, issueRow);
+
+    await page
+      .getByLabel("Issue comment")
+      .fill("Posted from **Acorn** issue modal.");
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Discard comment draft?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page.getByLabel("Issue comment")).toHaveValue(
+      "Posted from **Acorn** issue modal.",
+    );
+    await page.getByRole("button", { name: "Preview" }).click();
+    await expect(
+      page.getByText("Posted from Acorn issue modal."),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Write" }).click();
+    await expect(page.getByLabel("Issue comment")).toHaveValue(
+      "Posted from **Acorn** issue modal.",
+    );
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+
+    await expect(
+      page.getByText("Posted from Acorn issue modal."),
+    ).toBeVisible();
+    await expect(page.getByLabel("Issue comment")).toHaveValue("");
+
+    await page.getByRole("button", { name: "Edit comment" }).click();
+    await page
+      .getByRole("textbox", { name: "Edit comment" })
+      .fill("Edited from **Acorn** issue modal.");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(
+      page.getByText("Edited from Acorn issue modal."),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Delete comment" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Delete comment?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(
+      page.getByText("Edited from Acorn issue modal."),
+    ).toHaveCount(0);
+
+    const call = await page.evaluate(() => {
+      const w = window as unknown as { __issueCommentArgs?: unknown[] };
+      return w.__issueCommentArgs?.[0];
+    });
+    expect(call).toEqual({
+      repoPath: "/tmp/demo",
+      number: 43,
+      body: "Posted from **Acorn** issue modal.",
+    });
+    const updateCall = await page.evaluate(() => {
+      const w = window as unknown as { __issueCommentUpdateArgs?: unknown[] };
+      return w.__issueCommentUpdateArgs?.[0];
+    });
+    expect(updateCall).toEqual({
+      repoPath: "/tmp/demo",
+      accountLogin: "im-ian",
+      commentId: 4300,
+      body: "Edited from **Acorn** issue modal.",
+    });
+    const deleteCall = await page.evaluate(() => {
+      const w = window as unknown as { __issueCommentDeleteArgs?: unknown[] };
+      return w.__issueCommentDeleteArgs?.[0];
+    });
+    expect(deleteCall).toEqual({
+      repoPath: "/tmp/demo",
+      accountLogin: "im-ian",
+      commentId: 4300,
+    });
   });
 
   test("double-clicking a pull request row opens its in-app detail modal", async ({
@@ -298,6 +495,186 @@ test.describe("right panel: tab switching", () => {
     await expect(
       page.getByText("Loaded pull request body from gh."),
     ).toBeVisible();
+  });
+
+  test("posting from the pull request detail modal appends a conversation comment", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 88,
+          title: "Comment from PR modal",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/comment",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/88",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.handle("get_pull_request_detail", () => {
+      const w = window as unknown as {
+        __prModalComments?: Array<{ id: number; body: string }>;
+      };
+      const comments = w.__prModalComments ?? [];
+      return {
+        kind: "ok",
+        account: "im-ian",
+        detail: {
+          number: 88,
+          title: "Comment from PR modal",
+          body: "PR body",
+          state: "OPEN",
+          is_draft: false,
+          author: "im-ian",
+          head_branch: "feature/comment",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/88",
+          created_at: "2026-05-18T00:00:00Z",
+          updated_at: "2026-05-19T00:00:00Z",
+          merged_at: null,
+          additions: 1,
+          deletions: 0,
+          changed_files: 1,
+          mergeable: "MERGEABLE",
+          labels: [],
+          comments: comments.map((comment, index) => ({
+            id: comment.id,
+            author: "im-ian",
+            author_avatar_url: null,
+            body: comment.body,
+            created_at: `2026-05-19T01:1${index}:00Z`,
+            url: `https://github.com/im-ian/acorn/pull/88#issuecomment-${comment.id}`,
+          })),
+          reviews: [],
+          checks: [],
+          commits: [],
+        },
+      };
+    });
+    await tauri.handle("add_pull_request_comment", (args) => {
+      const w = window as unknown as {
+        __prModalComments?: Array<{ id: number; body: string }>;
+        __prCommentArgs?: unknown[];
+      };
+      w.__prModalComments = w.__prModalComments ?? [];
+      w.__prCommentArgs = w.__prCommentArgs ?? [];
+      w.__prCommentArgs.push(args);
+      w.__prModalComments.push({
+        id: 8800 + w.__prModalComments.length,
+        body: (args as { body?: string }).body ?? "missing body",
+      });
+      return undefined;
+    });
+    await tauri.handle("update_github_comment", (args) => {
+      const w = window as unknown as {
+        __prModalComments?: Array<{ id: number; body: string }>;
+        __prCommentUpdateArgs?: unknown[];
+      };
+      w.__prModalComments = w.__prModalComments ?? [];
+      w.__prCommentUpdateArgs = w.__prCommentUpdateArgs ?? [];
+      w.__prCommentUpdateArgs.push(args);
+      const comment = w.__prModalComments.find(
+        (item) => item.id === (args as { commentId?: number }).commentId,
+      );
+      if (comment) comment.body = (args as { body?: string }).body ?? comment.body;
+      return undefined;
+    });
+    await tauri.handle("delete_github_comment", (args) => {
+      const w = window as unknown as {
+        __prModalComments?: Array<{ id: number; body: string }>;
+        __prCommentDeleteArgs?: unknown[];
+      };
+      w.__prModalComments = w.__prModalComments ?? [];
+      w.__prCommentDeleteArgs = w.__prCommentDeleteArgs ?? [];
+      w.__prCommentDeleteArgs.push(args);
+      w.__prModalComments = w.__prModalComments.filter(
+        (item) => item.id !== (args as { commentId?: number }).commentId,
+      );
+      return undefined;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+    const prRow = page
+      .getByText("Comment from PR modal")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, prRow);
+
+    await page
+      .getByLabel("Pull request comment")
+      .fill("Posted from **Acorn** PR modal.");
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Discard comment draft?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page.getByLabel("Pull request comment")).toHaveValue(
+      "Posted from **Acorn** PR modal.",
+    );
+    await page.getByRole("button", { name: "Preview" }).click();
+    await expect(page.getByText("Posted from Acorn PR modal.")).toBeVisible();
+    await page.getByRole("button", { name: "Write" }).click();
+    await expect(page.getByLabel("Pull request comment")).toHaveValue(
+      "Posted from **Acorn** PR modal.",
+    );
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+
+    await expect(page.getByText("Posted from Acorn PR modal.")).toBeVisible();
+    await expect(page.getByLabel("Pull request comment")).toHaveValue("");
+
+    await page.getByRole("button", { name: "Edit comment" }).click();
+    await page
+      .getByRole("textbox", { name: "Edit comment" })
+      .fill("Edited from **Acorn** PR modal.");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("Edited from Acorn PR modal.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Delete comment" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Delete comment?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByText("Edited from Acorn PR modal.")).toHaveCount(0);
+
+    const call = await page.evaluate(() => {
+      const w = window as unknown as { __prCommentArgs?: unknown[] };
+      return w.__prCommentArgs?.[0];
+    });
+    expect(call).toEqual({
+      repoPath: "/tmp/demo",
+      number: 88,
+      body: "Posted from **Acorn** PR modal.",
+    });
+    const updateCall = await page.evaluate(() => {
+      const w = window as unknown as { __prCommentUpdateArgs?: unknown[] };
+      return w.__prCommentUpdateArgs?.[0];
+    });
+    expect(updateCall).toEqual({
+      repoPath: "/tmp/demo",
+      accountLogin: "im-ian",
+      commentId: 8800,
+      body: "Edited from **Acorn** PR modal.",
+    });
+    const deleteCall = await page.evaluate(() => {
+      const w = window as unknown as { __prCommentDeleteArgs?: unknown[] };
+      return w.__prCommentDeleteArgs?.[0];
+    });
+    expect(deleteCall).toEqual({
+      repoPath: "/tmp/demo",
+      accountLogin: "im-ian",
+      commentId: 8800,
+    });
   });
 
   test("opening PR merge from the context menu shows a skeleton before details load", async ({

@@ -27,6 +27,9 @@ vi.mock("../lib/api", () => {
       updatePullRequestBody: vi.fn<
         (repoPath: string, n: number, body: string) => Promise<void>
       >(),
+      addPullRequestComment: vi.fn<
+        (repoPath: string, n: number, body: string) => Promise<void>
+      >(),
       mergePullRequest: vi.fn(),
       closePullRequest: vi.fn(),
       generatePrCommitMessage: vi.fn(),
@@ -103,6 +106,7 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     mockApi.getPullRequestDetail.mockReset();
     mockApi.getPullRequestDiff.mockReset();
     mockApi.updatePullRequestBody.mockReset();
+    mockApi.addPullRequestComment.mockReset();
     mockApi.mergePullRequest.mockReset();
     mockApi.closePullRequest.mockReset();
     mockApi.generatePrCommitMessage.mockReset();
@@ -184,11 +188,13 @@ describe("PullRequestDetailModal — body checkbox toggle", () => {
     const detail = fakeDetail("");
     detail.comments = [
       {
+        id: 1,
         author: "linear-code",
         author_avatar_url:
           "https://avatars.githubusercontent.com/in/1658531?s=80&v=4",
         body: "Figma parity note",
         created_at: "2026-05-19T02:00:00Z",
+        url: "https://github.com/x/y/pull/999#issuecomment-1",
       },
     ];
     mockApi.getPullRequestDetail.mockResolvedValueOnce({

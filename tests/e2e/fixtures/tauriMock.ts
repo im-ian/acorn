@@ -198,6 +198,18 @@ export const tauriMockSource = `
     if (cmd === 'get_issue_detail') {
       return Promise.resolve({ kind: 'not_github' });
     }
+    if (cmd === 'add_issue_comment') {
+      return Promise.resolve(undefined);
+    }
+    if (cmd === 'update_github_comment') {
+      return Promise.resolve(undefined);
+    }
+    if (cmd === 'delete_github_comment') {
+      return Promise.resolve(undefined);
+    }
+    if (cmd === 'add_pull_request_comment') {
+      return Promise.resolve(undefined);
+    }
     if (cmd === 'get_pull_request_diff') {
       return Promise.resolve({ kind: 'ok', account: 'test', diff: { files: [] } });
     }
