@@ -179,6 +179,7 @@ const detailedIssue = {
   body: "Detailed issue body",
   comments: [
     {
+      id: 1,
       author: "im-ian",
       author_avatar_url: null,
       body: "First issue comment",

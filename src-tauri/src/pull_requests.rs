@@ -257,6 +257,7 @@ pub enum IssueListing {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IssueComment {
+    pub id: Option<u64>,
     pub author: String,
     pub author_avatar_url: Option<String>,
     pub body: String,
@@ -419,6 +420,68 @@ pub fn get_issue_detail(repo_path: &Path, number: u64) -> AppResult<IssueDetailL
             Ok(IssueDetailListing::NoAccess { slug, accounts })
         }
     }
+}
+
+pub fn add_issue_comment(repo_path: &Path, number: u64, body: &str) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(AppError::Other("Comment body cannot be empty.".to_string()));
+    }
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_gh_comment("issue", &slug, number, token, body)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account can comment on this issue.".to_string(),
+        )),
+    }
+}
+
+pub fn update_github_comment(
+    repo_path: &Path,
+    account_login: &str,
+    comment_id: u64,
+    body: &str,
+) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(AppError::Other("Comment body cannot be empty.".to_string()));
+    }
+
+    let token = gh_token_for_required(account_login)?;
+    run_issue_comment_update(&slug, comment_id, &token, body)?;
+    store_resolution(repo_path, account_login.trim());
+    Ok(())
+}
+
+pub fn delete_github_comment(
+    repo_path: &Path,
+    account_login: &str,
+    comment_id: u64,
+) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    let token = gh_token_for_required(account_login)?;
+    run_issue_comment_delete(&slug, comment_id, &token)?;
+    store_resolution(repo_path, account_login.trim());
+    Ok(())
 }
 
 /// Outcome of running an authenticated gh operation for a repo. `Ok` carries
@@ -693,6 +756,9 @@ fn build_issue_detail(number: u64, view: GhIssueView) -> IssueDetail {
                 .login
                 .unwrap_or_else(|| "unknown".to_string());
             IssueComment {
+                id: comment
+                    .database_id
+                    .or_else(|| comment_id_from_url(comment.url.as_deref())),
                 author_avatar_url: actor_avatars.get(&author).cloned(),
                 author,
                 body: comment.body.unwrap_or_default(),
@@ -964,6 +1030,15 @@ fn gh_token_for(login: &str) -> Option<String> {
     }
 }
 
+fn gh_token_for_required(login: &str) -> AppResult<String> {
+    let login = login.trim();
+    if login.is_empty() {
+        return Err(AppError::Other("GitHub account is required.".to_string()));
+    }
+    gh_token_for(login)
+        .ok_or_else(|| AppError::Other(format!("No gh token found for account {login}.")))
+}
+
 fn gh_active_token() -> Option<String> {
     let out = cli_resolver::run("gh", |cmd| {
         cmd.args(["auth", "token"]);
@@ -1037,10 +1112,12 @@ fn git_user_email(repo_path: &Path) -> Option<String> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PullRequestComment {
+    pub id: Option<u64>,
     pub author: String,
     pub author_avatar_url: Option<String>,
     pub body: String,
     pub created_at: String,
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1195,6 +1272,28 @@ pub fn get_pull_request_diff(repo_path: &Path, number: u64) -> AppResult<PullReq
     }
 }
 
+pub fn add_pull_request_comment(repo_path: &Path, number: u64, body: &str) -> AppResult<()> {
+    let Some(slug) = github_owner_repo(repo_path)? else {
+        return Err(AppError::Other(
+            "Origin remote is not a GitHub repository.".to_string(),
+        ));
+    };
+
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(AppError::Other("Comment body cannot be empty.".to_string()));
+    }
+
+    match try_with_account(repo_path, &slug, |token| {
+        run_gh_comment("pr", &slug, number, token, body)
+    })? {
+        AccountOutcome::Ok { value, .. } => Ok(value),
+        AccountOutcome::NoAccess { .. } => Err(AppError::Other(
+            "No logged-in gh account can comment on this PR.".to_string(),
+        )),
+    }
+}
+
 /// Image enrichment variant used for the overall PR diff. Resolves the
 /// "new" side at the PR's head ref and the "old" side at the base ref.
 fn enrich_image_previews_against_refs(
@@ -1237,10 +1336,14 @@ fn build_detail(number: u64, view: GhPullRequestView) -> PullRequestDetail {
         .map(|c| {
             let author = c.author.login.unwrap_or_else(|| "unknown".to_string());
             PullRequestComment {
+                id: c
+                    .database_id
+                    .or_else(|| comment_id_from_url(c.url.as_deref())),
                 author_avatar_url: actor_avatars.get(&author).cloned(),
                 author,
                 body: c.body.unwrap_or_default(),
                 created_at: c.created_at.unwrap_or_default(),
+                url: c.url,
             }
         })
         .collect();
@@ -1836,6 +1939,8 @@ struct GhIssueView {
 
 #[derive(Debug, Deserialize)]
 struct GhIssueComment {
+    #[serde(rename = "databaseId")]
+    database_id: Option<u64>,
     #[serde(default)]
     author: GhAuthor,
     body: Option<String>,
@@ -1870,11 +1975,14 @@ struct GhCommitAuthor {
 
 #[derive(Debug, Deserialize)]
 struct GhComment {
+    #[serde(rename = "databaseId")]
+    database_id: Option<u64>,
     #[serde(default)]
     author: GhAuthor,
     body: Option<String>,
     #[serde(rename = "createdAt")]
     created_at: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2149,6 +2257,122 @@ fn run_pr_edit_body(slug: &str, number: u64, token: &str, body: &str) -> AppResu
         return Err(AppError::Other(msg));
     }
     Ok(())
+}
+
+fn run_gh_comment(target: &str, slug: &str, number: u64, token: &str, body: &str) -> AppResult<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let gh_path = cli_resolver::resolve("gh")?;
+    let number_s = number.to_string();
+    let mut cmd = Command::new(&gh_path);
+    cmd.env("GH_TOKEN", token).env("GH_HOST", GH_HOST).args([
+        target,
+        "comment",
+        &number_s,
+        "--repo",
+        slug,
+        "--body-file",
+        "-",
+    ]);
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                cli_resolver::invalidate("gh");
+            }
+            cli_resolver::spawn_error("gh", e)
+        })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(body.as_bytes())
+            .map_err(|e| AppError::Other(format!("failed writing comment to gh: {e}")))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+fn run_issue_comment_update(slug: &str, comment_id: u64, token: &str, body: &str) -> AppResult<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let gh_path = cli_resolver::resolve("gh")?;
+    let endpoint = format!("repos/{slug}/issues/comments/{comment_id}");
+    let payload = serde_json::json!({ "body": body }).to_string();
+    let mut cmd = Command::new(&gh_path);
+    cmd.env("GH_TOKEN", token)
+        .env("GH_HOST", GH_HOST)
+        .args(["api", "-X", "PATCH", &endpoint, "--input", "-", "--silent"]);
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                cli_resolver::invalidate("gh");
+            }
+            cli_resolver::spawn_error("gh", e)
+        })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(payload.as_bytes())
+            .map_err(|e| AppError::Other(format!("failed writing comment update to gh: {e}")))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Other(format!("failed waiting for gh: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+fn run_issue_comment_delete(slug: &str, comment_id: u64, token: &str) -> AppResult<()> {
+    let endpoint = format!("repos/{slug}/issues/comments/{comment_id}");
+    let output = cli_resolver::run("gh", |cmd| {
+        cmd.env("GH_TOKEN", token)
+            .env("GH_HOST", GH_HOST)
+            .args(["api", "-X", "DELETE", &endpoint, "--silent"]);
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("gh exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(AppError::Other(msg));
+    }
+    Ok(())
+}
+
+fn comment_id_from_url(url: Option<&str>) -> Option<u64> {
+    let fragment = url?.rsplit_once('#')?.1;
+    fragment.strip_prefix("issuecomment-")?.parse().ok()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2760,6 +2984,22 @@ mod tests {
     }
 
     #[test]
+    fn issue_comment_id_is_parsed_from_web_url_fragment() {
+        assert_eq!(
+            comment_id_from_url(Some(
+                "https://github.com/acme/widgets/issues/7#issuecomment-12345"
+            )),
+            Some(12345)
+        );
+        assert_eq!(
+            comment_id_from_url(Some("https://github.com/acme/widgets/issues/7")),
+            None
+        );
+        assert_eq!(comment_id_from_url(Some("not-a-url#comment-12345")), None);
+        assert_eq!(comment_id_from_url(None), None);
+    }
+
+    #[test]
     fn commit_login_query_uses_graphql_variables() {
         let query = build_commit_login_query(2);
 
@@ -2857,6 +3097,7 @@ mod tests {
         assert_eq!(detail.state_reason.as_deref(), Some("COMPLETED"));
         assert_eq!(detail.labels[0].name, "enhancement");
         assert_eq!(detail.comments[0].author, "bob");
+        assert_eq!(detail.comments[0].id, Some(1));
         assert_eq!(detail.comments[0].body, "Looks good");
         assert_eq!(detail.assignees, vec!["carol".to_string()]);
         assert_eq!(detail.milestone.as_deref(), Some("v1"));

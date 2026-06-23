@@ -67,4 +67,18 @@ describe("Markdown — interactive task list", () => {
     );
     expect(box?.disabled).toBe(true);
   });
+
+  it("renders soft line breaks as hard breaks when enabled", () => {
+    act(() => {
+      root.render(<Markdown content={"안녕\n하세요"} softBreaks />);
+    });
+    expect(container.querySelectorAll("br")).toHaveLength(1);
+  });
+
+  it("keeps CommonMark soft break rendering by default", () => {
+    act(() => {
+      root.render(<Markdown content={"안녕\n하세요"} />);
+    });
+    expect(container.querySelectorAll("br")).toHaveLength(0);
+  });
 });

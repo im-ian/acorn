@@ -15,7 +15,9 @@ import {
   GitPullRequestDraft,
   MessagesSquare,
   Minus,
+  PencilLine,
   Plus,
+  Trash2,
   X,
   XCircle,
 } from "lucide-react";
@@ -41,7 +43,11 @@ import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { DeleteCommentDialog } from "./DeleteCommentDialog";
+import { DiscardCommentDraftDialog } from "./DiscardCommentDraftDialog";
 import { DiffSplitView } from "./DiffSplitView";
+import { GitHubCommentEditForm } from "./GitHubCommentEditForm";
+import { GitHubCommentComposer } from "./GitHubCommentComposer";
 import { GitHubLabelChip } from "./GitHubLabelChip";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
@@ -121,6 +127,10 @@ export function PullRequestDetailModal({
   const [refreshing, setRefreshing] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [discardCommentDialogOpen, setDiscardCommentDialogOpen] =
+    useState(false);
+  const [deleteCommentId, setDeleteCommentId] = useState<number | null>(null);
   // Optimistic body override while a task-list checkbox toggle is in flight
   // (or after one succeeds, until the next fetch overwrites it). Keyed by
   // PR identity so a stale override never bleeds into a different PR.
@@ -131,10 +141,31 @@ export function PullRequestDetailModal({
   const [bodySaveError, setBodySaveError] = useState<string | null>(null);
   const bodyWriteSeqRef = useRef(0);
 
-  useDialogShortcuts(open !== null, {
-    onCancel: onClose,
-    onConfirm: onClose,
-  });
+  const requestClose = useCallback(() => {
+    if (commentDraft.trim().length > 0) {
+      setDiscardCommentDialogOpen(true);
+      return;
+    }
+    onClose();
+  }, [commentDraft, onClose]);
+
+  const discardAndClose = useCallback(() => {
+    setCommentDraft("");
+    setDiscardCommentDialogOpen(false);
+    onClose();
+  }, [onClose]);
+
+  useDialogShortcuts(
+    open !== null &&
+      !discardCommentDialogOpen &&
+      !mergeDialogOpen &&
+      !closeDialogOpen &&
+      deleteCommentId === null,
+    {
+      onCancel: requestClose,
+      onConfirm: requestClose,
+    },
+  );
 
   // Hard-clear stale data whenever the modal closes or switches PR.
   useEffect(() => {
@@ -146,12 +177,18 @@ export function PullRequestDetailModal({
       setReloadKey(0);
       setMergeDialogOpen(false);
       setCloseDialogOpen(false);
+      setCommentDraft("");
+      setDiscardCommentDialogOpen(false);
+      setDeleteCommentId(null);
       setBodyOverride(null);
       setBodySaveError(null);
       return;
     }
     setListing(null);
     setError(null);
+    setCommentDraft("");
+    setDiscardCommentDialogOpen(false);
+    setDeleteCommentId(null);
     setBodyOverride(null);
     setBodySaveError(null);
   }, [open]);
@@ -217,6 +254,39 @@ export function PullRequestDetailModal({
     onMutated?.();
   }, [onMutated]);
 
+  const handleSubmitComment = useCallback(
+    async (body: string) => {
+      if (!open) return;
+      await api.addPullRequestComment(open.repoPath, open.number, body);
+      setCommentDraft("");
+      handleMutated();
+    },
+    [open, handleMutated],
+  );
+
+  const handleUpdateComment = useCallback(
+    async (commentId: number, body: string) => {
+      if (!open || listing?.kind !== "ok") return;
+      await api.updateGithubComment(
+        open.repoPath,
+        listing.account,
+        commentId,
+        body,
+      );
+      handleMutated();
+    },
+    [open, listing, handleMutated],
+  );
+
+  const handleDeleteComment = useCallback(
+    async (commentId: number) => {
+      if (!open || listing?.kind !== "ok") return;
+      await api.deleteGithubComment(open.repoPath, listing.account, commentId);
+      handleMutated();
+    },
+    [open, listing, handleMutated],
+  );
+
   const prKey = open ? `${open.repoPath}#${open.number}` : null;
   // Whenever a fresh detail arrives, the canonical body wins unless we have
   // an unsynced override from a click that happened mid-fetch. The override
@@ -267,27 +337,27 @@ export function PullRequestDetailModal({
 
   return (
     <>
-    <Modal open={open !== null} onClose={onClose} variant="panel" size="5xl">
+    <Modal open={open !== null} onClose={requestClose} variant="panel" size="5xl">
       {open ? (
         error ? (
-          <ModalShell title={`#${open.number}`} onClose={onClose}>
+          <ModalShell title={`#${open.number}`} onClose={requestClose}>
             <div className="p-4 text-xs text-danger">{error}</div>
           </ModalShell>
         ) : !listing ? (
           <DetailSkeleton
             number={open.number}
-            onClose={onClose}
+            onClose={requestClose}
             onRefresh={handleRefresh}
             refreshing={refreshing}
           />
         ) : listing.kind === "not_github" ? (
-          <ModalShell title={`#${open.number}`} onClose={onClose}>
+          <ModalShell title={`#${open.number}`} onClose={requestClose}>
             <div className="p-4 text-xs text-fg-muted">
               {dt(t, "dialogs.pullRequestDetail.notGithub")}
             </div>
           </ModalShell>
         ) : listing.kind === "no_access" ? (
-          <ModalShell title={`#${open.number}`} onClose={onClose}>
+          <ModalShell title={`#${open.number}`} onClose={requestClose}>
             <div className="p-4 text-xs text-fg-muted">
               {dt(t, "dialogs.pullRequestDetail.noAccessPrefix")}{" "}
               <code className="font-mono">gh</code>{" "}
@@ -297,20 +367,26 @@ export function PullRequestDetailModal({
           </ModalShell>
         ) : (
           <DetailBody
+            account={listing.account}
             detail={listing.detail}
             body={displayBody ?? listing.detail.body}
             onTaskToggle={handleTaskToggle}
             bodySaveError={bodySaveError}
             tab={tab}
             onTab={setTab}
+            commentDraft={commentDraft}
+            onCommentDraftChange={setCommentDraft}
             repoPath={open.repoPath}
             cwd={cwd}
-            onClose={onClose}
+            onClose={requestClose}
             onRefresh={handleRefresh}
             refreshing={refreshing}
             diffReloadKey={reloadKey}
             onOpenMerge={() => setMergeDialogOpen(true)}
             onOpenClose={() => setCloseDialogOpen(true)}
+            onSubmitComment={handleSubmitComment}
+            onUpdateComment={handleUpdateComment}
+            onRequestDeleteComment={setDeleteCommentId}
           />
         )
       ) : null}
@@ -339,6 +415,20 @@ export function PullRequestDetailModal({
         />
       </>
     ) : null}
+    <DiscardCommentDraftDialog
+      open={discardCommentDialogOpen}
+      onCancel={() => setDiscardCommentDialogOpen(false)}
+      onDiscard={discardAndClose}
+    />
+    <DeleteCommentDialog
+      open={deleteCommentId !== null}
+      onCancel={() => setDeleteCommentId(null)}
+      onDelete={async () => {
+        if (deleteCommentId === null) return;
+        await handleDeleteComment(deleteCommentId);
+        setDeleteCommentId(null);
+      }}
+    />
     </>
   );
 }
@@ -361,12 +451,15 @@ function ModalShell({
 }
 
 function DetailBody({
+  account,
   detail,
   body,
   onTaskToggle,
   bodySaveError,
   tab,
   onTab,
+  commentDraft,
+  onCommentDraftChange,
   repoPath,
   cwd,
   onClose,
@@ -375,7 +468,11 @@ function DetailBody({
   diffReloadKey,
   onOpenMerge,
   onOpenClose,
+  onSubmitComment,
+  onUpdateComment,
+  onRequestDeleteComment,
 }: {
+  account: string;
   detail: PullRequestDetail;
   /** Optimistically-overridden body (or `detail.body` if no edit is pending). */
   body: string;
@@ -383,6 +480,8 @@ function DetailBody({
   bodySaveError: string | null;
   tab: DetailTab;
   onTab: (t: DetailTab) => void;
+  commentDraft: string;
+  onCommentDraftChange: (body: string) => void;
   repoPath: string;
   cwd?: string;
   onClose: () => void;
@@ -391,6 +490,9 @@ function DetailBody({
   diffReloadKey: number;
   onOpenMerge: () => void;
   onOpenClose: () => void;
+  onSubmitComment: (body: string) => Promise<void>;
+  onUpdateComment: (commentId: number, body: string) => Promise<void>;
+  onRequestDeleteComment: (commentId: number) => void;
 }) {
   const t = useTranslation();
   const conversationCount = detail.comments.length + detail.reviews.length;
@@ -460,8 +562,14 @@ function DetailBody({
       <div className="min-h-0 flex-1 overflow-hidden p-1.5">
         {tab === "conversation" ? (
           <ConversationPane
+            currentAccount={account}
             comments={detail.comments}
             reviews={detail.reviews}
+            commentDraft={commentDraft}
+            onCommentDraftChange={onCommentDraftChange}
+            onSubmitComment={onSubmitComment}
+            onUpdateComment={onUpdateComment}
+            onRequestDeleteComment={onRequestDeleteComment}
           />
         ) : tab === "commits" ? (
           <CommitsPane
@@ -593,7 +701,7 @@ function DetailBody({
         >
           <Panel id="pr-body" order={1} defaultSize={22} minSize={10} maxSize={60}>
             <div className="acorn-selectable h-full overflow-y-auto bg-bg-sidebar/40 px-4 py-3">
-              <Markdown content={body} onTaskToggle={onTaskToggle} />
+              <Markdown content={body} softBreaks onTaskToggle={onTaskToggle} />
               {bodySaveError ? (
                 <p className="mt-2 text-[10.5px] text-danger">
                   {dt(t, "dialogs.pullRequestDetail.checkboxSaveFailed")}{" "}
@@ -982,11 +1090,23 @@ function readStoredSort(): ConversationSort {
 }
 
 function ConversationPane({
+  currentAccount,
   comments,
   reviews,
+  commentDraft,
+  onCommentDraftChange,
+  onSubmitComment,
+  onUpdateComment,
+  onRequestDeleteComment,
 }: {
+  currentAccount: string;
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
+  commentDraft: string;
+  onCommentDraftChange: (body: string) => void;
+  onSubmitComment: (body: string) => Promise<void>;
+  onUpdateComment: (commentId: number, body: string) => Promise<void>;
+  onRequestDeleteComment: (commentId: number) => void;
 }) {
   const t = useTranslation();
   const [sort, setSort] = useState<ConversationSort>(() => readStoredSort());
@@ -1036,6 +1156,22 @@ function ConversationPane({
         <div className="flex flex-1 items-center justify-center text-xs text-fg-muted">
           {dt(t, "dialogs.pullRequestDetail.noComments")}
         </div>
+        <GitHubCommentComposer
+          body={commentDraft}
+          onBodyChange={onCommentDraftChange}
+          ariaLabel={dt(t, "dialogs.pullRequestDetail.commentAriaLabel")}
+          placeholder={dt(t, "dialogs.pullRequestDetail.commentPlaceholder")}
+          writeLabel={dt(t, "dialogs.pullRequestDetail.commentWrite")}
+          previewLabel={dt(t, "dialogs.pullRequestDetail.commentPreview")}
+          previewEmptyLabel={dt(
+            t,
+            "dialogs.pullRequestDetail.commentPreviewEmpty",
+          )}
+          submitLabel={dt(t, "dialogs.pullRequestDetail.commentSubmit")}
+          submittingLabel={dt(t, "dialogs.pullRequestDetail.commentSubmitting")}
+          errorPrefix={dt(t, "dialogs.pullRequestDetail.commentFailed")}
+          onSubmit={onSubmitComment}
+        />
       </div>
     );
   }
@@ -1046,12 +1182,34 @@ function ConversationPane({
       <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
         {entries.map((entry, i) =>
           entry.kind === "comment" ? (
-            <CommentBlock key={`c-${i}`} comment={entry.comment} />
+            <CommentBlock
+              key={`c-${entry.comment.id ?? i}-${entry.ts}`}
+              comment={entry.comment}
+              currentAccount={currentAccount}
+              onUpdateComment={onUpdateComment}
+              onRequestDeleteComment={onRequestDeleteComment}
+            />
           ) : (
             <ReviewBlock key={`r-${i}`} review={entry.review} />
           ),
         )}
       </ul>
+      <GitHubCommentComposer
+        body={commentDraft}
+        onBodyChange={onCommentDraftChange}
+        ariaLabel={dt(t, "dialogs.pullRequestDetail.commentAriaLabel")}
+        placeholder={dt(t, "dialogs.pullRequestDetail.commentPlaceholder")}
+        writeLabel={dt(t, "dialogs.pullRequestDetail.commentWrite")}
+        previewLabel={dt(t, "dialogs.pullRequestDetail.commentPreview")}
+        previewEmptyLabel={dt(
+          t,
+          "dialogs.pullRequestDetail.commentPreviewEmpty",
+        )}
+        submitLabel={dt(t, "dialogs.pullRequestDetail.commentSubmit")}
+        submittingLabel={dt(t, "dialogs.pullRequestDetail.commentSubmitting")}
+        errorPrefix={dt(t, "dialogs.pullRequestDetail.commentFailed")}
+        onSubmit={onSubmitComment}
+      />
     </div>
   );
 }
@@ -1083,27 +1241,107 @@ function SortToggle({
   );
 }
 
-function CommentBlock({ comment }: { comment: PullRequestComment }) {
+function CommentBlock({
+  comment,
+  currentAccount,
+  onUpdateComment,
+  onRequestDeleteComment,
+}: {
+  comment: PullRequestComment;
+  currentAccount: string;
+  onUpdateComment: (commentId: number, body: string) => Promise<void>;
+  onRequestDeleteComment: (commentId: number) => void;
+}) {
   const t = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const canMutate =
+    comment.id !== null &&
+    comment.author.toLowerCase() === currentAccount.toLowerCase();
   return (
     <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
-        <AuthorTag
-          login={comment.author}
-          avatarUrl={comment.author_avatar_url}
-          size={28}
-          nameClass="text-[12.5px] font-semibold tracking-tight"
-        />
-        <span className="opacity-60">
-          {dt(t, "dialogs.pullRequestDetail.commented")}
-        </span>
-        <span className="font-mono opacity-60">
-          {formatTimestamp(comment.created_at)}
-        </span>
+      <div className="mb-2 flex items-center justify-between gap-2 text-[10.5px] text-fg-muted">
+        <div className="min-w-0 flex items-center gap-2">
+          <AuthorTag
+            login={comment.author}
+            avatarUrl={comment.author_avatar_url}
+            size={28}
+            nameClass="text-[12.5px] font-semibold tracking-tight"
+          />
+          <span className="shrink-0 opacity-60">
+            {dt(t, "dialogs.pullRequestDetail.commented")}
+          </span>
+          <span className="truncate font-mono opacity-60">
+            {formatTimestamp(comment.created_at)}
+          </span>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {comment.url ? (
+            <Tooltip
+              label={dt(t, "dialogs.pullRequestDetail.openOnGithub")}
+              side="top"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (comment.url) void openUrl(comment.url);
+                }}
+                className="rounded p-1 text-fg-muted transition hover:bg-bg hover:text-fg"
+              >
+                <ExternalLink size={12} />
+              </button>
+            </Tooltip>
+          ) : null}
+          {canMutate ? (
+            <>
+              <Tooltip label={dt(t, "dialogs.githubComment.edit")} side="top">
+                <button
+                  type="button"
+                  aria-label={dt(t, "dialogs.githubComment.edit")}
+                  onClick={() => setEditing(true)}
+                  className="rounded p-1 text-fg-muted transition hover:bg-bg hover:text-fg"
+                >
+                  <PencilLine size={12} />
+                </button>
+              </Tooltip>
+              <Tooltip label={dt(t, "dialogs.githubComment.delete")} side="top">
+                <button
+                  type="button"
+                  aria-label={dt(t, "dialogs.githubComment.delete")}
+                  onClick={() => {
+                    if (comment.id !== null) onRequestDeleteComment(comment.id);
+                  }}
+                  className="rounded p-1 text-fg-muted transition hover:bg-danger/10 hover:text-danger"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </Tooltip>
+            </>
+          ) : null}
+        </div>
       </div>
-      {comment.body.trim().length > 0 ? (
+      {editing && comment.id !== null ? (
+        <GitHubCommentEditForm
+          initialBody={comment.body}
+          ariaLabel={dt(t, "dialogs.githubComment.editAriaLabel")}
+          writeLabel={dt(t, "dialogs.pullRequestDetail.commentWrite")}
+          previewLabel={dt(t, "dialogs.pullRequestDetail.commentPreview")}
+          previewEmptyLabel={dt(
+            t,
+            "dialogs.pullRequestDetail.commentPreviewEmpty",
+          )}
+          saveLabel={dt(t, "dialogs.githubComment.save")}
+          savingLabel={dt(t, "dialogs.githubComment.saving")}
+          cancelLabel={dt(t, "dialogs.githubComment.cancel")}
+          errorPrefix={dt(t, "dialogs.githubComment.updateFailed")}
+          onCancel={() => setEditing(false)}
+          onSave={async (body) => {
+            await onUpdateComment(comment.id!, body);
+            setEditing(false);
+          }}
+        />
+      ) : comment.body.trim().length > 0 ? (
         <div className="acorn-selectable">
-          <Markdown content={comment.body} />
+          <Markdown content={comment.body} softBreaks />
         </div>
       ) : (
         <p className="text-[11px] text-fg-muted">
@@ -1132,7 +1370,7 @@ function ReviewBlock({ review }: { review: PullRequestReview }) {
       </div>
       {review.body.trim().length > 0 ? (
         <div className="acorn-selectable">
-          <Markdown content={review.body} />
+          <Markdown content={review.body} softBreaks />
         </div>
       ) : (
         <p className="text-[11px] text-fg-muted">

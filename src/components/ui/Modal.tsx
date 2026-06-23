@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 
@@ -64,6 +64,7 @@ export function Modal({
   children,
 }: ModalProps) {
   const mounted = useHasMounted();
+  const backdropPointerDownRef = useRef(false);
   if (!open || !mounted) return null;
   const isDialog = variant === "dialog";
   // Portal to <body> so every Modal renders as a top-level sibling. This
@@ -80,8 +81,14 @@ export function Modal({
         "fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px]",
         isDialog ? BACKDROP_DIALOG : BACKDROP_PANEL,
       )}
+      onPointerDown={(e) => {
+        backdropPointerDownRef.current = e.target === e.currentTarget;
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && backdropPointerDownRef.current) {
+          onClose();
+        }
+        backdropPointerDownRef.current = false;
       }}
     >
       <div

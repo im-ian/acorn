@@ -5357,6 +5357,44 @@ pub async fn get_issue_detail(repo_path: String, number: u64) -> AppResult<Issue
 }
 
 #[tauri::command]
+pub async fn add_issue_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
+    run_blocking("add_issue_comment", move || {
+        pull_requests::add_issue_comment(&PathBuf::from(repo_path), number, &body)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn update_github_comment(
+    repo_path: String,
+    account_login: String,
+    comment_id: u64,
+    body: String,
+) -> AppResult<()> {
+    run_blocking("update_github_comment", move || {
+        pull_requests::update_github_comment(
+            &PathBuf::from(repo_path),
+            &account_login,
+            comment_id,
+            &body,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_github_comment(
+    repo_path: String,
+    account_login: String,
+    comment_id: u64,
+) -> AppResult<()> {
+    run_blocking("delete_github_comment", move || {
+        pull_requests::delete_github_comment(&PathBuf::from(repo_path), &account_login, comment_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn get_pull_request_detail(
     repo_path: String,
     number: u64,
@@ -5374,6 +5412,18 @@ pub async fn get_pull_request_diff(
 ) -> AppResult<PullRequestDiffListing> {
     run_blocking("get_pull_request_diff", move || {
         pull_requests::get_pull_request_diff(&PathBuf::from(repo_path), number)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn add_pull_request_comment(
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    run_blocking("add_pull_request_comment", move || {
+        pull_requests::add_pull_request_comment(&PathBuf::from(repo_path), number, &body)
     })
     .await
 }
