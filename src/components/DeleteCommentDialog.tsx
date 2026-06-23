@@ -3,7 +3,7 @@ import { AlertTriangle, Trash2 } from "lucide-react";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -70,9 +70,9 @@ export function DeleteCommentDialog({
       <div className="space-y-2 px-4 py-3 text-xs leading-relaxed text-fg-muted">
         <p>{dt(t, "dialogs.githubComment.deleteMessage")}</p>
         {error ? (
-          <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-danger">
+          <Notice tone="danger" density="compact">
             {dt(t, "dialogs.githubComment.deleteFailed")} {error}
-          </p>
+          </Notice>
         ) : null}
       </div>
       <ModalFooter variant="sidebar">
