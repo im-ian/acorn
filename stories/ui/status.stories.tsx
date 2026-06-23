@@ -15,6 +15,7 @@ import {
   type StatusDotSize,
   type StatusTone,
 } from "../../src/components/ui";
+import { GitHubLabelChip } from "../../src/components/GitHubLabelChip";
 
 const tones = [
   "neutral",
@@ -128,6 +129,21 @@ export const Pulse: Story = {
             {tone}
           </StatusBadge>
         </div>
+      ))}
+    </div>
+  ),
+};
+
+export const GitHubLabels: Story = {
+  render: () => (
+    <div className="flex flex-wrap items-center gap-2">
+      {[
+        { name: "bug", color: "d73a4a" },
+        { name: "enhancement", color: "a2eeef" },
+        { name: "documentation", color: "0075ca" },
+        { name: "good first issue", color: "7057ff" },
+      ].map((label) => (
+        <GitHubLabelChip key={label.name} label={label} />
       ))}
     </div>
   ),

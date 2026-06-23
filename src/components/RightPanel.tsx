@@ -101,6 +101,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { FileExplorer } from "./FileExplorer";
+import { GitHubLabelChip } from "./GitHubLabelChip";
 import { IssueDetailModal } from "./IssueDetailModal";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
@@ -4539,22 +4540,6 @@ function NoAccessBanner({
         {rt(t, "rightPanel.noAccess.withAccess")}
       </p>
     </div>
-  );
-}
-
-function GitHubLabelChip({ label }: { label: PullRequestLabel }) {
-  return (
-    <Tooltip label={label.name} side="top">
-      <span
-        className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-        style={{
-          backgroundColor: `#${label.color.replace(/^#/, "")}26`,
-          color: `#${label.color.replace(/^#/, "")}`,
-        }}
-      >
-        {label.name}
-      </span>
-    </Tooltip>
   );
 }
 

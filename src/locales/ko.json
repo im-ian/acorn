@@ -1627,6 +1627,7 @@
       "created": "생성",
       "updated": "업데이트",
       "comments": "댓글",
+      "commented": "댓글 작성",
       "noComments": "아직 댓글이 없습니다.",
       "noBody": "이슈 설명이 없습니다.",
       "empty": "(비어 있음)",

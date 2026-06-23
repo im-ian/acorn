@@ -35,7 +35,6 @@ import type {
   PullRequestCommit,
   PullRequestDetail,
   PullRequestDetailListing,
-  PullRequestLabel,
   PullRequestReview,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
@@ -43,6 +42,7 @@ import { AuthorTag, buildProfileMenuItems } from "./AuthorTag";
 import { ClosePullRequestDialog } from "./ClosePullRequestDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffSplitView } from "./DiffSplitView";
+import { GitHubLabelChip } from "./GitHubLabelChip";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
 import {
@@ -541,7 +541,7 @@ function DetailBody({
               <>
                 <span className="opacity-50">·</span>
                 {detail.labels.map((label) => (
-                  <PrDetailLabelChip key={label.name} label={label} />
+                  <GitHubLabelChip key={label.name} label={label} />
                 ))}
               </>
             ) : null}
@@ -908,21 +908,6 @@ function MergeActionButton({
 }
 
 const BODY_HEIGHT_DEFAULT = 192;
-
-function PrDetailLabelChip({ label }: { label: PullRequestLabel }) {
-  const hex = label.color.replace(/^#/, "");
-  return (
-    <span
-      className="rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-      style={{
-        backgroundColor: `#${hex}26`,
-        color: `#${hex}`,
-      }}
-    >
-      {label.name}
-    </span>
-  );
-}
 
 function PrStateGlyph({
   state,

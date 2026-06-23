@@ -5,20 +5,20 @@ import {
   CircleX,
   ExternalLink,
   MessageSquare,
+  X,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
-import { cn } from "../lib/cn";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import type {
   IssueComment,
   IssueDetail,
   IssueDetailListing,
-  PullRequestLabel,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
 import { AuthorTag } from "./AuthorTag";
+import { GitHubLabelChip } from "./GitHubLabelChip";
 import { Tooltip } from "./Tooltip";
 import {
   Markdown,
@@ -183,45 +183,83 @@ function IssueDetailBody({
   const t = useTranslation();
   const created = toUnixSeconds(detail.created_at);
   const updated = toUnixSeconds(detail.updated_at);
-  const subtitle = (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-      <AuthorTag
-        login={detail.author}
-        size={16}
-        nameClass="text-[11px] text-fg-muted"
-      />
-      <span className="opacity-50">·</span>
-      <span>{dt(t, "dialogs.issueDetail.created")} {absoluteTime(created)}</span>
-      <span className="opacity-50">·</span>
-      <span>{dt(t, "dialogs.issueDetail.updated")} {absoluteTime(updated)}</span>
-    </span>
-  );
 
   return (
     <>
-      <ModalHeader
-        title={`#${detail.number} ${detail.title}`}
-        subtitle={subtitle}
-        icon={<IssueStateGlyph state={detail.state} reason={detail.state_reason} />}
-        actions={
-          <>
-            <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
-            <Tooltip
-              label={dt(t, "dialogs.issueDetail.openOnGithub")}
-              side="bottom"
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <IssueStateGlyph
+              state={detail.state}
+              reason={detail.state_reason}
+            />
+            <span
+              className={`shrink-0 font-mono text-xs leading-5 ${issueNumberClassName(
+                detail.state,
+                detail.state_reason,
+              )}`}
             >
-              <button
-                type="button"
-                onClick={() => void openUrl(detail.url)}
-                className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
-              >
-                <ExternalLink size={14} />
-              </button>
+              #{detail.number}
+            </span>
+            <Tooltip
+              label={detail.title}
+              side="bottom"
+              multiline
+              className="min-w-0 flex-1"
+            >
+              <h3 className="truncate text-sm font-semibold leading-5 tracking-tight text-fg">
+                {detail.title}
+              </h3>
             </Tooltip>
-          </>
-        }
-        onClose={onClose}
-      />
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-fg-muted">
+            <AuthorTag
+              login={detail.author}
+              size={16}
+              nameClass="text-[11px] text-fg-muted"
+            />
+            <span className="opacity-50">·</span>
+            <span>
+              {dt(t, "dialogs.issueDetail.created")} {absoluteTime(created)}
+            </span>
+            <span className="opacity-50">·</span>
+            <span>
+              {dt(t, "dialogs.issueDetail.updated")} {absoluteTime(updated)}
+            </span>
+            {detail.labels.length > 0 ? (
+              <>
+                <span className="opacity-50">·</span>
+                {detail.labels.map((label) => (
+                  <GitHubLabelChip key={label.name} label={label} />
+                ))}
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
+          <Tooltip
+            label={dt(t, "dialogs.issueDetail.openOnGithub")}
+            side="bottom"
+          >
+            <button
+              type="button"
+              onClick={() => void openUrl(detail.url)}
+              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            >
+              <ExternalLink size={14} />
+            </button>
+          </Tooltip>
+          <button
+            type="button"
+            aria-label={dt(t, "dialogs.common.close")}
+            onClick={onClose}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </header>
       <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-4 px-4 py-3">
           <IssueMeta detail={detail} />
@@ -266,41 +304,18 @@ function IssueDetailBody({
 
 function IssueMeta({ detail }: { detail: IssueDetail }) {
   const t = useTranslation();
-  const state = detail.state.toUpperCase();
-  const reason = detail.state_reason?.toUpperCase() ?? null;
-  const stateText =
-    state === "OPEN"
-      ? dt(t, "dialogs.issueDetail.stateOpen")
-      : issueClosedReasonLabel(reason, t);
   const assignees = detail.assignees.join(", ");
+  if (!detail.milestone && !assignees) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg-muted">
-      <span
-        className={cn(
-          "rounded px-1.5 py-0.5 font-medium",
-          state === "OPEN"
-            ? "bg-emerald-500/10 text-emerald-300"
-            : reason === "NOT_PLANNED"
-              ? "bg-fg-muted/15 text-fg-muted"
-              : "bg-purple-500/10 text-purple-300",
-        )}
-      >
-        {stateText}
-      </span>
-      {detail.labels.map((label) => (
-        <IssueLabelChip key={label.name} label={label} />
-      ))}
       {detail.milestone ? (
-        <>
-          <span className="opacity-50">·</span>
-          <span>
-            {dt(t, "dialogs.issueDetail.milestone")} {detail.milestone}
-          </span>
-        </>
+        <span>
+          {dt(t, "dialogs.issueDetail.milestone")} {detail.milestone}
+        </span>
       ) : null}
       {assignees ? (
         <>
-          <span className="opacity-50">·</span>
+          {detail.milestone ? <span className="opacity-50">·</span> : null}
           <span>
             {dt(t, "dialogs.issueDetail.assignees")} {assignees}
           </span>
@@ -316,14 +331,28 @@ function IssueCommentBlock({ comment }: { comment: IssueComment }) {
   const hasBody = comment.body.trim().length > 0;
   return (
     <li className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10.5px] text-fg-muted">
-        <AuthorTag
-          login={comment.author}
-          avatarUrl={comment.author_avatar_url}
-          size={28}
-          nameClass="text-[12.5px] font-semibold tracking-tight"
-        />
-        <span className="font-mono opacity-60">{absoluteTime(created)}</span>
+      <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-bg-elevated/30 px-3 py-2">
+        <div className="min-w-0 flex items-start gap-2">
+          <AuthorTag
+            login={comment.author}
+            avatarUrl={comment.author_avatar_url}
+            size={28}
+            nameClass="text-[12.5px] font-semibold tracking-tight"
+          />
+          <div className="min-w-0 pt-0.5 text-[10.5px] leading-4 text-fg-muted">
+            <div className="truncate">
+              {dt(t, "dialogs.issueDetail.commented")}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0 opacity-60">
+                {dt(t, "dialogs.issueDetail.created")}
+              </span>
+              <span className="truncate font-mono opacity-75">
+                {absoluteTime(created)}
+              </span>
+            </div>
+          </div>
+        </div>
         {comment.url ? (
           <Tooltip
             label={dt(t, "dialogs.issueDetail.openCommentOnGithub")}
@@ -333,7 +362,7 @@ function IssueCommentBlock({ comment }: { comment: IssueComment }) {
             <button
               type="button"
               onClick={() => void openUrl(comment.url ?? "")}
-              className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+              className="rounded p-1 text-fg-muted transition hover:bg-bg hover:text-fg"
             >
               <ExternalLink size={12} />
             </button>
@@ -353,46 +382,31 @@ function IssueCommentBlock({ comment }: { comment: IssueComment }) {
   );
 }
 
-function IssueLabelChip({ label }: { label: PullRequestLabel }) {
-  return (
-    <Tooltip label={label.name} side="top">
-      <span
-        className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase"
-        style={{
-          backgroundColor: `#${label.color.replace(/^#/, "")}26`,
-          color: `#${label.color.replace(/^#/, "")}`,
-        }}
-      >
-        {label.name}
-      </span>
-    </Tooltip>
-  );
-}
-
 function IssueStateGlyph({
   state,
   reason,
+  size = 14,
 }: {
   state: string;
   reason: string | null;
+  size?: number;
 }) {
   if (state.toUpperCase() === "OPEN") {
-    return <CircleDot size={14} className="text-emerald-400" />;
+    return <CircleDot size={size} className="text-emerald-400" />;
   }
   if (reason?.toUpperCase() === "NOT_PLANNED") {
-    return <CircleX size={14} className="text-fg-muted" />;
+    return <CircleX size={size} className="text-fg-muted" />;
   }
-  return <CircleCheck size={14} className="text-purple-400" />;
+  return <CircleCheck size={size} className="text-accent" />;
 }
 
-function issueClosedReasonLabel(
+function issueNumberClassName(
+  state: string,
   reason: string | null,
-  t: Translator,
 ): string {
-  if (reason === "NOT_PLANNED") {
-    return dt(t, "dialogs.issueDetail.stateNotPlanned");
-  }
-  return dt(t, "dialogs.issueDetail.stateCompleted");
+  if (state.toUpperCase() === "OPEN") return "text-emerald-400";
+  if (reason?.toUpperCase() === "NOT_PLANNED") return "text-fg-muted";
+  return "text-accent";
 }
 
 function IssueDetailSkeleton({
