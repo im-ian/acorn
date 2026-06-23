@@ -5,7 +5,7 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useSettings } from "../lib/settings";
 import type { Session } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalFooter, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -65,14 +65,14 @@ export function RunningSessionCloseWarningDialog({
           />
           <div className="space-y-3 px-4 py-3 text-sm text-fg">
             <p>{dt(t, "dialogs.runningSessionClose.message")}</p>
-            <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+            <Notice tone="warning">
               <div className="text-[11px] uppercase tracking-wide text-fg-muted">
                 {dt(t, "dialogs.runningSessionClose.sessionLabel")}
               </div>
               <div className="mt-1 truncate font-mono text-xs text-accent">
                 {session.name}
               </div>
-            </div>
+            </Notice>
             <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs text-fg-muted">
               <input
                 type="checkbox"

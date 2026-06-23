@@ -52,6 +52,7 @@ import { GitHubLabelChip } from "./GitHubLabelChip";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { Tooltip } from "./Tooltip";
 import {
+  CodeValue,
   ListBox,
   ListEmptyState,
   ListRow,
@@ -360,7 +361,7 @@ export function PullRequestDetailModal({
           <ModalShell title={`#${open.number}`} onClose={requestClose}>
             <div className="p-4 text-xs text-fg-muted">
               {dt(t, "dialogs.pullRequestDetail.noAccessPrefix")}{" "}
-              <code className="font-mono">gh</code>{" "}
+              <CodeValue display="inline">gh</CodeValue>{" "}
               {dt(t, "dialogs.pullRequestDetail.noAccessSuffix")}{" "}
               {listing.slug}.
             </div>
