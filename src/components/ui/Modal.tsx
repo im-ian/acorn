@@ -77,7 +77,7 @@ export function Modal({
       aria-labelledby={ariaLabelledBy}
       aria-label={ariaLabel}
       className={cn(
-        "fixed inset-0 z-50 bg-black/50 backdrop-blur-sm",
+        "fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px]",
         isDialog ? BACKDROP_DIALOG : BACKDROP_PANEL,
       )}
       onClick={(e) => {
