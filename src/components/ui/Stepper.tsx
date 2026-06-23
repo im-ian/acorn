@@ -74,7 +74,7 @@ export function Stepper({
   return (
     <div
       className={cn(
-        "inline-flex h-7 w-fit items-stretch self-start overflow-hidden rounded-md border border-border bg-bg",
+        "inline-flex h-8 w-fit items-stretch self-start overflow-hidden rounded-lg bg-fill",
         disabled && "opacity-50",
       )}
     >
@@ -83,7 +83,7 @@ export function Stepper({
         onClick={dec}
         disabled={disabled || value <= min}
         aria-label={t("ui.stepper.decrease")}
-        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-fill-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Minus size={12} />
       </button>
@@ -120,7 +120,7 @@ export function Stepper({
         onClick={inc}
         disabled={disabled || value >= max}
         aria-label={t("ui.stepper.increase")}
-        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-fill-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus size={12} />
       </button>

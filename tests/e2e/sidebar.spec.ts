@@ -2467,6 +2467,134 @@ test.describe("sidebar: project lifecycle", () => {
     });
   });
 
+  test("clicking an existing instant session activates its terminal pane", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "project-1",
+        name: "project",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+      {
+        id: "local-1",
+        name: "terminal-1",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+      {
+        id: "local-2",
+        name: "terminal-2",
+        repo_path: "/Users/tester",
+        worktree_path: "/Users/tester",
+        branch: "HEAD",
+        isolated: false,
+        project_scoped: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        kind: "regular",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("pty_spawn", (args) => {
+      const slot = document.querySelector<HTMLElement>(
+        `[data-acorn-terminal-slot="${(args as { sessionId?: string }).sessionId ?? ""}"]`,
+      );
+      const parent = slot?.parentElement ?? null;
+      const w = window as unknown as { __localSpawnCalls?: unknown[] };
+      w.__localSpawnCalls = w.__localSpawnCalls ?? [];
+      w.__localSpawnCalls.push({
+        ...(args as Record<string, unknown>),
+        parentPane: parent?.getAttribute("data-pane-body") ?? null,
+        parentLimbo: parent?.getAttribute("data-acorn-terminal-limbo") ?? null,
+      });
+      return null;
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /^project main · Idle$/ }).click();
+
+    const instant = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    const terminalRow = instant.getByRole("button", { name: /^terminal-2\b/ });
+    const terminalBox = await terminalRow.boundingBox();
+    expect(terminalBox).not.toBeNull();
+    await page.mouse.click(
+      terminalBox!.x + terminalBox!.width - 40,
+      terminalBox!.y + terminalBox!.height / 2,
+    );
+
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __localSpawnCalls?: unknown[] })
+                .__localSpawnCalls?.some(
+                  (call) =>
+                    (call as { sessionId?: string }).sessionId === "local-2",
+                ) ?? false,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBe(true);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __localSpawnCalls?: unknown[] })
+          .__localSpawnCalls,
+    )) as Array<{
+      sessionId: string;
+      cwd: string;
+      parentPane: string | null;
+      parentLimbo: string | null;
+    }>;
+    const localCall = calls.find((call) => call.sessionId === "local-2");
+    expect(localCall).toMatchObject({
+      sessionId: "local-2",
+      cwd: "/Users/tester",
+      parentLimbo: null,
+    });
+    expect(localCall?.parentPane).not.toBeNull();
+  });
+
   test("local chat sessions show agent provider icons", async ({
     page,
     tauri,

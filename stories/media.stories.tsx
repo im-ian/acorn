@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { AcornRain } from "../src/components/AcornRain";
 import { ImageLightbox } from "../src/components/ImageLightbox";
+import { Button } from "../src/components/ui/Button";
 
 const meta = {
   title: "Components/Media",
@@ -19,13 +20,9 @@ export const Lightbox: Story = {
     const [open, setOpen] = useState(true);
     return (
       <div className="h-screen bg-bg p-8 text-fg">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs"
-        >
+        <Button onClick={() => setOpen(true)} variant="primary">
           Open lightbox
-        </button>
+        </Button>
         <ImageLightbox
           image={
             open
@@ -45,13 +42,12 @@ export const Lightbox: Story = {
 export const TreeShake: Story = {
   render: () => (
     <div className="h-screen bg-bg p-8 text-fg">
-      <button
-        type="button"
+      <Button
         onClick={() => window.dispatchEvent(new Event("acorn:shake-tree"))}
-        className="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs"
+        variant="primary"
       >
         Shake tree
-      </button>
+      </Button>
       <AcornRain />
     </div>
   ),

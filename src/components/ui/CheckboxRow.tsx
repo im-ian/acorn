@@ -18,7 +18,7 @@ export function CheckboxRow({
   return (
     <label
       className={cn(
-        "flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg px-3 py-2 transition",
+        "flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-bg px-3 py-2 transition",
         disabled && "cursor-not-allowed opacity-50",
         !disabled && "hover:border-fg-muted/40",
       )}
@@ -28,7 +28,7 @@ export function CheckboxRow({
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-[var(--color-accent)]"
+        className="acorn-check mt-0.5"
       />
       <span className="flex flex-col">
         <span className="text-xs font-medium text-fg">{label}</span>

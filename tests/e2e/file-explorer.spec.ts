@@ -441,6 +441,21 @@ test.describe("file explorer", () => {
     await expect(
       page.getByRole("button", { name: "Guide.md", exact: true }),
     ).toBeVisible();
+
+    const guideRow = page.getByRole("button", {
+      name: "Guide.md",
+      exact: true,
+    });
+    const guideBox = await guideRow.boundingBox();
+    expect(guideBox).not.toBeNull();
+    await page.mouse.dblclick(
+      guideBox!.x + guideBox!.width - 12,
+      guideBox!.y + guideBox!.height / 2,
+    );
+
+    await expect(
+      page.getByRole("button", { name: /Guide\.md Close tab/ }),
+    ).toBeVisible();
   });
 
   test("keeps expanded folders when the live repo root carries a trailing slash", async ({

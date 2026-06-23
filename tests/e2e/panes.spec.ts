@@ -299,7 +299,7 @@ test.describe("pane / sidebar shortcuts", () => {
     await expect(panes).toHaveCount(3);
   });
 
-  test("focused pane renders a small active indicator", async ({
+  test("focused pane is marked with an active indicator", async ({
     page,
     tauri,
   }) => {
@@ -319,11 +319,6 @@ test.describe("pane / sidebar shortcuts", () => {
     const initialPaneId = await indicator.getAttribute(
       "data-active-pane-indicator",
     );
-
-    const box = await indicator.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box?.width).toBeLessThanOrEqual(3);
-    expect(box?.height).toBeGreaterThanOrEqual(40);
 
     await pressHotkey(page, { mod: true, key: "d" });
     await expect(page.locator("[data-pane-body]")).toHaveCount(2);

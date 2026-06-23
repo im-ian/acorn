@@ -1,4 +1,5 @@
 import { test, expect, pressHotkey } from "./support";
+import type { Locator, Page } from "@playwright/test";
 
 // Right panel needs an active project + session for the tabs to actually
 // render their content. Without that, every tab falls back to "No project
@@ -55,6 +56,12 @@ async function seedActiveWorktreeSession(
       last_message: null,
     },
   ]);
+}
+
+async function dblclickRowRightSide(page: Page, row: Locator): Promise<void> {
+  const box = await row.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.dblclick(box!.x + box!.width - 12, box!.y + box!.height / 2);
 }
 
 test.describe("right panel: tab switching", () => {
@@ -134,7 +141,10 @@ test.describe("right panel: tab switching", () => {
     await page.goto("/");
     await expect(page.getByText("Large diff commit")).toBeVisible();
 
-    await page.getByText("Large diff commit").dblclick();
+    const commitRow = page
+      .getByText("Large diff commit")
+      .locator("xpath=ancestor::button[1]");
+    await dblclickRowRightSide(page, commitRow);
 
     await expect
       .poll(() =>
@@ -215,10 +225,79 @@ test.describe("right panel: tab switching", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "GitHub" }).click();
     await page.getByRole("button", { name: "Issues" }).click();
-    await page.getByText("Render issue detail in app").dblclick();
+    const issueRow = page
+      .getByText("Render issue detail in app")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, issueRow);
 
     await expect(page.getByText("Loaded issue body from gh.")).toBeVisible();
     await expect(page.getByText("First in-app issue comment.")).toBeVisible();
+  });
+
+  test("double-clicking a pull request row opens its in-app detail modal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedActiveSession(tauri);
+    await tauri.respond("list_pull_requests", {
+      kind: "ok",
+      account: "test-account",
+      items: [
+        {
+          number: 87,
+          title: "Review full row PR",
+          state: "OPEN",
+          author: "im-ian",
+          head_branch: "feature/full-row",
+          base_branch: "main",
+          url: "https://github.com/im-ian/acorn/pull/87",
+          updated_at: "2026-05-19T00:00:00Z",
+          is_draft: false,
+          checks: null,
+          labels: [],
+        },
+      ],
+    });
+    await tauri.respond("get_pull_request_detail", {
+      kind: "ok",
+      account: "test-account",
+      detail: {
+        number: 87,
+        title: "Review full row PR",
+        body: "Loaded pull request body from gh.",
+        state: "OPEN",
+        is_draft: false,
+        author: "im-ian",
+        head_branch: "feature/full-row",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/87",
+        created_at: "2026-05-18T00:00:00Z",
+        updated_at: "2026-05-19T00:00:00Z",
+        merged_at: null,
+        additions: 12,
+        deletions: 3,
+        changed_files: 2,
+        mergeable: "MERGEABLE",
+        labels: [],
+        comments: [],
+        reviews: [],
+        checks: [],
+        commits: [],
+      },
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "GitHub" }).click();
+    await page.getByRole("button", { name: "PRs" }).click();
+
+    const prRow = page
+      .getByText("Review full row PR")
+      .locator("xpath=ancestor::li[@role='button'][1]");
+    await dblclickRowRightSide(page, prRow);
+
+    await expect(
+      page.getByText("Loaded pull request body from gh."),
+    ).toBeVisible();
   });
 
   test("opening PR merge from the context menu shows a skeleton before details load", async ({
@@ -469,7 +548,10 @@ test.describe("right panel: tab switching", () => {
 
     await page.goto("/");
     await page.getByRole("button", { name: "Staged" }).click();
-    await page.getByText("src/components/Terminal.tsx").dblclick();
+    const stagedRow = page
+      .getByText("src/components/Terminal.tsx")
+      .locator("xpath=ancestor::li[1]");
+    await dblclickRowRightSide(page, stagedRow);
 
     await expect(
       page.getByRole("button", { name: /Terminal\.tsx Close tab/ }),
@@ -521,7 +603,10 @@ test.describe("right panel: tab switching", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "Staged" }).click();
     const stagedList = page.locator("#staged-list");
-    await stagedList.getByText("src/deleted.ts").dblclick();
+    const deletedRow = stagedList
+      .getByText("src/deleted.ts")
+      .locator("xpath=ancestor::li[1]");
+    await dblclickRowRightSide(page, deletedRow);
 
     await expect(stagedList.getByText("src/deleted.ts")).toBeVisible();
     await expect(page.getByText(/nothing to open/i)).toHaveCount(0);
@@ -1154,7 +1239,10 @@ test.describe("right panel: groups", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "Agents" }).click();
     await page.getByRole("button", { name: "History" }).click();
-    await page.getByText("Resume from codex worktree").dblclick();
+    const historyRow = page
+      .getByText("Resume from codex worktree")
+      .locator("xpath=ancestor::div[contains(@class, 'rounded-md')][1]");
+    await dblclickRowRightSide(page, historyRow);
 
     await expect
       .poll(

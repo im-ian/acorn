@@ -1,4 +1,5 @@
 import { cn } from "../../lib/cn";
+import { SkeletonBlock } from "../ui";
 
 export function MetricValueSkeleton() {
   return <SkeletonBlock className="h-5 w-24 bg-fg-muted/15" />;
@@ -7,13 +8,13 @@ export function MetricValueSkeleton() {
 export function ChangedFilesSkeleton() {
   return (
     <div
-      className="divide-y divide-border"
+      className="space-y-0.5 p-1"
       data-work-summary-section-skeleton="files"
     >
       {[0, 1, 2, 3, 4].map((idx) => (
         <div
           key={idx}
-          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2"
+          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-3 py-1.5"
         >
           <div className="flex min-w-0 items-center gap-2">
             <SkeletonBlock className="h-5 w-10 bg-fg-muted/15" />
@@ -34,11 +35,11 @@ export function ChangedFilesSkeleton() {
 export function ConversationSkeleton() {
   return (
     <div
-      className="grid grid-cols-2 gap-px bg-border"
+      className="grid grid-cols-2 gap-2 p-3"
       data-work-summary-section-skeleton="conversation"
     >
       {Array.from({ length: 4 }).map((_, idx) => (
-        <div key={idx} className="bg-bg px-4 py-3">
+        <div key={idx} className="rounded-md bg-bg-sidebar/40 px-3 py-2">
           <SkeletonBlock className="h-2.5 w-20 bg-fg-muted/10" />
           <SkeletonBlock className="mt-2 h-4 w-10 bg-fg-muted/15" />
         </div>
@@ -83,13 +84,5 @@ function SkeletonChartRow() {
       <SkeletonBlock className="h-2 w-full bg-fg-muted/10" />
       <SkeletonBlock className="h-2.5 w-10 bg-fg-muted/10" />
     </div>
-  );
-}
-
-function SkeletonBlock({ className }: { className: string }) {
-  return (
-    <span
-      className={cn("block animate-pulse rounded bg-fg-muted/10", className)}
-    />
   );
 }

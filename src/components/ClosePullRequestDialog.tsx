@@ -6,7 +6,14 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import type { PullRequestDetail } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import {
+  Button,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+  SkeletonBlock,
+} from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -21,10 +28,10 @@ function CloseDialogSkeleton({ label }: { label: string }) {
       aria-label={label}
       className="space-y-3 px-4 py-3 text-sm text-fg"
     >
-      <div className="h-3 w-48 animate-pulse rounded bg-bg-sidebar" />
+      <SkeletonBlock className="h-3 w-48 bg-bg-sidebar" />
       <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
-        <div className="h-3 w-3/4 animate-pulse rounded bg-bg-elevated" />
-        <div className="h-3 w-1/2 animate-pulse rounded bg-bg-elevated" />
+        <SkeletonBlock className="h-3 w-3/4 bg-bg-elevated" />
+        <SkeletonBlock className="h-3 w-1/2 bg-bg-elevated" />
       </div>
     </div>
   );
@@ -103,24 +110,24 @@ export function ClosePullRequestDialog({
           />
           {loadError && !loading ? (
             <div className="space-y-3 px-4 py-3 text-xs text-fg">
-              <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+              <Notice tone="danger" density="compact">
                 {loadError}
-              </p>
+              </Notice>
             </div>
           ) : (
             <CloseDialogSkeleton
               label={dt(t, "dialogs.closePullRequest.loadingDetails")}
             />
           )}
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+          <ModalFooter variant="sidebar">
+            <Button
               onClick={onClose}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
-          </footer>
+            </Button>
+          </ModalFooter>
         </>
       ) : (
         <>
@@ -147,31 +154,32 @@ export function ClosePullRequestDialog({
               </p>
             </div>
             {error ? (
-              <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+              <Notice tone="danger" density="compact">
                 {error}
-              </p>
+              </Notice>
             ) : null}
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+          <ModalFooter variant="sidebar">
+            <Button
               onClick={onClose}
               disabled={submitting}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => void handleClose()}
               disabled={submitting}
-              className="rounded-md bg-rose-500/20 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+              variant="dangerSoft"
+              size="md"
+              surface="dialog"
             >
               {submitting
                 ? dt(t, "dialogs.closePullRequest.closing")
                 : dt(t, "dialogs.closePullRequest.closePr")}
-            </button>
-          </footer>
+            </Button>
+          </ModalFooter>
         </>
       )}
     </Modal>

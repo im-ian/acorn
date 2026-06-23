@@ -13,6 +13,7 @@ import {
   Activity,
   Bot,
   Check,
+  ChevronRight,
   CircleAlert,
   Code2,
   CircleCheck,
@@ -100,6 +101,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { DiffViewerModal } from "./DiffViewerModal";
 import { FileExplorer } from "./FileExplorer";
+import { GitHubLabelChip } from "./GitHubLabelChip";
 import { IssueDetailModal } from "./IssueDetailModal";
 import { MergePullRequestDialog } from "./MergePullRequestDialog";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
@@ -107,11 +109,22 @@ import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 import {
   CommandHint,
+  ListActionRow,
+  ListBox,
+  ListEmptyState,
+  ListRow,
   Modal,
   ModalHeader,
   RefreshButton,
   Select,
+  SkeletonBlock,
+  SkeletonCircle,
+  SkeletonList,
+  SkeletonText,
   TextInput,
+  listBoxClassName,
+  listRowClassName,
+  type ListRowDensity,
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -145,6 +158,7 @@ type SetExpandedDiff = Dispatch<SetStateAction<ExpandedDiff | null>>;
 
 const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
+const COMMIT_LIST_PADDING_Y = 4;
 const BACKGROUND_LOADED_TABS = new Set<RightTab>([
   "prs",
   "issues",
@@ -435,10 +449,10 @@ export function RightPanel() {
   }, [retainedRepoPaths]);
 
   return (
-    <aside className="flex h-full w-full flex-col bg-bg-sidebar">
+    <aside className="flex h-full w-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar">
       <nav
         className={cn(
-          "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border",
+          "flex shrink-0 gap-0.5 overflow-x-auto whitespace-nowrap border-b border-border px-1.5 py-1",
           "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
         aria-label="Right panel group"
@@ -456,7 +470,7 @@ export function RightPanel() {
       {visibleTabs.length > 0 ? (
         <nav
           className={cn(
-            "flex shrink-0 overflow-x-auto whitespace-nowrap border-b border-border bg-bg-elevated/30",
+            "flex shrink-0 gap-0.5 overflow-x-auto whitespace-nowrap border-b border-border bg-bg-elevated/30 px-1.5 py-1",
             "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           )}
           aria-label="Right panel sub-tab"
@@ -642,10 +656,10 @@ function TabButton({ icon, label, active, onClick, badge, className }: TabButton
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex shrink-0 items-center justify-center gap-1.5 px-3 py-2 text-xs transition",
+        "relative flex shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition",
         active
-          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent/30"
-          : "text-fg-muted hover:text-fg",
+          ? "acorn-tab-active-bg text-fg"
+          : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         className,
       )}
     >
@@ -675,10 +689,10 @@ function SubTabButton({ icon, label, active, onClick, badge }: TabButtonProps) {
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex shrink-0 items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] transition",
+        "relative flex shrink-0 items-center justify-center gap-1.5 rounded px-2 py-1 text-[11px] transition",
         active
-          ? "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-accent/40"
-          : "text-fg-muted/80 hover:text-fg",
+          ? "bg-bg-elevated text-fg"
+          : "text-fg-muted/80 hover:bg-bg-elevated/40 hover:text-fg",
       )}
     >
       {icon}
@@ -749,39 +763,7 @@ function tabLabelKey(tab: RightTab): RightPanelTranslationKey {
 }
 
 function Empty({ msg }: { msg: string }) {
-  return (
-    <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs leading-5 text-fg-muted">
-      {msg}
-    </div>
-  );
-}
-
-/**
- * Shimmer placeholder row used while a tab's initial fetch is in flight.
- * Switching projects clears and refetches all the right-panel tabs at once;
- * without these the panel goes briefly blank and the click feels janky.
- */
-function SkeletonRow({ pulseDelayMs = 0 }: { pulseDelayMs?: number }) {
-  return (
-    <div
-      className="flex items-center gap-2 border-b border-border/40 px-3 py-2"
-      style={{ animationDelay: `${pulseDelayMs}ms` }}
-    >
-      <span className="h-3 w-12 shrink-0 animate-pulse rounded bg-fg-muted/15" />
-      <span className="h-3 w-full max-w-[60%] animate-pulse rounded bg-fg-muted/10" />
-      <span className="h-3 w-10 shrink-0 animate-pulse rounded bg-fg-muted/10 ml-auto" />
-    </div>
-  );
-}
-
-function SkeletonList({ count = 6 }: { count?: number }) {
-  return (
-    <div className="text-xs">
-      {Array.from({ length: count }).map((_, i) => (
-        <SkeletonRow key={i} pulseDelayMs={i * 80} />
-      ))}
-    </div>
-  );
+  return <ListEmptyState>{msg}</ListEmptyState>;
 }
 
 /**
@@ -799,24 +781,28 @@ function PrSkeletonRow({ index }: { index: number }) {
   const titleW = titleWidths[index % titleWidths.length];
   const branchW = branchWidths[index % branchWidths.length];
   return (
-    <div className="flex flex-col gap-1.5 border-b border-border/40 px-3 py-2">
+    <div
+      className={listRowClassName({
+        className: "flex flex-col gap-1.5",
+      })}
+    >
       <div className="flex w-full items-center gap-2">
-        <span className="h-3 w-8 shrink-0 animate-pulse rounded bg-fg-muted/15" />
-        <span className="h-4 w-12 shrink-0 animate-pulse rounded-full bg-fg-muted/15" />
-        <span
-          className="h-3 min-w-0 flex-1 animate-pulse rounded bg-fg-muted/10"
+        <SkeletonBlock className="h-3 w-8 shrink-0 bg-fg-muted/15" />
+        <SkeletonBlock className="h-4 w-12 shrink-0 rounded-full bg-fg-muted/15" />
+        <SkeletonBlock
+          className="h-3 min-w-0 flex-1"
           style={{ width: titleW }}
         />
       </div>
       <div className="flex w-full items-center gap-2">
-        <span className="h-2.5 w-16 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+        <SkeletonBlock className="h-2.5 w-16 shrink-0" />
         <span className="text-[10px] text-fg-muted/40">·</span>
-        <span
-          className="h-2.5 animate-pulse rounded bg-fg-muted/10"
+        <SkeletonBlock
+          className="h-2.5"
           style={{ width: branchW }}
         />
         <span className="text-[10px] text-fg-muted/40">·</span>
-        <span className="h-2.5 w-10 shrink-0 animate-pulse rounded bg-fg-muted/10" />
+        <SkeletonBlock className="h-2.5 w-10 shrink-0" />
       </div>
     </div>
   );
@@ -824,7 +810,7 @@ function PrSkeletonRow({ index }: { index: number }) {
 
 function PrSkeletonList({ count = 6 }: { count?: number }) {
   return (
-    <div className="text-xs">
+    <div className={listBoxClassName()}>
       {Array.from({ length: count }).map((_, i) => (
         <PrSkeletonRow key={i} index={i} />
       ))}
@@ -853,28 +839,28 @@ function HistorySkeletonRow({
   return (
     <div
       aria-hidden="true"
-      className="flex items-start gap-2 border-b border-border/40 px-3 py-2.5"
+      className={listRowClassName({ className: "flex items-start gap-2" })}
       style={{ animationDelay: `${index * 60}ms` }}
     >
-      <span
+      <SkeletonBlock
         className={cn(
-          "mt-0.5 shrink-0 animate-pulse rounded bg-fg-muted/15",
+          "mt-0.5 shrink-0 bg-fg-muted/15",
           showAgentProviderIcons ? "size-5" : "h-4 w-12",
         )}
       />
       <div className="min-w-0 flex-1 space-y-1.5">
-        <span
-          className="block h-3 animate-pulse rounded bg-fg-muted/15"
+        <SkeletonBlock
+          className="h-3 bg-fg-muted/15"
           style={{ width: titleW }}
         />
-        <span
-          className="block h-2.5 animate-pulse rounded bg-fg-muted/10"
+        <SkeletonBlock
+          className="h-2.5"
           style={{ width: previewW }}
         />
         {showWorktree ? (
-          <span className="block h-2.5 w-24 animate-pulse rounded bg-fg-muted/10" />
+          <SkeletonBlock className="h-2.5 w-24" />
         ) : null}
-        <span className="block h-2 w-12 animate-pulse rounded bg-fg-muted/10" />
+        <SkeletonBlock className="h-2 w-12" />
       </div>
     </div>
   );
@@ -1233,11 +1219,11 @@ function TodosTab({ todos }: { todos: TodoItem[] }) {
           </span>
         ) : null}
       </div>
-      <ul className="acorn-no-scrollbar flex-1 overflow-y-auto p-2 text-xs">
+      <ListBox className="acorn-no-scrollbar flex-1 overflow-y-auto">
         {todos.map((t, i) => (
           <TodoRow key={`${i}-${t.content}`} todo={t} />
         ))}
-      </ul>
+      </ListBox>
     </div>
   );
 }
@@ -1249,11 +1235,10 @@ function TodoRow({ todo }: { todo: TodoItem }) {
       ? todo.activeForm
       : todo.content;
   return (
-    <li
-      className={cn(
-        "flex items-start gap-2 rounded px-2 py-1.5",
-        status === "in_progress" && "bg-bg-elevated/40",
-      )}
+    <ListRow
+      className="flex items-start gap-2"
+      selected={status === "in_progress"}
+      selectedClassName="bg-bg-elevated/40"
     >
       <span className="mt-0.5 shrink-0">{statusGlyph(status)}</span>
       <span
@@ -1266,7 +1251,7 @@ function TodoRow({ todo }: { todo: TodoItem }) {
       >
         {display}
       </span>
-    </li>
+    </ListRow>
   );
 }
 
@@ -1360,11 +1345,11 @@ function ActivityTab() {
       {notifications.length === 0 ? (
         <Empty msg={rt(t, "rightPanel.activity.empty")} />
       ) : (
-        <ul className="acorn-no-scrollbar flex-1 overflow-y-auto p-2 text-xs">
+        <ListBox className="acorn-no-scrollbar flex-1 overflow-y-auto">
           {notifications.map((notification) => (
             <ActivityRow key={notification.id} notification={notification} />
           ))}
-        </ul>
+        </ListBox>
       )}
     </div>
   );
@@ -1387,12 +1372,11 @@ function ActivityRow({
   };
 
   return (
-    <li
-      className={cn(
-        "group mb-1 flex items-start gap-2 rounded px-2 py-2 transition",
-        "hover:bg-bg-elevated/60",
-        unread && "bg-warning/5",
-      )}
+    <ListRow
+      interactive
+      className="group flex items-start gap-2"
+      selected={unread}
+      selectedClassName="bg-warning/5"
     >
       <button
         type="button"
@@ -1439,7 +1423,7 @@ function ActivityRow({
           <X size={12} />
         </button>
       </Tooltip>
-    </li>
+    </ListRow>
   );
 }
 
@@ -1720,7 +1704,7 @@ function AgentHistoryTab({
         ) : visibleItems.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.history.emptyForFilter")} />
         ) : (
-          <div className="divide-y divide-border/50">
+          <div className={listBoxClassName({ text: "none" })}>
             {visibleItems.map((item) => {
               const providerTone =
                 item.provider === "codex"
@@ -1731,7 +1715,10 @@ function AgentHistoryTab({
               return (
                 <div
                   key={`${item.provider}:${item.id}:${item.transcript_path}`}
-                  className="group cursor-default px-3 py-2.5 hover:bg-bg-elevated/60"
+                  className={listRowClassName({
+                    interactive: true,
+                    className: "group cursor-default",
+                  })}
                   onDoubleClick={() => void runSession(item)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -2247,6 +2234,8 @@ function CommitsTab({
     count: rowCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => COMMIT_ROW_HEIGHT,
+    paddingStart: COMMIT_LIST_PADDING_Y,
+    paddingEnd: COMMIT_LIST_PADDING_Y,
     overscan: 8,
   });
 
@@ -2268,12 +2257,12 @@ function CommitsTab({
             <SkeletonList count={8} />
           </div>
         </Panel>
-        <ResizeHandle direction="vertical" thin />
+        <ResizeHandle direction="vertical" gap />
         <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
           <div className="acorn-no-scrollbar h-full overflow-y-auto p-3">
-            <div className="h-3 w-1/2 animate-pulse rounded bg-fg-muted/15" />
-            <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-fg-muted/10" />
-            <div className="mt-2 h-3 w-2/3 animate-pulse rounded bg-fg-muted/10" />
+            <SkeletonBlock className="h-3 w-1/2 bg-fg-muted/15" />
+            <SkeletonBlock className="mt-2 h-3 w-3/4" />
+            <SkeletonBlock className="mt-2 h-3 w-2/3" />
           </div>
         </Panel>
       </PanelGroup>
@@ -2298,6 +2287,7 @@ function CommitsTab({
                 key={vi.key}
                 data-index={vi.index}
                 ref={virtualizer.measureElement}
+                className="px-1"
                 style={{
                   position: "absolute",
                   top: 0,
@@ -2321,12 +2311,13 @@ function CommitsTab({
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, commit: c });
                     }}
-                    className={cn(
-                      "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left text-xs transition",
-                      selected === c.sha
-                        ? "bg-bg-elevated"
-                        : "hover:bg-bg-elevated/50",
-                    )}
+                    className={listRowClassName({
+                      interactive: true,
+                      selected: selected === c.sha,
+                      surface: "subtle",
+                      className:
+                        "flex w-full flex-col items-start gap-0.5 text-left text-xs",
+                    })}
                     style={{ height: COMMIT_ROW_HEIGHT }}
                   >
                     <span className="flex w-full min-w-0 items-center gap-2">
@@ -2376,7 +2367,7 @@ function CommitsTab({
         </div>
         </div>
       </Panel>
-      <ResizeHandle direction="vertical" thin />
+      <ResizeHandle direction="vertical" gap />
       <Panel id="commits-diff" order={2} defaultSize={50} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selected && diff ? (
@@ -2647,11 +2638,11 @@ function StagedTab({
   return (
     <PanelGroup direction="vertical" autoSaveId="acorn:layout:staged">
       <Panel id="staged-list" order={1} defaultSize={35} minSize={15}>
-        <ul className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
+        <ListBox className="acorn-no-scrollbar h-full overflow-x-hidden overflow-y-auto">
           {files.map((f) => {
             const canOpen = !isDeleted(f);
             return (
-              <li
+              <ListRow
                 key={f.path}
                 aria-disabled={!canOpen}
                 onClick={() => setSelectedPath(f.path)}
@@ -2664,10 +2655,11 @@ function StagedTab({
                   if (!canOpen) return;
                   openInCodeViewer(f);
                 }}
-                className={cn(
-                  "flex cursor-default items-center gap-2 px-3 py-1.5 font-mono text-xs hover:bg-bg-elevated/40",
-                  selectedPath === f.path && "bg-bg-elevated",
-                )}
+                density="compact"
+                interactive
+                selected={selectedPath === f.path}
+                surface="subtle"
+                className="flex cursor-default items-center gap-2 font-mono text-xs"
               >
                 <span className="w-24 shrink-0 truncate text-fg-muted">
                   {f.status}
@@ -2687,12 +2679,12 @@ function StagedTab({
                     {f.path}
                   </span>
                 </Tooltip>
-              </li>
+              </ListRow>
             );
           })}
-        </ul>
+        </ListBox>
       </Panel>
-      <ResizeHandle direction="vertical" thin />
+      <ResizeHandle direction="vertical" gap />
       <Panel id="staged-diff" order={2} defaultSize={65} minSize={15}>
         <div className="acorn-no-scrollbar h-full overflow-y-auto">
           {selectedDiff ? (
@@ -3303,10 +3295,10 @@ function PullRequestsTab({
             type="button"
             onClick={() => setStateFilter(opt.value)}
             className={cn(
-              "rounded px-2 py-0.5 text-[11px] transition",
+              "rounded-md px-2 py-0.5 text-[11px] transition",
               stateFilter === opt.value
                 ? "bg-bg-elevated text-fg"
-                : "text-fg-muted hover:text-fg",
+                : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
             )}
           >
             {rt(t, prStateLabelKey(opt.value))}
@@ -3357,7 +3349,7 @@ function PullRequestsTab({
             })}
           />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((pr) => (
               <PrRow
                 key={pr.number}
@@ -3382,7 +3374,7 @@ function PullRequestsTab({
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}
@@ -3693,10 +3685,10 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
             type="button"
             onClick={() => setStateFilter(opt.value)}
             className={cn(
-              "rounded px-2 py-0.5 text-[11px] transition",
+              "rounded-md px-2 py-0.5 text-[11px] transition",
               stateFilter === opt.value
                 ? "bg-bg-elevated text-fg"
-                : "text-fg-muted hover:text-fg",
+                : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
             )}
           >
             {rt(t, issueStateLabelKey(opt.value))}
@@ -3747,7 +3739,7 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
             })}
           />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((issue) => (
               <IssueRow
                 key={issue.number}
@@ -3770,7 +3762,7 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}
@@ -3923,7 +3915,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
             }
           />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {visibleItems.map((run) => (
               <WorkflowRunRow
                 key={run.id}
@@ -3932,7 +3924,7 @@ function ActionsTab({ repoPath }: { repoPath: string }) {
                 onOpenDetail={() => setDetailRunId(run.id)}
               />
             ))}
-          </ul>
+          </ListBox>
         )}
       </div>
       <WorkflowRunDetailModal
@@ -3971,69 +3963,69 @@ function WorkflowRunRow({
 
   return (
     <li>
-      <Tooltip
-        label={rt(t, "rightPanel.actions.doubleClickDetails")}
-        side="top"
-        className="w-full"
+      <button
+        type="button"
+        onDoubleClick={onOpenDetail}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onOpenDetail();
+          }
+        }}
+        className={listRowClassName({
+          interactive: true,
+          className: "flex w-full items-start gap-2 text-left",
+        })}
       >
-        <button
-          type="button"
-          onDoubleClick={onOpenDetail}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onOpenDetail();
-            }
-          }}
-          className={cn(
-            "flex w-full items-start gap-2 border-b border-border/40 px-3 py-2 text-left",
-            "transition hover:bg-bg-elevated/60 focus:bg-bg-elevated/60 focus:outline-none",
-          )}
-        >
-          <span className="mt-0.5 flex shrink-0 items-center">
-            <WorkflowRunStatusIcon
-              status={run.status}
-              conclusion={run.conclusion}
-            />
-          </span>
-          <div className="min-w-0 flex-1">
+        <span className="mt-0.5 flex shrink-0 items-center">
+          <WorkflowRunStatusIcon
+            status={run.status}
+            conclusion={run.conclusion}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <Tooltip
+            label={rt(t, "rightPanel.actions.doubleClickDetails")}
+            side="top"
+            className="min-w-0 w-full"
+          >
             <div className="truncate text-fg">{title}</div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
-              <span className="truncate">{run.workflow_name}</span>
-              <span className="opacity-50">·</span>
-              <span className="truncate">{run.event}</span>
-              {branch ? (
-                <>
-                  <span className="opacity-50">·</span>
-                  <span className="truncate font-mono">{branch}</span>
-                </>
-              ) : null}
-              {run.attempt > 1 ? (
-                <>
-                  <span className="opacity-50">·</span>
-                  <span>
-                    {rtf(t, "rightPanel.actions.retryAttempt", {
-                      attempt: run.attempt,
-                    })}
-                  </span>
-                </>
-              ) : null}
-            </div>
+          </Tooltip>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-fg-muted">
+            <span className="truncate">{run.workflow_name}</span>
+            <span className="opacity-50">·</span>
+            <span className="truncate">{run.event}</span>
+            {branch ? (
+              <>
+                <span className="opacity-50">·</span>
+                <span className="truncate font-mono">{branch}</span>
+              </>
+            ) : null}
+            {run.attempt > 1 ? (
+              <>
+                <span className="opacity-50">·</span>
+                <span>
+                  {rtf(t, "rightPanel.actions.retryAttempt", {
+                    attempt: run.attempt,
+                  })}
+                </span>
+              </>
+            ) : null}
           </div>
-          {startedRelative ? (
-            <Tooltip label={startedAbsolute}>
-              <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
-                {startedRelative}
-              </span>
-            </Tooltip>
-          ) : null}
-          {duration ? (
-            <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
-              {duration}
+        </div>
+        {startedRelative ? (
+          <Tooltip label={startedAbsolute}>
+            <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-fg-muted">
+              {startedRelative}
             </span>
-          ) : null}
-        </button>
-      </Tooltip>
+          </Tooltip>
+        ) : null}
+        {duration ? (
+          <span className="mt-0.5 shrink-0 whitespace-nowrap font-mono text-[10px] text-fg-muted">
+            {duration}
+          </span>
+        ) : null}
+      </button>
     </li>
   );
 }
@@ -4113,29 +4105,7 @@ function WorkflowRunDetailModal({
     detail?.display_title.trim().length
       ? detail.display_title
       : detail?.workflow_name ?? rt(t, "rightPanel.actions.workflowRun");
-  const subtitle = detail ? (
-    <span className="flex flex-wrap items-center gap-1.5">
-      <span>{detail.workflow_name}</span>
-      <span className="opacity-50">·</span>
-      <span>{detail.event}</span>
-      {detail.head_branch ? (
-        <>
-          <span className="opacity-50">·</span>
-          <span className="font-mono">{detail.head_branch}</span>
-        </>
-      ) : null}
-      {detail.attempt > 1 ? (
-        <>
-          <span className="opacity-50">·</span>
-          <span>
-            {rtf(t, "rightPanel.actions.retryAttempt", {
-              attempt: detail.attempt,
-            })}
-          </span>
-        </>
-      ) : null}
-    </span>
-  ) : undefined;
+  const showSkeleton = !error && (loading || !listing);
 
   return (
     <Modal
@@ -4145,101 +4115,194 @@ function WorkflowRunDetailModal({
       size="2xl"
       className="flex h-[36rem] flex-col"
     >
-      <ModalHeader
-        title={title}
-        subtitle={subtitle}
-        variant="dialog"
-        icon={
-          <span className="mt-0.5 flex self-start">
-            {detail ? (
-              <WorkflowRunStatusIcon
-                status={detail.status}
-                conclusion={detail.conclusion}
-              />
-            ) : (
-              <Activity size={14} className="text-fg-muted" />
-            )}
-          </span>
-        }
-        actions={
-          detail?.url ? (
-            <Tooltip
-              label={rt(t, "rightPanel.tooltips.openOnGitHub")}
-              side="bottom"
-            >
+      {showSkeleton ? (
+        <WorkflowRunDetailSkeleton onClose={onClose} />
+      ) : (
+        <>
+          <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="mt-0.5 flex shrink-0">
+                  {detail ? (
+                    <WorkflowRunStatusIcon
+                      status={detail.status}
+                      conclusion={detail.conclusion}
+                    />
+                  ) : (
+                    <Activity size={14} className="text-fg-muted" />
+                  )}
+                </span>
+                <Tooltip
+                  label={title}
+                  side="bottom"
+                  multiline
+                  className="min-w-0 flex-1"
+                >
+                  <h3 className="truncate text-sm font-semibold leading-5 tracking-tight text-fg">
+                    {title}
+                  </h3>
+                </Tooltip>
+              </div>
+              {detail ? (
+                <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-fg-muted">
+                  <span>{detail.workflow_name}</span>
+                  <span className="opacity-50">·</span>
+                  <span>{detail.event}</span>
+                  {detail.head_branch ? (
+                    <>
+                      <span className="opacity-50">·</span>
+                      <span className="font-mono">{detail.head_branch}</span>
+                    </>
+                  ) : null}
+                  {detail.attempt > 1 ? (
+                    <>
+                      <span className="opacity-50">·</span>
+                      <span>
+                        {rtf(t, "rightPanel.actions.retryAttempt", {
+                          attempt: detail.attempt,
+                        })}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {detail?.url ? (
+                <Tooltip
+                  label={rt(t, "rightPanel.tooltips.openOnGitHub")}
+                  side="bottom"
+                >
+                  <button
+                    type="button"
+                    onClick={() => void openUrl(detail.url)}
+                    className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                </Tooltip>
+              ) : null}
               <button
                 type="button"
-                onClick={() => void openUrl(detail.url)}
-                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+                aria-label={t("dialogs.common.close")}
+                onClick={onClose}
+                className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               >
-                <ExternalLink size={12} />
-                {rt(t, "rightPanel.actions.github")}
+                <X size={16} />
               </button>
-            </Tooltip>
-          ) : null
-        }
-        onClose={onClose}
-      />
-      <div className="acorn-no-scrollbar flex-1 min-h-0 overflow-y-auto text-xs">
-        <div className="px-4 py-3">
-        {error ? (
-          <div className="p-2 text-danger">{error}</div>
-        ) : loading || !listing ? (
-          <WorkflowRunDetailSkeleton />
-        ) : listing.kind === "not_github" ? (
-          <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
-        ) : listing.kind === "no_access" ? (
-          <NoAccessBanner
-            slug={listing.slug}
-            accounts={listing.accounts}
-            repoPath={repoPath}
-          />
-        ) : (
-          <WorkflowRunDetailBody detail={listing.detail} />
-        )}
-        </div>
-      </div>
+            </div>
+          </header>
+          <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">
+            <div className="px-4 py-3">
+              {error ? (
+                <div className="p-2 text-danger">{error}</div>
+              ) : listing?.kind === "not_github" ? (
+                <Empty msg={rt(t, "rightPanel.errors.originNotGitHub")} />
+              ) : listing?.kind === "no_access" ? (
+                <NoAccessBanner
+                  slug={listing.slug}
+                  accounts={listing.accounts}
+                  repoPath={repoPath}
+                />
+              ) : listing?.kind === "ok" ? (
+                <WorkflowRunDetailBody detail={listing.detail} />
+              ) : null}
+            </div>
+          </div>
+        </>
+      )}
     </Modal>
   );
 }
 
-function WorkflowRunDetailSkeleton() {
+function WorkflowRunDetailSkeleton({ onClose }: { onClose: () => void }) {
+  const t = useTranslation();
   return (
-    <div className="space-y-3 animate-pulse">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="contents">
-            <dt>
-              <span className="block h-3 w-16 rounded bg-border/60" />
-            </dt>
-            <dd>
-              <span
-                className="block h-3 rounded bg-border/40"
-                style={{ width: `${40 + ((i * 37) % 50)}%` }}
-              />
-            </dd>
+    <>
+      <header
+        className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3"
+        data-workflow-run-detail-skeleton="header"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/20" />
+            <SkeletonBlock className="h-3.5 w-[58%] min-w-0 bg-fg-muted/15" />
           </div>
-        ))}
-      </dl>
-      <div>
-        <span className="mb-1.5 block h-3 w-20 rounded bg-border/60" />
-        <ul className="space-y-1.5">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <li
-              key={i}
-              className="flex items-center gap-2 rounded border border-border/60 bg-bg/40 px-2 py-2"
-            >
-              <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-border/60" />
-              <span
-                className="h-3 rounded bg-border/40"
-                style={{ width: `${50 + ((i * 23) % 30)}%` }}
-              />
-              <span className="ml-auto h-3 w-10 rounded bg-border/40" />
-            </li>
-          ))}
-        </ul>
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <SkeletonBlock className="h-2.5 w-20 shrink-0" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <SkeletonBlock className="h-2.5 w-14 shrink-0" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <SkeletonBlock className="h-2.5 w-24 shrink-0" />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
+          <button
+            type="button"
+            aria-label={t("dialogs.common.close")}
+            onClick={onClose}
+            className="rounded p-1 text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </header>
+      <div className="acorn-no-scrollbar min-h-0 flex-1 overflow-y-auto text-xs">
+        <div
+          className="space-y-3 px-4 py-3"
+          data-workflow-run-detail-skeleton="body"
+        >
+          <section className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3">
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-[11px]">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="contents">
+                  <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
+                  <SkeletonBlock
+                    className="h-2.5 bg-fg-muted/10"
+                    style={{ width: `${38 + ((index * 29) % 42)}%` }}
+                  />
+                </div>
+              ))}
+            </div>
+          </section>
+          <section>
+            <div className="mb-1.5 flex items-center gap-2">
+              <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
+              <SkeletonBlock className="h-4 w-8 rounded-full bg-fg-muted/10" />
+            </div>
+            <ul className="space-y-1.5">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <li
+                  key={index}
+                  className="overflow-hidden rounded-md border border-border bg-bg-elevated/40"
+                >
+                  <div className="flex items-center gap-2 px-2.5 py-2">
+                    <SkeletonBlock className="h-3 w-3 shrink-0 rounded-sm bg-fg-muted/10" />
+                    <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/15" />
+                    <SkeletonBlock
+                      className="h-3 min-w-0 flex-1 bg-fg-muted/15"
+                      style={{ width: `${48 + ((index * 17) % 30)}%` }}
+                    />
+                    <SkeletonBlock className="ml-auto h-2.5 w-12 shrink-0" />
+                  </div>
+                  {index === 0 ? (
+                    <div className="border-t border-border/40 px-2.5 py-2">
+                      <SkeletonText
+                        className="gap-1.5"
+                        lineClassName="h-2.5"
+                        lines={3}
+                        widths={["64%", "52%", "40%"]}
+                      />
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -4262,7 +4325,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
   );
   return (
     <div className="space-y-3">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-fg-muted">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[var(--acorn-pane-radius)] bg-bg-sidebar/40 p-3 text-[11px] text-fg-muted">
         <dt className="opacity-70">{rt(t, "rightPanel.actions.status")}</dt>
         <dd className="text-fg">
           {detail.status}
@@ -4318,7 +4381,7 @@ function WorkflowRunDetailBody({ detail }: { detail: WorkflowRunDetail }) {
             {rt(t, "rightPanel.actions.noJobs")}
           </div>
         ) : (
-          <ul className="rounded border border-border/60 divide-y divide-border/40">
+          <ul className="space-y-1">
             {detail.jobs.map((job) => (
               <WorkflowJobRow key={job.id} job={job} nowUnix={nowUnix} />
             ))}
@@ -4340,16 +4403,23 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
     nowUnix,
   );
   return (
-    <li className="bg-bg/40">
+    <li className="overflow-hidden rounded-md border border-border bg-bg-elevated/40">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-2 px-2 py-1.5 text-left transition",
-          "sticky top-0 z-10 bg-bg-elevated hover:bg-bg-sidebar",
+          "flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left transition hover:bg-bg-elevated",
           expanded ? "border-b border-border/40" : "",
         )}
       >
+        <ChevronRight
+          size={12}
+          aria-hidden
+          className={cn(
+            "shrink-0 text-fg-muted transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
         <WorkflowRunStatusIcon
           status={job.status}
           conclusion={job.conclusion}
@@ -4387,7 +4457,7 @@ function WorkflowJobRow({ job, nowUnix }: { job: WorkflowJob; nowUnix: number })
         ) : null}
       </button>
       {expanded && job.steps.length > 0 ? (
-        <ol className="space-y-0.5 px-2 py-1.5 text-xs">
+        <ol className="space-y-0.5 px-2.5 py-2 text-xs">
           {job.steps.map((step) => (
             <WorkflowStepRow key={`${step.number}-${step.name}`} step={step} />
           ))}
@@ -4545,24 +4615,7 @@ function NoAccessBanner({
   );
 }
 
-function GitHubLabelChip({ label }: { label: PullRequestLabel }) {
-  return (
-    <Tooltip label={label.name} side="top">
-      <span
-        className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-        style={{
-          backgroundColor: `#${label.color.replace(/^#/, "")}26`,
-          color: `#${label.color.replace(/^#/, "")}`,
-        }}
-      >
-        {label.name}
-      </span>
-    </Tooltip>
-  );
-}
-
 type GitHubRowSurface = "panel" | "dialog";
-
 function GitHubListRow({
   number,
   title,
@@ -4574,6 +4627,7 @@ function GitHubListRow({
   onOpen,
   onContextMenu,
   surface = "panel",
+  rowDensity = "default",
   showAvatar = false,
   showLabels = true,
 }: {
@@ -4587,33 +4641,21 @@ function GitHubListRow({
   onOpen: () => void;
   onContextMenu?: (e: React.MouseEvent<HTMLLIElement>) => void;
   surface?: GitHubRowSurface;
+  rowDensity?: ListRowDensity;
   showAvatar?: boolean;
   showLabels?: boolean;
 }) {
   const t = useTranslation();
-  const hoverBg =
-    surface === "dialog"
-      ? "hover:bg-bg-sidebar focus-visible:bg-bg-sidebar"
-      : "hover:bg-bg-elevated/50 focus-visible:bg-bg-elevated/60";
   const titleSize = showAvatar ? "text-[13px]" : "text-xs";
   const metaSize = showAvatar ? "text-[11px]" : "text-[10px]";
 
   return (
-    <li
-      role="button"
-      tabIndex={0}
-      onDoubleClick={onOpen}
+    <ListActionRow
+      onOpen={onOpen}
       onContextMenu={onContextMenu}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={cn(
-        "flex w-full flex-col items-start gap-0.5 border-b border-border/40 px-3 py-2 text-left transition focus-visible:outline-none",
-        hoverBg,
-      )}
+      surface={surface === "dialog" ? "dialog" : "subtle"}
+      density={rowDensity}
+      className="flex flex-col items-start gap-0.5 text-left"
     >
       <span className={cn("flex w-full min-w-0 items-center gap-2", titleSize)}>
         <span className={cn("shrink-0 font-mono", numberClassName)}>
@@ -4667,7 +4709,7 @@ function GitHubListRow({
           </span>
         </Tooltip>
       </span>
-    </li>
+    </ListActionRow>
   );
 }
 
@@ -5011,7 +5053,8 @@ function PullRequestSearchModal({
           autoFocus
         />
         <div className="flex items-center gap-1 text-[11px]">
-          {PR_SEARCH_STATE_OPTIONS.map((opt) => (
+          <div className="flex items-center gap-0.5 rounded-md bg-bg p-0.5">
+            {PR_SEARCH_STATE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
@@ -5019,13 +5062,14 @@ function PullRequestSearchModal({
               className={cn(
                 "rounded px-2 py-0.5 transition",
                 stateFilter === opt.value
-                  ? "bg-bg text-fg"
+                  ? "bg-bg-elevated text-fg shadow-sm"
                   : "text-fg-muted hover:text-fg",
               )}
             >
               {rt(t, prStateLabelKey(opt.value))}
             </button>
-          ))}
+            ))}
+          </div>
           {loading ? (
             <span className="ml-auto text-fg-muted">
               {rt(t, "rightPanel.search.searching")}
@@ -5059,7 +5103,7 @@ function PullRequestSearchModal({
         ) : listing.items.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.search.noMatches")} />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((pr) => (
               <PrRow
                 key={pr.number}
@@ -5085,7 +5129,7 @@ function PullRequestSearchModal({
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}
@@ -5209,7 +5253,8 @@ function IssueSearchModal({
           autoFocus
         />
         <div className="flex items-center gap-1 text-[11px]">
-          {ISSUE_STATE_OPTIONS.map((opt) => (
+          <div className="flex items-center gap-0.5 rounded-md bg-bg p-0.5">
+            {ISSUE_STATE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
@@ -5217,13 +5262,14 @@ function IssueSearchModal({
               className={cn(
                 "rounded px-2 py-0.5 transition",
                 stateFilter === opt.value
-                  ? "bg-bg text-fg"
+                  ? "bg-bg-elevated text-fg shadow-sm"
                   : "text-fg-muted hover:text-fg",
               )}
             >
               {rt(t, issueStateLabelKey(opt.value))}
             </button>
-          ))}
+            ))}
+          </div>
           {loading ? (
             <span className="ml-auto text-fg-muted">
               {rt(t, "rightPanel.issueSearch.searching")}
@@ -5259,7 +5305,7 @@ function IssueSearchModal({
         ) : listing.items.length === 0 ? (
           <Empty msg={rt(t, "rightPanel.issueSearch.noMatches")} />
         ) : (
-          <ul className="text-xs">
+          <ListBox>
             {listing.items.map((issue) => (
               <IssueRow
                 key={issue.number}
@@ -5283,7 +5329,7 @@ function IssueSearchModal({
                 })}
               </li>
             ) : null}
-          </ul>
+          </ListBox>
         )}
       </div>
       {rowActions.overlays}

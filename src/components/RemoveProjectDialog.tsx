@@ -4,7 +4,7 @@ import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useTranslation } from "../lib/useTranslation";
-import { Modal, ModalHeader } from "./ui";
+import { Button, CodeValue, Modal, ModalFooter, ModalHeader } from "./ui";
 
 type RemoveProjectChoice =
   | "project_only"
@@ -52,6 +52,7 @@ export function RemoveProjectDialog({
         <>
           <ModalHeader
             title={dt(t, "dialogs.removeProject.title")}
+            subtitle={project.name}
             icon={<AlertTriangle size={16} className="text-warning" />}
             variant="dialog"
             onClose={() => onClose("cancel")}
@@ -61,10 +62,10 @@ export function RemoveProjectDialog({
               {dt(t, "dialogs.removeProject.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{project.name}</span>?
             </p>
-            <div className="space-y-1 rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
-              <p className="break-all font-mono text-fg-muted">
+            <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3 text-xs">
+              <CodeValue tone="muted" overflow="breakAll">
                 {project.repo_path}
-              </p>
+              </CodeValue>
               <p className="text-fg-muted">
                 {sessions.length}{" "}
                 {sessions.length === 1
@@ -82,37 +83,39 @@ export function RemoveProjectDialog({
               </p>
             </div>
           </div>
-          <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-            <button
-              type="button"
+          <ModalFooter variant="sidebar">
+            <Button
               onClick={() => onClose("cancel")}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg"
+              size="md"
+              surface="dialog"
             >
               {dt(t, "dialogs.common.cancel")}
-            </button>
+            </Button>
             {worktreeCount > 0 ? (
-              <button
-                type="button"
+              <Button
                 onClick={() => onClose("project_only")}
-                className="rounded-md px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
+                variant="neutral"
+                size="md"
+                surface="dialog"
               >
                 {dt(t, "dialogs.removeProject.closeKeepWorktrees")}
-              </button>
+              </Button>
             ) : null}
-            <button
-              type="button"
+            <Button
               onClick={() =>
                 onClose(
                   worktreeCount > 0 ? "project_and_worktrees" : "project_only",
                 )
               }
-              className="rounded-md bg-danger/15 px-3 py-1.5 text-xs font-medium text-danger transition hover:bg-danger/25"
+              variant="dangerSoft"
+              size="md"
+              surface="dialog"
             >
               {worktreeCount > 0
                 ? dt(t, "dialogs.removeProject.closeDeleteWorktrees")
                 : dt(t, "dialogs.removeProject.closeProject")}
-            </button>
-          </footer>
+            </Button>
+          </ModalFooter>
         </>
       ) : null}
     </Modal>

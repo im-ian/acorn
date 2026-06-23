@@ -21,7 +21,7 @@ export function RadioCard<T extends string>({
   return (
     <label
       className={cn(
-        "flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 transition",
+        "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition",
         active
           ? "border-accent/60 bg-accent/10"
           : "border-border bg-bg hover:border-fg-muted/40",
@@ -33,7 +33,7 @@ export function RadioCard<T extends string>({
         value={value}
         checked={active}
         onChange={() => onSelect(value)}
-        className="mt-0.5 accent-[var(--color-accent)]"
+        className="acorn-radio mt-0.5"
       />
       <span className="flex flex-col">
         <span className="text-xs font-medium text-fg">{label}</span>

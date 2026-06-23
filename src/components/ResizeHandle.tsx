@@ -11,6 +11,13 @@ interface ResizeHandleProps {
   direction?: "horizontal" | "vertical";
   showDivider?: boolean;
   thin?: boolean;
+  /**
+   * Floating-card gap: the handle becomes a transparent ~6px gutter so the
+   * darker canvas shows through between pane cards. Distinct from `thin`
+   * (a 1px divider reused by modals/diff views) — only the app layout opts
+   * into `gap` so those other surfaces stay unaffected.
+   */
+  gap?: boolean;
 }
 
 /**
@@ -37,6 +44,7 @@ export function ResizeHandle({
   direction = "horizontal",
   showDivider = false,
   thin = false,
+  gap = false,
 }: ResizeHandleProps) {
   const isHorizontal = direction === "horizontal";
   const handleId = useId();
@@ -129,32 +137,55 @@ export function ResizeHandle({
   // to col/row resize so the resize action is discoverable without any
   // chrome of our own.
   const showHandleVisual = collapsedPanelId !== null;
+  // Floating-card gutter with both neighbours open: there's no border to
+  // grab, so hovering the transparent gap surfaces a faint grip to hint the
+  // resize affordance. (A collapsed neighbour uses `showHandleVisual` for
+  // the louder re-expand grip instead.)
+  const showGapHint = gap && !showHandleVisual;
 
   return (
     <>
       <PanelResizeHandle
         id={handleId}
-        hitAreaMargins={thin ? { coarse: 12, fine: 6 } : { coarse: 0, fine: 0 }}
+        hitAreaMargins={
+          thin || gap ? { coarse: 12, fine: 6 } : { coarse: 0, fine: 0 }
+        }
         onDragging={setDragging}
         onDoubleClick={handleDoubleClick}
         className={cn(
-          "relative flex shrink-0 items-center justify-center transition-colors duration-150",
-          // Closed state: faint white tint on hover (re-expand affordance).
-          // Open state stays transparent — the thin accent line below
-          // surfaces during drag instead of a full-bar fill.
-          showHandleVisual && hovered && !dragging
-            ? "bg-white/5"
-            : "bg-transparent",
+          "relative flex shrink-0 items-center justify-center bg-transparent transition-colors duration-150",
           isHorizontal
-            ? thin
-              ? "w-px cursor-col-resize"
-              : "w-3 cursor-col-resize"
-            : thin
-              ? "h-px cursor-row-resize"
-              : "h-3 cursor-row-resize",
+            ? gap
+              ? "w-1.5 cursor-col-resize"
+              : thin
+                ? "w-px cursor-col-resize"
+                : "w-3 cursor-col-resize"
+            : gap
+              ? "h-1.5 cursor-row-resize"
+              : thin
+                ? "h-px cursor-row-resize"
+                : "h-3 cursor-row-resize",
         )}
       >
-        {showDivider || (dragging && !showHandleVisual) ? (
+        {(showHandleVisual || showGapHint) && (hovered || dragging) ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 transition-opacity duration-150"
+            style={{
+              // Gradient sits behind the grip in the gutter: keep the state
+              // color (white on hover, accent on drag) but fade the top and
+              // bottom ends to transparent.
+              backgroundImage: `linear-gradient(${
+                isHorizontal ? "to bottom" : "to right"
+              }, transparent, ${
+                dragging
+                  ? "color-mix(in oklab, var(--color-accent) 65%, transparent)"
+                  : "color-mix(in oklab, #ffffff 15%, transparent)"
+              }, transparent)`,
+            }}
+          />
+        ) : null}
+        {showDivider || (dragging && !showHandleVisual && !gap) ? (
           <span
             aria-hidden="true"
             className={cn(
@@ -167,17 +198,25 @@ export function ResizeHandle({
         <span
           aria-hidden="true"
           className={cn(
-            "pointer-events-none rounded-full bg-white transition-opacity duration-150",
-            // Fixed mid-size grip; only opacity changes between hover/drag
-            // so the user gets a steady visual instead of a resizing pill.
-            isHorizontal ? "h-10 w-[3px]" : "h-[3px] w-10",
+            "pointer-events-none rounded-full transition duration-150",
+            // Fixed mid-size grip; only opacity/color changes between
+            // hover/drag so the user gets a steady rounded visual. For a gap
+            // gutter the grip turns accent on drag, replacing the square line.
+            isHorizontal ? "h-10 w-[2px]" : "h-[2px] w-10",
+            showGapHint && dragging ? "bg-accent" : "bg-white",
             showHandleVisual
               ? dragging
                 ? "opacity-100"
                 : hovered
                   ? "opacity-70"
                   : "opacity-0"
-              : "opacity-0",
+              : showGapHint
+                ? dragging
+                  ? "opacity-100"
+                  : hovered
+                    ? "opacity-60"
+                    : "opacity-0"
+                : "opacity-0",
           )}
         />
       </PanelResizeHandle>

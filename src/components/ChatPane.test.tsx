@@ -180,6 +180,31 @@ function changeTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function getCombobox(label: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    `button[role="combobox"][aria-label="${label}"]`,
+  );
+  if (!button) throw new Error(`Combobox not found: ${label}`);
+  return button;
+}
+
+async function chooseSelectOption(label: string, optionText: string) {
+  const combobox = getCombobox(label);
+  await act(async () => {
+    combobox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  const optionLabel = Array.from(
+    document.querySelectorAll("[data-select-option-label]"),
+  ).find((element) => element.textContent?.trim() === optionText);
+  const option = optionLabel?.closest('[role="option"]');
+  if (!(option instanceof HTMLElement)) {
+    throw new Error(`Select option not found: ${optionText}`);
+  }
+  await act(async () => {
+    option.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 function emitChatState(state: ChatSessionState) {
   for (const listener of eventMocks.listeners.get(
     "acorn:chat-session-state-changed",
@@ -294,9 +319,7 @@ describe("ChatPane", () => {
     });
     await settle();
 
-    const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Chat provider"]',
-    );
+    const select = getCombobox("Chat provider");
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Chat message"]',
     );
@@ -316,9 +339,8 @@ describe("ChatPane", () => {
     expect(actions!.contains(sendButton)).toBe(true);
     expect(form).toBeTruthy();
 
+    await chooseSelectOption("Chat provider", "Codex");
     await act(async () => {
-      select!.value = "codex";
-      select!.dispatchEvent(new Event("change", { bubbles: true }));
       changeTextareaValue(textarea!, "hello");
     });
     await settle();
@@ -376,9 +398,7 @@ describe("ChatPane", () => {
     });
     await settle();
 
-    const worktreeSelect = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Chat worktree mode"]',
-    );
+    const worktreeSelect = getCombobox("Chat worktree mode");
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Chat message"]',
     );
@@ -387,9 +407,8 @@ describe("ChatPane", () => {
     expect(textarea).toBeTruthy();
     expect(form).toBeTruthy();
 
+    await chooseSelectOption("Chat worktree mode", "New worktree");
     await act(async () => {
-      worktreeSelect!.value = "new";
-      worktreeSelect!.dispatchEvent(new Event("change", { bubbles: true }));
       changeTextareaValue(textarea!, "start isolated");
     });
     await settle();
@@ -875,9 +894,7 @@ describe("ChatPane", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Chat message"]',
     );
-    const provider = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Chat provider"]',
-    );
+    const provider = getCombobox("Chat provider");
     expect(textarea).toBeTruthy();
     expect(provider).toBeTruthy();
     expect(document.activeElement).not.toBe(textarea);
@@ -2235,17 +2252,13 @@ describe("ChatPane", () => {
       ),
     ).toEqual(["Codex"]);
 
-    const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Chat provider"]',
-    );
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Chat message"]',
     );
     const form = container.querySelector("form");
 
+    await chooseSelectOption("Chat provider", "Claude");
     await act(async () => {
-      select!.value = "claude";
-      select!.dispatchEvent(new Event("change", { bubbles: true }));
       changeTextareaValue(textarea!, "second");
     });
     await settle();
@@ -2296,18 +2309,13 @@ describe("ChatPane", () => {
     });
     await settle();
 
-    const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Chat provider"]',
-    );
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Chat message"]',
     );
     const form = container.querySelector("form");
-    expect(select?.textContent).toContain("Antigravity");
 
+    await chooseSelectOption("Chat provider", "Antigravity");
     await act(async () => {
-      select!.value = "antigravity";
-      select!.dispatchEvent(new Event("change", { bubbles: true }));
       changeTextareaValue(textarea!, "hello agy");
     });
     await settle();

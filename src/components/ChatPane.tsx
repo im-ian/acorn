@@ -45,7 +45,7 @@ import type {
 } from "../lib/types";
 import { ChatMessageBody } from "./chat/ChatMessageBody";
 import { Tooltip } from "./Tooltip";
-import { Modal, ModalHeader } from "./ui";
+import { Button, Modal, ModalFooter, ModalHeader, Select } from "./ui";
 
 interface ChatPaneProps {
   sessionId: string;
@@ -1514,7 +1514,7 @@ export function ChatPane({
           </p>
         </div>
         <div
-          className={`mx-auto flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated/65 shadow-sm transition-[width,max-width,padding,box-shadow,border-color] duration-300 ease-out ${
+          className={`mx-auto flex flex-col gap-2 rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/65 shadow-sm transition-[width,max-width,padding,box-shadow,border-color] duration-300 ease-out ${
             composerIsCentered
               ? "w-[90%] max-w-none px-3 py-3 shadow-xl ring-1 ring-border/60"
               : "max-w-4xl px-2 py-2"
@@ -1592,11 +1592,9 @@ export function ChatPane({
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {canChooseStartupWorktree ? (
-                <select
+                <Select
                   aria-label="Chat worktree mode"
-                  className={`shrink-0 rounded bg-transparent px-2 text-xs text-fg outline-none transition focus:bg-bg disabled:opacity-60 ${
-                    composerIsCentered ? "h-9" : "h-8"
-                  }`}
+                  className="w-40 shrink-0"
                   disabled={sending}
                   value={startupWorktreeMode}
                   onChange={(event) =>
@@ -1607,13 +1605,11 @@ export function ChatPane({
                 >
                   <option value="same">Current directory</option>
                   <option value="new">New worktree</option>
-                </select>
+                </Select>
               ) : null}
-              <select
+              <Select
                 aria-label="Chat provider"
-                className={`shrink-0 rounded bg-transparent px-2 text-xs text-fg outline-none transition focus:bg-bg disabled:opacity-60 ${
-                  composerIsCentered ? "h-9" : "h-8"
-                }`}
+                className="w-32 shrink-0"
                 disabled={sending}
                 value={provider}
                 onChange={(event) =>
@@ -1623,7 +1619,7 @@ export function ChatPane({
                 <option value="claude">Claude</option>
                 <option value="codex">Codex</option>
                 <option value="antigravity">Antigravity</option>
-              </select>
+              </Select>
               {sending || hasRunningMessages ? (
                 <Tooltip label="Stop response" side="top">
                   <button
@@ -1742,34 +1738,36 @@ function ForkWorktreeDialog({
           </p>
         ) : null}
       </div>
-      <footer className="flex items-center justify-end gap-2 border-t border-border bg-bg-sidebar/40 px-4 py-3">
-        <button
-          type="button"
+      <ModalFooter variant="sidebar">
+        <Button
           onClick={onClose}
           disabled={busy}
-          className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition hover:bg-bg-sidebar hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+          size="md"
+          surface="dialog"
         >
           Cancel
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           aria-label="Fork in same directory"
           onClick={() => onChoose("same")}
           disabled={busy}
-          className="rounded-md border border-border px-3 py-1.5 text-xs text-fg transition hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+          variant="outline"
+          size="md"
+          surface="dialog"
         >
           Same directory
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           aria-label="Fork in new worktree"
           onClick={() => onChoose("new")}
           disabled={busy || !canUseNewWorktree}
-          className="rounded-md bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+          variant="accentSoft"
+          size="md"
+          surface="dialog"
         >
           New worktree
-        </button>
-      </footer>
+        </Button>
+      </ModalFooter>
     </Modal>
   );
 }
