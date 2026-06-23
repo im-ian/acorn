@@ -21,7 +21,7 @@ const CODE_VALUE_BASE_CLASS =
 
 const CODE_VALUE_DISPLAY_CLASS: Record<CodeValueDisplay, string> = {
   block: "block w-full px-2.5 py-1.5",
-  inline: "inline-block max-w-full px-1.5 py-0.5 align-baseline leading-5",
+  inline: "inline-block max-w-full px-1.5 py-0.5 align-middle leading-4",
 };
 
 const CODE_VALUE_SURFACE_CLASS: Record<CodeValueSurface, string> = {

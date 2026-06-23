@@ -76,12 +76,16 @@ export const Variants: Story = {
         <CodeValue surface="elevated">{path}</CodeValue>
       </VariantRow>
       <VariantRow label="inline">
-        <p className="text-xs text-fg-muted">
-          Current value{" "}
-          <CodeValue display="inline" surface="muted">
+        <span className="flex min-w-0 items-center gap-2 text-xs text-fg-muted">
+          <span className="shrink-0">Current value</span>
+          <CodeValue
+            display="inline"
+            surface="muted"
+            className="max-w-[18rem]"
+          >
             {uuid}
           </CodeValue>
-        </p>
+        </span>
       </VariantRow>
     </div>
   ),
