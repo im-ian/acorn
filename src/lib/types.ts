@@ -453,6 +453,7 @@ export type IssueListing =
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
 
 export interface IssueComment {
+  id: number | null;
   author: string;
   author_avatar_url: string | null;
   body: string;
@@ -482,10 +483,12 @@ export type IssueDetailListing =
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
 
 export interface PullRequestComment {
+  id: number | null;
   author: string;
   author_avatar_url: string | null;
   body: string;
   created_at: string;
+  url: string | null;
 }
 
 export interface PullRequestReview {

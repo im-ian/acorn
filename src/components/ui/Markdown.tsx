@@ -77,6 +77,7 @@ function rehypeTaskIndex() {
 interface MarkdownProps {
   content: string;
   className?: string;
+  softBreaks?: boolean;
   /**
    * Optional handler invoked when a GFM task-list checkbox is toggled.
    * The `index` is the zero-based position of the checkbox in source order
@@ -92,6 +93,36 @@ interface MarkdownProps {
 // xmpp/irc and the like — gate what we hand to the OS opener to web links
 // and mailto so a crafted body can't launch arbitrary scheme handlers.
 const SAFE_OPEN_URL_RE = /^(https?:|mailto:)/i;
+
+type MarkdownAstNode = {
+  type?: string;
+  value?: unknown;
+  children?: MarkdownAstNode[];
+  [key: string]: unknown;
+};
+
+function remarkSoftBreaks() {
+  return (tree: MarkdownAstNode) => {
+    const visit = (node: MarkdownAstNode) => {
+      if (!Array.isArray(node.children)) return;
+      node.children = node.children.flatMap((child) => {
+        visit(child);
+        if (child.type !== "text" || typeof child.value !== "string") {
+          return [child];
+        }
+        const parts = child.value.split("\n");
+        if (parts.length === 1) return [child];
+        return parts.flatMap<MarkdownAstNode>((part, index) => {
+          const nodes: MarkdownAstNode[] = [];
+          if (index > 0) nodes.push({ type: "break" });
+          if (part.length > 0) nodes.push({ ...child, value: part });
+          return nodes;
+        });
+      });
+    };
+    visit(tree);
+  };
+}
 
 const baseComponents: Components = {
   a({ href, children, title, ...rest }) {
@@ -240,7 +271,12 @@ const baseComponents: Components = {
   },
 };
 
-function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
+function MarkdownImpl({
+  content,
+  className,
+  softBreaks = false,
+  onTaskToggle,
+}: MarkdownProps) {
   const [lightbox, setLightbox] = useState<
     { src: string; alt?: string } | null
   >(null);
@@ -314,11 +350,16 @@ function MarkdownImpl({ content, className, onTaskToggle }: MarkdownProps) {
     [onTaskToggle],
   );
 
+  const remarkPlugins = useMemo(
+    () => (softBreaks ? [remarkGfm, remarkSoftBreaks] : [remarkGfm]),
+    [softBreaks],
+  );
+
   return (
     <>
       <div className={cn("text-[11.5px] leading-relaxed text-fg", className)}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={remarkPlugins}
           rehypePlugins={[
             rehypeRaw,
             rehypeTaskIndex,

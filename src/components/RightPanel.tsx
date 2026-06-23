@@ -3775,6 +3775,7 @@ function IssuesTab({ repoPath }: { repoPath: string }) {
       <IssueDetailModal
         open={issueDetail}
         onClose={() => setIssueDetail(null)}
+        onMutated={() => void fetchActiveIssues()}
       />
     </div>
   );

@@ -383,6 +383,41 @@ export const api = {
       number,
     });
   },
+  addIssueComment(
+    repoPath: string,
+    number: number,
+    body: string,
+  ): Promise<void> {
+    return invoke<void>("add_issue_comment", {
+      repoPath,
+      number,
+      body,
+    });
+  },
+  updateGithubComment(
+    repoPath: string,
+    accountLogin: string,
+    commentId: number,
+    body: string,
+  ): Promise<void> {
+    return invoke<void>("update_github_comment", {
+      repoPath,
+      accountLogin,
+      commentId,
+      body,
+    });
+  },
+  deleteGithubComment(
+    repoPath: string,
+    accountLogin: string,
+    commentId: number,
+  ): Promise<void> {
+    return invoke<void>("delete_github_comment", {
+      repoPath,
+      accountLogin,
+      commentId,
+    });
+  },
   getPullRequestDetail(
     repoPath: string,
     number: number,
@@ -399,6 +434,17 @@ export const api = {
     return invoke<PullRequestDiffListing>("get_pull_request_diff", {
       repoPath,
       number,
+    });
+  },
+  addPullRequestComment(
+    repoPath: string,
+    number: number,
+    body: string,
+  ): Promise<void> {
+    return invoke<void>("add_pull_request_comment", {
+      repoPath,
+      number,
+      body,
     });
   },
   getPullRequestCommitDiff(
