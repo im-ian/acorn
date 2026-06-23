@@ -108,12 +108,15 @@ import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 import {
+  Button,
+  CodeValue,
   CommandHint,
   ListActionRow,
   ListBox,
   ListEmptyState,
   ListRow,
   Modal,
+  ModalFooter,
   ModalHeader,
   RefreshButton,
   Select,
@@ -121,10 +124,12 @@ import {
   SkeletonCircle,
   SkeletonList,
   SkeletonText,
+  StatusDot,
   TextInput,
   listBoxClassName,
   listRowClassName,
   type ListRowDensity,
+  type StatusTone,
 } from "./ui";
 import { useDialogShortcuts } from "../lib/dialog";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -1383,11 +1388,10 @@ function ActivityRow({
         onClick={openSession}
         className="flex min-w-0 flex-1 items-start gap-2 text-left"
       >
-        <span
-          className={cn(
-            "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-            activityDotClass(notification.kind),
-          )}
+        <StatusDot
+          tone={activityDotTone(notification.kind)}
+          size="sm"
+          className="mt-1"
         />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
@@ -1427,10 +1431,10 @@ function ActivityRow({
   );
 }
 
-function activityDotClass(kind: SessionNotificationKind): string {
-  if (kind === "failed") return "bg-danger";
-  if (kind === "completed") return "bg-accent";
-  return "bg-warning";
+function activityDotTone(kind: SessionNotificationKind): StatusTone {
+  if (kind === "failed") return "danger";
+  if (kind === "completed") return "accent";
+  return "warning";
 }
 
 function formatActivityTime(value: string): string {
@@ -1878,20 +1882,21 @@ function AgentHistoryTab({
             })}
           </p>
           {worktreeNotice ? (
-            <div className="rounded border border-border bg-bg-sidebar px-3 py-2 font-mono text-[11px] text-fg-muted">
+            <CodeValue surface="muted" tone="muted" overflow="wrap">
               {worktreeNotice.path}
-            </div>
+            </CodeValue>
           ) : null}
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="rounded border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
-              onClick={() => setWorktreeNotice(null)}
-            >
-              {rt(t, "rightPanel.history.worktreeRunConfirm")}
-            </button>
-          </div>
         </div>
+        <ModalFooter variant="sidebar">
+          <Button
+            onClick={() => setWorktreeNotice(null)}
+            variant="neutral"
+            size="md"
+            surface="dialog"
+          >
+            {rt(t, "rightPanel.history.worktreeRunConfirm")}
+          </Button>
+        </ModalFooter>
       </Modal>
       <Modal
         open={trashCandidate !== null}
@@ -1911,31 +1916,32 @@ function AgentHistoryTab({
             {rt(t, "rightPanel.history.trashTranscriptBody")}
           </p>
           {trashCandidate ? (
-            <div className="rounded border border-border bg-bg-sidebar px-3 py-2 font-mono text-[11px] text-fg-muted">
+            <CodeValue surface="muted" tone="muted" overflow="wrap">
               {trashCandidate.transcript_path}
-            </div>
+            </CodeValue>
           ) : null}
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className="rounded border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg transition hover:bg-bg-sidebar"
-              onClick={() => setTrashCandidate(null)}
-            >
-              {rt(t, "rightPanel.history.trashTranscriptCancel")}
-            </button>
-            <button
-              type="button"
-              className="rounded border border-danger/50 bg-danger/10 px-3 py-1.5 text-xs text-danger transition hover:bg-danger/15"
-              onClick={() =>
-                trashCandidate
-                  ? void moveTranscriptToTrash(trashCandidate)
-                  : undefined
-              }
-            >
-              {rt(t, "rightPanel.history.trashTranscriptConfirm")}
-            </button>
-          </div>
         </div>
+        <ModalFooter variant="sidebar">
+          <Button
+            onClick={() => setTrashCandidate(null)}
+            size="md"
+            surface="dialog"
+          >
+            {rt(t, "rightPanel.history.trashTranscriptCancel")}
+          </Button>
+          <Button
+            onClick={() =>
+              trashCandidate
+                ? void moveTranscriptToTrash(trashCandidate)
+                : undefined
+            }
+            variant="dangerSoft"
+            size="md"
+            surface="dialog"
+          >
+            {rt(t, "rightPanel.history.trashTranscriptConfirm")}
+          </Button>
+        </ModalFooter>
       </Modal>
     </div>
   );
