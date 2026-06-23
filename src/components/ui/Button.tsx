@@ -27,7 +27,7 @@ export interface ButtonClassNameOptions {
 }
 
 const BUTTON_BASE_CLASS =
-  "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50";
 
 const BUTTON_SIZE_CLASS: Record<ButtonSize, string> = {
   xs: "h-6 px-2 text-[11px]",
@@ -146,7 +146,7 @@ export interface IconButtonClassNameOptions {
 }
 
 const ICON_BUTTON_BASE_CLASS =
-  "inline-flex shrink-0 items-center justify-center rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50";
 
 const ICON_BUTTON_SIZE_CLASS: Record<IconButtonSize, string> = {
   xs: "size-5",
