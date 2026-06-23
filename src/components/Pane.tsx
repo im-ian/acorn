@@ -501,9 +501,7 @@ export function Pane({ paneId }: PaneProps) {
     <div
       className={cn(
         "relative flex h-full flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border bg-bg transition-colors",
-        // Focused pane: a brighter neutral edge (luminance only, no accent
-        // hue) so the cue stays calm and doesn't fight multi-pane input.
-        isFocused ? "border-fg/25" : "border-border",
+        isFocused ? "border-accent/60" : "border-border",
       )}
       data-pane-root={paneId}
       data-active-pane-indicator={isFocused ? paneId : undefined}
