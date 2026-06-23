@@ -1708,6 +1708,7 @@
     },
     "actions": {
       "killPty": "PTY 종료",
+      "open": "세션 열기",
       "openTooltip": "이 세션을 원래 프로젝트 탭에서 열기",
       "restoreTooltip": "이 세션을 Acorn 사이드바로 다시 가져오기",
       "restore": "세션 복원",
@@ -1736,6 +1737,8 @@
       "shutdown": "데몬을 종료했습니다.",
       "shutdownFailed": "데몬을 종료하지 못했습니다:",
       "sessionKilled": "PTY를 종료했습니다.",
+      "sessionKillStillRunning": "PTY 종료 요청 후에도 세션이 계속 실행 중입니다.",
+      "sessionOpened": "세션을 열었습니다.",
       "sessionRestored": "세션을 복원했습니다.",
       "sessionForgotten": "세션을 데몬 목록에서 제거했습니다.",
       "inactiveCleared": "비활성 데몬 세션을 정리했습니다.",

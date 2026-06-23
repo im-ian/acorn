@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertCircle,
+  ExternalLink,
   Power,
   RefreshCcw,
   Loader2,
@@ -360,6 +361,7 @@ function SessionsList({
   const [rowError, setRowError] = useState<string | null>(null);
   const showToast = useToasts((s) => s.show);
   const refreshAll = useAppStore((s) => s.refreshAll);
+  const pollSessionStatuses = useAppStore((s) => s.pollSessionStatuses);
   const selectSession = useAppStore((s) => s.selectSession);
   const appById = useMemo(() => {
     const m = new Map<string, Session>();
@@ -367,14 +369,28 @@ function SessionsList({
     return m;
   }, [appSessions]);
 
-  const runRowAction = useCallback(
-    async (id: string, fn: () => Promise<void>, successMessage: string) => {
+  const killSessionPty = useCallback(
+    async (daemonSession: DaemonSessionSummary) => {
+      const appSession = appById.get(daemonSession.id);
+      const id = daemonSession.id;
       setRowBusy(id);
       setRowError(null);
       try {
-        await fn();
+        await api.daemonKillSession(id);
+        const stopped = await waitForDaemonSessionToStop(id);
         await onRefresh();
-        showToast(successMessage);
+        const stoppedAfterRefresh =
+          stopped || !(await isDaemonSessionAlive(id));
+        if (appSession) {
+          await refreshAll();
+          await pollSessionStatuses([id]);
+        }
+        if (!stoppedAfterRefresh) {
+          throw new Error(
+            t("backgroundSessions.toasts.sessionKillStillRunning"),
+          );
+        }
+        showToast(t("backgroundSessions.toasts.sessionKilled"));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setRowError(message);
@@ -385,16 +401,17 @@ function SessionsList({
         setRowBusy(null);
       }
     },
-    [onRefresh, showToast, t],
+    [appById, onRefresh, pollSessionStatuses, refreshAll, showToast, t],
   );
 
-  const restoreSessionToTab = useCallback(
+  const openOrRestoreSession = useCallback(
     async (daemonSession: DaemonSessionSummary) => {
       const appSession = appById.get(daemonSession.id);
+      const restore = !appSession;
       setRowBusy(daemonSession.id);
       setRowError(null);
       try {
-        if (!appSession) {
+        if (restore) {
           await api.daemonAdoptSession(daemonSession.id);
         }
         await refreshAll();
@@ -409,7 +426,13 @@ function SessionsList({
           });
         }
         await onRefresh();
-        showToast(t("backgroundSessions.toasts.sessionRestored"));
+        showToast(
+          t(
+            restore
+              ? "backgroundSessions.toasts.sessionRestored"
+              : "backgroundSessions.toasts.sessionOpened",
+          ),
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setRowError(message);
@@ -518,10 +541,14 @@ function SessionsList({
                 >
                   <RowButton
                     busy={busy}
-                    onClick={() => void restoreSessionToTab(s)}
-                    aria-label={t("backgroundSessions.actions.restore")}
+                    onClick={() => void openOrRestoreSession(s)}
+                    aria-label={t(
+                      app
+                        ? "backgroundSessions.actions.open"
+                        : "backgroundSessions.actions.restore",
+                    )}
                   >
-                    <Undo2 size={12} />
+                    {app ? <ExternalLink size={12} /> : <Undo2 size={12} />}
                   </RowButton>
                 </Tooltip>
                 {s.alive ? (
@@ -531,13 +558,7 @@ function SessionsList({
                   >
                     <RowButton
                       busy={busy}
-                      onClick={() =>
-                        void runRowAction(
-                          s.id,
-                          () => api.daemonKillSession(s.id),
-                          t("backgroundSessions.toasts.sessionKilled"),
-                        )
-                      }
+                      onClick={() => void killSessionPty(s)}
                       tone="danger"
                       aria-label={t("backgroundSessions.actions.killPty")}
                     >
@@ -558,6 +579,24 @@ function SessionsList({
       ) : null}
     </div>
   );
+}
+
+async function waitForDaemonSessionToStop(id: string): Promise<boolean> {
+  const delays = [0, 100, 150, 250, 500, 750, 1_000];
+  for (const delay of delays) {
+    if (delay > 0) await sleep(delay);
+    if (!(await isDaemonSessionAlive(id))) return true;
+  }
+  return false;
+}
+
+async function isDaemonSessionAlive(id: string): Promise<boolean> {
+  const sessions = await api.daemonListSessions();
+  return sessions.some((session) => session.id === id && session.alive);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function formatRelativeTime(timestampMs: number, ago: string): string {

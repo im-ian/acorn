@@ -68,14 +68,29 @@ test.describe("background sessions settings", () => {
         agent_kind: null,
       },
     ]);
+    await tauri.handle("daemon_adopt_session", (args) => {
+      const w = window as unknown as { __adoptCalls?: unknown[] };
+      w.__adoptCalls = w.__adoptCalls ?? [];
+      w.__adoptCalls.push(args);
+      return undefined;
+    });
 
     const modal = await openSessionsSettings(page);
 
     await expect(modal.getByText("alpha", { exact: true })).toBeVisible();
     await expect(modal.getByText("s-1", { exact: true })).toHaveCount(0);
     await expect(
-      modal.getByRole("button", { name: "Restore session" }),
+      modal.getByRole("button", { name: "Open session" }),
     ).toBeVisible();
+    await expect(
+      modal.getByRole("button", { name: "Restore session" }),
+    ).toHaveCount(0);
+    await modal.getByRole("button", { name: "Open session" }).click();
+    const adoptCalls = (await page.evaluate(
+      () =>
+        (window as unknown as { __adoptCalls?: unknown[] }).__adoptCalls ?? [],
+    )) as unknown[];
+    expect(adoptCalls).toEqual([]);
 
     await modal.getByText("alpha", { exact: true }).hover();
     const tooltip = page.getByRole("tooltip");
@@ -90,6 +105,126 @@ test.describe("background sessions settings", () => {
     await expect(tooltip).toContainText("Worktree");
     await expect(tooltip).toContainText("/tmp/demo");
     await expect(tooltip.locator("svg")).toHaveCount(5);
+  });
+
+  test("kill pty uses the daemon kill path and polls app status", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __ptyKilled?: boolean;
+        __listSessionsAfterKill?: number;
+      };
+      if (w.__ptyKilled) {
+        w.__listSessionsAfterKill = (w.__listSessionsAfterKill ?? 0) + 1;
+      }
+      return [
+        {
+          id: "s-1",
+          name: "alpha",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          status: "running",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:05Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+          agent_provider: null,
+        },
+      ];
+    });
+    await tauri.respond("daemon_status", DAEMON_RUNNING);
+    await tauri.handle("daemon_list_sessions", () => {
+      const row = {
+        id: "s-1",
+        name: "alpha",
+        kind: "regular",
+        alive: true,
+        cwd: "/tmp/demo",
+        repo_path: "/tmp/demo",
+        branch: "main",
+        agent_kind: null,
+      };
+      const w = window as unknown as {
+        __ptyKilled?: boolean;
+        __daemonPollsAfterKill?: number;
+      };
+      if (!w.__ptyKilled) return [row];
+      w.__daemonPollsAfterKill = (w.__daemonPollsAfterKill ?? 0) + 1;
+      return w.__daemonPollsAfterKill >= 2 ? [] : [row];
+    });
+    await tauri.handle("daemon_kill_session", (args) => {
+      const w = window as unknown as {
+        __daemonKillCalls?: unknown[];
+        __ptyKilled?: boolean;
+      };
+      w.__daemonKillCalls = w.__daemonKillCalls ?? [];
+      w.__daemonKillCalls.push(args);
+      w.__ptyKilled = true;
+      return undefined;
+    });
+    await tauri.handle("detect_session_statuses", (args) => {
+      const w = window as unknown as { __statusPollCalls?: unknown[] };
+      w.__statusPollCalls = w.__statusPollCalls ?? [];
+      w.__statusPollCalls.push(args);
+      return [
+        {
+          id: "s-1",
+          status: "idle",
+          branch: "main",
+          agent_provider: null,
+          agent_transcript_id: null,
+          auto_title_enabled: null,
+        },
+      ];
+    });
+
+    const modal = await openSessionsSettings(page);
+    await expect(modal.getByText("alpha", { exact: true })).toBeVisible();
+    await page.evaluate(() => {
+      (window as unknown as { __statusPollCalls?: unknown[] }).__statusPollCalls =
+        [];
+    });
+
+    await modal.getByRole("button", { name: "Kill PTY" }).click();
+
+    await expect(
+      modal.getByText("No live sessions tracked.", { exact: true }),
+    ).toBeVisible();
+    const daemonKillCalls = (await page.evaluate(
+      () =>
+        (window as unknown as { __daemonKillCalls?: unknown[] })
+          .__daemonKillCalls ?? [],
+    )) as Array<{ targetSessionId: string }>;
+    expect(daemonKillCalls).toEqual([{ targetSessionId: "s-1" }]);
+    const statusPollCalls = (await page.evaluate(
+      () =>
+        (window as unknown as { __statusPollCalls?: unknown[] })
+          .__statusPollCalls ?? [],
+    )) as Array<{ ids: string[] }>;
+    expect(statusPollCalls).toContainEqual({ ids: ["s-1"] });
+    await expect(
+      page
+        .locator('[data-panel-id="sidebar"]')
+        .getByRole("button", { name: /^alpha main · Idle/ }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __listSessionsAfterKill?: number })
+              .__listSessionsAfterKill ?? 0,
+        ),
+      )
+      .toBeGreaterThan(0);
   });
 
   test("restore adopts an orphaned daemon session and opens its project tab", async ({
