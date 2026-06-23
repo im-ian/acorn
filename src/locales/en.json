@@ -1501,6 +1501,7 @@
     },
     "closePullRequest": {
       "titlePrefix": "Close",
+      "loadingDetails": "Loading pull request details...",
       "confirmPrefix": "Close pull request",
       "confirmSuffix": "without merging?",
       "closing": "Closing...",
@@ -1508,6 +1509,7 @@
     },
     "mergePullRequest": {
       "titlePrefix": "Merge",
+      "loadingDetails": "Loading pull request details...",
       "mergeMethod": "Merge method",
       "methodSquash": "Squash",
       "methodSquashHint": "Combine into one commit on the base branch.",
@@ -1561,6 +1563,7 @@
       "yourVersion": "your version",
       "currentlyRunning": "currently running",
       "onThisVersion": "you're on this version",
+      "loadingReleaseNotes": "Loading release notes...",
       "noReleaseNotes": "No release notes were published with this version.",
       "viewOnGithub": "View on GitHub",
       "installing": "Installing...",

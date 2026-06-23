@@ -8,6 +8,8 @@ import {
   Modal,
   ModalFooter,
   ModalHeader,
+  Notice,
+  SkeletonBlock,
   buttonClassName,
 } from "./ui";
 
@@ -34,6 +36,8 @@ interface WhatsNewModalProps {
   showInstall?: boolean;
   /** Disables the install button while a download/install is running. */
   busy?: boolean;
+  /** Shows a skeleton while release notes are being fetched. */
+  loading?: boolean;
   /** Error message shown above the footer. */
   error?: string | null;
   /** Invoked when the install button is clicked. Required if showInstall. */
@@ -47,6 +51,27 @@ interface WhatsNewModalProps {
    * the latest one.
    */
   isFallback?: boolean;
+}
+
+function ReleaseNotesSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={label}
+      className="space-y-4"
+    >
+      <div className="space-y-2">
+        <SkeletonBlock className="h-4 w-40 bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-full bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-5/6 bg-bg-sidebar" />
+      </div>
+      <div className="space-y-2">
+        <SkeletonBlock className="h-4 w-28 bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-11/12 bg-bg-sidebar" />
+        <SkeletonBlock className="h-3 w-2/3 bg-bg-sidebar" />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -72,6 +97,7 @@ export function WhatsNewModal({
   currentVersion,
   showInstall = false,
   busy = false,
+  loading = false,
   error,
   onInstall,
   htmlUrl,
@@ -104,18 +130,26 @@ export function WhatsNewModal({
         onClose={onClose}
       />
       <div className="max-h-[28rem] overflow-y-auto px-4 py-4">
-        {trimmedBody.length > 0 ? (
+        {loading ? (
+          <ReleaseNotesSkeleton
+            label={dt(t, "dialogs.whatsNew.loadingReleaseNotes")}
+          />
+        ) : trimmedBody.length > 0 ? (
           <Markdown content={trimmedBody} className="text-xs" />
-        ) : (
+        ) : error ? null : (
           <p className="text-xs text-fg-muted">
             {dt(t, "dialogs.whatsNew.noReleaseNotes")}
           </p>
         )}
       </div>
       {error ? (
-        <p className="border-t border-danger/40 bg-danger/10 px-4 py-2 text-[11px] text-danger">
+        <Notice
+          tone="danger"
+          density="compact"
+          className="rounded-none border-x-0 border-b-0 px-4 py-2"
+        >
           {error}
-        </p>
+        </Notice>
       ) : null}
       <ModalFooter>
         {htmlUrl ? (

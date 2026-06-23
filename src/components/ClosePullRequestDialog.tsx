@@ -6,7 +6,14 @@ import type { TranslationKey, Translator } from "../lib/i18n";
 import { useToasts } from "../lib/toasts";
 import type { PullRequestDetail } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { Button, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
+import {
+  Button,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+  SkeletonBlock,
+} from "./ui";
 
 type DialogTranslationKey = Extract<TranslationKey, `dialogs.${string}`>;
 
@@ -14,10 +21,29 @@ function dt(t: Translator, key: DialogTranslationKey): string {
   return t(key);
 }
 
+function CloseDialogSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={label}
+      className="space-y-3 px-4 py-3 text-sm text-fg"
+    >
+      <SkeletonBlock className="h-3 w-48 bg-bg-sidebar" />
+      <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
+        <SkeletonBlock className="h-3 w-3/4 bg-bg-elevated" />
+        <SkeletonBlock className="h-3 w-1/2 bg-bg-elevated" />
+      </div>
+    </div>
+  );
+}
+
 interface ClosePullRequestDialogProps {
   open: boolean;
   repoPath: string;
+  number?: number;
   detail: PullRequestDetail | null;
+  loading?: boolean;
+  loadError?: string | null;
   onClose: () => void;
   onClosed: () => void;
 }
@@ -25,7 +51,10 @@ interface ClosePullRequestDialogProps {
 export function ClosePullRequestDialog({
   open,
   repoPath,
+  number,
   detail,
+  loading = false,
+  loadError = null,
   onClose,
   onClosed,
 }: ClosePullRequestDialogProps) {
@@ -64,12 +93,46 @@ export function ClosePullRequestDialog({
     }
   }
 
+  const dialogNumber = detail?.number ?? number;
+  const dialogTitle = `${dt(t, "dialogs.closePullRequest.titlePrefix")}${
+    dialogNumber ? ` #${dialogNumber}` : ""
+  }`;
+
   return (
     <Modal open={open} onClose={onClose} variant="dialog" size="md">
-      {detail ? (
+      {!detail ? (
         <>
           <ModalHeader
-            title={`${dt(t, "dialogs.closePullRequest.titlePrefix")} #${detail.number}`}
+            title={dialogTitle}
+            icon={<GitPullRequestClosed size={16} className="text-rose-400" />}
+            variant="dialog"
+            onClose={onClose}
+          />
+          {loadError && !loading ? (
+            <div className="space-y-3 px-4 py-3 text-xs text-fg">
+              <Notice tone="danger" density="compact">
+                {loadError}
+              </Notice>
+            </div>
+          ) : (
+            <CloseDialogSkeleton
+              label={dt(t, "dialogs.closePullRequest.loadingDetails")}
+            />
+          )}
+          <ModalFooter variant="sidebar">
+            <Button
+              onClick={onClose}
+              size="md"
+              surface="dialog"
+            >
+              {dt(t, "dialogs.common.cancel")}
+            </Button>
+          </ModalFooter>
+        </>
+      ) : (
+        <>
+          <ModalHeader
+            title={dialogTitle}
             icon={
               <GitPullRequestClosed size={16} className="text-rose-400" />
             }
@@ -118,7 +181,7 @@ export function ClosePullRequestDialog({
             </Button>
           </ModalFooter>
         </>
-      ) : null}
+      )}
     </Modal>
   );
 }

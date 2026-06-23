@@ -1501,6 +1501,7 @@
     },
     "closePullRequest": {
       "titlePrefix": "닫기",
+      "loadingDetails": "Pull request 상세를 불러오는 중...",
       "confirmPrefix": "Pull request",
       "confirmSuffix": "를 병합하지 않고 닫을까요?",
       "closing": "닫는 중...",
@@ -1508,6 +1509,7 @@
     },
     "mergePullRequest": {
       "titlePrefix": "병합",
+      "loadingDetails": "Pull request 상세를 불러오는 중...",
       "mergeMethod": "병합 방식",
       "methodSquash": "Squash",
       "methodSquashHint": "기본 브랜치에 하나의 커밋으로 합칩니다.",
@@ -1561,6 +1563,7 @@
       "yourVersion": "현재 버전",
       "currentlyRunning": "현재 실행 중",
       "onThisVersion": "이 버전을 사용 중입니다",
+      "loadingReleaseNotes": "릴리스 노트를 불러오는 중...",
       "noReleaseNotes": "이 버전에는 공개된 릴리스 노트가 없습니다.",
       "viewOnGithub": "GitHub에서 보기",
       "installing": "설치 중...",

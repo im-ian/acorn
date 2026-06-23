@@ -26,7 +26,14 @@ import type {
 import { useTranslation } from "../lib/useTranslation";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { Tooltip } from "./Tooltip";
-import { Button, Modal, ModalFooter, ModalHeader, Notice } from "./ui";
+import {
+  Button,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Notice,
+  SkeletonBlock,
+} from "./ui";
 
 const METHOD_OPTIONS: ReadonlyArray<{
   value: MergeMethod;
@@ -101,10 +108,40 @@ function formatCount(template: string, count: number): string {
   return template.replace("{count}", String(count));
 }
 
+function MergeDialogSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={label}
+      className="space-y-4 px-4 py-3 text-xs text-fg"
+    >
+      <div className="space-y-2">
+        <SkeletonBlock className="h-3 w-24 bg-bg-sidebar" />
+        <div className="grid grid-cols-3 gap-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <SkeletonBlock
+              key={i}
+              className="h-14 rounded-md border border-border bg-bg-sidebar/60"
+            />
+          ))}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <SkeletonBlock className="h-3 w-28 bg-bg-sidebar" />
+        <SkeletonBlock className="h-8 rounded-md border border-border bg-bg-sidebar/60" />
+        <SkeletonBlock className="h-28 rounded-md border border-border bg-bg-sidebar/60" />
+      </div>
+    </div>
+  );
+}
+
 interface MergePullRequestDialogProps {
   open: boolean;
   repoPath: string;
+  number?: number;
   detail: PullRequestDetail | null;
+  loading?: boolean;
+  loadError?: string | null;
   onClose: () => void;
   onMerged: () => void;
 }
@@ -112,7 +149,10 @@ interface MergePullRequestDialogProps {
 export function MergePullRequestDialog({
   open,
   repoPath,
+  number,
   detail,
+  loading = false,
+  loadError = null,
   onClose,
   onMerged,
 }: MergePullRequestDialogProps) {
@@ -251,6 +291,10 @@ export function MergePullRequestDialog({
   const providerLabel = aiCommitProviderLabel(settings);
   const busy = submitting || generating;
   const mergeBlocked = checksBlock.blocked && !adminMerge;
+  const dialogNumber = detail?.number ?? number;
+  const dialogTitle = `${dt(t, "dialogs.mergePullRequest.titlePrefix")}${
+    dialogNumber ? ` #${dialogNumber}` : ""
+  }`;
 
   function handleMethodSelect(nextMethod: MergeMethod) {
     setMethod(nextMethod);
@@ -271,10 +315,39 @@ export function MergePullRequestDialog({
   return (
     <>
       <Modal open={open} onClose={onClose} variant="dialog" size="lg">
-        {detail ? (
+        {!detail ? (
           <>
             <ModalHeader
-              title={`${dt(t, "dialogs.mergePullRequest.titlePrefix")} #${detail.number}`}
+              title={dialogTitle}
+              icon={<GitMerge size={16} className="text-emerald-400" />}
+              variant="dialog"
+              onClose={onClose}
+            />
+            {loadError && !loading ? (
+              <div className="space-y-3 px-4 py-3 text-xs text-fg">
+                <Notice tone="danger" density="compact">
+                  {loadError}
+                </Notice>
+              </div>
+            ) : (
+              <MergeDialogSkeleton
+                label={dt(t, "dialogs.mergePullRequest.loadingDetails")}
+              />
+            )}
+            <ModalFooter variant="sidebar">
+              <Button
+                onClick={onClose}
+                size="md"
+                surface="dialog"
+              >
+                {dt(t, "dialogs.common.cancel")}
+              </Button>
+            </ModalFooter>
+          </>
+        ) : (
+          <>
+            <ModalHeader
+              title={dialogTitle}
               icon={<GitMerge size={16} className="text-emerald-400" />}
               variant="dialog"
               onClose={() => {
@@ -464,7 +537,7 @@ export function MergePullRequestDialog({
             </button>
           </ModalFooter>
           </>
-        ) : null}
+        )}
       </Modal>
       <ProjectSettingsModal
         project={

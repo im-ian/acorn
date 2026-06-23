@@ -5,7 +5,9 @@ import {
   useRef,
   useState,
   type DependencyList,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import {
   Activity,
@@ -134,7 +136,7 @@ import {
 } from "../lib/sessionCreation";
 
 interface ExpandedDiff {
-  payload: DiffPayload;
+  payload: DiffPayload | null;
   title: string;
   /** Rich React subtitle — avatar + author + sha line for commit expansion. */
   subtitle?: ReactNode;
@@ -145,7 +147,12 @@ interface ExpandedDiff {
    * commit; omitted for staged-diff expansion (no commit context).
    */
   body?: string;
+  loading?: boolean;
+  error?: string | null;
+  requestId?: number;
 }
+
+type SetExpandedDiff = Dispatch<SetStateAction<ExpandedDiff | null>>;
 
 const COMMITS_PAGE_SIZE = 50;
 const COMMIT_ROW_HEIGHT = 48;
@@ -585,11 +592,15 @@ export function RightPanel() {
       </div>
       <DiffViewerModal
         payload={expanded?.payload ?? null}
+        open={expanded !== null}
+        loading={expanded?.loading ?? false}
+        error={expanded?.error ?? null}
         title={expanded?.title ?? ""}
         subtitle={expanded?.subtitle}
         headerActions={expanded?.headerActions}
         body={expanded?.body}
         cwd={codePanelRepoPath ?? undefined}
+        loadingLabel={rt(t, "rightPanel.loading.diffLower")}
         onClose={() => setExpanded(null)}
       />
       <PullRequestSearchModal
@@ -1935,7 +1946,7 @@ function CommitsTab({
 }: {
   repoPath: string;
   invalidateKey: number;
-  onExpand: (e: ExpandedDiff) => void;
+  onExpand: SetExpandedDiff;
 }) {
   const t = useTranslation();
   const cachedCommits = rightPanelCache.getCommits(repoPath);
@@ -1961,6 +1972,8 @@ function CommitsTab({
   } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const generationRef = useRef(0);
+  const diffGenerationRef = useRef(0);
+  const expandRequestRef = useRef(0);
   // Hydrated cache counts as a successful top-of-history load so a failed
   // background refresh doesn't replace good data with an error banner.
   const loadedTopRef = useRef(!!cachedCommits);
@@ -2001,6 +2014,8 @@ function CommitsTab({
     generationRef.current += 1;
     return () => {
       generationRef.current += 1;
+      diffGenerationRef.current += 1;
+      expandRequestRef.current += 1;
     };
   }, [repoPath]);
 
@@ -2086,13 +2101,23 @@ function CommitsTab({
     });
   }, [repoPath, commits.length]);
 
+  function loadCommitDiff(sha: string): Promise<DiffPayload> {
+    return rightPanelCache.fetchCommitDiff(repoPath, sha);
+  }
+
   function selectCommit(sha: string) {
+    const token = ++diffGenerationRef.current;
     setSelected(sha);
     setDiff(null);
-    api
-      .commitDiff(repoPath, sha)
-      .then(setDiff)
-      .catch((e) => setError(String(e)));
+    loadCommitDiff(sha)
+      .then((payload) => {
+        if (diffGenerationRef.current !== token) return;
+        setDiff(payload);
+      })
+      .catch((e) => {
+        if (diffGenerationRef.current !== token) return;
+        setError(String(e));
+      });
   }
 
   function buildSubtitle(c: CommitInfo): ReactNode {
@@ -2139,20 +2164,45 @@ function CommitsTab({
   }
 
   async function expandCommit(c: CommitInfo) {
+    const requestId = ++expandRequestRef.current;
+    const cachedPayload = rightPanelCache.getCommitDiff(repoPath, c.sha);
+    onExpand({
+      payload: cachedPayload,
+      title: c.summary,
+      subtitle: buildSubtitle(c),
+      headerActions: buildHeaderActions(c, null),
+      body: c.body,
+      loading: cachedPayload === null,
+      error: null,
+      requestId,
+    });
     try {
       const [payload, webUrl] = await Promise.all([
-        api.commitDiff(repoPath, c.sha),
+        loadCommitDiff(c.sha),
         api.commitWebUrl(repoPath, c.sha).catch(() => null),
       ]);
-      onExpand({
-        payload,
-        title: c.summary,
-        subtitle: buildSubtitle(c),
-        headerActions: buildHeaderActions(c, webUrl),
-        body: c.body,
+      if (expandRequestRef.current !== requestId) return;
+      onExpand((current) => {
+        if (current?.requestId !== requestId) return current;
+        return {
+          ...current,
+          payload,
+          headerActions: buildHeaderActions(c, webUrl),
+          loading: false,
+          error: null,
+        };
       });
     } catch (e) {
-      setError(String(e));
+      if (expandRequestRef.current !== requestId) return;
+      const message = String(e);
+      onExpand((current) => {
+        if (current?.requestId !== requestId) return current;
+        return {
+          ...current,
+          loading: false,
+          error: message,
+        };
+      });
     }
   }
 
@@ -2409,7 +2459,7 @@ function StagedTab({
 }: {
   repoPath: string;
   invalidateKey: number;
-  onExpand: (e: ExpandedDiff) => void;
+  onExpand: SetExpandedDiff;
 }) {
   const t = useTranslation();
   const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
@@ -2766,6 +2816,14 @@ function prListStateFromCache(
   };
 }
 
+type PrDialogTarget = {
+  number: number;
+  detail: PullRequestDetail | null;
+  loading: boolean;
+  error: string | null;
+  requestId: number;
+};
+
 /**
  * Shared PR row actions: context menu, copy/open helpers, and the
  * merge/close dialog overlays. Lets the PRs tab and the search modal
@@ -2787,11 +2845,17 @@ function usePrRowActions(
   } | null>(null);
   const [mergeFor, setMergeFor] = useState<{
     number: number;
-    detail: PullRequestDetail;
+    detail: PullRequestDetail | null;
+    loading: boolean;
+    error: string | null;
+    requestId: number;
   } | null>(null);
   const [closeFor, setCloseFor] = useState<{
     number: number;
-    detail: PullRequestDetail;
+    detail: PullRequestDetail | null;
+    loading: boolean;
+    error: string | null;
+    requestId: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped on every detail fetch / dialog dismiss so stale getPullRequestDetail
@@ -2814,40 +2878,121 @@ function usePrRowActions(
     }
   }
 
-  async function loadDetailFor(
-    pr: PullRequestInfo,
-  ): Promise<PullRequestDetail | null> {
-    const epoch = ++dialogEpochRef.current;
-    try {
-      const listing = await api.getPullRequestDetail(repoPath, pr.number);
-      if (epoch !== dialogEpochRef.current) return null;
-      if (listing.kind !== "ok") {
-        setError(
-          listing.kind === "not_github"
-            ? rt(t, "rightPanel.errors.originNotGitHub")
-            : rtf(t, "rightPanel.errors.noAccessToSlug", {
-                slug: listing.slug,
-              }),
-        );
-        return null;
-      }
-      return listing.detail;
-    } catch (e) {
-      if (epoch === dialogEpochRef.current) setError(String(e));
-      return null;
-    }
+  function detailLoadError(listing: PullRequestListing): string | null {
+    if (listing.kind === "ok") return null;
+    return listing.kind === "not_github"
+      ? rt(t, "rightPanel.errors.originNotGitHub")
+      : rtf(t, "rightPanel.errors.noAccessToSlug", {
+          slug: listing.slug,
+        });
   }
 
-  async function openMergeFor(pr: PullRequestInfo) {
-    const detail = await loadDetailFor(pr);
-    if (!detail) return;
-    setMergeFor({ number: pr.number, detail });
+  function updateMergeTarget(
+    requestId: number,
+    update: (current: PrDialogTarget) => PrDialogTarget,
+  ) {
+    setMergeFor((current) => {
+      if (!current || current.requestId !== requestId) return current;
+      return update(current);
+    });
   }
 
-  async function openCloseFor(pr: PullRequestInfo) {
-    const detail = await loadDetailFor(pr);
-    if (!detail) return;
-    setCloseFor({ number: pr.number, detail });
+  function updateCloseTarget(
+    requestId: number,
+    update: (current: PrDialogTarget) => PrDialogTarget,
+  ) {
+    setCloseFor((current) => {
+      if (!current || current.requestId !== requestId) return current;
+      return update(current);
+    });
+  }
+
+  function openMergeFor(pr: PullRequestInfo) {
+    const requestId = ++dialogEpochRef.current;
+    setError(null);
+    setMergeFor({
+      number: pr.number,
+      detail: null,
+      loading: true,
+      error: null,
+      requestId,
+    });
+    void api
+      .getPullRequestDetail(repoPath, pr.number)
+      .then((listing) => {
+        if (requestId !== dialogEpochRef.current) return;
+        if (listing.kind !== "ok") {
+          const loadError = detailLoadError(listing);
+          if (!loadError) return;
+          setError(loadError);
+          updateMergeTarget(requestId, (current) => ({
+            ...current,
+            loading: false,
+            error: loadError,
+          }));
+          return;
+        }
+        updateMergeTarget(requestId, (current) => ({
+          ...current,
+          detail: listing.detail,
+          loading: false,
+          error: null,
+        }));
+      })
+      .catch((e) => {
+        if (requestId !== dialogEpochRef.current) return;
+        const message = String(e);
+        setError(message);
+        updateMergeTarget(requestId, (current) => ({
+          ...current,
+          loading: false,
+          error: message,
+        }));
+      });
+  }
+
+  function openCloseFor(pr: PullRequestInfo) {
+    const requestId = ++dialogEpochRef.current;
+    setError(null);
+    setCloseFor({
+      number: pr.number,
+      detail: null,
+      loading: true,
+      error: null,
+      requestId,
+    });
+    void api
+      .getPullRequestDetail(repoPath, pr.number)
+      .then((listing) => {
+        if (requestId !== dialogEpochRef.current) return;
+        if (listing.kind !== "ok") {
+          const loadError = detailLoadError(listing);
+          if (!loadError) return;
+          setError(loadError);
+          updateCloseTarget(requestId, (current) => ({
+            ...current,
+            loading: false,
+            error: loadError,
+          }));
+          return;
+        }
+        updateCloseTarget(requestId, (current) => ({
+          ...current,
+          detail: listing.detail,
+          loading: false,
+          error: null,
+        }));
+      })
+      .catch((e) => {
+        if (requestId !== dialogEpochRef.current) return;
+        const message = String(e);
+        setError(message);
+        updateCloseTarget(requestId, (current) => ({
+          ...current,
+          loading: false,
+          error: message,
+        }));
+      });
   }
 
   function openContextMenu(
@@ -2916,7 +3061,10 @@ function usePrRowActions(
       <MergePullRequestDialog
         open={mergeFor !== null}
         repoPath={repoPath}
+        number={mergeFor?.number}
         detail={mergeFor?.detail ?? null}
+        loading={mergeFor?.loading ?? false}
+        loadError={mergeFor?.error ?? null}
         onClose={() => {
           dialogEpochRef.current += 1;
           setMergeFor(null);
@@ -2930,7 +3078,10 @@ function usePrRowActions(
       <ClosePullRequestDialog
         open={closeFor !== null}
         repoPath={repoPath}
+        number={closeFor?.number}
         detail={closeFor?.detail ?? null}
+        loading={closeFor?.loading ?? false}
+        loadError={closeFor?.error ?? null}
         onClose={() => {
           dialogEpochRef.current += 1;
           setCloseFor(null);
@@ -4703,10 +4854,10 @@ const PR_SEARCH_STATE_OPTIONS: { value: PrStateFilter }[] = [
 ];
 
 /**
- * Modal-scoped PR search. Queries gh server-side via `--search`, so it
- * reaches every PR in the repo rather than filtering the (capped) list that
- * the PRs tab currently displays. Empty query → no fetch; results paginate
- * by growing `limit` on scroll, mirroring the main tab's pattern.
+ * Modal-scoped PR search. Uses the backend list endpoint rather than
+ * filtering the PRs tab's capped list, so backend search and fallback logic
+ * stay in one place. Empty query → no fetch; results paginate by growing
+ * `limit` on scroll, mirroring the main tab's pattern.
  */
 function PullRequestSearchModal({
   open,
