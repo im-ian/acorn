@@ -108,60 +108,126 @@ export const PullRequestRows: Story = {
 
 export const DetailLayout: Story = {
   render: () => (
-    <div className="overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
+    <div className="h-[36rem] overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg">
       <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <SkeletonCircle className="h-3.5 w-3.5 bg-fg-muted/20" />
-            <span className="font-mono text-xs text-fg-muted">#128</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/20" />
+            <span className="shrink-0 font-mono text-xs text-fg-muted">
+              #128
+            </span>
             <SkeletonBlock className="h-3.5 w-[55%] bg-fg-muted/15" />
           </div>
-          <div className="mt-2 flex items-center gap-1.5">
-            <SkeletonBlock className="h-2.5 w-16" />
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <SkeletonCircle className="h-4 w-4 shrink-0 bg-fg-muted/15" />
+            <SkeletonBlock className="h-2.5 w-16 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <SkeletonBlock className="h-2.5 w-40" />
+            <SkeletonBlock className="h-2.5 w-40 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <SkeletonBlock className="h-2.5 w-14" />
+            <SkeletonBlock className="h-2.5 w-8 shrink-0" />
+            <SkeletonBlock className="h-2.5 w-8 shrink-0" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <SkeletonBlock className="h-2.5 w-14 shrink-0" />
+            <span className="text-[10px] text-fg-muted/40">·</span>
+            <SkeletonBlock className="h-4 w-11 shrink-0 rounded-full bg-fg-muted/10" />
+            <SkeletonBlock className="h-4 w-14 shrink-0 rounded-full bg-fg-muted/10" />
           </div>
         </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <SkeletonBlock className="h-6 w-14 rounded-md bg-fg-muted/10" />
+          <SkeletonBlock className="h-6 w-12 rounded-md bg-fg-muted/10" />
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
+        </div>
       </header>
-      <div className="border-b border-border bg-bg-sidebar/40 px-4 py-3">
+      <div
+        className="overflow-hidden border-b border-border bg-bg-sidebar/40 px-4 py-3"
+        style={{ height: 192 }}
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <SkeletonBlock className="h-3 w-3 rounded-sm bg-fg-muted/15" />
+          <SkeletonBlock className="h-3 w-32 bg-fg-muted/15" />
+        </div>
         <SkeletonText
           className="gap-2"
-          lines={5}
-          widths={["85%", "72%", "40%", "60%", "78%"]}
+          lines={4}
+          widths={["86%", "74%", "54%", "42%"]}
         />
+        <div className="mt-3 grid gap-1.5">
+          {[0, 1].map((item) => (
+            <div key={item} className="flex items-center gap-2">
+              <SkeletonBlock className="h-3 w-3 rounded-sm bg-fg-muted/15" />
+              <SkeletonBlock className="h-3 w-[42%]" />
+            </div>
+          ))}
+        </div>
       </div>
+      <div
+        aria-hidden
+        className="h-1.5 shrink-0 border-b border-border bg-bg-sidebar/40"
+      />
       <nav className="flex gap-0.5 border-b border-border px-1.5 py-1">
         {[
-          { icon: <MessagesSquare size={13} />, w: "w-20" },
-          { icon: <GitCommit size={13} />, w: "w-14" },
-          { icon: <CheckCircle2 size={13} />, w: "w-12" },
-          { icon: <GitPullRequest size={13} />, w: "w-10" },
+          { icon: <MessagesSquare size={13} />, w: "w-20", active: true },
+          { icon: <GitCommit size={13} />, w: "w-14", active: false },
+          { icon: <CheckCircle2 size={13} />, w: "w-12", active: false },
+          { icon: <GitPullRequest size={13} />, w: "w-10", active: false },
         ].map((tab, index) => (
           <div
             key={index}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs text-fg-muted/60"
+            className={`flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-xs ${
+              tab.active ? "acorn-tab-active-bg text-fg" : "text-fg-muted/60"
+            }`}
           >
             {tab.icon}
-            <SkeletonBlock className={["h-2.5 bg-fg-muted/15", tab.w]} />
+            <SkeletonBlock
+              className={[
+                "h-2.5",
+                tab.active ? "bg-fg-muted/20" : "bg-fg-muted/15",
+                tab.w,
+              ]}
+            />
+            {index === 0 ? (
+              <SkeletonBlock className="h-4 w-5 rounded-full bg-fg-muted/15" />
+            ) : null}
           </div>
         ))}
       </nav>
-      <div className="space-y-3 px-4 py-3">
-        {[0, 1].map((index) => (
-          <div
-            key={index}
-            className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3"
-          >
-            <div className="mb-2 flex items-center gap-2">
-              <SkeletonCircle className="h-7 w-7 bg-fg-muted/15" />
-              <SkeletonBlock className="h-3 w-28 bg-fg-muted/15" />
-              <SkeletonBlock className="h-2.5 w-14" />
-            </div>
-            <SkeletonText lines={3} widths={["95%", "82%", "60%"]} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
+          <div className="flex items-center gap-1 rounded px-1.5 py-0.5">
+            <SkeletonBlock className="h-3 w-3 shrink-0 rounded-sm bg-fg-muted/15" />
+            <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
           </div>
-        ))}
+        </div>
+        <div className="space-y-3 px-4 py-3">
+          {[
+            { titleW: "w-24", metaW: "w-14", lines: ["95%", "82%", "60%"] },
+            { titleW: "w-32", metaW: "w-20", lines: ["70%", "45%"] },
+            {
+              titleW: "w-20",
+              metaW: "w-16",
+              lines: ["88%", "76%", "52%", "30%"],
+            },
+          ].map((row, index) => (
+            <div
+              key={index}
+              className="rounded-[var(--acorn-pane-radius)] border border-border bg-bg-sidebar/40 p-3"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <SkeletonCircle className="h-7 w-7 shrink-0 bg-fg-muted/15" />
+                <SkeletonBlock
+                  className={["h-3 bg-fg-muted/15", row.titleW]}
+                />
+                <SkeletonBlock className={["h-4 rounded-full", row.metaW]} />
+                <SkeletonBlock className="h-2.5 w-20" />
+              </div>
+              <SkeletonText lines={row.lines.length} widths={row.lines} />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   ),

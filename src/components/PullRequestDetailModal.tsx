@@ -726,14 +726,18 @@ function DetailSkeleton({
   const t = useTranslation();
   return (
     <>
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+      <header
+        className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3"
+        data-pr-detail-skeleton="header"
+      >
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <SkeletonCircle className="h-3.5 w-3.5 shrink-0 bg-fg-muted/20" />
             <span className="font-mono text-xs text-fg-muted">#{number}</span>
-            <SkeletonBlock className="h-3.5 w-[55%] bg-fg-muted/15" />
+            <SkeletonBlock className="h-3.5 w-[55%] min-w-0 bg-fg-muted/15" />
           </div>
-          <div className="mt-2 flex items-center gap-1.5">
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <SkeletonCircle className="h-4 w-4 shrink-0 bg-fg-muted/15" />
             <SkeletonBlock className="h-2.5 w-16 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
             <SkeletonBlock className="h-2.5 w-40 shrink-0" />
@@ -743,11 +747,16 @@ function DetailSkeleton({
             <span className="text-[10px] text-fg-muted/40">·</span>
             <SkeletonBlock className="h-2.5 w-14 shrink-0" />
             <span className="text-[10px] text-fg-muted/40">·</span>
-            <SkeletonBlock className="h-2.5 w-16 shrink-0" />
+            <SkeletonBlock className="h-4 w-11 shrink-0 rounded-full bg-fg-muted/10" />
+            <SkeletonBlock className="h-4 w-14 shrink-0 rounded-full bg-fg-muted/10" />
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <SkeletonBlock className="h-6 w-14 rounded-md bg-fg-muted/10" />
+          <SkeletonBlock className="h-6 w-12 rounded-md bg-fg-muted/10" />
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
           <RefreshButton onClick={onRefresh} loading={refreshing} size={14} />
+          <SkeletonBlock className="h-6 w-6 rounded bg-fg-muted/10" />
           <button
             type="button"
             aria-label={dt(t, "dialogs.common.close")}
@@ -762,18 +771,26 @@ function DetailSkeleton({
       <div
         className="shrink-0 overflow-hidden border-b border-border bg-bg-sidebar/40 px-4 py-3"
         style={{ height: BODY_HEIGHT_DEFAULT }}
+        data-pr-detail-skeleton="body"
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex h-full flex-col gap-2">
+          <div className="mb-1 flex items-center gap-2">
+            <SkeletonBlock className="h-3 w-3 rounded-sm bg-fg-muted/15" />
+            <SkeletonBlock className="h-3 w-32 bg-fg-muted/15" />
+          </div>
           <SkeletonText
             className="gap-2"
-            lines={3}
-            widths={["85%", "72%", "40%"]}
+            lines={4}
+            widths={["86%", "74%", "54%", "42%"]}
           />
-          <SkeletonText
-            className="mt-2 gap-2"
-            lines={3}
-            widths={["60%", "78%", "35%"]}
-          />
+          <div className="mt-1 grid gap-1.5">
+            {[0, 1].map((item) => (
+              <div key={item} className="flex items-center gap-2">
+                <SkeletonBlock className="h-3 w-3 rounded-sm bg-fg-muted/15" />
+                <SkeletonBlock className="h-3 w-[42%]" />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
       <div
@@ -781,35 +798,56 @@ function DetailSkeleton({
         className="h-1.5 shrink-0 border-b border-border bg-bg-sidebar/40"
       />
 
-      <nav className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1">
+      <nav
+        className="flex shrink-0 gap-0.5 border-b border-border px-1.5 py-1"
+        data-pr-detail-skeleton="tabs"
+      >
         {[
-          { icon: <MessagesSquare size={13} />, w: "w-20" },
-          { icon: <GitCommit size={13} />, w: "w-14" },
-          { icon: <CheckCircle2 size={13} />, w: "w-12" },
-          { icon: <GitPullRequest size={13} />, w: "w-10" },
+          { icon: <MessagesSquare size={13} />, w: "w-20", active: true },
+          { icon: <GitCommit size={13} />, w: "w-14", active: false },
+          { icon: <CheckCircle2 size={13} />, w: "w-12", active: false },
+          { icon: <GitPullRequest size={13} />, w: "w-10", active: false },
         ].map((tab, i) => (
           <div
             key={i}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs text-fg-muted/60"
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-xs",
+              tab.active
+                ? "acorn-tab-active-bg text-fg"
+                : "text-fg-muted/60",
+            )}
           >
             {tab.icon}
-            <SkeletonBlock className={cn("h-2.5 bg-fg-muted/15", tab.w)} />
+            <SkeletonBlock
+              className={cn(
+                "h-2.5",
+                tab.active ? "bg-fg-muted/20" : "bg-fg-muted/15",
+                tab.w,
+              )}
+            />
+            {i === 0 ? (
+              <SkeletonBlock className="h-4 w-5 rounded-full bg-fg-muted/15" />
+            ) : null}
           </div>
         ))}
       </nav>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 items-center justify-end border-b border-border/40 px-3 py-1.5">
-          <div className="flex items-center gap-1 px-1.5 py-0.5">
+          <div className="flex items-center gap-1 rounded px-1.5 py-0.5">
             <SkeletonBlock className="h-3 w-3 shrink-0 rounded-sm bg-fg-muted/15" />
             <SkeletonBlock className="h-2.5 w-16 bg-fg-muted/15" />
           </div>
         </div>
         <ul className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
           {[
-            { titleW: "w-24", bodyWidths: ["95%", "82%", "60%"] },
-            { titleW: "w-32", bodyWidths: ["70%", "45%"] },
-            { titleW: "w-20", bodyWidths: ["88%", "76%", "52%", "30%"] },
+            { titleW: "w-24", metaW: "w-14", bodyWidths: ["95%", "82%", "60%"] },
+            { titleW: "w-32", metaW: "w-20", bodyWidths: ["70%", "45%"] },
+            {
+              titleW: "w-20",
+              metaW: "w-16",
+              bodyWidths: ["88%", "76%", "52%", "30%"],
+            },
           ].map((row, i) => (
             <li
               key={i}
@@ -820,7 +858,7 @@ function DetailSkeleton({
                 <SkeletonBlock
                   className={cn("h-3 bg-fg-muted/15", row.titleW)}
                 />
-                <SkeletonBlock className="h-2.5 w-14" />
+                <SkeletonBlock className={cn("h-4 rounded-full", row.metaW)} />
                 <SkeletonBlock className="h-2.5 w-20" />
               </div>
               <SkeletonText
