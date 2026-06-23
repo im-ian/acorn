@@ -29,6 +29,7 @@ import { GitHubCommentComposer } from "./GitHubCommentComposer";
 import { GitHubLabelChip } from "./GitHubLabelChip";
 import { Tooltip } from "./Tooltip";
 import {
+  CodeValue,
   Markdown,
   Modal,
   ModalHeader,
@@ -221,7 +222,7 @@ export function IssueDetailModal({
             >
               <div className="p-4 text-xs text-fg-muted">
                 {dt(t, "dialogs.issueDetail.noAccessPrefix")}{" "}
-                <code className="font-mono">gh</code>{" "}
+                <CodeValue display="inline">gh</CodeValue>{" "}
                 {dt(t, "dialogs.issueDetail.noAccessSuffix")} {listing.slug}.
               </div>
             </IssueModalShell>
