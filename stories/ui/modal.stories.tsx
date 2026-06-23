@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ExternalLink, Terminal } from "lucide-react";
 import { Modal } from "../../src/components/ui/Modal";
+import { ModalFooter } from "../../src/components/ui/ModalFooter";
 import { ModalHeader } from "../../src/components/ui/ModalHeader";
 
 const meta = {
@@ -43,7 +44,7 @@ export const Dialog: Story = {
               pnpm run storybook
             </div>
           </div>
-          <footer className="flex justify-end gap-2 border-t border-border px-4 py-3">
+          <ModalFooter>
             <button
               type="button"
               className="rounded px-3 py-1 text-xs text-fg-muted hover:bg-bg-sidebar"
@@ -57,7 +58,7 @@ export const Dialog: Story = {
             >
               Run
             </button>
-          </footer>
+          </ModalFooter>
         </Modal>
       </div>
     );
