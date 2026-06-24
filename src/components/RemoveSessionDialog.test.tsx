@@ -44,19 +44,32 @@ describe("RemoveSessionDialog", () => {
     vi.clearAllMocks();
   });
 
-  function renderDialog(target: Session, canDeleteWorktree = true) {
+  function renderDialog(
+    target: Session,
+    canDeleteWorktree = true,
+    ownedSessionCount = 0,
+  ) {
     const onClose = vi.fn();
     act(() => {
       root.render(
         <RemoveSessionDialog
           session={target}
           canDeleteWorktree={canDeleteWorktree}
+          ownedSessionCount={ownedSessionCount}
           onClose={onClose}
         />,
       );
     });
     return onClose;
   }
+
+  it("warns when control-owned sessions will also be removed", () => {
+    renderDialog(session({ kind: "control" }), true, 2);
+
+    expect(document.body.textContent).toContain(
+      "This will also remove 2 control-owned session(s).",
+    );
+  });
 
   it("offers worktree deletion for a non-isolated linked worktree session", () => {
     renderDialog(session({ in_worktree: true }));

@@ -1315,6 +1315,8 @@
       "confirmPrefix": "Remove session",
       "isolatedWorktree": "This is an isolated worktree:",
       "linkedWorktree": "This session is using a linked git worktree:",
+      "ownedSessionsWillBeRemovedPrefix": "This will also remove",
+      "ownedSessionsWillBeRemovedSuffix": "control-owned session(s).",
       "deleteWorktreeQuestion": "Remove the session only, or also delete the worktree from disk?",
       "filesIn": "Files in",
       "willNotBeTouched": "will not be touched.",
