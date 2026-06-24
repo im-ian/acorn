@@ -233,6 +233,65 @@ async function terminalTextAndUnderlineRects(
   }, text);
 }
 
+async function terminalTextRect(
+  page: Page,
+  text: string,
+): Promise<{ top: number; bottom: number; left: number; width: number } | null> {
+  return page.evaluate((target) => {
+    const toPlainRect = (rect: DOMRect) => ({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      width: rect.width,
+    });
+
+    for (const row of Array.from(
+      document.querySelectorAll<HTMLElement>(".xterm-rows > div"),
+    )) {
+      const rowText = row.textContent ?? "";
+      const start = rowText.indexOf(target);
+      if (start < 0) continue;
+
+      const end = start + target.length;
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let offset = 0;
+      let startSet = false;
+      let endSet = false;
+
+      for (
+        let node = walker.nextNode() as Text | null;
+        node;
+        node = walker.nextNode() as Text | null
+      ) {
+        const textLength = node.textContent?.length ?? 0;
+        const nextOffset = offset + textLength;
+        if (!startSet && start <= nextOffset) {
+          range.setStart(node, Math.max(0, start - offset));
+          startSet = true;
+        }
+        if (startSet && end <= nextOffset) {
+          range.setEnd(node, Math.max(0, end - offset));
+          endSet = true;
+          break;
+        }
+        offset = nextOffset;
+      }
+
+      if (!startSet || !endSet) {
+        range.detach();
+        return null;
+      }
+
+      const textRect = range.getBoundingClientRect();
+      range.detach();
+      return toPlainRect(textRect);
+    }
+
+    return null;
+  }, text);
+}
+
 async function terminalEmojiTrailingOffsets(page: Page): Promise<{
   cellWidth: number;
   offsets: Record<string, number>;
@@ -1907,6 +1966,95 @@ test.describe("terminal: spawn", () => {
       (window as unknown as { __tooltipObserver?: MutationObserver })
         .__tooltipObserver?.disconnect();
     });
+  });
+
+  test("positions link hover underline after Korean prefix text", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { linkActivation: "modifier-click" } }),
+      );
+    });
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "s-term",
+        name: "shell",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+      },
+    ]);
+    await tauri.handle("pty_spawn", () => null);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __koreanPrefixLinkChannelId?: number;
+      };
+      w.__koreanPrefixLinkChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __koreanPrefixLinkChannelId?: number })
+              .__koreanPrefixLinkChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    const url = "https://example.test/docs/api/terminal/interfaces";
+    await emitSubscribedPtyOutput(
+      page,
+      "__koreanPrefixLinkChannelId",
+      `문서 링크 ${url}\r\n`,
+    );
+    await expect(page.locator(".xterm")).toContainText(url);
+
+    const textRect = await terminalTextRect(page, url);
+    expect(textRect).not.toBeNull();
+    await page.mouse.move(
+      textRect!.left + Math.min(12, textRect!.width / 2),
+      (textRect!.top + textRect!.bottom) / 2,
+    );
+
+    await expect(
+      page.getByRole("tooltip", { name: /to open link/ }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-acorn-terminal-link-underline="true"]'),
+    ).toHaveCount(1);
+
+    const rects = await terminalTextAndUnderlineRects(page, url);
+    expect(rects).not.toBeNull();
+    expect(Math.abs(rects!.underline.left - rects!.text.left)).toBeLessThan(2);
+    expect(Math.abs(rects!.underline.width - rects!.text.width)).toBeLessThan(
+      2,
+    );
+    expect(
+      Math.abs(rects!.underline.top - (rects!.text.bottom - 1)),
+    ).toBeLessThan(2);
   });
 
   test("shows stable hover underline for OSC URI terminal links", async ({
