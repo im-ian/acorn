@@ -1274,7 +1274,7 @@ export function ChatPane({
                         <div className="flex min-w-0 flex-col gap-2">
                           <textarea
                             aria-label="Edit user message content"
-                            className="min-h-24 w-full min-w-[18rem] resize-y rounded border border-border bg-bg px-2 py-1.5 text-sm leading-5 text-fg outline-none focus:border-accent/70 disabled:opacity-60"
+                            className="min-h-24 w-full min-w-[18rem] resize-y rounded border border-input-border bg-input px-2 py-1.5 text-sm leading-5 text-fg outline-none focus:border-accent/70 focus:bg-input-hover disabled:opacity-60"
                             disabled={isActionBusy}
                             value={editDraft}
                             onChange={(event) => setEditDraft(event.target.value)}
@@ -1514,7 +1514,7 @@ export function ChatPane({
           </p>
         </div>
         <div
-          className={`mx-auto flex flex-col gap-2 rounded-[var(--acorn-pane-radius)] border border-border bg-bg-elevated/65 shadow-sm transition-[width,max-width,padding,box-shadow,border-color] duration-300 ease-out ${
+          className={`mx-auto flex flex-col gap-2 rounded-[var(--acorn-pane-radius)] border border-input-border bg-input shadow-sm transition-[width,max-width,padding,box-shadow,border-color,background-color] duration-300 ease-out focus-within:border-accent/60 focus-within:bg-input-hover ${
             composerIsCentered
               ? "w-[90%] max-w-none px-3 py-3 shadow-xl ring-1 ring-border/60"
               : "max-w-4xl px-2 py-2"

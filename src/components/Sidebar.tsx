@@ -3004,7 +3004,7 @@ function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
         }
       }}
       onBlur={() => onSubmit(value.trim())}
-      className="min-w-0 w-full flex-1 rounded border border-accent/50 bg-bg px-1 py-0.5 text-[13px] font-medium text-fg outline-none focus:border-accent"
+      className="min-w-0 w-full flex-1 rounded border border-accent/50 bg-input px-1 py-0.5 text-[13px] font-medium text-fg outline-none focus:border-accent focus:bg-input-hover"
     />
   );
 }

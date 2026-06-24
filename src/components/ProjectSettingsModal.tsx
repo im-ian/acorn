@@ -417,7 +417,7 @@ export function ProjectSettingsModal({
                         t,
                         "dialogs.projectSettings.generationPromptPlaceholder",
                       )}
-                      className="w-full resize-none rounded-md border border-border bg-bg px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg outline-none transition focus:border-accent disabled:opacity-60"
+                      className="w-full resize-none rounded-md border border-input-border bg-input px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg outline-none transition focus:border-accent focus:bg-input-hover disabled:opacity-60"
                     />
                     <p className="text-right text-[10px] tabular-nums text-fg-muted">
                       {promptCount(

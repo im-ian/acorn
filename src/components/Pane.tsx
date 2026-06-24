@@ -1754,7 +1754,7 @@ function TabRenameInput({ initial, onSubmit, onCancel }: TabRenameInputProps) {
         }
       }}
       onBlur={() => onSubmit(value.trim())}
-      className="w-32 min-w-0 rounded bg-bg-sidebar px-1 text-xs text-fg outline-none ring-1 ring-accent"
+      className="w-32 min-w-0 rounded border border-accent bg-input px-1 text-xs text-fg outline-none"
     />
   );
 }

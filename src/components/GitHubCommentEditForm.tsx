@@ -75,7 +75,7 @@ export function GitHubCommentEditForm({
           }}
           rows={4}
           disabled={saving}
-          className="w-full resize-none rounded-md border border-border bg-bg p-2 font-mono text-[11px] leading-relaxed text-fg outline-none transition placeholder:text-fg-muted/70 focus:border-accent/60 disabled:opacity-60"
+          className="w-full resize-none rounded-md border border-input-border bg-input p-2 font-mono text-[11px] leading-relaxed text-fg outline-none transition placeholder:text-fg-muted/70 focus:border-accent/60 focus:bg-input-hover disabled:opacity-60"
         />
       ) : (
         <div

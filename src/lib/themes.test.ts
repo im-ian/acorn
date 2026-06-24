@@ -89,6 +89,14 @@ describe("BUILT_IN_THEMES", () => {
       expect(theme.css, theme.id).toMatch(/--color-term-selection\s*:/);
     }
   });
+
+  it("gives every built-in theme an explicit input surface", () => {
+    for (const theme of BUILT_IN_THEMES) {
+      expect(theme.css, theme.id).toMatch(/--color-input\s*:/);
+      expect(theme.css, theme.id).toMatch(/--color-input-hover\s*:/);
+      expect(theme.css, theme.id).toMatch(/--color-input-border\s*:/);
+    }
+  });
 });
 
 describe("validateThemeCss", () => {

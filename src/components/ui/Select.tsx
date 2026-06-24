@@ -129,7 +129,7 @@ interface ChildSeparatorProps {
 }
 
 export const SELECT_CLASS =
-  "flex h-8 w-full items-center rounded-lg border border-transparent bg-fill font-mono text-xs text-fg outline-none transition focus-visible:border-accent";
+  "flex h-8 w-full items-center rounded-lg border border-input-border bg-input font-mono text-xs text-fg outline-none transition focus-visible:border-accent focus-visible:bg-input-hover";
 
 const SELECT_ROOT_CLASS = "relative inline-block min-w-0 text-xs";
 
@@ -477,7 +477,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
             >
               {searchable ? (
                 <div className="border-b border-border p-1.5">
-                  <div className="flex h-8 items-center rounded-lg border border-transparent bg-fill px-2 focus-within:border-accent">
+                  <div className="flex h-8 items-center rounded-lg border border-input-border bg-input px-2 focus-within:border-accent focus-within:bg-input-hover">
                     <Search
                       aria-hidden="true"
                       size={13}
