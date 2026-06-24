@@ -2186,7 +2186,7 @@ function SessionTitlePromptModal({
               onChange={(e) =>
                 patchAgents({ sessionTitlePrompt: e.target.value })
               }
-              className="min-h-40 w-full resize-y rounded-md border border-border bg-bg px-2 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus:border-accent"
+              className="min-h-40 w-full resize-y rounded-md border border-input-border bg-input px-2 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus:border-accent focus:bg-input-hover"
             />
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] text-fg-muted">

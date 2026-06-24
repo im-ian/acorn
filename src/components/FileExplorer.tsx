@@ -2079,7 +2079,7 @@ function EditRow({
           else if (e.key === "Escape") onCancel();
         }}
         onBlur={onCommit}
-        className="w-full bg-transparent text-[12px] text-fg outline outline-1 outline-accent/40 focus:outline-accent"
+        className="w-full rounded border border-accent/50 bg-input px-1 text-[12px] text-fg outline-none focus:border-accent focus:bg-input-hover"
       />
     </div>
   );

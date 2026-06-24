@@ -3,6 +3,9 @@
   --color-bg: #eff1f5;
   --color-bg-elevated: #e6e9ef;
   --color-bg-sidebar: #dce0e8;
+  --color-input: color-mix(in oklab, var(--color-bg) 76%, #fff);
+  --color-input-hover: color-mix(in oklab, var(--color-bg) 68%, #fff);
+  --color-input-border: color-mix(in oklab, var(--color-border) 84%, #fff);
   --color-fg: #4c4f69;
   --color-fg-muted: #6c6f85;
   --color-border: #ccd0da;
