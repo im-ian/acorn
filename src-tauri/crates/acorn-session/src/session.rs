@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -376,6 +377,26 @@ impl SessionStore {
         v
     }
 
+    pub fn list_control_owned_descendants(&self, controller_id: Uuid) -> Vec<Session> {
+        let sessions = self.list();
+        let mut seen = HashSet::from([controller_id]);
+        let mut frontier = vec![controller_id];
+        let mut descendants = Vec::new();
+
+        while let Some(owner_id) = frontier.pop() {
+            for session in &sessions {
+                if seen.contains(&session.id) || !session.owner.is_control_owner(owner_id) {
+                    continue;
+                }
+                seen.insert(session.id);
+                frontier.push(session.id);
+                descendants.push(session.clone());
+            }
+        }
+
+        descendants
+    }
+
     pub fn update_status(&self, id: &Uuid, status: SessionStatus) -> SessionResult<Session> {
         let mut entry = self
             .inner
@@ -745,6 +766,63 @@ mod tests {
             store.get(&session.id).expect("session persisted").kind,
             SessionKind::Control
         );
+    }
+
+    #[test]
+    fn list_control_owned_descendants_follows_nested_ownership() {
+        let store = SessionStore::new();
+        let controller = store.insert({
+            let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+            session.kind = SessionKind::Control;
+            session
+        });
+        let worker = store.insert({
+            let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+            session.name = "worker".to_string();
+            session.owner = SessionOwner::control(controller.id);
+            session
+        });
+        let nested = store.insert({
+            let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+            session.name = "nested".to_string();
+            session.owner = SessionOwner::control(worker.id);
+            session
+        });
+        let user_owned = store.insert({
+            let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+            session.name = "user".to_string();
+            session
+        });
+
+        let descendants = store.list_control_owned_descendants(controller.id);
+        let ids: HashSet<_> = descendants.into_iter().map(|session| session.id).collect();
+
+        assert_eq!(ids, HashSet::from([worker.id, nested.id]));
+        assert!(!ids.contains(&controller.id));
+        assert!(!ids.contains(&user_owned.id));
+    }
+
+    #[test]
+    fn list_control_owned_descendants_handles_cycles() {
+        let store = SessionStore::new();
+        let controller = store.insert({
+            let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+            session.kind = SessionKind::Control;
+            session
+        });
+        let worker = store.insert({
+            let mut session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+            session.owner = SessionOwner::control(controller.id);
+            session
+        });
+        let mut controller_cycle = controller.clone();
+        controller_cycle.owner = SessionOwner::control(worker.id);
+        store.insert(controller_cycle);
+
+        let descendants = store.list_control_owned_descendants(controller.id);
+
+        assert_eq!(descendants.len(), 1);
+        assert_eq!(descendants[0].id, worker.id);
     }
 
     #[test]

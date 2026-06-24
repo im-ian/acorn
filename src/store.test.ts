@@ -1288,6 +1288,30 @@ describe("removeSession", () => {
     );
   });
 
+  it("allows worktree deletion when only control-owned workers share it", async () => {
+    const worktreePath = `${REPO_A}/.worktrees/shared`;
+    const control = session("ctl", REPO_A, {
+      kind: "control",
+      isolated: true,
+      worktree_path: worktreePath,
+    });
+    const worker = session("worker", REPO_A, {
+      worktree_path: `${worktreePath}/`,
+      owner: { kind: "control", session_id: "ctl" },
+    });
+    await seed([project(REPO_A, 0)], [control, worker]);
+
+    mockApi.removeSession.mockResolvedValueOnce(null);
+    mockApi.listSessions.mockResolvedValue([]);
+    mockApi.listProjects.mockResolvedValue([project(REPO_A, 0)]);
+
+    const removed = await useAppStore.getState().removeSession("ctl", true);
+
+    expect(removed).toBeNull();
+    expect(mockApi.removeSession).toHaveBeenCalledWith("ctl", true);
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
   it("collapses an empty split pane before the backend worktree delete finishes", async () => {
     const a1 = session("a1", REPO_A);
     const a2 = session("a2", REPO_A);
