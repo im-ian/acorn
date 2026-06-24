@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "./types";
 import {
   canDeleteSessionWorktree,
+  controlOwnedSessionCount,
   hasRecordedWorktree,
   isSessionInWorktreeWorkspace,
   otherSessionsUsingProjectWorktree,
   otherSessionsUsingWorktreePath,
+  sessionRemovalCascadeIds,
   sessionsUsingProjectWorktree,
   sessionsUsingWorktreePath,
   shouldAutoDeleteSessionWorktree,
@@ -98,6 +100,24 @@ describe("worktree deletion policy", () => {
     ).toBe(false);
   });
 
+  it("allows worktree deletion when only control-owned workers share it", () => {
+    const target = session({
+      id: "control",
+      kind: "control",
+      isolated: true,
+      worktree_path: "/repo/.acorn/worktrees/solo",
+    });
+    const worker = session({
+      id: "worker",
+      worktree_path: "/repo/.acorn/worktrees/solo/",
+      owner: { kind: "control", session_id: "control" },
+    });
+
+    expect(canDeleteSessionWorktree(target, foldersByRepo, [target, worker])).toBe(
+      true,
+    );
+  });
+
   it("preserves isolated sessions that are backing a worktree workspace", () => {
     const target = session({
       isolated: true,
@@ -119,6 +139,28 @@ describe("worktree deletion policy", () => {
 
     expect(canDeleteSessionWorktree(target, foldersByRepo)).toBe(true);
     expect(shouldAutoDeleteSessionWorktree(target, foldersByRepo)).toBe(false);
+  });
+});
+
+describe("sessionRemovalCascadeIds", () => {
+  it("includes nested control-owned descendants", () => {
+    const control = session({ id: "control", kind: "control" });
+    const worker = session({
+      id: "worker",
+      owner: { kind: "control", session_id: "control" },
+    });
+    const nested = session({
+      id: "nested",
+      owner: { kind: "control", session_id: "worker" },
+    });
+    const user = session({ id: "user" });
+
+    const ids = sessionRemovalCascadeIds([control, worker, nested, user], control);
+
+    expect([...ids].sort()).toEqual(["control", "nested", "worker"]);
+    expect(controlOwnedSessionCount([control, worker, nested, user], control)).toBe(
+      2,
+    );
   });
 });
 

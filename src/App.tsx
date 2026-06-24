@@ -51,6 +51,7 @@ import {
 } from "./lib/terminalConversation";
 import {
   canDeleteSessionWorktree,
+  controlOwnedSessionCount,
   hasRecordedWorktree,
   shouldAutoDeleteSessionWorktree,
 } from "./lib/sessionWorktree";
@@ -316,6 +317,11 @@ function App() {
   const pendingRemoveCanDeleteWorktree =
     pendingRemove !== null &&
     canDeleteSessionWorktree(pendingRemove, projectFolders, sessions);
+  const pendingRemoveOwnedSessionCount =
+    pendingRemove !== null
+      ? controlOwnedSessionCount(sessions, pendingRemove)
+      : 0;
+  const pendingRemoveHasOwnedSessions = pendingRemoveOwnedSessionCount > 0;
   const pendingRemoveKeepsSharedWorktree =
     pendingRemoveRecordedWorktree && !pendingRemoveCanDeleteWorktree;
   const pendingRemoveAutoDeletesWorktree =
@@ -331,6 +337,7 @@ function App() {
   const pendingRemoveSkipsDialog =
     pendingRemove !== null &&
     !pendingRemoveNeedsRunningWarning &&
+    !pendingRemoveHasOwnedSessions &&
     (pendingRemoveKeepsSharedWorktree ||
       (pendingRemoveAutoDeletesWorktree &&
         deleteIsolatedWorktreesWithoutPrompt) ||
@@ -1172,7 +1179,11 @@ function App() {
       projectFolders,
       sessions,
     );
-    if (autoDeleteWorktree && deleteIsolatedWorktreesWithoutPrompt) {
+    if (
+      autoDeleteWorktree &&
+      deleteIsolatedWorktreesWithoutPrompt &&
+      !pendingRemoveHasOwnedSessions
+    ) {
       clearPendingRemove();
       void removeSession(pendingRemove.id, true).then((removedWorktree) =>
         showStoreWorktreeRemovalToast(
@@ -1186,7 +1197,9 @@ function App() {
       );
       return;
     }
-    if (confirmRemoveSession || recordedWorktree) return;
+    if (confirmRemoveSession || recordedWorktree || pendingRemoveHasOwnedSessions) {
+      return;
+    }
     clearPendingRemove();
     void removeSession(pendingRemove.id, false).then(() =>
       showStoreOperationToast(
@@ -1196,6 +1209,7 @@ function App() {
     );
   }, [
     pendingRemove,
+    pendingRemoveHasOwnedSessions,
     pendingRemoveNeedsRunningWarning,
     deleteIsolatedWorktreesWithoutPrompt,
     clearPendingRemove,
@@ -1852,6 +1866,7 @@ function App() {
             : pendingRemove
         }
         canDeleteWorktree={pendingRemoveCanDeleteWorktree}
+        ownedSessionCount={pendingRemoveOwnedSessionCount}
         onClose={(choice) => {
           const target = pendingRemove;
           clearPendingRemove();

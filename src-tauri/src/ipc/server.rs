@@ -26,15 +26,15 @@ use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::Arc;
 use std::time::Duration;
 
 use acorn_ipc::primer;
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, PROTOCOL_VERSION, Request, Response, SessionSummary,
-    WorkspaceSummary,
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
+    PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 use base64::Engine;
@@ -42,8 +42,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
-use crate::commands::{create_unique_worktree, sanitize_worktree_name};
-use crate::ipc::workspaces::{LIST_WORKSPACES_REQUEST_EVENT, ListWorkspacesRequestPayload};
+use crate::commands::{
+    create_unique_worktree, sanitize_worktree_name, session_removal_cascade, terminate_session_pty,
+};
+use crate::ipc::workspaces::{ListWorkspacesRequestPayload, LIST_WORKSPACES_REQUEST_EVENT};
 use crate::persistence;
 use crate::state::AppState;
 use crate::worktree;
@@ -832,31 +834,38 @@ fn handle_kill_session<R: Runtime>(
             message: "refusing to kill the source control session".to_string(),
         };
     }
-    let _ = state.pty.kill(&target.id);
-    if let Err(err) = state.sessions.remove(&target.id) {
-        return Response::Error {
-            code: ErrorCode::Internal,
-            message: format!("remove failed: {err}"),
-        };
+    let sessions_to_remove = session_removal_cascade(state, &target);
+    for session in &sessions_to_remove {
+        terminate_session_pty(state, &session.id);
+    }
+    for session in &sessions_to_remove {
+        if let Err(err) = state.sessions.remove(&session.id) {
+            return Response::Error {
+                code: ErrorCode::Internal,
+                message: format!("remove failed: {err}"),
+            };
+        }
     }
     if let Err(err) = persistence::save_sessions(&state.sessions.list()) {
         tracing::warn!(error = %err, "ipc: persist after kill-session failed");
     }
-    if let Err(err) = app.emit(
-        SESSIONS_CHANGED_EVENT,
-        SessionsChangedPayload {
-            action: "removed",
-            session_id: target.id.to_string(),
-            repo_path: target.repo_path.display().to_string(),
-            workspace_path: Some(target.worktree_path.display().to_string()),
-            workspace_id: None,
-        },
-    ) {
-        tracing::warn!(
-            error = %err,
-            event = SESSIONS_CHANGED_EVENT,
-            "ipc: sessions-changed emit failed",
-        );
+    for session in &sessions_to_remove {
+        if let Err(err) = app.emit(
+            SESSIONS_CHANGED_EVENT,
+            SessionsChangedPayload {
+                action: "removed",
+                session_id: session.id.to_string(),
+                repo_path: session.repo_path.display().to_string(),
+                workspace_path: Some(session.worktree_path.display().to_string()),
+                workspace_id: None,
+            },
+        ) {
+            tracing::warn!(
+                error = %err,
+                event = SESSIONS_CHANGED_EVENT,
+                "ipc: sessions-changed emit failed",
+            );
+        }
     }
     Response::Ack
 }
@@ -1077,6 +1086,37 @@ mod tests {
         let target = store.insert(make_session("/tmp/A", "user", SessionKind::Regular));
         let res = resolve_action_target(&ctl, &target.id.to_string(), &store, true);
         assert!(res.is_ok(), "allow_foreign should bypass owner guard");
+    }
+
+    #[test]
+    fn session_removal_cascade_includes_control_owned_descendants() {
+        let state = AppState::new();
+        let controller = state
+            .sessions
+            .insert(make_session("/tmp/A", "ctl", SessionKind::Control));
+        let worker = state.sessions.insert({
+            let mut session = make_session("/tmp/A", "worker", SessionKind::Regular);
+            session.owner = SessionOwner::control(controller.id);
+            session
+        });
+        let nested = state.sessions.insert({
+            let mut session = make_session("/tmp/A", "nested", SessionKind::Regular);
+            session.owner = SessionOwner::control(worker.id);
+            session
+        });
+        let user = state
+            .sessions
+            .insert(make_session("/tmp/A", "user", SessionKind::Regular));
+
+        let cascade = session_removal_cascade(&state, &controller);
+        let ids: std::collections::HashSet<_> =
+            cascade.into_iter().map(|session| session.id).collect();
+
+        assert_eq!(
+            ids,
+            std::collections::HashSet::from([controller.id, worker.id, nested.id])
+        );
+        assert!(!ids.contains(&user.id));
     }
 
     #[test]

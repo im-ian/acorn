@@ -1315,6 +1315,8 @@
       "confirmPrefix": "세션 제거",
       "isolatedWorktree": "격리된 워크트리입니다:",
       "linkedWorktree": "이 세션은 연결된 Git 워크트리를 사용 중입니다:",
+      "ownedSessionsWillBeRemovedPrefix": "이 작업은 컨트롤 세션이 소유한 세션",
+      "ownedSessionsWillBeRemovedSuffix": "개도 함께 제거합니다.",
       "deleteWorktreeQuestion": "세션만 제거할까요, 아니면 디스크의 워크트리도 함께 삭제할까요?",
       "filesIn": "다음 위치의 파일은",
       "willNotBeTouched": "변경되지 않습니다.",

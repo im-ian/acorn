@@ -57,6 +57,40 @@ export function otherSessionsUsingWorktreePath(
   );
 }
 
+export function sessionRemovalCascadeIds(
+  sessions: readonly Session[],
+  target: Session,
+): Set<string> {
+  const ids = new Set<string>([target.id]);
+  if (target.kind !== "control") return ids;
+
+  const frontier = [target.id];
+  while (frontier.length > 0) {
+    const ownerId = frontier.pop();
+    if (!ownerId) continue;
+    for (const session of sessions) {
+      if (
+        ids.has(session.id) ||
+        session.owner.kind !== "control" ||
+        session.owner.session_id !== ownerId
+      ) {
+        continue;
+      }
+      ids.add(session.id);
+      frontier.push(session.id);
+    }
+  }
+
+  return ids;
+}
+
+export function controlOwnedSessionCount(
+  sessions: readonly Session[],
+  target: Session,
+): number {
+  return sessionRemovalCascadeIds(sessions, target).size - 1;
+}
+
 export function isSessionInWorktreeWorkspace(
   session: Session,
   foldersByRepo: ProjectFoldersByRepo,
@@ -73,6 +107,7 @@ export function canDeleteSessionWorktree(
   foldersByRepo: ProjectFoldersByRepo,
   sessions: readonly Session[] = [session],
 ): boolean {
+  const removalIds = sessionRemovalCascadeIds(sessions, session);
   return (
     hasRecordedWorktree(session) &&
     !isSessionInWorktreeWorkspace(session, foldersByRepo) &&
@@ -80,7 +115,7 @@ export function canDeleteSessionWorktree(
       sessions,
       session.worktree_path,
       session.id,
-    ).length === 0
+    ).every((candidate) => removalIds.has(candidate.id))
   );
 }
 

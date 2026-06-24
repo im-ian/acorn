@@ -49,6 +49,7 @@ import {
 } from "./lib/sessionCreation";
 import {
   otherSessionsUsingWorktreePath,
+  sessionRemovalCascadeIds,
   sessionsUsingProjectWorktree,
   sessionsUsingWorktreePath,
 } from "./lib/sessionWorktree";
@@ -2302,15 +2303,18 @@ export const useAppStore = create<AppStateModel>()(
   },
 
   async removeSession(id, removeWorktree = false) {
+    const target = get().sessions.find((session) => session.id === id);
+    const removalIds = target
+      ? sessionRemovalCascadeIds(get().sessions, target)
+      : new Set<string>([id]);
     if (removeWorktree) {
       const state = get();
-      const target = state.sessions.find((session) => session.id === id);
       if (target) {
         const otherSessions = otherSessionsUsingWorktreePath(
           state.sessions,
           target.worktree_path,
           target.id,
-        );
+        ).filter((session) => !removalIds.has(session.id));
         if (otherSessions.length > 0) {
           set({ error: WORKTREE_IN_USE_BY_OTHER_SESSIONS });
           return null;
@@ -2318,11 +2322,15 @@ export const useAppStore = create<AppStateModel>()(
       }
     }
     const owning = findTabOwner(get(), id);
-    sessionPlacementById.delete(id);
+    for (const removalId of removalIds) {
+      sessionPlacementById.delete(removalId);
+    }
     set((s) => {
-      if (!s.sessions.some((session) => session.id === id)) return s;
+      if (!s.sessions.some((session) => removalIds.has(session.id))) return s;
 
-      const sessions = s.sessions.filter((session) => session.id !== id);
+      const sessions = s.sessions.filter(
+        (session) => !removalIds.has(session.id),
+      );
       const reconciled = reconcileWorkspaces(
         sessions,
         s.projects,
@@ -2334,9 +2342,13 @@ export const useAppStore = create<AppStateModel>()(
         true,
       );
       const liveInWorktree = { ...s.liveInWorktree };
-      delete liveInWorktree[id];
+      for (const removalId of removalIds) {
+        delete liveInWorktree[removalId];
+      }
       const pendingTerminalInput = { ...s.pendingTerminalInput };
-      delete pendingTerminalInput[id];
+      for (const removalId of removalIds) {
+        delete pendingTerminalInput[removalId];
+      }
 
       return {
         sessions,
@@ -2345,7 +2357,7 @@ export const useAppStore = create<AppStateModel>()(
         liveInWorktree,
         pendingTerminalInput,
         sessionNotifications: s.sessionNotifications.filter(
-          (notification) => notification.sessionId !== id,
+          (notification) => !removalIds.has(notification.sessionId),
         ),
         workspaces: reconciled.workspaces,
         projectFolders: reconciled.projectFolders,

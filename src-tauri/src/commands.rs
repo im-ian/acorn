@@ -3169,13 +3169,29 @@ pub fn reorder_sessions(
 /// daemon-backed session is a no-op against `state.pty`, leaving its child
 /// process and stream pump thread running and leaking its `stream_registry`
 /// entry.
-fn terminate_session_pty(state: &AppState, id: &Uuid) {
-    if state.stream_registry.contains(id) {
+pub(crate) fn terminate_session_pty(state: &AppState, id: &Uuid) {
+    let stream_attached = state.stream_registry.contains(id);
+    if stream_attached || state.daemon_bridge.is_alive(*id) {
         state.daemon_bridge.kill(*id).ok();
-        state.stream_registry.drop_attachment(id);
+        if stream_attached {
+            state.stream_registry.drop_attachment(id);
+        }
     } else {
         state.pty.kill(id).ok();
     }
+}
+
+pub(crate) fn session_removal_cascade(state: &AppState, session: &Session) -> Vec<Session> {
+    let mut sessions = vec![session.clone()];
+    let mut seen = HashSet::from([session.id]);
+    if session.kind == SessionKind::Control {
+        for owned in state.sessions.list_control_owned_descendants(session.id) {
+            if seen.insert(owned.id) {
+                sessions.push(owned);
+            }
+        }
+    }
+    sessions
 }
 
 fn sessions_using_linked_worktree(
@@ -3208,9 +3224,18 @@ fn ensure_no_sessions_using_worktree_path_except(
     worktree_path: &Path,
     except_id: Option<&Uuid>,
 ) -> AppResult<()> {
+    let except_ids: HashSet<Uuid> = except_id.into_iter().copied().collect();
+    ensure_no_sessions_using_worktree_path_except_ids(state, worktree_path, &except_ids)
+}
+
+fn ensure_no_sessions_using_worktree_path_except_ids(
+    state: &AppState,
+    worktree_path: &Path,
+    except_ids: &HashSet<Uuid>,
+) -> AppResult<()> {
     let has_conflict = sessions_using_worktree_path(state, worktree_path)
         .into_iter()
-        .any(|session| except_id != Some(&session.id));
+        .any(|session| !except_ids.contains(&session.id));
     if has_conflict {
         return Err(AppError::Other(
             WORKTREE_IN_USE_BY_OTHER_SESSIONS.to_string(),
@@ -3308,16 +3333,25 @@ pub async fn remove_session(
     let app_state = state.inner().clone();
     let id = Uuid::parse_str(&id).map_err(|e| AppError::Other(e.to_string()))?;
     let session = app_state.sessions.get(&id)?;
+    let sessions_to_remove = session_removal_cascade(&app_state, &session);
+    let removal_ids: HashSet<_> = sessions_to_remove
+        .iter()
+        .map(|session| session.id)
+        .collect();
     if remove_worktree.unwrap_or(false) {
-        ensure_no_sessions_using_worktree_path_except(
+        ensure_no_sessions_using_worktree_path_except_ids(
             &app_state,
             &session.worktree_path,
-            Some(&id),
+            &removal_ids,
         )?;
     }
-    terminate_session_pty(&app_state, &id);
+    for session in &sessions_to_remove {
+        terminate_session_pty(&app_state, &session.id);
+    }
     if let Ok(dir) = persistence::data_dir() {
-        scrollback::delete(&dir, &id.to_string()).ok();
+        for session in &sessions_to_remove {
+            scrollback::delete(&dir, &session.id.to_string()).ok();
+        }
     }
     let removed_worktree = if remove_worktree.unwrap_or(false) {
         match stage_remove_linked_worktree_blocking(
@@ -3340,7 +3374,13 @@ pub async fn remove_session(
     } else {
         None
     };
-    app_state.sessions.remove(&id)?;
+    for session in &sessions_to_remove {
+        if session.id == id {
+            app_state.sessions.remove(&session.id)?;
+        } else {
+            app_state.sessions.remove(&session.id).ok();
+        }
+    }
     if should_remove_local_project_mirror(&session, &app_state.sessions.list()) {
         app_state.projects.remove(&session.repo_path);
     }

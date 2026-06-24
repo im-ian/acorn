@@ -18,12 +18,14 @@ function dt(t: Translator, key: DialogTranslationKey): string {
 interface RemoveSessionDialogProps {
   session: Session | null;
   canDeleteWorktree?: boolean;
+  ownedSessionCount?: number;
   onClose: (choice: RemoveChoice) => void;
 }
 
 export function RemoveSessionDialog({
   session,
   canDeleteWorktree = true,
+  ownedSessionCount = 0,
   onClose,
 }: RemoveSessionDialogProps) {
   const t = useTranslation();
@@ -101,6 +103,13 @@ export function RemoveSessionDialog({
               {dt(t, "dialogs.removeSession.confirmPrefix")}{" "}
               <span className="font-mono text-accent">{session.name}</span>?
             </p>
+            {ownedSessionCount > 0 ? (
+              <p className="text-xs text-warning">
+                {dt(t, "dialogs.removeSession.ownedSessionsWillBeRemovedPrefix")}{" "}
+                <span className="font-mono">{ownedSessionCount}</span>{" "}
+                {dt(t, "dialogs.removeSession.ownedSessionsWillBeRemovedSuffix")}
+              </p>
+            ) : null}
             {recordedWorktree ? (
               <div className="space-y-2 rounded-md border border-border bg-bg-sidebar/60 p-3">
                 <p className="text-xs text-fg-muted">
