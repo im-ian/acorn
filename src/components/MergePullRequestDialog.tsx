@@ -436,7 +436,7 @@ export function MergePullRequestDialog({
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder={dt(t, "dialogs.mergePullRequest.subjectPlaceholder")}
                   disabled={busy}
-                  className="w-full rounded-md border border-border bg-bg-sidebar/60 px-2 py-1.5 text-[11px] text-fg outline-none transition focus:border-accent/60 disabled:opacity-60"
+                  className="w-full rounded-md border border-input-border bg-input px-2 py-1.5 text-[11px] text-fg outline-none transition focus:border-accent/60 focus:bg-input-hover disabled:opacity-60"
                 />
                 <textarea
                   value={body}
@@ -444,7 +444,7 @@ export function MergePullRequestDialog({
                   placeholder={dt(t, "dialogs.mergePullRequest.bodyPlaceholder")}
                   rows={6}
                   disabled={busy}
-                  className="w-full resize-none rounded-md border border-border bg-bg-sidebar/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg outline-none transition focus:border-accent/60 disabled:opacity-60"
+                  className="w-full resize-none rounded-md border border-input-border bg-input px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg outline-none transition focus:border-accent/60 focus:bg-input-hover disabled:opacity-60"
                 />
               </div>
             ) : (

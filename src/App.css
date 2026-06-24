@@ -21,6 +21,9 @@
    */
   --color-fill: color-mix(in oklab, var(--color-fg) 6%, transparent);
   --color-fill-hover: color-mix(in oklab, var(--color-fg) 12%, transparent);
+  --color-input: var(--color-fill);
+  --color-input-hover: var(--color-fill-hover);
+  --color-input-border: color-mix(in oklab, var(--color-border) 72%, transparent);
 
   --font-sans: "Inter", "SF Pro Text", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;

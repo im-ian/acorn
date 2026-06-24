@@ -74,7 +74,7 @@ export function Stepper({
   return (
     <div
       className={cn(
-        "inline-flex h-8 w-fit items-stretch self-start overflow-hidden rounded-lg bg-fill",
+        "inline-flex h-8 w-fit items-stretch self-start overflow-hidden rounded-lg border border-input-border bg-input",
         disabled && "opacity-50",
       )}
     >
@@ -83,11 +83,11 @@ export function Stepper({
         onClick={dec}
         disabled={disabled || value <= min}
         aria-label={t("ui.stepper.decrease")}
-        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-fill-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-input-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Minus size={12} />
       </button>
-      <div className="flex min-w-[4.25rem] items-center justify-center border-x border-border px-1.5 font-mono text-xs tabular-nums text-fg focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent">
+      <div className="flex min-w-[4.25rem] items-center justify-center border-x border-input-border px-1.5 font-mono text-xs tabular-nums text-fg focus-within:ring-1 focus-within:ring-inset focus-within:ring-accent">
         <input
           aria-label={t("ui.stepper.value")}
           className="h-full w-12 bg-transparent text-center font-mono text-xs tabular-nums text-fg outline-none disabled:cursor-not-allowed"
@@ -120,7 +120,7 @@ export function Stepper({
         onClick={inc}
         disabled={disabled || value >= max}
         aria-label={t("ui.stepper.increase")}
-        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-fill-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex w-8 items-center justify-center text-fg-muted transition hover:bg-input-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus size={12} />
       </button>
