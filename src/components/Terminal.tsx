@@ -1810,9 +1810,11 @@ export function Terminal({
       const fit = fitTerminalRef.current;
       if (!fit) return;
       repaintTerminalViewport({ container, fit, term });
-      // Even when xterm's cols/rows are unchanged, force a backend resize so
-      // TUIs launched from an already-open shell observe the current pane size.
-      sendPtyResize(true);
+      // Before a TUI starts, force one backend resize so commands launched
+      // from an already-open shell see the current pane size. Once a TUI has
+      // entered the alternate screen, avoid same-size SIGWINCH pulses; Claude
+      // Code's fullscreen renderer is sensitive to redundant resize redraws.
+      sendPtyResize(term.buffer.active.type !== "alternate");
     };
     const commandSizeSyncScheduler = createTerminalRepaintScheduler(
       syncViewportAndPtySize,
