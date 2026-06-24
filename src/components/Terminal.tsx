@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Terminal as XTerm,
+  type IBufferLine,
   type IDisposable,
   type ITheme,
   type IViewportRange,
@@ -237,10 +238,10 @@ function suppressCurrentXtermLinkUnderline(term: XTerm): void {
   }
 }
 
-function textRangeRectForColumns(
+function textRangeRectForStringOffsets(
   rowElement: HTMLElement,
-  startCol: number,
-  endCol: number,
+  startOffset: number,
+  endOffset: number,
 ): DOMRect | null {
   const doc = rowElement.ownerDocument;
   const walker = doc.createTreeWalker(rowElement, NodeFilter.SHOW_TEXT);
@@ -256,12 +257,12 @@ function textRangeRectForColumns(
   ) {
     const textLength = node.textContent?.length ?? 0;
     const nextOffset = offset + textLength;
-    if (!startSet && startCol <= nextOffset) {
-      range.setStart(node, Math.max(0, startCol - offset));
+    if (!startSet && startOffset <= nextOffset) {
+      range.setStart(node, Math.max(0, startOffset - offset));
       startSet = true;
     }
-    if (startSet && endCol <= nextOffset) {
-      range.setEnd(node, Math.max(0, endCol - offset));
+    if (startSet && endOffset <= nextOffset) {
+      range.setEnd(node, Math.max(0, endOffset - offset));
       endSet = true;
       break;
     }
@@ -277,6 +278,44 @@ function textRangeRectForColumns(
   range.detach();
   if (rect.width <= 0 || rect.height <= 0) return null;
   return rect;
+}
+
+function bufferStringOffsetForColumn(
+  bufferLine: IBufferLine,
+  targetColumn: number,
+): number {
+  let stringOffset = 0;
+
+  for (let column = 0; column < bufferLine.length; column += 1) {
+    const cell = bufferLine.getCell(column);
+    if (!cell) break;
+
+    const width = cell.getWidth();
+    if (width === 0) continue;
+    if (targetColumn <= column) return stringOffset;
+
+    const chars = cell.getChars();
+    const nextOffset = stringOffset + (chars.length || 1);
+    const nextColumn = column + Math.max(width, 1);
+    if (targetColumn < nextColumn) return stringOffset;
+    if (targetColumn === nextColumn) return nextOffset;
+
+    stringOffset = nextOffset;
+  }
+
+  return stringOffset;
+}
+
+function textRangeRectForBufferColumns(
+  rowElement: HTMLElement,
+  bufferLine: IBufferLine,
+  startCol: number,
+  endCol: number,
+): DOMRect | null {
+  const startOffset = bufferStringOffsetForColumn(bufferLine, startCol);
+  const endOffset = bufferStringOffsetForColumn(bufferLine, endCol);
+  if (endOffset <= startOffset) return null;
+  return textRangeRectForStringOffsets(rowElement, startOffset, endOffset);
 }
 
 function rectToTooltipAnchorRect(rect: DOMRect): TooltipAnchorRect {
@@ -378,9 +417,11 @@ function linkRangeAnchorRects(
       y === endViewportY
         ? Math.max(startCol + 1, Math.min(term.cols, range.end.x))
         : term.cols;
-    const textRect = rowElement
-      ? textRangeRectForColumns(rowElement, startCol, endCol)
-      : null;
+    const bufferLine = term.buffer.active.getLine(viewportY + y);
+    const textRect =
+      rowElement && bufferLine
+        ? textRangeRectForBufferColumns(rowElement, bufferLine, startCol, endCol)
+        : null;
     if (textRect) {
       rects.push(rectToTooltipAnchorRect(textRect));
       continue;
