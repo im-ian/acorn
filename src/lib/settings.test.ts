@@ -7,6 +7,9 @@ import {
   MOUNTED_TERMINAL_LIMIT_MAX,
   MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
+  TERMINAL_FONT_SIZE_STEP,
   TERMINAL_FONT_SMOOTHING_VALUES,
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
@@ -244,6 +247,77 @@ describe("terminal.maxMountedTerminals settings", () => {
     expect(useSettings.getState().settings.terminal.detachOffscreenTerminals).toBe(
       true,
     );
+  });
+});
+
+describe("terminal.fontSize settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("loads persisted decimal font size and clamps it", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { fontSize: 13.375 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(13.38);
+  });
+
+  it("clamps out-of-range persisted font size", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ terminal: { fontSize: 99 } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(
+      TERMINAL_FONT_SIZE_MAX,
+    );
+  });
+
+  it("preserves patched decimal font size inside the supported range", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings
+      .getState()
+      .patchTerminal({ fontSize: TERMINAL_FONT_SIZE_MIN - 0.4 });
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(
+      TERMINAL_FONT_SIZE_MIN,
+    );
+
+    useSettings.getState().patchTerminal({ fontSize: 13.375 });
+    expect(useSettings.getState().settings.terminal.fontSize).toBe(13.38);
+  });
+
+  it("uses a fractional UI step for terminal font size", () => {
+    expect(TERMINAL_FONT_SIZE_STEP).toBe(0.25);
   });
 });
 

@@ -57,6 +57,9 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
+  TERMINAL_FONT_SIZE_STEP,
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
@@ -511,7 +514,7 @@ export function SettingsModal() {
   );
 }
 
-function formatTerminalLetterSpacing(value: number): string {
+function formatTerminalDecimal(value: number): string {
   return Number.isInteger(value)
     ? String(value)
     : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
@@ -555,9 +558,13 @@ function TerminalSettings() {
       >
         <Stepper
           value={settings.terminal.fontSize}
-          min={8}
-          max={32}
+          min={TERMINAL_FONT_SIZE_MIN}
+          max={TERMINAL_FONT_SIZE_MAX}
+          step={TERMINAL_FONT_SIZE_STEP}
           unit="px"
+          inputPrecision={2}
+          snapInputToStep={false}
+          format={formatTerminalDecimal}
           onChange={(n) => patchTerminal({ fontSize: n })}
         />
       </Field>
@@ -571,7 +578,7 @@ function TerminalSettings() {
           max={TERMINAL_LETTER_SPACING_MAX}
           step={TERMINAL_LETTER_SPACING_STEP}
           unit="px"
-          format={formatTerminalLetterSpacing}
+          format={formatTerminalDecimal}
           onChange={(n) => patchTerminal({ letterSpacing: n })}
         />
       </Field>
