@@ -8,6 +8,8 @@ interface StepperProps {
   min: number;
   max: number;
   step?: number;
+  inputPrecision?: number;
+  snapInputToStep?: boolean;
   unit?: string;
   disabled?: boolean;
   /**
@@ -29,6 +31,8 @@ export function Stepper({
   min,
   max,
   step = 1,
+  inputPrecision,
+  snapInputToStep = true,
   unit,
   disabled = false,
   format,
@@ -36,12 +40,14 @@ export function Stepper({
 }: StepperProps) {
   const t = useTranslation();
   const precision = decimalPlaces(step);
+  const commitPrecision = inputPrecision ?? precision;
   const formatValue = (n: number) => (format ? format(n) : String(n));
   const clamp = (n: number) => Math.max(min, Math.min(max, n));
   // Round-to-step keeps fractional steps (e.g. 0.05) from accumulating
   // FP drift after many clicks.
   const snap = (n: number) =>
     Number((Math.round(n / step) * step).toFixed(precision));
+  const roundInput = (n: number) => Number(n.toFixed(commitPrecision));
   const dec = () => onChange(clamp(snap(value - step)));
   const inc = () => onChange(clamp(snap(value + step)));
   const display = formatValue(value);
@@ -64,7 +70,9 @@ export function Stepper({
       return;
     }
 
-    const next = clamp(snap(parsed));
+    const next = clamp(
+      snapInputToStep ? snap(parsed) : roundInput(parsed),
+    );
     setDraft(formatValue(next));
     if (next !== value) {
       onChange(next);

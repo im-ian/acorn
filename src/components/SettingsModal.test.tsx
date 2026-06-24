@@ -434,6 +434,38 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches decimal terminal font size from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const label = Array.from(document.querySelectorAll("span")).find(
+      (element) => element.textContent === "Font size",
+    );
+    const field = label?.parentElement;
+    const valueInput = field?.querySelector<HTMLInputElement>(
+      'input[aria-label="Value"]',
+    );
+
+    expect(valueInput?.value).toBe("12");
+
+    setInputValue(valueInput as HTMLInputElement, "13.37");
+    blurInput(valueInput as HTMLInputElement);
+
+    expect(patchTerminal).toHaveBeenCalledWith({ fontSize: 13.37 });
+  });
+
   it("patches terminal letter spacing from the Terminal tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({

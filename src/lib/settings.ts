@@ -123,6 +123,9 @@ export const NOTIFICATION_HISTORY_LIMIT_MAX = 100;
 export const MOUNTED_TERMINAL_LIMIT_MIN = 1;
 export const MOUNTED_TERMINAL_LIMIT_DEFAULT = 8;
 export const MOUNTED_TERMINAL_LIMIT_MAX = 64;
+export const TERMINAL_FONT_SIZE_MIN = 8;
+export const TERMINAL_FONT_SIZE_MAX = 32;
+export const TERMINAL_FONT_SIZE_STEP = 0.25;
 export const TERMINAL_LETTER_SPACING_MIN = -2;
 export const TERMINAL_LETTER_SPACING_MAX = 6;
 export const TERMINAL_LETTER_SPACING_STEP = 0.25;
@@ -659,6 +662,18 @@ function normalizeLineHeight(v: unknown, fallback: number): number {
   return Math.max(1.0, Math.min(2.0, v));
 }
 
+export function normalizeTerminalFontSize(
+  v: unknown,
+  fallback: number,
+): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const clamped = Math.max(
+    TERMINAL_FONT_SIZE_MIN,
+    Math.min(TERMINAL_FONT_SIZE_MAX, v),
+  );
+  return Math.round(clamped * 100) / 100;
+}
+
 export function normalizeTerminalLetterSpacing(
   v: unknown,
   fallback: number,
@@ -889,6 +904,10 @@ function loadSettings(): AcornSettings {
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
         ...terminalRaw,
+        fontSize: normalizeTerminalFontSize(
+          (terminalRaw as { fontSize?: unknown }).fontSize,
+          DEFAULT_SETTINGS.terminal.fontSize,
+        ),
         fontWeight: normalizeWeight(
           terminalRaw.fontWeight,
           DEFAULT_SETTINGS.terminal.fontWeight,
@@ -1174,6 +1193,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeMountedTerminalLimit(
                   patch.maxMountedTerminals,
                   s.settings.terminal.maxMountedTerminals,
+                ),
+          fontSize:
+            patch.fontSize === undefined
+              ? s.settings.terminal.fontSize
+              : normalizeTerminalFontSize(
+                  patch.fontSize,
+                  s.settings.terminal.fontSize,
                 ),
           letterSpacing:
             patch.letterSpacing === undefined
