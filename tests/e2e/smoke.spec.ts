@@ -78,4 +78,37 @@ test.describe("smoke: app boots in mocked browser", () => {
       )
       .toBe("1");
   });
+
+  test("blocks modified wheel zoom without changing UI scale", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+
+    const result = await page.evaluate(() => {
+      const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const event = new WheelEvent("wheel", {
+        deltaY: -160,
+        metaKey: isMac,
+        ctrlKey: !isMac,
+        bubbles: true,
+        cancelable: true,
+      });
+
+      return {
+        dispatched: window.dispatchEvent(event),
+        defaultPrevented: event.defaultPrevented,
+        scale: document.documentElement.style.getPropertyValue(
+          "--acorn-ui-scale",
+        ),
+      };
+    });
+
+    expect(result).toEqual({
+      dispatched: false,
+      defaultPrevented: true,
+      scale: "1",
+    });
+  });
 });
