@@ -2169,6 +2169,59 @@ test.describe("sidebar: project lifecycle", () => {
     ).toBeVisible();
   });
 
+  test("hidden project header actions do not reserve title width", async ({
+    page,
+    tauri,
+  }) => {
+    const projectName = "codex-app-server-main";
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "codex-app-server-main",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+
+    await page.goto("/");
+    await page.mouse.move(900, 500);
+
+    const projectRow = page.getByRole("button", {
+      name: `Project ${projectName}`,
+    });
+    await expect(projectRow).toBeVisible();
+
+    const title = projectRow.getByText(projectName, { exact: true });
+    const newSessionButton = page.locator(
+      'button[aria-label="New session in this project"]',
+    );
+    await expect(newSessionButton).toHaveCount(1);
+
+    const hiddenButtonWidth = await newSessionButton.evaluate(
+      (el) => (el as HTMLElement).offsetWidth,
+    );
+    expect(hiddenButtonWidth).toBe(0);
+
+    const titleMetrics = await title.evaluate((el) => {
+      const titleEl = el as HTMLElement;
+      return {
+        clientWidth: titleEl.clientWidth,
+        scrollWidth: titleEl.scrollWidth,
+      };
+    });
+    expect(titleMetrics.scrollWidth).toBeLessThanOrEqual(
+      titleMetrics.clientWidth + 1,
+    );
+
+    await projectRow.hover();
+    await expect(newSessionButton).toBeVisible();
+    await expect
+      .poll(() =>
+        newSessionButton.evaluate((el) => (el as HTMLElement).offsetWidth),
+      )
+      .toBeGreaterThan(0);
+  });
+
   test("project header exposes regular and worktree session buttons outside the menu", async ({
     page,
     tauri,
