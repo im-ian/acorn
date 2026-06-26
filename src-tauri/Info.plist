@@ -10,5 +10,7 @@
   <string>Acorn checks Downloads folder access so terminal sessions can continue working with projects stored there after updates.</string>
   <key>NSFileProviderDomainUsageDescription</key>
   <string>Acorn checks iCloud Drive access so terminal sessions can continue working with projects stored there after updates.</string>
+  <key>NSAppDataUsageDescription</key>
+  <string>Acorn reads agent and developer-tool data files only when needed to show session history, resume candidates, or project context inside your terminal workspace.</string>
 </dict>
 </plist>

@@ -688,6 +688,10 @@
           "label": "Input Monitoring",
           "description": "Used by tools that listen for keyboard input."
         },
+        "appData": {
+          "label": "App Data",
+          "description": "Used when Acorn reads agent or developer-tool data files for history, resume candidates, or project context."
+        },
         "camera": {
           "label": "Camera",
           "description": "Used by browser tests or tools that open camera devices."

@@ -19,6 +19,7 @@ export type MacosPermissionResetId =
   | "accessibility"
   | "automation"
   | "input_monitoring"
+  | "app_data"
   | "camera"
   | "microphone"
   | "developer_tools";

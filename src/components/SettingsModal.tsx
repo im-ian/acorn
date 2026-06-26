@@ -2443,6 +2443,13 @@ const PERMISSION_LIST_ITEMS: PermissionListItem[] = [
     descriptionKey: "settings.permissions.items.inputMonitoring.description",
   },
   {
+    id: "app_data",
+    kind: "developer",
+    group: "automation",
+    labelKey: "settings.permissions.items.appData.label",
+    descriptionKey: "settings.permissions.items.appData.description",
+  },
+  {
     id: "developer_tools",
     kind: "developer",
     group: "automation",

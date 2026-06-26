@@ -241,6 +241,12 @@ test.describe("settings modal", () => {
           status: "reset",
           error: null,
         },
+        {
+          id: "app_data",
+          service: "SystemPolicyAppData",
+          status: "reset",
+          error: null,
+        },
       ];
     });
     await tauri.handle("warm_macos_folder_permissions", () => {
@@ -276,6 +282,7 @@ test.describe("settings modal", () => {
     await expect(
       modal.getByText("Screen Recording", { exact: true }),
     ).toBeVisible();
+    await expect(modal.getByText("App Data", { exact: true })).toBeVisible();
     await expect(modal.getByText("Camera", { exact: true })).toBeVisible();
     await expect(
       modal.getByText("Prompts when used", { exact: true }).first(),
@@ -293,6 +300,9 @@ test.describe("settings modal", () => {
     await expect(modal.getByText("Ready", { exact: true })).toBeVisible();
     await expect(
       modal.getByText("Will ask again", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("SystemPolicyAppData", { exact: true }),
     ).toBeVisible();
     await expect
       .poll(() =>
