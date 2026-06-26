@@ -62,6 +62,7 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
+import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import { hasRecordedWorktree } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
@@ -1015,6 +1016,14 @@ function TabItem({
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const session = tab.kind === "session" ? tab.session : null;
+  const autoCloseEnabled = useAppStore((s) =>
+    session ? Boolean(s.autoCloseSessionIds[session.id]) : false,
+  );
+  const canConfigureAutoClose =
+    session != null && canConfigureSessionAutoClose(session);
+  const toggleSessionAutoClose = useAppStore(
+    (s) => s.toggleSessionAutoClose,
+  );
   const isGeneratingTitle = useAppStore((s) =>
     session ? Boolean(s.generatingSessionTitleIds[session.id]) : false,
   );
@@ -1288,7 +1297,7 @@ function TabItem({
 
   const menuItems: ContextMenuItem[] = [
     ...(session
-      ? [
+      ? ([
           paneContextMenuGroupTitle(t, "session"),
           {
             label: paneT(t, "pane.menu.rename"),
@@ -1307,7 +1316,17 @@ function TabItem({
             icon: <BarChart3 size={12} />,
             onClick: () => void openWorkSummaryTab({ sessionId: session.id }),
           },
-        ]
+          ...(canConfigureAutoClose
+            ? [
+                {
+                  type: "checkbox",
+                  label: paneT(t, "pane.menu.autoCloseWhenFinished"),
+                  checked: autoCloseEnabled,
+                  onChange: () => toggleSessionAutoClose(session.id),
+                } satisfies ContextMenuItem,
+              ]
+            : []),
+        ] satisfies ContextMenuItem[])
       : []),
     ...(forkItems.length > 0
       ? [paneContextMenuGroupTitle(t, "fork"), ...forkItems]
@@ -1480,9 +1499,13 @@ function TabItem({
         className={cn(
           "group relative flex h-7 min-w-[96px] shrink-0 cursor-pointer select-none items-center rounded-md pr-0.5 text-[13px] leading-5 transition",
           isDraggingThisTab && "opacity-40",
-          active
-            ? "acorn-tab-active-bg text-fg"
-            : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+          autoCloseEnabled
+            ? active
+              ? "bg-warning/15 text-fg ring-1 ring-warning/25"
+              : "bg-warning/10 text-fg hover:bg-warning/15"
+            : active
+              ? "acorn-tab-active-bg text-fg"
+              : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
         )}
       >
         <div
@@ -1623,6 +1646,7 @@ function TabItem({
             isGeneratingTitle={isGeneratingTitle}
             generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
             showWorktreeIcon={showWorktreeIcon}
+            autoCloseEnabled={autoCloseEnabled}
           />
         ) : null}
       </div>
@@ -1645,6 +1669,7 @@ function WorkspaceTabDragGhost({
   isGeneratingTitle,
   generatingLabel,
   showWorktreeIcon,
+  autoCloseEnabled,
 }: {
   drag: WorkspaceTabDragSession;
   tab: PaneTab;
@@ -1653,11 +1678,17 @@ function WorkspaceTabDragGhost({
   isGeneratingTitle: boolean;
   generatingLabel: string;
   showWorktreeIcon: boolean;
+  autoCloseEnabled: boolean;
 }) {
   return createPortal(
     <div
       aria-hidden
-      className="pointer-events-none fixed z-[9999] flex items-center gap-1.5 border border-border bg-bg-elevated px-3 text-[13px] leading-5 text-fg opacity-95 shadow-2xl"
+      className={cn(
+        "pointer-events-none fixed z-[9999] flex items-center gap-1.5 border px-3 text-[13px] leading-5 text-fg opacity-95 shadow-2xl",
+        autoCloseEnabled
+          ? "border-warning/30 bg-warning/15"
+          : "border-border bg-bg-elevated",
+      )}
       style={{
         left: drag.pointer.x - drag.offset.x,
         top: drag.pointer.y - drag.offset.y,

@@ -66,6 +66,31 @@ describe("ContextMenu", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it("renders checkbox items with checked state and toggles through onChange", () => {
+    const onChange = vi.fn();
+    const onClose = render([
+      {
+        type: "checkbox",
+        label: "Close when finished",
+        checked: false,
+        onChange,
+      },
+    ]);
+
+    const checkbox = document.querySelector('[role="menuitemcheckbox"]');
+    if (!checkbox) throw new Error("missing checkbox menu item");
+
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    expect(checkbox.textContent?.trim()).toBe("Close when finished");
+
+    act(() => {
+      (checkbox as HTMLButtonElement).click();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
   it("renders submenu affordances separately from shortcut text", () => {
     render([
       {

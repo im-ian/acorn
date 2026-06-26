@@ -358,6 +358,26 @@ describe("session title helpers", () => {
     });
   });
 
+  it("skips sessions excluded from automatic title generation", () => {
+    expect(
+      planAutoGenerateSessionTitles({
+        sessions: [
+          session({ id: "auto-close" }),
+          session({ id: "normal" }),
+        ],
+        enabled: true,
+        inFlightIds: new Set(),
+        excludedSessionIds: new Set(["auto-close"]),
+        lastAttemptAt: new Map(),
+        now: 1_000,
+        retryMs: 30_000,
+      }),
+    ).toEqual({
+      sessionIds: ["normal"],
+      retryDelayMs: null,
+    });
+  });
+
   it("returns the next retry delay for recently attempted sessions", () => {
     expect(
       planAutoGenerateSessionTitles({

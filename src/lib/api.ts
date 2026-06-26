@@ -30,6 +30,7 @@ import type {
   SessionKind,
   SessionMode,
   SessionStatus,
+  SessionStatusReason,
   SessionTitleReadinessResult,
   StagedFile,
   TodoItem,
@@ -637,6 +638,7 @@ export const api = {
     {
       id: string;
       status: SessionStatus;
+      status_reason?: SessionStatusReason | null;
       agent_provider?: SessionAgentProvider | null;
       agent_transcript_id?: string | null;
       branch: string | null;
@@ -647,6 +649,7 @@ export const api = {
       {
         id: string;
         status: SessionStatus;
+        status_reason?: SessionStatusReason | null;
         agent_provider?: SessionAgentProvider | null;
         agent_transcript_id?: string | null;
         branch: string | null;

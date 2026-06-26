@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { cn } from "../lib/cn";
 
 interface ContextMenuButton {
@@ -20,6 +20,15 @@ interface ContextMenuSubmenu {
   children: ContextMenuItem[];
 }
 
+interface ContextMenuCheckbox {
+  type: "checkbox";
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  shortcut?: string;
+}
+
 interface ContextMenuSeparator {
   type: "separator";
 }
@@ -32,6 +41,7 @@ interface ContextMenuGroupTitle {
 export type ContextMenuItem =
   | ContextMenuButton
   | ContextMenuSubmenu
+  | ContextMenuCheckbox
   | ContextMenuSeparator
   | ContextMenuGroupTitle;
 
@@ -111,6 +121,8 @@ interface ContextMenuItemButtonProps {
   icon?: React.ReactNode;
   disabled?: boolean;
   trailing?: React.ReactNode;
+  role?: "menuitem" | "menuitemcheckbox";
+  ariaChecked?: boolean;
   ariaHasPopup?: "menu";
   ariaExpanded?: boolean;
   onClick?: () => void;
@@ -123,6 +135,8 @@ function ContextMenuItemButton({
   icon,
   disabled,
   trailing,
+  role = "menuitem",
+  ariaChecked,
   ariaHasPopup,
   ariaExpanded,
   onClick,
@@ -132,7 +146,8 @@ function ContextMenuItemButton({
   return (
     <button
       type="button"
-      role="menuitem"
+      role={role}
+      aria-checked={ariaChecked}
       aria-haspopup={ariaHasPopup}
       aria-expanded={ariaExpanded}
       disabled={disabled}
@@ -170,6 +185,29 @@ function ContextMenuShortcut({
     >
       {shortcut}
     </kbd>
+  );
+}
+
+function ContextMenuCheckboxIndicator({
+  checked,
+  disabled,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border",
+        checked
+          ? "border-accent bg-accent text-bg"
+          : "border-border bg-bg text-transparent",
+        disabled && "opacity-50",
+      )}
+    >
+      <Check size={10} strokeWidth={3} />
+    </span>
   );
 }
 
@@ -293,6 +331,39 @@ function ContextMenuPanel({
                     onClose={onClose}
                   />
                 ) : null}
+              </li>
+            );
+          }
+          if (item.type === "checkbox") {
+            return (
+              <li key={i}>
+                <ContextMenuItemButton
+                  role="menuitemcheckbox"
+                  ariaChecked={item.checked}
+                  label={item.label}
+                  icon={
+                    <ContextMenuCheckboxIndicator
+                      checked={item.checked}
+                      disabled={item.disabled}
+                    />
+                  }
+                  disabled={item.disabled}
+                  trailing={
+                    item.shortcut ? (
+                      <ContextMenuShortcut
+                        shortcut={item.shortcut}
+                        disabled={item.disabled}
+                      />
+                    ) : null
+                  }
+                  onMouseEnter={() => setActiveSubmenu(null)}
+                  onFocus={() => setActiveSubmenu(null)}
+                  onClick={() => {
+                    if (item.disabled) return;
+                    onClose();
+                    item.onChange(!item.checked);
+                  }}
+                />
               </li>
             );
           }
