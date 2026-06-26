@@ -664,6 +664,15 @@ function TerminalSettings() {
           />
         </div>
       </Field>
+      <CheckboxRow
+        label={st(t, "settings.terminal.rightClickPasteSelection.label")}
+        description={st(
+          t,
+          "settings.terminal.rightClickPasteSelection.description",
+        )}
+        checked={settings.terminal.rightClickPasteSelection}
+        onChange={(v) => patchTerminal({ rightClickPasteSelection: v })}
+      />
     </section>
   );
 }

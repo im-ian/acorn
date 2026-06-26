@@ -515,6 +515,28 @@ function usesExplicitRelativePath(path: string): boolean {
   return path.startsWith("./") || path.startsWith("../");
 }
 
+function selectedTextForTerminalContextPaste(
+  container: HTMLElement,
+  term: XTerm,
+): string {
+  const terminalSelection = term.getSelection();
+  if (terminalSelection.length > 0) return terminalSelection;
+
+  const selection = container.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return "";
+  }
+  if (
+    !selection.anchorNode ||
+    !selection.focusNode ||
+    !container.contains(selection.anchorNode) ||
+    !container.contains(selection.focusNode)
+  ) {
+    return "";
+  }
+  return selection.toString();
+}
+
 export function Terminal({
   sessionId,
   repoPath,
@@ -1761,6 +1783,24 @@ export function Terminal({
     };
     container.addEventListener("paste", onPaste, true);
 
+    const onContextMenu = (e: MouseEvent) => {
+      if (!useSettings.getState().settings.terminal.rightClickPasteSelection) {
+        return;
+      }
+      const text = selectedTextForTerminalContextPaste(container, term);
+      if (text.length === 0) return;
+      const action = terminalPasteAction({
+        text,
+        hasImagePayload: false,
+        normalizeUnicodeSpaces: normalizeTerminalUnicodeSpaces(),
+      });
+      if (action.kind === "pasteText") term.paste(action.text);
+      term.focus();
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    container.addEventListener("contextmenu", onContextMenu, true);
+
     const onTerminalPaste = (e: Event) => {
       const detail = (e as CustomEvent<TerminalPasteEventDetail>).detail;
       if (detail?.sessionId !== sessionId) return;
@@ -2518,6 +2558,7 @@ export function Terminal({
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("keypress", onKeypress, true);
       container.removeEventListener("paste", onPaste, true);
+      container.removeEventListener("contextmenu", onContextMenu, true);
       window.removeEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
       container.removeEventListener("dragover", onDragOver);
       container.removeEventListener("drop", onDrop);
