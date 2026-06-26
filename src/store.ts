@@ -27,12 +27,15 @@ import {
 } from "./lib/layout";
 import {
   activeSessionIdFromTabId,
+  codeWorkspaceTabViewStateEqual,
   isRestorableWorkspaceTab,
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
   makeCodeWorkspaceTabTarget,
   makeWorkSummaryWorkspaceTab,
+  mergeCodeWorkspaceTabViewState,
   type FrontendWorkspaceTab,
+  type CodeWorkspaceTabViewState,
 } from "./lib/workspaceTabs";
 import {
   defaultTabByGroup,
@@ -354,6 +357,11 @@ interface AppStateModel {
     path: string,
     repoPath?: string,
     target?: { line?: number; column?: number },
+  ) => void;
+  /** Persist transient scroll/zoom state for an open code/media viewer tab. */
+  updateCodeViewerTabViewState: (
+    id: string,
+    patch: CodeWorkspaceTabViewState,
   ) => void;
   /** Open a work summary tab for the current session or a provided worktree. */
   openWorkSummaryTab: (scope?: WorkSummaryTabScope) => Promise<void>;
@@ -3049,6 +3057,24 @@ export const useAppStore = create<AppStateModel>()(
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
         ...mirrorActive(newWorkspaces, workspaceId),
+      };
+    });
+  },
+
+  updateCodeViewerTabViewState(id, patch) {
+    set((s) => {
+      const tab = s.workspaceTabs[id];
+      if (!tab || tab.kind !== "code") return s;
+      const viewState = mergeCodeWorkspaceTabViewState(tab.viewState, patch);
+      if (codeWorkspaceTabViewStateEqual(tab.viewState, viewState)) return s;
+      return {
+        workspaceTabs: {
+          ...s.workspaceTabs,
+          [id]: {
+            ...tab,
+            viewState,
+          },
+        },
       };
     });
   },

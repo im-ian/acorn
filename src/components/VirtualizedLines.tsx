@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -9,7 +10,14 @@ import {
   type Key,
   type RefObject,
   type ReactNode,
+  type UIEvent,
 } from "react";
+import {
+  currentScrollPosition,
+  restoreScrollPosition,
+  type PartialScrollPosition,
+  type ScrollPosition,
+} from "../lib/scrollPosition";
 
 export const VIRTUALIZED_LINE_THRESHOLD = 500;
 
@@ -29,6 +37,8 @@ interface VirtualizedLineListProps {
   minWidthCh?: number;
   overscan?: number;
   threshold?: number;
+  restoreScrollPosition?: PartialScrollPosition;
+  onScrollPositionChange?: (position: ScrollPosition) => void;
 }
 
 export interface VirtualizedLineListHandle {
@@ -63,10 +73,15 @@ export const VirtualizedLineList = forwardRef<
     minWidthCh,
     overscan = DEFAULT_OVERSCAN,
     threshold = VIRTUALIZED_LINE_THRESHOLD,
+    restoreScrollPosition: restoredScrollPosition,
+    onScrollPositionChange,
   },
   ref,
 ) {
   const scrollRef = useRef<HTMLElement | null>(null);
+  const restoredScrollPositionRef = useRef(restoredScrollPosition);
+  const onScrollPositionChangeRef = useRef(onScrollPositionChange);
+  const didRestoreScrollRef = useRef(false);
   const virtualized = count > threshold;
   const averageInitialSize = useMemo(() => {
     if (count === 0) return 1;
@@ -105,8 +120,29 @@ export const VirtualizedLineList = forwardRef<
   const renderedItems: RenderedVirtualItem[] =
     virtualItems.length > 0 ? virtualItems : fallbackItems;
 
+  useEffect(() => {
+    restoredScrollPositionRef.current = restoredScrollPosition;
+  }, [restoredScrollPosition?.scrollLeft, restoredScrollPosition?.scrollTop]);
+
+  useEffect(() => {
+    onScrollPositionChangeRef.current = onScrollPositionChange;
+  }, [onScrollPositionChange]);
+
   const setScrollRef = useCallback((node: HTMLElement | null) => {
     scrollRef.current = node;
+    if (!node) {
+      didRestoreScrollRef.current = false;
+      return;
+    }
+    if (didRestoreScrollRef.current) return;
+    didRestoreScrollRef.current = true;
+    restoreScrollPosition(node, restoredScrollPositionRef.current);
+  }, []);
+
+  const handleScroll = useCallback((event: UIEvent<HTMLElement>) => {
+    onScrollPositionChangeRef.current?.(
+      currentScrollPosition(event.currentTarget),
+    );
   }, []);
 
   useImperativeHandle(
@@ -136,6 +172,7 @@ export const VirtualizedLineList = forwardRef<
   const props = {
     ref: setScrollRef,
     className,
+    onScroll: handleScroll,
     onCopy,
     "data-virtualized": virtualized ? "true" : "false",
   };
