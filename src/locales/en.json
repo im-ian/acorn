@@ -60,6 +60,7 @@
       "notifications": "Notifications",
       "shortcuts": "Shortcuts",
       "storage": "Storage",
+      "permissions": "Permissions",
       "experiments": "Experiments",
       "about": "About"
     },
@@ -606,6 +607,100 @@
         "clearing": "Clearing..."
       },
       "total": "Total: {size}"
+    },
+    "permissions": {
+      "title": "Permissions",
+      "description": "Reset Acorn's macOS privacy decisions and immediately check protected folders so macOS can ask again.",
+      "notice": "Use this when folders, Playwright, browser automation, or capture tools keep failing because macOS saved a stale permission decision.",
+      "kind": {
+        "folder": "Folder",
+        "developer": "Acorn",
+        "external": "External"
+      },
+      "groups": {
+        "folders": {
+          "title": "Protected folders",
+          "description": "These can be checked by briefly reading the folder."
+        },
+        "automation": {
+          "title": "Automation and capture",
+          "description": "These reset Acorn's macOS privacy decision. macOS prompts again when Acorn uses the protected capability."
+        },
+        "browser": {
+          "title": "Browser and Playwright media",
+          "description": "These are usually owned by Chrome, Chromium, or the Playwright browser process rather than Acorn."
+        }
+      },
+      "list": {
+        "title": "Permission areas",
+        "description": "Acorn-owned permissions can be reset here. Browser and Playwright media permissions are shown separately because macOS grants them to the browser process."
+      },
+      "folderAccess": {
+        "label": "macOS privacy permissions",
+        "description": "Resets saved Acorn decisions for protected folders and common developer-tool permissions, then reads protected folders once to surface folder prompts."
+      },
+      "reset": {
+        "button": "Reset permissions",
+        "running": "Resetting..."
+      },
+      "status": {
+        "ready": "Folder access was reset and checked.",
+        "needsAttention": "Some folders still need attention.",
+        "empty": "No macOS protected folders were checked on this platform.",
+        "failed": "Failed to reset macOS permissions.",
+        "checkOnReset": "Check on reset",
+        "promptedByTool": "Prompts when used",
+        "browserManaged": "Browser-managed",
+        "reset": "Will ask again",
+        "skipped": "macOS only",
+        "resetFailed": "Reset failed"
+      },
+      "items": {
+        "desktop": {
+          "label": "Desktop",
+          "description": "Files and folders under Desktop."
+        },
+        "documents": {
+          "label": "Documents",
+          "description": "Files and folders under Documents."
+        },
+        "downloads": {
+          "label": "Downloads",
+          "description": "Files and folders under Downloads."
+        },
+        "icloud": {
+          "label": "iCloud Drive",
+          "description": "Files and folders under iCloud Drive, when present."
+        },
+        "screenCapture": {
+          "label": "Screen Recording",
+          "description": "Used by screenshot, screen capture, and visual automation tools."
+        },
+        "accessibility": {
+          "label": "Accessibility",
+          "description": "Used by tools that inspect or control other app windows."
+        },
+        "automation": {
+          "label": "Automation",
+          "description": "Used by Apple Events and scripts that control other apps."
+        },
+        "inputMonitoring": {
+          "label": "Input Monitoring",
+          "description": "Used by tools that listen for keyboard input."
+        },
+        "camera": {
+          "label": "Camera",
+          "description": "Used by browser tests or tools that open camera devices."
+        },
+        "microphone": {
+          "label": "Microphone",
+          "description": "Used by browser tests or tools that open audio input devices."
+        },
+        "developerTools": {
+          "label": "Developer Tools",
+          "description": "Used by debugging and automation tools that attach to other processes."
+        }
+      }
     },
     "experiments": {
       "warning": "Unfinished features. Behavior may change between releases; the toggles themselves are stable.",

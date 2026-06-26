@@ -11,6 +11,25 @@ export interface FolderPermissionWarmupResult {
   error: string | null;
 }
 
+export type MacosPermissionResetStatus = "reset" | "skipped" | "error";
+
+export type MacosPermissionResetId =
+  | FolderPermissionWarmupResult["id"]
+  | "screen_capture"
+  | "accessibility"
+  | "automation"
+  | "input_monitoring"
+  | "camera"
+  | "microphone"
+  | "developer_tools";
+
+export interface MacosPermissionResetResult {
+  id: MacosPermissionResetId;
+  service: string;
+  status: MacosPermissionResetStatus;
+  error: string | null;
+}
+
 export function hasDeniedFolderPermission(
   results: FolderPermissionWarmupResult[],
 ): boolean {

@@ -220,4 +220,97 @@ test.describe("settings modal", () => {
       )
       .toBe(false);
   });
+
+  test("resets macOS privacy permissions from Settings", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("reset_macos_developer_permissions", () => {
+      const w = window as unknown as { __permissionResetCalls?: number };
+      w.__permissionResetCalls = (w.__permissionResetCalls ?? 0) + 1;
+      return [
+        {
+          id: "screen_capture",
+          service: "ScreenCapture",
+          status: "reset",
+          error: null,
+        },
+        {
+          id: "accessibility",
+          service: "Accessibility",
+          status: "reset",
+          error: null,
+        },
+      ];
+    });
+    await tauri.handle("warm_macos_folder_permissions", () => {
+      const w = window as unknown as { __permissionWarmupCalls?: number };
+      w.__permissionWarmupCalls = (w.__permissionWarmupCalls ?? 0) + 1;
+      return [
+        {
+          id: "desktop",
+          path: "/Users/tester/Desktop",
+          status: "ok",
+          error: null,
+        },
+      ];
+    });
+
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Permissions|권한)$/ }).click();
+    await expect(
+      modal.getByRole("heading", { name: /^(Permissions|권한)$/ }),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("Protected folders", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("Automation and capture", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("Browser and Playwright media", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("Screen Recording", { exact: true }),
+    ).toBeVisible();
+    await expect(modal.getByText("Camera", { exact: true })).toBeVisible();
+    await expect(
+      modal.getByText("Prompts when used", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(
+      modal.getByText("Browser-managed", { exact: true }).first(),
+    ).toBeVisible();
+
+    await modal.getByRole("button", { name: "Reset permissions" }).click();
+
+    await expect(
+      modal.getByText("Folder access was reset and checked."),
+    ).toBeVisible();
+    await expect(modal.getByText("Desktop", { exact: true })).toBeVisible();
+    await expect(modal.getByText("Ready", { exact: true })).toBeVisible();
+    await expect(
+      modal.getByText("Will ask again", { exact: true }).first(),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __permissionResetCalls?: number })
+              .__permissionResetCalls ?? 0,
+        ),
+      )
+      .toBe(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __permissionWarmupCalls?: number })
+              .__permissionWarmupCalls ?? 0,
+        ),
+      )
+      .toBe(1);
+  });
 });

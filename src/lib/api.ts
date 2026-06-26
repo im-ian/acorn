@@ -36,7 +36,10 @@ import type {
   WorkflowRunDetailListing,
   WorkflowRunsListing,
 } from "./types";
-import type { FolderPermissionWarmupResult } from "./permissionWarmup";
+import type {
+  FolderPermissionWarmupResult,
+  MacosPermissionResetResult,
+} from "./permissionWarmup";
 import type { IpcListWorkspacesResponsePayload } from "./ipcWorkspaces";
 
 export type {
@@ -559,6 +562,11 @@ export const api = {
   },
   resetMacosFolderPermissions(): Promise<void> {
     return invoke<void>("reset_macos_folder_permissions");
+  },
+  resetMacosDeveloperPermissions(): Promise<MacosPermissionResetResult[]> {
+    return invoke<MacosPermissionResetResult[]>(
+      "reset_macos_developer_permissions",
+    );
   },
   /**
    * Stop the in-process IPC listener and spawn a fresh one. Used when the

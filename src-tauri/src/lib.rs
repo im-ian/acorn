@@ -596,6 +596,7 @@ pub fn run() {
             clipboard::clipboard_snapshot,
             commands::warm_macos_folder_permissions,
             commands::reset_macos_folder_permissions,
+            commands::reset_macos_developer_permissions,
             commands::ipc_restart,
             commands::ipc_list_workspaces_response,
             commands::list_system_fonts,
