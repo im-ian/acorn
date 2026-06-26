@@ -26,6 +26,11 @@ const mocks = vi.hoisted(() => ({
   fsGitDiffLines: vi.fn(async () => []),
   fsGitStatus: vi.fn(),
   fsGitDiffStats: vi.fn(),
+  detectSessionAgent: vi.fn(async () => ({
+    claude: null,
+    codex: null,
+    antigravity: null,
+  })),
   loadChatSessionState: vi.fn(),
   agentTranscriptSummary: vi.fn(),
   agentTranscriptSummaryAtPath: vi.fn(),
@@ -49,6 +54,7 @@ vi.mock("../lib/api", () => ({
     fsGitDiffLines: mocks.fsGitDiffLines,
     fsGitStatus: mocks.fsGitStatus,
     fsGitDiffStats: mocks.fsGitDiffStats,
+    detectSessionAgent: mocks.detectSessionAgent,
     loadChatSessionState: mocks.loadChatSessionState,
     agentTranscriptSummary: mocks.agentTranscriptSummary,
     agentTranscriptSummaryAtPath: mocks.agentTranscriptSummaryAtPath,
@@ -178,6 +184,7 @@ function resetStore(): void {
       sessionsLoadedCleanly: true,
       liveInWorktree: {},
       generatingSessionTitleIds: {},
+      autoCloseSessionIds: {},
     },
     false,
   );
@@ -857,6 +864,91 @@ describe("Pane empty state", () => {
       indicator!.compareDocumentPosition(title!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
+  });
+
+  it("tints tabs with session auto-close enabled", () => {
+    const enabled = session("agent-session", { agent_provider: "codex" });
+    const disabled = session("manual-session", { agent_provider: "claude" });
+    seedActivePaneWithTabs([enabled, disabled], enabled.id);
+    useAppStore.setState((s) => ({
+      ...s,
+      autoCloseSessionIds: { [enabled.id]: true },
+    }));
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const enabledHandle = container.querySelector(
+      `[data-tab-drag-handle="${enabled.id}"]`,
+    );
+    const disabledHandle = container.querySelector(
+      `[data-tab-drag-handle="${disabled.id}"]`,
+    );
+    const enabledTab = enabledHandle?.closest('[role="button"]');
+    const disabledTab = disabledHandle?.closest('[role="button"]');
+
+    expect(enabledTab?.className).toContain("bg-warning/15");
+    expect(enabledTab?.className).toContain("ring-warning/25");
+    expect(disabledTab?.className).not.toContain("bg-warning");
+  });
+
+  it("shows the auto-close tab menu item for agent sessions", async () => {
+    const active = session("agent-session", { agent_provider: "codex" });
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const tab = container
+      .querySelector(`[data-tab-drag-handle="${active.id}"]`)
+      ?.closest('[role="button"]');
+    expect(tab).toBeInstanceOf(HTMLElement);
+
+    await act(async () => {
+      tab?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+
+    expect(document.body.textContent).toContain("Close When Agent Finishes");
+  });
+
+  it("hides the auto-close tab menu item for plain terminal sessions", async () => {
+    const active = session("plain-session", { agent_provider: null });
+    seedActivePaneWithTab(active);
+
+    act(() => {
+      root.render(<Pane paneId="root" />);
+    });
+
+    const tab = container
+      .querySelector(`[data-tab-drag-handle="${active.id}"]`)
+      ?.closest('[role="button"]');
+    expect(tab).toBeInstanceOf(HTMLElement);
+
+    await act(async () => {
+      tab?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+
+    expect(document.body.textContent).not.toContain(
+      "Close When Agent Finishes",
+    );
   });
 
   it("passes a work summary token baseline through pane tab rendering", async () => {

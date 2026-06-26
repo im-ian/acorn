@@ -1,5 +1,6 @@
 import {
   Activity,
+  BarChart3,
   Bot,
   ChevronRight,
   Copy,
@@ -7,6 +8,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  GitFork,
   Home,
   LayoutPanelLeft,
   MessageSquareText,
@@ -53,6 +55,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store";
 import {
   AgentProviderIcon,
+  buildAgentForkCommand,
+  providerRequiresForkTranscriptPrep,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { api, type WorktreeRemoval } from "../lib/api";
@@ -70,6 +74,7 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
+import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import {
   hasRecordedWorktree,
   shouldAutoDeleteSessionWorktree,
@@ -93,7 +98,9 @@ import {
 import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
+  buildSessionCreateRequestFromScope,
   resolveActiveSessionScope,
+  scopeForSession,
   scopeWithProjectRootLaunch,
   type SessionCreateScope,
 } from "../lib/sessionCreation";
@@ -144,6 +151,12 @@ const STATUS_ICON: Record<SessionStatus, string> = {
   completed: "text-accent/60",
 };
 
+function autoCloseSessionRowClassName(active: boolean): string {
+  return active
+    ? "!bg-warning/15 text-fg shadow-sm ring-1 ring-warning/25 focus-visible:!bg-warning/15"
+    : "!bg-warning/10 text-fg hover:!bg-warning/15 focus-visible:!bg-warning/15";
+}
+
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 const FOLDER_COLLAPSED_KEY = "acorn:sidebar:collapsed-project-folders";
 const PROJECT_ITEM_ORDER_KEY = "acorn:sidebar:project-item-order";
@@ -164,6 +177,7 @@ function sidebarText(t: Translator, key: SidebarTranslationKey): string {
 
 type SidebarContextMenuGroup =
   | "session"
+  | "fork"
   | "workspace"
   | "project"
   | "open"
@@ -2530,8 +2544,19 @@ function SessionRow({
 }: SessionRowProps) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
+  const sessions = useAppStore((s) => s.sessions);
+  const projects = useAppStore((s) => s.projects);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
+  const toggleSessionAutoClose = useAppStore(
+    (s) => s.toggleSessionAutoClose,
+  );
+  const createSession = useAppStore((s) => s.createSession);
+  const selectSession = useAppStore((s) => s.selectSession);
+  const setPendingTerminalInput = useAppStore(
+    (s) => s.setPendingTerminalInput,
+  );
   const editorCommand = useSettings((s) => s.settings.editor.command);
   const editorConfigured = editorCommand.trim().length > 0;
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
@@ -2568,11 +2593,20 @@ function SessionRow({
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
+  const autoCloseEnabled = useAppStore((s) =>
+    Boolean(s.autoCloseSessionIds[session.id]),
+  );
+  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [agent, setAgent] = useState<{
+    claude: string | null;
+    codex: string | null;
+    antigravity: string | null;
+  } | null>(null);
   const {
     attributes,
     listeners,
@@ -2592,6 +2626,29 @@ function SessionRow({
     if (isGeneratingTitle && editing) setEditing(false);
   }, [editing, isGeneratingTitle]);
 
+  useEffect(() => {
+    if (!menu) return;
+    setAgent(null);
+    let cancelled = false;
+    api
+      .detectSessionAgent(session.id)
+      .then((res) => {
+        if (!cancelled) setAgent(res);
+      })
+      .catch((err) => {
+        console.error("[Sidebar.Fork] detect failed", {
+          sessionId: session.id,
+          err,
+        });
+        if (!cancelled) {
+          setAgent({ claude: null, codex: null, antigravity: null });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [menu, session.id]);
+
   async function regenerateTitle() {
     const settings = useSettings.getState().settings;
     const status = await generateSessionTitle(
@@ -2607,9 +2664,103 @@ function SessionRow({
     }
   }
 
+  async function forkSession(
+    kind: SessionAgentProvider,
+    parentAgentId: string,
+    isolated: boolean,
+  ) {
+    selectSession(session.id);
+    const request = buildSessionCreateRequestFromScope(
+      { sessions, projects },
+      scopeForSession(session),
+      { isolated, kind: "regular", agentProvider: kind },
+    );
+    try {
+      const created = await applySessionCreateRequest(createSession, request);
+      const error = useAppStore.getState().consumeError();
+      if (!created || error) {
+        showToast(`${t("toasts.session.createFailed")} ${error ?? ""}`.trim());
+        return;
+      }
+      if (providerRequiresForkTranscriptPrep(kind) && isolated) {
+        try {
+          await api.prepareClaudeFork(parentAgentId, created.worktree_path);
+        } catch (err) {
+          console.error("[Sidebar] prepare_claude_fork failed", err);
+        }
+      }
+      const command = buildAgentForkCommand(kind, parentAgentId);
+      setPendingTerminalInput(created.id, command, { agentProvider: kind });
+      await useAppStore.getState().refreshAll();
+      selectSession(created.id);
+    } catch (err) {
+      console.error("[Sidebar] fork session failed", err);
+      showToast(`${t("toasts.session.createFailed")} ${String(err)}`);
+    }
+  }
+
   const agentProvider = showAgentProviderIcons
     ? resolveSessionAgentProvider(session)
     : null;
+  const forkItems: ContextMenuItem[] = (() => {
+    if (!agent) return [];
+    const items: ContextMenuItem[] = [];
+    const providerCount = [agent.claude, agent.codex, agent.antigravity].filter(
+      Boolean,
+    ).length;
+    const multiple = providerCount > 1;
+    if (agent.claude) {
+      items.push({
+        label: multiple
+          ? sidebarText(t, "sidebar.actions.forkClaudeSession")
+          : sidebarText(t, "sidebar.actions.forkSession"),
+        icon: <GitFork size={12} />,
+        onClick: () => void forkSession("claude", agent.claude!, false),
+      });
+      items.push({
+        label: multiple
+          ? sidebarText(t, "sidebar.actions.forkClaudeInNewWorktree")
+          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
+        icon: <GitBranch size={12} />,
+        onClick: () => void forkSession("claude", agent.claude!, true),
+      });
+    }
+    if (agent.codex) {
+      items.push({
+        label: multiple
+          ? sidebarText(t, "sidebar.actions.forkCodexSession")
+          : sidebarText(t, "sidebar.actions.forkSession"),
+        icon: <GitFork size={12} />,
+        onClick: () => void forkSession("codex", agent.codex!, false),
+      });
+      items.push({
+        label: multiple
+          ? sidebarText(t, "sidebar.actions.forkCodexInNewWorktree")
+          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
+        icon: <GitBranch size={12} />,
+        onClick: () => void forkSession("codex", agent.codex!, true),
+      });
+    }
+    if (agent.antigravity) {
+      items.push({
+        label: multiple
+          ? sidebarText(t, "sidebar.actions.forkAntigravitySession")
+          : sidebarText(t, "sidebar.actions.forkSession"),
+        icon: <GitFork size={12} />,
+        onClick: () =>
+          void forkSession("antigravity", agent.antigravity!, false),
+      });
+      items.push({
+        label: multiple
+          ? sidebarText(t, "sidebar.actions.forkAntigravityInNewWorktree")
+          : sidebarText(t, "sidebar.actions.forkInNewWorktree"),
+        icon: <GitBranch size={12} />,
+        onClick: () =>
+          void forkSession("antigravity", agent.antigravity!, true),
+      });
+    }
+    return items;
+  })();
   const folderMoveMenuItems: ContextMenuItem[] = [];
   const targetFolderMenuItems: ContextMenuItem[] = [];
   if (onMoveToProjectFolder) {
@@ -2679,6 +2830,27 @@ function SessionRow({
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
     },
+    {
+      label: sidebarText(t, "sidebar.actions.openWorkSummary"),
+      icon: <BarChart3 size={12} />,
+      onClick: () => {
+        selectSession(session.id);
+        void openWorkSummaryTab({ sessionId: session.id });
+      },
+    },
+    ...(canConfigureAutoClose
+      ? [
+          {
+            type: "checkbox",
+            label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
+            checked: autoCloseEnabled,
+            onChange: () => toggleSessionAutoClose(session.id),
+          } satisfies ContextMenuItem,
+        ]
+      : []),
+    ...(forkItems.length > 0
+      ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
+      : []),
     ...(folderMoveMenuItems.length > 0
       ? [contextMenuGroupTitle(t, "workspace"), ...folderMoveMenuItems]
       : []),
@@ -2778,10 +2950,15 @@ function SessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: "bg-bg-elevated shadow-sm",
+        selectedClassName: autoCloseEnabled
+          ? autoCloseSessionRowClassName(true)
+          : "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
+          autoCloseEnabled &&
+            !active &&
+            autoCloseSessionRowClassName(false),
           isDragging && "opacity-40",
         ),
       })}
@@ -3543,6 +3720,9 @@ function LocalSessionRow({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const toggleSessionAutoClose = useAppStore(
+    (s) => s.toggleSessionAutoClose,
+  );
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
@@ -3559,6 +3739,10 @@ function LocalSessionRow({
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
+  const autoCloseEnabled = useAppStore((s) =>
+    Boolean(s.autoCloseSessionIds[session.id]),
+  );
+  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
@@ -3611,6 +3795,16 @@ function LocalSessionRow({
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
     },
+    ...(canConfigureAutoClose
+      ? [
+          {
+            type: "checkbox",
+            label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
+            checked: autoCloseEnabled,
+            onChange: () => toggleSessionAutoClose(session.id),
+          } satisfies ContextMenuItem,
+        ]
+      : []),
     { type: "separator" },
     {
       label: sidebarText(t, "sidebar.actions.revealInFinder"),
@@ -3671,10 +3865,15 @@ function LocalSessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: "bg-bg-elevated shadow-sm",
+        selectedClassName: autoCloseEnabled
+          ? autoCloseSessionRowClassName(true)
+          : "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
+          autoCloseEnabled &&
+            !active &&
+            autoCloseSessionRowClassName(false),
           isDragging && "opacity-40",
         ),
       })}

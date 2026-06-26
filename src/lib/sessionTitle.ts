@@ -5,6 +5,7 @@ export interface AutoSessionTitlePlanOptions {
   sessions: readonly Session[];
   enabled: boolean;
   inFlightIds: ReadonlySet<string>;
+  excludedSessionIds?: ReadonlySet<string>;
   lastAttemptAt: ReadonlyMap<string, number>;
   now: number;
   retryMs: number;
@@ -109,6 +110,7 @@ export function planAutoGenerateSessionTitles({
   sessions,
   enabled,
   inFlightIds,
+  excludedSessionIds,
   lastAttemptAt,
   now,
   retryMs,
@@ -117,6 +119,7 @@ export function planAutoGenerateSessionTitles({
   let retryDelayMs: number | null = null;
 
   for (const session of sessions) {
+    if (excludedSessionIds?.has(session.id)) continue;
     if (!canAutoGenerateSessionTitle(session, enabled)) continue;
     if (inFlightIds.has(session.id)) continue;
 

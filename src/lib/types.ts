@@ -5,6 +5,8 @@ export type SessionStatus =
   | "failed"
   | "completed";
 
+export type SessionStatusReason = "turn_complete" | "shell_prompt";
+
 export type SessionNotificationKind =
   | "needs_input"
   | "failed"
@@ -114,6 +116,8 @@ export interface Session {
   isolated: boolean;
   project_scoped?: boolean;
   status: SessionStatus;
+  /** Ephemeral status-poll detail. Not persisted in backend sessions. */
+  status_reason?: SessionStatusReason | null;
   created_at: string;
   updated_at: string;
   last_message: string | null;
