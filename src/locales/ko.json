@@ -60,6 +60,7 @@
       "notifications": "알림",
       "shortcuts": "단축키",
       "storage": "저장 공간",
+      "permissions": "권한",
       "experiments": "실험 기능",
       "about": "정보"
     },
@@ -606,6 +607,100 @@
         "clearing": "지우는 중..."
       },
       "total": "합계: {size}"
+    },
+    "permissions": {
+      "title": "권한",
+      "description": "Acorn의 macOS 개인정보 보호 결정을 초기화한 뒤 보호 폴더를 바로 확인해서 macOS가 다시 물어볼 수 있게 합니다.",
+      "notice": "폴더, Playwright, 브라우저 자동화, 캡처 도구가 macOS에 저장된 오래된 권한 결정 때문에 계속 실패할 때 사용하세요.",
+      "kind": {
+        "folder": "폴더",
+        "developer": "Acorn",
+        "external": "외부"
+      },
+      "groups": {
+        "folders": {
+          "title": "보호 폴더",
+          "description": "폴더를 잠깐 읽어서 여기에서 확인할 수 있습니다."
+        },
+        "automation": {
+          "title": "자동화 및 캡처",
+          "description": "Acorn의 macOS 개인정보 보호 결정을 초기화합니다. Acorn이 보호 기능을 사용할 때 macOS가 다시 요청합니다."
+        },
+        "browser": {
+          "title": "브라우저 및 Playwright 미디어",
+          "description": "대부분 Acorn이 아니라 Chrome, Chromium 또는 Playwright 브라우저 프로세스의 권한입니다."
+        }
+      },
+      "list": {
+        "title": "권한 영역",
+        "description": "Acorn 소유 권한은 여기에서 초기화할 수 있습니다. 브라우저와 Playwright 미디어 권한은 macOS가 브라우저 프로세스에 부여하므로 별도로 표시합니다."
+      },
+      "folderAccess": {
+        "label": "macOS 개인정보 보호 권한",
+        "description": "Acorn에 저장된 보호 폴더와 일반적인 개발 도구 권한 결정을 초기화하고, 보호 폴더를 한 번 읽어 폴더 권한 요청을 표시합니다."
+      },
+      "reset": {
+        "button": "권한 초기화",
+        "running": "초기화 중..."
+      },
+      "status": {
+        "ready": "폴더 접근 권한을 초기화하고 확인했습니다.",
+        "needsAttention": "일부 폴더에 아직 확인이 필요합니다.",
+        "empty": "이 플랫폼에서 확인할 macOS 보호 폴더가 없습니다.",
+        "failed": "macOS 권한을 초기화하지 못했습니다.",
+        "checkOnReset": "초기화 시 확인",
+        "promptedByTool": "사용 시 요청",
+        "browserManaged": "브라우저에서 관리",
+        "reset": "다시 요청됨",
+        "skipped": "macOS 전용",
+        "resetFailed": "초기화 실패"
+      },
+      "items": {
+        "desktop": {
+          "label": "데스크탑",
+          "description": "데스크탑 아래의 파일과 폴더입니다."
+        },
+        "documents": {
+          "label": "문서",
+          "description": "문서 폴더 아래의 파일과 폴더입니다."
+        },
+        "downloads": {
+          "label": "다운로드",
+          "description": "다운로드 폴더 아래의 파일과 폴더입니다."
+        },
+        "icloud": {
+          "label": "iCloud Drive",
+          "description": "iCloud Drive가 있을 때 그 아래의 파일과 폴더입니다."
+        },
+        "screenCapture": {
+          "label": "화면 기록",
+          "description": "스크린샷, 화면 캡처, 시각 자동화 도구가 사용합니다."
+        },
+        "accessibility": {
+          "label": "손쉬운 사용",
+          "description": "다른 앱 창을 읽거나 제어하는 도구가 사용합니다."
+        },
+        "automation": {
+          "label": "자동화",
+          "description": "다른 앱을 제어하는 Apple Events와 스크립트가 사용합니다."
+        },
+        "inputMonitoring": {
+          "label": "입력 모니터링",
+          "description": "키보드 입력을 감지하는 도구가 사용합니다."
+        },
+        "camera": {
+          "label": "카메라",
+          "description": "카메라 장치를 여는 브라우저 테스트나 도구가 사용합니다."
+        },
+        "microphone": {
+          "label": "마이크",
+          "description": "오디오 입력 장치를 여는 브라우저 테스트나 도구가 사용합니다."
+        },
+        "developerTools": {
+          "label": "개발자 도구",
+          "description": "다른 프로세스에 붙는 디버깅 및 자동화 도구가 사용합니다."
+        }
+      }
     },
     "experiments": {
       "warning": "완성되지 않은 기능입니다. 릴리스 사이에 동작이 바뀔 수 있지만 토글 자체는 안정적입니다.",

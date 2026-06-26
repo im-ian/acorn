@@ -1789,6 +1789,70 @@ pub struct FolderPermissionWarmupResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub struct MacosPermissionResetResult {
+    pub id: &'static str,
+    pub service: &'static str,
+    pub status: &'static str,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct MacosTccService {
+    id: &'static str,
+    service: &'static str,
+}
+
+const MACOS_FOLDER_TCC_SERVICES: &[MacosTccService] = &[
+    MacosTccService {
+        id: "desktop",
+        service: "SystemPolicyDesktopFolder",
+    },
+    MacosTccService {
+        id: "documents",
+        service: "SystemPolicyDocumentsFolder",
+    },
+    MacosTccService {
+        id: "downloads",
+        service: "SystemPolicyDownloadsFolder",
+    },
+];
+
+const MACOS_DEVELOPER_TCC_SERVICES: &[MacosTccService] = &[
+    MacosTccService {
+        id: "desktop",
+        service: "SystemPolicyDesktopFolder",
+    },
+    MacosTccService {
+        id: "documents",
+        service: "SystemPolicyDocumentsFolder",
+    },
+    MacosTccService {
+        id: "downloads",
+        service: "SystemPolicyDownloadsFolder",
+    },
+    MacosTccService {
+        id: "screen_capture",
+        service: "ScreenCapture",
+    },
+    MacosTccService {
+        id: "accessibility",
+        service: "Accessibility",
+    },
+    MacosTccService {
+        id: "automation",
+        service: "AppleEvents",
+    },
+    MacosTccService {
+        id: "input_monitoring",
+        service: "ListenEvent",
+    },
+    MacosTccService {
+        id: "developer_tools",
+        service: "DeveloperTool",
+    },
+];
+
 #[tauri::command]
 pub async fn warm_macos_folder_permissions() -> AppResult<Vec<FolderPermissionWarmupResult>> {
     run_blocking("warm_macos_folder_permissions", move || {
@@ -1802,6 +1866,17 @@ pub async fn reset_macos_folder_permissions<R: Runtime>(app: AppHandle<R>) -> Ap
     let bundle_id = app.config().identifier.clone();
     run_blocking("reset_macos_folder_permissions", move || {
         reset_macos_folder_permissions_inner(&bundle_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reset_macos_developer_permissions<R: Runtime>(
+    app: AppHandle<R>,
+) -> AppResult<Vec<MacosPermissionResetResult>> {
+    let bundle_id = app.config().identifier.clone();
+    run_blocking("reset_macos_developer_permissions", move || {
+        Ok(reset_macos_developer_permissions_inner(&bundle_id))
     })
     .await
 }
@@ -1822,18 +1897,14 @@ fn reset_macos_folder_permissions_inner(bundle_id: &str) -> AppResult<()> {
         return Ok(());
     }
 
-    let failures: Vec<String> = [
-        "SystemPolicyDesktopFolder",
-        "SystemPolicyDocumentsFolder",
-        "SystemPolicyDownloadsFolder",
-    ]
-    .into_iter()
-    .filter_map(|service| {
-        reset_macos_tcc_service(service, bundle_id)
-            .err()
-            .map(|err| format!("{service}: {err}"))
-    })
-    .collect();
+    let failures: Vec<String> = MACOS_FOLDER_TCC_SERVICES
+        .iter()
+        .filter_map(|service| {
+            reset_macos_tcc_service(service.service, bundle_id)
+                .err()
+                .map(|err| format!("{}: {err}", service.service))
+        })
+        .collect();
 
     if failures.is_empty() {
         Ok(())
@@ -1843,6 +1914,38 @@ fn reset_macos_folder_permissions_inner(bundle_id: &str) -> AppResult<()> {
             failures.join("; ")
         )))
     }
+}
+
+fn reset_macos_developer_permissions_inner(bundle_id: &str) -> Vec<MacosPermissionResetResult> {
+    if !cfg!(target_os = "macos") {
+        return MACOS_DEVELOPER_TCC_SERVICES
+            .iter()
+            .map(|service| MacosPermissionResetResult {
+                id: service.id,
+                service: service.service,
+                status: "skipped",
+                error: None,
+            })
+            .collect();
+    }
+
+    MACOS_DEVELOPER_TCC_SERVICES
+        .iter()
+        .map(|service| match reset_macos_tcc_service(service.service, bundle_id) {
+            Ok(()) => MacosPermissionResetResult {
+                id: service.id,
+                service: service.service,
+                status: "reset",
+                error: None,
+            },
+            Err(err) => MacosPermissionResetResult {
+                id: service.id,
+                service: service.service,
+                status: "error",
+                error: Some(err.to_string()),
+            },
+        })
+        .collect()
 }
 
 fn reset_macos_tcc_service(service: &'static str, bundle_id: &str) -> AppResult<()> {
