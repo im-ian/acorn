@@ -1848,6 +1848,10 @@ const MACOS_DEVELOPER_TCC_SERVICES: &[MacosTccService] = &[
         service: "ListenEvent",
     },
     MacosTccService {
+        id: "app_data",
+        service: "SystemPolicyAppData",
+    },
+    MacosTccService {
         id: "developer_tools",
         service: "DeveloperTool",
     },
