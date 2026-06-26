@@ -1112,6 +1112,38 @@ describe("workspace tabs", () => {
     expect(updatedTab.target?.token).not.toBe(firstTarget?.token);
   });
 
+  it("merges code viewer scroll and zoom state into the existing tab", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore.getState().openCodeViewerTab(`${REPO_A}/src/App.tsx`, REPO_A);
+    const tabId = useAppStore.getState().activeTabId!;
+
+    useAppStore.getState().updateCodeViewerTabViewState(tabId, {
+      code: { scrollTop: 120, scrollLeft: 4 },
+    });
+    useAppStore.getState().updateCodeViewerTabViewState(tabId, {
+      media: { imageZoom: 1.5 },
+    });
+    useAppStore.getState().updateCodeViewerTabViewState(tabId, {
+      code: { previewMarkdown: true },
+    });
+
+    const tab = useAppStore.getState().workspaceTabs[tabId];
+    expect(tab).toMatchObject({
+      kind: "code",
+      viewState: {
+        code: {
+          scrollTop: 120,
+          scrollLeft: 4,
+          previewMarkdown: true,
+        },
+        media: {
+          imageZoom: 1.5,
+        },
+      },
+    });
+  });
+
   it("reselects a worktree-scoped code tab after switching projects", async () => {
     const a1 = session("a1", REPO_A, {
       worktree_path: `${REPO_A}/.worktrees/a1`,

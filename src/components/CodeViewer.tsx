@@ -14,6 +14,7 @@ import { cn } from "../lib/cn";
 import { useSettings } from "../lib/settings";
 import { resolveThemeMode, useThemes } from "../lib/themes";
 import { useTranslation } from "../lib/useTranslation";
+import type { ScrollPosition } from "../lib/scrollPosition";
 import {
   estimateMaxLineWidthCh,
   lineIndexProps,
@@ -23,12 +24,22 @@ import {
 } from "./VirtualizedLines";
 import { Tooltip } from "./Tooltip";
 import { Button, FloatingToolbar, IconButton, Markdown } from "./ui";
-import type { CodeWorkspaceTabTarget } from "../lib/workspaceTabs";
+import type {
+  CodeWorkspaceTabTarget,
+  CodeWorkspaceTabViewState,
+} from "../lib/workspaceTabs";
+import {
+  scrollPositionFromEventTarget,
+  useDeferredScrollReporter,
+  useRestoredScrollRef,
+} from "./useScrollViewState";
 
 interface CodeViewerProps {
   path: string;
   isActive: boolean;
   target?: CodeWorkspaceTabTarget;
+  viewState?: CodeWorkspaceTabViewState;
+  onViewStateChange?: (patch: CodeWorkspaceTabViewState) => void;
 }
 
 interface ViewerState {
@@ -124,13 +135,21 @@ function pathsOverlap(a: string, b: string): boolean {
   return isSameOrInside(a, b) || isSameOrInside(b, a);
 }
 
-export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
+export function CodeViewer({
+  path,
+  isActive,
+  target,
+  viewState,
+  onViewStateChange,
+}: CodeViewerProps) {
   const t = useTranslation();
   const themeId = useSettings((s) => s.settings.appearance.themeId);
   const themes = useThemes((s) => s.themes);
   const [state, setState] = useState<ViewerState>(EMPTY_STATE);
   const [diffLines, setDiffLines] = useState<FsLineDiffEntry[]>([]);
-  const [previewMarkdown, setPreviewMarkdown] = useState(false);
+  const [previewMarkdown, setPreviewMarkdown] = useState(
+    () => viewState?.code?.previewMarkdown ?? false,
+  );
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
@@ -142,6 +161,22 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   const themeMode = useMemo(
     () => resolveThemeMode(themeId, themes),
     [themeId, themes],
+  );
+  const reportCodeScrollPosition = useDeferredScrollReporter(
+    useCallback(
+      (position: ScrollPosition) => onViewStateChange?.({ code: position }),
+      [onViewStateChange],
+    ),
+  );
+  const restorePreviewScrollRef = useRestoredScrollRef<HTMLDivElement>(
+    viewState?.code,
+  );
+  const setPreviewRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      previewRef.current = node;
+      restorePreviewScrollRef(node);
+    },
+    [restorePreviewScrollRef],
   );
 
   const refreshFile = useCallback(
@@ -180,7 +215,7 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
   }, [path]);
 
   useEffect(() => {
-    setPreviewMarkdown(false);
+    setPreviewMarkdown(viewState?.code?.previewMarkdown ?? false);
     setSearchOpen(false);
     setSearchQuery("");
     setActiveMatchIndex(0);
@@ -190,6 +225,12 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
       loadSeqRef.current += 1;
     };
   }, [path, refreshFile]);
+
+  const togglePreviewMarkdown = useCallback(() => {
+    const next = !previewMarkdown;
+    setPreviewMarkdown(next);
+    onViewStateChange?.({ code: { previewMarkdown: next } });
+  }, [onViewStateChange, previewMarkdown]);
 
   useEffect(() => {
     const data = state.data;
@@ -423,7 +464,12 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
       ) : null}
       {previewMarkdown && canPreviewMarkdown ? (
         <div
-          ref={previewRef}
+          ref={setPreviewRef}
+          onScroll={(event) =>
+            reportCodeScrollPosition(
+              scrollPositionFromEventTarget(event.currentTarget),
+            )
+          }
           className="acorn-selectable min-h-0 flex-1 overflow-auto px-8 py-6 pb-16"
         >
           <Markdown
@@ -440,6 +486,8 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
           estimateSize={estimateCodeLineHeight}
           getLineText={(index) => sourceLines[index] ?? ""}
           minWidthCh={minWidthCh}
+          restoreScrollPosition={viewState?.code}
+          onScrollPositionChange={reportCodeScrollPosition}
           renderLine={(index) => (
             <CodeLine
               key={index}
@@ -525,7 +573,7 @@ export function CodeViewer({ path, isActive, target }: CodeViewerProps) {
       {canPreviewMarkdown ? (
         <Button
           aria-pressed={previewMarkdown}
-          onClick={() => setPreviewMarkdown((v) => !v)}
+          onClick={togglePreviewMarkdown}
           variant="outline"
           size="xs"
           surface="dialog"

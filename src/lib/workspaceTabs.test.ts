@@ -5,9 +5,11 @@ import {
   isRestorableWorkspaceTab,
   isSessionTabId,
   isWorkspaceTabId,
+  codeWorkspaceTabViewStateEqual,
   makeCodeWorkspaceTab,
   makeSessionWorkspaceTab,
   makeWorkSummaryWorkspaceTab,
+  mergeCodeWorkspaceTabViewState,
 } from "./workspaceTabs";
 
 afterEach(() => {
@@ -114,5 +116,40 @@ describe("workspace tab lifecycle", () => {
       title: "s1 summary",
     });
     expect(isRestorableWorkspaceTab(tab)).toBe(false);
+  });
+});
+
+describe("code workspace tab view state", () => {
+  it("merges code and media patches without dropping the other surface", () => {
+    const current = {
+      code: { scrollTop: 80, previewMarkdown: true },
+      media: { scrollLeft: 10, imageZoom: 1.5 },
+    };
+
+    expect(
+      mergeCodeWorkspaceTabViewState(current, {
+        code: { scrollLeft: 24 },
+      }),
+    ).toEqual({
+      code: { scrollTop: 80, scrollLeft: 24, previewMarkdown: true },
+      media: { scrollLeft: 10, imageZoom: 1.5 },
+    });
+  });
+
+  it("compares saved code/media view state by value", () => {
+    const state = {
+      code: { scrollTop: 12, scrollLeft: 3, previewMarkdown: false },
+      media: { scrollTop: 40, imageZoom: 2 },
+    };
+
+    expect(codeWorkspaceTabViewStateEqual(state, structuredClone(state))).toBe(
+      true,
+    );
+    expect(
+      codeWorkspaceTabViewStateEqual(state, {
+        ...state,
+        media: { scrollTop: 41, imageZoom: 2 },
+      }),
+    ).toBe(false);
   });
 });

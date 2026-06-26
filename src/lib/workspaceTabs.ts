@@ -28,6 +28,7 @@ export interface CodeWorkspaceTab
   extends WorkspaceTabBase<"code", "ephemeral" | "restorable"> {
   path: string;
   target?: CodeWorkspaceTabTarget;
+  viewState?: CodeWorkspaceTabViewState;
 }
 
 export interface WorkSummaryWorkspaceTab
@@ -41,6 +42,24 @@ export interface CodeWorkspaceTabTarget {
   line: number;
   column?: number;
   token: string;
+}
+
+export interface FileScrollViewState {
+  scrollTop?: number;
+  scrollLeft?: number;
+}
+
+export interface CodeFileViewState extends FileScrollViewState {
+  previewMarkdown?: boolean;
+}
+
+export interface MediaFileViewState extends FileScrollViewState {
+  imageZoom?: number;
+}
+
+export interface CodeWorkspaceTabViewState {
+  code?: CodeFileViewState;
+  media?: MediaFileViewState;
 }
 
 export type WorkspaceTab =
@@ -148,4 +167,52 @@ export function isProcessBackedWorkspaceTab(
   tab: WorkspaceTab,
 ): tab is ProcessBackedWorkspaceTab {
   return tab.lifecycle === "process-backed";
+}
+
+export function mergeCodeWorkspaceTabViewState(
+  current: CodeWorkspaceTabViewState | undefined,
+  patch: CodeWorkspaceTabViewState,
+): CodeWorkspaceTabViewState {
+  const code = patch.code
+    ? { ...(current?.code ?? {}), ...patch.code }
+    : current?.code;
+  const media = patch.media
+    ? { ...(current?.media ?? {}), ...patch.media }
+    : current?.media;
+  return {
+    ...(code ? { code } : {}),
+    ...(media ? { media } : {}),
+  };
+}
+
+export function codeWorkspaceTabViewStateEqual(
+  a: CodeWorkspaceTabViewState | undefined,
+  b: CodeWorkspaceTabViewState | undefined,
+): boolean {
+  return (
+    codeFileViewStateEqual(a?.code, b?.code) &&
+    mediaFileViewStateEqual(a?.media, b?.media)
+  );
+}
+
+function codeFileViewStateEqual(
+  a: CodeFileViewState | undefined,
+  b: CodeFileViewState | undefined,
+): boolean {
+  return (
+    a?.scrollTop === b?.scrollTop &&
+    a?.scrollLeft === b?.scrollLeft &&
+    a?.previewMarkdown === b?.previewMarkdown
+  );
+}
+
+function mediaFileViewStateEqual(
+  a: MediaFileViewState | undefined,
+  b: MediaFileViewState | undefined,
+): boolean {
+  return (
+    a?.scrollTop === b?.scrollTop &&
+    a?.scrollLeft === b?.scrollLeft &&
+    a?.imageZoom === b?.imageZoom
+  );
 }

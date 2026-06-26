@@ -189,6 +189,9 @@ export function Pane({ paneId }: PaneProps) {
   const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const closeWorkspaceTab = useAppStore((s) => s.closeWorkspaceTab);
   const openCodeViewerTab = useAppStore((s) => s.openCodeViewerTab);
+  const updateCodeViewerTabViewState = useAppStore(
+    (s) => s.updateCodeViewerTabViewState,
+  );
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
   const moveTab = useAppStore((s) => s.moveTab);
   const splitFocusedPane = useAppStore((s) => s.splitFocusedPane);
@@ -242,6 +245,7 @@ export function Pane({ paneId }: PaneProps) {
           lifecycle: workspaceTab.lifecycle,
           path: workspaceTab.path,
           target: workspaceTab.target,
+          viewState: workspaceTab.viewState,
         });
       } else if (workspaceTab?.kind === "work-summary") {
         ordered.push({
@@ -585,8 +589,13 @@ export function Pane({ paneId }: PaneProps) {
         ) : null}
         {active?.kind === "code" ? (
           <FileViewer
+            key={active.id}
             path={active.path}
             target={active.target}
+            viewState={active.viewState}
+            onViewStateChange={(patch) =>
+              updateCodeViewerTabViewState(active.id, patch)
+            }
             isActive={isFocused}
           />
         ) : null}
