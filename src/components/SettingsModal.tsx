@@ -36,6 +36,14 @@ import {
 } from "../lib/i18n";
 import { sendTestNotification } from "../lib/notifications";
 import {
+  hasDeniedFolderPermission,
+  type FolderPermissionWarmupResult,
+  type FolderPermissionWarmupStatus,
+  type MacosPermissionResetId,
+  type MacosPermissionResetResult,
+  type MacosPermissionResetStatus,
+} from "../lib/permissionWarmup";
+import {
   fetchLatestReleaseNotes,
   fetchReleaseNotes,
   type ReleaseNotes,
@@ -112,6 +120,7 @@ type Tab =
   | "notifications"
   | "shortcuts"
   | "storage"
+  | "permissions"
   | "experiments"
   | "about";
 
@@ -126,6 +135,7 @@ const TABS: Array<{ id: Tab; labelKey: TranslationKey }> = [
   { id: "notifications", labelKey: "settings.tabs.notifications" },
   { id: "shortcuts", labelKey: "settings.tabs.shortcuts" },
   { id: "storage", labelKey: "settings.tabs.storage" },
+  { id: "permissions", labelKey: "settings.tabs.permissions" },
   { id: "experiments", labelKey: "settings.tabs.experiments" },
   { id: "about", labelKey: "settings.tabs.about" },
 ];
@@ -467,6 +477,8 @@ export function SettingsModal() {
             <ShortcutsSettings />
           ) : tab === "storage" ? (
             <StorageSettings />
+          ) : tab === "permissions" ? (
+            <PermissionSettings />
           ) : tab === "experiments" ? (
             <ExperimentsSettings />
           ) : (
@@ -2324,6 +2336,389 @@ function formatBytes(bytes: number): string {
   const mb = kb / 1024;
   if (mb < 1024) return `${mb.toFixed(1)} MB`;
   return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function permissionStatusLabel(
+  t: SettingsTranslator,
+  status: FolderPermissionWarmupStatus,
+): string {
+  switch (status) {
+    case "ok":
+      return st(t, "dialogs.folderPermissionWarmup.status.ok");
+    case "missing":
+      return st(t, "dialogs.folderPermissionWarmup.status.missing");
+    case "denied":
+      return st(t, "dialogs.folderPermissionWarmup.status.denied");
+    case "error":
+      return st(t, "dialogs.folderPermissionWarmup.status.error");
+  }
+}
+
+function permissionStatusClass(status: FolderPermissionWarmupStatus): string {
+  switch (status) {
+    case "ok":
+      return "text-accent";
+    case "missing":
+      return "text-fg-muted";
+    case "denied":
+    case "error":
+      return "text-danger";
+  }
+}
+
+function hasFolderPermissionIssue(
+  results: FolderPermissionWarmupResult[],
+): boolean {
+  return results.some(
+    (result) => result.status === "denied" || result.status === "error",
+  );
+}
+
+type PermissionListItemKind = "folder" | "developer" | "external";
+type PermissionGroupId = "folders" | "automation" | "browser";
+
+interface PermissionListItem {
+  id: MacosPermissionResetId;
+  kind: PermissionListItemKind;
+  group: PermissionGroupId;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
+}
+
+const PERMISSION_LIST_ITEMS: PermissionListItem[] = [
+  {
+    id: "desktop",
+    kind: "folder",
+    group: "folders",
+    labelKey: "settings.permissions.items.desktop.label",
+    descriptionKey: "settings.permissions.items.desktop.description",
+  },
+  {
+    id: "documents",
+    kind: "folder",
+    group: "folders",
+    labelKey: "settings.permissions.items.documents.label",
+    descriptionKey: "settings.permissions.items.documents.description",
+  },
+  {
+    id: "downloads",
+    kind: "folder",
+    group: "folders",
+    labelKey: "settings.permissions.items.downloads.label",
+    descriptionKey: "settings.permissions.items.downloads.description",
+  },
+  {
+    id: "icloud",
+    kind: "folder",
+    group: "folders",
+    labelKey: "settings.permissions.items.icloud.label",
+    descriptionKey: "settings.permissions.items.icloud.description",
+  },
+  {
+    id: "screen_capture",
+    kind: "developer",
+    group: "automation",
+    labelKey: "settings.permissions.items.screenCapture.label",
+    descriptionKey: "settings.permissions.items.screenCapture.description",
+  },
+  {
+    id: "accessibility",
+    kind: "developer",
+    group: "automation",
+    labelKey: "settings.permissions.items.accessibility.label",
+    descriptionKey: "settings.permissions.items.accessibility.description",
+  },
+  {
+    id: "automation",
+    kind: "developer",
+    group: "automation",
+    labelKey: "settings.permissions.items.automation.label",
+    descriptionKey: "settings.permissions.items.automation.description",
+  },
+  {
+    id: "input_monitoring",
+    kind: "developer",
+    group: "automation",
+    labelKey: "settings.permissions.items.inputMonitoring.label",
+    descriptionKey: "settings.permissions.items.inputMonitoring.description",
+  },
+  {
+    id: "developer_tools",
+    kind: "developer",
+    group: "automation",
+    labelKey: "settings.permissions.items.developerTools.label",
+    descriptionKey: "settings.permissions.items.developerTools.description",
+  },
+  {
+    id: "camera",
+    kind: "external",
+    group: "browser",
+    labelKey: "settings.permissions.items.camera.label",
+    descriptionKey: "settings.permissions.items.camera.description",
+  },
+  {
+    id: "microphone",
+    kind: "external",
+    group: "browser",
+    labelKey: "settings.permissions.items.microphone.label",
+    descriptionKey: "settings.permissions.items.microphone.description",
+  },
+];
+
+const PERMISSION_GROUPS: Array<{
+  id: PermissionGroupId;
+  titleKey: TranslationKey;
+  descriptionKey: TranslationKey;
+}> = [
+  {
+    id: "folders",
+    titleKey: "settings.permissions.groups.folders.title",
+    descriptionKey: "settings.permissions.groups.folders.description",
+  },
+  {
+    id: "automation",
+    titleKey: "settings.permissions.groups.automation.title",
+    descriptionKey: "settings.permissions.groups.automation.description",
+  },
+  {
+    id: "browser",
+    titleKey: "settings.permissions.groups.browser.title",
+    descriptionKey: "settings.permissions.groups.browser.description",
+  },
+];
+
+function resetStatusLabel(
+  t: SettingsTranslator,
+  status: MacosPermissionResetStatus,
+): string {
+  switch (status) {
+    case "reset":
+      return st(t, "settings.permissions.status.reset");
+    case "skipped":
+      return st(t, "settings.permissions.status.skipped");
+    case "error":
+      return st(t, "settings.permissions.status.resetFailed");
+  }
+}
+
+function resetStatusClass(status: MacosPermissionResetStatus): string {
+  switch (status) {
+    case "reset":
+      return "text-accent";
+    case "skipped":
+      return "text-fg-muted";
+    case "error":
+      return "text-danger";
+  }
+}
+
+function PermissionSettings() {
+  const t = useTranslation();
+  const showToast = useToasts((s) => s.show);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<FolderPermissionWarmupResult[] | null>(
+    null,
+  );
+  const [resetResults, setResetResults] = useState<
+    MacosPermissionResetResult[] | null
+  >(null);
+  const [status, setStatus] = useState<{
+    tone: "danger" | "success" | "warning" | "neutral";
+    text: string;
+  } | null>(null);
+  const resultById = new Map(results?.map((result) => [result.id, result]));
+  const resetResultById = new Map(
+    resetResults?.map((result) => [result.id, result]),
+  );
+
+  async function handleReset() {
+    setBusy(true);
+    setStatus(null);
+    setResults(null);
+    setResetResults(null);
+    try {
+      const resetNext = await api.resetMacosDeveloperPermissions();
+      const next = await api.warmMacosFolderPermissions();
+      setResetResults(resetNext);
+      setResults(next);
+      const hasIssue =
+        hasFolderPermissionIssue(next) ||
+        resetNext.some((result) => result.status === "error");
+      const skipped =
+        next.length === 0 &&
+        resetNext.length > 0 &&
+        resetNext.every((result) => result.status === "skipped");
+      const empty = next.length === 0 && resetNext.length === 0;
+
+      const text =
+        skipped || empty
+          ? st(t, "settings.permissions.status.empty")
+          : hasIssue
+            ? st(t, "settings.permissions.status.needsAttention")
+            : st(t, "settings.permissions.status.ready");
+      setStatus({
+        tone: skipped || empty ? "neutral" : hasIssue ? "warning" : "success",
+        text,
+      });
+      showToast(text);
+    } catch (err) {
+      console.error("[Settings] folder permission reset failed", err);
+      const text = `${st(t, "settings.permissions.status.failed")} ${messageFromUnknownError(err)}`;
+      setStatus({ tone: "danger", text });
+      showToast(text);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <header className="space-y-1">
+        <h3 className="text-sm font-medium text-fg">
+          {st(t, "settings.permissions.title")}
+        </h3>
+        <p className="text-[11px] text-fg-muted">
+          {st(t, "settings.permissions.description")}
+        </p>
+      </header>
+
+      <Notice tone="info" density="compact">
+        {st(t, "settings.permissions.notice")}
+      </Notice>
+
+      <div className="flex items-center justify-between gap-3 rounded-[var(--acorn-pane-radius)] border border-border px-3 py-2.5">
+        <div className="min-w-0 space-y-1">
+          <div className="text-xs font-medium text-fg">
+            {st(t, "settings.permissions.folderAccess.label")}
+          </div>
+          <p className="text-[11px] text-fg-muted">
+            {st(t, "settings.permissions.folderAccess.description")}
+          </p>
+        </div>
+        <Button
+          onClick={() => void handleReset()}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+        >
+          {busy ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <RefreshCcw size={12} />
+          )}
+          {busy
+            ? st(t, "settings.permissions.reset.running")
+            : st(t, "settings.permissions.reset.button")}
+        </Button>
+      </div>
+
+      <div className="space-y-2">
+        <div>
+          <div className="text-xs font-medium text-fg">
+            {st(t, "settings.permissions.list.title")}
+          </div>
+          <p className="text-[11px] text-fg-muted">
+            {st(t, "settings.permissions.list.description")}
+          </p>
+        </div>
+        <div className="rounded-[var(--acorn-pane-radius)] border border-border">
+          {PERMISSION_GROUPS.map((group) => {
+            const items = PERMISSION_LIST_ITEMS.filter(
+              (item) => item.group === group.id,
+            );
+            return (
+              <div key={group.id} className="border-b border-border last:border-b-0">
+                <div className="border-b border-border bg-bg-sidebar/40 px-3 py-2">
+                  <div className="text-xs font-medium text-fg">
+                    {st(t, group.titleKey)}
+                  </div>
+                  <p className="mt-1 text-[11px] text-fg-muted">
+                    {st(t, group.descriptionKey)}
+                  </p>
+                </div>
+                {items.map((item) => {
+                  const folderResult =
+                    item.kind === "folder"
+                      ? resultById.get(
+                          item.id as FolderPermissionWarmupResult["id"],
+                        )
+                      : null;
+                  const resetResult =
+                    item.kind === "developer"
+                      ? resetResultById.get(item.id)
+                      : null;
+                  const statusText = folderResult
+                    ? permissionStatusLabel(t, folderResult.status)
+                    : resetResult
+                      ? resetStatusLabel(t, resetResult.status)
+                      : item.kind === "folder"
+                        ? st(t, "settings.permissions.status.checkOnReset")
+                        : item.kind === "external"
+                          ? st(t, "settings.permissions.status.browserManaged")
+                          : st(t, "settings.permissions.status.promptedByTool");
+                  const statusClass = folderResult
+                    ? permissionStatusClass(folderResult.status)
+                    : resetResult
+                      ? resetStatusClass(resetResult.status)
+                      : "text-fg-muted";
+                  const detail = folderResult
+                    ? (folderResult.error ?? folderResult.path)
+                    : (resetResult?.error ?? resetResult?.service);
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 last:border-b-0"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-fg">
+                            {st(t, item.labelKey)}
+                          </span>
+                          <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-fg-muted">
+                            {item.kind === "folder"
+                              ? st(t, "settings.permissions.kind.folder")
+                              : item.kind === "external"
+                                ? st(t, "settings.permissions.kind.external")
+                                : st(t, "settings.permissions.kind.developer")}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-fg-muted">
+                          {st(t, item.descriptionKey)}
+                        </p>
+                        {detail ? (
+                          <div className="mt-1 truncate text-[10px] text-fg-muted">
+                            {detail}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div
+                        className={`shrink-0 text-[11px] font-medium ${statusClass}`}
+                      >
+                        {statusText}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {status ? (
+        <Notice tone={status.tone} density="compact">
+          {status.text}
+        </Notice>
+      ) : null}
+
+      {results && hasDeniedFolderPermission(results) ? (
+        <Notice tone="neutral" density="compact">
+          {st(t, "dialogs.folderPermissionWarmup.deniedHint")}
+        </Notice>
+      ) : null}
+    </section>
+  );
 }
 
 function StorageSettings() {
