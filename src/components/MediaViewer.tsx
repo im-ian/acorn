@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type UIEventHandler,
+} from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
@@ -10,14 +16,23 @@ import {
 } from "../lib/api";
 import { basenameFromPath, type MediaFileKind } from "../lib/mediaFiles";
 import { cn } from "../lib/cn";
+import type { ScrollPosition } from "../lib/scrollPosition";
 import { useTranslation } from "../lib/useTranslation";
 import { Tooltip } from "./Tooltip";
 import { FloatingToolbar, IconButton } from "./ui";
+import type { CodeWorkspaceTabViewState } from "../lib/workspaceTabs";
+import {
+  scrollPositionFromEventTarget,
+  useDeferredScrollReporter,
+  useRestoredScrollRef,
+} from "./useScrollViewState";
 
 interface MediaViewerProps {
   path: string;
   kind: MediaFileKind;
   isActive: boolean;
+  viewState?: CodeWorkspaceTabViewState;
+  onViewStateChange?: (patch: CodeWorkspaceTabViewState) => void;
 }
 
 interface MediaState {
@@ -38,12 +53,29 @@ const IMAGE_ZOOM_MIN = 0.25;
 const IMAGE_ZOOM_MAX = 5;
 const IMAGE_ZOOM_STEP = 0.25;
 
-export function MediaViewer({ path, kind, isActive }: MediaViewerProps) {
+export function MediaViewer({
+  path,
+  kind,
+  isActive,
+  viewState,
+  onViewStateChange,
+}: MediaViewerProps) {
   const t = useTranslation();
   const [state, setState] = useState<MediaState>(EMPTY_STATE);
-  const [imageZoom, setImageZoom] = useState(1);
+  const [imageZoom, setImageZoom] = useState(() =>
+    clampImageZoom(viewState?.media?.imageZoom ?? 1),
+  );
   const loadSeqRef = useRef(0);
   const title = basenameFromPath(path);
+  const reportMediaScrollPosition = useDeferredScrollReporter(
+    useCallback(
+      (position: ScrollPosition) => onViewStateChange?.({ media: position }),
+      [onViewStateChange],
+    ),
+  );
+  const restoreMediaScrollRef = useRestoredScrollRef<HTMLDivElement>(
+    viewState?.media,
+  );
 
   const refreshAsset = useCallback(
     async ({ reset = false }: { reset?: boolean } = {}) => {
@@ -81,8 +113,17 @@ export function MediaViewer({ path, kind, isActive }: MediaViewerProps) {
   }, [refreshAsset]);
 
   useEffect(() => {
-    setImageZoom(1);
+    setImageZoom(clampImageZoom(viewState?.media?.imageZoom ?? 1));
   }, [path, kind]);
+
+  const updateImageZoom = useCallback(
+    (updater: (value: number) => number) => {
+      const next = clampImageZoom(updater(imageZoom));
+      setImageZoom(next);
+      onViewStateChange?.({ media: { imageZoom: next } });
+    },
+    [imageZoom, onViewStateChange],
+  );
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
@@ -139,11 +180,23 @@ export function MediaViewer({ path, kind, isActive }: MediaViewerProps) {
         <>
           <ImageZoomControls
             zoom={imageZoom}
-            onZoomIn={() => setImageZoom((value) => nextImageZoom(value, 1))}
-            onZoomOut={() => setImageZoom((value) => nextImageZoom(value, -1))}
-            onReset={() => setImageZoom(1)}
+            onZoomIn={() => updateImageZoom((value) => nextImageZoom(value, 1))}
+            onZoomOut={() =>
+              updateImageZoom((value) => nextImageZoom(value, -1))
+            }
+            onReset={() => updateImageZoom(() => 1)}
           />
-          {renderMedia(kind, state.src, title, imageZoom)}
+          {renderMedia(
+            kind,
+            state.src,
+            title,
+            imageZoom,
+            restoreMediaScrollRef,
+            (event) =>
+              reportMediaScrollPosition(
+                scrollPositionFromEventTarget(event.currentTarget),
+              ),
+          )}
         </>
       ) : (
         renderMedia(kind, state.src, title)
@@ -157,10 +210,17 @@ function renderMedia(
   src: string,
   title: string,
   imageZoom = 1,
+  imageScrollRef?: (node: HTMLDivElement | null) => void,
+  onImageScroll?: UIEventHandler<HTMLDivElement>,
 ) {
   if (kind === "image") {
     return (
-      <div className="h-full w-full overflow-auto">
+      <div
+        ref={imageScrollRef}
+        onScroll={onImageScroll}
+        data-acorn-media-scroll="image"
+        className="h-full w-full overflow-auto"
+      >
         <div className="flex min-h-full min-w-full items-center justify-center p-6">
           <img
             src={src}

@@ -42,6 +42,12 @@ async function flushPromises() {
   });
 }
 
+async function flushScrollReport() {
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+  });
+}
+
 describe("FileViewer", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -121,6 +127,54 @@ describe("FileViewer", () => {
     expect(image?.style.transform).toBe("scale(1)");
   });
 
+  it("restores and reports image media zoom and scroll state", async () => {
+    vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 1536 });
+    const onViewStateChange = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <FileViewer
+          path="/repo/assets/icon.svg"
+          isActive
+          viewState={{
+            media: { imageZoom: 1.5, scrollTop: 32, scrollLeft: 8 },
+          }}
+          onViewStateChange={onViewStateChange}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const image = container.querySelector<HTMLImageElement>('img[alt="icon.svg"]');
+    const scroller = container.querySelector<HTMLDivElement>(
+      '[data-acorn-media-scroll="image"]',
+    );
+    const zoomIn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Zoom in"]',
+    );
+
+    expect(image?.style.transform).toBe("scale(1.5)");
+    expect(scroller?.scrollTop).toBe(32);
+    expect(scroller?.scrollLeft).toBe(8);
+
+    await act(async () => zoomIn!.click());
+
+    expect(onViewStateChange).toHaveBeenCalledWith({
+      media: { imageZoom: 1.75 },
+    });
+
+    await act(async () => {
+      scroller!.scrollTop = 64;
+      scroller!.scrollLeft = 12;
+      scroller!.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await flushScrollReport();
+
+    expect(onViewStateChange).toHaveBeenLastCalledWith({
+      media: { scrollTop: 64, scrollLeft: 12 },
+    });
+  });
+
   it("opens pdf files in the media viewer", async () => {
     vi.mocked(api.fsPrepareAsset).mockResolvedValueOnce({ size: 2048 });
 
@@ -156,5 +210,44 @@ describe("FileViewer", () => {
 
     expect(container.textContent).toContain("hello from source");
     expect(api.fsPrepareAsset).not.toHaveBeenCalled();
+  });
+
+  it("restores and reports code viewer scroll state", async () => {
+    vi.mocked(api.fsReadFile).mockResolvedValueOnce({
+      content: Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join("\n"),
+      size: 640,
+      truncated: false,
+      binary: false,
+    });
+    vi.mocked(api.fsGitDiffLines).mockResolvedValueOnce([]);
+    const onViewStateChange = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <FileViewer
+          path="/repo/src/App.tsx"
+          isActive
+          viewState={{ code: { scrollTop: 48, scrollLeft: 6 } }}
+          onViewStateChange={onViewStateChange}
+        />,
+      );
+    });
+    await flushPromises();
+
+    const codeScroller = container.querySelector<HTMLPreElement>("pre");
+    expect(codeScroller).not.toBeNull();
+    expect(codeScroller?.scrollTop).toBe(48);
+    expect(codeScroller?.scrollLeft).toBe(6);
+
+    await act(async () => {
+      codeScroller!.scrollTop = 96;
+      codeScroller!.scrollLeft = 14;
+      codeScroller!.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await flushScrollReport();
+
+    expect(onViewStateChange).toHaveBeenLastCalledWith({
+      code: { scrollTop: 96, scrollLeft: 14 },
+    });
   });
 });
