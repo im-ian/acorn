@@ -242,6 +242,11 @@ export interface AcornSettings {
      */
     linkActivation: TerminalLinkActivation;
     /**
+     * When enabled, right-clicking selected terminal text writes that
+     * selection back to the PTY. Default off because it is an input gesture.
+     */
+    rightClickPasteSelection: boolean;
+    /**
      * Upper bound on simultaneously-mounted terminal sessions. Visible
      * terminals are always exempt, so this only evicts off-screen daemon
      * sessions that can be re-attached with scrollback replay.
@@ -467,6 +472,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     fontWeightBold: 700,
     lineHeight: 1.0,
     linkActivation: "click",
+    rightClickPasteSelection: false,
     maxMountedTerminals: MOUNTED_TERMINAL_LIMIT_DEFAULT,
     detachOffscreenTerminals: true,
   },
@@ -932,6 +938,12 @@ function loadSettings(): AcornSettings {
           (terminalRaw as { linkActivation?: unknown }).linkActivation,
           DEFAULT_SETTINGS.terminal.linkActivation,
         ),
+        rightClickPasteSelection:
+          typeof (terminalRaw as { rightClickPasteSelection?: unknown })
+            .rightClickPasteSelection === "boolean"
+            ? (terminalRaw as { rightClickPasteSelection: boolean })
+                .rightClickPasteSelection
+            : DEFAULT_SETTINGS.terminal.rightClickPasteSelection,
         maxMountedTerminals: normalizeMountedTerminalLimit(
           (terminalRaw as { maxMountedTerminals?: unknown })
             .maxMountedTerminals,
@@ -1215,6 +1227,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
                   patch.fontSmoothing,
                   s.settings.terminal.fontSmoothing,
                 ),
+          rightClickPasteSelection:
+            patch.rightClickPasteSelection === undefined
+              ? s.settings.terminal.rightClickPasteSelection
+              : typeof patch.rightClickPasteSelection === "boolean"
+                ? patch.rightClickPasteSelection
+                : s.settings.terminal.rightClickPasteSelection,
           detachOffscreenTerminals:
             patch.detachOffscreenTerminals === undefined
               ? s.settings.terminal.detachOffscreenTerminals

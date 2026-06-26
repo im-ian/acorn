@@ -121,6 +121,10 @@
         "modifierClick": {
           "description": "Hold {modifier} while clicking to open. Stops stray clicks on output containing URLs from yanking focus to the browser."
         }
+      },
+      "rightClickPasteSelection": {
+        "label": "Paste selected text on right-click",
+        "description": "When terminal text is selected, right-click writes that selection back to terminal input. Off by default."
       }
     },
     "sessions": {

@@ -121,6 +121,10 @@
         "modifierClick": {
           "description": "{modifier} 키를 누른 채 클릭하면 열립니다. URL이 포함된 출력에서 실수로 클릭해 브라우저로 포커스가 넘어가는 일을 막습니다."
         }
+      },
+      "rightClickPasteSelection": {
+        "label": "선택 텍스트 우클릭 입력",
+        "description": "터미널 텍스트를 선택한 상태에서 우클릭하면 선택 내용을 터미널 입력으로 다시 보냅니다. 기본값은 꺼짐입니다."
       }
     },
     "sessions": {

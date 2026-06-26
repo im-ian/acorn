@@ -535,6 +535,42 @@ describe("SettingsModal font controls", () => {
     expect(patchTerminal).toHaveBeenCalledWith({ fontSmoothing: "subpixel" });
   });
 
+  it("patches terminal right-click selection paste from the Terminal tab", async () => {
+    const patchTerminal = vi.fn();
+    useSettings.setState({
+      settings: cloneSettings(),
+      patchTerminal,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openTerminalTab();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggle = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ).find((input) =>
+      input
+        .closest("label")
+        ?.textContent?.includes("Paste selected text on right-click"),
+    );
+
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    expect(toggle?.checked).toBe(false);
+
+    act(() => {
+      toggle?.click();
+    });
+
+    expect(patchTerminal).toHaveBeenCalledWith({
+      rightClickPasteSelection: true,
+    });
+  });
+
   it("patches the resident terminal limit from the Sessions tab", async () => {
     const patchTerminal = vi.fn();
     useSettings.setState({
