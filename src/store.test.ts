@@ -192,6 +192,7 @@ function resetStore(): void {
       pendingRemoveProject: null,
       sessionsLoadedCleanly: true,
       liveInWorktree: {},
+      autoCloseSessionIds: {},
       generatingSessionTitleIds: {},
     },
     false,
@@ -316,6 +317,49 @@ describe("sessionNotifications", () => {
     expect(
       useAppStore.getState().sessionNotifications.map((item) => item.id),
     ).toEqual(["n2"]);
+  });
+});
+
+describe("session auto-close flags", () => {
+  it("toggles per-session auto-close state", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { agent_provider: "codex" })],
+    );
+
+    useAppStore.getState().toggleSessionAutoClose("a1");
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({ a1: true });
+
+    useAppStore.getState().toggleSessionAutoClose("a1");
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
+  });
+
+  it("ignores unknown session ids", () => {
+    useAppStore.getState().toggleSessionAutoClose("missing");
+
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
+  });
+
+  it("does not enable auto-close for plain terminal sessions", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("plain", REPO_A, { agent_provider: null })],
+    );
+
+    useAppStore.getState().toggleSessionAutoClose("plain");
+
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
+  });
+
+  it("ignores control sessions because removing them can cascade", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("ctl", REPO_A, { kind: "control" })],
+    );
+
+    useAppStore.getState().toggleSessionAutoClose("ctl");
+
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({});
   });
 });
 
@@ -1262,6 +1306,9 @@ describe("removeSession", () => {
     useAppStore.getState().addSessionNotification(
       notification("n2", { sessionId: "a2" }),
     );
+    useAppStore.setState({
+      autoCloseSessionIds: { a1: true, a2: true },
+    });
 
     const pending = deferred<null>();
     mockApi.removeSession.mockReturnValueOnce(pending.promise);
@@ -1273,6 +1320,7 @@ describe("removeSession", () => {
     expect(
       useAppStore.getState().sessionNotifications.map((item) => item.id),
     ).toEqual(["n2"]);
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({ a2: true });
 
     pending.resolve(null);
     await removal;
@@ -1459,7 +1507,10 @@ describe("splitFocusedPane", () => {
     window.localStorage.clear();
     await seed(
       [project(REPO_A, 0), project(REPO_B, 1)],
-      [session("a1", REPO_A), session("b1", REPO_B)],
+      [
+        session("a1", REPO_A, { agent_provider: "codex" }),
+        session("b1", REPO_B),
+      ],
     );
     useAppStore.getState().splitFocusedPane("horizontal");
     const split = useAppStore.getState().layout;
@@ -1471,6 +1522,7 @@ describe("splitFocusedPane", () => {
     useAppStore.getState().addSessionNotification(
       notification("n-persist", { sessionId: "a1" }),
     );
+    useAppStore.getState().toggleSessionAutoClose("a1");
 
     const restored = useAppStore.getState().layout;
     expect(restored.kind).toBe("split");
@@ -1484,6 +1536,7 @@ describe("splitFocusedPane", () => {
     expect(persisted.state.sessionNotifications).toEqual([
       notification("n-persist", { sessionId: "a1" }),
     ]);
+    expect(persisted.state.autoCloseSessionIds).toEqual({ a1: true });
 
     resetStore();
     window.localStorage.setItem("acorn-workspaces", raw!);
@@ -1496,6 +1549,7 @@ describe("splitFocusedPane", () => {
     expect(useAppStore.getState().sessionNotifications).toEqual([
       notification("n-persist", { sessionId: "a1" }),
     ]);
+    expect(useAppStore.getState().autoCloseSessionIds).toEqual({ a1: true });
   });
 });
 
@@ -1907,6 +1961,33 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("merges status reasons from status polling even when status is unchanged", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "needs_input",
+          agent_provider: "codex",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "needs_input",
+        status_reason: "turn_complete",
+        agent_provider: "codex",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.status_reason).toBe(
+      "turn_complete",
+    );
+  });
+
   it("clears the live agent provider when status polling reports null", async () => {
     await seed(
       [project(REPO_A, 0)],
@@ -2113,6 +2194,57 @@ describe("generateSessionTitle", () => {
     expect(useAppStore.getState().sessions[0]?.title_source).toBe("generated");
   });
 
+  it("skips automatic title generation for auto-close sessions", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { agent_provider: "codex" })],
+    );
+    useAppStore.setState({ autoCloseSessionIds: { a1: true } });
+
+    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
+    const status = await useAppStore
+      .getState()
+      .generateSessionTitle("a1", ai, "Title prompt");
+
+    expect(status).toBe("skipped");
+    expect(mockApi.generateSessionTitle).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
+    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
+  });
+
+  it("does not apply an automatic title result after auto-close is enabled", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [session("a1", REPO_A, { agent_provider: "codex" })],
+    );
+    let resolveTitle!: (value: GenerateSessionTitleResult) => void;
+    mockApi.generateSessionTitle.mockImplementationOnce(
+      () =>
+        new Promise<GenerateSessionTitleResult>((resolve) => {
+          resolveTitle = resolve;
+        }),
+    );
+
+    const ai = { provider: "codex" as const, ollamaModel: "", llmModel: "" };
+    const request = useAppStore
+      .getState()
+      .generateSessionTitle("a1", ai, "Title prompt");
+    useAppStore.setState({ autoCloseSessionIds: { a1: true } });
+
+    resolveTitle({
+      status: "generated",
+      session: session("a1", REPO_A, {
+        name: "Should Not Apply",
+        title_source: "generated",
+      }),
+    });
+
+    await expect(request).resolves.toBe("skipped");
+    expect(useAppStore.getState().sessions[0]?.name).toBe("a1");
+    expect(useAppStore.getState().sessions[0]?.title_source).toBe("default");
+    expect(useAppStore.getState().generatingSessionTitleIds).toEqual({});
+  });
+
   it("passes force when manually regenerating a generated session title", async () => {
     await seed(
       [project(REPO_A, 0)],
@@ -2125,6 +2257,7 @@ describe("generateSessionTitle", () => {
         }),
       ],
     );
+    useAppStore.setState({ autoCloseSessionIds: { a1: true } });
     mockApi.generateSessionTitle.mockResolvedValueOnce({
       status: "generated",
       session: session("a1", REPO_A, {

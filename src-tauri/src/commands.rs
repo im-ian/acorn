@@ -25,6 +25,7 @@ use crate::worktree;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
 use acorn_session::status::AgentKind as StatusAgentKind;
+use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
     Project, Session, SessionAgentProvider, SessionKind, SessionMode, SessionOwner, SessionStatus,
 };
@@ -4895,6 +4896,7 @@ pub async fn read_session_todos(session_id: String, cwd: String) -> AppResult<Ve
 pub struct SessionStatusEntry {
     pub id: String,
     pub status: SessionStatus,
+    pub status_reason: Option<SessionStatusReason>,
     pub agent_provider: Option<SessionAgentProvider>,
     pub agent_transcript_id: Option<String>,
     /// Current branch read live from the session's worktree on each poll.
@@ -4997,6 +4999,7 @@ fn detect_session_statuses_blocking(
                 return SessionStatusEntry {
                     id,
                     status: previous,
+                    status_reason: None,
                     agent_provider: session.as_ref().and_then(|s| s.agent_provider),
                     agent_transcript_id: session
                         .as_ref()
@@ -5096,7 +5099,8 @@ fn detect_session_statuses_blocking(
                     _ => current,
                 }
             };
-            let status = session_status::detect(transcript, previous, shell_hint);
+            let detection = session_status::detect_with_reason(transcript, previous, shell_hint);
+            let status = detection.status;
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
             //     performed inside the terminal (and `claude -w` worktrees)
@@ -5124,6 +5128,7 @@ fn detect_session_statuses_blocking(
             SessionStatusEntry {
                 id,
                 status,
+                status_reason: detection.reason,
                 agent_provider,
                 agent_transcript_id,
                 branch,

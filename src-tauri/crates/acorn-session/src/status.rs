@@ -39,6 +39,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use acorn_pty::ShellHint;
+use serde::Serialize;
 
 use crate::session::SessionStatus;
 
@@ -55,6 +56,25 @@ pub enum AgentKind {
     Claude,
     Codex,
     Antigravity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusReason {
+    TurnComplete,
+    ShellPrompt,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StatusDetection {
+    pub status: SessionStatus,
+    pub reason: Option<StatusReason>,
+}
+
+impl StatusDetection {
+    fn new(status: SessionStatus, reason: Option<StatusReason>) -> Self {
+        Self { status, reason }
+    }
 }
 
 /// Infer a session's status from its transcript tail (when one was resolved)
@@ -86,13 +106,21 @@ pub fn detect(
     previous: SessionStatus,
     shell_hint: Option<ShellHint>,
 ) -> SessionStatus {
+    detect_with_reason(transcript, previous, shell_hint).status
+}
+
+pub fn detect_with_reason(
+    transcript: Option<(PathBuf, AgentKind)>,
+    previous: SessionStatus,
+    shell_hint: Option<ShellHint>,
+) -> StatusDetection {
     if matches!(shell_hint, Some(ShellHint::Idle) | None) {
-        return SessionStatus::Idle;
+        return StatusDetection::new(SessionStatus::Idle, None);
     }
 
     let (path, kind) = match transcript {
         Some(t) => t,
-        None => return map_shell_hint(shell_hint),
+        None => return detect_shell_hint(shell_hint),
     };
 
     let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -105,21 +133,30 @@ pub fn detect(
     };
 
     match classified {
-        Some(TurnClass::NeedsInput) => SessionStatus::NeedsInput,
-        Some(TurnClass::Running) => SessionStatus::Running,
+        Some(TurnClass::NeedsInput) => {
+            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::TurnComplete))
+        }
+        Some(TurnClass::Running) => StatusDetection::new(SessionStatus::Running, None),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Idle. The next poll that lands on a real turn line corrects
         // it.
-        None => previous,
+        None => StatusDetection::new(previous, None),
     }
 }
 
+#[cfg(test)]
 fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
+    detect_shell_hint(hint).status
+}
+
+fn detect_shell_hint(hint: Option<ShellHint>) -> StatusDetection {
     match hint {
-        Some(ShellHint::Running) => SessionStatus::Running,
-        Some(ShellHint::NeedsInput) => SessionStatus::NeedsInput,
-        Some(ShellHint::Idle) | None => SessionStatus::Idle,
+        Some(ShellHint::Running) => StatusDetection::new(SessionStatus::Running, None),
+        Some(ShellHint::NeedsInput) => {
+            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::ShellPrompt))
+        }
+        Some(ShellHint::Idle) | None => StatusDetection::new(SessionStatus::Idle, None),
     }
 }
 
@@ -522,6 +559,30 @@ mod tests {
                 Some(ShellHint::Running),
             ),
             SessionStatus::NeedsInput,
+        );
+    }
+
+    #[test]
+    fn detect_reports_turn_complete_reason_for_finished_transcript() {
+        let path = write_status_transcript(
+            r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#,
+        );
+
+        assert_eq!(
+            detect_with_reason(
+                Some((path, AgentKind::Codex)),
+                SessionStatus::Running,
+                Some(ShellHint::Running),
+            ),
+            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::TurnComplete)),
+        );
+    }
+
+    #[test]
+    fn detect_reports_shell_prompt_reason_for_shell_needs_input() {
+        assert_eq!(
+            detect_with_reason(None, SessionStatus::Running, Some(ShellHint::NeedsInput)),
+            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::ShellPrompt)),
         );
     }
 
