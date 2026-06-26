@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 
-const SCENES = ["workspace", "pr-modal", "command-palette"];
+const SCENES = [
+  "workspace",
+  "pr-modal",
+  "chat-session",
+  "control-session",
+  "command-palette",
+];
 
 function usage() {
   console.log(`Usage:
@@ -19,7 +25,7 @@ Options:
 
 Examples:
   pnpm run capture:readme
-  pnpm run capture:readme -- workspace pr-modal
+  pnpm run capture:readme -- workspace pr-modal chat-session
   pnpm run capture:readme -- --out /tmp/acorn-captures --headed
   pnpm run capture:readme -- --port 1425
 `);

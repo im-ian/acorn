@@ -4,8 +4,15 @@ import { test, expect, type Page } from "@playwright/test";
 import { tauriMockSource } from "../e2e/fixtures/tauriMock";
 
 const CAPTURE_DIR = process.env.ACORN_CAPTURE_DIR ?? "assets/screenshots";
+const DEFAULT_SCENES = [
+  "workspace",
+  "pr-modal",
+  "chat-session",
+  "control-session",
+  "command-palette",
+] as const;
 const SELECTED_SCENES = new Set(
-  (process.env.ACORN_CAPTURE_SCENES ?? "workspace,pr-modal,command-palette")
+  (process.env.ACORN_CAPTURE_SCENES ?? DEFAULT_SCENES.join(","))
     .split(",")
     .map((scene) => scene.trim())
     .filter(Boolean),
@@ -18,7 +25,7 @@ const REPOS = {
   local: "/workspace/instant",
 } as const;
 
-type SceneName = "workspace" | "pr-modal" | "command-palette";
+type SceneName = (typeof DEFAULT_SCENES)[number];
 
 interface CaptureScene {
   name: SceneName;
@@ -62,6 +69,47 @@ const scenes: CaptureScene[] = [
     },
   },
   {
+    name: "chat-session",
+    file: "chat-session.png",
+    prepare: async (page) => {
+      const chatPane = page.locator('[data-pane-body="chat-root"]');
+      await expect(
+        page.getByRole("button", { name: /Chat handoff review/ }).first(),
+      ).toBeVisible();
+      await expect(
+        chatPane.getByText("Can you review the workspace split"),
+      ).toBeVisible();
+      await expect(
+        chatPane.getByText("I checked the workspace layout"),
+      ).toBeVisible();
+    },
+  },
+  {
+    name: "control-session",
+    file: "control-session.png",
+    prepare: async (page) => {
+      const controlPane = page.locator('[data-pane-body="control-left"]');
+      const uiPane = page.locator('[data-pane-body="control-right-top"]');
+      const testPane = page.locator('[data-pane-body="control-right-middle"]');
+      const docsPane = page.locator('[data-pane-body="control-right-bottom"]');
+      await expect(
+        page.locator("aside").getByRole("button", {
+          name: /control-orchestrator/,
+        }),
+      ).toBeVisible();
+      await expect(
+        controlPane.getByText("$ acorn-ipc list-sessions"),
+      ).toBeVisible();
+      await expect(uiPane.getByText("$ codex --resume ui-worker")).toBeVisible();
+      await expect(
+        testPane.getByText("$ claude --continue test-runner"),
+      ).toBeVisible();
+      await expect(
+        docsPane.getByText("$ codex --resume docs-refresh"),
+      ).toBeVisible();
+    },
+  },
+  {
     name: "command-palette",
     file: "command-palette.png",
     prepare: async (page) => {
@@ -93,7 +141,7 @@ for (const scene of scenes) {
       `scene ${scene.name} was not requested`,
     );
 
-    await bootCapturePage(page);
+    await bootCapturePage(page, scene.name);
     await scene.prepare?.(page);
     await waitForStablePaint(page);
 
@@ -105,7 +153,7 @@ for (const scene of scenes) {
   });
 }
 
-async function bootCapturePage(page: Page) {
+async function bootCapturePage(page: Page, sceneName: SceneName) {
   await page.clock.setFixedTime(new Date(NOW));
   await page.addInitScript({
     content: `(() => {
@@ -132,16 +180,24 @@ async function bootCapturePage(page: Page) {
         JSON.stringify(["${folderId(REPOS.website, "release")}"])
       );
       window.localStorage.setItem("acorn-workspaces", JSON.stringify(${JSON.stringify(
-        persistedWorkspace(),
+        persistedWorkspace(sceneName),
       )}));
     })();`,
   });
   await page.addInitScript({ content: tauriMockSource });
-  await page.addInitScript({ content: captureMockHandlersSource() });
+  await page.addInitScript({ content: captureMockHandlersSource(sceneName) });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  const expectedSidebarSession =
+    sceneName === "chat-session"
+      ? /Chat handoff review/
+      : sceneName === "control-session"
+        ? /control-orchestrator/
+        : /workspace-polish/;
   await expect(
-    page.locator("aside").getByRole("button", { name: /workspace-polish/ }),
+    page.locator("aside").getByRole("button", {
+      name: expectedSidebarSession,
+    }),
   ).toBeVisible();
 }
 
@@ -154,51 +210,11 @@ function folderId(repoPath: string, name: string) {
   return `project-folder:${repoPath}:${name}`;
 }
 
-function persistedWorkspace() {
+function persistedWorkspace(sceneName: SceneName) {
   return {
     state: {
       workspaces: {
-        [REPOS.app]: {
-          layout: {
-            kind: "split",
-            id: "capture-root-split",
-            direction: "horizontal",
-            sizes: [62, 38],
-            a: { kind: "pane", id: "left-main" },
-            b: {
-              kind: "split",
-              id: "capture-right-stack",
-              direction: "vertical",
-              sizes: [50, 50],
-              a: { kind: "pane", id: "right-top" },
-              b: { kind: "pane", id: "right-bottom" },
-            },
-          },
-          panes: {
-            "left-main": paneState(
-              "left-main",
-              ["workspace-polish"],
-              "workspace-polish",
-            ),
-            "right-top": paneState(
-              "right-top",
-              ["agent-resume"],
-              "agent-resume",
-            ),
-            "right-bottom": paneState(
-              "right-bottom",
-              ["api-contracts"],
-              "api-contracts",
-            ),
-          },
-          focusedPaneId: "left-main",
-          rightTab: "files",
-          rightTabByGroup: {
-            code: "files",
-            github: "prs",
-            agents: "history",
-          },
-        },
+        [REPOS.app]: appWorkspace(sceneName),
         [folderId(REPOS.app, "frontend")]: emptyWorkspace("ui-snapshot"),
         [folderId(REPOS.app, "release")]: emptyWorkspace("release-checks"),
         [REPOS.website]: emptyWorkspace("landing-refresh"),
@@ -244,8 +260,116 @@ function persistedWorkspace() {
   };
 }
 
+function appWorkspace(sceneName: SceneName) {
+  if (sceneName === "chat-session") {
+    return {
+      layout: { kind: "pane", id: "chat-root" },
+      panes: {
+        "chat-root": paneState("chat-root", ["chat-handoff"], "chat-handoff"),
+      },
+      focusedPaneId: "chat-root",
+      ...rightPanelWorkspaceState(),
+    };
+  }
+
+  if (sceneName === "control-session") {
+    return {
+      layout: {
+        kind: "split",
+        id: "control-root-split",
+        direction: "horizontal",
+        sizes: [40, 60],
+        a: { kind: "pane", id: "control-left" },
+        b: {
+          kind: "split",
+          id: "control-right-stack-top",
+          direction: "vertical",
+          sizes: [34, 66],
+          a: { kind: "pane", id: "control-right-top" },
+          b: {
+            kind: "split",
+            id: "control-right-stack-bottom",
+            direction: "vertical",
+            sizes: [50, 50],
+            a: { kind: "pane", id: "control-right-middle" },
+            b: { kind: "pane", id: "control-right-bottom" },
+          },
+        },
+      },
+      panes: {
+        "control-left": paneState(
+          "control-left",
+          ["control-orchestrator"],
+          "control-orchestrator",
+        ),
+        "control-right-top": paneState(
+          "control-right-top",
+          ["ui-worker"],
+          "ui-worker",
+        ),
+        "control-right-middle": paneState(
+          "control-right-middle",
+          ["test-runner"],
+          "test-runner",
+        ),
+        "control-right-bottom": paneState(
+          "control-right-bottom",
+          ["docs-refresh"],
+          "docs-refresh",
+        ),
+      },
+      focusedPaneId: "control-left",
+      ...rightPanelWorkspaceState(),
+    };
+  }
+
+  return {
+    layout: {
+      kind: "split",
+      id: "capture-root-split",
+      direction: "horizontal",
+      sizes: [62, 38],
+      a: { kind: "pane", id: "left-main" },
+      b: {
+        kind: "split",
+        id: "capture-right-stack",
+        direction: "vertical",
+        sizes: [50, 50],
+        a: { kind: "pane", id: "right-top" },
+        b: { kind: "pane", id: "right-bottom" },
+      },
+    },
+    panes: {
+      "left-main": paneState(
+        "left-main",
+        ["workspace-polish"],
+        "workspace-polish",
+      ),
+      "right-top": paneState("right-top", ["agent-resume"], "agent-resume"),
+      "right-bottom": paneState(
+        "right-bottom",
+        ["api-contracts"],
+        "api-contracts",
+      ),
+    },
+    focusedPaneId: "left-main",
+    ...rightPanelWorkspaceState(),
+  };
+}
+
 function paneState(id: string, tabIds: string[], activeTabId: string) {
   return { id, tabIds, activeTabId, activationHistory: tabIds };
+}
+
+function rightPanelWorkspaceState() {
+  return {
+    rightTab: "files",
+    rightTabByGroup: {
+      code: "files",
+      github: "prs",
+      agents: "history",
+    },
+  };
 }
 
 function emptyWorkspace(activeSessionId: string) {
@@ -333,14 +457,146 @@ function projectFolder(
   return { id, repoPath, name, cwdPath, position };
 }
 
-function captureMockHandlersSource() {
+function chatStates() {
+  return {
+    "chat-handoff": {
+      schema_version: 1,
+      session_id: "chat-handoff",
+      session: {
+        id: "chat-handoff",
+        workspace_path: REPOS.app,
+        title: "Chat handoff review",
+        active_provider: "claude",
+        active_model: "sonnet",
+        created_at: "2026-06-01T11:12:00Z",
+        updated_at: "2026-06-01T11:59:00Z",
+      },
+      provider: "claude",
+      model: "sonnet",
+      messages: [
+        chatMessage(
+          "chat-user-1",
+          "user",
+          [
+            "Can you review the workspace split behavior before I open the PR?",
+            "",
+            "Focus on pane persistence, tab handoff, and right-panel state.",
+          ].join("\n"),
+          "complete",
+          "2026-06-01T11:20:00Z",
+        ),
+        chatMessage(
+          "chat-assistant-1",
+          "assistant",
+          [
+            "I checked the workspace layout state and the pane split helpers.",
+            "",
+            "- `focusedPaneId` is preserved across workspace switches",
+            "- right-panel tab state now follows the active project",
+            "- chat sessions skip terminal portal mounting",
+            "",
+            "Next I would add a focused capture scene for the single-pane chat flow.",
+          ].join("\n"),
+          "complete",
+          "2026-06-01T11:22:00Z",
+        ),
+        chatMessage(
+          "chat-user-2",
+          "user",
+          "Good. Also check whether this survives a reload with a collapsed docs project.",
+          "complete",
+          "2026-06-01T11:48:00Z",
+        ),
+        chatMessage(
+          "chat-assistant-2",
+          "assistant",
+          "Running a reload pass now. The persisted layout shape looks stable.",
+          "streaming",
+          "2026-06-01T11:59:00Z",
+        ),
+      ],
+      turns: [
+        {
+          id: "chat-turn-1",
+          session_id: "chat-handoff",
+          provider: "claude",
+          model: "sonnet",
+          status: "complete",
+          user_message_id: "chat-user-1",
+          assistant_message_id: "chat-assistant-1",
+          started_at: "2026-06-01T11:20:00Z",
+          completed_at: "2026-06-01T11:22:00Z",
+          error: null,
+        },
+        {
+          id: "chat-turn-2",
+          session_id: "chat-handoff",
+          provider: "claude",
+          model: "sonnet",
+          status: "running",
+          user_message_id: "chat-user-2",
+          assistant_message_id: "chat-assistant-2",
+          started_at: "2026-06-01T11:58:00Z",
+          completed_at: null,
+          error: null,
+        },
+      ],
+      provider_threads: [
+        {
+          session_id: "chat-handoff",
+          provider: "claude",
+          model: "sonnet",
+          native_thread_id: "thread-readme-chat",
+          resume_token: null,
+          last_response_id: "resp-readme-chat",
+          updated_at: "2026-06-01T11:59:00Z",
+        },
+      ],
+      context_snapshots: [],
+      memory: {
+        session_id: "chat-handoff",
+        summary: "Reviewed workspace split persistence and chat pane behavior.",
+        important_decisions: [
+          "Keep chat sessions in a single pane for the README capture.",
+        ],
+        facts: ["Right-panel state remains scoped to the active project."],
+        through_message_id: "chat-assistant-1",
+        updated_at: "2026-06-01T11:50:00Z",
+      },
+      created_at: "2026-06-01T11:12:00Z",
+      updated_at: "2026-06-01T11:59:00Z",
+    },
+  };
+}
+
+function chatMessage(
+  id: string,
+  role: "user" | "assistant",
+  content: string,
+  status: "complete" | "streaming",
+  createdAt: string,
+) {
+  return {
+    id,
+    session_id: "chat-handoff",
+    turn_id: role === "user" ? null : id.replace("assistant", "turn"),
+    role,
+    content,
+    created_at: createdAt,
+    status,
+    metadata: role === "assistant" ? { provider: "claude" } : null,
+  };
+}
+
+function captureMockHandlersSource(sceneName: SceneName) {
   return `(() => {
     const repos = ${JSON.stringify(REPOS)};
     const now = ${JSON.stringify(NOW)};
     const handlers = window.__ACORN_MOCK_HANDLERS__ =
       window.__ACORN_MOCK_HANDLERS__ || {};
     const projectFolders = ${JSON.stringify(projectFolders())};
-    const sessions = ${JSON.stringify(seedSessions())};
+    const sessions = ${JSON.stringify(seedSessions(sceneName))};
+    const chatStates = ${JSON.stringify(chatStates())};
 
     function b64(input) {
       return btoa(unescape(encodeURIComponent(input)));
@@ -351,6 +607,38 @@ function captureMockHandlersSource() {
       if (typeof callback === "function") {
         window.setTimeout(() => callback({ index: 0, message: b64(text) }), 40);
       }
+    }
+
+    function emptyChatState(sessionId) {
+      return {
+        schema_version: 1,
+        session_id: sessionId,
+        session: {
+          id: sessionId,
+          workspace_path: repos.app,
+          title: "Chat",
+          active_provider: "claude",
+          active_model: null,
+          created_at: now,
+          updated_at: now,
+        },
+        provider: "claude",
+        model: null,
+        messages: [],
+        turns: [],
+        provider_threads: [],
+        context_snapshots: [],
+        memory: {
+          session_id: sessionId,
+          summary: null,
+          important_decisions: [],
+          facts: [],
+          through_message_id: null,
+          updated_at: now,
+        },
+        created_at: now,
+        updated_at: now,
+      };
     }
 
     handlers.list_projects = () => [
@@ -391,6 +679,45 @@ function captureMockHandlersSource() {
     handlers.pty_kill = () => undefined;
     handlers.scrollback_load = () => null;
     handlers.scrollback_save = () => undefined;
+    handlers.load_chat_session_state = (args) =>
+      chatStates[args?.sessionId] || emptyChatState(args?.sessionId || "chat");
+    handlers.save_chat_session_state = (args) => args?.chatState;
+    handlers.append_chat_message = (args) => {
+      const state = chatStates[args?.sessionId] || emptyChatState(args?.sessionId || "chat");
+      return { ...state, messages: [...state.messages, args?.message].filter(Boolean) };
+    };
+    handlers.send_chat_message = (args) => {
+      const state = chatStates[args?.sessionId] || emptyChatState(args?.sessionId || "chat");
+      return { ...state, messages: state.messages.concat({
+        id: "capture-user-draft",
+        session_id: args?.sessionId || "chat",
+        turn_id: "capture-turn-draft",
+        role: "user",
+        content: args?.content || "",
+        created_at: now,
+        status: "complete",
+        metadata: null,
+      }) };
+    };
+    handlers.retry_chat_message = () => emptyChatState("chat");
+    handlers.update_chat_message = (args) => {
+      const state = chatStates[args?.sessionId] || emptyChatState(args?.sessionId || "chat");
+      return {
+        ...state,
+        messages: state.messages.map((message) =>
+          message.id === args?.messageId ? { ...message, ...args?.patch } : message,
+        ),
+      };
+    };
+    handlers.delete_chat_message = (args) => {
+      const state = chatStates[args?.sessionId] || emptyChatState(args?.sessionId || "chat");
+      return {
+        ...state,
+        messages: state.messages.filter((message) => message.id !== args?.messageId),
+      };
+    };
+    handlers.cancel_chat_message = (args) =>
+      chatStates[args?.sessionId] || emptyChatState(args?.sessionId || "chat");
 
     handlers.fs_list_dir = (args) => {
       const path = args && args.path;
@@ -605,6 +932,62 @@ function captureMockHandlersSource() {
     }
 
     function terminalText(id) {
+      if (id === "control-orchestrator") {
+        return [
+          "$ acorn-ipc promote --self",
+          "promoted control-orchestrator to control session",
+          "",
+          "$ acorn-ipc list-sessions",
+          "ui-worker       running   codex",
+          "test-runner     running   claude",
+          "docs-refresh    idle      codex",
+          "",
+          "$ acorn-ipc send-input ui-worker",
+          "task: tighten the pane drag target",
+          "",
+          "$ acorn-ipc send-input test-runner",
+          "task: run focused regression tests",
+          "",
+          "$ acorn-ipc read-buffer ui-worker",
+          "Applying WorkspaceGrid patch...",
+        ].join("\\r\\n") + "\\r\\n";
+      }
+      if (id === "ui-worker") {
+        return [
+          "$ codex --resume ui-worker",
+          "Task: tighten the pane drag target",
+          "Reading PaneDropOverlay.tsx",
+          "Editing WorkspaceGrid.tsx",
+          "",
+          "$ pnpm exec vitest run PaneDropOverlay",
+          "PASS PaneDropOverlay.test.tsx (9 tests) 538ms",
+        ].join("\\r\\n") + "\\r\\n";
+      }
+      if (id === "test-runner") {
+        return [
+          "$ claude --continue test-runner",
+          "Running focused regression checks",
+          "",
+          "$ pnpm exec vitest run workspaces",
+          "PASS workspaces.test.ts (18 tests) 412ms",
+          "",
+          "$ pnpm run typecheck",
+          "PASS src/store/workspaces.ts",
+        ].join("\\r\\n") + "\\r\\n";
+      }
+      if (id === "docs-refresh") {
+        return [
+          "$ codex --resume docs-refresh",
+          "Task: update README screenshot notes",
+          "",
+          "$ rg capture:readme docs package.json",
+          "docs/README_SCREENSHOTS.md",
+          "package.json",
+          "",
+          "$ git diff -- docs/README_SCREENSHOTS.md",
+          "README screenshot workflow documented",
+        ].join("\\r\\n") + "\\r\\n";
+      }
       if (id === "api-contracts") {
         return [
           "$ cargo test session_contracts",
@@ -670,8 +1053,8 @@ function captureMockHandlersSource() {
   })();`;
 }
 
-function seedSessions() {
-  return [
+function seedSessions(sceneName: SceneName) {
+  const baseSessions = [
     session("workspace-polish", "workspace-polish", REPOS.app, "main", {
       status: "needs_input",
       agent: "codex",
@@ -775,6 +1158,60 @@ function seedSessions() {
       ),
     ),
   ];
+
+  if (sceneName === "chat-session") {
+    return [
+      session("chat-handoff", "Chat handoff review", REPOS.app, "main", {
+        status: "running",
+        agent: "claude",
+        position: 0,
+        mode: "chat",
+      }),
+      ...baseSessions.filter((candidate) => candidate.repo_path !== REPOS.app),
+    ];
+  }
+
+  if (sceneName === "control-session") {
+    const controlOwner = {
+      kind: "control" as const,
+      session_id: "control-orchestrator",
+    };
+    return [
+      session(
+        "control-orchestrator",
+        "control-orchestrator",
+        REPOS.app,
+        "main",
+        {
+          status: "running",
+          agent: "codex",
+          position: 0,
+          kind: "control",
+        },
+      ),
+      session("ui-worker", "ui-worker", REPOS.app, "feature/pane-dnd", {
+        status: "running",
+        agent: "codex",
+        position: 1,
+        owner: controlOwner,
+      }),
+      session("test-runner", "test-runner", REPOS.app, "main", {
+        status: "running",
+        agent: "claude",
+        position: 2,
+        owner: controlOwner,
+      }),
+      session("docs-refresh", "docs-refresh", REPOS.app, "docs/screenshots", {
+        status: "idle",
+        agent: "codex",
+        position: 3,
+        owner: controlOwner,
+      }),
+      ...baseSessions.filter((candidate) => candidate.repo_path !== REPOS.app),
+    ];
+  }
+
+  return baseSessions;
 }
 
 function session(
@@ -791,6 +1228,8 @@ function session(
     inWorktree?: boolean;
     projectScoped?: boolean;
     kind?: "regular" | "control";
+    mode?: "terminal" | "chat";
+    owner?: { kind: "user" } | { kind: "control"; session_id: string };
   },
 ) {
   const cwd = options.cwd ?? repoPath;
@@ -810,8 +1249,8 @@ function session(
     auto_title_enabled: true,
     generated_title_transcript_id: `${options.agent}-${id}`,
     kind: options.kind ?? "regular",
-    mode: "terminal",
-    owner: { kind: "user" },
+    mode: options.mode ?? "terminal",
+    owner: options.owner ?? { kind: "user" },
     position: options.position,
     in_worktree: options.inWorktree ?? false,
     agent_provider: options.agent,
