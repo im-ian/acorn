@@ -6,6 +6,9 @@ const SCENES = [
   "pr-modal",
   "chat-session",
   "control-session",
+  "staged-diff",
+  "agent-history",
+  "work-summary",
   "command-palette",
 ];
 
@@ -25,7 +28,7 @@ Options:
 
 Examples:
   pnpm run capture:readme
-  pnpm run capture:readme -- workspace pr-modal chat-session
+  pnpm run capture:readme -- workspace pr-modal chat-session staged-diff
   pnpm run capture:readme -- --out /tmp/acorn-captures --headed
   pnpm run capture:readme -- --port 1425
 `);

@@ -9,6 +9,9 @@ const DEFAULT_SCENES = [
   "pr-modal",
   "chat-session",
   "control-session",
+  "staged-diff",
+  "agent-history",
+  "work-summary",
   "command-palette",
 ] as const;
 const SELECTED_SCENES = new Set(
@@ -24,6 +27,7 @@ const REPOS = {
   docs: "/workspace/acorn-docs",
   local: "/workspace/instant",
 } as const;
+const WORK_SUMMARY_TAB_ID = "work-summary:readme-workspace-polish";
 
 type SceneName = (typeof DEFAULT_SCENES)[number];
 
@@ -107,6 +111,57 @@ const scenes: CaptureScene[] = [
       await expect(
         docsPane.getByText("$ codex --resume docs-refresh"),
       ).toBeVisible();
+    },
+  },
+  {
+    name: "staged-diff",
+    file: "staged-diff.png",
+    prepare: async (page) => {
+      const rightPanel = page.locator('[data-panel-id="right"]');
+      await rightPanel.getByRole("button", { name: "Code", exact: true }).click();
+      await rightPanel
+        .getByRole("button", { name: "Staged", exact: true })
+        .click();
+      await expect(
+        rightPanel.locator("#staged-list").getByText("README.md"),
+      ).toBeVisible();
+      await expect(
+        rightPanel.getByText("Automated with the capture CLI"),
+      ).toBeVisible();
+    },
+  },
+  {
+    name: "agent-history",
+    file: "agent-history.png",
+    prepare: async (page) => {
+      const rightPanel = page.locator('[data-panel-id="right"]');
+      await rightPanel
+        .getByRole("button", { name: "Agents", exact: true })
+        .click();
+      await rightPanel
+        .getByRole("button", { name: "History", exact: true })
+        .click();
+      await expect(
+        rightPanel.getByText("Refine workspace split behavior"),
+      ).toBeVisible();
+      await expect(
+        rightPanel.getByText("Review resume flow edge cases"),
+      ).toBeVisible();
+    },
+  },
+  {
+    name: "work-summary",
+    file: "work-summary.png",
+    prepare: async (page) => {
+      const summaryPane = page.locator('[data-pane-body="summary-root"]');
+      await expect(
+        page.getByRole("button", { name: /Workspace work summary/ }),
+      ).toBeVisible();
+      await expect(
+        summaryPane.getByText("workspace-polish", { exact: true }),
+      ).toBeVisible();
+      await expect(summaryPane.getByText("README.md")).toBeVisible();
+      await expect(summaryPane.getByText("Tokens", { exact: true })).toBeVisible();
     },
   },
   {
@@ -254,7 +309,7 @@ function persistedWorkspace(sceneName: SceneName) {
           createdAt: "2026-06-01T11:55:00Z",
         },
       ],
-      workspaceTabs: {},
+      workspaceTabs: workspaceTabs(sceneName),
     },
     version: 4,
   };
@@ -323,6 +378,21 @@ function appWorkspace(sceneName: SceneName) {
     };
   }
 
+  if (sceneName === "work-summary") {
+    return {
+      layout: { kind: "pane", id: "summary-root" },
+      panes: {
+        "summary-root": paneState(
+          "summary-root",
+          [WORK_SUMMARY_TAB_ID],
+          WORK_SUMMARY_TAB_ID,
+        ),
+      },
+      focusedPaneId: "summary-root",
+      ...rightPanelWorkspaceState(),
+    };
+  }
+
   return {
     layout: {
       kind: "split",
@@ -354,6 +424,31 @@ function appWorkspace(sceneName: SceneName) {
     },
     focusedPaneId: "left-main",
     ...rightPanelWorkspaceState(),
+  };
+}
+
+function workspaceTabs(sceneName: SceneName) {
+  if (sceneName !== "work-summary") return {};
+  return {
+    [WORK_SUMMARY_TAB_ID]: {
+      id: WORK_SUMMARY_TAB_ID,
+      kind: "work-summary",
+      lifecycle: "restorable",
+      title: "Workspace work summary",
+      repoPath: REPOS.app,
+      cwdPath: REPOS.app,
+      sessionId: "workspace-polish",
+      tokenBaseline: {
+        capturedAt: "2026-06-01T11:20:00Z",
+        inputTokens: 3200,
+        outputTokens: 1180,
+        cacheReadTokens: 840,
+        cacheCreationTokens: 220,
+        reasoningTokens: 360,
+        totalTokens: 5800,
+        messagesWithUsage: 8,
+      },
+    },
   };
 }
 
@@ -588,6 +683,107 @@ function chatMessage(
   };
 }
 
+function agentHistoryItems() {
+  return [
+    {
+      provider: "codex",
+      id: "codex-workspace-polish",
+      title: "Refine workspace split behavior",
+      preview:
+        "Adjusted pane persistence, tab handoff, and README capture layout.",
+      cwd: REPOS.app,
+      worktree: {
+        name: "feature/pane-dnd",
+        path: `${REPOS.app}/.acorn/worktrees/pane-dnd`,
+        exists: true,
+      },
+      transcript_path: `${REPOS.app}/.acorn/transcripts/codex-workspace-polish.jsonl`,
+      updated_at: 1780314900,
+      resume_command: "codex --resume codex-workspace-polish",
+    },
+    {
+      provider: "claude",
+      id: "claude-agent-resume",
+      title: "Review resume flow edge cases",
+      preview:
+        "Checked stale status refresh, transcript lookup, and handoff behavior.",
+      cwd: REPOS.app,
+      worktree: null,
+      transcript_path: `${REPOS.app}/.acorn/transcripts/claude-agent-resume.jsonl`,
+      updated_at: 1780313700,
+      resume_command: "claude --continue claude-agent-resume",
+    },
+    {
+      provider: "codex",
+      id: "codex-docs-refresh",
+      title: "Refresh README screenshot notes",
+      preview:
+        "Documented isolated Playwright captures and review output paths.",
+      cwd: REPOS.app,
+      worktree: {
+        name: "docs/screenshots",
+        path: `${REPOS.app}/.acorn/worktrees/docs-screenshots`,
+        exists: true,
+      },
+      transcript_path: `${REPOS.app}/.acorn/transcripts/codex-docs-refresh.jsonl`,
+      updated_at: 1780312800,
+      resume_command: "codex --resume codex-docs-refresh",
+    },
+  ];
+}
+
+function agentTranscriptSummaries() {
+  return {
+    "codex-workspace-polish": agentTranscriptSummary(
+      "codex",
+      "codex-workspace-polish",
+      18,
+      10840,
+    ),
+    "claude-agent-resume": agentTranscriptSummary(
+      "claude",
+      "claude-agent-resume",
+      14,
+      8420,
+    ),
+    "codex-docs-refresh": agentTranscriptSummary(
+      "codex",
+      "codex-docs-refresh",
+      9,
+      4380,
+    ),
+  };
+}
+
+function agentTranscriptSummary(
+  provider: "claude" | "codex",
+  id: string,
+  messageCount: number,
+  totalTokens: number,
+) {
+  return {
+    provider,
+    id,
+    transcript_path: `${REPOS.app}/.acorn/transcripts/${id}.jsonl`,
+    updated_at: 1780314900,
+    message_count: messageCount,
+    user_messages: Math.ceil(messageCount / 2),
+    assistant_messages: Math.floor(messageCount / 2),
+    turn_count: Math.floor(messageCount / 2),
+    complete_turns: Math.max(1, Math.floor(messageCount / 2) - 1),
+    running_turns: 1,
+    token_usage: {
+      input_tokens: Math.round(totalTokens * 0.42),
+      output_tokens: Math.round(totalTokens * 0.21),
+      cache_read_tokens: Math.round(totalTokens * 0.2),
+      cache_creation_tokens: Math.round(totalTokens * 0.06),
+      reasoning_tokens: Math.round(totalTokens * 0.11),
+      total_tokens: totalTokens,
+      messages_with_usage: messageCount,
+    },
+  };
+}
+
 function captureMockHandlersSource(sceneName: SceneName) {
   return `(() => {
     const repos = ${JSON.stringify(REPOS)};
@@ -597,6 +793,8 @@ function captureMockHandlersSource(sceneName: SceneName) {
     const projectFolders = ${JSON.stringify(projectFolders())};
     const sessions = ${JSON.stringify(seedSessions(sceneName))};
     const chatStates = ${JSON.stringify(chatStates())};
+    const agentHistory = ${JSON.stringify(agentHistoryItems())};
+    const transcriptSummaries = ${JSON.stringify(agentTranscriptSummaries())};
 
     function b64(input) {
       return btoa(unescape(encodeURIComponent(input)));
@@ -830,8 +1028,12 @@ function captureMockHandlersSource(sceneName: SceneName) {
       account: "im-ian",
       items: [],
     });
-    handlers.list_unscoped_agent_history = () => [];
-    handlers.list_agent_history = () => [];
+    handlers.list_unscoped_agent_history = () => agentHistory;
+    handlers.list_agent_history = () => agentHistory;
+    handlers.agent_transcript_summary = (args) =>
+      transcriptSummaries[args?.transcriptId] || null;
+    handlers.agent_transcript_summary_at_path = (args) =>
+      transcriptSummaries[args?.id] || null;
     handlers.read_session_todos = () => [
       { content: "Seed screenshot fixture data", status: "completed", activeForm: null },
       { content: "Capture Files panel", status: "in_progress", activeForm: "Capturing Files panel" },
@@ -1208,6 +1410,16 @@ function seedSessions(sceneName: SceneName) {
         owner: controlOwner,
       }),
       ...baseSessions.filter((candidate) => candidate.repo_path !== REPOS.app),
+    ];
+  }
+
+  if (sceneName === "work-summary") {
+    return [
+      ...baseSessions.filter(
+        (candidate) =>
+          candidate.repo_path !== REPOS.app ||
+          candidate.id === "workspace-polish",
+      ),
     ];
   }
 
