@@ -1900,10 +1900,56 @@ function ProjectGroupView({
             {project.name}
           </span>
         </span>
-        {PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
+        <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
+          {PROJECT_SESSION_PRIMARY_CREATE_ACTIONS.map((action) => (
+            <Tooltip
+              key={action.id}
+              label={sidebarText(t, action.labelKey)}
+              side="bottom"
+            >
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenu(null);
+                  setCreateMenu(null);
+                  if (projectSessionCreationFolder) {
+                    onAddSession(
+                      projectSessionCreationFolder,
+                      action.isolated,
+                      action.kind,
+                      action.mode,
+                    );
+                  }
+                }}
+                className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+                aria-label={sidebarText(t, action.ariaKey)}
+              >
+                {projectSessionCreateIcon(action.id)}
+              </button>
+            </Tooltip>
+          ))}
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              setMenu(null);
+              setCreateMenu((current) =>
+                current === null ? { x: rect.left, y: rect.bottom + 4 } : null,
+              );
+            }}
+            className="flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
+            aria-label={sidebarText(t, "sidebar.aria.newSessionMenuInProject")}
+            aria-haspopup="menu"
+            aria-expanded={createMenu !== null}
+          >
+            <MoreHorizontal size={13} />
+          </button>
           <Tooltip
-            key={action.id}
-            label={sidebarText(t, action.labelKey)}
+            label={sidebarText(t, "sidebar.actions.closeProject")}
             side="bottom"
           >
             <button
@@ -1911,59 +1957,15 @@ function ProjectGroupView({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                setMenu(null);
-                setCreateMenu(null);
-                if (projectSessionCreationFolder) {
-                  onAddSession(
-                    projectSessionCreationFolder,
-                    action.isolated,
-                    action.kind,
-                    action.mode,
-                  );
-                }
+                onRemoveProject();
               }}
-              className="invisible flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-              aria-label={sidebarText(t, action.ariaKey)}
+              className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
+              aria-label={sidebarText(t, "sidebar.actions.closeProject")}
             >
-              {projectSessionCreateIcon(action.id)}
+              <X size={12} />
             </button>
           </Tooltip>
-        ))}
-        <button
-          type="button"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            const rect = e.currentTarget.getBoundingClientRect();
-            setMenu(null);
-            setCreateMenu((current) =>
-              current === null ? { x: rect.left, y: rect.bottom + 4 } : null,
-            );
-          }}
-          className="invisible flex size-5 shrink-0 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover:visible"
-          aria-label={sidebarText(t, "sidebar.aria.newSessionMenuInProject")}
-          aria-haspopup="menu"
-          aria-expanded={createMenu !== null}
-        >
-          <MoreHorizontal size={13} />
-        </button>
-        <Tooltip
-          label={sidebarText(t, "sidebar.actions.closeProject")}
-          side="bottom"
-        >
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemoveProject();
-            }}
-            className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover:visible"
-            aria-label={sidebarText(t, "sidebar.actions.closeProject")}
-          >
-            <X size={12} />
-          </button>
-        </Tooltip>
+        </div>
       </div>
       <ContextMenu
         open={createMenu !== null}
@@ -2341,7 +2343,7 @@ function ProjectFolderView({
           )}
         </span>
         {!editing ? (
-          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover/project-folder:flex group-focus-within/project-folder:flex">
             <Tooltip
               label={sidebarText(t, "sidebar.aria.newSessionInProjectFolder")}
               side="bottom"
@@ -2358,7 +2360,7 @@ function ProjectFolderView({
                   onAddSession(false, "regular", "terminal");
                 }}
                 onKeyDown={(e) => e.stopPropagation()}
-                className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover/project-folder:visible group-focus-within/project-folder:visible"
+                className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               >
                 <Plus size={12} />
               </button>
@@ -2390,7 +2392,7 @@ function ProjectFolderView({
                   );
                 }}
                 onKeyDown={(e) => e.stopPropagation()}
-                className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover/project-folder:visible group-focus-within/project-folder:visible"
+                className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               >
                 <MoreHorizontal size={13} />
               </button>
@@ -2412,7 +2414,7 @@ function ProjectFolderView({
                     onRemoveFolder(folder.id);
                   }}
                   onKeyDown={(e) => e.stopPropagation()}
-                  className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover/project-folder:visible group-focus-within/project-folder:visible"
+                  className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
                 >
                   <Trash2 size={12} />
                 </button>
@@ -2811,7 +2813,7 @@ function SessionRow({
         }}
         onCancelRename={() => setEditing(false)}
       />
-      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+      <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
         <button
           type="button"
           aria-label={sidebarText(t, "sidebar.actions.removeSession")}
@@ -2821,7 +2823,7 @@ function SessionRow({
             onRemove();
           }}
           onKeyDown={(e) => e.stopPropagation()}
-          className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover:visible"
+          className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
         >
           <Trash2 size={12} />
         </button>
@@ -3439,7 +3441,7 @@ function LocalWorkspaceView({
           )}
         </span>
         {!editing ? (
-          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover/local-workspace:flex group-focus-within/local-workspace:flex">
             <Tooltip
               label={sidebarText(t, "sidebar.localTerminals.newSession")}
               side="bottom"
@@ -3453,7 +3455,7 @@ function LocalWorkspaceView({
                   onCreateSession();
                 }}
                 onKeyDown={(e) => e.stopPropagation()}
-                className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg group-hover/local-workspace:visible group-focus-within/local-workspace:visible"
+                className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg"
               >
                 <Plus size={12} />
               </button>
@@ -3471,7 +3473,7 @@ function LocalWorkspaceView({
                   onRemoveFolder(folder.id);
                 }}
                 onKeyDown={(e) => e.stopPropagation()}
-                className="invisible flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger group-hover/local-workspace:visible group-focus-within/local-workspace:visible"
+                className="flex size-5 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-danger"
               >
                 <Trash2 size={12} />
               </button>
@@ -3719,7 +3721,7 @@ function LocalSessionRow({
             onRemove();
           }
         }}
-        className="invisible rounded p-1 text-fg-muted transition hover:text-danger group-hover:visible"
+        className="ml-auto hidden shrink-0 rounded p-1 text-fg-muted transition hover:text-danger group-hover:inline-flex"
       >
         <Trash2 size={12} />
       </span>
