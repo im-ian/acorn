@@ -423,6 +423,35 @@ async function disableTerminalUnicodeSpaceNormalization(
   });
 }
 
+async function enableTerminalRightClickPasteSelection(
+  page: Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "acorn:settings:v1",
+      JSON.stringify({
+        terminal: { rightClickPasteSelection: true },
+      }),
+    );
+  });
+}
+
+async function rightClickSelectedTerminalText(
+  page: Page,
+  text: string,
+): Promise<void> {
+  const textRect = await terminalTextRect(page, text);
+  expect(textRect).not.toBeNull();
+  const y = (textRect!.top + textRect!.bottom) / 2;
+  await page.mouse.move(textRect!.left + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(textRect!.left + textRect!.width - 2, y, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await page.mouse.click(textRect!.left + 10, y, { button: "right" });
+}
+
 async function terminalEmojiLetterSpacing(
   page: Page,
   marker: string,
@@ -658,6 +687,155 @@ test.describe("terminal: spawn", () => {
         ),
       )
       .toEqual(["pnpm run dev"]);
+  });
+
+  test("does not write selected terminal text on right-click by default", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await rightClickSelectedTerminalText(page, "run-selected");
+    await page.waitForTimeout(150);
+
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+      ),
+    ).toEqual([]);
+  });
+
+  test("writes selected terminal text on right-click when enabled", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await rightClickSelectedTerminalText(page, "run-selected");
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toEqual(["run-selected"]);
+  });
+
+  test("does not write non-terminal selected text on terminal right-click", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    await page.evaluate(() => {
+      const selected = document.createElement("div");
+      selected.textContent = "foreign-selection";
+      selected.style.userSelect = "text";
+      document.body.appendChild(selected);
+
+      const range = document.createRange();
+      range.selectNodeContents(selected);
+      const selection = window.getSelection();
+      if (!selection) throw new Error("missing document selection");
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      const terminal = document.querySelector<HTMLElement>(".acorn-terminal");
+      if (!terminal) throw new Error("missing terminal element");
+      terminal.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+        }),
+      );
+    });
+    await page.waitForTimeout(150);
+
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+      ),
+    ).toEqual([]);
   });
 
   test("normalizes no-break spaces from direct terminal input", async ({
