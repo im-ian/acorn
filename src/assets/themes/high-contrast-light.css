@@ -15,7 +15,8 @@
   --color-warning: #7a4d00;
   --color-terminal-bg: #ffffff;
   --color-terminal-fg: #05070a;
-  --color-term-selection: rgba(0, 78, 204, 0.26);
+  --color-selection: rgba(0, 78, 204, 0.30);
+  --color-term-selection: var(--color-selection);
   --color-term-scrollbar: rgba(0, 0, 0, 0.22);
   --color-term-scrollbar-hover: rgba(0, 0, 0, 0.34);
   --color-term-scrollbar-active: rgba(0, 0, 0, 0.46);
