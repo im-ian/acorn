@@ -2,14 +2,13 @@
 //! per-session state files so the focus-time "이전 대화 이어하기" modal
 //! can decide what to surface.
 //!
-//! The on-demand pairing logic in `transcript_watcher::collect_live_mappings`
-//! is already what the Fork menu uses to map a running `claude` / `codex`
-//! process to its transcript via PTY descendant scan + cwd match +
-//! mtime window. The modal needs the same answer but from a different
-//! direction: when the user focuses a session and the agent is *not*
-//! currently running, what was the last transcript that session had been
-//! writing? This task keeps `<state_dir>/{claude,codex,antigravity}.id` up to
-//! date so the modal lookup is a single file read.
+//! The transcript watcher maps a running `claude` / `codex` / `antigravity`
+//! process to its transcript via PTY descendant scan + cwd match + mtime
+//! window. The modal needs the user-facing session owner rather than every
+//! nested sub-agent: when the user focuses a session and the agent is *not*
+//! currently running, what was the last top-level transcript that session had
+//! been writing? This task keeps `<state_dir>/{claude,codex,antigravity}.id`
+//! up to date so the modal lookup is a single file read.
 //!
 //! Why polling and not filesystem events: PTY-tree resolution is the
 //! decisive disambiguator when two sessions are running the same agent
@@ -17,8 +16,8 @@
 //! to attribute a new JSONL to an Acorn session, and the agent process
 //! is alive for seconds-to-minutes — a 2 s poll is fast enough to capture
 //! every fresh UUID before the user could plausibly focus away and back.
-//! A second benefit: the persister shares its scan with the Fork menu's
-//! `SCAN_CACHE_TTL_MS` cache, so neither pays the cost twice.
+//! A second benefit: the owner-scoped scanner has its own short cache, so
+//! back-to-back ticks do not repeat the same host-wide process scan.
 //!
 //! `*.id.acknowledged` is deliberately *not* touched here. When a
 //! session starts a new conversation, its UUID changes; the new value
@@ -58,7 +57,7 @@ pub fn collect_session_pids(state: &AppState) -> Vec<SessionPid> {
 
 /// Tick interval. Short enough to capture a UUID before the user could
 /// reasonably switch sessions and back; long enough that the host-wide
-/// process scan inside `collect_live_mappings` does not show up on any
+/// process scan inside `collect_session_owner_mappings` does not show up on any
 /// idle-CPU graph.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -100,7 +99,7 @@ fn tick(state: &AppState) -> io::Result<()> {
                 .or_else(|| state.pty.child_pid(&s.id)),
         })
         .collect::<Vec<_>>();
-    let mappings = transcript_watcher::collect_live_mappings(&sessions);
+    let mappings = transcript_watcher::collect_session_owner_mappings(&sessions);
     if mappings.is_empty() {
         return Ok(());
     }
