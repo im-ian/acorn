@@ -15,4 +15,6 @@
   --color-warning: oklch(65% 0.16 75);
   --color-terminal-bg: #ffffff;
   --color-terminal-fg: #1a1d20;
+  --color-selection: rgba(214, 110, 170, 0.30);
+  --color-term-selection: var(--color-selection);
 }

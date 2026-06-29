@@ -15,7 +15,8 @@
   --color-warning: #ad8301;
   --color-terminal-bg: #fffcf0;
   --color-terminal-fg: #100f0f;
-  --color-term-selection: rgba(187, 220, 206, 0.3);
+  --color-selection: rgba(36, 131, 123, 0.26);
+  --color-term-selection: var(--color-selection);
   --color-term-black: #100f0f;
   --color-term-red: #af3029;
   --color-term-green: #66800b;

@@ -14,6 +14,15 @@
   --color-warning: oklch(78% 0.16 75);
 
   /*
+   * Text-selection highlight. Each theme overrides this with a brand-tinted,
+   * contrast-safe value; the terminal mirrors it through --color-term-selection
+   * so drag-selection looks identical across the shell and the embedded xterm.
+   * Default mirrors acorn-dark so the very first paint (before a theme attr is
+   * applied) still has a visible selection.
+   */
+  --color-selection: rgba(120, 232, 156, 0.45);
+
+  /*
    * Subtle contrast fills for borderless surfaces (neutral/ghost buttons,
    * inputs). Derived from the foreground token so they invert automatically
    * per theme — light alpha on dark themes, dark alpha on light themes — and
@@ -39,6 +48,21 @@
    */
   --acorn-canvas: color-mix(in oklab, var(--color-bg-sidebar) 82%, #000);
   --acorn-pane-radius: 0.5rem;
+}
+
+/*
+ * Themed text selection across the whole shell. Without this the React surfaces
+ * (chat, diff, sidebar, modals) fall back to the OS-default selection colour,
+ * which clashes with the xterm terminal's themed selection and can vanish
+ * against same-hue surfaces. Only the background is themed so selected text
+ * keeps its own colour and stays legible.
+ */
+::selection {
+  background-color: var(--color-selection);
+}
+
+::-moz-selection {
+  background-color: var(--color-selection);
 }
 
 .acorn-canvas {
