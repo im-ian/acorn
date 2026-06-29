@@ -69,6 +69,85 @@ describe("language settings", () => {
   });
 });
 
+describe("interface settings", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("defaults new workspaces to pane mode", () => {
+    expect(DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode).toBe("panes");
+  });
+
+  it("loads a persisted default workspace mode", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ interface: { defaultWorkspaceViewMode: "kanban" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.interface.defaultWorkspaceViewMode,
+    ).toBe("kanban");
+  });
+
+  it("falls back to panes for an unsupported default workspace mode", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ interface: { defaultWorkspaceViewMode: "grid" } }),
+    );
+
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    expect(
+      useSettings.getState().settings.interface.defaultWorkspaceViewMode,
+    ).toBe("panes");
+  });
+
+  it("patches the default workspace mode and preserves the previous value for invalid patches", async () => {
+    vi.resetModules();
+    const { useSettings } = await import("./settings");
+
+    useSettings
+      .getState()
+      .patchInterface({ defaultWorkspaceViewMode: "kanban" });
+    expect(
+      useSettings.getState().settings.interface.defaultWorkspaceViewMode,
+    ).toBe("kanban");
+
+    const invalidMode =
+      "grid" as unknown as typeof DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode;
+    useSettings
+      .getState()
+      .patchInterface({ defaultWorkspaceViewMode: invalidMode });
+    expect(
+      useSettings.getState().settings.interface.defaultWorkspaceViewMode,
+    ).toBe("kanban");
+  });
+});
+
 describe("terminal.linkActivation default", () => {
   it("defaults to plain click so xterm's stock behaviour is preserved", () => {
     expect(DEFAULT_SETTINGS.terminal.linkActivation).toBe("click");

@@ -52,7 +52,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useAppStore } from "../store";
+import { useAppStore, type WorkspaceViewMode } from "../store";
 import {
   AgentProviderIcon,
   buildAgentForkCommand,
@@ -216,6 +216,7 @@ export function Sidebar() {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeProject = useAppStore((s) => s.activeProject);
   const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
+  const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const selectSession = useAppStore((s) => s.selectSession);
   const focusLocalSessions = useAppStore((s) => s.focusLocalSessions);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
@@ -1089,6 +1090,11 @@ export function Sidebar() {
                       collapsed={collapsed.has(project.repoPath)}
                       activeSessionId={activeSessionId}
                       isActiveProject={activeProject === project.repoPath}
+                      workspaceViewMode={
+                        activeProject === project.repoPath
+                          ? workspaceViewMode
+                          : "panes"
+                      }
                       activeProjectFolderId={activeProjectFolderId}
                       topLevelOrder={projectItemOrders[project.repoPath] ?? []}
                       onTitleClick={() =>
@@ -1664,6 +1670,7 @@ interface ProjectGroupViewProps {
   collapsed: boolean;
   activeSessionId: string | null;
   isActiveProject: boolean;
+  workspaceViewMode: WorkspaceViewMode;
   activeProjectFolderId: string | null;
   topLevelOrder: readonly string[];
   /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
@@ -1697,6 +1704,7 @@ function ProjectGroupView({
   collapsed,
   activeSessionId,
   isActiveProject,
+  workspaceViewMode,
   activeProjectFolderId,
   topLevelOrder,
   onTitleClick,
@@ -2076,7 +2084,10 @@ function ProjectGroupView({
                   <SessionRow
                     key={item.id}
                     session={item.session}
-                    active={item.session.id === activeSessionId}
+                    active={
+                      workspaceViewMode === "panes" &&
+                      item.session.id === activeSessionId
+                    }
                     onSelect={() =>
                       onSelectSession(item.folderId, item.session.id)
                     }
@@ -2090,8 +2101,13 @@ function ProjectGroupView({
                     key={item.id}
                     folderGroup={item.folderGroup}
                     projectFolders={projectFoldersForRows}
-                    activeSessionId={activeSessionId}
-                    active={activeProjectFolderId === item.folderGroup.folder.id}
+                    activeSessionId={
+                      workspaceViewMode === "panes" ? activeSessionId : null
+                    }
+                    active={
+                      workspaceViewMode === "panes" &&
+                      activeProjectFolderId === item.folderGroup.folder.id
+                    }
                     collapsed={collapsedFolderIds.has(
                       item.folderGroup.folder.id,
                     )}

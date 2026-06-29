@@ -12,7 +12,7 @@ import { StatusBar } from "./components/StatusBar";
 import { RemoveSessionDialog } from "./components/RemoveSessionDialog";
 import { RunningSessionCloseWarningDialog } from "./components/RunningSessionCloseWarningDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
-import { LayoutRenderer } from "./components/LayoutRenderer";
+import { WorkspaceMain } from "./components/WorkspaceMain";
 import { RightPanel } from "./components/RightPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { AcornRain } from "./components/AcornRain";
@@ -289,6 +289,7 @@ function App() {
   const projects = useAppStore((s) => s.projects);
   const projectFolders = useAppStore((s) => s.projectFolders);
   const layout = useAppStore((s) => s.layout);
+  const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const pendingRemoveId = useAppStore((s) => s.pendingRemoveId);
   const pendingRemoveProject = useAppStore((s) => s.pendingRemoveProject);
   const clearPendingRemove = useAppStore((s) => s.clearPendingRemove);
@@ -1750,7 +1751,7 @@ function App() {
           </Panel>
           <ResizeHandle gap />
           <Panel id="main" order={2} defaultSize={56} minSize={30}>
-            <LayoutRenderer node={layout} />
+            <WorkspaceMain layout={layout} viewMode={workspaceViewMode} />
           </Panel>
           <ResizeHandle gap />
           <Panel

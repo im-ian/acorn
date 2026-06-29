@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
+import { useAppHotkeyBlocker } from "../../lib/hotkeys";
 
 export type ModalVariant = "dialog" | "panel";
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "5xl";
@@ -65,6 +66,7 @@ export function Modal({
 }: ModalProps) {
   const mounted = useHasMounted();
   const backdropPointerDownRef = useRef(false);
+  useAppHotkeyBlocker(open && mounted);
   if (!open || !mounted) return null;
   const isDialog = variant === "dialog";
   // Portal to <body> so every Modal renders as a top-level sibling. This

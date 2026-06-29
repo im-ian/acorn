@@ -14,7 +14,9 @@ import {
   Bell,
   CheckCheck,
   Clock,
+  Columns3,
   Gauge,
+  Kanban,
   Loader2,
   Settings,
   Trash2,
@@ -40,10 +42,10 @@ import type {
   AgentTokenWindow,
 } from "../lib/types";
 import { useTranslation } from "../lib/useTranslation";
-import { useAppStore } from "../store";
+import { useAppStore, type WorkspaceViewMode } from "../store";
 import { MemoryBreakdownModal } from "./MemoryBreakdownModal";
 import { Tooltip } from "./Tooltip";
-import { StatusDot, type StatusTone } from "./ui";
+import { Select, StatusDot, type SelectOption, type StatusTone } from "./ui";
 
 const MEMORY_POLL_MS = 2000;
 const TOKEN_USAGE_POLL_MS = 60_000;
@@ -72,6 +74,16 @@ function statusBarFormat(
       ? String(values[name])
       : match,
   );
+}
+
+function workspaceViewLabel(t: Translator, mode: WorkspaceViewMode): string {
+  return mode === "kanban"
+    ? t("workspace.mode.kanban")
+    : t("workspace.mode.panes");
+}
+
+function isWorkspaceViewMode(value: string): value is WorkspaceViewMode {
+  return value === "panes" || value === "kanban";
 }
 
 function useHomeDir(): string | null {
@@ -203,8 +215,15 @@ function GitHubMark() {
 
 export function StatusBar() {
   const t = useTranslation();
-  const { sessions, activeSessionId, activeProject, error, loading } =
-    useAppStore();
+  const {
+    sessions,
+    activeSessionId,
+    activeProject,
+    error,
+    loading,
+    workspaceViewMode,
+  } = useAppStore();
+  const setWorkspaceViewMode = useAppStore((s) => s.setWorkspaceViewMode);
   const multiInputEnabled = useAppStore((s) => s.multiInputEnabled);
   const prAccountByRepo = useAppStore((s) => s.prAccountByRepo);
   const showSessionCount = useSettings(
@@ -248,6 +267,19 @@ export function StatusBar() {
   // then fall back to the active project root.
   const prAccountKey = active?.worktree_path ?? activeProject ?? null;
   const prAccount = prAccountKey ? prAccountByRepo[prAccountKey] ?? null : null;
+  const workspaceModeText = workspaceViewLabel(t, workspaceViewMode);
+  const workspaceViewOptions: SelectOption[] = [
+    {
+      value: "panes",
+      label: workspaceViewLabel(t, "panes"),
+      icon: <Columns3 size={12} />,
+    },
+    {
+      value: "kanban",
+      label: workspaceViewLabel(t, "kanban"),
+      icon: <Kanban size={12} />,
+    },
+  ];
 
   return (
     <>
@@ -301,6 +333,26 @@ export function StatusBar() {
             children (branch, path) shrink instead of forcing the row
             wider than the footer. */}
         <span className="ml-auto flex min-w-0 items-center gap-3">
+          <Select
+            data-testid="workspace-view-status"
+            value={workspaceViewMode}
+            options={workspaceViewOptions}
+            placement="top"
+            aria-label={statusBarFormat(t, "statusBar.workspaceView", {
+              mode: workspaceModeText,
+            })}
+            onValueChange={(value) => {
+              if (isWorkspaceViewMode(value)) setWorkspaceViewMode(value);
+            }}
+            className={cn(
+              "w-[5.75rem] shrink-0",
+              "[&>button]:h-5 [&>button]:rounded [&>button]:border-transparent [&>button]:bg-transparent",
+              "[&>button]:font-mono [&>button]:text-xs [&>button]:text-fg-muted",
+              "[&>button]:hover:bg-bg-elevated [&>button]:hover:text-fg",
+              "[&>button]:focus-visible:ring-1 [&>button]:focus-visible:ring-accent/40",
+              "[&_[data-select-trigger-icon]]:ml-1 [&_[data-select-trigger-label]]:px-1 [&>button>svg]:mr-1 [&>button>svg]:size-3",
+            )}
+          />
           {loading ? (
             <span className="whitespace-nowrap">
               {statusBarText(t, "statusBar.working")}
