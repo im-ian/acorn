@@ -162,14 +162,59 @@ interface TerminalWorkspaceContext {
 
 function visibleTerminalSessionIdKey(state: AppStateSnapshot): string {
   const workspaceId = activeWorkspaceId(state);
-  if (!workspaceId) return "";
+  const ids: string[] = [];
+  if (workspaceId) {
+    const ws = state.workspaces[workspaceId];
+    if (ws) {
+      ids.push(
+        ...Object.values(ws.panes)
+          .map((pane) => pane.activeTabId)
+          .filter((id): id is string => Boolean(id)),
+      );
+    }
+  }
+  if (state.terminalPopupSessionId) ids.push(state.terminalPopupSessionId);
+  return [...new Set(ids)].sort().join(SESSION_ID_KEY_SEPARATOR);
+}
+
+function visibleTerminalTargetKey(
+  state: AppStateSnapshot,
+  sessionId: string,
+): string | null {
+  if (state.terminalPopupSessionId === sessionId) {
+    return `popup:${sessionId}`;
+  }
+  const workspaceId = activeWorkspaceId(state);
+  if (!workspaceId) return null;
   const ws = state.workspaces[workspaceId];
-  if (!ws) return "";
-  return Object.values(ws.panes)
-    .map((pane) => pane.activeTabId)
-    .filter((id): id is string => Boolean(id))
-    .sort()
-    .join(SESSION_ID_KEY_SEPARATOR);
+  if (!ws) return null;
+  for (const pane of Object.values(ws.panes)) {
+    if (pane.activeTabId === sessionId) return `pane:${pane.id}`;
+  }
+  return null;
+}
+
+function terminalDestinationForTargetKey(
+  targetKey: string | null,
+): HTMLElement | null {
+  if (!targetKey) return null;
+  if (targetKey.startsWith("popup:")) {
+    const sessionId = targetKey.slice("popup:".length);
+    return document.querySelector(
+      `[data-terminal-popup-body="${cssEscape(sessionId)}"]`,
+    ) as HTMLElement | null;
+  }
+  if (targetKey.startsWith("pane:")) {
+    const paneId = targetKey.slice("pane:".length);
+    return document.querySelector(
+      `[data-pane-body="${cssEscape(paneId)}"]`,
+    ) as HTMLElement | null;
+  }
+  return null;
+}
+
+function terminalTargetIsPopup(targetKey: string | null): boolean {
+  return Boolean(targetKey?.startsWith("popup:"));
 }
 
 function parseSessionIdKey(key: string): Set<string> {
@@ -189,30 +234,23 @@ function PortaledTerminal({ session }: { session: Session }) {
     targetRef.current = el;
   }
 
-  // Which pane (in the active workspace) is currently displaying this
-  // session as its active tab? null when this session is not visible.
-  const visiblePaneId = useAppStore((state) => {
-    const workspaceId = activeWorkspaceId(state);
-    if (!workspaceId) return null;
-    const ws = state.workspaces[workspaceId];
-    if (!ws) return null;
-    for (const pane of Object.values(ws.panes)) {
-      if (pane.activeTabId === session.id) return pane.id;
-    }
-    return null;
-  });
+  const visibleTargetKey = useAppStore((state) =>
+    visibleTerminalTargetKey(state, session.id),
+  );
 
   // The workspace layout reference. Splits/merges replace the layout node, so
   // a new reference signals that pane DOM bodies were remounted — even when
-  // `visiblePaneId` is unchanged. Without this dep the reattach effect skips
-  // re-running and the terminal target stays detached from the new pane body.
+  // the visible target is unchanged. Without this dep the reattach effect
+  // skips re-running and the terminal target stays detached from the new body.
   const layoutRef = useAppStore((state) =>
     activeWorkspaceId(state)
       ? state.workspaces[activeWorkspaceId(state)!]?.layout ?? null
       : null,
   );
   const isFocusedPane = useAppStore((state) =>
-    isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
+    terminalTargetIsPopup(visibleTargetKey)
+      ? true
+      : isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
   );
   const workspaceKey = useAppStore((state) =>
     workspaceContextKeyForSession(state, session.id),
@@ -232,24 +270,32 @@ function PortaledTerminal({ session }: { session: Session }) {
     };
   }, []);
 
-  // Whenever the visible pane changes, move our target div into that pane's
-  // body (or back to limbo). This must run as a layout effect: Terminal's
-  // passive mount effect opens xterm and spawns the PTY with the current
-  // measured cols/rows, so the target needs to be in its real pane before
-  // that effect runs. Waiting for rAF leaves the first spawn fitted against
-  // the off-screen limbo size, which narrow panes and agent TUIs expose as
-  // stale wrapping/paint until the next resize or tab refit.
+  // Whenever the visible target changes, move our target div into that pane,
+  // popup body, or back to limbo. Popup bodies are rendered through a Modal
+  // portal, so keep looking briefly if the target has not landed yet.
   useLayoutEffect(() => {
     const target = targetRef.current;
     if (!target) return;
-    const dest = visiblePaneId
-      ? (document.querySelector(
-          `[data-pane-body="${cssEscape(visiblePaneId)}"]`,
-        ) as HTMLElement | null)
-      : null;
-    const nextParent = dest ?? getTerminalLimbo();
-    if (target.parentElement !== nextParent) nextParent.appendChild(target);
-  }, [visiblePaneId, layoutRef]);
+    let frame: number | null = null;
+    let attempts = 0;
+    const move = () => {
+      const dest = terminalDestinationForTargetKey(visibleTargetKey);
+      const nextParent = dest ?? getTerminalLimbo();
+      if (target.parentElement !== nextParent) nextParent.appendChild(target);
+      if (
+        dest === null &&
+        terminalTargetIsPopup(visibleTargetKey) &&
+        attempts < 30
+      ) {
+        attempts += 1;
+        frame = requestAnimationFrame(move);
+      }
+    };
+    move();
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [visibleTargetKey, layoutRef]);
 
   return createPortal(
     <Terminal
@@ -261,7 +307,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       workspacePath={workspace?.path ?? null}
       agentProvider={resolveSessionAgentProvider(session)}
       pasteAgentProvider={session.agent_provider ?? null}
-      isActive={visiblePaneId !== null}
+      isActive={visibleTargetKey !== null}
       isFocusedPane={isFocusedPane}
     />,
     targetRef.current,

@@ -95,6 +95,8 @@ function resetStore(): void {
       focusedPaneId: "root",
       activeTabId: null,
       activeSessionId: null,
+      workspaceViewMode: "panes",
+      terminalPopupSessionId: null,
       rightTab: "commits",
       rightTabByGroup: defaultTabByGroup(),
       workspaceTabs: {},
@@ -313,6 +315,33 @@ describe("TerminalHost", () => {
       { id: "first", active: false },
       { id: "second", active: true },
     ]);
+  });
+
+  it("moves a popup terminal into the popup body without changing pane selection", async () => {
+    installWorkspaceSessions(["first", "second"]);
+    const popupBody = document.createElement("div");
+    popupBody.dataset.terminalPopupBody = "second";
+    document.body.appendChild(popupBody);
+
+    render();
+    await act(async () => {
+      useAppStore.getState().openTerminalPopup("second");
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(terminalRows()).toEqual([
+      { id: "first", active: true },
+      { id: "second", active: true },
+    ]);
+    expect(
+      popupBody.querySelector(
+        '[data-acorn-terminal-slot="second"] [data-testid="terminal"]',
+      ),
+    ).not.toBeNull();
+    expect(useAppStore.getState().activeSessionId).toBe("first");
+
+    popupBody.remove();
   });
 
   it("uses the configured resident terminal limit when evicting idle daemon terminals", async () => {

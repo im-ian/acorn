@@ -2,11 +2,13 @@ import { useMemo } from "react";
 import { Command, useCommandState } from "cmdk";
 import {
   Bot,
+  Columns3,
   FolderOpen,
   FolderPlus,
   GitBranch,
   GitCommit,
   GitPullRequest,
+  Kanban,
   LayoutTemplate,
   ListChecks,
   ListPlus,
@@ -19,7 +21,7 @@ import {
   Trees,
 } from "lucide-react";
 import { RESET_PANEL_SIZES_EVENT } from "../lib/layoutEvents";
-import { useAppStore } from "../store";
+import { useAppStore, type WorkspaceViewMode } from "../store";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -44,9 +46,20 @@ function cpt(t: Translator, key: CommandPaletteTranslationKey): string {
   return t(key);
 }
 
+function workspaceModeLabel(t: Translator, mode: WorkspaceViewMode): string {
+  return mode === "kanban"
+    ? t("workspace.mode.kanban")
+    : t("workspace.mode.panes");
+}
+
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const sessions = useAppStore((s) => s.sessions);
+  const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const t = useTranslation();
+  const nextWorkspaceViewMode: WorkspaceViewMode =
+    workspaceViewMode === "kanban" ? "panes" : "kanban";
+  const NextWorkspaceViewIcon =
+    nextWorkspaceViewMode === "kanban" ? Kanban : Columns3;
 
   // Derived once per render — sessions array identity is stable from zustand
   // until the underlying list actually changes.
@@ -177,6 +190,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   function handleSetTab(tab: "todos" | "commits" | "staged" | "prs") {
     useAppStore.getState().setRightTab(tab);
+    close();
+  }
+
+  function handleToggleWorkspaceView() {
+    useAppStore.getState().setWorkspaceViewMode(nextWorkspaceViewMode);
     close();
   }
 
@@ -349,6 +367,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         ) : null}
 
         <Command.Group heading={cpt(t, "commandPalette.groups.view")}>
+          <Command.Item
+            value="toggle-workspace-view"
+            onSelect={handleToggleWorkspaceView}
+            keywords={["workspace", "view", "panes", "pane", "kanban", "board"]}
+          >
+            <NextWorkspaceViewIcon size={14} className="text-fg-muted" />
+            <span>{cpt(t, "commandPalette.commands.toggleWorkspaceView")}</span>
+            <span className="ml-auto truncate text-xs text-fg-muted/80">
+              {workspaceModeLabel(t, nextWorkspaceViewMode)}
+            </span>
+          </Command.Item>
           <Command.Item
             value="view-todos"
             onSelect={() => handleSetTab("todos")}

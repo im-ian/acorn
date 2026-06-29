@@ -153,9 +153,12 @@ export interface ProjectWorkspace {
   layout: LayoutNode;
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
+  viewMode?: WorkspaceViewMode;
   rightTab?: RightTab;
   rightTabByGroup?: Record<RightGroup, RightTab>;
 }
+
+export type WorkspaceViewMode = "panes" | "kanban";
 
 export interface MoveTabArgs {
   tabId: string;
@@ -191,6 +194,8 @@ interface AppStateModel {
   focusedPaneId: PaneId;
   activeTabId: string | null;
   activeSessionId: string | null;
+  workspaceViewMode: WorkspaceViewMode;
+  terminalPopupSessionId: string | null;
   consumeError: () => string | null;
 
   rightTab: RightTab;
@@ -275,6 +280,9 @@ interface AppStateModel {
     folderId: string | null,
   ) => void;
   setFocusedPane: (paneId: PaneId) => void;
+  setWorkspaceViewMode: (mode: WorkspaceViewMode) => void;
+  openTerminalPopup: (sessionId: string) => void;
+  closeTerminalPopup: () => void;
   focusAdjacentPane: (direction: PaneFocusDirection) => void;
   setPaneSplitSizes: (splitId: string, sizes: readonly number[]) => void;
   splitFocusedPane: (direction: Direction) => void;
@@ -483,11 +491,14 @@ function normalizePaneState(
   };
 }
 
-function emptyWorkspace(): ProjectWorkspace {
+function emptyWorkspace(
+  viewMode: WorkspaceViewMode = defaultWorkspaceViewMode(),
+): ProjectWorkspace {
   return {
     layout: makePaneNode(ROOT_PANE_ID),
     panes: { [ROOT_PANE_ID]: emptyPane(ROOT_PANE_ID) },
     focusedPaneId: ROOT_PANE_ID,
+    viewMode,
     rightTab: "commits",
     rightTabByGroup: defaultTabByGroup(),
   };
@@ -516,6 +527,21 @@ function normalizeRightPanelState(
   };
 }
 
+function defaultWorkspaceViewMode(): WorkspaceViewMode {
+  return useSettings.getState().settings.interface.defaultWorkspaceViewMode;
+}
+
+function readWorkspaceViewMode(value: unknown): WorkspaceViewMode | null {
+  return value === "kanban" || value === "panes" ? value : null;
+}
+
+function normalizeWorkspaceViewMode(
+  value: unknown,
+  fallback: WorkspaceViewMode = defaultWorkspaceViewMode(),
+): WorkspaceViewMode {
+  return readWorkspaceViewMode(value) ?? fallback;
+}
+
 let indexedSessions: Session[] | null = null;
 let indexedSessionsById: ReadonlyMap<string, Session> = new Map();
 
@@ -542,6 +568,7 @@ function fallbackEmptyMirror() {
     focusedPaneId: ROOT_PANE_ID as PaneId,
     activeTabId,
     activeSessionId: activeSessionIdFromTabId(activeTabId),
+    workspaceViewMode: defaultWorkspaceViewMode(),
   };
 }
 
@@ -560,6 +587,7 @@ function mirrorActive(
     focusedPaneId: ws.focusedPaneId,
     activeTabId,
     activeSessionId: activeSessionIdFromTabId(activeTabId),
+    workspaceViewMode: normalizeWorkspaceViewMode(ws.viewMode),
     ...rightPanel,
   };
 }
@@ -764,9 +792,15 @@ function reconcileWorkspaces(
   if (newActiveFolderId && !newWorkspaces[newActiveFolderId]) {
     newActiveFolderId = newActive ? defaultProjectFolderId(newActive) : null;
   }
+  const syncedWorkspaces = syncProjectWorkspaceViewModes(
+    newWorkspaces,
+    nextProjectFolders,
+    newActive,
+    newActiveFolderId,
+  );
 
   return {
-    workspaces: newWorkspaces,
+    workspaces: syncedWorkspaces,
     projectFolders: nextProjectFolders,
     sessionFolderIds: nextSessionFolderIds,
     activeProject: newActive,
@@ -805,6 +839,82 @@ function activeWorkspaceId(
   s: Pick<AppStateModel, "activeProject" | "activeProjectFolderId">,
 ): string | null {
   return s.activeProjectFolderId ?? s.activeProject;
+}
+
+function projectWorkspaceIds(
+  projectFolders: ProjectFoldersByRepo,
+  repoPath: string,
+): string[] {
+  const ids = new Set<string>([defaultProjectFolderId(repoPath)]);
+  for (const folder of projectFolders[repoPath] ?? []) {
+    ids.add(folder.id);
+  }
+  return [...ids];
+}
+
+function workspaceViewModeForProject(
+  workspaces: Record<string, ProjectWorkspace>,
+  projectFolders: ProjectFoldersByRepo,
+  repoPath: string,
+  preferredWorkspaceId: string | null = null,
+): WorkspaceViewMode {
+  const ids = projectWorkspaceIds(projectFolders, repoPath);
+  const candidates = [
+    preferredWorkspaceId && ids.includes(preferredWorkspaceId)
+      ? preferredWorkspaceId
+      : null,
+    defaultProjectFolderId(repoPath),
+    ...ids,
+  ];
+  const seen = new Set<string>();
+  for (const id of candidates) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const ws = workspaces[id];
+    const mode = readWorkspaceViewMode(ws?.viewMode);
+    if (mode) return mode;
+  }
+  return defaultWorkspaceViewMode();
+}
+
+function syncProjectWorkspaceViewModes(
+  workspaces: Record<string, ProjectWorkspace>,
+  projectFolders: ProjectFoldersByRepo,
+  preferredRepoPath: string | null = null,
+  preferredWorkspaceId: string | null = null,
+): Record<string, ProjectWorkspace> {
+  let next = workspaces;
+  for (const repoPath of Object.keys(projectFolders)) {
+    const mode = workspaceViewModeForProject(
+      workspaces,
+      projectFolders,
+      repoPath,
+      preferredRepoPath === repoPath ? preferredWorkspaceId : null,
+    );
+    for (const workspaceId of projectWorkspaceIds(projectFolders, repoPath)) {
+      const ws = next[workspaceId];
+      if (!ws || readWorkspaceViewMode(ws.viewMode) === mode) continue;
+      if (next === workspaces) next = { ...workspaces };
+      next[workspaceId] = { ...ws, viewMode: mode };
+    }
+  }
+  return next;
+}
+
+function setProjectWorkspaceViewMode(
+  workspaces: Record<string, ProjectWorkspace>,
+  projectFolders: ProjectFoldersByRepo,
+  repoPath: string,
+  mode: WorkspaceViewMode,
+): Record<string, ProjectWorkspace> {
+  let next = workspaces;
+  for (const workspaceId of projectWorkspaceIds(projectFolders, repoPath)) {
+    const ws = next[workspaceId];
+    if (!ws || readWorkspaceViewMode(ws.viewMode) === mode) continue;
+    if (next === workspaces) next = { ...workspaces };
+    next[workspaceId] = { ...ws, viewMode: mode };
+  }
+  return next;
 }
 
 function repoPathForProjectFolderId(
@@ -1211,6 +1321,8 @@ export const useAppStore = create<AppStateModel>()(
   focusedPaneId: ROOT_PANE_ID,
   activeTabId: null,
   activeSessionId: null,
+  workspaceViewMode: defaultWorkspaceViewMode(),
+  terminalPopupSessionId: null,
 
   rightTab: "commits",
   rightTabByGroup: defaultTabByGroup(),
@@ -1708,7 +1820,16 @@ export const useAppStore = create<AppStateModel>()(
           };
       const workspaces = hasWorkspace
         ? s.workspaces
-        : { ...s.workspaces, [folderId]: emptyWorkspace() };
+        : {
+            ...s.workspaces,
+            [folderId]: emptyWorkspace(
+              workspaceViewModeForProject(
+                s.workspaces,
+                projectFolders,
+                repoPath,
+              ),
+            ),
+          };
       return {
         workspaces,
         projectFolders,
@@ -1725,7 +1846,19 @@ export const useAppStore = create<AppStateModel>()(
       if (!folder) return s;
       const workspaces = s.workspaces[folder.id]
         ? s.workspaces
-        : { ...s.workspaces, [folder.id]: emptyWorkspace() };
+        : {
+            ...s.workspaces,
+            [folder.id]: emptyWorkspace(
+              workspaceViewModeForProject(
+                s.workspaces,
+                s.projectFolders,
+                folder.repoPath,
+                s.activeProject === folder.repoPath
+                  ? activeWorkspaceId(s)
+                  : null,
+              ),
+            ),
+          };
       return {
         workspaces,
         activeProject: folder.repoPath,
@@ -1775,7 +1908,14 @@ export const useAppStore = create<AppStateModel>()(
       };
       const workspaces = {
         ...s.workspaces,
-        [created.id]: emptyWorkspace(),
+        [created.id]: emptyWorkspace(
+          workspaceViewModeForProject(
+            s.workspaces,
+            projectFolders,
+            repoPath,
+            s.activeProject === repoPath ? activeWorkspaceId(s) : null,
+          ),
+        ),
       };
       const reconciled = reconcileWorkspaces(
         s.sessions,
@@ -1918,6 +2058,32 @@ export const useAppStore = create<AppStateModel>()(
       });
       return patch ?? s;
     });
+  },
+
+  setWorkspaceViewMode(mode) {
+    set((s) => {
+      const workspaceId = activeWorkspaceId(s);
+      if (!s.activeProject || !workspaceId) return s;
+      const workspaces = setProjectWorkspaceViewMode(
+        s.workspaces,
+        s.projectFolders,
+        s.activeProject,
+        mode,
+      );
+      if (workspaces === s.workspaces) return s;
+      return {
+        workspaces,
+        ...mirrorActive(workspaces, workspaceId),
+      };
+    });
+  },
+
+  openTerminalPopup(sessionId) {
+    set({ terminalPopupSessionId: sessionId });
+  },
+
+  closeTerminalPopup() {
+    set({ terminalPopupSessionId: null });
   },
 
   focusAdjacentPane(direction) {
@@ -2389,6 +2555,10 @@ export const useAppStore = create<AppStateModel>()(
       for (const removalId of removalIds) {
         delete autoCloseSessionIds[removalId];
       }
+      const terminalPopupSessionId =
+        s.terminalPopupSessionId && removalIds.has(s.terminalPopupSessionId)
+          ? null
+          : s.terminalPopupSessionId;
 
       return {
         sessions,
@@ -2397,6 +2567,7 @@ export const useAppStore = create<AppStateModel>()(
         liveInWorktree,
         pendingTerminalInput,
         autoCloseSessionIds,
+        terminalPopupSessionId,
         sessionNotifications: s.sessionNotifications.filter(
           (notification) => !removalIds.has(notification.sessionId),
         ),
@@ -3386,6 +3557,9 @@ export const useAppStore = create<AppStateModel>()(
         );
         const sanitized: Record<string, ProjectWorkspace> = {};
         for (const [key, ws] of Object.entries(state.workspaces ?? {})) {
+          const explicitViewMode = readWorkspaceViewMode(
+            (ws as PersistedWorkspaceState).viewMode,
+          );
           const newPanes: Record<PaneId, PaneState> = {};
           for (const [pid, pane] of Object.entries(ws.panes ?? {})) {
             const normalized = normalizePaneState(
@@ -3408,7 +3582,7 @@ export const useAppStore = create<AppStateModel>()(
               activationHistory: activationHistoryFor(normalized, ids, active),
             };
           }
-          sanitized[key] = {
+          const normalizedWorkspace: ProjectWorkspace = {
             ...ws,
             panes: newPanes,
             ...normalizeRightPanelState(
@@ -3417,11 +3591,23 @@ export const useAppStore = create<AppStateModel>()(
                 state.rightTabByGroup,
             ),
           };
+          if (explicitViewMode) {
+            normalizedWorkspace.viewMode = explicitViewMode;
+          } else {
+            delete normalizedWorkspace.viewMode;
+          }
+          sanitized[key] = normalizedWorkspace;
         }
-        state.workspaces = sanitized;
-        state.projectFolders = normalizePersistedProjectFolders(
+        const projectFolders = normalizePersistedProjectFolders(
           state.projectFolders,
           sanitized,
+        );
+        state.projectFolders = projectFolders;
+        state.workspaces = syncProjectWorkspaceViewModes(
+          sanitized,
+          projectFolders,
+          state.activeProject,
+          state.activeProjectFolderId,
         );
         state.sessionFolderIds = normalizeStringRecord(state.sessionFolderIds);
         state.autoCloseSessionIds = normalizeTrueRecord(

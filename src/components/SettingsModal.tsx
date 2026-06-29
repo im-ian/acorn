@@ -1,7 +1,9 @@
 import {
+  Columns3,
   Download,
   FolderOpen,
   ImagePlus,
+  Kanban,
   Keyboard,
   Loader2,
   RefreshCcw,
@@ -75,6 +77,7 @@ import {
   type SelectedAgent,
   type SessionTitleSource,
   type AcornSettings,
+  type DefaultWorkspaceViewMode,
   type TerminalFontSmoothing,
   type TerminalFontWeight,
   type TerminalLinkActivation,
@@ -106,6 +109,7 @@ import {
   Stepper,
   TextInput,
   type SelectItem,
+  type SelectOption,
   type SelectOptionGroup,
 } from "./ui";
 
@@ -1153,6 +1157,7 @@ function GithubSettings() {
 
 function InterfaceSettings({ t }: { t: SettingsTranslator }) {
   const settings = useSettings((s) => s.settings);
+  const patchInterface = useSettings((s) => s.patchInterface);
   const patchLanguage = useSettings((s) => s.patchLanguage);
   const patchAppearance = useSettings((s) => s.patchAppearance);
 
@@ -1167,7 +1172,61 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
         value={settings.appearance.uiScalePercent}
         onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
       />
+      <DefaultWorkspaceViewModeSection
+        value={settings.interface.defaultWorkspaceViewMode}
+        onChange={(defaultWorkspaceViewMode) =>
+          patchInterface({ defaultWorkspaceViewMode })
+        }
+        t={t}
+      />
     </section>
+  );
+}
+
+function isDefaultWorkspaceViewMode(
+  value: string,
+): value is DefaultWorkspaceViewMode {
+  return value === "panes" || value === "kanban";
+}
+
+function DefaultWorkspaceViewModeSection({
+  value,
+  onChange,
+  t,
+}: {
+  value: DefaultWorkspaceViewMode;
+  onChange: (value: DefaultWorkspaceViewMode) => void;
+  t: SettingsTranslator;
+}) {
+  const label = st(t, "settings.interface.defaultWorkspaceViewMode.label");
+  const options: SelectOption[] = [
+    {
+      value: "panes",
+      label: t("workspace.mode.panes"),
+      icon: <Columns3 size={13} />,
+    },
+    {
+      value: "kanban",
+      label: t("workspace.mode.kanban"),
+      icon: <Kanban size={13} />,
+    },
+  ];
+
+  return (
+    <Field
+      label={label}
+      hint={st(t, "settings.interface.defaultWorkspaceViewMode.hint")}
+    >
+      <Select
+        aria-label={label}
+        value={value}
+        options={options}
+        onValueChange={(nextValue) => {
+          if (isDefaultWorkspaceViewMode(nextValue)) onChange(nextValue);
+        }}
+        className="w-44"
+      />
+    </Field>
   );
 }
 

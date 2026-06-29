@@ -1,9 +1,20 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useHotkeys, type HotkeyBindings } from "./hotkeys";
+import {
+  useAppHotkeyBlocker,
+  useHotkeys,
+  type HotkeyBindings,
+} from "./hotkeys";
 
-function HotkeyHarness({ bindings }: { bindings: HotkeyBindings }) {
+function HotkeyHarness({
+  bindings,
+  blockAppHotkeys = false,
+}: {
+  bindings: HotkeyBindings;
+  blockAppHotkeys?: boolean;
+}) {
+  useAppHotkeyBlocker(blockAppHotkeys);
   useHotkeys(bindings);
   return <input aria-label="hotkey target" />;
 }
@@ -23,9 +34,17 @@ describe("useHotkeys", () => {
     container.remove();
   });
 
-  function render(bindings: HotkeyBindings): HTMLInputElement {
+  function render(
+    bindings: HotkeyBindings,
+    blockAppHotkeys = false,
+  ): HTMLInputElement {
     act(() => {
-      root.render(<HotkeyHarness bindings={bindings} />);
+      root.render(
+        <HotkeyHarness
+          bindings={bindings}
+          blockAppHotkeys={blockAppHotkeys}
+        />,
+      );
     });
     const input = container.querySelector("input");
     if (!input) throw new Error("missing hotkey target");
@@ -70,5 +89,26 @@ describe("useHotkeys", () => {
 
     expect(descendantHandler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks app-level modifier shortcuts while a modal is open", () => {
+    const handler = vi.fn((event: KeyboardEvent) => event.preventDefault());
+    const input = render({ "Control+Shift+e": handler }, true);
+    const descendantHandler = vi.fn();
+    input.addEventListener("keydown", descendantHandler, { capture: true });
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "e",
+        code: "KeyE",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(descendantHandler).not.toHaveBeenCalled();
   });
 });

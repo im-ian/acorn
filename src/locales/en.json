@@ -68,6 +68,12 @@
       "label": "Language",
       "hint": "Language used for the Acorn interface. New translations are added gradually."
     },
+    "interface": {
+      "defaultWorkspaceViewMode": {
+        "label": "Default workspace mode",
+        "hint": "Mode used when Acorn creates a new project workspace. Existing project-specific choices stay unchanged."
+      }
+    },
     "terminal": {
       "fontFamily": {
         "label": "Font family",
@@ -770,6 +776,8 @@
     "working": "working...",
     "error": "error: {error}",
     "githubAccountTooltip": "PRs listed via gh account {account}",
+    "workspaceView": "view: {mode}",
+    "workspaceViewTooltip": "Workspace view",
     "branch": "branch: {branch}",
     "memoryTooltip": "Click to view per-process breakdown",
     "memory": "memory: {memory}",
@@ -842,6 +850,38 @@
         "restarting": "Restarting...",
         "settings": "Settings"
       }
+    }
+  },
+  "workspace": {
+    "mode": {
+      "ariaLabel": "Workspace view mode",
+      "panes": "Panes",
+      "kanban": "Kanban"
+    },
+    "kanban": {
+      "title": "Workspace kanban",
+      "empty": "No sessions in this workspace.",
+      "emptyColumn": "No sessions",
+      "filterLabel": "Filter sessions",
+      "filterPlaceholder": "Filter sessions",
+      "newSession": "New session",
+      "resizeColumn": "Resize {name} column",
+      "actions": {
+        "createSession": "Create session",
+        "resetColumnSizes": "Reset sizes",
+        "equalizeColumnSizes": "Equalize sizes",
+        "newSession": "New session",
+        "newWorktreeSession": "New worktree",
+        "newChatSession": "New chat",
+        "newControlSession": "Control"
+      },
+      "sort": {
+        "label": "Sort sessions",
+        "updatedDesc": "Recently updated",
+        "createdDesc": "Newest",
+        "nameAsc": "Name"
+      },
+      "openSession": "Open {name}"
     }
   },
   "topBar": {
@@ -1819,6 +1859,7 @@
       "viewCommits": "View Commits",
       "viewStaged": "View Staged",
       "viewPullRequests": "View Pull Requests",
+      "toggleWorkspaceView": "Toggle workspace view",
       "resetPanelSizes": "Reset panel sizes",
       "reloadShellEnvironment": "Reload shell environment",
       "restartIpcServer": "Restart IPC server",
