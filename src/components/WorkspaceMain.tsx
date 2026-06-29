@@ -45,6 +45,20 @@ import { useDialogShortcuts } from "../lib/dialog";
 import { useSettings } from "../lib/settings";
 import { useTranslation } from "../lib/useTranslation";
 import {
+  KANBAN_COLUMN_STATUSES,
+  KANBAN_COLUMN_DEFAULT_WIDTH,
+  clampKanbanColumnWidth,
+  defaultKanbanColumnWidths,
+  equalizeKanbanColumnWidths,
+  readKanbanBoardPrefs,
+  sessionMatchesKanbanFilter,
+  sortKanbanSessions,
+  toKanbanSortMode,
+  writeKanbanBoardPrefs,
+  type KanbanBoardPrefs,
+  type KanbanSortMode,
+} from "../lib/kanbanBoard";
+import {
   selectSessionsById,
   useAppStore,
   type WorkspaceViewMode,
@@ -56,17 +70,6 @@ import { LayoutRenderer } from "./LayoutRenderer";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 
-const KANBAN_COLUMNS: ReadonlyArray<{
-  status: SessionStatus;
-  tone: StatusTone;
-}> = [
-  { status: "idle", tone: "neutral" },
-  { status: "needs_input", tone: "warning" },
-  { status: "running", tone: "accent" },
-  { status: "failed", tone: "danger" },
-  { status: "completed", tone: "success" },
-];
-
 const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   idle: "neutral",
   running: "accent",
@@ -74,6 +77,16 @@ const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   failed: "danger",
   completed: "success",
 };
+
+// Pair each column status (ordered by the board library) with its UI tone, so
+// the column order has a single source of truth in `kanbanBoard.ts`.
+const KANBAN_COLUMNS: ReadonlyArray<{
+  status: SessionStatus;
+  tone: StatusTone;
+}> = KANBAN_COLUMN_STATUSES.map((status) => ({
+  status,
+  tone: STATUS_TONE[status],
+}));
 
 const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
   idle: "text-fg-muted",
@@ -83,13 +96,9 @@ const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
   completed: "text-accent/70",
 };
 
-type KanbanSortMode = "updated-desc" | "created-desc" | "name-asc";
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 type WorkspaceKanbanContextGroup = "session" | "open" | "copy" | "danger";
 
-const KANBAN_COLUMN_WIDTHS_KEY = "acorn:workspace-kanban:column-widths:v2";
-const KANBAN_COLUMN_DEFAULT_WIDTH = 192;
-const KANBAN_COLUMN_MIN_WIDTH = 152;
 const KANBAN_COLUMN_GAP_PX = 6;
 const KANBAN_BOARD_PADDING_X_PX = 16;
 
@@ -112,18 +121,23 @@ export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
 }
 
 function WorkspaceKanbanBoard() {
+  // Remount per project so each board hydrates its own persisted prefs through
+  // the useState initializer rather than racing an effect to swap them in.
+  const projectId = useAppStore((s) => s.activeProject);
+  return (
+    <KanbanBoard key={projectId ?? "__no-project__"} projectId={projectId} />
+  );
+}
+
+function KanbanBoard({ projectId }: { projectId: string | null }) {
   const t = useTranslation();
   const panes = useAppStore((s) => s.panes);
   const sessionsById = useAppStore(selectSessionsById);
   const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
-  const [filterQuery, setFilterQuery] = useState("");
-  const [sortMode, setSortMode] = useState<KanbanSortMode>("updated-desc");
-  const [columnWidths, setColumnWidths] = useState<number[]>(
-    readKanbanColumnWidths,
+  const [prefs, setPrefs] = useState<KanbanBoardPrefs>(() =>
+    readKanbanBoardPrefs(projectId),
   );
-  const [lastEditedColumnWidth, setLastEditedColumnWidth] = useState(
-    KANBAN_COLUMN_DEFAULT_WIDTH,
-  );
+  const { filterQuery, sortMode, columnWidths } = prefs;
   const [resizingColumnIndex, setResizingColumnIndex] = useState<number | null>(
     null,
   );
@@ -171,9 +185,30 @@ function WorkspaceKanbanBoard() {
     [columnWidths],
   );
 
+  // Persist board prefs per project. projectId is fixed for this instance (the
+  // wrapper remounts via key on project switch), so a board can never write one
+  // project's prefs into another project's bucket.
   useEffect(() => {
-    writeKanbanColumnWidths(columnWidths);
-  }, [columnWidths]);
+    writeKanbanBoardPrefs(projectId, prefs);
+  }, [projectId, prefs]);
+
+  function setFilterQuery(filterQuery: string) {
+    setPrefs((current) => ({ ...current, filterQuery }));
+  }
+
+  function setSortMode(sortMode: KanbanSortMode) {
+    setPrefs((current) => ({ ...current, sortMode }));
+  }
+
+  function updateColumnWidths(
+    next: number[] | ((current: number[]) => number[]),
+  ) {
+    setPrefs((current) => ({
+      ...current,
+      columnWidths:
+        typeof next === "function" ? next(current.columnWidths) : next,
+    }));
+  }
 
   function openSession(id: string) {
     openTerminalPopup(id);
@@ -190,8 +225,7 @@ function WorkspaceKanbanBoard() {
 
   function resizeColumn(index: number, nextWidth: number) {
     const clampedWidth = clampKanbanColumnWidth(nextWidth);
-    setLastEditedColumnWidth(clampedWidth);
-    setColumnWidths((current) =>
+    updateColumnWidths((current) =>
       current.map((width, widthIndex) =>
         widthIndex === index ? clampedWidth : width,
       ),
@@ -203,13 +237,11 @@ function WorkspaceKanbanBoard() {
   }
 
   function resetColumnWidths() {
-    setLastEditedColumnWidth(KANBAN_COLUMN_DEFAULT_WIDTH);
-    setColumnWidths(defaultKanbanColumnWidths());
+    updateColumnWidths(defaultKanbanColumnWidths());
   }
 
   function equalizeColumnWidths() {
-    const equalWidth = clampKanbanColumnWidth(lastEditedColumnWidth);
-    setColumnWidths(KANBAN_COLUMNS.map(() => equalWidth));
+    updateColumnWidths((current) => equalizeKanbanColumnWidths(current));
   }
 
   function startColumnResize(
@@ -1036,113 +1068,6 @@ function workspaceContextMenuGroupTitle(
     type: "group-title",
     label: sidebarText(t, `sidebar.contextMenu.${group}`),
   };
-}
-
-function toKanbanSortMode(value: string): KanbanSortMode {
-  if (
-    value === "updated-desc" ||
-    value === "created-desc" ||
-    value === "name-asc"
-  ) {
-    return value;
-  }
-  return "updated-desc";
-}
-
-function defaultKanbanColumnWidths(): number[] {
-  return KANBAN_COLUMNS.map(() => KANBAN_COLUMN_DEFAULT_WIDTH);
-}
-
-function readKanbanColumnWidths(): number[] {
-  const fallback = defaultKanbanColumnWidths();
-  if (typeof window === "undefined") return fallback;
-
-  try {
-    const raw = window.localStorage.getItem(KANBAN_COLUMN_WIDTHS_KEY);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return fallback;
-    const byStatus = parsed as Partial<Record<SessionStatus, unknown>>;
-    return KANBAN_COLUMNS.map(({ status }, index) => {
-      const value = byStatus[status];
-      return typeof value === "number" && Number.isFinite(value)
-        ? clampKanbanColumnWidth(value)
-        : (fallback[index] ?? KANBAN_COLUMN_DEFAULT_WIDTH);
-    });
-  } catch {
-    return fallback;
-  }
-}
-
-function writeKanbanColumnWidths(widths: readonly number[]) {
-  if (typeof window === "undefined") return;
-  const byStatus: Partial<Record<SessionStatus, number>> = {};
-  KANBAN_COLUMNS.forEach(({ status }, index) => {
-    byStatus[status] = clampKanbanColumnWidth(
-      widths[index] ?? KANBAN_COLUMN_DEFAULT_WIDTH,
-    );
-  });
-  try {
-    window.localStorage.setItem(
-      KANBAN_COLUMN_WIDTHS_KEY,
-      JSON.stringify(byStatus),
-    );
-  } catch {
-    // Ignore private-mode or quota failures; resizing should still work.
-  }
-}
-
-function clampKanbanColumnWidth(width: number): number {
-  return Math.max(KANBAN_COLUMN_MIN_WIDTH, Math.round(width));
-}
-
-function sortKanbanSessions(
-  sessions: readonly Session[],
-  sortMode: KanbanSortMode,
-): Session[] {
-  return [...sessions].sort((a, b) => {
-    switch (sortMode) {
-      case "updated-desc":
-        return (
-          sessionTimestamp(b.updated_at) - sessionTimestamp(a.updated_at) ||
-          compareSessionName(a, b)
-        );
-      case "created-desc":
-        return (
-          sessionTimestamp(b.created_at) - sessionTimestamp(a.created_at) ||
-          compareSessionName(a, b)
-        );
-      case "name-asc":
-        return compareSessionName(a, b);
-    }
-  });
-}
-
-function sessionMatchesKanbanFilter(
-  session: Session,
-  filterQuery: string,
-): boolean {
-  const query = filterQuery.trim().toLowerCase();
-  if (!query) return true;
-  return [
-    session.name,
-    session.worktree_path,
-    basename(session.worktree_path),
-    session.branch,
-    session.id,
-  ].some((value) => value.toLowerCase().includes(query));
-}
-
-function sessionTimestamp(value: string): number {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function compareSessionName(a: Session, b: Session): number {
-  return a.name.localeCompare(b.name, undefined, {
-    sensitivity: "base",
-    numeric: true,
-  });
 }
 
 async function copyToClipboard(text: string): Promise<void> {
