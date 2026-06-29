@@ -340,6 +340,106 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls[0]).toMatchObject({ id: "session-1", force: true });
   });
 
+  test("control session worker menu opens and interrupts owned workers", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "control-1",
+        name: "controller",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "control",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "worker-1",
+        name: "claude-worker",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "running",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "control", session_id: "control-1" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("pty_write", (args) => {
+      const w = window as unknown as { __ptyWrites?: unknown[] };
+      w.__ptyWrites = w.__ptyWrites ?? [];
+      w.__ptyWrites.push(args);
+      return null;
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const controller = sidebar.getByRole("button", {
+      name: /^controller control session main · Idle/,
+    });
+    await expect(controller).toBeVisible();
+    await expect(
+      controller.getByRole("button", { name: "Worker sessions" }),
+    ).toHaveText("1");
+
+    await controller.getByRole("button", { name: "Worker sessions" }).click();
+    await page
+      .getByRole("menuitem", { name: /claude-worker · Running/ })
+      .hover();
+    await page.getByRole("menuitem", { name: "Open", exact: true }).click();
+    await expect(
+      sidebar.getByRole("button", { name: /^claude-worker main · Running/ }),
+    ).toBeVisible();
+
+    await controller.getByRole("button", { name: "Worker sessions" }).click();
+    await page
+      .getByRole("menuitem", { name: /claude-worker · Running/ })
+      .hover();
+    await page
+      .getByRole("menuitem", { name: "Send Ctrl-C", exact: true })
+      .click();
+
+    const writes = (await page.evaluate(
+      () => (window as unknown as { __ptyWrites?: unknown[] }).__ptyWrites,
+    )) as Array<{ sessionId: string; data: string }>;
+    expect(writes).toEqual([{ sessionId: "worker-1", data: "Aw==" }]);
+
+    await controller.getByRole("button", { name: "Worker sessions" }).click();
+    await page
+      .getByRole("menuitem", { name: /claude-worker · Running/ })
+      .hover();
+    await page.getByRole("menuitem", { name: "Terminate..." }).click();
+    const dialog = page.getByRole("dialog", { name: "Close running session?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("claude-worker");
+  });
+
   test("ordinary terminal sessions cannot regenerate a session name", async ({
     page,
     tauri,

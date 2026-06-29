@@ -178,6 +178,7 @@ function sidebarText(t: Translator, key: SidebarTranslationKey): string {
 type SidebarContextMenuGroup =
   | "session"
   | "fork"
+  | "workers"
   | "workspace"
   | "project"
   | "open"
@@ -2552,6 +2553,7 @@ function SessionRow({
   const toggleSessionAutoClose = useAppStore(
     (s) => s.toggleSessionAutoClose,
   );
+  const requestRemoveSession = useAppStore((s) => s.requestRemoveSession);
   const createSession = useAppStore((s) => s.createSession);
   const selectSession = useAppStore((s) => s.selectSession);
   const setPendingTerminalInput = useAppStore(
@@ -2602,11 +2604,30 @@ function SessionRow({
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [workerMenu, setWorkerMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
   const [agent, setAgent] = useState<{
     claude: string | null;
     codex: string | null;
     antigravity: string | null;
   } | null>(null);
+  const workers = sessions.filter(
+    (candidate) =>
+      candidate.owner?.kind === "control" &&
+      candidate.owner?.session_id === session.id,
+  );
+
+  function openWorkerSession(workerId: string) {
+    selectSession(workerId);
+    requestAnimationFrame(() => {
+      window.dispatchEvent(
+        new CustomEvent("acorn:focus-session", {
+          detail: { sessionId: workerId },
+        }),
+      );
+    });
+  }
   const {
     attributes,
     listeners,
@@ -2702,6 +2723,39 @@ function SessionRow({
   const agentProvider = showAgentProviderIcons
     ? resolveSessionAgentProvider(session)
     : null;
+  const workerMenuItems: ContextMenuItem[] = [
+    contextMenuGroupTitle(t, "workers"),
+    ...workers.map((worker) => {
+      const label = `${resolveSessionTitle(worker, sessionDisplay.title)} · ${statusLabel(t, worker.status)}`;
+      return {
+        type: "submenu" as const,
+        label,
+        icon: <Bot size={12} />,
+        children: [
+          {
+            label: sidebarText(t, "sidebar.actions.openWorker"),
+            icon: <LayoutPanelLeft size={12} />,
+            onClick: () => openWorkerSession(worker.id),
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.interruptWorker"),
+            icon: <X size={12} />,
+            onClick: () => {
+              void api.ptyWrite(worker.id, "\x03").catch((err: unknown) => {
+                console.error("[Sidebar] worker interrupt failed", err);
+                showToast(String(err));
+              });
+            },
+          },
+          {
+            label: sidebarText(t, "sidebar.actions.terminateWorker"),
+            icon: <Trash2 size={12} />,
+            onClick: () => requestRemoveSession(worker.id),
+          },
+        ],
+      };
+    }),
+  ];
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent) return [];
     const items: ContextMenuItem[] = [];
@@ -2990,7 +3044,38 @@ function SessionRow({
         }}
         onCancelRename={() => setEditing(false)}
       />
-      <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
+      {workers.length > 0 && !editing ? (
+        <Tooltip
+          label={sidebarText(t, "sidebar.actions.workerSessions")}
+          side="right"
+        >
+          <button
+            type="button"
+            aria-label={sidebarText(t, "sidebar.actions.workerSessions")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              setWorkerMenu({
+                x: rect.right + 4,
+                y: rect.top,
+              });
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="ml-auto flex h-5 shrink-0 items-center gap-1 rounded px-1 text-[10px] leading-none text-accent transition hover:bg-bg-elevated"
+          >
+            <Bot size={11} />
+            <span>{workers.length}</span>
+          </button>
+        </Tooltip>
+      ) : null}
+      <div
+        className={cn(
+          "hidden shrink-0 items-center gap-0.5 group-hover:flex",
+          workers.length === 0 && "ml-auto",
+        )}
+      >
         <button
           type="button"
           aria-label={sidebarText(t, "sidebar.actions.removeSession")}
@@ -3028,6 +3113,13 @@ function SessionRow({
         y={menu?.y ?? 0}
         onClose={() => setMenu(null)}
         items={sessionMenuItems}
+      />
+      <ContextMenu
+        open={workerMenu !== null && workers.length > 0}
+        x={workerMenu?.x ?? 0}
+        y={workerMenu?.y ?? 0}
+        onClose={() => setWorkerMenu(null)}
+        items={workerMenuItems}
       />
     </li>
   );

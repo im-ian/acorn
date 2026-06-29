@@ -86,6 +86,9 @@ pub fn primer_for(
          - To create a session in this exact Acorn workspace, pass \
          `--workspace current`. To target a path explicitly, pass \
          `--workspace <absolute path>`.\n\
+         - To launch a visible worker agent, create the sibling session with \
+         `acorn-ipc new-session <name> --workspace current --run 'claude'`. \
+         Acorn opens the new terminal and runs the command there.\n\
          - To discover named workspaces first, run `acorn-ipc list-workspaces --json` \
          and pass both the returned `workspace_path` and `id` to \
          `new-session --workspace <path> --workspace-id <id>`.\n\
@@ -99,7 +102,7 @@ pub fn primer_for(
            acorn-ipc context                             # print this context\n\
            acorn-ipc list-sessions                       # see siblings + self\n\
            acorn-ipc list-workspaces                     # see frontend workspaces\n\
-           acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]\n\
+           acorn-ipc new-session   <name> [--run COMMAND] [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]\n\
            acorn-ipc send-keys     -t <uuid> --data '…' --enter [--allow-foreign]\n\
            acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]\n\
            acorn-ipc select-session -t <uuid> [--allow-foreign]\n\

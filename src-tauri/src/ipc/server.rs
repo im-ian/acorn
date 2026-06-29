@@ -72,6 +72,8 @@ struct SessionsChangedPayload {
     workspace_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initial_command: Option<String>,
 }
 
 /// Shutdown signal for an active IPC listener. The listener thread polls
@@ -313,6 +315,25 @@ fn dispatch<R: Runtime>(envelope: Envelope, app: &AppHandle<R>, state: &AppState
         } => handle_new_session(
             &source,
             name,
+            None,
+            isolated,
+            owner,
+            workspace_path,
+            workspace_id,
+            app,
+            state,
+        ),
+        Request::LaunchSession {
+            name,
+            command,
+            isolated,
+            owner,
+            workspace_path,
+            workspace_id,
+        } => handle_new_session(
+            &source,
+            name,
+            Some(command),
             isolated,
             owner,
             workspace_path,
@@ -340,6 +361,7 @@ fn request_label(req: &Request) -> &'static str {
         Request::SendKeys { .. } => "send-keys",
         Request::ReadBuffer { .. } => "read-buffer",
         Request::NewSession { .. } => "new-session",
+        Request::LaunchSession { .. } => "launch-session",
         Request::SelectSession { .. } => "select-session",
         Request::KillSession { .. } => "kill-session",
     }
@@ -408,6 +430,7 @@ fn handle_promote_self<R: Runtime>(
                 repo_path: session.repo_path.display().to_string(),
                 workspace_path: Some(session.worktree_path.display().to_string()),
                 workspace_id: None,
+                initial_command: None,
             },
         ) {
             tracing::warn!(
@@ -708,6 +731,7 @@ fn authorize_new_session_workspace(
 fn handle_new_session<R: Runtime>(
     source: &Session,
     name: String,
+    initial_command: Option<String>,
     isolated: bool,
     owner: Option<NewSessionOwner>,
     workspace_path: Option<String>,
@@ -721,6 +745,19 @@ fn handle_new_session<R: Runtime>(
             message: "name must not be empty".to_string(),
         };
     }
+    let raw_initial_command = initial_command;
+    let initial_command = match normalize_optional_string(raw_initial_command.clone()) {
+        Some(command) => Some(command),
+        None => {
+            if raw_initial_command.is_some() {
+                return Response::Error {
+                    code: ErrorCode::Invalid,
+                    message: "command must not be empty".to_string(),
+                };
+            }
+            None
+        }
+    };
     let workspace_id = normalize_optional_string(workspace_id);
     if isolated
         && (normalize_optional_string(workspace_path.clone()).is_some() || workspace_id.is_some())
@@ -784,6 +821,7 @@ fn handle_new_session<R: Runtime>(
             repo_path: inserted.repo_path.display().to_string(),
             workspace_path: Some(inserted.worktree_path.display().to_string()),
             workspace_id,
+            initial_command,
         },
     ) {
         tracing::warn!(
@@ -858,6 +896,7 @@ fn handle_kill_session<R: Runtime>(
                 repo_path: session.repo_path.display().to_string(),
                 workspace_path: Some(session.worktree_path.display().to_string()),
                 workspace_id: None,
+                initial_command: None,
             },
         ) {
             tracing::warn!(
