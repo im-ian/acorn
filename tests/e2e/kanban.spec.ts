@@ -256,15 +256,20 @@ test.describe("workspace kanban mode", () => {
     ).toBeLessThan(1);
     expect(scrollWidthAfter).toBeGreaterThan(scrollWidthBefore + 40);
 
+    // Equalize distributes the mean width across columns, so every column ends
+    // up the same width as the others (distinct from reset, which restores the
+    // fixed default) and lands between the resized and untouched widths.
     await board.getByRole("button", { name: "Equalize sizes" }).click();
     await expect
       .poll(async () => {
         const widths = await kanbanColumnWidths();
-        return Math.max(
-          ...widths.map((width) => Math.abs(width - idleWidthAfter)),
-        );
+        return Math.max(...widths) - Math.min(...widths);
       })
       .toBeLessThan(1);
+    const equalizedWidths = await kanbanColumnWidths();
+    const equalizedWidth = equalizedWidths[0] ?? 0;
+    expect(equalizedWidth).toBeLessThan(idleWidthAfter);
+    expect(equalizedWidth).toBeGreaterThan(needsInputWidthAfter);
 
     await board.getByRole("button", { name: "Reset sizes" }).click();
     await expect
