@@ -136,6 +136,7 @@ interface IpcSessionsChangedPayload {
   session_id?: string;
   workspace_id?: string | null;
   workspace_path?: string | null;
+  initial_command?: string | null;
 }
 
 function ipcSessionsChangedPayload(value: unknown): IpcSessionsChangedPayload | null {
@@ -149,6 +150,8 @@ function ipcSessionsChangedPayload(value: unknown): IpcSessionsChangedPayload | 
       typeof raw.workspace_id === "string" ? raw.workspace_id : null,
     workspace_path:
       typeof raw.workspace_path === "string" ? raw.workspace_path : null,
+    initial_command:
+      typeof raw.initial_command === "string" ? raw.initial_command : null,
   };
 }
 
@@ -1324,9 +1327,22 @@ function App() {
         .refreshSessions()
         .then(() => {
           if (payload?.action !== "created" || !payload.session_id) return;
-          useAppStore.getState().placeSessionInWorkspace(payload.session_id, {
+          const store = useAppStore.getState();
+          store.placeSessionInWorkspace(payload.session_id, {
             workspaceId: payload.workspace_id,
             workspacePath: payload.workspace_path,
+          });
+          const command = payload.initial_command?.trim();
+          if (!command) return;
+          const nextStore = useAppStore.getState();
+          nextStore.setPendingTerminalInput(payload.session_id, command);
+          nextStore.selectSession(payload.session_id);
+          requestAnimationFrame(() => {
+            window.dispatchEvent(
+              new CustomEvent("acorn:focus-session", {
+                detail: { sessionId: payload.session_id },
+              }),
+            );
           });
         });
     })

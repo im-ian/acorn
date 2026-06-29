@@ -964,6 +964,10 @@
       "regenerateName": "Regenerate Name",
       "openWorkSummary": "Open Work Summary",
       "autoCloseWhenFinished": "Close When Agent Finishes",
+      "workerSessions": "Worker sessions",
+      "openWorker": "Open",
+      "interruptWorker": "Send Ctrl-C",
+      "terminateWorker": "Terminate...",
       "forkClaudeSession": "Fork Claude Session",
       "forkSession": "Fork Session",
       "forkClaudeInNewWorktree": "Fork Claude in New Worktree",
@@ -986,6 +990,7 @@
     "contextMenu": {
       "session": "Session",
       "fork": "Fork",
+      "workers": "Workers",
       "workspace": "Workspace",
       "project": "Project",
       "open": "Open",

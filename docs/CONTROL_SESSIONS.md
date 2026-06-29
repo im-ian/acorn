@@ -210,7 +210,7 @@ acorn-ipc promote-self
 acorn-ipc context
 acorn-ipc list-sessions
 acorn-ipc list-workspaces
-acorn-ipc new-session   <name> [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]
+acorn-ipc new-session   <name> [--run COMMAND] [--workspace current|PATH] [--workspace-id ID] [--isolated] [--owner me|user]
 acorn-ipc send-keys     -t <uuid> --data "ls" --enter [--allow-foreign]
 acorn-ipc read-buffer   -t <uuid> [--max-bytes N] [--allow-foreign]
 acorn-ipc select-session -t <uuid> [--allow-foreign]
@@ -241,6 +241,18 @@ the control session, or `--workspace /absolute/path` to target a registered
 project cwd or one of that project's linked worktrees. `--workspace-id` is
 the exact frontend workspace placement hint; it is filled automatically for
 `--workspace current` when Acorn injected `ACORN_WORKSPACE_ID`.
+
+Pass `--run <command>` to open the new session in the UI and run a command as
+soon as its PTY is mounted. This is the preferred way to spawn visible worker
+agents from a control session:
+
+```sh
+acorn-ipc new-session "claude-worker" --workspace current --run "claude"
+```
+
+The worker remains an ordinary Acorn terminal session owned by the source
+control session, so it appears in the sidebar and can be opened, interrupted
+with Ctrl-C, or removed from the parent session's worker menu.
 
 `list-workspaces` is subject to the same authorization gate as every command
 except `promote-self`: the source session must already be `Control`, and the
@@ -290,6 +302,12 @@ Spin up a fresh isolated worktree and focus it:
 acorn-ipc promote-self   # no-op if this terminal is already control
 new_id=$(acorn-ipc new-session "patch-bot" --isolated)
 acorn-ipc select-session -t "$new_id"
+```
+
+Spawn a visible Claude worker in the current Acorn workspace:
+
+```sh
+acorn-ipc new-session "claude-worker" --workspace current --run "claude"
 ```
 
 ## Security model

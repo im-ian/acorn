@@ -964,6 +964,10 @@
       "regenerateName": "이름 다시 생성",
       "openWorkSummary": "작업 요약 열기",
       "autoCloseWhenFinished": "에이전트 완료 시 닫기",
+      "workerSessions": "워커 세션",
+      "openWorker": "열기",
+      "interruptWorker": "Ctrl-C 보내기",
+      "terminateWorker": "종료...",
       "forkClaudeSession": "Claude 세션 포크",
       "forkSession": "세션 포크",
       "forkClaudeInNewWorktree": "새 워크트리에 Claude 포크",
@@ -986,6 +990,7 @@
     "contextMenu": {
       "session": "세션",
       "fork": "포크",
+      "workers": "워커",
       "workspace": "작업공간",
       "project": "프로젝트",
       "open": "열기",

@@ -78,6 +78,21 @@ pub enum Request {
         #[serde(default)]
         workspace_id: Option<String>,
     },
+    /// Create a new regular session and queue a shell command to run as soon
+    /// as the frontend mounts its PTY. This is intentionally a separate wire
+    /// variant from `NewSession` so older servers reject the request instead
+    /// of silently ignoring the command field.
+    LaunchSession {
+        name: String,
+        command: String,
+        isolated: bool,
+        #[serde(default)]
+        owner: Option<NewSessionOwner>,
+        #[serde(default)]
+        workspace_path: Option<String>,
+        #[serde(default)]
+        workspace_id: Option<String>,
+    },
     /// Ask the app to focus the given session in its pane. Emits a Tauri
     /// event the frontend reacts to.
     SelectSession {

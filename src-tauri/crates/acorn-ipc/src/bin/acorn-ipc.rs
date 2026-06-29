@@ -19,8 +19,8 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 
 use acorn_ipc::proto::{
-    Envelope, ErrorCode, NewSessionOwner, PROTOCOL_VERSION, Request, Response, SessionSummary,
-    WorkspaceSummary,
+    Envelope, ErrorCode, NewSessionOwner, Request, Response, SessionSummary, WorkspaceSummary,
+    PROTOCOL_VERSION,
 };
 use acorn_ipc::socket_path;
 
@@ -118,6 +118,10 @@ enum Command {
     NewSession {
         /// Display name for the new session.
         name: String,
+        /// Run this shell command once the new Acorn terminal is visible.
+        /// Useful for launching worker agents, e.g. `--run "claude"`.
+        #[arg(long = "run", value_name = "COMMAND")]
+        run: Option<String>,
         /// Create the session inside a fresh git worktree.
         #[arg(long)]
         isolated: bool,
@@ -273,6 +277,7 @@ fn build_request_with_workspace_env(
         },
         Command::NewSession {
             name,
+            run,
             isolated,
             workspace,
             workspace_id,
@@ -280,16 +285,28 @@ fn build_request_with_workspace_env(
         } => {
             let (workspace_path, workspace_id) =
                 resolve_new_session_workspace(workspace, workspace_id, workspace_env)?;
-            Request::NewSession {
-                name: name.clone(),
-                isolated: *isolated,
-                workspace_path,
-                workspace_id,
-                owner: match owner.as_deref() {
-                    Some("user") => Some(NewSessionOwner::User),
-                    Some("me") | None => None,
-                    Some(other) => return Err(format!("unsupported --owner value: {other}")),
-                },
+            let owner = match owner.as_deref() {
+                Some("user") => Some(NewSessionOwner::User),
+                Some("me") | None => None,
+                Some(other) => return Err(format!("unsupported --owner value: {other}")),
+            };
+            if let Some(command) = run.clone().and_then(non_empty_string) {
+                Request::LaunchSession {
+                    name: name.clone(),
+                    command,
+                    isolated: *isolated,
+                    workspace_path,
+                    workspace_id,
+                    owner,
+                }
+            } else {
+                Request::NewSession {
+                    name: name.clone(),
+                    isolated: *isolated,
+                    workspace_path,
+                    workspace_id,
+                    owner,
+                }
             }
         }
         Command::SelectSession {
@@ -799,6 +816,7 @@ mod tests {
     fn new_session_owner_user_is_forwarded() {
         let req = build_request(&Command::NewSession {
             name: "worker".to_string(),
+            run: None,
             isolated: false,
             workspace: None,
             workspace_id: None,
@@ -818,6 +836,7 @@ mod tests {
         let req = build_request_with_workspace_env(
             &Command::NewSession {
                 name: "worker".to_string(),
+                run: None,
                 isolated: false,
                 workspace: Some("current".to_string()),
                 workspace_id: None,
@@ -848,6 +867,7 @@ mod tests {
         let result = build_request_with_workspace_env(
             &Command::NewSession {
                 name: "worker".to_string(),
+                run: None,
                 isolated: false,
                 workspace: Some("current".to_string()),
                 workspace_id: None,
@@ -872,6 +892,41 @@ mod tests {
         match req {
             Request::SendKeys { allow_foreign, .. } => assert!(allow_foreign),
             other => panic!("expected send-keys, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_session_run_builds_launch_session_request() {
+        let req = build_request_with_workspace_env(
+            &Command::NewSession {
+                name: "claude-worker".to_string(),
+                run: Some("claude".to_string()),
+                isolated: false,
+                workspace: Some("current".to_string()),
+                workspace_id: None,
+                owner: None,
+            },
+            WorkspaceEnv {
+                id: Some("project-folder:/repo:abc".to_string()),
+                path: Some("/repo".to_string()),
+                name: Some("repo".to_string()),
+            },
+        )
+        .expect("build");
+        match req {
+            Request::LaunchSession {
+                name,
+                command,
+                workspace_path,
+                workspace_id,
+                ..
+            } => {
+                assert_eq!(name, "claude-worker");
+                assert_eq!(command, "claude");
+                assert_eq!(workspace_path.as_deref(), Some("/repo"));
+                assert_eq!(workspace_id.as_deref(), Some("project-folder:/repo:abc"));
+            }
+            other => panic!("expected launch-session, got {other:?}"),
         }
     }
 }
