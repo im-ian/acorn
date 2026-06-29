@@ -246,6 +246,33 @@ describe("Select", () => {
     expect(optionLabels()).toEqual(["Enterprise Plan"]);
   });
 
+  it("renders option icons in the trigger and option list", () => {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Select
+          value="panes"
+          options={[
+            { value: "panes", label: "Panes", icon: <span>P</span> },
+            { value: "kanban", label: "Kanban", icon: <span>K</span> },
+          ]}
+        />,
+      );
+    });
+
+    expect(
+      document.querySelector("[data-select-trigger-icon]")?.textContent,
+    ).toBe("P");
+
+    clickElement(getCombobox());
+
+    expect(
+      Array.from(document.querySelectorAll("[data-select-option-icon]")).map(
+        (icon) => icon.textContent,
+      ),
+    ).toEqual(["P", "K"]);
+  });
+
   it("renders separators without making them selectable", () => {
     const onValueChange = vi.fn();
     const options: SelectItem[] = [
@@ -349,5 +376,23 @@ describe("Select", () => {
     pressKey(trigger, "Enter");
 
     expect(onValueChange).toHaveBeenCalledWith("acorn-pink");
+  });
+
+  it("can place the options above the trigger", () => {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Select
+          placement="top"
+          value="acorn-dark"
+          options={THEME_OPTIONS}
+        />,
+      );
+    });
+
+    clickElement(getCombobox());
+
+    const listbox = document.querySelector<HTMLElement>('[role="listbox"]');
+    expect(listbox?.parentElement?.style.transform).toBe("translateY(-100%)");
   });
 });

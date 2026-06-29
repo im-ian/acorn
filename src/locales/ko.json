@@ -68,6 +68,12 @@
       "label": "언어",
       "hint": "Acorn 인터페이스에 사용할 언어입니다. 새 번역은 점진적으로 추가됩니다."
     },
+    "interface": {
+      "defaultWorkspaceViewMode": {
+        "label": "기본 작업공간 모드",
+        "hint": "새 프로젝트 작업공간을 만들 때 사용할 모드입니다. 이미 프로젝트별로 선택한 모드는 유지됩니다."
+      }
+    },
     "terminal": {
       "fontFamily": {
         "label": "글꼴 패밀리",
@@ -770,6 +776,8 @@
     "working": "작업 중...",
     "error": "오류: {error}",
     "githubAccountTooltip": "{account} gh 계정으로 PR을 표시합니다",
+    "workspaceView": "보기: {mode}",
+    "workspaceViewTooltip": "작업공간 보기",
     "branch": "브랜치: {branch}",
     "memoryTooltip": "프로세스별 세부 정보를 보려면 클릭",
     "memory": "메모리: {memory}",
@@ -842,6 +850,38 @@
         "restarting": "재시작 중...",
         "settings": "설정"
       }
+    }
+  },
+  "workspace": {
+    "mode": {
+      "ariaLabel": "작업공간 보기 모드",
+      "panes": "패널",
+      "kanban": "칸반"
+    },
+    "kanban": {
+      "title": "작업공간 칸반",
+      "empty": "이 작업공간에 세션이 없습니다.",
+      "emptyColumn": "세션 없음",
+      "filterLabel": "세션 필터",
+      "filterPlaceholder": "세션 필터",
+      "newSession": "새 세션",
+      "resizeColumn": "{name} 컬럼 크기 조절",
+      "actions": {
+        "createSession": "세션 생성",
+        "resetColumnSizes": "크기 초기화",
+        "equalizeColumnSizes": "크기 균등화",
+        "newSession": "새 세션",
+        "newWorktreeSession": "새 워크트리",
+        "newChatSession": "새 채팅",
+        "newControlSession": "컨트롤"
+      },
+      "sort": {
+        "label": "세션 정렬",
+        "updatedDesc": "최근 업데이트",
+        "createdDesc": "최신 생성",
+        "nameAsc": "이름"
+      },
+      "openSession": "{name} 열기"
     }
   },
   "topBar": {
@@ -1819,6 +1859,7 @@
       "viewCommits": "커밋 보기",
       "viewStaged": "스테이징 보기",
       "viewPullRequests": "Pull requests 보기",
+      "toggleWorkspaceView": "작업공간 보기 전환",
       "resetPanelSizes": "패널 크기 재설정",
       "reloadShellEnvironment": "셸 환경 다시 로드",
       "restartIpcServer": "IPC 서버 다시 시작",

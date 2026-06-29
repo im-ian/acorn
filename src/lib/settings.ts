@@ -131,6 +131,7 @@ export const TERMINAL_LETTER_SPACING_MAX = 6;
 export const TERMINAL_LETTER_SPACING_STEP = 0.25;
 
 export type ToastPosition = "top" | "bottom";
+export type DefaultWorkspaceViewMode = "panes" | "kanban";
 
 export const TOAST_POSITION_OPTIONS: ReadonlyArray<{
   value: ToastPosition;
@@ -212,6 +213,13 @@ export const TERMINAL_FONT_WEIGHTS: ReadonlyArray<{
 
 export interface AcornSettings {
   language: Language;
+  interface: {
+    /**
+     * Initial workspace view mode for newly-created project workspaces.
+     * Existing project workspaces keep their own stored mode.
+     */
+    defaultWorkspaceViewMode: DefaultWorkspaceViewMode;
+  };
   terminal: {
     fontFamily: string;
     fontSize: number;
@@ -460,6 +468,9 @@ export interface AcornSettings {
 
 export const DEFAULT_SETTINGS: AcornSettings = {
   language: "en",
+  interface: {
+    defaultWorkspaceViewMode: "panes",
+  },
   terminal: {
     fontFamily: fontStackFromSlots(
       ["JetBrains Mono", "Fira Code", "Menlo"],
@@ -577,6 +588,10 @@ const VALID_PR_INTERVALS = new Set<number>(
 
 const VALID_BG_FITS = new Set<BackgroundFit>(["cover", "contain", "tile"]);
 const VALID_TOAST_POSITIONS = new Set<ToastPosition>(["top", "bottom"]);
+const VALID_WORKSPACE_VIEW_MODES = new Set<DefaultWorkspaceViewMode>([
+  "panes",
+  "kanban",
+]);
 
 function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
   if (typeof v === "string" && VALID_BG_FITS.has(v as BackgroundFit)) {
@@ -779,6 +794,19 @@ function normalizeLanguage(v: unknown, fallback: Language): Language {
   return isLanguage(v) ? v : fallback;
 }
 
+function normalizeDefaultWorkspaceViewMode(
+  v: unknown,
+  fallback: DefaultWorkspaceViewMode,
+): DefaultWorkspaceViewMode {
+  if (
+    typeof v === "string" &&
+    VALID_WORKSPACE_VIEW_MODES.has(v as DefaultWorkspaceViewMode)
+  ) {
+    return v as DefaultWorkspaceViewMode;
+  }
+  return fallback;
+}
+
 /**
  * v1 commitMessage block from the multi-provider commit-message PR. The
  * loader below lifts every field up into the new `agents.*` block so a
@@ -819,6 +847,9 @@ function loadSettings(): AcornSettings {
         })
       | null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
+    const interfaceRaw = (parsed.interface ?? {}) as Partial<
+      AcornSettings["interface"]
+    >;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
     const sessionsRaw = (parsed.sessions ?? {}) as PersistedSessionSettings;
 
@@ -907,6 +938,12 @@ function loadSettings(): AcornSettings {
     };
     return {
       language: normalizeLanguage(parsed.language, DEFAULT_SETTINGS.language),
+      interface: {
+        defaultWorkspaceViewMode: normalizeDefaultWorkspaceViewMode(
+          interfaceRaw.defaultWorkspaceViewMode,
+          DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode,
+        ),
+      },
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
         ...terminalRaw,
@@ -1134,6 +1171,7 @@ interface SettingsState {
   /// default tab.
   openTab: (tab: string) => void;
   consumePendingTab: () => string | null;
+  patchInterface: (patch: Partial<AcornSettings["interface"]>) => void;
   patchTerminal: (patch: Partial<AcornSettings["terminal"]>) => void;
   patchAgents: (
     patch: Partial<{
@@ -1192,6 +1230,24 @@ export const useSettings = create<SettingsState>((set, get) => ({
     }
     return t;
   },
+  patchInterface: (patch) =>
+    set((s) => {
+      const next: AcornSettings = {
+        ...s.settings,
+        interface: {
+          ...s.settings.interface,
+          defaultWorkspaceViewMode:
+            patch.defaultWorkspaceViewMode === undefined
+              ? s.settings.interface.defaultWorkspaceViewMode
+              : normalizeDefaultWorkspaceViewMode(
+                  patch.defaultWorkspaceViewMode,
+                  s.settings.interface.defaultWorkspaceViewMode,
+                ),
+        },
+      };
+      persist(next);
+      return { settings: next };
+    }),
   patchTerminal: (patch) =>
     set((s) => {
       const next: AcornSettings = {

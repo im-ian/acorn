@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { cn } from "../lib/cn";
 
 interface TooltipProps {
   /**
@@ -248,7 +249,7 @@ export function Tooltip({
             ? ({ WebkitUserDrag: "element" } as CSSProperties)
             : undefined
         }
-        className={`inline-flex ${className ?? ""}`}
+        className={cn("inline-flex", className)}
       >
         {children}
       </span>

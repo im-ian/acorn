@@ -1,4 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type HTMLAttributes,
+} from "react";
 import { createPortal } from "react-dom";
 import { PanelResizeHandle } from "react-resizable-panels";
 import { cn } from "../lib/cn";
@@ -7,7 +13,9 @@ import {
   type ExpandPanelDetail,
 } from "../lib/layoutEvents";
 
-interface ResizeHandleProps {
+interface ResizeHandleProps
+  extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+  mode?: "panel" | "manual";
   direction?: "horizontal" | "vertical";
   showDivider?: boolean;
   thin?: boolean;
@@ -18,6 +26,7 @@ interface ResizeHandleProps {
    * into `gap` so those other surfaces stay unaffected.
    */
   gap?: boolean;
+  manualDragging?: boolean;
 }
 
 /**
@@ -41,18 +50,31 @@ const TOOLTIP_DELAY_MS = 250;
 const TOOLTIP_TEXT = "Double-click to expand";
 
 export function ResizeHandle({
+  mode = "panel",
   direction = "horizontal",
   showDivider = false,
   thin = false,
   gap = false,
+  manualDragging = false,
+  className,
+  onMouseEnter,
+  onMouseLeave,
+  onFocus,
+  onBlur,
+  role,
+  tabIndex,
+  ...rest
 }: ResizeHandleProps) {
   const isHorizontal = direction === "horizontal";
   const handleId = useId();
   const [dragging, setDragging] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [manualHovered, setManualHovered] = useState(false);
   const [tooltipAnchor, setTooltipAnchor] = useState<DOMRect | null>(null);
   const tooltipTimerRef = useRef<number | null>(null);
   const [collapsedPanelId, setCollapsedPanelId] = useState<string | null>(null);
+  const effectiveDragging = mode === "manual" ? manualDragging : dragging;
+  const effectiveHovered = mode === "manual" ? manualHovered : hovered;
 
   // Mirror the lib's `data-resize-handle-state` into React state. CSS
   // arbitrary variants (`data-[resize-handle-state=hover]:...`) compiled
@@ -142,6 +164,112 @@ export function ResizeHandle({
   // resize affordance. (A collapsed neighbour uses `showHandleVisual` for
   // the louder re-expand grip instead.)
   const showGapHint = gap && !showHandleVisual;
+  const handleClassName = cn(
+    "relative flex shrink-0 items-center justify-center bg-transparent transition-colors duration-150",
+    isHorizontal
+      ? gap
+        ? "w-1.5 cursor-col-resize"
+        : thin
+          ? "w-px cursor-col-resize"
+          : "w-3 cursor-col-resize"
+      : gap
+        ? "h-1.5 cursor-row-resize"
+        : thin
+          ? "h-px cursor-row-resize"
+          : "h-3 cursor-row-resize",
+    className,
+  );
+  const handleContent = (
+    <>
+      {(showHandleVisual || showGapHint) &&
+      (effectiveHovered || effectiveDragging) ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 transition-opacity duration-150"
+          style={{
+            // Gradient sits behind the grip in the gutter: keep the state
+            // color (white on hover, accent on drag) but fade the top and
+            // bottom ends to transparent.
+            backgroundImage: `linear-gradient(${
+              isHorizontal ? "to bottom" : "to right"
+            }, transparent, ${
+              effectiveDragging
+                ? "color-mix(in oklab, var(--color-accent) 65%, transparent)"
+                : "color-mix(in oklab, #ffffff 15%, transparent)"
+            }, transparent)`,
+          }}
+        />
+      ) : null}
+      {showDivider || (effectiveDragging && !showHandleVisual && !gap) ? (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute transition-colors duration-150",
+            effectiveDragging && !showHandleVisual
+              ? "bg-accent"
+              : "bg-border/80",
+            isHorizontal ? "h-full w-px" : "h-px w-full",
+          )}
+        />
+      ) : null}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none rounded-full transition duration-150",
+          // Fixed mid-size grip; only opacity/color changes between
+          // hover/drag so the user gets a steady rounded visual. For a gap
+          // gutter the grip turns accent on drag, replacing the square line.
+          isHorizontal ? "h-10 w-[2px]" : "h-[2px] w-10",
+          showGapHint && effectiveDragging ? "bg-accent" : "bg-white",
+          showHandleVisual
+            ? effectiveDragging
+              ? "opacity-100"
+              : effectiveHovered
+                ? "opacity-70"
+                : "opacity-0"
+            : showGapHint
+              ? effectiveDragging
+                ? "opacity-100"
+                : effectiveHovered
+                  ? "opacity-60"
+                  : "opacity-0"
+              : "opacity-0",
+        )}
+      />
+    </>
+  );
+
+  if (mode === "manual") {
+    return (
+      <div
+        {...rest}
+        role={role ?? "separator"}
+        tabIndex={tabIndex ?? 0}
+        aria-orientation={
+          rest["aria-orientation"] ?? (isHorizontal ? "vertical" : "horizontal")
+        }
+        onMouseEnter={(event) => {
+          setManualHovered(true);
+          onMouseEnter?.(event);
+        }}
+        onMouseLeave={(event) => {
+          setManualHovered(false);
+          onMouseLeave?.(event);
+        }}
+        onFocus={(event) => {
+          setManualHovered(true);
+          onFocus?.(event);
+        }}
+        onBlur={(event) => {
+          setManualHovered(false);
+          onBlur?.(event);
+        }}
+        className={handleClassName}
+      >
+        {handleContent}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -152,73 +280,9 @@ export function ResizeHandle({
         }
         onDragging={setDragging}
         onDoubleClick={handleDoubleClick}
-        className={cn(
-          "relative flex shrink-0 items-center justify-center bg-transparent transition-colors duration-150",
-          isHorizontal
-            ? gap
-              ? "w-1.5 cursor-col-resize"
-              : thin
-                ? "w-px cursor-col-resize"
-                : "w-3 cursor-col-resize"
-            : gap
-              ? "h-1.5 cursor-row-resize"
-              : thin
-                ? "h-px cursor-row-resize"
-                : "h-3 cursor-row-resize",
-        )}
+        className={handleClassName}
       >
-        {(showHandleVisual || showGapHint) && (hovered || dragging) ? (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 transition-opacity duration-150"
-            style={{
-              // Gradient sits behind the grip in the gutter: keep the state
-              // color (white on hover, accent on drag) but fade the top and
-              // bottom ends to transparent.
-              backgroundImage: `linear-gradient(${
-                isHorizontal ? "to bottom" : "to right"
-              }, transparent, ${
-                dragging
-                  ? "color-mix(in oklab, var(--color-accent) 65%, transparent)"
-                  : "color-mix(in oklab, #ffffff 15%, transparent)"
-              }, transparent)`,
-            }}
-          />
-        ) : null}
-        {showDivider || (dragging && !showHandleVisual && !gap) ? (
-          <span
-            aria-hidden="true"
-            className={cn(
-              "pointer-events-none absolute transition-colors duration-150",
-              dragging && !showHandleVisual ? "bg-accent" : "bg-border/80",
-              isHorizontal ? "h-full w-px" : "h-px w-full",
-            )}
-          />
-        ) : null}
-        <span
-          aria-hidden="true"
-          className={cn(
-            "pointer-events-none rounded-full transition duration-150",
-            // Fixed mid-size grip; only opacity/color changes between
-            // hover/drag so the user gets a steady rounded visual. For a gap
-            // gutter the grip turns accent on drag, replacing the square line.
-            isHorizontal ? "h-10 w-[2px]" : "h-[2px] w-10",
-            showGapHint && dragging ? "bg-accent" : "bg-white",
-            showHandleVisual
-              ? dragging
-                ? "opacity-100"
-                : hovered
-                  ? "opacity-70"
-                  : "opacity-0"
-              : showGapHint
-                ? dragging
-                  ? "opacity-100"
-                  : hovered
-                    ? "opacity-60"
-                    : "opacity-0"
-                : "opacity-0",
-          )}
-        />
+        {handleContent}
       </PanelResizeHandle>
       {tooltipAnchor && !dragging
         ? createPortal(

@@ -24,6 +24,7 @@ export interface SelectOption {
   label: string;
   description?: string;
   disabled?: boolean;
+  icon?: ReactNode;
   searchText?: string;
 }
 
@@ -61,6 +62,7 @@ type BaseSelectProps = Omit<
   disabled?: boolean;
   emptyMessage?: string;
   name?: string;
+  placement?: "bottom" | "top";
   placeholder?: string;
   searchable?: boolean;
   searchPlaceholder?: string;
@@ -92,6 +94,7 @@ interface NormalizedOption {
   label: string;
   description?: string;
   disabled: boolean;
+  icon?: ReactNode;
   group?: string;
   searchText: string;
 }
@@ -142,6 +145,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
       emptyMessage = "No options",
       name,
       options,
+      placement = "bottom",
       placeholder = "",
       searchable = false,
       searchPlaceholder = "Search options",
@@ -191,10 +195,19 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
       () => new Set(selectedValues),
       [selectedValues],
     );
-    const selectedLabels = useMemo(() => {
+    const selectedOptions = useMemo(() => {
       const byValue = new Map(allOptions.map((option) => [option.value, option]));
-      return selectedValues.map((value) => byValue.get(value)?.label ?? value);
+      return selectedValues.map((value) => byValue.get(value) ?? null);
     }, [allOptions, selectedValues]);
+    const selectedLabels = useMemo(
+      () =>
+        selectedValues.map(
+          (value, index) => selectedOptions[index]?.label ?? value,
+        ),
+      [selectedOptions, selectedValues],
+    );
+    const selectedIcon =
+      selectedOptions.length === 1 ? selectedOptions[0]?.icon : undefined;
     const [isOpen, setIsOpen] = useState(false);
     const [listboxRect, setListboxRect] = useState<{
       left: number;
@@ -280,7 +293,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
         if (!rect) return;
         setListboxRect({
           left: rect.left,
-          top: rect.bottom + 4,
+          top: placement === "top" ? rect.top - 4 : rect.bottom + 4,
           width: rect.width,
         });
       };
@@ -292,7 +305,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
         window.removeEventListener("resize", updateListboxRect);
         window.removeEventListener("scroll", updateListboxRect, true);
       };
-    }, [isOpen]);
+    }, [isOpen, placement]);
 
     useLayoutEffect(() => {
       if (!isOpen || !searchable || !listboxRect) return;
@@ -473,6 +486,8 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
                 left: listboxRect.left,
                 minWidth: listboxRect.width,
                 top: listboxRect.top,
+                transform:
+                  placement === "top" ? "translateY(-100%)" : undefined,
               }}
             >
               {searchable ? (
@@ -549,6 +564,14 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
                             }}
                             onClick={() => selectOption(option)}
                           >
+                            {option.icon ? (
+                              <span
+                                data-select-option-icon
+                                className="shrink-0 text-fg-muted"
+                              >
+                                {option.icon}
+                              </span>
+                            ) : null}
                             <span className="min-w-0 flex-1">
                               <span
                                 data-select-option-label
@@ -615,9 +638,19 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(
           onClick={handleTriggerClick}
           onKeyDown={handleTriggerKeyDown}
         >
+          {selectedIcon ? (
+            <span
+              data-select-trigger-icon
+              className="ml-2 shrink-0 text-fg-muted"
+            >
+              {selectedIcon}
+            </span>
+          ) : null}
           <span
+            data-select-trigger-label
             className={cn(
-              "min-w-0 flex-1 truncate px-2",
+              "min-w-0 flex-1 truncate pr-2",
+              selectedIcon ? "pl-1" : "pl-2",
               !hasDisplayValue && "text-fg-muted",
             )}
           >
@@ -801,6 +834,7 @@ function normalizeOption(
     label,
     description,
     disabled: option.disabled === true,
+    icon: option.icon,
     group,
     searchText: [label, description, value, group, option.searchText]
       .filter(Boolean)

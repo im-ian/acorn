@@ -352,6 +352,7 @@ describe("SettingsModal font controls", () => {
     useSettings.setState({
       open: true,
       settings: cloneSettings(),
+      patchInterface: vi.fn(),
       patchAppearance: vi.fn(),
       patchTerminal: vi.fn(),
     });
@@ -387,6 +388,28 @@ describe("SettingsModal font controls", () => {
     expect(document.body.textContent).toContain("Custom Command");
     expect(document.body.textContent).not.toContain("Ollama");
     expect(document.body.textContent).not.toContain("llm CLI");
+  });
+
+  it("patches the default workspace mode from the Interface tab", async () => {
+    const patchInterface = vi.fn();
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+      patchInterface,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openInterfaceTab();
+
+    clickElement(getComboboxByLabel("Default workspace mode"));
+    clickOption("Kanban");
+
+    expect(patchInterface).toHaveBeenCalledWith({
+      defaultWorkspaceViewMode: "kanban",
+    });
   });
 
   afterEach(() => {

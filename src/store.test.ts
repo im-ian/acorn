@@ -179,6 +179,8 @@ function resetStore(): void {
       focusedPaneId: "root",
       activeTabId: null,
       activeSessionId: null,
+      workspaceViewMode: "panes",
+      terminalPopupSessionId: null,
       rightTab: "commits",
       rightTabByGroup: defaultTabByGroup(),
       workspaceTabs: {},
@@ -1476,6 +1478,131 @@ describe("removeSession", () => {
 });
 
 describe("splitFocusedPane", () => {
+  it("uses the configured default workspace mode for new project workspaces", async () => {
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        interface: { defaultWorkspaceViewMode: "kanban" },
+      },
+    });
+
+    await seed([project(REPO_A, 0)], []);
+
+    const state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.workspaces[REPO_A].viewMode).toBe("kanban");
+  });
+
+  it("preserves an explicit project mode when hydrating old workspaces with a missing default view mode", async () => {
+    window.localStorage.clear();
+    await seed(
+      [project(REPO_A, 0)],
+      [session("root", REPO_A), session("web", REPO_A)],
+    );
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder(REPO_A, "Frontend", `${REPO_A}/web`);
+    expect(folder).not.toBeNull();
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+
+    const raw = window.localStorage.getItem("acorn-workspaces");
+    expect(raw).not.toBeNull();
+    const persisted = JSON.parse(raw!);
+    delete persisted.state.workspaces[REPO_A].viewMode;
+    persisted.state.activeProject = REPO_A;
+    persisted.state.activeProjectFolderId = REPO_A;
+
+    resetStore();
+    window.localStorage.setItem("acorn-workspaces", JSON.stringify(persisted));
+    await useAppStore.persist.rehydrate();
+
+    const state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("kanban");
+    expect(state.workspaces[REPO_A].viewMode).toBe("kanban");
+    expect(state.workspaces[folder!.id].viewMode).toBe("kanban");
+  });
+
+  it("materializes a missing workspace view mode even when selecting the apparent fallback mode", async () => {
+    await seed([project(REPO_A, 0)], []);
+    useAppStore.setState((state) => {
+      const { viewMode: _viewMode, ...workspaceWithoutMode } =
+        state.workspaces[REPO_A];
+      return {
+        workspaces: {
+          ...state.workspaces,
+          [REPO_A]: workspaceWithoutMode,
+        },
+      };
+    });
+
+    useAppStore.getState().setWorkspaceViewMode("panes");
+
+    expect(useAppStore.getState().workspaces[REPO_A].viewMode).toBe("panes");
+  });
+
+  it("stores the workspace view mode per project", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [session("a1", REPO_A), session("b1", REPO_B)],
+    );
+
+    useAppStore.getState().setActiveProject(REPO_A);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    const folder = useAppStore
+      .getState()
+      .createProjectFolder(REPO_A, "Feature", `${REPO_A}/feature`);
+    expect(folder).not.toBeNull();
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+    expect(useAppStore.getState().workspaces[folder!.id].viewMode).toBe(
+      "kanban",
+    );
+
+    useAppStore.getState().setWorkspaceViewMode("panes");
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+    expect(useAppStore.getState().workspaces[REPO_A].viewMode).toBe("panes");
+    expect(useAppStore.getState().workspaces[folder!.id].viewMode).toBe(
+      "panes",
+    );
+
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    useAppStore.getState().setActiveProject(REPO_B);
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+
+    useAppStore.getState().setActiveProject(REPO_A);
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+  });
+
+  it("tracks the terminal popup session independently from pane selection", async () => {
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A), session("a2", REPO_A)]);
+
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+
+    useAppStore.getState().openTerminalPopup("a2");
+    expect(useAppStore.getState().terminalPopupSessionId).toBe("a2");
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+
+    useAppStore.getState().closeTerminalPopup();
+    expect(useAppStore.getState().terminalPopupSessionId).toBeNull();
+    expect(useAppStore.getState().activeSessionId).toBe("a1");
+  });
+
+  it("clears the terminal popup when the popup session is removed", async () => {
+    const a1 = session("a1", REPO_A);
+    const a2 = session("a2", REPO_A);
+    await seed([project(REPO_A, 0)], [a1, a2]);
+
+    useAppStore.getState().openTerminalPopup("a2");
+    mockApi.listProjects.mockResolvedValueOnce([project(REPO_A, 0)]);
+    mockApi.listSessions.mockResolvedValueOnce([a1]);
+
+    await useAppStore.getState().removeSession("a2", true);
+
+    expect(useAppStore.getState().terminalPopupSessionId).toBeNull();
+    expect(useAppStore.getState().sessions.map((s) => s.id)).toEqual(["a1"]);
+  });
+
   it("creates a new pane and focuses it; layout becomes a split", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
     expect(useAppStore.getState().layout.kind).toBe("pane");

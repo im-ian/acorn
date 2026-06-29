@@ -192,6 +192,7 @@ const MODIFIER_EVENT_KEYS = new Set([
 ]);
 
 let shortcutRecordingActive = false;
+let appHotkeyBlockDepth = 0;
 
 type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
 
@@ -386,6 +387,20 @@ export function isShortcutRecordingActive(): boolean {
   return shortcutRecordingActive;
 }
 
+export function areAppHotkeysBlocked(): boolean {
+  return appHotkeyBlockDepth > 0;
+}
+
+export function useAppHotkeyBlocker(active: boolean): void {
+  useEffect(() => {
+    if (!active) return;
+    appHotkeyBlockDepth += 1;
+    return () => {
+      appHotkeyBlockDepth = Math.max(0, appHotkeyBlockDepth - 1);
+    };
+  }, [active]);
+}
+
 const MAC_KEY_SYMBOL: Record<string, string> = {
   $mod: "⌘",
   Meta: "⌘",
@@ -498,6 +513,11 @@ function stopPropagationAfterHandling(
       binding,
       (event: KeyboardEvent) => {
         if (isShortcutRecordingActive()) return;
+        if (areAppHotkeysBlocked()) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
         handler(event);
         // App-level shortcuts that handled the key must own it before focused
         // surfaces like xterm also interpret the same chord.
@@ -515,6 +535,7 @@ function skipWhileRecording(bindings: HotkeyBindings): HotkeyBindings {
       binding,
       (event: KeyboardEvent) => {
         if (isShortcutRecordingActive()) return;
+        if (areAppHotkeysBlocked()) return;
         handler(event);
       },
     ]),
