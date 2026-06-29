@@ -15,4 +15,6 @@
   --color-warning: #9a6700;
   --color-terminal-bg: #ffffff;
   --color-terminal-fg: #1f2328;
+  --color-selection: rgba(9, 105, 218, 0.22);
+  --color-term-selection: var(--color-selection);
 }
