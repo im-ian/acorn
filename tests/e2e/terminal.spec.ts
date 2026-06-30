@@ -137,13 +137,18 @@ async function emitNativeFileDragEvent(
   );
 }
 
+// Tauri's `Channel` only dispatches a message when its `index` matches the
+// next expected one, so successive emits on the same channel must carry
+// monotonically increasing indices — reusing `0` silently buffers the message
+// and it never reaches the terminal.
 async function emitSubscribedPtyOutput(
   page: Page,
   channelIdKey: string,
   text: string,
+  index = 0,
 ): Promise<void> {
   await page.evaluate(
-    ({ channelIdKey, text }) => {
+    ({ channelIdKey, text, index }) => {
       const w = window as unknown as {
         [key: string]: unknown;
       };
@@ -156,11 +161,11 @@ async function emitSubscribedPtyOutput(
         | undefined;
       if (!callback) throw new Error("missing terminal output callback");
       callback({
-        index: 0,
+        index,
         message: Array.from(new TextEncoder().encode(text)),
       });
     },
-    { channelIdKey, text },
+    { channelIdKey, text, index },
   );
 }
 
@@ -451,6 +456,7 @@ async function rightClickSelectedTerminalText(
   await page.mouse.up();
   await page.mouse.click(textRect!.left + 10, y, { button: "right" });
 }
+
 
 async function terminalEmojiLetterSpacing(
   page: Page,
@@ -787,6 +793,75 @@ test.describe("terminal: spawn", () => {
         ),
       )
       .toEqual(["run-selected"]);
+  });
+
+  test("writes selected terminal text on right-click while a TUI holds mouse tracking", async ({
+    page,
+    tauri,
+  }) => {
+    await enableTerminalRightClickPasteSelection(page);
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __contextPasteChannelId?: number;
+      };
+      w.__contextPasteChannelId = channel.id;
+      return 1;
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Idle$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __contextPasteChannelId?: number })
+              .__contextPasteChannelId ?? null,
+        ),
+      )
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "run-selected\r\n",
+    );
+    await expect(page.locator(".xterm")).toContainText("run-selected");
+
+    // Have the "agent" enable mouse tracking exactly as claude/vim do. xterm
+    // disables its selection service in response, so a plain drag now routes to
+    // the PTY as a mouse report instead of selecting — the regression this
+    // covers. The Option/Shift force modifier is the only way back to a
+    // selection, which the right-click paste then needs.
+    await emitSubscribedPtyOutput(
+      page,
+      "__contextPasteChannelId",
+      "\x1b[?1000h\x1b[?1006h",
+      1,
+    );
+    await expect(page.locator(".xterm.enable-mouse-events")).toBeAttached();
+
+    await page.evaluate(() => {
+      (window as unknown as { __ptyWrites?: string[] }).__ptyWrites = [];
+    });
+
+    // A plain drag selects (no modifier): the left button is taken over so the
+    // drag makes a native selection instead of going to the app.
+    await rightClickSelectedTerminalText(page, "run-selected");
+
+    // Assert the pasted text is present rather than the only write, since the
+    // gesture can still surface incidental mouse reports.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __ptyWrites?: string[] }).__ptyWrites,
+        ),
+      )
+      .toContain("run-selected");
   });
 
   test("does not write non-terminal selected text on terminal right-click", async ({
