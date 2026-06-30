@@ -523,7 +523,16 @@ function selectedTextForTerminalContextPaste(
   if (terminalSelection.length > 0) return terminalSelection;
 
   const selection = container.ownerDocument.getSelection();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+  if (!selection || selection.rangeCount === 0) {
+    return "";
+  }
+  // Trust the text content, not `isCollapsed`: a TUI with mouse tracking on
+  // disables xterm's own (green) selection, so the user drags a native (blue)
+  // DOM selection instead. When the right-click fires, WebKit can report that
+  // selection as `isCollapsed === true` while `toString()` still holds the
+  // dragged text — gating on the collapsed flag would drop a real selection.
+  const text = selection.toString();
+  if (text.length === 0) {
     return "";
   }
   if (
@@ -534,7 +543,7 @@ function selectedTextForTerminalContextPaste(
   ) {
     return "";
   }
-  return selection.toString();
+  return text;
 }
 
 export function Terminal({
@@ -594,6 +603,14 @@ export function Terminal({
       lineHeight: initialSettings.terminal.lineHeight,
       cursorBlink: isFocusedPane,
       allowProposedApi: true,
+      // Let Option+drag force a local selection even while a TUI has mouse
+      // tracking on (`?1000`–`?1006`); the left-drag takeover relies on this to
+      // replay a forced selection into xterm. Gated on the paste setting so a
+      // user with the feature off keeps Option+click forwarding an alt-modifier
+      // mouse report to the app; kept in sync in the settings subscription
+      // above. Non-Mac forces selection with Shift, which xterm honors anyway.
+      macOptionClickForcesSelection:
+        initialSettings.terminal.rightClickPasteSelection,
       scrollback: 5000,
       // `convertEol` rewrites every bare `\n` from the PTY into `\r\n` before
       // the parser sees it. A real shell already emits `\r\n` for line
@@ -1027,6 +1044,15 @@ export function Terminal({
         if (next.linkActivation !== "modifier-click") {
           hideLinkTooltip(true);
         }
+      }
+      if (
+        next.rightClickPasteSelection !== previous.rightClickPasteSelection
+      ) {
+        // Only force a selection on Option+drag while the paste gesture is on;
+        // otherwise leave Option+click to forward an alt-modifier mouse report
+        // to the app (see the left-drag takeover for why this is needed).
+        term.options.macOptionClickForcesSelection =
+          next.rightClickPasteSelection;
       }
       if (state.settings.appearance.themeId !== prev.settings.appearance.themeId) {
         scheduleThemeRefresh();
@@ -1783,12 +1809,15 @@ export function Terminal({
     };
     container.addEventListener("paste", onPaste, true);
 
-    const onContextMenu = (e: MouseEvent) => {
-      if (!useSettings.getState().settings.terminal.rightClickPasteSelection) {
-        return;
-      }
+    // Write the current terminal selection back into the PTY. Returns whether
+    // anything was pasted so the caller can decide to swallow the event. The
+    // selection is read live: the drag/click takeover below keeps an xterm
+    // selection (coordinate-based, so it survives app repaints) alive until the
+    // right-click reads it, so there is no need to cache it — and caching risks
+    // pasting stale text after the user has cleared or replaced the selection.
+    const writeSelectionToPty = (): boolean => {
       const text = selectedTextForTerminalContextPaste(container, term);
-      if (text.length === 0) return;
+      if (text.length === 0) return false;
       const action = terminalPasteAction({
         text,
         hasImagePayload: false,
@@ -1796,6 +1825,185 @@ export function Terminal({
       });
       if (action.kind === "pasteText") term.paste(action.text);
       term.focus();
+      // Consume the selection: clear it so the next bare hover stops being
+      // suppressed (see `onTerminalMouseMove`) and the app resumes tracking.
+      term.clearSelection();
+      return true;
+    };
+
+    const isMouseTrackingActive = (): boolean =>
+      term.modes.mouseTrackingMode !== "none";
+
+    // Left-drag-to-select inside a mouse-tracking TUI (claude, vim). Those apps
+    // enable mouse tracking, so xterm hands every left drag to the app instead
+    // of selecting — that is why a plain drag selects nothing there while it
+    // works in a normal shell. A native DOM selection is no help: claude
+    // repaints constantly, and each repaint rebuilds the DOM rows and destroys
+    // an in-progress browser selection. xterm's own selection is coordinate
+    // based and survives repaints, so we drive *that*: a confirmed drag is
+    // replayed to xterm with the platform force modifier set, which makes xterm
+    // select even while mouse tracking is on (`macOptionClickForcesSelection`).
+    // A plain click (no drag) is replayed without the modifier so the app still
+    // receives the click; wheel is never touched, so scrolling still reaches
+    // the app. Gated on the setting, so other apps are unaffected unless opted
+    // in.
+    const LEFT_DRAG_THRESHOLD_PX = 3;
+    // The modifier xterm honors to force a selection while mouse tracking is on:
+    // Option on macOS (with `macOptionClickForcesSelection`), Shift elsewhere.
+    const forceSelectModifier: MouseEventInit = IS_MAC
+      ? { altKey: true }
+      : { shiftKey: true };
+    let pendingLeftDrag: { x: number; y: number } | null = null;
+    let leftDragSelecting = false;
+    let replayingMouse = false;
+
+    const dispatchSyntheticMouse = (
+      type: "mousedown" | "mouseup",
+      x: number,
+      y: number,
+      extra: MouseEventInit,
+    ) => {
+      const target =
+        container.ownerDocument.elementFromPoint(x, y) ?? container;
+      replayingMouse = true;
+      try {
+        target.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            detail: 1,
+            clientX: x,
+            clientY: y,
+            view: container.ownerDocument.defaultView,
+            ...extra,
+          }),
+        );
+      } finally {
+        replayingMouse = false;
+      }
+    };
+
+    const onTerminalMouseDown = (e: MouseEvent) => {
+      const pasteEnabled =
+        useSettings.getState().settings.terminal.rightClickPasteSelection;
+
+      // Right button: paste the selection. xterm clears the selection and
+      // reports the click on the mousedown (which lands before `contextmenu`),
+      // so the paste has to happen here, at capture phase, before xterm runs.
+      // Always claim the click — `preventDefault` suppresses WebKit's native
+      // right-click word-select (which otherwise flashes a selection on a plain
+      // right-click); with a selection it pastes, without one it is a no-op.
+      if (e.button === 2) {
+        if (!pasteEnabled) return;
+        writeSelectionToPty();
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      // Take the real left mousedown over: block it from xterm and the browser
+      // so neither a stray mouse report nor a competing native selection
+      // starts. The click/drag decision is made on the following move/up.
+      if (
+        e.button === 0 &&
+        pasteEnabled &&
+        !replayingMouse &&
+        isMouseTrackingActive()
+      ) {
+        pendingLeftDrag = { x: e.clientX, y: e.clientY };
+        leftDragSelecting = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        // Double/triple click: word/line select. Replay at once with the force
+        // modifier and the same click count so xterm selects (xterm keys off
+        // the event's `detail`); the real mouseup then flows through to
+        // finalize it, just like a drag.
+        if (e.detail >= 2) {
+          leftDragSelecting = true;
+          dispatchSyntheticMouse("mousedown", e.clientX, e.clientY, {
+            ...forceSelectModifier,
+            buttons: 1,
+            detail: e.detail,
+          });
+        }
+      }
+    };
+    container.addEventListener("mousedown", onTerminalMouseDown, true);
+
+    const onTerminalMouseMove = (e: MouseEvent) => {
+      if (!pendingLeftDrag) {
+        // Bare hover *over this terminal* while a selection is shown: swallow
+        // the motion report so a mouse-tracking app does not repaint and wipe
+        // the (coordinate-based) xterm selection before the user can right-click
+        // it. The `container.contains` guard keeps this document-level listener
+        // from blocking hover on other panes when this terminal holds a
+        // selection. Only meaningful when the gesture is enabled and the app is
+        // tracking motion.
+        if (
+          e.buttons === 0 &&
+          container.contains(e.target as Node) &&
+          term.hasSelection() &&
+          useSettings.getState().settings.terminal.rightClickPasteSelection &&
+          isMouseTrackingActive()
+        ) {
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+      // The button is no longer down but our state is still pending — the real
+      // mouseup fired outside the document (released off-window) and never
+      // reached `onTerminalMouseUp`. Reset so we neither swallow motion nor
+      // open a buttonless selection on the next move.
+      if (e.buttons === 0) {
+        pendingLeftDrag = null;
+        leftDragSelecting = false;
+        return;
+      }
+      if (leftDragSelecting) return;
+      const moved =
+        Math.abs(e.clientX - pendingLeftDrag.x) > LEFT_DRAG_THRESHOLD_PX ||
+        Math.abs(e.clientY - pendingLeftDrag.y) > LEFT_DRAG_THRESHOLD_PX;
+      if (!moved) {
+        e.stopImmediatePropagation();
+        return;
+      }
+      // Drag confirmed: open an xterm force-selection anchored at the press
+      // point. Subsequent real moves are left alone so xterm extends it.
+      leftDragSelecting = true;
+      dispatchSyntheticMouse("mousedown", pendingLeftDrag.x, pendingLeftDrag.y, {
+        ...forceSelectModifier,
+        buttons: 1,
+      });
+    };
+    const onTerminalMouseUp = (e: MouseEvent) => {
+      if (!pendingLeftDrag) return;
+      const start = pendingLeftDrag;
+      pendingLeftDrag = null;
+      if (leftDragSelecting) {
+        // The real mouseup flows through to xterm, which finalizes the
+        // selection it has been extending.
+        leftDragSelecting = false;
+        return;
+      }
+      // No drag — a plain click. Clear any standing selection so a click
+      // deselects (xterm leaves its selection in place while mouse tracking is
+      // on), then swallow the real mouseup and replay the click without the
+      // force modifier so xterm reports it to the app.
+      if (term.hasSelection()) term.clearSelection();
+      e.stopImmediatePropagation();
+      dispatchSyntheticMouse("mousedown", start.x, start.y, { buttons: 1 });
+      dispatchSyntheticMouse("mouseup", start.x, start.y, { buttons: 0 });
+    };
+    container.ownerDocument.addEventListener("mousemove", onTerminalMouseMove, true);
+    container.ownerDocument.addEventListener("mouseup", onTerminalMouseUp, true);
+
+    const onContextMenu = (e: MouseEvent) => {
+      if (!useSettings.getState().settings.terminal.rightClickPasteSelection) {
+        return;
+      }
+      // The paste already happened on the right-button mousedown; here we only
+      // suppress the native context menu so it never appears over the terminal.
       e.preventDefault();
       e.stopImmediatePropagation();
     };
@@ -2558,6 +2766,17 @@ export function Terminal({
       container.removeEventListener("keydown", onKeydown, true);
       container.removeEventListener("keypress", onKeypress, true);
       container.removeEventListener("paste", onPaste, true);
+      container.removeEventListener("mousedown", onTerminalMouseDown, true);
+      container.ownerDocument.removeEventListener(
+        "mousemove",
+        onTerminalMouseMove,
+        true,
+      );
+      container.ownerDocument.removeEventListener(
+        "mouseup",
+        onTerminalMouseUp,
+        true,
+      );
       container.removeEventListener("contextmenu", onContextMenu, true);
       window.removeEventListener(TERMINAL_PASTE_EVENT, onTerminalPaste);
       container.removeEventListener("dragover", onDragOver);
