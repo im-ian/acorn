@@ -33,6 +33,7 @@ import {
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
   createTerminalRepaintScheduler,
+  createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
 } from "../lib/terminalRepaint";
 import {
@@ -2940,6 +2941,29 @@ export function Terminal({
       scheduler.dispose();
     };
   }, [isActive]);
+
+  // Switching between in-app tabs keeps the window focused and does not always
+  // toggle `isActive`, so neither repaint effect above fires when a hidden
+  // terminal (background tab, kanban view, split/merge remount) scrolls back on
+  // screen. Watch real on-screen visibility so the buffer is rebuilt the moment
+  // the element regains a layout box, instead of staying blank until the user
+  // scrolls or clicks.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const refresh = () => {
+      const term = termRef.current;
+      const fit = fitTerminalRef.current;
+      const el = containerRef.current;
+      if (!term || !fit || !el) return;
+      repaintTerminalViewport({ container: el, fit, term });
+    };
+    const observer = createTerminalVisibilityRepaintObserver(
+      container,
+      refresh,
+    );
+    return observer.dispose;
+  }, []);
 
   // FitAddon subtracts padding from xterm.element, not its parent — keep the
   // gutter on the outer wrapper so xterm's parent stays padding-free and rows
