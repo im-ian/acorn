@@ -4961,18 +4961,22 @@ pub async fn detect_session_statuses(
 /// Whether the transcript-tail status poll should yield to the hook-set
 /// status instead of applying its own classification.
 ///
-/// `hook_active` is true once a session has reported any agent lifecycle hook
-/// event this run (see `SessionStore::is_hook_active`). `detected` is the
-/// status the transcript/shell poll derived. Agent lifecycle hooks
-/// (Start/Stop/NeedsInput) are the authoritative turn-boundary signal, so when
-/// the channel is live the poll defers the Running/NeedsInput/Completed
-/// distinction to hooks and keeps ownership only of the Idle edge (agent
-/// process gone), which no hook reports. Without this, a long or tool-heavy
-/// Claude turn whose `end_turn` line has scrolled past the 256 KiB tail window
-/// keeps the poll reading Running and clobbering the hook's resting status on
-/// every tick — the session never returns to NeedsInput/Completed.
-fn poll_defers_to_hook(hook_active: bool, detected: SessionStatus) -> bool {
-    hook_active && detected != SessionStatus::Idle
+/// Agent lifecycle hooks are the authoritative turn-boundary signal. The poll
+/// defers **only** when all three hold:
+/// - `hook_active`: the session has reported a hook event this run
+///   (`SessionStore::is_hook_active`) — otherwise there is no hook status to
+///   trust and the transcript poll is the only signal.
+/// - `live_agent`: an agent process is currently alive under the PTY. Once it
+///   exits (or an unrelated command runs in the same tab) the hook status is
+///   stale and the poll must resume driving liveness.
+/// - `detected == Running`: the poll only ever *demotes* to Running from a
+///   stale tail (an `end_turn` line scrolled past the 256 KiB window). A
+///   transcript-derived `NeedsInput`/`Idle` is trustworthy and passes through —
+///   `NeedsInput` also backstops a dropped turn-end hook on short turns.
+///
+/// The caller keeps the hook-set status (re-read fresh) when this returns true.
+fn poll_defers_to_hook(hook_active: bool, live_agent: bool, detected: SessionStatus) -> bool {
+    hook_active && live_agent && detected == SessionStatus::Running
 }
 
 fn detect_session_statuses_blocking(
@@ -5139,13 +5143,19 @@ fn detect_session_statuses_blocking(
                 parsed_id
                     .map(|uuid| state.sessions.is_hook_active(&uuid))
                     .unwrap_or(false),
+                live_agent_kind.is_some(),
                 detection.status,
             );
-            // When a live hook channel owns the status, keep the hook-set
-            // value (`previous`) rather than the transcript-derived one; the
-            // poll still surfaces the Idle edge when the agent process exits.
+            // When a live hooked agent owns the status, keep the hook-set value
+            // instead of the stale transcript reading. Re-read it fresh: a hook
+            // may have written during this poll's process-table / transcript
+            // I/O, and reusing the `previous` captured before that I/O would
+            // clobber the newer hook status back to an old value.
             let status = if defer_to_hook {
-                previous
+                parsed_id
+                    .and_then(|uuid| state.sessions.get(&uuid).ok())
+                    .map(|s| s.status)
+                    .unwrap_or(previous)
             } else {
                 detection.status
             };
@@ -5166,7 +5176,11 @@ fn detect_session_statuses_blocking(
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
             if let Some(uuid) = parsed_id {
-                let _ = state.sessions.refresh_status(&uuid, status);
+                // Deferring means a hook owns the status; leave the store value
+                // untouched so a hook write racing this poll's I/O survives.
+                if !defer_to_hook {
+                    let _ = state.sessions.refresh_status(&uuid, status);
+                }
                 let _ = state.sessions.refresh_agent_state(
                     &uuid,
                     agent_provider,
@@ -6116,30 +6130,41 @@ mod tests {
     }
 
     #[test]
-    fn poll_defers_to_hook_keeps_hook_status_for_live_agent() {
-        // A live hook channel owns the Running/NeedsInput/Completed
-        // distinction, so the transcript poll must defer for every non-Idle
-        // classification (a stale `tool_use` tail would otherwise clobber a
-        // hook-set resting status back to Running).
-        assert!(poll_defers_to_hook(true, SessionStatus::Running));
-        assert!(poll_defers_to_hook(true, SessionStatus::NeedsInput));
-        assert!(poll_defers_to_hook(true, SessionStatus::Completed));
-        assert!(poll_defers_to_hook(true, SessionStatus::Failed));
+    fn poll_defers_only_when_demoting_a_live_hooked_agent_to_running() {
+        // The one case the poll must not win: a hooked, live agent whose stale
+        // transcript tail reads Running (its `end_turn` scrolled out of the
+        // window) — deferring keeps the hook's resting status.
+        assert!(poll_defers_to_hook(true, true, SessionStatus::Running));
     }
 
     #[test]
-    fn poll_owns_idle_edge_even_when_hook_active() {
-        // No hook reports process death, so the poll always surfaces Idle.
-        assert!(!poll_defers_to_hook(true, SessionStatus::Idle));
+    fn poll_lets_transcript_needs_input_through_as_backstop() {
+        // A transcript-derived NeedsInput is trustworthy (it saw `end_turn`)
+        // and backstops a dropped turn-end hook, so it is never deferred.
+        assert!(!poll_defers_to_hook(true, true, SessionStatus::NeedsInput));
+    }
+
+    #[test]
+    fn poll_owns_status_once_the_agent_is_gone() {
+        // No live agent: the hook status is stale (agent exited, or an
+        // unrelated command now runs in the tab), so the poll drives again —
+        // including surfacing Idle, which no hook reports.
+        assert!(!poll_defers_to_hook(true, false, SessionStatus::Running));
+        assert!(!poll_defers_to_hook(true, false, SessionStatus::Idle));
+    }
+
+    #[test]
+    fn poll_owns_idle_edge_even_with_a_live_hooked_agent() {
+        assert!(!poll_defers_to_hook(true, true, SessionStatus::Idle));
     }
 
     #[test]
     fn poll_drives_status_without_a_hook_channel() {
         // Sessions with no observed hook events (e.g. `claude` typed straight
-        // into a terminal) rely on the transcript poll for every status.
-        assert!(!poll_defers_to_hook(false, SessionStatus::Running));
-        assert!(!poll_defers_to_hook(false, SessionStatus::NeedsInput));
-        assert!(!poll_defers_to_hook(false, SessionStatus::Idle));
+        // into a terminal before hooks registered) rely on the transcript poll.
+        assert!(!poll_defers_to_hook(false, true, SessionStatus::Running));
+        assert!(!poll_defers_to_hook(false, true, SessionStatus::NeedsInput));
+        assert!(!poll_defers_to_hook(false, true, SessionStatus::Idle));
     }
 
     #[test]
