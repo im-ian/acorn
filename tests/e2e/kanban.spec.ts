@@ -42,7 +42,7 @@ function session(
 }
 
 test.describe("workspace kanban mode", () => {
-  test("groups active workspace sessions by status and opens a card in a popup", async ({
+  test("groups active workspace sessions by status and opens a card terminal popover", async ({
     page,
     tauri,
   }) => {
@@ -57,14 +57,45 @@ test.describe("workspace kanban mode", () => {
       session("alpha", "alpha", "idle", {
         updated_at: "2026-01-01T00:00:01Z",
       }),
-      session("shell", "shell", "idle"),
+      session("shell", "shell", "idle", {
+        branch: "shell",
+      }),
       session("done", "done", "completed", {
         agent_provider: "antigravity",
       }),
       session("broken", "broken", "failed", {
         agent_provider: "codex",
+        last_message: "Tests failed in popover state handling.",
+        worktree_path:
+          "/tmp/demo/.worktrees/broken-session-with-a-very-long-worktree-directory-name-that-should-wrap-inside-the-card-tooltip",
       }),
     ]);
+    await tauri.handle("detect_session_statuses", (args) => {
+      const ids = Array.isArray((args as { ids?: unknown }).ids)
+        ? ((args as { ids: string[] }).ids)
+        : [];
+      const statuses: Record<string, string> = {
+        "needs-review": "needs_input",
+        runner: "running",
+        alpha: "idle",
+        shell: "idle",
+        done: "completed",
+        broken: "failed",
+      };
+      return ids.map((id) => ({
+        id,
+        status: statuses[id] ?? "idle",
+        branch: id === "shell" ? "shell" : `feat/${id}`,
+        last_message:
+          id === "broken"
+            ? "Updated from status polling."
+            : null,
+        last_user_message:
+          id === "broken" ? "Please check the failed tests." : null,
+        last_agent_message:
+          id === "broken" ? "Updated from status polling." : null,
+      }));
+    });
 
     await page.goto("/");
 
@@ -161,6 +192,47 @@ test.describe("workspace kanban mode", () => {
         .locator('[data-kanban-session-id="broken"]')
         .locator('[data-kanban-agent-icon="codex"]'),
     ).toBeVisible();
+    const brokenCard = board.locator('[data-kanban-session-id="broken"]');
+    await expect(
+      brokenCard.getByTestId("workspace-kanban-card-meta"),
+    ).toContainText("feat/broken");
+    await expect(brokenCard).not.toContainText("Failed");
+    await expect(
+      brokenCard.getByTestId("workspace-kanban-card-last-message"),
+    ).toContainText("Updated from status polling.");
+    await brokenCard.hover();
+    const cardTooltip = page.getByRole("tooltip");
+    await expect(cardTooltip).toBeVisible();
+    await expect(cardTooltip).toContainText("Title");
+    await expect(cardTooltip).toContainText("broken");
+    await expect(cardTooltip).toContainText("Last message");
+    await expect(cardTooltip).toContainText("Updated from status polling.");
+    await expect(cardTooltip).toContainText("Branch");
+    await expect(cardTooltip).toContainText("feat/broken");
+    await expect(cardTooltip).toContainText("Worktree");
+    await expect(cardTooltip).toContainText(
+      "/tmp/demo/.worktrees/broken-session-with-a-very-long-worktree-directory-name-that-should-wrap-inside-the-card-tooltip",
+    );
+    const tooltipMetrics = await cardTooltip.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      const node = el as HTMLElement;
+      return {
+        clientWidth: node.clientWidth,
+        left: rect.left,
+        right: rect.right,
+        scrollWidth: node.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(tooltipMetrics.left).toBeGreaterThanOrEqual(0);
+    expect(tooltipMetrics.right).toBeLessThanOrEqual(
+      tooltipMetrics.viewportWidth,
+    );
+    expect(tooltipMetrics.scrollWidth).toBeLessThanOrEqual(
+      tooltipMetrics.clientWidth + 1,
+    );
+    await page.mouse.move(0, 0);
+    await expect(cardTooltip).toHaveCount(0);
     await expect(
       board
         .locator('[data-kanban-session-id="runner"]')
@@ -171,6 +243,13 @@ test.describe("workspace kanban mode", () => {
         .locator('[data-kanban-session-id="shell"]')
         .locator('[data-kanban-session-icon="terminal"]'),
     ).toBeVisible();
+    const shellCard = board.locator('[data-kanban-session-id="shell"]');
+    await expect(
+      shellCard.getByTestId("workspace-kanban-card-branch"),
+    ).toHaveText("shell");
+    await expect(
+      shellCard.getByTestId("workspace-kanban-card-worktree"),
+    ).toHaveText("shell");
     await expect(
       board
         .locator('[data-kanban-session-id="done"]')
@@ -279,9 +358,17 @@ test.describe("workspace kanban mode", () => {
       })
       .toBeLessThan(1);
 
-    await board
-      .getByRole("button", { name: "Open shell" })
-      .click({ button: "right" });
+    const shellMenuTarget = board.getByRole("button", { name: "Open shell" });
+    const shellMenuTargetBox = await shellMenuTarget.boundingBox();
+    expect(shellMenuTargetBox).not.toBeNull();
+    if (!shellMenuTargetBox) throw new Error("missing shell card");
+    await shellMenuTarget.dispatchEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: shellMenuTargetBox.x + shellMenuTargetBox.width / 2,
+      clientY: shellMenuTargetBox.y + shellMenuTargetBox.height / 2,
+    });
     await expect(
       page.getByRole("menuitem", { name: "Open shell" }),
     ).toBeVisible();
@@ -296,21 +383,144 @@ test.describe("workspace kanban mode", () => {
     ).toBeVisible();
     await page.keyboard.press("Escape");
 
+    await board.getByRole("button", { name: "Open shell" }).click();
+    const shellPopover = page.getByTestId("kanban-terminal-popover");
+    await expect(shellPopover).toBeVisible();
+    await expect(
+      shellPopover.getByRole("heading", { name: "shell" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("terminal-popover-body")).toBeVisible();
+    await expect(
+      page
+        .getByTestId("terminal-popover-body")
+        .locator('[data-acorn-terminal-slot="shell"] .acorn-terminal-shell'),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByTestId("terminal-popover-body")
+        .locator(".xterm-helper-textarea"),
+    ).toBeFocused();
+    const shellPopoverBoxBefore = await shellPopover.boundingBox();
+    expect(shellPopoverBoxBefore).not.toBeNull();
+    if (!shellPopoverBoxBefore) throw new Error("missing shell popover");
+    const resizeHandle = page.getByTestId("kanban-terminal-popover-resize");
+    await expect(resizeHandle).toBeVisible();
+    const resizeHandleBox = await resizeHandle.boundingBox();
+    expect(resizeHandleBox).not.toBeNull();
+    if (!resizeHandleBox) throw new Error("missing popover resize handle");
+    await page.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2,
+      resizeHandleBox.y + resizeHandleBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2 + 72,
+      resizeHandleBox.y + resizeHandleBox.height / 2 + 44,
+    );
+    await page.mouse.up();
+    const shellPopoverBoxAfter = await shellPopover.boundingBox();
+    expect(shellPopoverBoxAfter?.width ?? 0).toBeGreaterThan(
+      shellPopoverBoxBefore.width + 40,
+    );
+    expect(shellPopoverBoxAfter?.height ?? 0).toBeGreaterThan(
+      shellPopoverBoxBefore.height + 24,
+    );
+    const expandButton = page.getByTestId("kanban-terminal-popover-expand");
+    await expect(expandButton).toHaveAttribute(
+      "aria-label",
+      "Expand terminal",
+    );
+    await expandButton.click();
+    await expect(expandButton).toHaveAttribute(
+      "aria-label",
+      "Restore terminal size",
+    );
+    await expect(resizeHandle).toHaveCount(0);
+    const expandedPopoverBox = await shellPopover.boundingBox();
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    expect(expandedPopoverBox?.width ?? 0).toBeGreaterThan(
+      viewport.width - 24,
+    );
+    expect(expandedPopoverBox?.height ?? 0).toBeGreaterThan(
+      viewport.height - 24,
+    );
+    await expandButton.click();
+    await expect(expandButton).toHaveAttribute(
+      "aria-label",
+      "Expand terminal",
+    );
+    await expect(resizeHandle).toBeVisible();
+    const restoredPopoverBox = await shellPopover.boundingBox();
+    expect(
+      Math.abs((restoredPopoverBox?.width ?? 0) - shellPopoverBoxAfter.width),
+    ).toBeLessThan(2);
+    expect(
+      Math.abs((restoredPopoverBox?.height ?? 0) - shellPopoverBoxAfter.height),
+    ).toBeLessThan(2);
+    const dragHandle = page.getByTestId("kanban-terminal-popover-drag-handle");
+    const popoverBoxBeforeDrag = await shellPopover.boundingBox();
+    const dragHandleBox = await dragHandle.boundingBox();
+    expect(popoverBoxBeforeDrag).not.toBeNull();
+    expect(dragHandleBox).not.toBeNull();
+    if (!popoverBoxBeforeDrag || !dragHandleBox) {
+      throw new Error("missing draggable terminal popover");
+    }
+    const dragViewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    const dragDeltaX =
+      dragViewport.width -
+        (popoverBoxBeforeDrag.x + popoverBoxBeforeDrag.width) >
+      64
+        ? 48
+        : -48;
+    const dragDeltaY =
+      dragViewport.height -
+        (popoverBoxBeforeDrag.y + popoverBoxBeforeDrag.height) >
+      48
+        ? 32
+        : -32;
+    const dragStartX = dragHandleBox.x + Math.min(96, dragHandleBox.width / 2);
+    const dragStartY = dragHandleBox.y + dragHandleBox.height / 2;
+    await page.mouse.move(dragStartX, dragStartY);
+    await page.mouse.down();
+    await page.mouse.move(dragStartX + dragDeltaX, dragStartY + dragDeltaY);
+    await page.mouse.up();
+    const popoverBoxAfterDrag = await shellPopover.boundingBox();
+    expect(
+      Math.abs((popoverBoxAfterDrag?.x ?? 0) - popoverBoxBeforeDrag.x),
+    ).toBeGreaterThan(24);
+    expect(
+      Math.abs((popoverBoxAfterDrag?.y ?? 0) - popoverBoxBeforeDrag.y),
+    ).toBeGreaterThan(16);
+
     await board.getByRole("button", { name: "Open broken" }).click();
 
     await expect(page.getByTestId("workspace-kanban")).toBeVisible();
     await expect(page.getByTestId("workspace-view-status")).toContainText(
       "Kanban",
     );
-    const dialog = page.getByRole("dialog", { name: "broken" });
-    await expect(dialog).toBeVisible();
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
     await expect(
-      dialog.locator('[data-popup-agent-icon="codex"]'),
+      popover.getByRole("heading", { name: "broken" }),
     ).toBeVisible();
-    await expect(page.getByTestId("terminal-popup-body")).toBeVisible();
+    await expect(
+      popover.locator('[data-console-agent-icon="codex"]'),
+    ).toBeVisible();
+    await expect(page.getByTestId("terminal-popover-body")).toBeVisible();
+    const popoverBox = await popover.boundingBox();
+    expect(popoverBox?.x).toBeGreaterThanOrEqual(0);
+    expect((popoverBox?.x ?? 0) + (popoverBox?.width ?? 0)).toBeLessThanOrEqual(
+      await page.evaluate(() => window.innerWidth),
+    );
     await expect(
       page
-        .getByTestId("terminal-popup-body")
+        .getByTestId("terminal-popover-body")
         .locator('[data-acorn-terminal-slot="broken"] .acorn-terminal-shell'),
     ).toBeVisible();
   });
@@ -338,6 +548,88 @@ test.describe("workspace kanban mode", () => {
       "Kanban",
     );
     await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+  });
+
+  test("uses configured kanban terminal popover placement", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: {
+            defaultWorkspaceViewMode: "kanban",
+            kanbanTerminalPopoverPlacement: "center",
+            kanbanTerminalPopoverDefaultSize: "custom",
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("centered", "centered", "idle"),
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open centered" }).click();
+
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    const box = await popover.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) throw new Error("missing centered popover");
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    expect(Math.abs(box.x + box.width / 2 - viewport.width / 2)).toBeLessThan(
+      8,
+    );
+    expect(Math.abs(box.y + box.height / 2 - viewport.height / 2)).toBeLessThan(
+      8,
+    );
+  });
+
+  test("uses configured fullscreen kanban terminal popover size", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: {
+            defaultWorkspaceViewMode: "kanban",
+            kanbanTerminalPopoverPlacement: "card",
+            kanbanTerminalPopoverDefaultSize: "fullscreen",
+          },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("fullscreen", "fullscreen", "idle"),
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open fullscreen" }).click();
+
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    await expect(
+      page.getByTestId("kanban-terminal-popover-expand"),
+    ).toHaveAttribute("aria-label", "Restore terminal size");
+    await expect(page.getByTestId("kanban-terminal-popover-resize")).toHaveCount(
+      0,
+    );
+    const box = await popover.boundingBox();
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    expect(box?.width ?? 0).toBeGreaterThan(viewport.width - 24);
+    expect(box?.height ?? 0).toBeGreaterThan(viewport.height - 24);
   });
 
   test("restores kanban or pane mode per project", async ({ page, tauri }) => {

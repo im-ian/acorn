@@ -182,7 +182,7 @@ function visibleTerminalTargetKey(
   sessionId: string,
 ): string | null {
   if (state.terminalPopupSessionId === sessionId) {
-    return `popup:${sessionId}`;
+    return `popover:${sessionId}`;
   }
   const workspaceId = activeWorkspaceId(state);
   if (!workspaceId) return null;
@@ -198,10 +198,10 @@ function terminalDestinationForTargetKey(
   targetKey: string | null,
 ): HTMLElement | null {
   if (!targetKey) return null;
-  if (targetKey.startsWith("popup:")) {
-    const sessionId = targetKey.slice("popup:".length);
+  if (targetKey.startsWith("popover:")) {
+    const sessionId = targetKey.slice("popover:".length);
     return document.querySelector(
-      `[data-terminal-popup-body="${cssEscape(sessionId)}"]`,
+      `[data-terminal-popover-body="${cssEscape(sessionId)}"]`,
     ) as HTMLElement | null;
   }
   if (targetKey.startsWith("pane:")) {
@@ -213,8 +213,8 @@ function terminalDestinationForTargetKey(
   return null;
 }
 
-function terminalTargetIsPopup(targetKey: string | null): boolean {
-  return Boolean(targetKey?.startsWith("popup:"));
+function terminalTargetIsPopover(targetKey: string | null): boolean {
+  return Boolean(targetKey?.startsWith("popover:"));
 }
 
 function parseSessionIdKey(key: string): Set<string> {
@@ -248,7 +248,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       : null,
   );
   const isFocusedPane = useAppStore((state) =>
-    terminalTargetIsPopup(visibleTargetKey)
+    terminalTargetIsPopover(visibleTargetKey)
       ? true
       : isSessionInFocusedPane(session.id, state.panes, state.focusedPaneId),
   );
@@ -271,8 +271,8 @@ function PortaledTerminal({ session }: { session: Session }) {
   }, []);
 
   // Whenever the visible target changes, move our target div into that pane,
-  // popup body, or back to limbo. Popup bodies are rendered through a Modal
-  // portal, so keep looking briefly if the target has not landed yet.
+  // popover body, or back to limbo. Keep looking briefly if the target has not
+  // landed in the DOM yet.
   useLayoutEffect(() => {
     const target = targetRef.current;
     if (!target) return;
@@ -284,7 +284,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       if (target.parentElement !== nextParent) nextParent.appendChild(target);
       if (
         dest === null &&
-        terminalTargetIsPopup(visibleTargetKey) &&
+        terminalTargetIsPopover(visibleTargetKey) &&
         attempts < 30
       ) {
         attempts += 1;
@@ -309,6 +309,7 @@ function PortaledTerminal({ session }: { session: Session }) {
       pasteAgentProvider={session.agent_provider ?? null}
       isActive={visibleTargetKey !== null}
       isFocusedPane={isFocusedPane}
+      autoFocusOnActive={terminalTargetIsPopover(visibleTargetKey)}
     />,
     targetRef.current,
   );

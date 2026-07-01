@@ -87,6 +87,37 @@ test.describe("settings modal", () => {
       .toBe("subpixel");
   });
 
+  test("changes kanban terminal popover settings and persists them", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await expect(modal.getByText("Kanban terminal popover")).toBeVisible();
+
+    await modal.getByText("Center of screen", { exact: true }).click();
+    await modal.getByText("Full screen", { exact: true }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          const settings = raw ? JSON.parse(raw) : null;
+          return {
+            placement:
+              settings?.interface?.kanbanTerminalPopoverPlacement ?? null,
+            defaultSize:
+              settings?.interface?.kanbanTerminalPopoverDefaultSize ?? null,
+          };
+        }),
+      )
+      .toEqual({
+        placement: "center",
+        defaultSize: "fullscreen",
+      });
+  });
+
   test("records a custom shortcut and reset all restores defaults", async ({
     page,
   }) => {

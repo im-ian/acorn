@@ -178,8 +178,8 @@ export function FloatingTooltip({
       }}
       className={`${
         multiline
-          ? "pointer-events-none max-w-xs whitespace-pre-line break-words rounded border border-border bg-bg-elevated px-2 py-1 text-[11px] font-normal leading-snug text-fg shadow-md"
-          : "pointer-events-none whitespace-nowrap rounded border border-border bg-bg-elevated px-2 py-0.5 text-[11px] font-normal text-fg shadow-md"
+          ? "pointer-events-none inline-block max-w-[min(34rem,calc(100vw-1rem))] whitespace-pre-line break-words rounded border border-border bg-bg-elevated px-2 py-1 text-[11px] font-normal leading-snug text-fg shadow-md"
+          : "pointer-events-none inline-block whitespace-nowrap rounded border border-border bg-bg-elevated px-2 py-0.5 text-[11px] font-normal text-fg shadow-md"
       } ${overlayClassName ?? ""}`}
     >
       {label}
@@ -242,7 +242,9 @@ export function Tooltip({
         onMouseLeave={hide}
         onFocus={show}
         onBlur={hide}
+        onPointerDown={hide}
         onClick={hide}
+        onContextMenu={hide}
         draggable={draggable || undefined}
         style={
           draggable

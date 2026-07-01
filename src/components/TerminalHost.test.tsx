@@ -26,14 +26,17 @@ vi.mock("./Terminal", async () => {
     Terminal: ({
       sessionId,
       isActive,
+      autoFocusOnActive,
     }: {
       sessionId: string;
       isActive?: boolean;
+      autoFocusOnActive?: boolean;
     }) =>
       React.createElement("div", {
         "data-testid": "terminal",
         "data-session-id": sessionId,
         "data-active": String(Boolean(isActive)),
+        "data-auto-focus-on-active": String(Boolean(autoFocusOnActive)),
       }),
   };
 });
@@ -317,11 +320,11 @@ describe("TerminalHost", () => {
     ]);
   });
 
-  it("moves a popup terminal into the popup body without changing pane selection", async () => {
+  it("moves a popover terminal into the popover body without changing pane selection", async () => {
     installWorkspaceSessions(["first", "second"]);
-    const popupBody = document.createElement("div");
-    popupBody.dataset.terminalPopupBody = "second";
-    document.body.appendChild(popupBody);
+    const popoverBody = document.createElement("div");
+    popoverBody.dataset.terminalPopoverBody = "second";
+    document.body.appendChild(popoverBody);
 
     render();
     await act(async () => {
@@ -335,13 +338,23 @@ describe("TerminalHost", () => {
       { id: "second", active: true },
     ]);
     expect(
-      popupBody.querySelector(
+      popoverBody.querySelector(
         '[data-acorn-terminal-slot="second"] [data-testid="terminal"]',
       ),
     ).not.toBeNull();
+    expect(
+      popoverBody.querySelector<HTMLElement>(
+        '[data-acorn-terminal-slot="second"] [data-testid="terminal"]',
+      )?.dataset.autoFocusOnActive,
+    ).toBe("true");
+    expect(
+      document.querySelector<HTMLElement>(
+        '[data-acorn-terminal-slot="first"] [data-testid="terminal"]',
+      )?.dataset.autoFocusOnActive,
+    ).toBe("false");
     expect(useAppStore.getState().activeSessionId).toBe("first");
 
-    popupBody.remove();
+    popoverBody.remove();
   });
 
   it("uses the configured resident terminal limit when evicting idle daemon terminals", async () => {

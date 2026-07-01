@@ -1608,6 +1608,24 @@ export const useAppStore = create<AppStateModel>()(
                   ? (update.status_reason ?? null)
                   : (sess.status_reason ?? null);
                 const nextBranch = update.branch ?? sess.branch;
+                const nextLastMessage = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "last_message",
+                )
+                  ? (update.last_message ?? null)
+                  : sess.last_message;
+                const nextLastUserMessage = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "last_user_message",
+                )
+                  ? (update.last_user_message ?? null)
+                  : (sess.last_user_message ?? null);
+                const nextLastAgentMessage = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "last_agent_message",
+                )
+                  ? (update.last_agent_message ?? null)
+                  : (sess.last_agent_message ?? null);
                 const nextAgentProvider =
                   Object.prototype.hasOwnProperty.call(update, "agent_provider")
                     ? (update.agent_provider ?? null)
@@ -1628,6 +1646,9 @@ export const useAppStore = create<AppStateModel>()(
                   nextStatus !== sess.status ||
                   nextStatusReason !== (sess.status_reason ?? null) ||
                   nextBranch !== sess.branch ||
+                  nextLastMessage !== sess.last_message ||
+                  nextLastUserMessage !== (sess.last_user_message ?? null) ||
+                  nextLastAgentMessage !== (sess.last_agent_message ?? null) ||
                   nextAgentProvider !== (sess.agent_provider ?? null) ||
                   nextAgentTranscriptId !== (sess.agent_transcript_id ?? null) ||
                   nextAutoTitleEnabled !== (sess.auto_title_enabled ?? null)
@@ -1638,6 +1659,9 @@ export const useAppStore = create<AppStateModel>()(
                     status: nextStatus,
                     status_reason: nextStatusReason,
                     branch: nextBranch,
+                    last_message: nextLastMessage,
+                    last_user_message: nextLastUserMessage,
+                    last_agent_message: nextLastAgentMessage,
                     agent_provider: nextAgentProvider,
                     agent_transcript_id: nextAgentTranscriptId,
                     auto_title_enabled: nextAutoTitleEnabled,
