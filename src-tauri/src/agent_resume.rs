@@ -153,10 +153,7 @@ pub fn live_transcript(session_id: uuid::Uuid) -> Option<LiveTranscript> {
 /// Resolve only the marker for `kind`. Status polling uses this when the
 /// current PTY tree already tells us which live provider owns the tab, so a
 /// nested peer agent from another provider cannot steal the session status.
-pub fn live_transcript_for_kind(
-    session_id: uuid::Uuid,
-    kind: AgentKind,
-) -> Option<LiveTranscript> {
+pub fn live_transcript_for_kind(session_id: uuid::Uuid, kind: AgentKind) -> Option<LiveTranscript> {
     let base = acorn_daemon::paths::data_dir().ok()?;
     live_transcript_for_kind_at(&base, session_id, kind)
 }
@@ -357,11 +354,24 @@ fn antigravity_brain_roots() -> Vec<PathBuf> {
         .collect()
 }
 
-fn extract_preview(kind: AgentKind, path: &Path) -> io::Result<Option<String>> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ConversationPreview {
+    pub last_user_message: Option<String>,
+    pub last_agent_message: Option<String>,
+}
+
+pub(crate) fn extract_preview(kind: AgentKind, path: &Path) -> io::Result<Option<String>> {
+    Ok(extract_conversation_preview(kind, path)?.last_agent_message)
+}
+
+pub(crate) fn extract_conversation_preview(
+    kind: AgentKind,
+    path: &Path,
+) -> io::Result<ConversationPreview> {
     match kind {
-        AgentKind::Claude => extract_claude_preview(path),
-        AgentKind::Codex => extract_codex_preview(path),
-        AgentKind::Antigravity => extract_antigravity_preview(path),
+        AgentKind::Claude => extract_claude_conversation_preview(path),
+        AgentKind::Codex => extract_codex_conversation_preview(path),
+        AgentKind::Antigravity => extract_antigravity_conversation_preview(path),
     }
 }
 
@@ -372,8 +382,9 @@ const PREVIEW_CHARS: usize = 90;
 /// `assistant` line and return its first text segment, truncated and
 /// newline-collapsed for single-line display. Conservative parsing —
 /// any JSON parse error or unexpected shape silently yields `None`.
-fn extract_claude_preview(path: &Path) -> io::Result<Option<String>> {
+fn extract_claude_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
     let text = read_tail_lossy(path)?;
+    let mut preview = ConversationPreview::default();
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() || !trimmed.starts_with('{') {
@@ -382,27 +393,20 @@ fn extract_claude_preview(path: &Path) -> io::Result<Option<String>> {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
-            continue;
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("assistant") if preview.last_agent_message.is_none() => {
+                preview.last_agent_message = claude_message_preview(&v);
+            }
+            Some("user") if preview.last_user_message.is_none() => {
+                preview.last_user_message = claude_message_preview(&v);
+            }
+            _ => {}
         }
-        let items = v
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_array());
-        let Some(items) = items else { continue };
-        for item in items {
-            if item.get("type").and_then(|t| t.as_str()) != Some("text") {
-                continue;
-            }
-            let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
-                continue;
-            };
-            if let Some(p) = collapse_preview(text) {
-                return Ok(Some(p));
-            }
+        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
+            break;
         }
     }
-    Ok(None)
+    Ok(preview)
 }
 
 /// Codex rollout schema: each line is a JSON event. Conversation turns
@@ -411,8 +415,9 @@ fn extract_claude_preview(path: &Path) -> io::Result<Option<String>> {
 /// .content[].text` (newer ones). Try the cheap variants in reverse so
 /// the latest assistant turn wins; give up to `None` if nothing matches —
 /// the modal still renders the UUID + timestamp.
-fn extract_codex_preview(path: &Path) -> io::Result<Option<String>> {
+fn extract_codex_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
     let text = read_tail_lossy(path)?;
+    let mut preview = ConversationPreview::default();
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() || !trimmed.starts_with('{') {
@@ -422,81 +427,156 @@ fn extract_codex_preview(path: &Path) -> io::Result<Option<String>> {
             continue;
         };
 
-        if v.pointer("/payload/role").and_then(|r| r.as_str()) == Some("assistant") {
-            if let Some(content) = v.pointer("/payload/content").and_then(|c| c.as_array()) {
-                for item in content.iter().rev() {
-                    let text = item
-                        .get("text")
-                        .or_else(|| item.get("output_text"))
-                        .and_then(|t| t.as_str());
-                    if let Some(text) = text {
-                        if let Some(p) = collapse_preview(text) {
-                            return Ok(Some(p));
-                        }
-                    }
-                }
+        let payload_role = v.pointer("/payload/role").and_then(|r| r.as_str());
+        match payload_role {
+            Some("assistant") if preview.last_agent_message.is_none() => {
+                preview.last_agent_message = codex_payload_message_preview(&v);
             }
+            Some("user") if preview.last_user_message.is_none() => {
+                preview.last_user_message = codex_payload_message_preview(&v);
+            }
+            _ => {}
         }
 
-        if let Some(msg) = v
-            .pointer("/payload/message")
-            .and_then(|m| m.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            if let Some(p) = collapse_preview(msg) {
-                return Ok(Some(p));
-            }
+        if preview.last_agent_message.is_none() && payload_role != Some("user") {
+            preview.last_agent_message = codex_response_output_preview(&v)
+                .or_else(|| codex_payload_message_fallback_preview(&v));
         }
 
-        let arrays = [
-            v.pointer("/payload/response/output"),
-            v.pointer("/response_payload/output"),
-            v.pointer("/payload/output"),
-        ];
-        for arr in arrays.into_iter().flatten() {
-            let Some(items) = arr.as_array() else {
-                continue;
-            };
+        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
+            break;
+        }
+    }
+    Ok(preview)
+}
+
+fn extract_antigravity_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
+    extract_antigravity_brain_conversation_preview(path)
+}
+
+fn extract_antigravity_brain_conversation_preview(path: &Path) -> io::Result<ConversationPreview> {
+    let text = read_tail_lossy(path)?;
+    let mut preview = ConversationPreview::default();
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("PLANNER_RESPONSE") if preview.last_agent_message.is_none() => {
+                preview.last_agent_message = v
+                    .get("content")
+                    .and_then(|t| t.as_str())
+                    .and_then(collapse_preview);
+            }
+            Some("USER_INPUT") if preview.last_user_message.is_none() => {
+                preview.last_user_message = v
+                    .get("content")
+                    .and_then(|t| t.as_str())
+                    .and_then(collapse_antigravity_user_preview);
+            }
+            _ => {}
+        }
+        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
+            break;
+        }
+    }
+    Ok(preview)
+}
+
+fn claude_message_preview(v: &serde_json::Value) -> Option<String> {
+    let content = v.get("message").and_then(|m| m.get("content"))?;
+    preview_from_content_value(content)
+}
+
+fn preview_from_content_value(content: &serde_json::Value) -> Option<String> {
+    if let Some(text) = content.as_str() {
+        return collapse_preview(text);
+    }
+    let items = content.as_array()?;
+    for item in items {
+        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        if let Some(p) = collapse_preview(text) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn codex_payload_message_preview(v: &serde_json::Value) -> Option<String> {
+    if let Some(content) = v.pointer("/payload/content") {
+        if let Some(text) = content.as_str() {
+            return collapse_preview(text);
+        }
+        if let Some(items) = content.as_array() {
             for item in items.iter().rev() {
-                let content = item.get("content").and_then(|c| c.as_array());
-                let Some(content) = content else { continue };
-                for c in content.iter().rev() {
-                    if let Some(text) = c.get("text").and_then(|t| t.as_str()) {
-                        if let Some(p) = collapse_preview(text) {
-                            return Ok(Some(p));
-                        }
+                let text = item
+                    .get("text")
+                    .or_else(|| item.get("output_text"))
+                    .and_then(|t| t.as_str());
+                if let Some(text) = text {
+                    if let Some(p) = collapse_preview(text) {
+                        return Some(p);
                     }
                 }
             }
         }
     }
-    Ok(None)
+    codex_payload_message_fallback_preview(v)
 }
 
-fn extract_antigravity_preview(path: &Path) -> io::Result<Option<String>> {
-    extract_antigravity_brain_preview(path)
+fn codex_payload_message_fallback_preview(v: &serde_json::Value) -> Option<String> {
+    v.pointer("/payload/message")
+        .and_then(|m| m.as_str())
+        .filter(|s| !s.is_empty())
+        .and_then(collapse_preview)
 }
 
-fn extract_antigravity_brain_preview(path: &Path) -> io::Result<Option<String>> {
-    let text = read_tail_lossy(path)?;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.starts_with('{') {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+fn codex_response_output_preview(v: &serde_json::Value) -> Option<String> {
+    let arrays = [
+        v.pointer("/payload/response/output"),
+        v.pointer("/response_payload/output"),
+        v.pointer("/payload/output"),
+    ];
+    for arr in arrays.into_iter().flatten() {
+        let Some(items) = arr.as_array() else {
             continue;
         };
-        if v.get("type").and_then(|t| t.as_str()) != Some("PLANNER_RESPONSE") {
-            continue;
-        }
-        if let Some(text) = v.get("content").and_then(|t| t.as_str()) {
-            if let Some(p) = collapse_preview(text) {
-                return Ok(Some(p));
+        for item in items.iter().rev() {
+            let content = item.get("content").and_then(|c| c.as_array());
+            let Some(content) = content else { continue };
+            for c in content.iter().rev() {
+                if let Some(text) = c.get("text").and_then(|t| t.as_str()) {
+                    if let Some(p) = collapse_preview(text) {
+                        return Some(p);
+                    }
+                }
             }
         }
     }
-    Ok(None)
+    None
+}
+
+fn collapse_antigravity_user_preview(s: &str) -> Option<String> {
+    let content = extract_tagged_antigravity_user_request(s).unwrap_or(s);
+    collapse_preview(content)
+}
+
+fn extract_tagged_antigravity_user_request(s: &str) -> Option<&str> {
+    let start_tag = "<USER_REQUEST>";
+    let end_tag = "</USER_REQUEST>";
+    let start = s.find(start_tag)? + start_tag.len();
+    let rest = &s[start..];
+    let end = rest.find(end_tag).unwrap_or(rest.len());
+    Some(&rest[..end])
 }
 
 fn read_tail_lossy(path: &Path) -> io::Result<String> {
@@ -625,9 +705,77 @@ mod tests {
         )
         .unwrap();
 
-        let preview = extract_codex_preview(&path).unwrap();
+        let preview = extract_preview(AgentKind::Codex, &path).unwrap();
 
         assert_eq!(preview.as_deref(), Some("Here is the latest Codex answer."));
+    }
+
+    #[test]
+    fn claude_conversation_preview_reads_latest_user_and_assistant() {
+        let base = ScratchDir::new("claude-conversation-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"Please fix the failing tests."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I found the failing assertion."}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Claude, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Please fix the failing tests.")
+        );
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("I found the failing assertion.")
+        );
+    }
+
+    #[test]
+    fn codex_conversation_preview_reads_payload_roles() {
+        let base = ScratchDir::new("codex-conversation-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"message","payload":{"role":"user","content":[{"type":"input_text","text":"Check the drawer regression."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The regression is in the popover target."}]}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Check the drawer regression.")
+        );
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("The regression is in the popover target.")
+        );
+    }
+
+    #[test]
+    fn codex_conversation_preview_does_not_treat_user_message_as_agent() {
+        let base = ScratchDir::new("codex-user-message-preview");
+        let path = base.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"message","payload":{"role":"user","message":"Please inspect the popover."}}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Codex, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Please inspect the popover.")
+        );
+        assert_eq!(preview.last_agent_message, None);
     }
 
     #[test]
@@ -642,11 +790,35 @@ mod tests {
         )
         .unwrap();
 
-        let preview = extract_antigravity_preview(&path).unwrap();
+        let preview = extract_preview(AgentKind::Antigravity, &path).unwrap();
 
         assert_eq!(
             preview.as_deref(),
             Some("Here is the latest Antigravity answer.")
+        );
+    }
+
+    #[test]
+    fn antigravity_conversation_preview_reads_user_request_tag() {
+        let base = ScratchDir::new("antigravity-conversation-preview");
+        let path = base.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>Make the board calmer.</USER_REQUEST>"}
+{"type":"PLANNER_RESPONSE","status":"DONE","content":"I will reduce the terminal surface."}
+"#,
+        )
+        .unwrap();
+
+        let preview = extract_conversation_preview(AgentKind::Antigravity, &path).unwrap();
+
+        assert_eq!(
+            preview.last_user_message.as_deref(),
+            Some("Make the board calmer.")
+        );
+        assert_eq!(
+            preview.last_agent_message.as_deref(),
+            Some("I will reduce the terminal surface.")
         );
     }
 

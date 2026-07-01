@@ -72,6 +72,34 @@
       "defaultWorkspaceViewMode": {
         "label": "기본 작업공간 모드",
         "hint": "새 프로젝트 작업공간을 만들 때 사용할 모드입니다. 이미 프로젝트별로 선택한 모드는 유지됩니다."
+      },
+      "kanbanTerminalPopover": {
+        "title": "칸반 터미널 팝오버",
+        "description": "칸반 카드에서 터미널을 열 때 위치와 시작 크기를 정합니다.",
+        "placement": {
+          "label": "표시 위치",
+          "hint": "칸반 카드에서 터미널을 열 때 처음 나타나는 위치입니다.",
+          "card": {
+            "label": "칸반 아이템 옆",
+            "description": "선택한 칸반 카드 옆에 엽니다."
+          },
+          "center": {
+            "label": "화면 가운데",
+            "description": "작업공간 중앙에 엽니다."
+          }
+        },
+        "defaultSize": {
+          "label": "기본 크기",
+          "hint": "새 터미널 팝오버가 열릴 때의 시작 크기입니다.",
+          "custom": {
+            "label": "작은 화면 / 사용자 지정",
+            "description": "저장된 팝오버 크기를 사용하고, 리사이즈하면 기억합니다."
+          },
+          "fullscreen": {
+            "label": "전체 화면",
+            "description": "앱 창 안에서 크게 펼쳐서 엽니다."
+          }
+        }
       }
     },
     "terminal": {
@@ -881,7 +909,40 @@
         "createdDesc": "최신 생성",
         "nameAsc": "이름"
       },
-      "openSession": "{name} 열기"
+      "openSession": "{name} 열기",
+      "tooltip": {
+        "title": "제목",
+        "lastMessage": "마지막 메시지",
+        "noLastMessage": "마지막 메시지 없음",
+        "branch": "브랜치",
+        "detached": "(detached)",
+        "worktree": "워크트리"
+      },
+      "console": {
+        "ariaLabel": "세션 콘솔",
+        "terminal": "터미널",
+        "chat": "채팅"
+      },
+      "terminalPopover": {
+        "ariaLabel": "세션 터미널",
+        "expand": "터미널 크게 보기",
+        "restore": "터미널 원래 크기로",
+        "resize": "터미널 크기 조절"
+      },
+      "popover": {
+        "ariaLabel": "세션 대화",
+        "userPrompt": "내 마지막 프롬프트",
+        "agentMessage": "Agent 마지막 메시지",
+        "emptyUser": "아직 사용자 프롬프트가 없습니다",
+        "emptyAgent": "아직 Agent 메시지가 없습니다",
+        "messagePlaceholder": "이 세션에 답장하기...",
+        "disabledPlaceholder": "이 세션에는 터미널에서 입력하세요",
+        "send": "전송",
+        "sending": "전송 중",
+        "openTerminal": "터미널 열기",
+        "sendUnavailable": "이 세션에는 터미널을 열어 입력하세요.",
+        "sendError": "메시지를 보내지 못했습니다."
+      }
     }
   },
   "topBar": {

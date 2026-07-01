@@ -74,6 +74,8 @@ import {
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
   TOAST_POSITION_OPTIONS,
+  type KanbanTerminalPopoverDefaultSize,
+  type KanbanTerminalPopoverPlacement,
   type SelectedAgent,
   type SessionTitleSource,
   type AcornSettings,
@@ -1162,20 +1164,33 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
   const patchAppearance = useSettings((s) => s.patchAppearance);
 
   return (
-    <section className="space-y-4">
-      <LanguageSection
-        language={settings.language}
-        onChange={patchLanguage}
-        t={t}
-      />
-      <UiScaleSection
-        value={settings.appearance.uiScalePercent}
-        onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
-      />
-      <DefaultWorkspaceViewModeSection
-        value={settings.interface.defaultWorkspaceViewMode}
-        onChange={(defaultWorkspaceViewMode) =>
-          patchInterface({ defaultWorkspaceViewMode })
+    <section className="space-y-6">
+      <div className="space-y-4">
+        <LanguageSection
+          language={settings.language}
+          onChange={patchLanguage}
+          t={t}
+        />
+        <UiScaleSection
+          value={settings.appearance.uiScalePercent}
+          onChange={(uiScalePercent) => patchAppearance({ uiScalePercent })}
+        />
+        <DefaultWorkspaceViewModeSection
+          value={settings.interface.defaultWorkspaceViewMode}
+          onChange={(defaultWorkspaceViewMode) =>
+            patchInterface({ defaultWorkspaceViewMode })
+          }
+          t={t}
+        />
+      </div>
+      <KanbanTerminalPopoverSettings
+        placement={settings.interface.kanbanTerminalPopoverPlacement}
+        defaultSize={settings.interface.kanbanTerminalPopoverDefaultSize}
+        onPlacementChange={(kanbanTerminalPopoverPlacement) =>
+          patchInterface({ kanbanTerminalPopoverPlacement })
+        }
+        onDefaultSizeChange={(kanbanTerminalPopoverDefaultSize) =>
+          patchInterface({ kanbanTerminalPopoverDefaultSize })
         }
         t={t}
       />
@@ -1227,6 +1242,115 @@ function DefaultWorkspaceViewModeSection({
         className="w-44"
       />
     </Field>
+  );
+}
+
+function KanbanTerminalPopoverSettings({
+  placement,
+  defaultSize,
+  onPlacementChange,
+  onDefaultSizeChange,
+  t,
+}: {
+  placement: KanbanTerminalPopoverPlacement;
+  defaultSize: KanbanTerminalPopoverDefaultSize;
+  onPlacementChange: (value: KanbanTerminalPopoverPlacement) => void;
+  onDefaultSizeChange: (value: KanbanTerminalPopoverDefaultSize) => void;
+  t: SettingsTranslator;
+}) {
+  return (
+    <SettingsGroup
+      title={st(t, "settings.interface.kanbanTerminalPopover.title")}
+      description={st(
+        t,
+        "settings.interface.kanbanTerminalPopover.description",
+      )}
+    >
+      <div className="space-y-4">
+        <Field
+          label={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.placement.label",
+          )}
+          hint={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.placement.hint",
+          )}
+        >
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <RadioCard<KanbanTerminalPopoverPlacement>
+              name="kanban-terminal-popover-placement"
+              value="card"
+              current={placement}
+              label={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.placement.card.label",
+              )}
+              description={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.placement.card.description",
+              )}
+              onSelect={onPlacementChange}
+            />
+            <RadioCard<KanbanTerminalPopoverPlacement>
+              name="kanban-terminal-popover-placement"
+              value="center"
+              current={placement}
+              label={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.placement.center.label",
+              )}
+              description={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.placement.center.description",
+              )}
+              onSelect={onPlacementChange}
+            />
+          </div>
+        </Field>
+        <Field
+          label={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.defaultSize.label",
+          )}
+          hint={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.defaultSize.hint",
+          )}
+        >
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <RadioCard<KanbanTerminalPopoverDefaultSize>
+              name="kanban-terminal-popover-default-size"
+              value="custom"
+              current={defaultSize}
+              label={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.defaultSize.custom.label",
+              )}
+              description={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.defaultSize.custom.description",
+              )}
+              onSelect={onDefaultSizeChange}
+            />
+            <RadioCard<KanbanTerminalPopoverDefaultSize>
+              name="kanban-terminal-popover-default-size"
+              value="fullscreen"
+              current={defaultSize}
+              label={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.defaultSize.fullscreen.label",
+              )}
+              description={st(
+                t,
+                "settings.interface.kanbanTerminalPopover.defaultSize.fullscreen.description",
+              )}
+              onSelect={onDefaultSizeChange}
+            />
+          </div>
+        </Field>
+      </div>
+    </SettingsGroup>
   );
 }
 

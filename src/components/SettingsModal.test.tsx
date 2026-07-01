@@ -412,6 +412,45 @@ describe("SettingsModal font controls", () => {
     });
   });
 
+  it("patches kanban terminal popover options from the Interface tab", async () => {
+    const patchInterface = vi.fn();
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+      patchInterface,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openInterfaceTab();
+
+    const centerInput = document.querySelector<HTMLInputElement>(
+      'input[name="kanban-terminal-popover-placement"][value="center"]',
+    );
+    const fullscreenInput = document.querySelector<HTMLInputElement>(
+      'input[name="kanban-terminal-popover-default-size"][value="fullscreen"]',
+    );
+    if (!centerInput || !fullscreenInput) {
+      throw new Error("Kanban terminal popover settings not found");
+    }
+
+    act(() => {
+      centerInput.click();
+    });
+    act(() => {
+      fullscreenInput.click();
+    });
+
+    expect(patchInterface).toHaveBeenNthCalledWith(1, {
+      kanbanTerminalPopoverPlacement: "center",
+    });
+    expect(patchInterface).toHaveBeenNthCalledWith(2, {
+      kanbanTerminalPopoverDefaultSize: "fullscreen",
+    });
+  });
+
   afterEach(() => {
     if (root) {
       act(() => root?.unmount());

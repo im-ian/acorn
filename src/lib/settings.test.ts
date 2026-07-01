@@ -96,12 +96,24 @@ describe("interface settings", () => {
 
   it("defaults new workspaces to pane mode", () => {
     expect(DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode).toBe("panes");
+    expect(
+      DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement,
+    ).toBe("card");
+    expect(
+      DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize,
+    ).toBe("custom");
   });
 
   it("loads a persisted default workspace mode", async () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ interface: { defaultWorkspaceViewMode: "kanban" } }),
+      JSON.stringify({
+        interface: {
+          defaultWorkspaceViewMode: "kanban",
+          kanbanTerminalPopoverPlacement: "center",
+          kanbanTerminalPopoverDefaultSize: "fullscreen",
+        },
+      }),
     );
 
     vi.resetModules();
@@ -110,12 +122,26 @@ describe("interface settings", () => {
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverPlacement,
+    ).toBe("center");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverDefaultSize,
+    ).toBe("fullscreen");
   });
 
-  it("falls back to panes for an unsupported default workspace mode", async () => {
+  it("falls back for unsupported interface values", async () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ interface: { defaultWorkspaceViewMode: "grid" } }),
+      JSON.stringify({
+        interface: {
+          defaultWorkspaceViewMode: "grid",
+          kanbanTerminalPopoverPlacement: "dock",
+          kanbanTerminalPopoverDefaultSize: "huge",
+        },
+      }),
     );
 
     vi.resetModules();
@@ -124,27 +150,63 @@ describe("interface settings", () => {
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("panes");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverPlacement,
+    ).toBe("card");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverDefaultSize,
+    ).toBe("custom");
   });
 
-  it("patches the default workspace mode and preserves the previous value for invalid patches", async () => {
+  it("patches interface settings and preserves the previous value for invalid patches", async () => {
     vi.resetModules();
     const { useSettings } = await import("./settings");
 
     useSettings
       .getState()
-      .patchInterface({ defaultWorkspaceViewMode: "kanban" });
+      .patchInterface({
+        defaultWorkspaceViewMode: "kanban",
+        kanbanTerminalPopoverPlacement: "center",
+        kanbanTerminalPopoverDefaultSize: "fullscreen",
+      });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverPlacement,
+    ).toBe("center");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverDefaultSize,
+    ).toBe("fullscreen");
 
     const invalidMode =
       "grid" as unknown as typeof DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode;
+    const invalidPlacement =
+      "dock" as unknown as typeof DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement;
+    const invalidDefaultSize =
+      "huge" as unknown as typeof DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize;
     useSettings
       .getState()
-      .patchInterface({ defaultWorkspaceViewMode: invalidMode });
+      .patchInterface({
+        defaultWorkspaceViewMode: invalidMode,
+        kanbanTerminalPopoverPlacement: invalidPlacement,
+        kanbanTerminalPopoverDefaultSize: invalidDefaultSize,
+      });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverPlacement,
+    ).toBe("center");
+    expect(
+      useSettings.getState().settings.interface
+        .kanbanTerminalPopoverDefaultSize,
+    ).toBe("fullscreen");
   });
 });
 

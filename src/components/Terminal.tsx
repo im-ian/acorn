@@ -115,6 +115,7 @@ interface TerminalProps {
    */
   isActive?: boolean;
   isFocusedPane?: boolean;
+  autoFocusOnActive?: boolean;
 }
 
 interface PtyOutputPayload {
@@ -558,6 +559,7 @@ export function Terminal({
   pasteAgentProvider = null,
   isActive = true,
   isFocusedPane = true,
+  autoFocusOnActive = false,
 }: TerminalProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -2874,6 +2876,20 @@ export function Terminal({
     window.addEventListener("acorn:focus-session", handler);
     return () => window.removeEventListener("acorn:focus-session", handler);
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!isActive || !autoFocusOnActive) return;
+    const focus = () => termRef.current?.focus();
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const frame = requestAnimationFrame(() => {
+      focus();
+      timeout = setTimeout(focus, 0);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (timeout !== null) clearTimeout(timeout);
+    };
+  }, [autoFocusOnActive, isActive, sessionId]);
 
   // When this terminal is hidden behind another tab in the same pane and
   // then made visible again, the DOM renderer may not have repainted while

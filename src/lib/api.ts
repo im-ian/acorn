@@ -639,6 +639,9 @@ export const api = {
       id: string;
       status: SessionStatus;
       status_reason?: SessionStatusReason | null;
+      last_message?: string | null;
+      last_user_message?: string | null;
+      last_agent_message?: string | null;
       agent_provider?: SessionAgentProvider | null;
       agent_transcript_id?: string | null;
       branch: string | null;
@@ -650,6 +653,9 @@ export const api = {
         id: string;
         status: SessionStatus;
         status_reason?: SessionStatusReason | null;
+        last_message?: string | null;
+        last_user_message?: string | null;
+        last_agent_message?: string | null;
         agent_provider?: SessionAgentProvider | null;
         agent_transcript_id?: string | null;
         branch: string | null;
