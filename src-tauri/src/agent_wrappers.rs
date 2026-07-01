@@ -217,9 +217,12 @@ input=$(cat 2>/dev/null || true)
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
 
 event=""
+# SubagentStop fires when a Task subagent finishes while the main agent is
+# still mid-turn, so it re-asserts Running rather than marking the session
+# done — only the main-agent Stop ends the turn.
 case "$hook_event_name" in
-  SessionStart|UserPromptSubmit) event="start" ;;
-  Stop|SubagentStop) event="stop" ;;
+  SessionStart|UserPromptSubmit|SubagentStop) event="start" ;;
+  Stop) event="stop" ;;
   Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
 esac
@@ -526,8 +529,10 @@ mod tests {
 
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"claude\""));
-        assert!(notify.contains("SessionStart|UserPromptSubmit"));
-        assert!(notify.contains("Stop|SubagentStop"));
+        // SubagentStop re-asserts Running (grouped with start), so the main
+        // agent's turn is not marked done when a Task subagent finishes.
+        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop"));
+        assert!(notify.contains("Stop) event=\"stop\""));
         assert!(notify.contains("Notification"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
