@@ -109,6 +109,10 @@ function EqualizablePanelGroup({
 
   useEffect(() => {
     const onEqualize = () => {
+      // The layout stays mounted (hidden) while the kanban view is shown, so
+      // this listener is still live there. Equalizing then would silently reset
+      // the hidden pane splits, so only act while the panes view is visible.
+      if (useAppStore.getState().workspaceViewMode !== "panes") return;
       onLayout(equalizedLayout);
       ref.current?.setLayout(equalizedLayout);
     };
