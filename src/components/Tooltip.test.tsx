@@ -55,6 +55,16 @@ describe("Tooltip", () => {
     });
   }
 
+  function contextMenuTrigger() {
+    const trigger = container.querySelector("button");
+    if (!trigger) throw new Error("trigger not found");
+    act(() => {
+      trigger.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+  }
+
   function tooltip() {
     return document.body.querySelector('[role="tooltip"]');
   }
@@ -90,5 +100,31 @@ describe("Tooltip", () => {
     act(() => vi.advanceTimersByTime(1));
 
     expect(tooltip()).toBeNull();
+  });
+
+  it("cancels a pending hover tooltip when the context menu opens", () => {
+    renderTooltip(500);
+    hoverTrigger();
+
+    act(() => vi.advanceTimersByTime(250));
+    contextMenuTrigger();
+    act(() => vi.advanceTimersByTime(250));
+
+    expect(tooltip()).toBeNull();
+  });
+
+  it("uses a block-level multiline surface so long content can wrap", () => {
+    act(() => {
+      root.render(
+        <Tooltip label="very/long/path/that/should/wrap" delay={0} multiline>
+          <button type="button">Trigger</button>
+        </Tooltip>,
+      );
+    });
+    hoverTrigger();
+    act(() => vi.advanceTimersByTime(0));
+
+    expect(tooltip()?.className).toContain("inline-block");
+    expect(tooltip()?.className).toContain("max-w-[min(34rem,calc(100vw-1rem))]");
   });
 });

@@ -4915,6 +4915,12 @@ pub struct SessionStatusEntry {
     pub id: String,
     pub status: SessionStatus,
     pub status_reason: Option<SessionStatusReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_user_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_agent_message: Option<String>,
     pub agent_provider: Option<SessionAgentProvider>,
     pub agent_transcript_id: Option<String>,
     /// Current branch read live from the session's worktree on each poll.
@@ -4940,6 +4946,45 @@ pub struct SessionStatusEntry {
 /// transcript-less shells are left untouched.
 fn auto_title_promotion_needed(auto_title_enabled: Option<bool>, has_transcript: bool) -> bool {
     has_transcript && auto_title_enabled == Some(false)
+}
+
+fn chat_conversation_preview(
+    chat_state: &persistence::ChatSessionState,
+) -> agent_resume::ConversationPreview {
+    let mut preview = agent_resume::ConversationPreview::default();
+    for message in chat_state.messages.iter().rev() {
+        match message.role {
+            persistence::ChatRole::User if preview.last_user_message.is_none() => {
+                preview.last_user_message = collapse_status_preview(&message.content);
+            }
+            persistence::ChatRole::Assistant if preview.last_agent_message.is_none() => {
+                preview.last_agent_message = collapse_status_preview(&message.content);
+            }
+            _ => {}
+        }
+        if preview.last_user_message.is_some() && preview.last_agent_message.is_some() {
+            break;
+        }
+    }
+    preview
+}
+
+fn collapse_status_preview(s: &str) -> Option<String> {
+    const STATUS_PREVIEW_CHARS: usize = 90;
+    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    let truncated = collapsed
+        .chars()
+        .take(STATUS_PREVIEW_CHARS)
+        .collect::<String>();
+    let suffix = if collapsed.chars().count() > STATUS_PREVIEW_CHARS {
+        "…"
+    } else {
+        ""
+    };
+    Some(format!("{truncated}{suffix}"))
 }
 
 #[tauri::command]
@@ -5035,10 +5080,22 @@ fn detect_session_statuses_blocking(
                 let branch = session
                     .as_ref()
                     .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
+                let conversation_preview = persistence::load_chat_session_state(&id)
+                    .ok()
+                    .map(|state| chat_conversation_preview(&state));
                 return SessionStatusEntry {
                     id,
                     status: previous,
                     status_reason: None,
+                    last_message: conversation_preview
+                        .as_ref()
+                        .and_then(|p| p.last_agent_message.clone()),
+                    last_user_message: conversation_preview
+                        .as_ref()
+                        .and_then(|p| p.last_user_message.clone()),
+                    last_agent_message: conversation_preview
+                        .as_ref()
+                        .and_then(|p| p.last_agent_message.clone()),
                     agent_provider: session.as_ref().and_then(|s| s.agent_provider),
                     agent_transcript_id: session
                         .as_ref()
@@ -5114,6 +5171,16 @@ fn detect_session_statuses_blocking(
                 }
                 None => None,
             };
+            let conversation_preview = transcript.as_ref().and_then(|(path, kind)| {
+                agent_resume::extract_conversation_preview(
+                    status_agent_kind_to_resume_kind(*kind),
+                    path,
+                )
+                .ok()
+            });
+            let transcript_preview = conversation_preview
+                .as_ref()
+                .and_then(|p| p.last_agent_message.clone());
             let shell_hint = refine_shell_hint_for_unpaired_agent(
                 shell_hint,
                 transcript.is_some(),
@@ -5195,6 +5262,13 @@ fn detect_session_statuses_blocking(
                 } else {
                     detection.reason
                 },
+                last_message: transcript_preview,
+                last_user_message: conversation_preview
+                    .as_ref()
+                    .and_then(|p| p.last_user_message.clone()),
+                last_agent_message: conversation_preview
+                    .as_ref()
+                    .and_then(|p| p.last_agent_message.clone()),
                 agent_provider,
                 agent_transcript_id,
                 branch,

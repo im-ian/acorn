@@ -72,6 +72,34 @@
       "defaultWorkspaceViewMode": {
         "label": "Default workspace mode",
         "hint": "Mode used when Acorn creates a new project workspace. Existing project-specific choices stay unchanged."
+      },
+      "kanbanTerminalPopover": {
+        "title": "Kanban terminal popover",
+        "description": "Controls where card terminals open and how large they start.",
+        "placement": {
+          "label": "Open position",
+          "hint": "Initial placement when you open a terminal from a kanban card.",
+          "card": {
+            "label": "Beside card",
+            "description": "Open next to the selected kanban item."
+          },
+          "center": {
+            "label": "Center of screen",
+            "description": "Open in the middle of the workspace."
+          }
+        },
+        "defaultSize": {
+          "label": "Default size",
+          "hint": "Initial size mode for newly opened terminal popovers.",
+          "custom": {
+            "label": "Small / custom",
+            "description": "Use the remembered popover size; resizing updates it."
+          },
+          "fullscreen": {
+            "label": "Full screen",
+            "description": "Open expanded inside the app window."
+          }
+        }
       }
     },
     "terminal": {
@@ -881,7 +909,40 @@
         "createdDesc": "Newest",
         "nameAsc": "Name"
       },
-      "openSession": "Open {name}"
+      "openSession": "Open {name}",
+      "tooltip": {
+        "title": "Title",
+        "lastMessage": "Last message",
+        "noLastMessage": "No last message",
+        "branch": "Branch",
+        "detached": "(detached)",
+        "worktree": "Worktree"
+      },
+      "console": {
+        "ariaLabel": "Session console",
+        "terminal": "Terminal",
+        "chat": "Chat"
+      },
+      "terminalPopover": {
+        "ariaLabel": "Session terminal",
+        "expand": "Expand terminal",
+        "restore": "Restore terminal size",
+        "resize": "Resize terminal"
+      },
+      "popover": {
+        "ariaLabel": "Session conversation",
+        "userPrompt": "My last prompt",
+        "agentMessage": "Agent last message",
+        "emptyUser": "No user prompt yet",
+        "emptyAgent": "No agent message yet",
+        "messagePlaceholder": "Reply to this session...",
+        "disabledPlaceholder": "Open terminal to type into this session",
+        "send": "Send",
+        "sending": "Sending",
+        "openTerminal": "Open terminal",
+        "sendUnavailable": "Open the terminal to send to this session.",
+        "sendError": "Could not send the message."
+      }
     }
   },
   "topBar": {
