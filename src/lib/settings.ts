@@ -132,6 +132,8 @@ export const TERMINAL_LETTER_SPACING_STEP = 0.25;
 
 export type ToastPosition = "top" | "bottom";
 export type DefaultWorkspaceViewMode = "panes" | "kanban";
+export type KanbanTerminalPopoverPlacement = "card" | "center";
+export type KanbanTerminalPopoverDefaultSize = "custom" | "fullscreen";
 
 export const TOAST_POSITION_OPTIONS: ReadonlyArray<{
   value: ToastPosition;
@@ -219,6 +221,16 @@ export interface AcornSettings {
      * Existing project workspaces keep their own stored mode.
      */
     defaultWorkspaceViewMode: DefaultWorkspaceViewMode;
+    /**
+     * Initial placement for terminal popovers opened from kanban cards.
+     * Users can still drag the popover after it opens.
+     */
+    kanbanTerminalPopoverPlacement: KanbanTerminalPopoverPlacement;
+    /**
+     * Initial size mode for terminal popovers opened from kanban cards.
+     * `custom` uses the remembered user-resized popover size.
+     */
+    kanbanTerminalPopoverDefaultSize: KanbanTerminalPopoverDefaultSize;
   };
   terminal: {
     fontFamily: string;
@@ -470,6 +482,8 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   language: "en",
   interface: {
     defaultWorkspaceViewMode: "panes",
+    kanbanTerminalPopoverPlacement: "card",
+    kanbanTerminalPopoverDefaultSize: "custom",
   },
   terminal: {
     fontFamily: fontStackFromSlots(
@@ -592,6 +606,10 @@ const VALID_WORKSPACE_VIEW_MODES = new Set<DefaultWorkspaceViewMode>([
   "panes",
   "kanban",
 ]);
+const VALID_KANBAN_TERMINAL_POPOVER_PLACEMENTS =
+  new Set<KanbanTerminalPopoverPlacement>(["card", "center"]);
+const VALID_KANBAN_TERMINAL_POPOVER_DEFAULT_SIZES =
+  new Set<KanbanTerminalPopoverDefaultSize>(["custom", "fullscreen"]);
 
 function normalizeBgFit(v: unknown, fallback: BackgroundFit): BackgroundFit {
   if (typeof v === "string" && VALID_BG_FITS.has(v as BackgroundFit)) {
@@ -807,6 +825,36 @@ function normalizeDefaultWorkspaceViewMode(
   return fallback;
 }
 
+function normalizeKanbanTerminalPopoverPlacement(
+  v: unknown,
+  fallback: KanbanTerminalPopoverPlacement,
+): KanbanTerminalPopoverPlacement {
+  if (
+    typeof v === "string" &&
+    VALID_KANBAN_TERMINAL_POPOVER_PLACEMENTS.has(
+      v as KanbanTerminalPopoverPlacement,
+    )
+  ) {
+    return v as KanbanTerminalPopoverPlacement;
+  }
+  return fallback;
+}
+
+function normalizeKanbanTerminalPopoverDefaultSize(
+  v: unknown,
+  fallback: KanbanTerminalPopoverDefaultSize,
+): KanbanTerminalPopoverDefaultSize {
+  if (
+    typeof v === "string" &&
+    VALID_KANBAN_TERMINAL_POPOVER_DEFAULT_SIZES.has(
+      v as KanbanTerminalPopoverDefaultSize,
+    )
+  ) {
+    return v as KanbanTerminalPopoverDefaultSize;
+  }
+  return fallback;
+}
+
 /**
  * v1 commitMessage block from the multi-provider commit-message PR. The
  * loader below lifts every field up into the new `agents.*` block so a
@@ -943,6 +991,16 @@ function loadSettings(): AcornSettings {
           interfaceRaw.defaultWorkspaceViewMode,
           DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode,
         ),
+        kanbanTerminalPopoverPlacement:
+          normalizeKanbanTerminalPopoverPlacement(
+            interfaceRaw.kanbanTerminalPopoverPlacement,
+            DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement,
+          ),
+        kanbanTerminalPopoverDefaultSize:
+          normalizeKanbanTerminalPopoverDefaultSize(
+            interfaceRaw.kanbanTerminalPopoverDefaultSize,
+            DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize,
+          ),
       },
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
@@ -1242,6 +1300,20 @@ export const useSettings = create<SettingsState>((set, get) => ({
               : normalizeDefaultWorkspaceViewMode(
                   patch.defaultWorkspaceViewMode,
                   s.settings.interface.defaultWorkspaceViewMode,
+                ),
+          kanbanTerminalPopoverPlacement:
+            patch.kanbanTerminalPopoverPlacement === undefined
+              ? s.settings.interface.kanbanTerminalPopoverPlacement
+              : normalizeKanbanTerminalPopoverPlacement(
+                  patch.kanbanTerminalPopoverPlacement,
+                  s.settings.interface.kanbanTerminalPopoverPlacement,
+                ),
+          kanbanTerminalPopoverDefaultSize:
+            patch.kanbanTerminalPopoverDefaultSize === undefined
+              ? s.settings.interface.kanbanTerminalPopoverDefaultSize
+              : normalizeKanbanTerminalPopoverDefaultSize(
+                  patch.kanbanTerminalPopoverDefaultSize,
+                  s.settings.interface.kanbanTerminalPopoverDefaultSize,
                 ),
         },
       };

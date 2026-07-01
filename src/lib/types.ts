@@ -121,6 +121,10 @@ export interface Session {
   created_at: string;
   updated_at: string;
   last_message: string | null;
+  /** Ephemeral transcript/chat preview for the latest user turn. */
+  last_user_message?: string | null;
+  /** Ephemeral transcript/chat preview for the latest agent turn. */
+  last_agent_message?: string | null;
   title_source: SessionTitleSource;
   auto_title_enabled?: boolean | null;
   generated_title_transcript_id?: string | null;

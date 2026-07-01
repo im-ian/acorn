@@ -1482,7 +1482,10 @@ describe("splitFocusedPane", () => {
     useSettings.setState({
       settings: {
         ...structuredClone(DEFAULT_SETTINGS),
-        interface: { defaultWorkspaceViewMode: "kanban" },
+        interface: {
+          ...DEFAULT_SETTINGS.interface,
+          defaultWorkspaceViewMode: "kanban",
+        },
       },
     });
 
@@ -2085,6 +2088,88 @@ describe("pollSessionStatuses", () => {
 
     expect(useAppStore.getState().sessions[0]?.agent_transcript_id).toBe(
       "claude-new",
+    );
+  });
+
+  it("merges last messages from status polling even when status is unchanged", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "running",
+          last_message: "Older transcript preview",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        last_message: "New transcript preview",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.last_message).toBe(
+      "New transcript preview",
+    );
+  });
+
+  it("merges split conversation previews from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "running",
+          last_user_message: "Older user prompt",
+          last_agent_message: "Older agent response",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        last_user_message: "New user prompt",
+        last_agent_message: "New agent response",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.last_user_message).toBe(
+      "New user prompt",
+    );
+    expect(useAppStore.getState().sessions[0]?.last_agent_message).toBe(
+      "New agent response",
+    );
+  });
+
+  it("preserves last messages when status polling omits the field", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "running",
+          last_message: "Current transcript preview",
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.last_message).toBe(
+      "Current transcript preview",
     );
   });
 
