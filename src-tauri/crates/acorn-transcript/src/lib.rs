@@ -1,10 +1,15 @@
-//! On-demand process-inspection pairing for the Tab > Fork menu.
+//! On-demand process-inspection pairing for live agent processes.
 //!
 //! Each call walks every Acorn session's PTY descendant tree, picks
 //! the `claude` / `codex` / `antigravity` processes, and resolves each one
 //! to the transcript file it is currently writing. The returned UUID is
 //! what `claude --resume <id>` / `codex fork <id>` expect, or the
 //! Antigravity brain id for Antigravity sessions.
+//!
+//! `collect_live_mappings` returns every live agent process for UI affordances
+//! such as Fork. `collect_session_owner_mappings` stops at the first agent
+//! boundary in each process-tree branch so durable resume markers track the
+//! user-facing session owner instead of a nested sub-agent.
 //!
 //! Algorithm (mirrors agent-sessions' approach):
 //!   1. List PTY descendants by basename.
@@ -67,16 +72,60 @@ struct ScanCache {
     mappings: Vec<(uuid::Uuid, AgentKind, String)>,
 }
 
+type OwnerTranscriptQuarantine = std::collections::HashMap<uuid::Uuid, HashSet<PathBuf>>;
+type OwnerRotationQuarantine = std::collections::HashMap<OwnerRotationScope, SystemTime>;
+
+fn owner_transcript_quarantine() -> &'static Mutex<OwnerTranscriptQuarantine> {
+    static QUARANTINE: OnceLock<Mutex<OwnerTranscriptQuarantine>> = OnceLock::new();
+    QUARANTINE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn owner_rotation_quarantine() -> &'static Mutex<OwnerRotationQuarantine> {
+    static QUARANTINE: OnceLock<Mutex<OwnerRotationQuarantine>> = OnceLock::new();
+    QUARANTINE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
 fn scan_cache() -> &'static Mutex<Option<ScanCache>> {
     static CACHE: OnceLock<Mutex<Option<ScanCache>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
-#[derive(Clone, Copy, Debug)]
+fn owner_scan_cache() -> &'static Mutex<Option<ScanCache>> {
+    static CACHE: OnceLock<Mutex<Option<ScanCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AgentKind {
     Claude,
     Codex,
     Antigravity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MappingScope {
+    AllDescendants,
+    SessionOwners,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentProcessRole {
+    Emit,
+    Quarantine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AgentProcessMatch {
+    pid: Pid,
+    kind: AgentKind,
+    role: AgentProcessRole,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct OwnerRotationScope {
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+    cwd: Option<PathBuf>,
 }
 
 /// Per-session input handed to [`collect_live_mappings`]: the Acorn
@@ -116,16 +165,34 @@ pub fn slug_for_cwd(cwd: &Path) -> String {
 /// so repeated menu opens within a short window do not multiply the
 /// per-process syscall cost.
 pub fn collect_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    collect_mappings_cached(scan_cache(), sessions, MappingScope::AllDescendants)
+}
+
+/// Pair the top-level user-facing agent process in each Acorn session branch.
+/// Non-agent wrappers are transparent, but once an agent process is found its
+/// children are excluded so nested sub-agents cannot overwrite the parent
+/// session's durable resume marker.
+pub fn collect_session_owner_mappings(
+    sessions: &[SessionPid],
+) -> Vec<(uuid::Uuid, AgentKind, String)> {
+    collect_mappings_cached(owner_scan_cache(), sessions, MappingScope::SessionOwners)
+}
+
+fn collect_mappings_cached(
+    cache: &'static Mutex<Option<ScanCache>>,
+    sessions: &[SessionPid],
+    scope: MappingScope,
+) -> Vec<(uuid::Uuid, AgentKind, String)> {
     {
-        let guard = scan_cache().lock();
+        let guard = cache.lock();
         if let Some(cache) = guard.as_ref() {
             if cache.captured_at.elapsed() < Duration::from_millis(SCAN_CACHE_TTL_MS) {
                 return cache.mappings.clone();
             }
         }
     }
-    let mappings = scan_live_mappings(sessions);
-    *scan_cache().lock() = Some(ScanCache {
+    let mappings = scan_live_mappings(sessions, scope);
+    *cache.lock() = Some(ScanCache {
         captured_at: Instant::now(),
         mappings: mappings.clone(),
     });
@@ -180,7 +247,10 @@ pub fn find_completed_agent_run(
     }
 }
 
-fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, String)> {
+fn scan_live_mappings(
+    sessions: &[SessionPid],
+    scope: MappingScope,
+) -> Vec<(uuid::Uuid, AgentKind, String)> {
     let mut out = Vec::new();
     let refresh = ProcessRefreshKind::new()
         .with_cwd(UpdateKind::Always)
@@ -225,11 +295,21 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
     // Tracks transcripts that have already been claimed by some session
     // this cycle so two sessions running claude in the same cwd do not
     // collide on the same JSONL.
-    let mut assigned: HashSet<PathBuf> = HashSet::new();
     let now = SystemTime::now();
     let recency_cutoff = now
         .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
         .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut assigned: HashSet<PathBuf> = HashSet::new();
+    let mut owner_quarantined = if scope == MappingScope::SessionOwners {
+        active_owner_quarantined_paths()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let mut owner_rotation_quarantined = if scope == MappingScope::SessionOwners {
+        active_owner_rotation_quarantines(now)
+    } else {
+        HashSet::new()
+    };
 
     let claude_root = claude_projects_root();
     let codex_root = codex_sessions_root();
@@ -249,6 +329,7 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
         cwd: PathBuf,
         start_time: SystemTime,
         explicit_transcript_id: Option<String>,
+        role: AgentProcessRole,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
 
@@ -257,43 +338,56 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
             continue;
         };
 
-        let mut stack = vec![Pid::from_u32(root_pid)];
-        while let Some(pid) = stack.pop() {
-            if let Some(proc) = sys.process(pid) {
-                let kind = if process_basename_matches(proc, "claude") {
-                    Some(AgentKind::Claude)
-                } else if process_basename_matches(proc, "codex") {
-                    Some(AgentKind::Codex)
-                } else if process_basename_matches(proc, "agy")
+        let matches =
+            collect_agent_processes_in_tree(&children, Pid::from_u32(root_pid), scope, |pid| {
+                let proc = sys.process(pid)?;
+                if process_basename_matches(proc, "claude") {
+                    return Some(AgentKind::Claude);
+                }
+                if process_basename_matches(proc, "codex") {
+                    return Some(AgentKind::Codex);
+                }
+                if process_basename_matches(proc, "agy")
                     || process_basename_matches(proc, "antigravity")
                     || process_basename_matches(proc, "antigravity-cli")
                 {
-                    Some(AgentKind::Antigravity)
-                } else {
-                    None
-                };
-                if let Some(kind) = kind {
-                    if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
-                        let start_time =
-                            SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
-                        let explicit_transcript_id = match kind {
-                            AgentKind::Codex => codex_resume_id_from_process(proc),
-                            AgentKind::Claude | AgentKind::Antigravity => None,
-                        };
-                        candidates.push(Candidate {
-                            session_id: session.session_id,
-                            kind,
-                            pid: pid.as_u32(),
-                            cwd,
-                            start_time,
-                            explicit_transcript_id,
-                        });
-                    }
+                    return Some(AgentKind::Antigravity);
+                }
+                None
+            });
+
+        for process_match in matches {
+            if let Some(proc) = sys.process(process_match.pid) {
+                if let Some(cwd) = proc.cwd().map(|p| p.to_path_buf()) {
+                    let start_time =
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(proc.start_time());
+                    let explicit_transcript_id = match process_match.kind {
+                        AgentKind::Claude => claude_resume_id_from_process(proc),
+                        AgentKind::Codex => codex_resume_id_from_process(proc),
+                        AgentKind::Antigravity => None,
+                    };
+                    candidates.push(Candidate {
+                        session_id: session.session_id,
+                        kind: process_match.kind,
+                        pid: process_match.pid.as_u32(),
+                        cwd,
+                        start_time,
+                        explicit_transcript_id,
+                        role: process_match.role,
+                    });
                 }
             }
-            if let Some(kids) = children.get(&pid) {
-                stack.extend(kids.iter().copied());
-            }
+        }
+    }
+
+    if scope == MappingScope::SessionOwners {
+        for c in candidates
+            .iter()
+            .filter(|c| c.role == AgentProcessRole::Quarantine)
+        {
+            let rotation_scope = owner_rotation_scope(c.session_id, c.kind, &c.cwd);
+            remember_owner_rotation_quarantine(&rotation_scope, now);
+            owner_rotation_quarantined.insert(rotation_scope);
         }
     }
 
@@ -301,21 +395,46 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
     candidates.sort_by(|a, b| b.start_time.cmp(&a.start_time));
 
     for c in candidates {
+        let mut reserved = assigned.clone();
+        if c.role == AgentProcessRole::Emit {
+            if let Some(paths) = owner_quarantined.get(&c.session_id) {
+                reserved.extend(paths.iter().cloned());
+            }
+        }
         let candidate = match c.kind {
             AgentKind::Claude => {
                 let sole_claude_in_cwd = claude_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
-                find_recent_claude_jsonl(
-                    &c.cwd,
-                    claude_root.as_deref(),
-                    recency_cutoff,
-                    c.start_time,
-                    now,
-                    sole_claude_in_cwd,
-                    &assigned,
-                )
+                let allow_rotation = sole_claude_in_cwd
+                    && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                        c.session_id,
+                        c.kind,
+                        &c.cwd,
+                    ));
+                c.explicit_transcript_id
+                    .as_deref()
+                    .and_then(|id| {
+                        find_claude_jsonl_for_uuid(&c.cwd, claude_root.as_deref(), id, &assigned)
+                    })
+                    .or_else(|| {
+                        find_recent_claude_jsonl(
+                            &c.cwd,
+                            claude_root.as_deref(),
+                            recency_cutoff,
+                            c.start_time,
+                            now,
+                            allow_rotation,
+                            &reserved,
+                        )
+                    })
             }
             AgentKind::Codex => {
                 let sole_codex_in_cwd = codex_cwd_counts.get(&c.cwd).copied().unwrap_or(0) <= 1;
+                let allow_rotation = sole_codex_in_cwd
+                    && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                        c.session_id,
+                        c.kind,
+                        &c.cwd,
+                    ));
                 // `codex resume <uuid>` may attach to an existing JSONL before
                 // Codex appends a new line, so the normal mtime >= process-start
                 // guard would hide the active transcript.
@@ -329,19 +448,27 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
                             recency_cutoff,
                             c.start_time,
                             now,
-                            sole_codex_in_cwd,
-                            &assigned,
+                            allow_rotation,
+                            &reserved,
                         )
                     })
             }
-            AgentKind::Antigravity => find_recent_antigravity_jsonl(
-                &antigravity_roots,
-                recency_cutoff,
-                c.start_time,
-                now,
-                antigravity_count <= 1,
-                &assigned,
-            ),
+            AgentKind::Antigravity => {
+                let allow_rotation = antigravity_count <= 1
+                    && !owner_rotation_quarantined.contains(&owner_rotation_scope(
+                        c.session_id,
+                        c.kind,
+                        &c.cwd,
+                    ));
+                find_recent_antigravity_jsonl(
+                    &antigravity_roots,
+                    recency_cutoff,
+                    c.start_time,
+                    now,
+                    allow_rotation,
+                    &reserved,
+                )
+            }
         };
         if let Some((path, uuid)) = candidate {
             tracing::info!(
@@ -353,12 +480,112 @@ fn scan_live_mappings(sessions: &[SessionPid]) -> Vec<(uuid::Uuid, AgentKind, St
                 %uuid,
                 "transcript_watcher: paired live agent"
             );
-            assigned.insert(path);
+            assigned.insert(path.clone());
+            if c.role == AgentProcessRole::Quarantine {
+                remember_owner_quarantined_path(c.session_id, &path);
+                continue;
+            }
+            if scope == MappingScope::SessionOwners {
+                release_owner_quarantined_path(c.session_id, &path);
+                if let Some(paths) = owner_quarantined.get_mut(&c.session_id) {
+                    paths.remove(&path);
+                    if paths.is_empty() {
+                        owner_quarantined.remove(&c.session_id);
+                    }
+                }
+            }
             out.push((c.session_id, c.kind, uuid));
         }
     }
 
     out
+}
+
+fn collect_agent_processes_in_tree<F>(
+    children: &std::collections::HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    scope: MappingScope,
+    mut kind_for_pid: F,
+) -> Vec<AgentProcessMatch>
+where
+    F: FnMut(Pid) -> Option<AgentKind>,
+{
+    let mut out = Vec::new();
+    let mut stack = vec![(root, false)];
+    while let Some((pid, below_agent_boundary)) = stack.pop() {
+        let mut next_below_agent_boundary = below_agent_boundary;
+        if let Some(kind) = kind_for_pid(pid) {
+            let role = if scope == MappingScope::SessionOwners && below_agent_boundary {
+                AgentProcessRole::Quarantine
+            } else {
+                AgentProcessRole::Emit
+            };
+            out.push(AgentProcessMatch { pid, kind, role });
+            next_below_agent_boundary =
+                below_agent_boundary || scope == MappingScope::SessionOwners;
+        }
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(
+                kids.iter()
+                    .copied()
+                    .map(|kid| (kid, next_below_agent_boundary)),
+            );
+        }
+    }
+    out
+}
+
+fn active_owner_quarantined_paths() -> std::collections::HashMap<uuid::Uuid, HashSet<PathBuf>> {
+    let mut guard = owner_transcript_quarantine().lock();
+    guard.retain(|_, paths| {
+        paths.retain(|path| path.is_file());
+        !paths.is_empty()
+    });
+    guard.clone()
+}
+
+fn remember_owner_quarantined_path(session_id: uuid::Uuid, path: &Path) {
+    owner_transcript_quarantine()
+        .lock()
+        .entry(session_id)
+        .or_default()
+        .insert(path.to_path_buf());
+}
+
+fn release_owner_quarantined_path(session_id: uuid::Uuid, path: &Path) {
+    let mut guard = owner_transcript_quarantine().lock();
+    if let Some(paths) = guard.get_mut(&session_id) {
+        paths.remove(path);
+        if paths.is_empty() {
+            guard.remove(&session_id);
+        }
+    }
+}
+
+fn active_owner_rotation_quarantines(now: SystemTime) -> HashSet<OwnerRotationScope> {
+    let mut guard = owner_rotation_quarantine().lock();
+    guard.retain(|_, expires_at| *expires_at >= now);
+    guard.keys().cloned().collect()
+}
+
+fn remember_owner_rotation_quarantine(scope: &OwnerRotationScope, now: SystemTime) {
+    let expires_at = now
+        .checked_add(Duration::from_secs(DORMANT_TRANSCRIPT_SECS))
+        .unwrap_or(now);
+    owner_rotation_quarantine()
+        .lock()
+        .insert(scope.clone(), expires_at);
+}
+
+fn owner_rotation_scope(session_id: uuid::Uuid, kind: AgentKind, cwd: &Path) -> OwnerRotationScope {
+    OwnerRotationScope {
+        session_id,
+        kind,
+        cwd: match kind {
+            AgentKind::Claude | AgentKind::Codex => Some(cwd.to_path_buf()),
+            AgentKind::Antigravity => None,
+        },
+    }
 }
 
 fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
@@ -396,6 +623,21 @@ fn codex_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     codex_resume_id_from_args(&args)
+}
+
+fn claude_resume_id_from_process(proc: &sysinfo::Process) -> Option<String> {
+    let args = proc
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    claude_resume_id_from_args(&args)
+}
+
+fn claude_resume_id_from_args(args: &[String]) -> Option<String> {
+    args.windows(2).find_map(|pair| {
+        (pair[0] == "--resume" && is_uuid_v4_shape(&pair[1])).then(|| pair[1].clone())
+    })
 }
 
 fn codex_resume_id_from_args(args: &[String]) -> Option<String> {
@@ -464,6 +706,39 @@ fn find_codex_jsonl_for_uuid(
     Some((path, uuid.to_string()))
 }
 
+fn find_claude_jsonl_for_uuid(
+    cwd: &Path,
+    projects_root: Option<&Path>,
+    uuid: &str,
+    assigned: &HashSet<PathBuf>,
+) -> Option<(PathBuf, String)> {
+    let root = projects_root?;
+    if !is_uuid_v4_shape(uuid) {
+        return None;
+    }
+    let filename = format!("{uuid}.jsonl");
+    let slug_path = root.join(slug_for_cwd(cwd)).join(&filename);
+    if claude_uuid_path_matches_cwd(&slug_path, cwd, assigned) {
+        return Some((slug_path, uuid.to_string()));
+    }
+    for project in std::fs::read_dir(root).ok()?.flatten() {
+        let path = project.path().join(&filename);
+        if claude_uuid_path_matches_cwd(&path, cwd, assigned) {
+            return Some((path, uuid.to_string()));
+        }
+    }
+    None
+}
+
+fn claude_uuid_path_matches_cwd(path: &Path, cwd: &Path, assigned: &HashSet<PathBuf>) -> bool {
+    if assigned.contains(path) || !path.is_file() {
+        return false;
+    }
+    read_agent_transcript_cwd(path)
+        .map(|transcript_cwd| transcript_cwd == cwd)
+        .unwrap_or(true)
+}
+
 fn codex_day_dirs_for_uuid(sessions_root: &Path, uuid: &str) -> Vec<PathBuf> {
     let Some(ms) = uuid_v7_unix_millis(uuid) else {
         return Vec::new();
@@ -473,7 +748,12 @@ fn codex_day_dirs_for_uuid(sessions_root: &Path, uuid: &str) -> Vec<PathBuf> {
     };
     let mut dirs = Vec::new();
     if let Some(dt) = Local.timestamp_millis_opt(ms).single() {
-        dirs.push(codex_day_dir(sessions_root, dt.year(), dt.month(), dt.day()));
+        dirs.push(codex_day_dir(
+            sessions_root,
+            dt.year(),
+            dt.month(),
+            dt.day(),
+        ));
     }
     if let Some(dt) = Utc.timestamp_millis_opt(ms).single() {
         let utc = codex_day_dir(sessions_root, dt.year(), dt.month(), dt.day());
@@ -1083,6 +1363,21 @@ fn is_uuid_v4_shape(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn process_roles(matches: Vec<AgentProcessMatch>) -> Vec<(u32, AgentKind, AgentProcessRole)> {
+        matches
+            .into_iter()
+            .map(|m| (m.pid.as_u32(), m.kind, m.role))
+            .collect()
+    }
+
+    fn emitted_processes(matches: Vec<AgentProcessMatch>) -> Vec<(u32, AgentKind)> {
+        matches
+            .into_iter()
+            .filter(|m| m.role == AgentProcessRole::Emit)
+            .map(|m| (m.pid.as_u32(), m.kind))
+            .collect()
+    }
+
     #[test]
     fn slug_for_simple_cwd() {
         assert_eq!(slug_for_cwd(Path::new("/Users/me/proj")), "-Users-me-proj");
@@ -1125,6 +1420,194 @@ mod tests {
         let args = vec!["codex".to_string(), "resume".to_string(), id.to_string()];
 
         assert_eq!(codex_resume_id_from_args(&args).as_deref(), Some(id));
+    }
+
+    #[test]
+    fn claude_resume_id_from_args_reads_resume_flag() {
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let args = vec!["claude".to_string(), "--resume".to_string(), id.to_string()];
+
+        assert_eq!(claude_resume_id_from_args(&args).as_deref(), Some(id));
+    }
+
+    #[test]
+    fn session_owner_scope_stops_at_first_agent_boundary() {
+        let root = Pid::from_u32(1);
+        let wrapper = Pid::from_u32(2);
+        let codex = Pid::from_u32(3);
+        let nested_codex = Pid::from_u32(4);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![wrapper]);
+        children.insert(wrapper, vec![codex]);
+        children.insert(codex, vec![nested_codex]);
+
+        let kind_for_pid = |pid: Pid| match pid.as_u32() {
+            3 | 4 => Some(AgentKind::Codex),
+            _ => None,
+        };
+
+        let all = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            kind_for_pid,
+        );
+        assert_eq!(
+            all.into_iter().map(|m| m.pid.as_u32()).collect::<Vec<_>>(),
+            vec![3, 4],
+        );
+
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            kind_for_pid,
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (3, AgentKind::Codex, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ],
+        );
+    }
+
+    #[test]
+    fn session_owner_scope_preserves_sibling_top_level_agents() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let wrapper = Pid::from_u32(3);
+        let claude = Pid::from_u32(4);
+        let nested_codex = Pid::from_u32(5);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![codex, wrapper]);
+        children.insert(wrapper, vec![claude]);
+        children.insert(codex, vec![nested_codex]);
+
+        let mut owners =
+            collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
+                match pid.as_u32() {
+                    2 | 5 => Some(AgentKind::Codex),
+                    4 => Some(AgentKind::Claude),
+                    _ => None,
+                }
+            })
+            .into_iter()
+            .filter(|m| m.role == AgentProcessRole::Emit)
+            .map(|m| (m.pid.as_u32(), m.kind))
+            .collect::<Vec<_>>();
+        owners.sort_by_key(|(pid, _)| *pid);
+
+        assert_eq!(owners, vec![(2, AgentKind::Codex), (4, AgentKind::Claude)]);
+    }
+
+    #[test]
+    fn session_owner_scope_handles_exec_replaced_shell_root() {
+        let root_codex = Pid::from_u32(1);
+        let nested_codex = Pid::from_u32(2);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root_codex, vec![nested_codex]);
+
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root_codex,
+            MappingScope::SessionOwners,
+            |pid| match pid.as_u32() {
+                1 | 2 => Some(AgentKind::Codex),
+                _ => None,
+            },
+        );
+
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (1, AgentKind::Codex, AgentProcessRole::Emit),
+                (2, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ],
+        );
+    }
+
+    #[test]
+    fn session_owner_scope_excludes_nested_peer_provider() {
+        let root = Pid::from_u32(1);
+        let claude = Pid::from_u32(2);
+        let tool_shell = Pid::from_u32(3);
+        let nested_codex = Pid::from_u32(4);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![claude]);
+        children.insert(claude, vec![tool_shell]);
+        children.insert(tool_shell, vec![nested_codex]);
+
+        let owners =
+            collect_agent_processes_in_tree(&children, root, MappingScope::SessionOwners, |pid| {
+                match pid.as_u32() {
+                    2 => Some(AgentKind::Claude),
+                    4 => Some(AgentKind::Codex),
+                    _ => None,
+                }
+            });
+
+        assert_eq!(
+            emitted_processes(owners.clone()),
+            vec![(2, AgentKind::Claude)],
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (2, AgentKind::Claude, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ],
+        );
+    }
+
+    #[test]
+    fn all_descendant_scope_keeps_nested_peer_provider_for_fork() {
+        let root = Pid::from_u32(1);
+        let claude = Pid::from_u32(2);
+        let tool_shell = Pid::from_u32(3);
+        let nested_codex = Pid::from_u32(4);
+        let mut children = std::collections::HashMap::new();
+        children.insert(root, vec![claude]);
+        children.insert(claude, vec![tool_shell]);
+        children.insert(tool_shell, vec![nested_codex]);
+
+        let kind_for_pid = |pid: Pid| match pid.as_u32() {
+            2 => Some(AgentKind::Claude),
+            4 => Some(AgentKind::Codex),
+            _ => None,
+        };
+
+        let all = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::AllDescendants,
+            kind_for_pid,
+        );
+        assert_eq!(
+            process_roles(all),
+            vec![
+                (2, AgentKind::Claude, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Emit),
+            ],
+        );
+
+        let owners = collect_agent_processes_in_tree(
+            &children,
+            root,
+            MappingScope::SessionOwners,
+            kind_for_pid,
+        );
+        assert_eq!(
+            emitted_processes(owners.clone()),
+            vec![(2, AgentKind::Claude)],
+        );
+        assert_eq!(
+            process_roles(owners),
+            vec![
+                (2, AgentKind::Claude, AgentProcessRole::Emit),
+                (4, AgentKind::Codex, AgentProcessRole::Quarantine),
+            ],
+        );
     }
 
     #[test]
@@ -1176,10 +1659,8 @@ mod tests {
         use std::fs::{self, File};
         use std::io::Write;
 
-        let root = std::env::temp_dir().join(format!(
-            "acorn-cxresume-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxresume-{}", uuid::Uuid::new_v4().simple()));
         let sessions = root.join("sessions");
         let cwd = root.join("repo");
         let id = "019e2001-3250-76b0-8410-2e073b38a2c1";
@@ -1345,6 +1826,7 @@ mod tests {
 
     const A_UUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const B_UUID: &str = "11111111-2222-3333-4444-555555555555";
+    const C_UUID: &str = "66666666-7777-8888-9999-aaaaaaaaaaaa";
 
     /// Create transcripts A then B (distinct birth seconds) and return
     /// (dir, a_path, b_path, b_mtime).
@@ -1360,6 +1842,23 @@ mod tests {
         File::create(&b).unwrap();
         let b_mtime = fs::metadata(&b).unwrap().modified().unwrap();
         (dir, a, b, b_mtime)
+    }
+
+    fn three_transcripts(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, SystemTime) {
+        use std::fs::{self, File};
+        let dir =
+            std::env::temp_dir().join(format!("acorn-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let a = dir.join(format!("{A_UUID}.jsonl"));
+        File::create(&a).unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let b = dir.join(format!("{B_UUID}.jsonl"));
+        File::create(&b).unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let c = dir.join(format!("{C_UUID}.jsonl"));
+        File::create(&c).unwrap();
+        let c_mtime = fs::metadata(&c).unwrap().modified().unwrap();
+        (dir, a, b, c, c_mtime)
     }
 
     /// `claude /new` keeps the same process alive but opens a fresh
@@ -1477,6 +1976,162 @@ mod tests {
             "rotation must stay off when the process is not the sole claude in cwd"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Owner-scoped resume markers must not advance to a nested
+    /// same-provider transcript that is still hot after the nested process
+    /// exits. The quarantine is represented as an assigned/reserved path for
+    /// the owner matcher, so the dormant parent anchor stays selected instead
+    /// of rotating forward to the nested successor.
+    #[test]
+    fn owner_quarantine_blocks_hot_nested_successor_after_exit() {
+        let (dir, a, b, b_mtime) = two_transcripts("owner-quarantine-hot");
+        let a_mtime = b_mtime - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        let mut reserved = HashSet::new();
+        reserved.insert(b);
+
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            a_mtime,
+            b_mtime,
+            true,
+            &reserved,
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(A_UUID),
+            "owner marker must not rotate to a quarantined hot nested transcript"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A resumed parent transcript can have an old birth time but a fresh
+    /// mtime. A nested transcript born closer to the parent process start must
+    /// not win the birth-proximity anchor when it is quarantined.
+    #[test]
+    fn owner_quarantine_blocks_nested_anchor_for_resumed_parent() {
+        let (dir, a, b, b_mtime) = two_transcripts("owner-quarantine-anchor");
+        set_mtime(&a, b_mtime);
+        let mut reserved = HashSet::new();
+        reserved.insert(b);
+
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            b_mtime,
+            b_mtime,
+            true,
+            &reserved,
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(A_UUID),
+            "owner marker must keep the resumed parent transcript when the nested anchor is reserved"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Reserving a nested transcript must not disable a clearly separate
+    /// top-level `/new` successor. The reserved nested file is skipped, and
+    /// normal owner rotation can still advance from the dormant parent anchor
+    /// to the unreserved hot successor.
+    #[test]
+    fn owner_quarantine_preserves_unreserved_top_level_new_rotation() {
+        let (dir, a, b, _c, c_mtime) = three_transcripts("owner-quarantine-new");
+        let a_mtime = c_mtime - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        let mut reserved = HashSet::new();
+        reserved.insert(b);
+
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            a_mtime,
+            c_mtime,
+            true,
+            &reserved,
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(C_UUID),
+            "owner /new should still advance to an unreserved hot successor"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// When a nested same-provider agent was just observed, owner rotation is
+    /// blocked briefly for that session/provider/cwd scope. That closes the
+    /// two-scan hole where a nested agent performs `/new`, exits, and leaves an
+    /// unreserved hot successor behind.
+    #[test]
+    fn owner_rotation_block_prevents_unreserved_nested_successor() {
+        let (dir, a, b, _c, c_mtime) = three_transcripts("owner-rotation-block");
+        let a_mtime = c_mtime - Duration::from_secs(60);
+        set_mtime(&a, a_mtime);
+        let mut reserved = HashSet::new();
+        reserved.insert(b);
+
+        let picked = pick_newest_unassigned_jsonl(
+            &dir,
+            SystemTime::UNIX_EPOCH,
+            a_mtime,
+            c_mtime,
+            false,
+            &reserved,
+        );
+        assert_eq!(
+            picked.map(|(_, id)| id).as_deref(),
+            Some(A_UUID),
+            "rotation block must keep the parent anchor while a nested /new successor is ambiguous"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn owner_quarantine_is_scoped_to_observing_session() {
+        use std::fs::{self, File};
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-quarantine-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{A_UUID}.jsonl"));
+        File::create(&path).unwrap();
+        let session_a = uuid::Uuid::new_v4();
+        let session_b = uuid::Uuid::new_v4();
+
+        remember_owner_quarantined_path(session_a, &path);
+        let active = active_owner_quarantined_paths();
+        assert!(active
+            .get(&session_a)
+            .is_some_and(|paths| paths.contains(&path)));
+        assert!(!active
+            .get(&session_b)
+            .is_some_and(|paths| paths.contains(&path)));
+
+        release_owner_quarantined_path(session_a, &path);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn owner_rotation_quarantine_is_scoped_by_session_provider_and_cwd() {
+        let session_a = uuid::Uuid::new_v4();
+        let session_b = uuid::Uuid::new_v4();
+        let cwd_a = Path::new("/tmp/acorn-a");
+        let cwd_b = Path::new("/tmp/acorn-b");
+        let scope_a = owner_rotation_scope(session_a, AgentKind::Codex, cwd_a);
+        let same_session_other_cwd = owner_rotation_scope(session_a, AgentKind::Codex, cwd_b);
+        let other_session_same_cwd = owner_rotation_scope(session_b, AgentKind::Codex, cwd_a);
+
+        remember_owner_rotation_quarantine(&scope_a, SystemTime::now());
+        let active = active_owner_rotation_quarantines(SystemTime::now());
+        assert!(active.contains(&scope_a));
+        assert!(!active.contains(&same_session_other_cwd));
+        assert!(!active.contains(&other_session_same_cwd));
+
+        owner_rotation_quarantine().lock().remove(&scope_a);
     }
 
     /// Codex `/new` keeps the same process alive and opens a fresh
