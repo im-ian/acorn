@@ -354,9 +354,11 @@ case "$event" in
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hookEventName"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     [ -n "$hook_event_name" ] || hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    # SubagentStop fires when a Task subagent finishes mid-turn, so it
+    # re-asserts Running rather than ending the turn — only Stop is complete.
     case "$hook_event_name" in
-      SessionStart|UserPromptSubmit|PreToolUse) event="start" ;;
-      Stop|SubagentStop) event="stop" ;;
+      SessionStart|UserPromptSubmit|PreToolUse|SubagentStop) event="start" ;;
+      Stop) event="stop" ;;
       Notification|PermissionRequest) event="needs_input" ;;
       Error) event="error" ;;
     esac
@@ -618,7 +620,7 @@ mod tests {
             ("SessionStart", "start"),
             ("UserPromptSubmit", "start"),
             ("Stop", "stop"),
-            ("SubagentStop", "stop"),
+            ("SubagentStop", "start"),
             ("Notification", "needs_input"),
             ("PermissionRequest", "needs_input"),
             ("Error", "error"),
@@ -654,5 +656,16 @@ mod tests {
         assert!(notify.contains("PermissionRequest"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+    }
+
+    #[test]
+    fn antigravity_notify_treats_subagent_stop_as_running() {
+        let base = ScratchDir::new("agy-events");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
+        // SubagentStop fires mid-turn, so it re-asserts Running; only the
+        // main-agent Stop ends the turn.
+        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(notify.contains("Stop) event=\"stop\""));
     }
 }
