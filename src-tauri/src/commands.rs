@@ -304,11 +304,21 @@ fn inject_agent_hook_env(
     session: &Session,
     hooks: Option<&crate::agent_hooks::AgentHookServer>,
 ) {
-    let Some(provider) = session.agent_provider else {
-        return;
-    };
-    if !provider.supports_hooks() {
-        return;
+    // A known provider that can't use hooks opts out entirely. An unknown
+    // provider still gets the channel: a plain terminal session only learns
+    // its provider once the status poll spots a live agent in the process
+    // tree — long after the PTY (and its fixed environment) has spawned. If
+    // the hook env were withheld until then, `claude`/`codex` launched inside
+    // a terminal would never register hooks, and status would fall back to
+    // transcript polling, which cannot see turn completion after the
+    // `end_turn` line scrolls out of the tail window. The per-provider
+    // wrapper shim only activates hooks when an actual agent binary runs, and
+    // the notify script reports its own provider, so injecting the channel
+    // ahead of classification is safe.
+    if let Some(provider) = session.agent_provider {
+        if !provider.supports_hooks() {
+            return;
+        }
     }
 
     let Some(hooks) = hooks else {
@@ -325,9 +335,13 @@ fn inject_agent_hook_env(
         .entry("ACORN_AGENT_HOOK_SESSION_ID".to_string())
         .or_insert_with(|| session.id.to_string());
 
-    effective_env
-        .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
-        .or_insert_with(|| provider.hook_provider_env_value().to_string());
+    // Provider-specific metadata only when the provider is already known; the
+    // notify scripts hardcode their own provider so this stays optional.
+    if let Some(provider) = session.agent_provider {
+        effective_env
+            .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
+            .or_insert_with(|| provider.hook_provider_env_value().to_string());
+    }
 }
 
 fn authorize_chat_session(state: &AppState, session_id: &str) -> AppResult<Session> {
@@ -7460,7 +7474,12 @@ mod tests {
     }
 
     #[test]
-    fn inject_agent_hook_env_skips_until_provider_is_known() {
+    fn inject_agent_hook_env_injects_channel_when_provider_unknown() {
+        // A terminal session not yet classified as an agent still gets the
+        // hook channel so a later `claude`/`codex` launch inside it can
+        // register hooks. Without this the agent never reports Stop/Notify
+        // events and its status falls back to transcript polling, which can't
+        // see turn completion once `end_turn` scrolls out of the tail window.
         let hooks = crate::agent_hooks::AgentHookServer::start().expect("hook server starts");
         let mut session = Session::new(
             "Shell".to_string(),
@@ -7476,9 +7495,20 @@ mod tests {
         let mut env = HashMap::new();
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
-        assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
-        assert!(!env.contains_key("ACORN_AGENT_HOOK_TOKEN"));
-        assert!(!env.contains_key("ACORN_AGENT_HOOK_SESSION_ID"));
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_URL"),
+            Some(&hooks.hook_url().to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_TOKEN"),
+            Some(&hooks.token().to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_SESSION_ID"),
+            Some(&session.id.to_string())
+        );
+        // Provider is unknown at spawn; the per-provider notify script reports
+        // its own provider, so the provider-specific var stays unset here.
         assert!(!env.contains_key("ACORN_AGENT_HOOK_PROVIDER"));
     }
 
