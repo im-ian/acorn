@@ -108,13 +108,20 @@ interface WorkspaceMainProps {
 }
 
 export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
+  const isKanban = viewMode === "kanban";
   return (
     <div className="h-full min-w-0" data-workspace-main>
-      {viewMode === "kanban" ? (
-        <WorkspaceKanbanBoard />
-      ) : (
+      {isKanban ? <WorkspaceKanbanBoard /> : null}
+      {/*
+        Keep the pane layout mounted (hidden) in kanban mode instead of
+        unmounting it. TerminalHost appendChild's each live terminal's target
+        div into a pane body; unmounting the layout orphans those divs, so
+        returning to panes shows blank terminals until an unrelated reattach.
+        Hiding preserves the pane-body DOM identity so the terminals stay put.
+      */}
+      <div className={cn("h-full min-w-0", isKanban && "hidden")}>
         <LayoutRenderer node={layout} />
-      )}
+      </div>
       <WorkspaceSessionPopup />
     </div>
   );
