@@ -991,6 +991,7 @@
       "newControlSession": "New control session",
       "newProjectFolder": "New workspace",
       "newProjectFolderWithWorktree": "New worktree workspace",
+      "createWorkspaceFromWorktree": "Create Workspace from Worktree",
       "renameProjectFolder": "Rename workspace",
       "removeProjectFolder": "Remove workspace",
       "moveToProjectFolder": "Move to",

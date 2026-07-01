@@ -991,6 +991,7 @@
       "newControlSession": "새 컨트롤 세션",
       "newProjectFolder": "새 작업공간",
       "newProjectFolderWithWorktree": "새 워크트리 작업공간",
+      "createWorkspaceFromWorktree": "이 워크트리로 작업공간 만들기",
       "renameProjectFolder": "작업공간 이름 변경",
       "removeProjectFolder": "작업공간 제거",
       "moveToProjectFolder": "이동",
