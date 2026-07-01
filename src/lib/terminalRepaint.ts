@@ -71,3 +71,47 @@ export function createTerminalRepaintScheduler(
 
   return { schedule, dispose };
 }
+
+/**
+ * Whether a repaint is needed for a visibility transition. xterm's DOM renderer
+ * skips row paints while its element has no layout box (background tab, hidden
+ * kanban view, split/merge remount), so it must be forced to rebuild only when
+ * the terminal comes back on-screen — not while it stays visible or hidden.
+ */
+export function shouldRepaintForVisibility(
+  wasVisible: boolean,
+  isVisible: boolean,
+): boolean {
+  return !wasVisible && isVisible;
+}
+
+/**
+ * Repaint the terminal whenever it transitions from hidden to on-screen.
+ *
+ * The isActive and window-`focus` repaint effects miss the common case of
+ * switching between in-app tabs while the window stays focused: no focus event
+ * fires, and a long output burst accumulated while the tab was hidden leaves
+ * the DOM renderer blank until the user scrolls. An IntersectionObserver reacts
+ * to genuine on-screen visibility, so the forced repaint runs once the element
+ * actually has a box.
+ */
+export function createTerminalVisibilityRepaintObserver(
+  element: Element,
+  repaint: () => void,
+): { dispose: () => void } {
+  if (typeof IntersectionObserver === "undefined") {
+    return { dispose: () => {} };
+  }
+  let wasVisible = false;
+  const observer = new IntersectionObserver((entries) => {
+    const entry = entries[entries.length - 1];
+    if (!entry) return;
+    const isVisible = entry.isIntersecting && entry.intersectionRatio > 0;
+    if (shouldRepaintForVisibility(wasVisible, isVisible)) repaint();
+    wasVisible = isVisible;
+  });
+  observer.observe(element);
+  return {
+    dispose: () => observer.disconnect(),
+  };
+}

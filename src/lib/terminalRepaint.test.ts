@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTerminalRepaintScheduler,
+  createTerminalVisibilityRepaintObserver,
   repaintTerminalViewport,
+  shouldRepaintForVisibility,
 } from "./terminalRepaint";
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -107,5 +110,121 @@ describe("createTerminalRepaintScheduler", () => {
     vi.advanceTimersByTime(50);
 
     expect(repaint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shouldRepaintForVisibility", () => {
+  it("repaints only on the hidden -> visible transition", () => {
+    expect(shouldRepaintForVisibility(false, true)).toBe(true);
+    expect(shouldRepaintForVisibility(true, true)).toBe(false);
+    expect(shouldRepaintForVisibility(true, false)).toBe(false);
+    expect(shouldRepaintForVisibility(false, false)).toBe(false);
+  });
+});
+
+interface FakeEntry {
+  isIntersecting: boolean;
+  intersectionRatio: number;
+}
+
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  callback: (entries: FakeEntry[]) => void;
+  observed: Element[] = [];
+  disconnected = false;
+
+  constructor(callback: (entries: FakeEntry[]) => void) {
+    this.callback = callback;
+    FakeIntersectionObserver.instances.push(this);
+  }
+
+  observe(element: Element): void {
+    this.observed.push(element);
+  }
+
+  disconnect(): void {
+    this.disconnected = true;
+  }
+
+  emit(...entries: FakeEntry[]): void {
+    this.callback(entries);
+  }
+}
+
+describe("createTerminalVisibilityRepaintObserver", () => {
+  function stubObserver(): typeof FakeIntersectionObserver {
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    return FakeIntersectionObserver;
+  }
+
+  it("returns a no-op when IntersectionObserver is unavailable", () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const repaint = vi.fn();
+    const element = document.createElement("div");
+
+    const observer = createTerminalVisibilityRepaintObserver(element, repaint);
+    observer.dispose();
+
+    expect(repaint).not.toHaveBeenCalled();
+  });
+
+  it("observes the element and repaints when it becomes visible", () => {
+    const Observer = stubObserver();
+    const repaint = vi.fn();
+    const element = document.createElement("div");
+
+    createTerminalVisibilityRepaintObserver(element, repaint);
+    const instance = Observer.instances[0];
+
+    expect(instance.observed).toContain(element);
+
+    instance.emit({ isIntersecting: true, intersectionRatio: 1 });
+    expect(repaint).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repaint again while the terminal stays visible", () => {
+    const Observer = stubObserver();
+    const repaint = vi.fn();
+
+    createTerminalVisibilityRepaintObserver(
+      document.createElement("div"),
+      repaint,
+    );
+    const instance = Observer.instances[0];
+
+    instance.emit({ isIntersecting: true, intersectionRatio: 0.5 });
+    instance.emit({ isIntersecting: true, intersectionRatio: 1 });
+
+    expect(repaint).toHaveBeenCalledTimes(1);
+  });
+
+  it("repaints again after the terminal is hidden and shown once more", () => {
+    const Observer = stubObserver();
+    const repaint = vi.fn();
+
+    createTerminalVisibilityRepaintObserver(
+      document.createElement("div"),
+      repaint,
+    );
+    const instance = Observer.instances[0];
+
+    instance.emit({ isIntersecting: true, intersectionRatio: 1 });
+    instance.emit({ isIntersecting: false, intersectionRatio: 0 });
+    instance.emit({ isIntersecting: true, intersectionRatio: 1 });
+
+    expect(repaint).toHaveBeenCalledTimes(2);
+  });
+
+  it("disconnects the observer on dispose", () => {
+    const Observer = stubObserver();
+    const observer = createTerminalVisibilityRepaintObserver(
+      document.createElement("div"),
+      vi.fn(),
+    );
+
+    observer.dispose();
+
+    expect(Observer.instances[0].disconnected).toBe(true);
   });
 });
