@@ -1469,6 +1469,33 @@ function canAssignSessionToWorkspace(
   return true;
 }
 
+function canCreateWorkspaceFromSessionWorktree(
+  session: Session,
+  projectFolders: readonly ProjectFolder[],
+  currentProjectFolderId: string | undefined,
+): boolean {
+  if (!hasRecordedWorktree(session)) return false;
+  if (
+    normalizeWorkspacePath(session.worktree_path) ===
+    normalizeWorkspacePath(session.repo_path)
+  ) {
+    return false;
+  }
+  const currentFolder = currentProjectFolderId
+    ? projectFolders.find((folder) => folder.id === currentProjectFolderId)
+    : null;
+  if (currentFolder && !isDefaultProjectFolder(currentFolder)) {
+    return false;
+  }
+  return !projectFolders.some(
+    (folder) =>
+      !isDefaultProjectFolder(folder) &&
+      isWorktreeWorkspace(folder) &&
+      normalizeWorkspacePath(folder.cwdPath) ===
+        normalizeWorkspacePath(session.worktree_path),
+  );
+}
+
 function isSessionDragCrossingLockedWorkspace(
   session: Session,
   activeFolder: ProjectFolder | null,
@@ -2565,6 +2592,7 @@ function SessionRow({
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
+  const createProjectFolder = useAppStore((s) => s.createProjectFolder);
   const toggleSessionAutoClose = useAppStore(
     (s) => s.toggleSessionAutoClose,
   );
@@ -2582,6 +2610,11 @@ function SessionRow({
   );
   const currentProjectFolder = projectFolders.find(
     (folder) => folder.id === currentProjectFolderId,
+  );
+  const canCreateWorktreeWorkspace = canCreateWorkspaceFromSessionWorktree(
+    session,
+    projectFolders,
+    currentProjectFolderId,
   );
   const currentWorkspaceCwd = currentProjectFolder?.cwdPath ?? null;
   const hideWorkspaceDuplicateContext =
@@ -2715,6 +2748,16 @@ function SessionRow({
     }
   }
 
+  function createWorkspaceFromWorktree() {
+    const folder = createProjectFolder(
+      session.repo_path,
+      basename(session.worktree_path),
+      session.worktree_path,
+    );
+    if (!folder) return;
+    selectSession(session.id);
+  }
+
   const agentProvider = showAgentProviderIcons
     ? resolveSessionAgentProvider(session)
     : null;
@@ -2831,6 +2874,21 @@ function SessionRow({
       });
     }
   }
+  const workspaceMenuItems: ContextMenuItem[] = [
+    ...(canCreateWorktreeWorkspace
+      ? [
+          {
+            label: sidebarText(t, "sidebar.actions.createWorkspaceFromWorktree"),
+            icon: <GitBranch size={12} />,
+            onClick: createWorkspaceFromWorktree,
+          } satisfies ContextMenuItem,
+        ]
+      : []),
+    ...(canCreateWorktreeWorkspace && folderMoveMenuItems.length > 0
+      ? [{ type: "separator" as const }]
+      : []),
+    ...folderMoveMenuItems,
+  ];
 
   const sessionMenuItems: ContextMenuItem[] = [
     contextMenuGroupTitle(t, "session"),
@@ -2867,8 +2925,8 @@ function SessionRow({
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
       : []),
-    ...(folderMoveMenuItems.length > 0
-      ? [contextMenuGroupTitle(t, "workspace"), ...folderMoveMenuItems]
+    ...(workspaceMenuItems.length > 0
+      ? [contextMenuGroupTitle(t, "workspace"), ...workspaceMenuItems]
       : []),
     contextMenuGroupTitle(t, "open"),
     {
@@ -3724,6 +3782,8 @@ interface LocalSessionRowProps {
   active: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  projectFolders?: readonly ProjectFolder[];
+  currentProjectFolderId?: string;
 }
 
 function LocalSessionRow({
@@ -3731,11 +3791,14 @@ function LocalSessionRow({
   active,
   onSelect,
   onRemove,
+  projectFolders = [],
+  currentProjectFolderId,
 }: LocalSessionRowProps) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
+  const createProjectFolder = useAppStore((s) => s.createProjectFolder);
   const toggleSessionAutoClose = useAppStore(
     (s) => s.toggleSessionAutoClose,
   );
@@ -3762,6 +3825,11 @@ function LocalSessionRow({
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
+  const canCreateWorktreeWorkspace = canCreateWorkspaceFromSessionWorktree(
+    session,
+    projectFolders,
+    currentProjectFolderId,
+  );
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const {
@@ -3798,6 +3866,16 @@ function LocalSessionRow({
     }
   }
 
+  function createWorkspaceFromWorktree() {
+    const folder = createProjectFolder(
+      session.repo_path,
+      basename(session.worktree_path),
+      session.worktree_path,
+    );
+    if (!folder) return;
+    onSelect();
+  }
+
   const menuItems: ContextMenuItem[] = [
     {
       label: sidebarText(t, "sidebar.actions.rename"),
@@ -3818,6 +3896,16 @@ function LocalSessionRow({
             label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
             checked: autoCloseEnabled,
             onChange: () => toggleSessionAutoClose(session.id),
+          } satisfies ContextMenuItem,
+        ]
+      : []),
+    ...(canCreateWorktreeWorkspace
+      ? [
+          { type: "separator" as const },
+          {
+            label: sidebarText(t, "sidebar.actions.createWorkspaceFromWorktree"),
+            icon: <GitBranch size={12} />,
+            onClick: createWorkspaceFromWorktree,
           } satisfies ContextMenuItem,
         ]
       : []),

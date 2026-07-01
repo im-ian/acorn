@@ -2098,6 +2098,78 @@ test.describe("sidebar: project lifecycle", () => {
     expect(calls ?? []).toEqual([]);
   });
 
+  test("project sessions can create a workspace from their worktree", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "worker-session",
+        name: "worker",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo/.acorn/worktrees/feature",
+        branch: "feature/branch",
+        isolated: true,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: true,
+      },
+    ]);
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const worker = sidebar
+      .getByRole("button", { name: /^worker worktree feature\/branch · Idle/ })
+      .first();
+    await expect(worker).toBeVisible();
+
+    await worker.click({ button: "right" });
+    await page
+      .getByRole("menuitem", {
+        name: "Create Workspace from Worktree",
+        exact: true,
+      })
+      .click();
+
+    const workspace = sidebar
+      .locator("[data-sidebar-workspace-id]")
+      .filter({ hasText: "feature" })
+      .first();
+    await expect(workspace).toBeVisible();
+    await expectWorkspacePathOnly(workspace, "feature");
+    const nestedWorker = workspace
+      .locator("xpath=following-sibling::ul")
+      .getByRole("button", {
+        name: /^worker feature\/branch · Idle/,
+      })
+      .first();
+    await expect(nestedWorker).toBeVisible();
+
+    await nestedWorker.click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", {
+        name: "Create Workspace from Worktree",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  });
+
   test("project workspaces can collapse and expand their sessions", async ({
     page,
     tauri,
