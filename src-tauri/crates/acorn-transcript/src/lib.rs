@@ -301,7 +301,7 @@ fn scan_live_mappings(
         .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut assigned: HashSet<PathBuf> = HashSet::new();
     let mut owner_quarantined = if scope == MappingScope::SessionOwners {
-        active_owner_quarantined_paths()
+        active_owner_quarantined_paths(now)
     } else {
         std::collections::HashMap::new()
     };
@@ -535,10 +535,27 @@ where
     out
 }
 
-fn active_owner_quarantined_paths() -> std::collections::HashMap<uuid::Uuid, HashSet<PathBuf>> {
+/// Snapshot the by-path owner quarantine, evicting entries that can no
+/// longer affect pairing. Every mtime-based picker rejects transcripts
+/// older than `RECENCY_WINDOW_SECS`, so once a quarantined file is gone
+/// or its mtime has aged out of that window the reservation is dead
+/// weight — and session ids are never reused, so without this prune the
+/// map would grow for the life of the process.
+fn active_owner_quarantined_paths(
+    now: SystemTime,
+) -> std::collections::HashMap<uuid::Uuid, HashSet<PathBuf>> {
+    let recency_cutoff = now
+        .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut guard = owner_transcript_quarantine().lock();
     guard.retain(|_, paths| {
-        paths.retain(|path| path.is_file());
+        paths.retain(|path| {
+            std::fs::metadata(path)
+                .ok()
+                .filter(|meta| meta.is_file())
+                .and_then(|meta| meta.modified().ok())
+                .is_some_and(|mtime| mtime >= recency_cutoff)
+        });
         !paths.is_empty()
     });
     guard.clone()
@@ -2103,7 +2120,7 @@ mod tests {
         let session_b = uuid::Uuid::new_v4();
 
         remember_owner_quarantined_path(session_a, &path);
-        let active = active_owner_quarantined_paths();
+        let active = active_owner_quarantined_paths(SystemTime::now());
         assert!(active
             .get(&session_a)
             .is_some_and(|paths| paths.contains(&path)));
@@ -2112,6 +2129,54 @@ mod tests {
             .is_some_and(|paths| paths.contains(&path)));
 
         release_owner_quarantined_path(session_a, &path);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Quarantined paths must not outlive their usefulness: every
+    /// mtime-based picker rejects transcripts older than
+    /// `RECENCY_WINDOW_SECS`, so once a quarantined file ages out of that
+    /// window its entry is evicted from the global map instead of
+    /// lingering for the life of the process (session ids are ephemeral
+    /// and never reused, so nothing else would ever clear it).
+    #[test]
+    fn owner_quarantine_evicts_entries_aged_out_of_recency_window() {
+        use std::fs::{self, File};
+        let dir = std::env::temp_dir().join(format!(
+            "acorn-quarantine-evict-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let stale = dir.join(format!("{A_UUID}.jsonl"));
+        let hot = dir.join(format!("{B_UUID}.jsonl"));
+        File::create(&stale).unwrap();
+        File::create(&hot).unwrap();
+        let stale_session = uuid::Uuid::new_v4();
+        let hot_session = uuid::Uuid::new_v4();
+
+        remember_owner_quarantined_path(stale_session, &stale);
+        remember_owner_quarantined_path(hot_session, &hot);
+        let now = SystemTime::now();
+        set_mtime(&stale, now - Duration::from_secs(RECENCY_WINDOW_SECS + 60));
+
+        let active = active_owner_quarantined_paths(now);
+        assert!(
+            !active.contains_key(&stale_session),
+            "an aged-out quarantined path must not appear in the active view"
+        );
+        assert!(
+            active
+                .get(&hot_session)
+                .is_some_and(|paths| paths.contains(&hot)),
+            "a still-recent quarantined path must survive the prune"
+        );
+        assert!(
+            !owner_transcript_quarantine()
+                .lock()
+                .contains_key(&stale_session),
+            "the stale session entry must be evicted from the global map"
+        );
+
+        release_owner_quarantined_path(hot_session, &hot);
         fs::remove_dir_all(&dir).unwrap();
     }
 
