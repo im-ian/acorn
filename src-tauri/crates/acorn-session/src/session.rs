@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -352,6 +352,16 @@ impl Session {
 #[derive(Default)]
 pub struct SessionStore {
     inner: DashMap<Uuid, Session>,
+    /// Sessions that reported at least one agent lifecycle hook event
+    /// (Start/Stop/NeedsInput/Error) this run. Runtime-only, never persisted.
+    /// The status poll consults this to decide whether hooks own the
+    /// Running/NeedsInput/Completed classification: once a session proves its
+    /// hook channel is live, the transcript-tail poll stops second-guessing
+    /// turn completion (a long or tool-heavy Claude turn often leaves no
+    /// `end_turn` line inside the tail window, so the tail keeps reading
+    /// Running long after the turn ended) and only keeps ownership of the
+    /// Idle (process-gone) edge, which no hook reports.
+    hook_active: DashSet<Uuid>,
 }
 
 impl SessionStore {
@@ -419,6 +429,18 @@ impl SessionStore {
             entry.status = status;
         }
         Ok(entry.clone())
+    }
+
+    /// Record that `id` reported an agent lifecycle hook event, marking its
+    /// hook channel live so the status poll defers turn-boundary
+    /// classification to hooks (see the `hook_active` field). Idempotent.
+    pub fn mark_hook_active(&self, id: &Uuid) {
+        self.hook_active.insert(*id);
+    }
+
+    /// Whether `id` has reported any agent lifecycle hook event this run.
+    pub fn is_hook_active(&self, id: &Uuid) -> bool {
+        self.hook_active.contains(id)
     }
 
     /// Refresh derived live-agent metadata without bumping `updated_at`.
@@ -569,6 +591,7 @@ impl SessionStore {
     }
 
     pub fn remove(&self, id: &Uuid) -> SessionResult<Session> {
+        self.hook_active.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
@@ -655,6 +678,23 @@ mod tests {
                 .auto_title_enabled,
             Some(true)
         );
+    }
+
+    #[test]
+    fn hook_activity_is_tracked_and_cleared_on_remove() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+
+        assert!(!store.is_hook_active(&session.id));
+
+        store.mark_hook_active(&session.id);
+        assert!(store.is_hook_active(&session.id));
+        // Idempotent.
+        store.mark_hook_active(&session.id);
+        assert!(store.is_hook_active(&session.id));
+
+        store.remove(&session.id).expect("session exists");
+        assert!(!store.is_hook_active(&session.id));
     }
 
     #[test]

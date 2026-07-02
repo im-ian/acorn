@@ -256,6 +256,39 @@ describe("session auto-close", () => {
     dispose();
   });
 
+  it("removes an agent-backed session when it exits to idle from needs_input", async () => {
+    // A hooked Claude/Codex session settles at needs_input between turns; when
+    // the agent process exits the poll reports idle. That exit should close the
+    // session, matching the running→idle path.
+    const removeSession = vi.fn(async () => null);
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+      autoCloseSessionIds: { "session-1": true },
+      removeSession,
+    });
+    const dispose = startSessionAutoCloseWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "idle",
+          agent_provider: null,
+          agent_transcript_id: null,
+          updated_at: "2026-01-01T00:02:00Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(removeSession).toHaveBeenCalledWith("session-1", false);
+    dispose();
+  });
+
   it("does not remove a historical agent session for a later shell transition", async () => {
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({
