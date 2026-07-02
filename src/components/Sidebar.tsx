@@ -2587,8 +2587,6 @@ function SessionRow({
 }: SessionRowProps) {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
-  const sessions = useAppStore((s) => s.sessions);
-  const projects = useAppStore((s) => s.projects);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
@@ -2719,6 +2717,7 @@ function SessionRow({
     isolated: boolean,
   ) {
     selectSession(session.id);
+    const { sessions, projects } = useAppStore.getState();
     const request = buildSessionCreateRequestFromScope(
       { sessions, projects },
       scopeForSession(session),
