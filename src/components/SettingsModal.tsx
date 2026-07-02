@@ -2706,6 +2706,7 @@ function PermissionSettings() {
   const t = useTranslation();
   const showToast = useToasts((s) => s.show);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [results, setResults] = useState<FolderPermissionWarmupResult[] | null>(
     null,
   );
@@ -2716,6 +2717,15 @@ function PermissionSettings() {
     tone: "danger" | "success" | "warning" | "neutral";
     text: string;
   } | null>(null);
+  // The two reset calls below stay in flight after the tab/modal closes;
+  // skip state updates once the component is gone.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const resultById = new Map(results?.map((result) => [result.id, result]));
   const resetResultById = new Map(
     resetResults?.map((result) => [result.id, result]),
@@ -2729,8 +2739,6 @@ function PermissionSettings() {
     try {
       const resetNext = await api.resetMacosDeveloperPermissions();
       const next = await api.warmMacosFolderPermissions();
-      setResetResults(resetNext);
-      setResults(next);
       const hasIssue =
         hasFolderPermissionIssue(next) ||
         resetNext.some((result) => result.status === "error");
@@ -2746,18 +2754,27 @@ function PermissionSettings() {
           : hasIssue
             ? st(t, "settings.permissions.status.needsAttention")
             : st(t, "settings.permissions.status.ready");
-      setStatus({
-        tone: skipped || empty ? "neutral" : hasIssue ? "warning" : "success",
-        text,
-      });
+      if (mountedRef.current) {
+        setResetResults(resetNext);
+        setResults(next);
+        setStatus({
+          tone: skipped || empty ? "neutral" : hasIssue ? "warning" : "success",
+          text,
+        });
+      }
       showToast(text);
     } catch (err) {
       console.error("[Settings] folder permission reset failed", err);
       const text = `${st(t, "settings.permissions.status.failed")} ${messageFromUnknownError(err)}`;
-      setStatus({ tone: "danger", text });
+      if (mountedRef.current) {
+        setStatus({ tone: "danger", text });
+      }
       showToast(text);
     } finally {
-      setBusy(false);
+      if (mountedRef.current) {
+        setBusy(false);
+        setConfirming(false);
+      }
     }
   }
 
@@ -2786,8 +2803,8 @@ function PermissionSettings() {
           </p>
         </div>
         <Button
-          onClick={() => void handleReset()}
-          disabled={busy}
+          onClick={() => setConfirming(true)}
+          disabled={busy || confirming}
           variant="outline"
           size="sm"
         >
@@ -2801,6 +2818,34 @@ function PermissionSettings() {
             : st(t, "settings.permissions.reset.button")}
         </Button>
       </div>
+
+      {confirming ? (
+        <Notice tone="warning" className="space-y-2">
+          <p className="text-[11px] text-fg">
+            {st(t, "settings.permissions.confirm.message")}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              variant="ghost"
+              size="xs"
+            >
+              {st(t, "settings.permissions.confirm.cancel")}
+            </Button>
+            <Button
+              onClick={() => void handleReset()}
+              disabled={busy}
+              variant="danger"
+              size="xs"
+            >
+              {busy
+                ? st(t, "settings.permissions.reset.running")
+                : st(t, "settings.permissions.confirm.confirm")}
+            </Button>
+          </div>
+        </Notice>
+      ) : null}
 
       <div className="space-y-2">
         <div>
