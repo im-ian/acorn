@@ -2130,6 +2130,14 @@ test.describe("sidebar: project lifecycle", () => {
         in_worktree: true,
       },
     ]);
+    // The click-time guard verifies the worktree still exists on disk before
+    // creating a workspace for it; the mock default answers false.
+    await tauri.handle(
+      "is_path_linked_worktree",
+      (args) =>
+        (args as { path?: string }).path ===
+        "/tmp/demo/.acorn/worktrees/feature",
+    );
 
     await page.goto("/");
 

@@ -13,7 +13,8 @@
       "titleNotReady": "아직 이 세션에서 사용할 transcript가 없습니다.",
       "titleRegenerateSkipped": "세션 이름을 다시 생성하지 않았습니다.",
       "worktreeAdopted": "새 워크트리를 가져왔습니다: {name}",
-      "worktreeAdoptFailed": "워크트리를 가져오지 못했습니다:"
+      "worktreeAdoptFailed": "워크트리를 가져오지 못했습니다:",
+      "worktreeMissing": "워크트리 폴더가 디스크에 더 이상 존재하지 않습니다."
     },
     "project": {
       "addFailed": "프로젝트를 추가하지 못했습니다:",

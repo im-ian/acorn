@@ -13,7 +13,8 @@
       "titleNotReady": "No transcript is available for this session yet.",
       "titleRegenerateSkipped": "Session name was not regenerated.",
       "worktreeAdopted": "Worktree adopted: {name}",
-      "worktreeAdoptFailed": "Failed to adopt worktree:"
+      "worktreeAdoptFailed": "Failed to adopt worktree:",
+      "worktreeMissing": "Worktree folder no longer exists on disk."
     },
     "project": {
       "addFailed": "Failed to add project:",
