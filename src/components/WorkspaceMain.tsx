@@ -196,6 +196,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
   const [resizingColumnIndex, setResizingColumnIndex] = useState<number | null>(
     null,
   );
+  const columnResizeCleanupRef = useRef<(() => void) | null>(null);
 
   const sessions = useMemo(() => {
     const ordered: Session[] = [];
@@ -255,6 +256,16 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     if (sessionsById.has(terminalPopover.sessionId)) return;
     closeTerminalPopover();
   }, [terminalPopover, sessionsById]);
+
+  // Release a column drag that is still active when the board unmounts
+  // (view-mode flip or project switch mid-drag) so the body cursor and text
+  // selection are restored and no orphaned listeners keep firing.
+  useEffect(() => {
+    return () => {
+      columnResizeCleanupRef.current?.();
+      columnResizeCleanupRef.current = null;
+    };
+  }, []);
 
   function setFilterQuery(filterQuery: string) {
     setPrefs((current) => ({ ...current, filterQuery }));
@@ -322,6 +333,11 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     event.preventDefault();
     event.stopPropagation();
 
+    // End any drag that is somehow still tracked before starting a new one.
+    columnResizeCleanupRef.current?.();
+
+    const source = event.currentTarget;
+    const pointerId = event.pointerId;
     const startX = event.clientX;
     const startWidth = columnWidths[index] ?? KANBAN_COLUMN_DEFAULT_WIDTH;
     const previousCursor = document.body.style.cursor;
@@ -330,22 +346,45 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     document.body.style.userSelect = "none";
     setResizingColumnIndex(index);
 
-    function cleanup() {
+    const cleanup = () => {
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
       setResizingColumnIndex(null);
+      try {
+        source.releasePointerCapture?.(pointerId);
+      } catch {
+        // The pointer may already be released if the handle unmounted.
+      }
       window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", cleanup);
-      window.removeEventListener("pointercancel", cleanup);
-    }
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      source.removeEventListener("lostpointercapture", onPointerEnd);
+      if (columnResizeCleanupRef.current === cleanup) {
+        columnResizeCleanupRef.current = null;
+      }
+    };
 
     function onPointerMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
       resizeColumn(index, startWidth + moveEvent.clientX - startX);
     }
 
+    function onPointerEnd(endEvent: PointerEvent) {
+      if (endEvent.pointerId !== pointerId) return;
+      cleanup();
+    }
+
+    columnResizeCleanupRef.current = cleanup;
+    try {
+      source.setPointerCapture?.(pointerId);
+    } catch {
+      // Synthetic events and some webviews can reject capture; window
+      // listeners still cover normal in-window dragging.
+    }
     window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", cleanup);
-    window.addEventListener("pointercancel", cleanup);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+    source.addEventListener("lostpointercapture", onPointerEnd);
   }
 
   return (

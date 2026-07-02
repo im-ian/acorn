@@ -51,6 +51,34 @@ function queryKanban(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-testid='workspace-kanban']");
 }
 
+function queryColumnResizeHandle(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    "[data-testid='workspace-kanban-column-resize-handle']",
+  );
+}
+
+function readColumnWidths(): number[] {
+  const board = document.querySelector<HTMLElement>(
+    "[data-kanban-column-widths]",
+  );
+  return (board?.dataset.kanbanColumnWidths ?? "").split(",").map(Number);
+}
+
+// jsdom has no PointerEvent constructor; React's pointer handlers and the
+// component's raw listeners only read MouseEvent fields plus `pointerId`,
+// which stays undefined on both sides and passes the same-pointer check.
+function firePointer(
+  target: EventTarget,
+  type: string,
+  init: MouseEventInit = {},
+): void {
+  act(() => {
+    target.dispatchEvent(
+      new MouseEvent(type, { bubbles: true, cancelable: true, ...init }),
+    );
+  });
+}
+
 describe("WorkspaceMain", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -100,5 +128,48 @@ describe("WorkspaceMain", () => {
 
     render("kanban");
     expect(queryLayout()?.parentElement?.className).toContain("hidden");
+  });
+
+  it("resizes the column during a drag and restores body styles on pointerup", () => {
+    render("kanban");
+    const handle = queryColumnResizeHandle();
+    expect(handle).not.toBeNull();
+    const initialWidth = readColumnWidths()[0];
+
+    firePointer(handle!, "pointerdown", { clientX: 100 });
+    expect(document.body.style.cursor).toBe("col-resize");
+    expect(document.body.style.userSelect).toBe("none");
+
+    firePointer(window, "pointermove", { clientX: 140 });
+    expect(readColumnWidths()[0]).toBe(initialWidth + 40);
+
+    firePointer(window, "pointerup", { clientX: 140 });
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+
+    // The drag listeners must be gone: further moves change nothing.
+    firePointer(window, "pointermove", { clientX: 200 });
+    expect(readColumnWidths()[0]).toBe(initialWidth + 40);
+  });
+
+  it("restores body styles and drops drag listeners when unmounted mid-drag", () => {
+    render("kanban");
+    const handle = queryColumnResizeHandle();
+    expect(handle).not.toBeNull();
+    const initialWidth = readColumnWidths()[0];
+
+    firePointer(handle!, "pointerdown", { clientX: 100 });
+    expect(document.body.style.cursor).toBe("col-resize");
+    expect(document.body.style.userSelect).toBe("none");
+
+    // Flipping the view mode away from kanban unmounts the board mid-drag.
+    render("panes");
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+
+    // The orphaned pointermove listener must not fire against a stale closure.
+    firePointer(window, "pointermove", { clientX: 300 });
+    render("kanban");
+    expect(readColumnWidths()[0]).toBe(initialWidth);
   });
 });
