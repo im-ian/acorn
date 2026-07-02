@@ -293,6 +293,20 @@ test.describe("settings modal", () => {
 
     await modal.getByRole("button", { name: "Reset permissions" }).click();
 
+    // First click only opens the confirmation notice; nothing is reset yet.
+    await expect(
+      modal.getByText(/revokes ALL of Acorn's granted macOS permissions/),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __permissionResetCalls?: number })
+            .__permissionResetCalls ?? 0,
+      ),
+    ).toBe(0);
+
+    await modal.getByRole("button", { name: "Reset all permissions" }).click();
+
     await expect(
       modal.getByText("Folder access was reset and checked."),
     ).toBeVisible();
