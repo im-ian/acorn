@@ -172,4 +172,22 @@ describe("WorkspaceMain", () => {
     render("kanban");
     expect(readColumnWidths()[0]).toBe(initialWidth);
   });
+
+  it("flushes the debounced prefs write on unmount so the final width persists", () => {
+    render("kanban");
+    const handle = queryColumnResizeHandle();
+    expect(handle).not.toBeNull();
+    const initialWidth = readColumnWidths()[0];
+
+    firePointer(handle!, "pointerdown", { clientX: 100 });
+    firePointer(window, "pointermove", { clientX: 140 });
+    firePointer(window, "pointerup", { clientX: 140 });
+    expect(readColumnWidths()[0]).toBe(initialWidth + 40);
+
+    // Unmount before the debounce window elapses; the pending write must
+    // flush so the remounted board reads the final width back.
+    render("panes");
+    render("kanban");
+    expect(readColumnWidths()[0]).toBe(initialWidth + 40);
+  });
 });

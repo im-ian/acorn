@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -106,6 +107,7 @@ type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 type WorkspaceKanbanContextGroup = "session" | "open" | "copy" | "danger";
 
 const KANBAN_COLUMN_GAP_PX = 6;
+const KANBAN_PREFS_WRITE_DEBOUNCE_MS = 200;
 const KANBAN_BOARD_PADDING_X_PX = 16;
 const KANBAN_TERMINAL_POPOVER_DEFAULT_WIDTH_PX = 560;
 const KANBAN_TERMINAL_POPOVER_DEFAULT_HEIGHT_PX = 420;
@@ -246,10 +248,25 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
 
   // Persist board prefs per project. projectId is fixed for this instance (the
   // wrapper remounts via key on project switch), so a board can never write one
-  // project's prefs into another project's bucket.
+  // project's prefs into another project's bucket. The write is debounced —
+  // a column-resize drag updates prefs on every pointermove tick, and each
+  // write re-serializes the whole per-project prefs map — with a flush on
+  // unmount so the final value always lands.
+  const pendingPrefsWriteRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    writeKanbanBoardPrefs(projectId, prefs);
+    const write = () => {
+      pendingPrefsWriteRef.current = null;
+      writeKanbanBoardPrefs(projectId, prefs);
+    };
+    pendingPrefsWriteRef.current = write;
+    const handle = window.setTimeout(write, KANBAN_PREFS_WRITE_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
   }, [projectId, prefs]);
+  useEffect(() => {
+    return () => {
+      pendingPrefsWriteRef.current?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!terminalPopover) return;
@@ -285,20 +302,23 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     }));
   }
 
-  function openSessionTerminal(id: string, anchor: HTMLElement) {
-    selectSession(id);
-    openTerminalPopup(id);
-    setTerminalPopover({ sessionId: id, anchor });
-    if (typeof window !== "undefined") {
-      requestAnimationFrame(() => {
-        window.dispatchEvent(
-          new CustomEvent("acorn:focus-session", {
-            detail: { sessionId: id },
-          }),
-        );
-      });
-    }
-  }
+  const openSessionTerminal = useCallback(
+    (id: string, anchor: HTMLElement) => {
+      selectSession(id);
+      openTerminalPopup(id);
+      setTerminalPopover({ sessionId: id, anchor });
+      if (typeof window !== "undefined") {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(
+            new CustomEvent("acorn:focus-session", {
+              detail: { sessionId: id },
+            }),
+          );
+        });
+      }
+    },
+    [selectSession, openTerminalPopup],
+  );
 
   function closeTerminalPopover() {
     closeTerminalPopup();
@@ -451,9 +471,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                           <KanbanSessionCard
                             key={session.id}
                             session={session}
-                            onOpen={(anchor) =>
-                              openSessionTerminal(session.id, anchor)
-                            }
+                            onOpen={openSessionTerminal}
                           />
                         ))
                       ) : (
@@ -706,12 +724,12 @@ function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
   );
 }
 
-function KanbanSessionCard({
+const KanbanSessionCard = memo(function KanbanSessionCard({
   session,
   onOpen,
 }: {
   session: Session;
-  onOpen: (anchor: HTMLElement) => void;
+  onOpen: (sessionId: string, anchor: HTMLElement) => void;
 }) {
   const t = useTranslation();
   const worktreeName = basename(session.worktree_path);
@@ -753,7 +771,7 @@ function KanbanSessionCard({
   }
 
   function handleOpen(event: ReactMouseEvent<HTMLButtonElement>) {
-    onOpen(event.currentTarget);
+    onOpen(session.id, event.currentTarget);
   }
 
   const sessionMenuItems = useMemo<ContextMenuItem[]>(
@@ -771,7 +789,7 @@ function KanbanSessionCard({
           const anchor = document.querySelector<HTMLElement>(
             `[data-kanban-session-id="${cssAttributeEscape(session.id)}"]`,
           );
-          if (anchor) onOpen(anchor);
+          if (anchor) onOpen(session.id, anchor);
         },
       },
       {
@@ -961,7 +979,7 @@ function KanbanSessionCard({
       />
     </>
   );
-}
+});
 
 function KanbanTerminalPopover({
   session,
