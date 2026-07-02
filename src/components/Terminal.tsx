@@ -1854,7 +1854,21 @@ export function Terminal({
     const forceSelectModifier: MouseEventInit = IS_MAC
       ? { altKey: true }
       : { shiftKey: true };
-    let pendingLeftDrag: { x: number; y: number } | null = null;
+    // The real event's modifier keys, carried into every synthetic replay so a
+    // modifier+click still reaches the app as such (SGR mouse reports encode
+    // shift/meta/ctrl). Force-select replays layer `forceSelectModifier` on
+    // top so the force key always wins.
+    const eventModifiers = (e: MouseEvent): MouseEventInit => ({
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      shiftKey: e.shiftKey,
+      altKey: e.altKey,
+    });
+    let pendingLeftDrag: {
+      x: number;
+      y: number;
+      modifiers: MouseEventInit;
+    } | null = null;
     let leftDragSelecting = false;
     let replayingMouse = false;
 
@@ -1912,7 +1926,11 @@ export function Terminal({
         !replayingMouse &&
         isMouseTrackingActive()
       ) {
-        pendingLeftDrag = { x: e.clientX, y: e.clientY };
+        pendingLeftDrag = {
+          x: e.clientX,
+          y: e.clientY,
+          modifiers: eventModifiers(e),
+        };
         leftDragSelecting = false;
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -1923,6 +1941,7 @@ export function Terminal({
         if (e.detail >= 2) {
           leftDragSelecting = true;
           dispatchSyntheticMouse("mousedown", e.clientX, e.clientY, {
+            ...eventModifiers(e),
             ...forceSelectModifier,
             buttons: 1,
             detail: e.detail,
@@ -1973,6 +1992,7 @@ export function Terminal({
       // point. Subsequent real moves are left alone so xterm extends it.
       leftDragSelecting = true;
       dispatchSyntheticMouse("mousedown", pendingLeftDrag.x, pendingLeftDrag.y, {
+        ...pendingLeftDrag.modifiers,
         ...forceSelectModifier,
         buttons: 1,
       });
@@ -1990,11 +2010,18 @@ export function Terminal({
       // No drag — a plain click. Clear any standing selection so a click
       // deselects (xterm leaves its selection in place while mouse tracking is
       // on), then swallow the real mouseup and replay the click without the
-      // force modifier so xterm reports it to the app.
+      // force modifier (but with the user's real modifiers) so xterm reports
+      // it to the app.
       if (term.hasSelection()) term.clearSelection();
       e.stopImmediatePropagation();
-      dispatchSyntheticMouse("mousedown", start.x, start.y, { buttons: 1 });
-      dispatchSyntheticMouse("mouseup", start.x, start.y, { buttons: 0 });
+      dispatchSyntheticMouse("mousedown", start.x, start.y, {
+        ...start.modifiers,
+        buttons: 1,
+      });
+      dispatchSyntheticMouse("mouseup", start.x, start.y, {
+        ...start.modifiers,
+        buttons: 0,
+      });
     };
     container.ownerDocument.addEventListener("mousemove", onTerminalMouseMove, true);
     container.ownerDocument.addEventListener("mouseup", onTerminalMouseUp, true);
