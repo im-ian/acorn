@@ -286,6 +286,87 @@ describe("session auto-close", () => {
     dispose();
   });
 
+  it("does not remove a session whose status reverts to running before the queued close runs", async () => {
+    const removeSession = vi.fn(async () => null);
+    useAppStore.setState({
+      autoCloseSessionIds: { "session-1": true },
+      removeSession,
+    });
+    const dispose = startSessionAutoCloseWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          status_reason: "turn_complete",
+          agent_provider: "codex",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+    // A new turn starts synchronously in the same tick, before the queued
+    // microtask drains.
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "running",
+          agent_provider: "codex",
+          updated_at: "2026-01-01T00:01:01Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(removeSession).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("still closes after an aborted close once the next turn finishes", async () => {
+    const removeSession = vi.fn(async () => null);
+    useAppStore.setState({
+      autoCloseSessionIds: { "session-1": true },
+      removeSession,
+    });
+    const dispose = startSessionAutoCloseWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          status_reason: "turn_complete",
+          agent_provider: "codex",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "running",
+          agent_provider: "codex",
+          updated_at: "2026-01-01T00:01:01Z",
+        }),
+      ],
+    });
+    await flushPromises();
+    expect(removeSession).not.toHaveBeenCalled();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          status_reason: "turn_complete",
+          agent_provider: "codex",
+          updated_at: "2026-01-01T00:02:00Z",
+        }),
+      ],
+    });
+    await flushPromises();
+
+    expect(removeSession).toHaveBeenCalledWith("session-1", false);
+    dispose();
+  });
+
   it("does not remove stale finished sessions on watcher startup", async () => {
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({

@@ -33,6 +33,18 @@ export function shouldAutoCloseFinishedSession(
   );
 }
 
+// Auto-close must only ever remove sessions that are still finished at the
+// moment of removal; anything else (notably `running`) means a new turn
+// started after the close was queued.
+function isStillFinished(session: Session): boolean {
+  return (
+    session.status === "completed" ||
+    (session.status === "needs_input" &&
+      (session.status_reason ?? null) === "turn_complete") ||
+    session.status === "idle"
+  );
+}
+
 export function startSessionAutoCloseWatcher(): () => void {
   const lastStatus = new Map<string, SessionStatus>();
   const lastStatusReason = new Map<string, SessionStatusReason | null>();
@@ -74,11 +86,13 @@ export function startSessionAutoCloseWatcher(): () => void {
       closingIds.add(session.id);
       queueMicrotask(() => {
         const latest = useAppStore.getState();
-        const stillPresent = latest.sessions.some(
+        const latestSession = latest.sessions.find(
           (candidate) => candidate.id === session.id,
         );
         const stillEnabled = Boolean(latest.autoCloseSessionIds[session.id]);
-        if (!stillEnabled || !stillPresent) {
+        // Re-validate against the freshest state: the status can flip back to
+        // `running` in the same tick (a new turn), and removal kills the pty.
+        if (!stillEnabled || !latestSession || !isStillFinished(latestSession)) {
           closingIds.delete(session.id);
           return;
         }
