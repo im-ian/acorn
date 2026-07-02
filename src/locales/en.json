@@ -649,6 +649,11 @@
         "button": "Reset permissions",
         "running": "Resetting..."
       },
+      "confirm": {
+        "message": "This revokes ALL of Acorn's granted macOS permissions — protected folders plus developer-tool permissions like Screen Recording, Accessibility, Automation, and Input Monitoring. macOS will ask again the next time each one is used. Continue?",
+        "cancel": "Cancel",
+        "confirm": "Reset all permissions"
+      },
       "status": {
         "ready": "Folder access was reset and checked.",
         "needsAttention": "Some folders still need attention.",

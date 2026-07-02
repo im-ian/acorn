@@ -73,6 +73,8 @@ const mocks = vi.hoisted(() => ({
   getAcornIpcStatus: vi.fn(),
   daemonStatus: vi.fn(),
   daemonListSessions: vi.fn(),
+  resetMacosDeveloperPermissions: vi.fn(),
+  warmMacosFolderPermissions: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -81,6 +83,8 @@ vi.mock("../lib/api", () => ({
     getAcornIpcStatus: mocks.getAcornIpcStatus,
     daemonStatus: mocks.daemonStatus,
     daemonListSessions: mocks.daemonListSessions,
+    resetMacosDeveloperPermissions: mocks.resetMacosDeveloperPermissions,
+    warmMacosFolderPermissions: mocks.warmMacosFolderPermissions,
   },
 }));
 
@@ -225,6 +229,19 @@ function openGithubTab() {
   );
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error("GitHub tab button not found");
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function openPermissionsTab() {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element) =>
+      element.textContent === "Permissions" || element.textContent === "권한",
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Permissions tab button not found");
   }
   act(() => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1309,6 +1326,46 @@ describe("SettingsModal font controls", () => {
     expect(patchGithub).toHaveBeenCalledWith({ showLabels: false });
     expect(patchGithub).toHaveBeenCalledWith({ showBranches: false });
     expect(patchGithub).toHaveBeenCalledWith({ showChecks: false });
+  });
+
+  it("requires confirmation before resetting macOS permissions", async () => {
+    mocks.resetMacosDeveloperPermissions.mockResolvedValue([]);
+    mocks.warmMacosFolderPermissions.mockResolvedValue([]);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openPermissionsTab();
+
+    const resetButton = Array.from(document.querySelectorAll("button")).find(
+      (element) =>
+        element.textContent === "Reset permissions" ||
+        element.textContent === "권한 초기화",
+    );
+    expect(resetButton).toBeInstanceOf(HTMLButtonElement);
+
+    clickElement(resetButton as HTMLButtonElement);
+
+    // First click only reveals the confirmation; nothing is reset yet.
+    expect(mocks.resetMacosDeveloperPermissions).not.toHaveBeenCalled();
+    expect(mocks.warmMacosFolderPermissions).not.toHaveBeenCalled();
+
+    const confirmButton = Array.from(document.querySelectorAll("button")).find(
+      (element) =>
+        element.textContent === "Reset all permissions" ||
+        element.textContent === "모든 권한 초기화",
+    );
+    expect(confirmButton).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.resetMacosDeveloperPermissions).toHaveBeenCalledTimes(1);
+    expect(mocks.warmMacosFolderPermissions).toHaveBeenCalledTimes(1);
   });
 });
 
