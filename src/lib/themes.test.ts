@@ -90,6 +90,12 @@ describe("BUILT_IN_THEMES", () => {
     }
   });
 
+  it("gives every built-in theme an explicit UI selection color", () => {
+    for (const theme of BUILT_IN_THEMES) {
+      expect(theme.css, theme.id).toMatch(/--color-selection\s*:/);
+    }
+  });
+
   it("gives every built-in theme an explicit input surface", () => {
     for (const theme of BUILT_IN_THEMES) {
       expect(theme.css, theme.id).toMatch(/--color-input\s*:/);
