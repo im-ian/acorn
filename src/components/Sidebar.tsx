@@ -90,7 +90,9 @@ import {
   buildProjectFolderGroups,
   defaultProjectFolderId,
   findProjectFolderById,
+  findWorktreeWorkspaceForPath,
   isDefaultProjectFolder,
+  resolveProjectFolderIdForSession,
   type ProjectFolder,
   type ProjectFolderGroup,
   type ProjectFolderProjectGroup,
@@ -1487,12 +1489,59 @@ function canCreateWorkspaceFromSessionWorktree(
   if (currentFolder && !isDefaultProjectFolder(currentFolder)) {
     return false;
   }
-  return !projectFolders.some(
-    (folder) =>
-      !isDefaultProjectFolder(folder) &&
-      isWorktreeWorkspace(folder) &&
-      normalizeWorkspacePath(folder.cwdPath) ===
-        normalizeWorkspacePath(session.worktree_path),
+  return !findWorktreeWorkspaceForPath(projectFolders, session.worktree_path);
+}
+
+/**
+ * Click-time counterpart of `canCreateWorkspaceFromSessionWorktree`, which
+ * only gates the context-menu item's *visibility* with a snapshot taken when
+ * the menu opened. By the time the item is clicked, another click or session
+ * may already have created a workspace for the same worktree, so eligibility
+ * is re-resolved against fresh store state: an existing workspace pointing at
+ * the same path is activated instead of duplicated, a worktree missing from
+ * disk surfaces a toast, and any other stale snapshot silently no-ops.
+ */
+async function createWorkspaceFromSessionWorktree(
+  session: Session,
+  showToast: (message: string) => void,
+  t: Translator,
+): Promise<ProjectFolder | null> {
+  const worktreeOnDisk = await api
+    .isPathLinkedWorktree(session.worktree_path)
+    .catch((err: unknown) => {
+      console.error("[Sidebar] worktree existence check failed", err);
+      return false;
+    });
+  // Read state only after the IPC roundtrip above so validation and creation
+  // run synchronously against the same snapshot, with no await in between.
+  const state = useAppStore.getState();
+  const folders = state.projectFolders[session.repo_path] ?? [];
+  const existing = findWorktreeWorkspaceForPath(
+    folders,
+    session.worktree_path,
+  );
+  if (existing) {
+    state.setActiveProjectFolder(existing.id);
+    return existing;
+  }
+  const currentFolderId = resolveProjectFolderIdForSession(
+    folders,
+    session,
+    state.sessionFolderIds,
+  );
+  if (
+    !canCreateWorkspaceFromSessionWorktree(session, folders, currentFolderId)
+  ) {
+    return null;
+  }
+  if (!worktreeOnDisk) {
+    showToast(t("toasts.session.worktreeMissing"));
+    return null;
+  }
+  return state.createProjectFolder(
+    session.repo_path,
+    basename(session.worktree_path),
+    session.worktree_path,
   );
 }
 
@@ -2590,7 +2639,6 @@ function SessionRow({
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
-  const createProjectFolder = useAppStore((s) => s.createProjectFolder);
   const toggleSessionAutoClose = useAppStore(
     (s) => s.toggleSessionAutoClose,
   );
@@ -2747,11 +2795,11 @@ function SessionRow({
     }
   }
 
-  function createWorkspaceFromWorktree() {
-    const folder = createProjectFolder(
-      session.repo_path,
-      basename(session.worktree_path),
-      session.worktree_path,
+  async function createWorkspaceFromWorktree() {
+    const folder = await createWorkspaceFromSessionWorktree(
+      session,
+      showToast,
+      t,
     );
     if (!folder) return;
     selectSession(session.id);
@@ -3797,7 +3845,6 @@ function LocalSessionRow({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
-  const createProjectFolder = useAppStore((s) => s.createProjectFolder);
   const toggleSessionAutoClose = useAppStore(
     (s) => s.toggleSessionAutoClose,
   );
@@ -3865,11 +3912,11 @@ function LocalSessionRow({
     }
   }
 
-  function createWorkspaceFromWorktree() {
-    const folder = createProjectFolder(
-      session.repo_path,
-      basename(session.worktree_path),
-      session.worktree_path,
+  async function createWorkspaceFromWorktree() {
+    const folder = await createWorkspaceFromSessionWorktree(
+      session,
+      showToast,
+      t,
     );
     if (!folder) return;
     onSelect();
