@@ -57,6 +57,25 @@ export function findProjectFolderById(
   return null;
 }
 
+/**
+ * Find the non-default workspace folder that already points at the given
+ * worktree path, if any. Matching uses the same normalization as the
+ * sidebar's worktree grouping (`isMatchingWorktreeFolder`), so callers can
+ * use this as a duplicate guard before creating a workspace for a worktree.
+ */
+export function findWorktreeWorkspaceForPath(
+  folders: readonly ProjectFolder[],
+  worktreePath: string,
+): ProjectFolder | null {
+  return (
+    folders.find(
+      (folder) =>
+        isWorktreeFolder(folder) &&
+        normalizePath(folder.cwdPath) === normalizePath(worktreePath),
+    ) ?? null
+  );
+}
+
 export function makeProjectFolderId(repoPath: string): string {
   const suffix =
     typeof crypto !== "undefined" && "randomUUID" in crypto
