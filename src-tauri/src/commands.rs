@@ -304,11 +304,21 @@ fn inject_agent_hook_env(
     session: &Session,
     hooks: Option<&crate::agent_hooks::AgentHookServer>,
 ) {
-    let Some(provider) = session.agent_provider else {
-        return;
-    };
-    if !provider.supports_hooks() {
-        return;
+    // A known provider that can't use hooks opts out entirely. An unknown
+    // provider still gets the channel: a plain terminal session only learns
+    // its provider once the status poll spots a live agent in the process
+    // tree — long after the PTY (and its fixed environment) has spawned. If
+    // the hook env were withheld until then, `claude`/`codex` launched inside
+    // a terminal would never register hooks, and status would fall back to
+    // transcript polling, which cannot see turn completion after the
+    // `end_turn` line scrolls out of the tail window. The per-provider
+    // wrapper shim only activates hooks when an actual agent binary runs, and
+    // the notify script reports its own provider, so injecting the channel
+    // ahead of classification is safe.
+    if let Some(provider) = session.agent_provider {
+        if !provider.supports_hooks() {
+            return;
+        }
     }
 
     let Some(hooks) = hooks else {
@@ -325,9 +335,13 @@ fn inject_agent_hook_env(
         .entry("ACORN_AGENT_HOOK_SESSION_ID".to_string())
         .or_insert_with(|| session.id.to_string());
 
-    effective_env
-        .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
-        .or_insert_with(|| provider.hook_provider_env_value().to_string());
+    // Provider-specific metadata only when the provider is already known; the
+    // notify scripts hardcode their own provider so this stays optional.
+    if let Some(provider) = session.agent_provider {
+        effective_env
+            .entry("ACORN_AGENT_HOOK_PROVIDER".to_string())
+            .or_insert_with(|| provider.hook_provider_env_value().to_string());
+    }
 }
 
 fn authorize_chat_session(state: &AppState, session_id: &str) -> AppResult<Session> {
@@ -4989,6 +5003,37 @@ pub async fn detect_session_statuses(
     .await
 }
 
+/// Whether the transcript-tail status poll should yield to the hook-set
+/// status instead of applying its own classification.
+///
+/// Agent lifecycle hooks are the authoritative turn-boundary signal. While an
+/// agent process is alive under a hooked session the poll defers the entire
+/// Running/NeedsInput distinction to the hook-set store value and does not
+/// consult the transcript tail at all, because the tail is stale in *both*
+/// directions around a turn boundary:
+/// - just after a turn ends, a long/tool-heavy turn's `end_turn` line may be
+///   outside the 256 KiB window (or absent entirely), so the tail still reads
+///   Running;
+/// - just after the next prompt is submitted (UserPromptSubmit already fired
+///   Running), the tail still shows the *previous* turn's `end_turn` and reads
+///   NeedsInput until the agent flushes the new turn's line.
+///
+/// Letting either through races the independent ~1s poll against the hook. The
+/// NeedsInput direction is the dangerous one: it mislabels a just-started turn
+/// as `NeedsInput`+`turn_complete`, which the opt-in auto-close acts on to kill
+/// a live agent mid-turn. So the poll trusts the hook, not the tail, whenever
+/// an agent is live.
+///
+/// The poll keeps ownership only of the Idle edge: once no agent process is
+/// live (`live_agent` false — the agent exited, or an unrelated command now
+/// owns the PTY) it drives status again. Trade-off: a *dropped* terminating
+/// hook (fire-and-forget transport) can leave status lagging at the last hook
+/// value until the next hook or the agent exits; the synchronous hook path
+/// makes that rare, and it self-heals rather than losing data.
+fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
+    hook_active && live_agent
+}
+
 fn detect_session_statuses_blocking(
     state: AppState,
     ids: Vec<String>,
@@ -5171,7 +5216,25 @@ fn detect_session_statuses_blocking(
                 }
             };
             let detection = session_status::detect_with_reason(transcript, previous, shell_hint);
-            let status = detection.status;
+            let defer_to_hook = poll_defers_to_hook(
+                parsed_id
+                    .map(|uuid| state.sessions.is_hook_active(&uuid))
+                    .unwrap_or(false),
+                live_agent_kind.is_some(),
+            );
+            // When a live hooked agent owns the status, keep the hook-set value
+            // instead of the stale transcript reading. Re-read it fresh: a hook
+            // may have written during this poll's process-table / transcript
+            // I/O, and reusing the `previous` captured before that I/O would
+            // clobber the newer hook status back to an old value.
+            let status = if defer_to_hook {
+                parsed_id
+                    .and_then(|uuid| state.sessions.get(&uuid).ok())
+                    .map(|s| s.status)
+                    .unwrap_or(previous)
+            } else {
+                detection.status
+            };
             // Branch source priority:
             //  1. deepest PTY descendant cwd — reflects `cd` + `git checkout`
             //     performed inside the terminal (and `claude -w` worktrees)
@@ -5189,7 +5252,11 @@ fn detect_session_statuses_blocking(
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
             if let Some(uuid) = parsed_id {
-                let _ = state.sessions.refresh_status(&uuid, status);
+                // Deferring means a hook owns the status; leave the store value
+                // untouched so a hook write racing this poll's I/O survives.
+                if !defer_to_hook {
+                    let _ = state.sessions.refresh_status(&uuid, status);
+                }
                 let _ = state.sessions.refresh_agent_state(
                     &uuid,
                     agent_provider,
@@ -5199,7 +5266,11 @@ fn detect_session_statuses_blocking(
             SessionStatusEntry {
                 id,
                 status,
-                status_reason: detection.reason,
+                status_reason: if defer_to_hook {
+                    None
+                } else {
+                    detection.reason
+                },
                 last_message: transcript_preview,
                 last_user_message: conversation_preview
                     .as_ref()
@@ -6017,9 +6088,9 @@ mod tests {
         auto_title_enabled_for_new_session, collect_memory_usage_from_roots,
         create_unique_worktree, daemon_spawn_name_for_session, detach_requested_by_stale_renderer,
         font_name_from_path, infer_acornd_root_from_session_pids, inject_agent_hook_env,
-        memory_root_pids, remove_linked_worktree_at_path, should_remove_local_project_mirror,
-        validate_editor_command, validate_new_project_name, ChatProviderAdapter,
-        ProcessMemorySnapshot,
+        memory_root_pids, poll_defers_to_hook, remove_linked_worktree_at_path,
+        should_remove_local_project_mirror, validate_editor_command, validate_new_project_name,
+        ChatProviderAdapter, ProcessMemorySnapshot,
     };
     use crate::error::{AppError, AppResult};
     use acorn_session::{Session, SessionAgentProvider, SessionKind, SessionMode};
@@ -6139,6 +6210,29 @@ mod tests {
                     metadata: None,
                 }))
         }
+    }
+
+    #[test]
+    fn poll_defers_while_a_hooked_agent_is_live() {
+        // While the agent process is alive the hook owns the turn boundary and
+        // the transcript tail is ignored in both directions (stale Running just
+        // after a turn ends, stale NeedsInput just after the next prompt).
+        assert!(poll_defers_to_hook(true, true));
+    }
+
+    #[test]
+    fn poll_owns_status_once_the_agent_is_gone() {
+        // Agent exited, or an unrelated command now owns the PTY — the poll
+        // drives liveness again, including the Idle edge that no hook reports.
+        assert!(!poll_defers_to_hook(true, false));
+    }
+
+    #[test]
+    fn poll_drives_status_without_a_hook_channel() {
+        // No observed hook events (e.g. `claude` typed straight into a terminal
+        // before hooks registered) — the transcript poll is the only signal.
+        assert!(!poll_defers_to_hook(false, true));
+        assert!(!poll_defers_to_hook(false, false));
     }
 
     #[test]
@@ -7473,7 +7567,12 @@ mod tests {
     }
 
     #[test]
-    fn inject_agent_hook_env_skips_until_provider_is_known() {
+    fn inject_agent_hook_env_injects_channel_when_provider_unknown() {
+        // A terminal session not yet classified as an agent still gets the
+        // hook channel so a later `claude`/`codex` launch inside it can
+        // register hooks. Without this the agent never reports Stop/Notify
+        // events and its status falls back to transcript polling, which can't
+        // see turn completion once `end_turn` scrolls out of the tail window.
         let hooks = crate::agent_hooks::AgentHookServer::start().expect("hook server starts");
         let mut session = Session::new(
             "Shell".to_string(),
@@ -7489,9 +7588,20 @@ mod tests {
         let mut env = HashMap::new();
         inject_agent_hook_env(&mut env, &session, Some(&hooks));
 
-        assert!(!env.contains_key("ACORN_AGENT_HOOK_URL"));
-        assert!(!env.contains_key("ACORN_AGENT_HOOK_TOKEN"));
-        assert!(!env.contains_key("ACORN_AGENT_HOOK_SESSION_ID"));
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_URL"),
+            Some(&hooks.hook_url().to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_TOKEN"),
+            Some(&hooks.token().to_string())
+        );
+        assert_eq!(
+            env.get("ACORN_AGENT_HOOK_SESSION_ID"),
+            Some(&session.id.to_string())
+        );
+        // Provider is unknown at spawn; the per-provider notify script reports
+        // its own provider, so the provider-specific var stays unset here.
         assert!(!env.contains_key("ACORN_AGENT_HOOK_PROVIDER"));
     }
 

@@ -19,10 +19,14 @@ export function shouldAutoCloseFinishedSession(
   // trusts that explicit reason.
   const needsInputAfterTurnComplete =
     session.status === "needs_input" && statusReason === "turn_complete";
-  // Agent transcripts normally finish as needs_input, but a fast process exit
-  // can collapse the next observed state to idle after the run.
+  // A hooked agent settles at needs_input between turns, then collapses to idle
+  // when its process exits; a non-hooked or fast exit can go straight from
+  // running to idle. Treat an exit from either the working (running) or resting
+  // (needs_input) state as the run ending — but never the running→needs_input
+  // turn boundary itself, so an interactive session is not closed mid-work.
   const returnedIdleAfterRun =
-    previousStatus === "running" && session.status === "idle";
+    (previousStatus === "running" || previousStatus === "needs_input") &&
+    session.status === "idle";
 
   return (
     enabled &&

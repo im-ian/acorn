@@ -132,9 +132,13 @@ case "$event" in
   *)
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    # Codex's turn-completion events (Stop / agent-turn-complete / task_complete)
+    # mean the agent finished the turn and is awaiting the user, so they map to
+    # needs_input. Codex emits no "process exited" event here — that shows up as
+    # the status poll observing an idle shell.
     case "$hook_event_name" in
       Start|UserPromptSubmit) event="start" ;;
-      Stop) event="stop" ;;
+      Stop) event="needs_input" ;;
       PermissionRequest) event="needs_input" ;;
       Error) event="error" ;;
     esac
@@ -142,7 +146,7 @@ case "$event" in
       codex_type=$(printf '%s\n' "$input" | grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
       case "$codex_type" in
         task_started) event="start" ;;
-        agent-turn-complete|task_complete) event="stop" ;;
+        agent-turn-complete|task_complete) event="needs_input" ;;
         exec_approval_request|apply_patch_approval_request|request_user_input) event="needs_input" ;;
       esac
     fi
@@ -217,10 +221,15 @@ input=$(cat 2>/dev/null || true)
 hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
 
 event=""
+# Claude fires Stop at the end of every assistant turn — it has finished
+# responding and is awaiting the user's next prompt — so Stop maps to
+# needs_input, matching the transcript classifier's end_turn semantics.
+# SubagentStop fires mid-turn (a Task subagent finished) so it re-asserts
+# Running. Claude has no "process exited" hook; that shows up as the status
+# poll observing an idle shell.
 case "$hook_event_name" in
-  SessionStart|UserPromptSubmit) event="start" ;;
-  Stop|SubagentStop) event="stop" ;;
-  Notification|PermissionRequest) event="needs_input" ;;
+  SessionStart|UserPromptSubmit|SubagentStop) event="start" ;;
+  Stop|Notification|PermissionRequest) event="needs_input" ;;
   Error) event="error" ;;
 esac
 [ -n "$event" ] || exit 0
@@ -351,9 +360,11 @@ case "$event" in
     event=""
     hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hookEventName"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
     [ -n "$hook_event_name" ] || hook_event_name=$(printf '%s\n' "$input" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+    # SubagentStop fires when a Task subagent finishes mid-turn, so it
+    # re-asserts Running rather than ending the turn — only Stop is complete.
     case "$hook_event_name" in
-      SessionStart|UserPromptSubmit|PreToolUse) event="start" ;;
-      Stop|SubagentStop) event="stop" ;;
+      SessionStart|UserPromptSubmit|PreToolUse|SubagentStop) event="start" ;;
+      Stop) event="stop" ;;
       Notification|PermissionRequest) event="needs_input" ;;
       Error) event="error" ;;
     esac
@@ -486,7 +497,11 @@ mod tests {
 
         let notify = fs::read_to_string(dir.join("acorn-codex-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"codex\""));
-        assert!(notify.contains("agent-turn-complete|task_complete"));
+        // Turn-completion events map to needs_input (awaiting the user), not a
+        // per-turn "completed"; Codex emits no process-exit hook here.
+        assert!(notify.contains("agent-turn-complete|task_complete) event=\"needs_input\""));
+        assert!(notify.contains("Stop) event=\"needs_input\""));
+        assert!(!notify.contains("event=\"stop\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
     }
@@ -526,9 +541,12 @@ mod tests {
 
         let notify = fs::read_to_string(dir.join("acorn-claude-notify")).unwrap();
         assert!(notify.contains("\"provider\":\"claude\""));
-        assert!(notify.contains("SessionStart|UserPromptSubmit"));
-        assert!(notify.contains("Stop|SubagentStop"));
-        assert!(notify.contains("Notification"));
+        // SubagentStop re-asserts Running (grouped with start); per-turn Stop
+        // maps to needs_input (awaiting the user), and Claude emits no "stop"
+        // (Completed) event at all — process exit is observed as idle.
+        assert!(notify.contains("SessionStart|UserPromptSubmit|SubagentStop"));
+        assert!(notify.contains("Stop|Notification|PermissionRequest) event=\"needs_input\""));
+        assert!(!notify.contains("event=\"stop\""));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
 
@@ -612,8 +630,8 @@ mod tests {
         for (claude_event, acorn_event) in [
             ("SessionStart", "start"),
             ("UserPromptSubmit", "start"),
-            ("Stop", "stop"),
-            ("SubagentStop", "stop"),
+            ("Stop", "needs_input"),
+            ("SubagentStop", "start"),
             ("Notification", "needs_input"),
             ("PermissionRequest", "needs_input"),
             ("Error", "error"),
@@ -649,5 +667,16 @@ mod tests {
         assert!(notify.contains("PermissionRequest"));
         assert!(notify.contains("X-Acorn-Agent-Hook-Token"));
         assert!(notify.contains("ACORN_AGENT_HOOK_SESSION_ID"));
+    }
+
+    #[test]
+    fn antigravity_notify_treats_subagent_stop_as_running() {
+        let base = ScratchDir::new("agy-events");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+        let notify = fs::read_to_string(dir.join("acorn-antigravity-notify")).unwrap();
+        // SubagentStop fires mid-turn, so it re-asserts Running; only the
+        // main-agent Stop ends the turn.
+        assert!(notify.contains("SubagentStop) event=\"start\""));
+        assert!(notify.contains("Stop) event=\"stop\""));
     }
 }
