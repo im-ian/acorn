@@ -1,4 +1,7 @@
 import type { Session, SessionKind } from "./types";
+import { WORKTREE_CITY_SLUGS } from "./worktreeCitySlugs";
+
+const DEFAULT_SESSION_NAME = "new session";
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -7,13 +10,11 @@ function basename(path: string): string {
 /**
  * Pick a session name that doesn't collide with any name in `existing`.
  *
- * Isolated sessions follow a `{repo}-worktree-{random}` convention because
+ * Isolated sessions follow a `{repo}-worktree-{city}` convention because
  * each one maps to a linked git worktree at `.acorn/worktrees/<name>/`.
- * Avoiding sequential names keeps old agent transcripts from appearing to
- * point at a newly-created worktree that happened to reuse the same path.
  * Control sessions get a `control-` prefix so they sort into their own
- * namespace. Regular sessions use the bare repo basename and only get a
- * numeric suffix on collision.
+ * namespace. Regular sessions use a stable placeholder tab name and get a
+ * numeric suffix starting at `-1` on collision.
  *
  * The generated isolated name is still only a candidate; the Rust backend's
  * `create_unique_worktree` re-suffixes on its own if it collides with an
@@ -28,53 +29,68 @@ export function suggestSessionName(
   const taken = new Set(existing.map((s) => s.name));
   if (isolated) {
     const base = `${basename(repoPath)}-worktree`;
-    let candidate = `${base}-${randomWorktreeSuffix()}`;
+    let candidate = `${base}-${randomWorktreeSlug()}`;
     for (let attempts = 0; attempts < 100; attempts++) {
       if (!taken.has(candidate)) return candidate;
-      candidate = `${base}-${randomWorktreeSuffix()}`;
+      candidate = `${base}-${randomWorktreeSlug()}`;
     }
     let n = 2;
     while (taken.has(`${candidate}-${n}`)) n++;
     return `${candidate}-${n}`;
   }
-  const base =
-    kind === "control"
-      ? `control-${basename(repoPath)}`
-      : basename(repoPath);
+  if (kind !== "control") {
+    return suggestDefaultSessionName(existing);
+  }
+  const base = `control-${basename(repoPath)}`;
   let candidate = base;
   let n = 2;
   while (taken.has(candidate)) {
     candidate = `${base}-${n++}`;
   }
   return candidate;
+}
+
+export function suggestDefaultSessionName(existing: Session[]): string {
+  return suggestNumberedName(DEFAULT_SESSION_NAME, existing);
 }
 
 export function suggestLocalSessionName(existing: Session[]): string {
+  return suggestDefaultSessionName(existing);
+}
+
+function suggestNumberedName(base: string, existing: Session[]): string {
   const taken = new Set(existing.map((s) => s.name));
-  const base = "terminal";
   let candidate = base;
-  let n = 2;
+  let n = 1;
   while (taken.has(candidate)) {
     candidate = `${base}-${n++}`;
   }
   return candidate;
 }
 
-function randomWorktreeSuffix(): string {
+function randomWorktreeSlug(): string {
+  const seed = randomUint32();
+  const city =
+    WORKTREE_CITY_SLUGS[seed % WORKTREE_CITY_SLUGS.length] ??
+    WORKTREE_CITY_SLUGS[0];
+  return city;
+}
+
+function randomUint32(): number {
   const webCrypto = globalThis.crypto;
   if (typeof webCrypto?.randomUUID === "function") {
-    return webCrypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const seed = Number.parseInt(
+      webCrypto.randomUUID().replace(/-/g, "").slice(0, 8),
+      16,
+    );
+    if (Number.isFinite(seed)) return seed;
   }
 
-  const bytes = new Uint8Array(6);
+  const bytes = new Uint32Array(1);
   if (webCrypto) {
     webCrypto.getRandomValues(bytes);
+    return bytes[0] ?? 0;
   } else {
-    for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
+    return Math.floor(Math.random() * 0xffffffff);
   }
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
 }
