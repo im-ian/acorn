@@ -5,6 +5,51 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const STABLE_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/;
+const RELEASE_SECTION_SUMMARIES = [
+  {
+    titleRe: /\bFeatures\b/i,
+    koSuffix: "기능 업데이트가 포함되었어요.",
+    enPrefix: "Feature updates:",
+  },
+  {
+    titleRe: /\bFixes\b/i,
+    koSuffix: "문제가 수정되었어요.",
+    enPrefix: "Fixes:",
+  },
+  {
+    titleRe: /\bPerformance\b/i,
+    koSuffix: "성능 개선이 포함되었어요.",
+    enPrefix: "Performance improvements:",
+  },
+  {
+    titleRe: /\bSecurity\b/i,
+    koSuffix: "보안 업데이트가 포함되었어요.",
+    enPrefix: "Security updates:",
+  },
+  {
+    titleRe: /\bDocs\b/i,
+    koSuffix: "문서 업데이트가 포함되었어요.",
+    enPrefix: "Documentation updates:",
+  },
+  {
+    titleRe: /\bRefactor\b|\bchore\b/i,
+    koSuffix: "내부 정리가 포함되었어요.",
+    enPrefix: "Internal cleanup:",
+  },
+  {
+    titleRe: /\bBuild\b|\bCI\b/i,
+    koSuffix: "빌드와 CI 업데이트가 포함되었어요.",
+    enPrefix: "Build and CI updates:",
+  },
+  {
+    titleRe: /\bOther changes\b/i,
+    koSuffix: "기타 변경사항이 포함되었어요.",
+    enPrefix: "Other changes:",
+  },
+];
+const HEADING_RE = /^(#{1,6})\s+(.+?)\s*$/;
+const ENTRY_RE = /^\s*[-*]\s+(.+?)\s*$/;
+const MAX_SUMMARY_ITEMS = 4;
 
 export function parseStableSemverTag(tag) {
   const match = STABLE_TAG_RE.exec(tag);
@@ -67,6 +112,95 @@ export function stripGithubGeneratedComments(body) {
     .trim();
 }
 
+function releaseSectionSummaryForHeading(line) {
+  const match = HEADING_RE.exec(line);
+  if (!match) return null;
+
+  const title = match[2];
+  return (
+    RELEASE_SECTION_SUMMARIES.find((summary) =>
+      summary.titleRe.test(title),
+    ) ?? null
+  );
+}
+
+function extractReleaseEntryTitle(line) {
+  const match = ENTRY_RE.exec(line);
+  if (!match) return null;
+
+  return match[1]
+    .replace(/\s+by\s+@\S+\s+in\s+(?:https?:\/\/\S+|#\d+)\s*$/i, "")
+    .replace(/\s+\(#\d+\)\s*$/, "")
+    .replace(/\s+#\d+\s*$/, "")
+    .replace(/^[a-z]+(?:\([^)]+\))?!?:\s*/i, "")
+    .trim();
+}
+
+function summarizeReleaseEntries(entries, locale = "ko") {
+  const visibleEntries = entries.slice(0, MAX_SUMMARY_ITEMS);
+  const hiddenCount = entries.length - visibleEntries.length;
+  const visibleSummary = visibleEntries.join(", ");
+  if (hiddenCount === 0) return visibleSummary;
+  return locale === "en"
+    ? `${visibleSummary}, and ${hiddenCount} more`
+    : `${visibleSummary} 외 ${hiddenCount}개`;
+}
+
+function formatReleaseSectionSummary(entries, summary) {
+  return [
+    `> ${summarizeReleaseEntries(entries)} ${summary.koSuffix}<br>`,
+    `> ${summary.enPrefix} ${summarizeReleaseEntries(entries, "en")}.`,
+  ];
+}
+
+export function addReleaseSectionSummaries(body) {
+  const lines = body.split(/\r?\n/);
+  const output = [];
+
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i];
+    const summary = releaseSectionSummaryForHeading(line);
+    if (!summary) {
+      output.push(line);
+      i += 1;
+      continue;
+    }
+
+    let nextHeadingIndex = i + 1;
+    while (
+      nextHeadingIndex < lines.length &&
+      !HEADING_RE.test(lines[nextHeadingIndex])
+    ) {
+      nextHeadingIndex += 1;
+    }
+
+    const contentStart = (() => {
+      let index = i + 1;
+      while (index < nextHeadingIndex && lines[index].trim().length === 0) {
+        index += 1;
+      }
+      return index;
+    })();
+    const contentLines = lines.slice(contentStart, nextHeadingIndex);
+    const entries = contentLines
+      .map(extractReleaseEntryTitle)
+      .filter((entry) => entry !== null && entry.length > 0);
+
+    output.push(line);
+    if (entries.length > 0) {
+      output.push(
+        "",
+        ...formatReleaseSectionSummary(entries, summary),
+      );
+      if (contentLines.length > 0) output.push("");
+    }
+    output.push(...contentLines);
+    i = nextHeadingIndex;
+  }
+
+  return output.join("\n").trim();
+}
+
 function readGitTags() {
   const stdout = execFileSync("git", ["tag", "-l", "v*.*.*"], {
     encoding: "utf8",
@@ -101,7 +235,12 @@ function generateNotes(repo, tag, previousTag) {
 }
 
 export function composeReleaseNotes(parts) {
-  const usableParts = parts.filter((part) => part.body.trim().length > 0);
+  const usableParts = parts
+    .map((part) => ({
+      tag: part.tag,
+      body: addReleaseSectionSummaries(part.body.trim()),
+    }))
+    .filter((part) => part.body.trim().length > 0);
   if (usableParts.length === 0) return "";
   if (usableParts.length === 1) return usableParts[0].body.trim();
 
