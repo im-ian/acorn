@@ -923,7 +923,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const createdRow = page
       .locator("aside")
-      .getByRole("button", { name: /^demo main · Idle/ })
+      .getByRole("button", { name: /^new session main · Idle/ })
       .first();
     await expect(createdRow).toBeVisible();
     await expectRootWorkspaceMetadataHidden(folderRow);
@@ -944,7 +944,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const createdFromButtonRow = page
       .locator("aside")
-      .getByRole("button", { name: /^demo-2 main · Idle/ })
+      .getByRole("button", { name: /^new session-1 main · Idle/ })
       .first();
     await expect(createdFromButtonRow).toBeVisible();
     await expectRootWorkspaceMetadataHidden(folderRow);
@@ -984,7 +984,7 @@ test.describe("sidebar: project lifecycle", () => {
     const createdFromMenuRow = page
       .locator("aside")
       .getByRole("button", {
-        name: /^demo-worktree-[a-f0-9]{12} worktree main · Idle/,
+        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* worktree main · Idle/,
       })
       .first();
     await expect(createdFromMenuRow).toBeVisible();
@@ -2046,7 +2046,7 @@ test.describe("sidebar: project lifecycle", () => {
       .first();
     const worktreeSession = sidebar
       .getByRole("button", {
-        name: /^demo-worktree-[a-f0-9]{12} main · Idle/,
+        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* main · Idle/,
       })
       .first();
     await expect(root).toBeVisible();
@@ -2451,12 +2451,12 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(worktreeWorkspace).toBeVisible();
     await expectWorkspacePathOnly(
       worktreeWorkspace,
-      /demo-worktree-[a-f0-9]{12}/,
+      /demo-worktree-[a-z]+(?:-[a-z]+)*/,
     );
     const worktreeSession = page
       .locator("aside")
       .getByRole("button", {
-        name: /^demo-worktree-[a-f0-9]{12} main · Idle/,
+        name: /^demo-worktree-[a-z]+(?:-[a-z]+)* main · Idle/,
       })
       .last();
     await expect(worktreeSession).toBeVisible();
@@ -2469,7 +2469,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     const projectRootSession = page
       .locator("aside")
-      .getByRole("button", { name: /^demo-2 main · Idle/ })
+      .getByRole("button", { name: /^new session-1 main · Idle/ })
       .first();
     await expect(projectRootSession).toBeVisible();
     await projectRootSession.click({ button: "right" });
@@ -2525,7 +2525,7 @@ test.describe("sidebar: project lifecycle", () => {
         ? [
             {
               id: "local-1",
-              name: "terminal",
+              name: "new session",
               repo_path: "/Users/tester",
               worktree_path: "/Users/tester",
               branch: "HEAD",
@@ -2553,7 +2553,7 @@ test.describe("sidebar: project lifecycle", () => {
       w.__localSessionCreated = true;
       return {
         id: "local-1",
-        name: "terminal",
+        name: "new session",
         repo_path: "/Users/tester",
         worktree_path: "/Users/tester",
         branch: "HEAD",
@@ -2576,7 +2576,7 @@ test.describe("sidebar: project lifecycle", () => {
 
     await expect(page.getByText("Instant Sessions")).toBeVisible();
     await expect(
-      chats.getByRole("button", { name: /^terminal\b/ }),
+      chats.getByRole("button", { name: /^new session\b/ }),
     ).toBeVisible();
 
     const calls = (await page.evaluate(
@@ -2592,7 +2592,7 @@ test.describe("sidebar: project lifecycle", () => {
     }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      name: "terminal",
+      name: "new session",
       repoPath: "/Users/tester",
       isolated: false,
       kind: "regular",
@@ -2775,7 +2775,7 @@ test.describe("sidebar: project lifecycle", () => {
         ? [
             {
               id: "local-1",
-              name: "terminal",
+              name: "new session",
               repo_path: "/Users/tester",
               worktree_path: "/Users/tester",
               branch: "HEAD",
@@ -2803,7 +2803,7 @@ test.describe("sidebar: project lifecycle", () => {
       w.__localSessionCreated = true;
       return {
         id: "local-1",
-        name: "terminal",
+        name: "new session",
         repo_path: "/Users/tester",
         worktree_path: "/Users/tester",
         branch: "HEAD",
@@ -2847,14 +2847,14 @@ test.describe("sidebar: project lifecycle", () => {
       .getByRole("button", { name: "New instant session" })
       .click();
     await expect(
-      instant.getByRole("button", { name: /^terminal\b/ }),
+      instant.getByRole("button", { name: /^new session\b/ }),
     ).toBeVisible();
 
     await scratch
       .getByRole("button", { name: "Collapse workspace" })
       .click();
     await expect(
-      instant.getByRole("button", { name: /^terminal\b/ }),
+      instant.getByRole("button", { name: /^new session\b/ }),
     ).toHaveCount(0);
 
     const calls = (await page.evaluate(
@@ -2870,7 +2870,7 @@ test.describe("sidebar: project lifecycle", () => {
     }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      name: "terminal",
+      name: "new session",
       repoPath: "/Users/tester",
       isolated: false,
       kind: "regular",
@@ -2971,7 +2971,7 @@ test.describe("sidebar: project lifecycle", () => {
       const sessions = [
         {
           id: "local-1",
-          name: "terminal",
+          name: "new session",
           repo_path: "/Users/tester",
           worktree_path: "/Users/tester",
           branch: "HEAD",
@@ -2993,7 +2993,7 @@ test.describe("sidebar: project lifecycle", () => {
             {
               ...sessions[0],
               id: "local-2",
-              name: "terminal-2",
+              name: "new session-1",
             },
           ]
         : sessions;
@@ -3008,7 +3008,7 @@ test.describe("sidebar: project lifecycle", () => {
       w.__hotkeyLocalCreated = true;
       return {
         id: "local-2",
-        name: "terminal-2",
+        name: "new session-1",
         repo_path: "/Users/tester",
         worktree_path: "/Users/tester",
         branch: "HEAD",
@@ -3039,7 +3039,7 @@ test.describe("sidebar: project lifecycle", () => {
     }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      name: "terminal-2",
+      name: "new session-1",
       repoPath: "/Users/tester",
       projectScoped: false,
     });
@@ -3167,7 +3167,7 @@ test.describe("sidebar: project lifecycle", () => {
       w.__createSessionCalls.push(args);
       return {
         id: "local-1",
-        name: "terminal",
+        name: "new session",
         repo_path: "/Users/tester",
         worktree_path: "/Users/tester",
         branch: "HEAD",
@@ -3201,7 +3201,7 @@ test.describe("sidebar: project lifecycle", () => {
     }>;
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      name: "terminal",
+      name: "new session",
       repoPath: "/Users/tester",
       projectScoped: false,
     });
