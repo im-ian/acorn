@@ -958,7 +958,8 @@
       },
       "card": {
         "stalled": "Stalled",
-        "dwellTitle": "In this column for {duration}"
+        "dwellTitle": "In this column for {duration}",
+        "openPullRequest": "Open pull request #{number}"
       }
     }
   },

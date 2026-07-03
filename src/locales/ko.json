@@ -958,7 +958,8 @@
       },
       "card": {
         "stalled": "정체",
-        "dwellTitle": "이 컬럼에 {duration} 머무름"
+        "dwellTitle": "이 컬럼에 {duration} 머무름",
+        "openPullRequest": "풀 리퀘스트 #{number} 열기"
       }
     }
   },

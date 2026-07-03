@@ -16,12 +16,15 @@ import { createPortal } from "react-dom";
 import {
   BarChart3,
   Bot,
+  CheckCircle2,
   ChevronDown,
+  CircleDashed,
   Clock,
   Columns3,
   Copy,
   FolderOpen,
   GitBranch,
+  GitPullRequest,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -33,6 +36,7 @@ import {
   Terminal as TerminalIcon,
   Trash2,
   X,
+  XCircle,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -45,7 +49,11 @@ import {
   type ProjectSessionCreateAction,
 } from "../lib/projectSessionCreateActions";
 import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
-import type { Session, SessionStatus } from "../lib/types";
+import type {
+  PullRequestInfo,
+  Session,
+  SessionStatus,
+} from "../lib/types";
 import {
   AgentProviderIcon,
   resolveSessionAgentProvider,
@@ -77,6 +85,10 @@ import {
   type KanbanStageDwell,
 } from "../lib/kanbanLifecycle";
 import {
+  useKanbanBoardData,
+  type KanbanSessionBoardData,
+} from "../lib/useKanbanBoardData";
+import {
   selectSessionsById,
   useAppStore,
   type WorkspaceViewMode,
@@ -85,6 +97,7 @@ import { IconButton, StatusDot, type StatusTone } from "./ui";
 import { ChatPane } from "./ChatPane";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { LayoutRenderer } from "./LayoutRenderer";
+import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 
@@ -259,18 +272,34 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     return () => window.clearInterval(handle);
   }, []);
 
+  const [prRefreshKey, setPrRefreshKey] = useState(0);
+  const boardData = useKanbanBoardData(sessions, prRefreshKey);
+  const [prDetail, setPrDetail] = useState<{
+    repoPath: string;
+    number: number;
+  } | null>(null);
+
+  const openPullRequestDetail = useCallback(
+    (repoPath: string, number: number) => {
+      setPrDetail({ repoPath, number });
+    },
+    [],
+  );
+
   const manualDoneSessionIds = prefs.manualDoneSessionIds;
   const stageContextBySession = useMemo(() => {
     const manualDone = new Set(manualDoneSessionIds);
     const contexts = new Map<string, KanbanStageContext>();
     for (const session of sessions) {
+      const data = boardData.get(session.id);
       contexts.set(session.id, {
-        ...EMPTY_KANBAN_STAGE_CONTEXT,
+        pr: data?.pr ?? null,
+        hasDiff: data?.hasDiff ?? false,
         manualDone: manualDone.has(session.id),
       });
     }
     return contexts;
-  }, [manualDoneSessionIds, sessions]);
+  }, [boardData, manualDoneSessionIds, sessions]);
 
   // Stages derive from every session (not just visible ones) so filtering the
   // board never resets a session's dwell clock.
@@ -567,8 +596,10 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                             session={session}
                             stage={column.stage}
                             dwell={dwellBySession.get(session.id) ?? null}
+                            data={boardData.get(session.id) ?? null}
                             now={now}
                             onOpen={openSessionTerminal}
+                            onOpenPullRequest={openPullRequestDetail}
                           />
                         ))
                       ) : (
@@ -631,6 +662,12 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
           onClose={closeTerminalPopover}
         />
       ) : null}
+      <PullRequestDetailModal
+        open={prDetail}
+        cwd={prDetail?.repoPath}
+        onClose={() => setPrDetail(null)}
+        onMutated={() => setPrRefreshKey((key) => key + 1)}
+      />
     </div>
   );
 }
@@ -825,14 +862,18 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   session,
   stage,
   dwell,
+  data,
   now,
   onOpen,
+  onOpenPullRequest,
 }: {
   session: Session;
   stage: KanbanLifecycleStage;
   dwell: KanbanStageDwell | null;
+  data: KanbanSessionBoardData | null;
   now: number;
   onOpen: (sessionId: string, anchor: HTMLElement) => void;
+  onOpenPullRequest: (repoPath: string, number: number) => void;
 }) {
   const t = useTranslation();
   const worktreeName = basename(session.worktree_path);
@@ -1049,6 +1090,31 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               {lastMessage}
             </span>
           ) : null}
+          {data && (data.pr || data.hasDiff) ? (
+            <span
+              className="flex min-w-0 flex-wrap items-center gap-1.5"
+              data-testid="workspace-kanban-card-chips"
+            >
+              {data.pr ? (
+                <KanbanPullRequestChip
+                  t={t}
+                  pr={data.pr}
+                  onOpen={(number) =>
+                    onOpenPullRequest(session.repo_path, number)
+                  }
+                />
+              ) : null}
+              {data.hasDiff ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded border border-border bg-bg px-1 py-px text-[10px] leading-4 tabular-nums"
+                  data-testid="workspace-kanban-card-diff"
+                >
+                  <span className="text-success">+{data.additions}</span>
+                  <span className="text-danger">−{data.deletions}</span>
+                </span>
+              ) : null}
+            </span>
+          ) : null}
           <span
             className="flex min-w-0 items-center gap-1.5 text-[10px] leading-none text-fg-muted"
             data-testid="workspace-kanban-card-meta"
@@ -1106,6 +1172,69 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
     </>
   );
 });
+
+/**
+ * Compact PR pill on a kanban card: state-tinted PR icon, number, and a CI
+ * rollup glyph. Rendered inside the card's root `<button>`, so it stops
+ * pointer/click propagation and acts as its own keyboard target.
+ */
+function KanbanPullRequestChip({
+  t,
+  pr,
+  onOpen,
+}: {
+  t: Translator;
+  pr: PullRequestInfo;
+  onOpen: (number: number) => void;
+}) {
+  const state = pr.state.toUpperCase();
+  const stateClass =
+    state === "OPEN"
+      ? pr.is_draft
+        ? "text-fg-muted"
+        : "text-emerald-400"
+      : state === "MERGED"
+        ? "text-purple-400"
+        : "text-danger";
+  const checks = pr.checks;
+  const label = t("workspace.kanban.card.openPullRequest").replace(
+    "{number}",
+    String(pr.number),
+  );
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={label}
+      title={pr.title}
+      data-testid="workspace-kanban-card-pr"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen(pr.number);
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen(pr.number);
+      }}
+      className="inline-flex items-center gap-1 rounded border border-border bg-bg px-1 py-px text-[10px] leading-4 transition hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      <GitPullRequest size={10} className={cn("shrink-0", stateClass)} />
+      <span className="tabular-nums text-fg-muted">#{pr.number}</span>
+      {checks ? (
+        checks.failed > 0 ? (
+          <XCircle size={10} className="shrink-0 text-danger" />
+        ) : checks.pending > 0 ? (
+          <CircleDashed size={10} className="shrink-0 text-warning" />
+        ) : (
+          <CheckCircle2 size={10} className="shrink-0 text-success" />
+        )
+      ) : null}
+    </span>
+  );
+}
 
 function KanbanTerminalPopover({
   session,
