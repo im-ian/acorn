@@ -339,9 +339,27 @@ pub fn run() {
                 }
             }) {
                 Ok(server) => {
+                    // Publish this run's URL + token to the stable endpoint
+                    // file the notify scripts read at send time. Without it,
+                    // agent sessions that survived an app restart (daemon
+                    // PTYs) would keep POSTing hook events to the previous
+                    // run's dead port and pin their status forever.
+                    if let Err(err) = agent_wrappers::write_agent_hook_endpoint(
+                        server.hook_url(),
+                        server.token(),
+                    ) {
+                        tracing::warn!(
+                            error = %err,
+                            "agent hook endpoint publish failed; sessions surviving a restart will lose hook status updates",
+                        );
+                    }
                     *state.agent_hooks.lock() = Some(std::sync::Arc::new(server));
                 }
                 Err(err) => {
+                    // Drop any stale endpoint file from a previous run — it
+                    // would win over the notify scripts' env fallback and
+                    // swallow events silently.
+                    agent_wrappers::remove_agent_hook_endpoint();
                     tracing::warn!(error = %err, "agent hook server disabled");
                 }
             }

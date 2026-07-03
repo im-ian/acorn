@@ -13,6 +13,7 @@ const CLAUDE_NOTIFY_NAME: &str = "acorn-claude-notify";
 const CLAUDE_SETTINGS_NAME: &str = "acorn-claude-settings.json";
 const ANTIGRAVITY_WRAPPER_NAME: &str = "agy";
 const ANTIGRAVITY_NOTIFY_NAME: &str = "acorn-antigravity-notify";
+const HOOK_ENDPOINT_NAME: &str = "agent-hook-endpoint";
 
 const CODEX_WRAPPER_BODY: &str = r#"#!/bin/sh
 _acorn_find_real_binary() {
@@ -41,10 +42,14 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
-if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
-   [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] &&
-   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
+# Hook channel is available when the endpoint file exists (rewritten by each
+# app launch with the current server URL + token) or the spawn-time env pair
+# is present. The session id has no file fallback — without it, events cannot
+# be attributed to a session.
+if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+   { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
+     { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify" ]; then
   export CODEX_TUI_RECORD_SESSION=1
   if [ -z "${CODEX_TUI_SESSION_LOG_PATH-}" ]; then
@@ -154,16 +159,31 @@ case "$event" in
     ;;
 esac
 
-[ -n "${ACORN_AGENT_HOOK_URL-}" ] || exit 0
-[ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] || exit 0
+# Resolve the hook endpoint at send time. Each app launch rewrites the
+# endpoint file with that run's server URL + token (the hook server binds a
+# fresh port and token per run), so an agent session that outlives an app
+# restart keeps reaching the *current* server. The spawn-time env vars are
+# only a fallback for when the file is missing.
+hook_url=""
+hook_token=""
+if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
+  hook_url=$(sed -n '1p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null || true)
+  hook_token=$(sed -n '2p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null || true)
+fi
+if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+  hook_url="${ACORN_AGENT_HOOK_URL-}"
+  hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
+fi
+[ -n "$hook_url" ] || exit 0
+[ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
 payload=$(printf '{"session_id":"%s","provider":"codex","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
-  -H "X-Acorn-Agent-Hook-Token: $ACORN_AGENT_HOOK_TOKEN" \
+  -H "X-Acorn-Agent-Hook-Token: $hook_token" \
   -d "$payload" \
-  "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
+  "$hook_url" >/dev/null 2>&1 || true
 "#;
 
 // Claude Code wrapper.
@@ -203,10 +223,14 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
-if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
-   [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] &&
-   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
+# Hook channel is available when the endpoint file exists (rewritten by each
+# app launch with the current server URL + token) or the spawn-time env pair
+# is present. The session id has no file fallback — without it, events cannot
+# be attributed to a session.
+if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+   { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
+     { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -f "$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json" ] &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-claude-notify" ]; then
   exec "$REAL_BIN" --settings "$ACORN_AGENT_WRAPPER_DIR/acorn-claude-settings.json" "$@"
@@ -234,16 +258,31 @@ case "$hook_event_name" in
 esac
 [ -n "$event" ] || exit 0
 
-[ -n "${ACORN_AGENT_HOOK_URL-}" ] || exit 0
-[ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] || exit 0
+# Resolve the hook endpoint at send time. Each app launch rewrites the
+# endpoint file with that run's server URL + token (the hook server binds a
+# fresh port and token per run), so an agent session that outlives an app
+# restart keeps reaching the *current* server. The spawn-time env vars are
+# only a fallback for when the file is missing.
+hook_url=""
+hook_token=""
+if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
+  hook_url=$(sed -n '1p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null || true)
+  hook_token=$(sed -n '2p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null || true)
+fi
+if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+  hook_url="${ACORN_AGENT_HOOK_URL-}"
+  hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
+fi
+[ -n "$hook_url" ] || exit 0
+[ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
 payload=$(printf '{"session_id":"%s","provider":"claude","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
-  -H "X-Acorn-Agent-Hook-Token: $ACORN_AGENT_HOOK_TOKEN" \
+  -H "X-Acorn-Agent-Hook-Token: $hook_token" \
   -d "$payload" \
-  "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
+  "$hook_url" >/dev/null 2>&1 || true
 "#;
 
 const ANTIGRAVITY_WRAPPER_BODY: &str = r#"#!/bin/sh
@@ -299,10 +338,14 @@ if [ -z "$REAL_BIN" ]; then
   exit 127
 fi
 
-if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
-   [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] &&
-   [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
+# Hook channel is available when the endpoint file exists (rewritten by each
+# app launch with the current server URL + token) or the spawn-time env pair
+# is present. The session id has no file fallback — without it, events cannot
+# be attributed to a session.
+if [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] &&
    [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] &&
+   { [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ] ||
+     { [ -n "${ACORN_AGENT_HOOK_URL-}" ] && [ -n "${ACORN_AGENT_HOOK_TOKEN-}" ]; }; } &&
    [ -x "$ACORN_AGENT_WRAPPER_DIR/acorn-antigravity-notify" ]; then
   _acorn_start_ts=$(date +%s 2>/dev/null || echo 0)
   (
@@ -372,20 +415,72 @@ case "$event" in
     ;;
 esac
 
-[ -n "${ACORN_AGENT_HOOK_URL-}" ] || exit 0
-[ -n "${ACORN_AGENT_HOOK_TOKEN-}" ] || exit 0
+# Resolve the hook endpoint at send time. Each app launch rewrites the
+# endpoint file with that run's server URL + token (the hook server binds a
+# fresh port and token per run), so an agent session that outlives an app
+# restart keeps reaching the *current* server. The spawn-time env vars are
+# only a fallback for when the file is missing.
+hook_url=""
+hook_token=""
+if [ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && [ -r "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" ]; then
+  hook_url=$(sed -n '1p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null || true)
+  hook_token=$(sed -n '2p' "$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint" 2>/dev/null || true)
+fi
+if [ -z "$hook_url" ] || [ -z "$hook_token" ]; then
+  hook_url="${ACORN_AGENT_HOOK_URL-}"
+  hook_token="${ACORN_AGENT_HOOK_TOKEN-}"
+fi
+[ -n "$hook_url" ] || exit 0
+[ -n "$hook_token" ] || exit 0
 [ -n "${ACORN_AGENT_HOOK_SESSION_ID-}" ] || exit 0
 
 payload=$(printf '{"session_id":"%s","provider":"antigravity","event":"%s","source":"hook"}' "$ACORN_AGENT_HOOK_SESSION_ID" "$event")
 curl -sf -X POST \
   -H 'Content-Type: application/json' \
-  -H "X-Acorn-Agent-Hook-Token: $ACORN_AGENT_HOOK_TOKEN" \
+  -H "X-Acorn-Agent-Hook-Token: $hook_token" \
   -d "$payload" \
-  "$ACORN_AGENT_HOOK_URL" >/dev/null 2>&1 || true
+  "$hook_url" >/dev/null 2>&1 || true
 "#;
 
 pub fn ensure_agent_wrapper_dir() -> io::Result<PathBuf> {
     ensure_agent_wrapper_dir_at(&acorn_daemon::paths::data_dir()?)
+}
+
+/// Publish the hook server's current URL + token where the notify scripts
+/// resolve them at send time. The hook server binds a fresh ephemeral port
+/// and token on every app launch, but agent PTYs (daemon-managed ones
+/// especially) outlive the app — their spawn-time `ACORN_AGENT_HOOK_URL`/
+/// `ACORN_AGENT_HOOK_TOKEN` env goes stale on the first restart and every
+/// event they emit afterwards would hit a dead port. Routing each POST
+/// through this file keeps surviving sessions attached to the current
+/// server. Two lines: URL, then token, trailing newline.
+pub fn write_agent_hook_endpoint(url: &str, token: &str) -> io::Result<PathBuf> {
+    let dir = ensure_agent_wrapper_dir()?;
+    write_agent_hook_endpoint_at(&dir, url, token)
+}
+
+fn write_agent_hook_endpoint_at(dir: &Path, url: &str, token: &str) -> io::Result<PathBuf> {
+    let path = dir.join(HOOK_ENDPOINT_NAME);
+    let tmp = dir.join(format!("{HOOK_ENDPOINT_NAME}.tmp"));
+    fs::write(&tmp, format!("{url}\n{token}\n"))?;
+    // The token authorizes status-event POSTs for any session id; keep it
+    // owner-readable only, like an SSH key. Set perms before the rename so
+    // the file is never observable in a looser mode.
+    #[cfg(unix)]
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+    // Atomic rename — a notify script reading mid-publish sees either the
+    // previous endpoint or the new one, never a torn file.
+    fs::rename(&tmp, &path)?;
+    Ok(path)
+}
+
+/// Best-effort removal of a stale endpoint file. Called when this run has no
+/// hook server: a leftover file from a previous run would otherwise win over
+/// the env fallback in the notify scripts and swallow events silently.
+pub fn remove_agent_hook_endpoint() {
+    if let Ok(base) = acorn_daemon::paths::data_dir() {
+        let _ = fs::remove_file(base.join(WRAPPER_DIR_NAME).join(HOOK_ENDPOINT_NAME));
+    }
 }
 
 fn ensure_agent_wrapper_dir_at(base: &Path) -> io::Result<PathBuf> {
@@ -644,6 +739,83 @@ mod tests {
                 notify.contains(&format!("event=\"{acorn_event}\"")),
                 "notify missing acorn event mapping {acorn_event}"
             );
+        }
+    }
+
+    #[test]
+    fn writes_hook_endpoint_file_atomically_with_owner_only_perms() {
+        let base = ScratchDir::new("endpoint");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        let path =
+            write_agent_hook_endpoint_at(&dir, "http://127.0.0.1:12345/agent-hook", "tok-1")
+                .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "http://127.0.0.1:12345/agent-hook\ntok-1\n"
+        );
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "endpoint file must be 0600");
+        }
+
+        // A relaunch overwrites with the new run's endpoint.
+        write_agent_hook_endpoint_at(&dir, "http://127.0.0.1:54321/agent-hook", "tok-2").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "http://127.0.0.1:54321/agent-hook\ntok-2\n"
+        );
+        assert!(
+            !dir.join(format!("{HOOK_ENDPOINT_NAME}.tmp")).exists(),
+            "publish must not leave the temp file behind"
+        );
+    }
+
+    #[test]
+    fn notify_scripts_resolve_endpoint_file_before_env() {
+        let base = ScratchDir::new("endpoint-notify");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        for name in [
+            "acorn-claude-notify",
+            "acorn-codex-notify",
+            "acorn-antigravity-notify",
+        ] {
+            let notify = fs::read_to_string(dir.join(name)).unwrap();
+            assert!(
+                notify.contains("$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint"),
+                "{name} must read the endpoint file"
+            );
+            // The POST goes to the resolved values, not the spawn-time env —
+            // stale env from before an app restart must not win over the file.
+            assert!(
+                notify.contains("\"$hook_url\""),
+                "{name} must POST to the resolved url"
+            );
+            assert!(
+                notify.contains("X-Acorn-Agent-Hook-Token: $hook_token"),
+                "{name} must send the resolved token"
+            );
+            // Env fallback stays for the no-file case.
+            assert!(notify.contains("hook_url=\"${ACORN_AGENT_HOOK_URL-}\""));
+            assert!(notify.contains("hook_token=\"${ACORN_AGENT_HOOK_TOKEN-}\""));
+        }
+    }
+
+    #[test]
+    fn wrappers_activate_hooks_on_endpoint_file_without_env_pair() {
+        let base = ScratchDir::new("endpoint-gate");
+        let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
+
+        for name in ["claude", "codex", "agy"] {
+            let wrapper = fs::read_to_string(dir.join(name)).unwrap();
+            assert!(
+                wrapper.contains("[ -r \"$ACORN_AGENT_WRAPPER_DIR/agent-hook-endpoint\" ] ||"),
+                "{name} wrapper must accept the endpoint file as a hook channel"
+            );
+            // Session id has no file fallback — it stays a hard requirement.
+            assert!(wrapper.contains("[ -n \"${ACORN_AGENT_HOOK_SESSION_ID-}\" ] &&"));
         }
     }
 
