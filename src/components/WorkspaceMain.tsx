@@ -17,6 +17,7 @@ import {
   BarChart3,
   Bot,
   ChevronDown,
+  Clock,
   Columns3,
   Copy,
   FolderOpen,
@@ -52,7 +53,6 @@ import {
 import { useSettings } from "../lib/settings";
 import { useTranslation } from "../lib/useTranslation";
 import {
-  KANBAN_COLUMN_STATUSES,
   KANBAN_COLUMN_DEFAULT_WIDTH,
   clampKanbanColumnWidth,
   defaultKanbanColumnWidths,
@@ -65,6 +65,17 @@ import {
   type KanbanBoardPrefs,
   type KanbanSortMode,
 } from "../lib/kanbanBoard";
+import {
+  EMPTY_KANBAN_STAGE_CONTEXT,
+  KANBAN_LIFECYCLE_STAGES,
+  deriveKanbanStage,
+  formatKanbanDwell,
+  isKanbanSessionStalled,
+  updateKanbanStageDwell,
+  type KanbanLifecycleStage,
+  type KanbanStageContext,
+  type KanbanStageDwell,
+} from "../lib/kanbanLifecycle";
 import {
   selectSessionsById,
   useAppStore,
@@ -85,15 +96,26 @@ const STATUS_TONE: Record<SessionStatus, StatusTone> = {
   completed: "success",
 };
 
-// Pair each column status (ordered by the board library) with its UI tone, so
-// the column order has a single source of truth in `kanbanBoard.ts`.
+const KANBAN_STAGE_TONE: Record<KanbanLifecycleStage, StatusTone> = {
+  idle: "neutral",
+  working: "accent",
+  waiting: "warning",
+  review: "success",
+  done: "neutral",
+};
+
+// Pair each lifecycle stage (ordered by `kanbanLifecycle.ts`, the single
+// source of truth for column order) with its UI tone.
 const KANBAN_COLUMNS: ReadonlyArray<{
-  status: SessionStatus;
+  stage: KanbanLifecycleStage;
   tone: StatusTone;
-}> = KANBAN_COLUMN_STATUSES.map((status) => ({
-  status,
-  tone: STATUS_TONE[status],
+}> = KANBAN_LIFECYCLE_STAGES.map((stage) => ({
+  stage,
+  tone: KANBAN_STAGE_TONE[stage],
 }));
+
+/** Re-render cadence for dwell labels and stall detection. */
+const KANBAN_CLOCK_TICK_MS = 30_000;
 
 const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
   idle: "text-fg-muted",
@@ -226,14 +248,66 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
     [filterQuery, sessions, sortMode],
   );
 
-  const sessionsByStatus = useMemo(() => {
-    const grouped = new Map<SessionStatus, Session[]>();
-    for (const { status } of KANBAN_COLUMNS) grouped.set(status, []);
+  // Clock for dwell labels and stall badges. Coarse on purpose — nothing on
+  // the board needs sub-30s freshness.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const handle = window.setInterval(
+      () => setNow(Date.now()),
+      KANBAN_CLOCK_TICK_MS,
+    );
+    return () => window.clearInterval(handle);
+  }, []);
+
+  const manualDoneSessionIds = prefs.manualDoneSessionIds;
+  const stageContextBySession = useMemo(() => {
+    const manualDone = new Set(manualDoneSessionIds);
+    const contexts = new Map<string, KanbanStageContext>();
+    for (const session of sessions) {
+      contexts.set(session.id, {
+        ...EMPTY_KANBAN_STAGE_CONTEXT,
+        manualDone: manualDone.has(session.id),
+      });
+    }
+    return contexts;
+  }, [manualDoneSessionIds, sessions]);
+
+  // Stages derive from every session (not just visible ones) so filtering the
+  // board never resets a session's dwell clock.
+  const stageBySession = useMemo(() => {
+    const stages = new Map<string, KanbanLifecycleStage>();
+    for (const session of sessions) {
+      stages.set(
+        session.id,
+        deriveKanbanStage(
+          session,
+          stageContextBySession.get(session.id) ?? EMPTY_KANBAN_STAGE_CONTEXT,
+        ),
+      );
+    }
+    return stages;
+  }, [sessions, stageContextBySession]);
+
+  const dwellRef = useRef<Map<string, KanbanStageDwell>>(new Map());
+  const dwellBySession = useMemo(() => {
+    const next = updateKanbanStageDwell(
+      dwellRef.current,
+      stageBySession,
+      Date.now(),
+    );
+    dwellRef.current = next;
+    return next;
+  }, [stageBySession]);
+
+  const sessionsByStage = useMemo(() => {
+    const grouped = new Map<KanbanLifecycleStage, Session[]>();
+    for (const { stage } of KANBAN_COLUMNS) grouped.set(stage, []);
     for (const session of visibleSessions) {
-      grouped.get(session.status)?.push(session);
+      const stage = stageBySession.get(session.id);
+      if (stage) grouped.get(stage)?.push(session);
     }
     return grouped;
-  }, [visibleSessions]);
+  }, [stageBySession, visibleSessions]);
 
   const boardWidth = useMemo(
     () =>
@@ -436,10 +510,12 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
           }}
         >
           {KANBAN_COLUMNS.map((column, columnIndex) => {
-            const columnSessions = sessionsByStatus.get(column.status) ?? [];
-            const label = statusLabel(t, column.status);
+            const columnSessions = sessionsByStage.get(column.stage) ?? [];
+            const label = stageLabel(t, column.stage);
+            const needsAttention =
+              column.stage === "waiting" && columnSessions.length > 0;
             return (
-              <Fragment key={column.status}>
+              <Fragment key={column.stage}>
                 <div
                   className="h-full min-h-0 shrink-0"
                   style={{
@@ -449,19 +525,37 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                   }}
                 >
                   <section
-                    className="flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border border-border bg-bg"
+                    className={cn(
+                      "flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--acorn-pane-radius)] border bg-bg",
+                      needsAttention ? "border-warning/50" : "border-border",
+                    )}
                     aria-label={label}
-                    data-kanban-column-status={column.status}
+                    data-kanban-column-stage={column.stage}
                   >
-                    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
+                    <header
+                      className={cn(
+                        "flex h-9 shrink-0 items-center gap-2 border-b px-2.5",
+                        needsAttention
+                          ? "border-warning/40 bg-warning/10"
+                          : "border-border",
+                      )}
+                    >
                       <StatusDot
                         tone={column.tone}
-                        pulse={column.status === "running"}
+                        pulse={column.stage === "working"}
                       />
                       <h2 className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">
                         {label}
                       </h2>
-                      <span className="rounded bg-fg-muted/10 px-1.5 py-px text-[10px] tabular-nums text-fg-muted">
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-px text-[10px] tabular-nums",
+                          needsAttention
+                            ? "bg-warning/20 font-semibold text-warning"
+                            : "bg-fg-muted/10 text-fg-muted",
+                        )}
+                        data-testid={`workspace-kanban-count-${column.stage}`}
+                      >
                         {columnSessions.length}
                       </span>
                     </header>
@@ -471,6 +565,9 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                           <KanbanSessionCard
                             key={session.id}
                             session={session}
+                            stage={column.stage}
+                            dwell={dwellBySession.get(session.id) ?? null}
+                            now={now}
                             onOpen={openSessionTerminal}
                           />
                         ))
@@ -493,7 +590,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                       label,
                     )}
                     data-testid="workspace-kanban-column-resize-handle"
-                    data-kanban-resize-status={column.status}
+                    data-kanban-resize-stage={column.stage}
                     onPointerDown={(event) =>
                       startColumnResize(columnIndex, event)
                     }
@@ -726,14 +823,22 @@ function KanbanCreateSessionDropdown({ t }: { t: Translator }) {
 
 const KanbanSessionCard = memo(function KanbanSessionCard({
   session,
+  stage,
+  dwell,
+  now,
   onOpen,
 }: {
   session: Session;
+  stage: KanbanLifecycleStage;
+  dwell: KanbanStageDwell | null;
+  now: number;
   onOpen: (sessionId: string, anchor: HTMLElement) => void;
 }) {
   const t = useTranslation();
   const worktreeName = basename(session.worktree_path);
   const branchName = session.branch?.trim();
+  const stalled = isKanbanSessionStalled(session, stage, now);
+  const dwellLabel = dwell ? formatKanbanDwell(now - dwell.since) : null;
   const lastMessage =
     session.last_agent_message?.trim() || session.last_message?.trim();
   const selectSession = useAppStore((s) => s.selectSession);
@@ -927,6 +1032,14 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                 {session.name}
               </span>
             </span>
+            {stalled ? (
+              <span
+                className="shrink-0 rounded bg-danger/15 px-1 py-px text-[9px] font-semibold uppercase leading-4 tracking-wide text-danger"
+                data-testid="workspace-kanban-card-stalled"
+              >
+                {t("workspace.kanban.card.stalled")}
+              </span>
+            ) : null}
           </span>
           {lastMessage ? (
             <span
@@ -966,6 +1079,19 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
                 <span className="text-fg-muted/45">|</span>
                 <Bot size={10} className="shrink-0 text-accent" />
               </>
+            ) : null}
+            {dwellLabel ? (
+              <span
+                className="ml-auto flex shrink-0 items-center gap-1 pl-1"
+                title={t("workspace.kanban.card.dwellTitle").replace(
+                  "{duration}",
+                  dwellLabel,
+                )}
+                data-testid="workspace-kanban-card-dwell"
+              >
+                <Clock size={10} className="shrink-0" />
+                <span className="tabular-nums">{dwellLabel}</span>
+              </span>
             ) : null}
           </span>
         </button>
@@ -1653,6 +1779,21 @@ function statusLabel(t: Translator, status: SessionStatus): string {
       return t("sidebar.status.failed");
     case "completed":
       return t("sidebar.status.completed");
+  }
+}
+
+function stageLabel(t: Translator, stage: KanbanLifecycleStage): string {
+  switch (stage) {
+    case "idle":
+      return t("workspace.kanban.stage.idle");
+    case "working":
+      return t("workspace.kanban.stage.working");
+    case "waiting":
+      return t("workspace.kanban.stage.waiting");
+    case "review":
+      return t("workspace.kanban.stage.review");
+    case "done":
+      return t("workspace.kanban.stage.done");
   }
 }
 

@@ -948,6 +948,17 @@
         "openTerminal": "터미널 열기",
         "sendUnavailable": "이 세션에는 터미널을 열어 입력하세요.",
         "sendError": "메시지를 보내지 못했습니다."
+      },
+      "stage": {
+        "idle": "대기",
+        "working": "작업 중",
+        "waiting": "입력 필요",
+        "review": "리뷰",
+        "done": "완료"
+      },
+      "card": {
+        "stalled": "정체",
+        "dwellTitle": "이 컬럼에 {duration} 머무름"
       }
     }
   },
