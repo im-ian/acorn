@@ -304,6 +304,14 @@ function clickOption(label: string) {
   clickElement(option);
 }
 
+function checkboxByLabel(label: string): HTMLInputElement {
+  const input = Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+  ).find((checkbox) => checkbox.closest("label")?.textContent?.includes(label));
+  if (!input) throw new Error(`Checkbox not found: ${label}`);
+  return input;
+}
+
 function pressKey(element: HTMLElement, key: string) {
   act(() => {
     element.dispatchEvent(
@@ -426,6 +434,29 @@ describe("SettingsModal font controls", () => {
 
     expect(patchInterface).toHaveBeenCalledWith({
       defaultWorkspaceViewMode: "kanban",
+    });
+  });
+
+  it("patches the project tab priority toggle from the Interface tab", async () => {
+    const patchInterface = vi.fn();
+    useSettings.setState({
+      open: true,
+      settings: cloneSettings(),
+      patchInterface,
+    });
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SettingsModal />);
+    });
+    openInterfaceTab();
+
+    act(() => {
+      checkboxByLabel("Move needs-input and failed tabs to the top").click();
+    });
+
+    expect(patchInterface).toHaveBeenCalledWith({
+      prioritizeNeedsInputTabs: true,
     });
   });
 

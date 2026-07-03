@@ -222,6 +222,11 @@ export interface AcornSettings {
      */
     defaultWorkspaceViewMode: DefaultWorkspaceViewMode;
     /**
+     * Move project sidebar tabs that need attention ahead of idle work.
+     * The saved manual order is preserved and restored when this is off.
+     */
+    prioritizeNeedsInputTabs: boolean;
+    /**
      * Initial placement for terminal popovers opened from kanban cards.
      * Users can still drag the popover after it opens.
      */
@@ -482,6 +487,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   language: "en",
   interface: {
     defaultWorkspaceViewMode: "panes",
+    prioritizeNeedsInputTabs: false,
     kanbanTerminalPopoverPlacement: "card",
     kanbanTerminalPopoverDefaultSize: "custom",
   },
@@ -991,6 +997,10 @@ function loadSettings(): AcornSettings {
           interfaceRaw.defaultWorkspaceViewMode,
           DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode,
         ),
+        prioritizeNeedsInputTabs:
+          typeof interfaceRaw.prioritizeNeedsInputTabs === "boolean"
+            ? interfaceRaw.prioritizeNeedsInputTabs
+            : DEFAULT_SETTINGS.interface.prioritizeNeedsInputTabs,
         kanbanTerminalPopoverPlacement:
           normalizeKanbanTerminalPopoverPlacement(
             interfaceRaw.kanbanTerminalPopoverPlacement,
@@ -1301,6 +1311,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
                   patch.defaultWorkspaceViewMode,
                   s.settings.interface.defaultWorkspaceViewMode,
                 ),
+          prioritizeNeedsInputTabs:
+            patch.prioritizeNeedsInputTabs === undefined
+              ? s.settings.interface.prioritizeNeedsInputTabs
+              : patch.prioritizeNeedsInputTabs,
           kanbanTerminalPopoverPlacement:
             patch.kanbanTerminalPopoverPlacement === undefined
               ? s.settings.interface.kanbanTerminalPopoverPlacement
