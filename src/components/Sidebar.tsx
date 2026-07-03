@@ -99,6 +99,13 @@ import {
   type ProjectFolderProjectGroup,
 } from "../lib/projectFolders";
 import {
+  buildProjectTopLevelItems,
+  orderProjectTopLevelItems,
+  orderSessionsByPriority,
+  type ProjectTopLevelFolderItem,
+  type ProjectTopLevelSessionItem,
+} from "../lib/sidebarProjectItems";
+import {
   applySessionCreateRequest,
   buildSessionCreateRequest,
   buildSessionCreateRequestFromScope,
@@ -233,6 +240,9 @@ export function Sidebar() {
   );
   const confirmDeleteEmptyWorktreeWorkspaces = useSettings(
     (s) => s.settings.sessions.confirmDeleteEmptyWorktreeWorkspaces,
+  );
+  const prioritizeNeedsInputTabs = useSettings(
+    (s) => s.settings.interface.prioritizeNeedsInputTabs,
   );
   const deleteIsolatedWorktreesWithoutPrompt =
     !confirmDeleteIsolatedWorktrees;
@@ -1104,6 +1114,7 @@ export function Sidebar() {
                       }
                       activeProjectFolderId={activeProjectFolderId}
                       topLevelOrder={projectItemOrders[project.repoPath] ?? []}
+                      prioritizeNeedsInputTabs={prioritizeNeedsInputTabs}
                       onTitleClick={() =>
                         applyClickPlan(
                           planTitleClick({
@@ -1597,69 +1608,6 @@ function projectSessionCreateMenuForWorkspace(
   });
 }
 
-interface ProjectTopLevelSessionItem {
-  id: string;
-  type: "session";
-  session: Session;
-  folderId: string;
-}
-
-interface ProjectTopLevelFolderItem {
-  id: string;
-  type: "folder";
-  folderGroup: ProjectFolderGroup;
-}
-
-type ProjectTopLevelItem =
-  | ProjectTopLevelSessionItem
-  | ProjectTopLevelFolderItem;
-
-function buildProjectTopLevelItems(
-  project: ProjectFolderProjectGroup,
-  order: readonly string[],
-): ProjectTopLevelItem[] {
-  const defaultFolderGroup =
-    project.folders.find((folderGroup) =>
-      isDefaultProjectFolder(folderGroup.folder),
-    ) ?? project.folders[0] ?? null;
-  const directSessions: ProjectTopLevelItem[] = (
-    defaultFolderGroup?.sessions ?? []
-  ).map((session) => ({
-    id: sessionDragId(session.id),
-    type: "session",
-    session,
-    folderId:
-      defaultFolderGroup?.folder.id ?? defaultProjectFolderId(project.repoPath),
-  }));
-  const folders: ProjectTopLevelItem[] = project.folders
-    .filter((folderGroup) => !isDefaultProjectFolder(folderGroup.folder))
-    .map((folderGroup) => ({
-      id: folderDragId(folderGroup.folder.id),
-      type: "folder",
-      folderGroup,
-    }));
-  return orderProjectTopLevelItems([...directSessions, ...folders], order);
-}
-
-function orderProjectTopLevelItems(
-  items: readonly ProjectTopLevelItem[],
-  order: readonly string[],
-): ProjectTopLevelItem[] {
-  const itemById = new Map(items.map((item) => [item.id, item]));
-  const seen = new Set<string>();
-  const ordered: ProjectTopLevelItem[] = [];
-  for (const id of order) {
-    const item = itemById.get(id);
-    if (!item || seen.has(id)) continue;
-    ordered.push(item);
-    seen.add(id);
-  }
-  for (const item of items) {
-    if (!seen.has(item.id)) ordered.push(item);
-  }
-  return ordered;
-}
-
 function isSessionRowDragId(id: string): boolean {
   return (
     id.startsWith(SESSION_DRAG_PREFIX) &&
@@ -1754,6 +1702,7 @@ interface ProjectGroupViewProps {
   workspaceViewMode: WorkspaceViewMode;
   activeProjectFolderId: string | null;
   topLevelOrder: readonly string[];
+  prioritizeNeedsInputTabs: boolean;
   /** Title click: activate (preserve collapse if inactive); ensure expanded if already active. */
   onTitleClick: () => void;
   /** Chevron click: activate + toggle expand. */
@@ -1788,6 +1737,7 @@ function ProjectGroupView({
   workspaceViewMode,
   activeProjectFolderId,
   topLevelOrder,
+  prioritizeNeedsInputTabs,
   onTitleClick,
   onChevronClick,
   onActivate,
@@ -1932,8 +1882,13 @@ function ProjectGroupView({
     (folderGroup) => folderGroup.folder,
   );
   const topLevelItems = useMemo(
-    () => buildProjectTopLevelItems(project, topLevelOrder),
-    [project, topLevelOrder],
+    () =>
+      buildProjectTopLevelItems(
+        project,
+        topLevelOrder,
+        prioritizeNeedsInputTabs,
+      ),
+    [prioritizeNeedsInputTabs, project, topLevelOrder],
   );
   const topLevelItemIds = useMemo(
     () => topLevelItems.map((item) => item.id),
@@ -2192,6 +2147,7 @@ function ProjectGroupView({
                     collapsed={collapsedFolderIds.has(
                       item.folderGroup.folder.id,
                     )}
+                    prioritizeNeedsInputTabs={prioritizeNeedsInputTabs}
                     onToggleFolder={() =>
                       onToggleFolder(item.folderGroup.folder.id)
                     }
@@ -2238,6 +2194,7 @@ interface ProjectFolderViewProps {
   activeSessionId: string | null;
   active: boolean;
   collapsed: boolean;
+  prioritizeNeedsInputTabs: boolean;
   onToggleFolder: () => void;
   onActivate: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -2258,6 +2215,7 @@ function ProjectFolderView({
   activeSessionId,
   active,
   collapsed,
+  prioritizeNeedsInputTabs,
   onToggleFolder,
   onActivate,
   onSelectSession,
@@ -2299,9 +2257,14 @@ function ProjectFolderView({
     transform: CSS.Transform.toString(transform),
     transition,
   };
+  const orderedSessions = useMemo(
+    () =>
+      orderSessionsByPriority(folderGroup.sessions, prioritizeNeedsInputTabs),
+    [folderGroup.sessions, prioritizeNeedsInputTabs],
+  );
   const sessionIds = useMemo(
-    () => folderGroup.sessions.map((s) => sessionDragId(s.id)),
-    [folderGroup.sessions],
+    () => orderedSessions.map((s) => sessionDragId(s.id)),
+    [orderedSessions],
   );
   const folderCreateMenu = useMemo(
     () => projectSessionCreateMenuForWorkspace(folder, true),
@@ -2597,7 +2560,7 @@ function ProjectFolderView({
                 {sidebarText(t, "sidebar.emptyProjectFolder.noSessions")}
               </li>
             ) : (
-              folderGroup.sessions.map((session) => (
+              orderedSessions.map((session) => (
                 <SessionRow
                   key={session.id}
                   session={session}

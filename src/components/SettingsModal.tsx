@@ -1182,6 +1182,13 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
           }
           t={t}
         />
+        <ProjectTabPrioritySection
+          value={settings.interface.prioritizeNeedsInputTabs}
+          onChange={(prioritizeNeedsInputTabs) =>
+            patchInterface({ prioritizeNeedsInputTabs })
+          }
+          t={t}
+        />
       </div>
       <KanbanTerminalPopoverSettings
         placement={settings.interface.kanbanTerminalPopoverPlacement}
@@ -1195,6 +1202,33 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
         t={t}
       />
     </section>
+  );
+}
+
+function ProjectTabPrioritySection({
+  value,
+  onChange,
+  t,
+}: {
+  value: boolean;
+  onChange: (value: boolean) => void;
+  t: SettingsTranslator;
+}) {
+  return (
+    <Field
+      label={st(t, "settings.interface.projectTabs.label")}
+      hint={st(t, "settings.interface.projectTabs.hint")}
+    >
+      <CheckboxRow
+        label={st(t, "settings.interface.projectTabs.priority.label")}
+        description={st(
+          t,
+          "settings.interface.projectTabs.priority.description",
+        )}
+        checked={value}
+        onChange={onChange}
+      />
+    </Field>
   );
 }
 

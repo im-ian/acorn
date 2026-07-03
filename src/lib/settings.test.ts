@@ -96,6 +96,7 @@ describe("interface settings", () => {
 
   it("defaults new workspaces to pane mode", () => {
     expect(DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode).toBe("panes");
+    expect(DEFAULT_SETTINGS.interface.prioritizeNeedsInputTabs).toBe(false);
     expect(
       DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement,
     ).toBe("card");
@@ -110,6 +111,7 @@ describe("interface settings", () => {
       JSON.stringify({
         interface: {
           defaultWorkspaceViewMode: "kanban",
+          prioritizeNeedsInputTabs: true,
           kanbanTerminalPopoverPlacement: "center",
           kanbanTerminalPopoverDefaultSize: "fullscreen",
         },
@@ -122,6 +124,9 @@ describe("interface settings", () => {
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(true);
     expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
@@ -138,6 +143,7 @@ describe("interface settings", () => {
       JSON.stringify({
         interface: {
           defaultWorkspaceViewMode: "grid",
+          prioritizeNeedsInputTabs: "yes",
           kanbanTerminalPopoverPlacement: "dock",
           kanbanTerminalPopoverDefaultSize: "huge",
         },
@@ -150,6 +156,9 @@ describe("interface settings", () => {
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("panes");
+    expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(false);
     expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
@@ -168,12 +177,16 @@ describe("interface settings", () => {
       .getState()
       .patchInterface({
         defaultWorkspaceViewMode: "kanban",
+        prioritizeNeedsInputTabs: true,
         kanbanTerminalPopoverPlacement: "center",
         kanbanTerminalPopoverDefaultSize: "fullscreen",
       });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(true);
     expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
@@ -199,6 +212,9 @@ describe("interface settings", () => {
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
     ).toBe("kanban");
+    expect(
+      useSettings.getState().settings.interface.prioritizeNeedsInputTabs,
+    ).toBe(true);
     expect(
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverPlacement,
