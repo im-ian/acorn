@@ -352,6 +352,7 @@ pub fn daemon_adopt_session(
         position: None,
         daemon_session_id: Some(id),
         agent_resume_token: Some(id.to_string()),
+        hook_active: false,
         in_worktree: false,
         agent_provider: None,
         agent_transcript_id: None,

@@ -42,17 +42,22 @@ ZDOTDIR=$_acorn_zd_save
 unset -f _acorn_realpath
 unset _acorn_zd_save _acorn_user_zd _acorn_zd_real _acorn_user_zd_real
 
-# Re-prepend Acorn-managed PATH entries if the user's rc replaced
-# PATH wholesale. Idempotent — duplicate entries are skipped.
-_acorn_prepend_path() {
-    case ":$PATH:" in
-        *":$1:"*) ;;
-        *) PATH=$1${PATH:+:$PATH} ;;
-    esac
+# Force Acorn-managed PATH entries to the FRONT after the user's rc
+# runs. Mere presence is not enough for the agent-wrapper shims: a user
+# rc that prepends its own entries (`~/.local/bin`, nvm, homebrew — the
+# usual `export PATH="…:$PATH"` patterns) leaves the shim dir in PATH
+# but buried behind a dir that also ships `claude`/`codex`/`agy`, so the
+# real binary wins the lookup and hook injection silently never happens.
+# Front placement is what makes the shim intercept. Idempotent — an
+# already-first entry is left alone, buried duplicates are collapsed.
+# (`$path` is zsh's array view of `$PATH`; `${path:#$1}` drops every
+# element equal to `$1`.)
+_acorn_force_path_front() {
+    path=("$1" ${path:#$1})
 }
-[ -n "${ACORN_CLI_DIR-}" ] && _acorn_prepend_path "$ACORN_CLI_DIR"
-[ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && _acorn_prepend_path "$ACORN_AGENT_WRAPPER_DIR"
-unset -f _acorn_prepend_path
+[ -n "${ACORN_CLI_DIR-}" ] && _acorn_force_path_front "$ACORN_CLI_DIR"
+[ -n "${ACORN_AGENT_WRAPPER_DIR-}" ] && _acorn_force_path_front "$ACORN_AGENT_WRAPPER_DIR"
+unset -f _acorn_force_path_front
 export PATH
 
 if [ -n "${ACORN_SESSION_ID-}" ] && [ -z "${ACORN_CONTROL_BANNER_SHOWN-}" ]; then

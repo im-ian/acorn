@@ -5034,6 +5034,36 @@ fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
     hook_active && live_agent
 }
 
+/// Recover a turn boundary that was crossed while the app was closed.
+///
+/// `hook_active` persists across restarts, so right after boot the poll
+/// already defers to the persisted hook-set status. But a hooked agent whose
+/// turn *ended* while no app instance was listening lost that turn-end event
+/// forever — the store still says Running and, since a resting agent emits no
+/// further events, nothing would ever correct it. Until the first hook event
+/// of this run confirms the channel, allow exactly the one transition hooks
+/// can no longer report: Running → NeedsInput backed by a real turn-complete
+/// marker in the transcript.
+///
+/// One-directional on purpose: while the app is closed nobody can submit a
+/// prompt to the session, so NeedsInput → Running cannot happen offline and a
+/// stale-tail Running must never demote a persisted resting status. Once an
+/// event lands this run (`hook_confirmed_this_run`), hooks own both
+/// directions again and this reconciliation switches off — leaving it open
+/// in-run would recreate the UserPromptSubmit-vs-stale-tail race the full
+/// hook deference exists to close.
+fn hook_boot_reconciled_status(
+    stored: SessionStatus,
+    hook_confirmed_this_run: bool,
+    detection: session_status::StatusDetection,
+) -> Option<SessionStatus> {
+    (!hook_confirmed_this_run
+        && stored == SessionStatus::Running
+        && detection.status == SessionStatus::NeedsInput
+        && detection.reason == Some(SessionStatusReason::TurnComplete))
+    .then_some(SessionStatus::NeedsInput)
+}
+
 fn detect_session_statuses_blocking(
     state: AppState,
     ids: Vec<String>,
@@ -5228,10 +5258,28 @@ fn detect_session_statuses_blocking(
             // I/O, and reusing the `previous` captured before that I/O would
             // clobber the newer hook status back to an old value.
             let status = if defer_to_hook {
-                parsed_id
+                let stored = parsed_id
                     .and_then(|uuid| state.sessions.get(&uuid).ok())
                     .map(|s| s.status)
-                    .unwrap_or(previous)
+                    .unwrap_or(previous);
+                // A turn that ended while the app was closed lost its
+                // turn-end hook event; recover it from the transcript until
+                // the first event of this run re-confirms the channel (see
+                // `hook_boot_reconciled_status`). The this-run flag is read
+                // here — after the poll's I/O — so an event landing during
+                // that window disables the recovery before it can clobber
+                // the fresher hook write.
+                let reconciled = parsed_id.and_then(|uuid| {
+                    hook_boot_reconciled_status(
+                        stored,
+                        state.sessions.is_hook_confirmed_this_run(&uuid),
+                        detection,
+                    )
+                });
+                if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
+                    let _ = state.sessions.refresh_status(&uuid, reconciled);
+                }
+                reconciled.unwrap_or(stored)
             } else {
                 detection.status
             };
@@ -6233,6 +6281,81 @@ mod tests {
         // before hooks registered) — the transcript poll is the only signal.
         assert!(!poll_defers_to_hook(false, true));
         assert!(!poll_defers_to_hook(false, false));
+    }
+
+    #[test]
+    fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
+        // Persisted hook status says Running, no event has confirmed the
+        // channel this run, and the transcript holds a real turn-complete
+        // marker — the turn ended while nobody was listening.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::NeedsInput,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Running,
+                false,
+                detection
+            ),
+            Some(acorn_session::SessionStatus::NeedsInput)
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
+        // An event reached this run's hook server — hooks own both directions
+        // again; re-opening the transcript passthrough would recreate the
+        // UserPromptSubmit-vs-stale-tail race.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::NeedsInput,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Running,
+                true,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_never_demotes_a_resting_status() {
+        // Nobody can submit a prompt while the app is closed, so a persisted
+        // NeedsInput can only be stale in the direction hooks will re-report;
+        // a stale-tail reading must not touch it.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Running,
+            reason: None,
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::NeedsInput,
+                false,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_requires_a_turn_complete_marker() {
+        // A shell-prompt NeedsInput hint is not evidence the agent's turn
+        // ended — only a transcript turn-complete marker flips Running.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::NeedsInput,
+            reason: Some(super::SessionStatusReason::ShellPrompt),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Running,
+                false,
+                detection
+            ),
+            None
+        );
     }
 
     #[test]
