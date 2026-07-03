@@ -74,6 +74,7 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
+import { suggestDefaultSessionName } from "../lib/sessionName";
 import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import {
   hasRecordedWorktree,
@@ -644,8 +645,12 @@ export function Sidebar() {
           : kind === "control"
             ? sidebarText(t, "sidebar.dialog.selectControlDirectory")
             : sidebarText(t, "sidebar.dialog.selectDirectory");
+        const name =
+          !isolated && kind === "regular"
+            ? suggestDefaultSessionName(sessions)
+            : "";
         const created = await api.createSessionFromDialog(
-          "",
+          name,
           isolated,
           kind,
           null,

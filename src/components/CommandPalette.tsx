@@ -29,6 +29,7 @@ import {
   buildSessionCreateRequest,
   resolveActiveSessionScope,
 } from "../lib/sessionCreation";
+import { suggestDefaultSessionName } from "../lib/sessionName";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
 
@@ -102,7 +103,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
       if (!scope) {
         const created = await api.createSessionFromDialog(
-          "",
+          suggestDefaultSessionName(state.sessions),
           false,
           "regular",
           null,

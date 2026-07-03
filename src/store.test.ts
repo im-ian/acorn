@@ -3262,7 +3262,7 @@ describe("auto initial session on first project add", () => {
 
     expect(mockApi.createSession).toHaveBeenCalledTimes(1);
     expect(mockApi.createSession).toHaveBeenCalledWith(
-      "repo-b",
+      "new session",
       REPO_B,
       false,
       "regular",
@@ -3281,7 +3281,7 @@ describe("auto initial session on first project add", () => {
 
     expect(mockApi.createSession).toHaveBeenCalledTimes(1);
     expect(mockApi.createSession).toHaveBeenCalledWith(
-      "repo-b",
+      "new session",
       REPO_B,
       false,
       "regular",
