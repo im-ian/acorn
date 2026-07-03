@@ -388,7 +388,7 @@ describe("Pane empty state", () => {
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "repo",
+      "new session",
       REPO,
       false,
       "regular",
@@ -399,7 +399,7 @@ describe("Pane empty state", () => {
   it("starts empty-pane project sessions at the project root from an active worktree workspace", async () => {
     const folderId = `project-folder:${REPO}:feature`;
     const created = session("new-session", {
-      name: "repo",
+      name: "new session",
       worktree_path: REPO,
       branch: "main",
       in_worktree: false,
@@ -459,7 +459,7 @@ describe("Pane empty state", () => {
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "repo",
+      "new session",
       REPO,
       false,
       "regular",
@@ -476,7 +476,7 @@ describe("Pane empty state", () => {
       in_worktree: true,
     });
     const created = session("new-session", {
-      name: "repo",
+      name: "new session",
       repo_path: REPO,
       worktree_path: REPO,
       branch: "main",
@@ -502,7 +502,7 @@ describe("Pane empty state", () => {
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "repo",
+      "new session",
       REPO,
       false,
       "regular",
@@ -525,7 +525,7 @@ describe("Pane empty state", () => {
       title: "Worker Summary",
     });
     const created = session("new-session", {
-      name: "repo",
+      name: "new session",
       repo_path: REPO,
       worktree_path: REPO,
       branch: "main",
@@ -581,7 +581,7 @@ describe("Pane empty state", () => {
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "repo",
+      "new session",
       REPO,
       false,
       "regular",
@@ -591,7 +591,7 @@ describe("Pane empty state", () => {
 
   it("keeps tab-strip double-click creation in linked work summary local scope", async () => {
     const local = session("local-session", {
-      name: "terminal",
+      name: "new session",
       repo_path: HOME,
       worktree_path: HOME,
       project_scoped: false,
@@ -609,7 +609,7 @@ describe("Pane empty state", () => {
       title: "Local Summary",
     });
     const created = session("local-session-2", {
-      name: "terminal-2",
+      name: "new session-1",
       repo_path: HOME,
       worktree_path: HOME,
       project_scoped: false,
@@ -668,7 +668,7 @@ describe("Pane empty state", () => {
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "terminal-2",
+      "new session-1",
       HOME,
       false,
       "regular",
@@ -679,13 +679,13 @@ describe("Pane empty state", () => {
 
   it("keeps tab-strip double-click creation in local chat scope", async () => {
     const local = session("local-session", {
-      name: "terminal",
+      name: "new session",
       repo_path: HOME,
       worktree_path: HOME,
       project_scoped: false,
     });
     const created = session("local-session-2", {
-      name: "terminal-2",
+      name: "new session-1",
       repo_path: HOME,
       worktree_path: HOME,
       project_scoped: false,
@@ -739,7 +739,7 @@ describe("Pane empty state", () => {
 
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "terminal-2",
+      "new session-1",
       HOME,
       false,
       "regular",
@@ -755,7 +755,7 @@ describe("Pane empty state", () => {
       title: "Work Summary",
     });
     const created = session("new-session", {
-      name: "repo",
+      name: "new session",
       repo_path: REPO,
       worktree_path: REPO,
       branch: "main",
@@ -803,7 +803,7 @@ describe("Pane empty state", () => {
     });
 
     expect(mocks.createSession).toHaveBeenCalledWith(
-      "repo",
+      "new session",
       REPO,
       false,
       "regular",

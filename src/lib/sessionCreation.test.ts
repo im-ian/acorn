@@ -274,7 +274,7 @@ describe("session creation policy", () => {
   it("builds local session requests with local naming", () => {
     const sessions = [
       session("local", "/Users/me", {
-        name: "terminal",
+        name: "new session",
         project_scoped: false,
       }),
     ];
@@ -285,7 +285,7 @@ describe("session creation policy", () => {
         { repoPath: "/Users/me", projectScoped: false },
       ),
     ).toMatchObject({
-      name: "terminal-2",
+      name: "new session-1",
       repoPath: "/Users/me",
       cwdPath: "/Users/me",
       projectScoped: false,
