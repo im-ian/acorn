@@ -74,6 +74,14 @@
         "label": "Default workspace mode",
         "hint": "Mode used when Acorn creates a new project workspace. Existing project-specific choices stay unchanged."
       },
+      "projectTabs": {
+        "label": "Project tabs",
+        "hint": "Controls the order of sessions and workspaces inside each project in the left sidebar.",
+        "priority": {
+          "label": "Move needs-input and failed tabs to the top",
+          "description": "Keeps your manual order saved, but displays tabs waiting on you or blocked by errors ahead of idle work."
+        }
+      },
       "kanbanTerminalPopover": {
         "title": "Kanban terminal popover",
         "description": "Controls where card terminals open and how large they start.",

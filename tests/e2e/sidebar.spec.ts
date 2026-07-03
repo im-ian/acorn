@@ -3583,4 +3583,199 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(projects.first()).toHaveAccessibleName("Project alpha");
     await expect(projects.last()).toHaveAccessibleName("Project beta");
   });
+
+  test("settings can move needs-input and failed project tabs to the top", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "idle-session",
+        name: "idle",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "idle",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "failed-session",
+        name: "failed",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "failed",
+        created_at: "2026-01-01T00:00:01Z",
+        updated_at: "2026-01-01T00:00:01Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+      {
+        id: "needs-session",
+        name: "needs",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "needs_input",
+        created_at: "2026-01-01T00:00:02Z",
+        updated_at: "2026-01-01T00:00:02Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        owner: { kind: "user" },
+        position: 2,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("reorder_sessions", (args) => {
+      const order = Array.isArray(args?.order) ? args.order : [];
+      const indexById = new Map(order.map((id, index) => [id, index]));
+      return [
+        {
+          id: "idle-session",
+          name: "idle",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "idle",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: indexById.get("idle-session") ?? 0,
+          in_worktree: false,
+        },
+        {
+          id: "failed-session",
+          name: "failed",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "failed",
+          created_at: "2026-01-01T00:00:01Z",
+          updated_at: "2026-01-01T00:00:01Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: indexById.get("failed-session") ?? 1,
+          in_worktree: false,
+        },
+        {
+          id: "needs-session",
+          name: "needs",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "needs_input",
+          created_at: "2026-01-01T00:00:02Z",
+          updated_at: "2026-01-01T00:00:02Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          owner: { kind: "user" },
+          position: indexById.get("needs-session") ?? 2,
+          in_worktree: false,
+        },
+      ];
+    });
+
+    await page.goto("/");
+
+    const sidebar = page.locator("aside");
+    const idle = sidebar.getByRole("button", { name: /^idle main · Idle/ });
+    const failed = sidebar.getByRole("button", {
+      name: /^failed main · Failed/,
+    });
+    const needs = sidebar.getByRole("button", {
+      name: /^needs main · Needs input/,
+    });
+
+    await expect
+      .poll(async () => {
+        const idleBox = await idle.boundingBox();
+        const failedBox = await failed.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!idleBox || !failedBox || !needsBox) return "missing";
+        return idleBox.y < failedBox.y && failedBox.y < needsBox.y
+          ? "saved-order"
+          : "different";
+      })
+      .toBe("saved-order");
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings
+      .getByRole("checkbox", {
+        name: /Move needs-input and failed tabs to the top/,
+      })
+      .click();
+    await page.keyboard.press("Escape");
+
+    await expect
+      .poll(async () => {
+        const idleBox = await idle.boundingBox();
+        const failedBox = await failed.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!idleBox || !failedBox || !needsBox) return "missing";
+        return failedBox.y < needsBox.y && needsBox.y < idleBox.y
+          ? "priority-order"
+          : "different";
+      })
+      .toBe("priority-order");
+
+    await dragBetween(page, needs, failed);
+    await pressHotkey(page, { mod: true, key: "," });
+    await settings
+      .getByRole("checkbox", {
+        name: /Move needs-input and failed tabs to the top/,
+      })
+      .click();
+    await page.keyboard.press("Escape");
+
+    await expect
+      .poll(async () => {
+        const idleBox = await idle.boundingBox();
+        const failedBox = await failed.boundingBox();
+        const needsBox = await needs.boundingBox();
+        if (!idleBox || !failedBox || !needsBox) return "missing";
+        return idleBox.y < needsBox.y && needsBox.y < failedBox.y
+          ? "manual-order"
+          : "different";
+      })
+      .toBe("manual-order");
+  });
 });
