@@ -300,6 +300,14 @@ pub struct Session {
     /// worktrees when added.
     #[serde(default, skip_deserializing)]
     pub in_worktree: bool,
+    /// Whether this session has ever reported an agent lifecycle hook event.
+    /// Persisted so hook ownership of the status survives an app restart: a
+    /// daemon-managed PTY outlives the app, and its resting hook-set status
+    /// (`needs_input`) must not be clobbered back to Running by the
+    /// transcript-tail poll before the agent emits its first event to the
+    /// new app instance (a resting agent may never emit one).
+    #[serde(default)]
+    pub hook_active: bool,
     /// Derived from status polling. This reflects the currently live
     /// Claude/Codex/Antigravity process under the session PTY and is not
     /// persisted in sessions.json.
@@ -342,6 +350,7 @@ impl Session {
             position: None,
             daemon_session_id: None,
             agent_resume_token: None,
+            hook_active: false,
             in_worktree: false,
             agent_provider: None,
             agent_transcript_id: None,
@@ -353,15 +362,23 @@ impl Session {
 pub struct SessionStore {
     inner: DashMap<Uuid, Session>,
     /// Sessions that reported at least one agent lifecycle hook event
-    /// (Start/Stop/NeedsInput/Error) this run. Runtime-only, never persisted.
-    /// The status poll consults this to decide whether hooks own the
+    /// (Start/Stop/NeedsInput/Error) *this run*. Runtime-only. The status
+    /// poll consults hook activity to decide whether hooks own the
     /// Running/NeedsInput/Completed classification: once a session proves its
     /// hook channel is live, the transcript-tail poll stops second-guessing
     /// turn completion (a long or tool-heavy Claude turn often leaves no
     /// `end_turn` line inside the tail window, so the tail keeps reading
     /// Running long after the turn ended) and only keeps ownership of the
     /// Idle (process-gone) edge, which no hook reports.
-    hook_active: DashSet<Uuid>,
+    ///
+    /// Hook activity itself also persists across restarts via the session's
+    /// `hook_active` field; this set distinguishes "confirmed live this run"
+    /// (an event actually arrived at this app instance's hook server) from
+    /// "was hook-owned before the restart", which the poll's boot
+    /// reconciliation needs — a turn that ended while the app was closed
+    /// lost its turn-end event forever and must be recovered from the
+    /// transcript exactly once.
+    hook_confirmed: DashSet<Uuid>,
 }
 
 impl SessionStore {
@@ -433,14 +450,39 @@ impl SessionStore {
 
     /// Record that `id` reported an agent lifecycle hook event, marking its
     /// hook channel live so the status poll defers turn-boundary
-    /// classification to hooks (see the `hook_active` field). Idempotent.
+    /// classification to hooks (see the `hook_confirmed` field). Also stamps
+    /// the session's persisted `hook_active` flag so hook ownership survives
+    /// an app restart. Idempotent.
     pub fn mark_hook_active(&self, id: &Uuid) {
-        self.hook_active.insert(*id);
+        self.hook_confirmed.insert(*id);
+        if let Some(mut entry) = self.inner.get_mut(id) {
+            if !entry.hook_active {
+                // Deliberately no `updated_at` bump — hook telemetry must
+                // not reshuffle the sidebar's most-recent-first ordering.
+                entry.hook_active = true;
+            }
+        }
     }
 
-    /// Whether `id` has reported any agent lifecycle hook event this run.
+    /// Whether `id` has ever reported an agent lifecycle hook event — either
+    /// this run or (via the persisted `hook_active` session flag) in a
+    /// previous one.
     pub fn is_hook_active(&self, id: &Uuid) -> bool {
-        self.hook_active.contains(id)
+        self.hook_confirmed.contains(id)
+            || self
+                .inner
+                .get(id)
+                .map(|entry| entry.hook_active)
+                .unwrap_or(false)
+    }
+
+    /// Whether `id` reported an agent lifecycle hook event *this run* — an
+    /// event actually reached this app instance's hook server. False right
+    /// after a restart even for sessions whose persisted `hook_active` flag
+    /// is set; the status poll uses that gap to reconcile a turn boundary
+    /// that was crossed while the app was closed.
+    pub fn is_hook_confirmed_this_run(&self, id: &Uuid) -> bool {
+        self.hook_confirmed.contains(id)
     }
 
     /// Refresh derived live-agent metadata without bumping `updated_at`.
@@ -591,7 +633,7 @@ impl SessionStore {
     }
 
     pub fn remove(&self, id: &Uuid) -> SessionResult<Session> {
-        self.hook_active.remove(id);
+        self.hook_confirmed.remove(id);
         self.inner
             .remove(id)
             .map(|(_, v)| v)
@@ -686,15 +728,52 @@ mod tests {
         let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
 
         assert!(!store.is_hook_active(&session.id));
+        assert!(!store.is_hook_confirmed_this_run(&session.id));
 
         store.mark_hook_active(&session.id);
         assert!(store.is_hook_active(&session.id));
+        assert!(store.is_hook_confirmed_this_run(&session.id));
         // Idempotent.
         store.mark_hook_active(&session.id);
         assert!(store.is_hook_active(&session.id));
 
         store.remove(&session.id).expect("session exists");
         assert!(!store.is_hook_active(&session.id));
+        assert!(!store.is_hook_confirmed_this_run(&session.id));
+    }
+
+    #[test]
+    fn hook_activity_persists_on_session_and_survives_reload() {
+        let store = SessionStore::new();
+        let session = store.insert(fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false));
+
+        store.mark_hook_active(&session.id);
+        let marked = store.get(&session.id).expect("session exists");
+        assert!(marked.hook_active);
+
+        // Simulate an app restart: serialize, load into a fresh store.
+        let json = serde_json::to_string(&marked).expect("session serializes");
+        let reloaded: Session = serde_json::from_str(&json).expect("session deserializes");
+        let fresh = SessionStore::new();
+        fresh.insert(reloaded);
+
+        // Hook ownership survives the restart, but no event has been
+        // confirmed against the new run's hook server yet.
+        assert!(fresh.is_hook_active(&session.id));
+        assert!(!fresh.is_hook_confirmed_this_run(&session.id));
+    }
+
+    #[test]
+    fn sessions_persisted_before_hook_active_field_load_as_inactive() {
+        let session = fake_session("/tmp/acorn-repo", "/tmp/acorn-repo", false);
+        let mut value = serde_json::to_value(&session).expect("session serializes");
+        value
+            .as_object_mut()
+            .expect("session is an object")
+            .remove("hook_active");
+        let reloaded: Session =
+            serde_json::from_value(value).expect("legacy session deserializes");
+        assert!(!reloaded.hook_active);
     }
 
     #[test]
