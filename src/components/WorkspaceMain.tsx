@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -22,6 +23,7 @@ import {
   Clock,
   Columns3,
   Copy,
+  CornerDownLeft,
   FolderOpen,
   GitBranch,
   GitPullRequest,
@@ -287,19 +289,31 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
   );
 
   const manualDoneSessionIds = prefs.manualDoneSessionIds;
+  const manualDoneSet = useMemo(
+    () => new Set(manualDoneSessionIds),
+    [manualDoneSessionIds],
+  );
+  const toggleManualDone = useCallback((sessionId: string) => {
+    setPrefs((current) => {
+      const ids = new Set(current.manualDoneSessionIds);
+      if (ids.has(sessionId)) ids.delete(sessionId);
+      else ids.add(sessionId);
+      return { ...current, manualDoneSessionIds: [...ids] };
+    });
+  }, []);
+
   const stageContextBySession = useMemo(() => {
-    const manualDone = new Set(manualDoneSessionIds);
     const contexts = new Map<string, KanbanStageContext>();
     for (const session of sessions) {
       const data = boardData.get(session.id);
       contexts.set(session.id, {
         pr: data?.pr ?? null,
         hasDiff: data?.hasDiff ?? false,
-        manualDone: manualDone.has(session.id),
+        manualDone: manualDoneSet.has(session.id),
       });
     }
     return contexts;
-  }, [boardData, manualDoneSessionIds, sessions]);
+  }, [boardData, manualDoneSet, sessions]);
 
   // Stages derive from every session (not just visible ones) so filtering the
   // board never resets a session's dwell clock.
@@ -598,8 +612,10 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                             dwell={dwellBySession.get(session.id) ?? null}
                             data={boardData.get(session.id) ?? null}
                             now={now}
+                            manualDone={manualDoneSet.has(session.id)}
                             onOpen={openSessionTerminal}
                             onOpenPullRequest={openPullRequestDetail}
+                            onToggleManualDone={toggleManualDone}
                           />
                         ))
                       ) : (
@@ -864,16 +880,20 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
   dwell,
   data,
   now,
+  manualDone,
   onOpen,
   onOpenPullRequest,
+  onToggleManualDone,
 }: {
   session: Session;
   stage: KanbanLifecycleStage;
   dwell: KanbanStageDwell | null;
   data: KanbanSessionBoardData | null;
   now: number;
+  manualDone: boolean;
   onOpen: (sessionId: string, anchor: HTMLElement) => void;
   onOpenPullRequest: (repoPath: string, number: number) => void;
+  onToggleManualDone: (sessionId: string) => void;
 }) {
   const t = useTranslation();
   const worktreeName = basename(session.worktree_path);
@@ -916,7 +936,14 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
     openContextMenu(event.clientX, event.clientY);
   }
 
-  function handleOpen(event: ReactMouseEvent<HTMLButtonElement>) {
+  function handleOpen(event: ReactMouseEvent<HTMLElement>) {
+    onOpen(session.id, event.currentTarget);
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
     onOpen(session.id, event.currentTarget);
   }
 
@@ -949,6 +976,13 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               console.error("[WorkspaceMain] open work summary failed", err);
             });
         },
+      },
+      {
+        label: manualDone
+          ? t("workspace.kanban.actions.restoreFromDone")
+          : t("workspace.kanban.actions.markAsDone"),
+        icon: <CheckCircle2 size={12} />,
+        onClick: () => onToggleManualDone(session.id),
       },
       ...(canConfigureAutoClose
         ? [
@@ -1022,7 +1056,9 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
       autoCloseEnabled,
       canConfigureAutoClose,
       editorConfigured,
+      manualDone,
       onOpen,
+      onToggleManualDone,
       openLabel,
       openWorkSummaryTab,
       requestRemoveSession,
@@ -1056,14 +1092,20 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
         multiline
         className="flex w-full"
       >
-        <button
-          type="button"
+        {/*
+          Not a <button>: the waiting-stage quick-reply nests a real <input>,
+          and interactive content inside a button is invalid and breaks focus.
+        */}
+        <div
+          role="button"
+          tabIndex={0}
           data-testid="workspace-kanban-card"
           data-kanban-session-id={session.id}
           onClick={handleOpen}
+          onKeyDown={handleKeyDown}
           onPointerDown={handlePointerDown}
           onContextMenu={handleContextMenu}
-          className="group flex w-full flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="group flex w-full cursor-pointer flex-col gap-2 rounded-md border border-border bg-bg-elevated/45 p-2 text-left transition hover:border-accent/45 hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           aria-label={openLabel}
         >
           <span className="flex min-w-0 items-start gap-1.5">
@@ -1160,7 +1202,10 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
               </span>
             ) : null}
           </span>
-        </button>
+          {stage === "waiting" && session.mode !== "chat" ? (
+            <KanbanQuickReply t={t} sessionId={session.id} />
+          ) : null}
+        </div>
       </Tooltip>
       <ContextMenu
         open={menu !== null}
@@ -1175,7 +1220,7 @@ const KanbanSessionCard = memo(function KanbanSessionCard({
 
 /**
  * Compact PR pill on a kanban card: state-tinted PR icon, number, and a CI
- * rollup glyph. Rendered inside the card's root `<button>`, so it stops
+ * rollup glyph. Rendered inside the card's clickable root, so it stops
  * pointer/click propagation and acts as its own keyboard target.
  */
 function KanbanPullRequestChip({
@@ -1232,6 +1277,86 @@ function KanbanPullRequestChip({
           <CheckCircle2 size={10} className="shrink-0 text-success" />
         )
       ) : null}
+    </span>
+  );
+}
+
+/**
+ * Inline reply box on Waiting cards. Writes straight to the session PTY with
+ * a trailing `\r` (what xterm sends for Enter — `\n` would land as a literal
+ * LF in the line buffer instead of submitting). Terminal-mode sessions only;
+ * the caller hides this for chat sessions.
+ */
+function KanbanQuickReply({
+  t,
+  sessionId,
+}: {
+  t: Translator;
+  sessionId: string;
+}) {
+  const [value, setValue] = useState("");
+  const [sending, setSending] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function send() {
+    const text = value.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setFailed(false);
+    try {
+      await api.ptyWrite(sessionId, `${text}\r`);
+      setValue("");
+    } catch (err) {
+      console.error("[WorkspaceMain] kanban quick reply failed", err);
+      setFailed(true);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <span
+      className="flex items-center gap-1"
+      data-testid="workspace-kanban-card-quick-reply"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <input
+        value={value}
+        onChange={(event) => {
+          setValue(event.currentTarget.value);
+          if (failed) setFailed(false);
+        }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            void send();
+          }
+        }}
+        disabled={sending}
+        aria-label={t("workspace.kanban.quickReply.label")}
+        aria-invalid={failed || undefined}
+        placeholder={
+          failed
+            ? t("workspace.kanban.quickReply.error")
+            : t("workspace.kanban.quickReply.placeholder")
+        }
+        className={cn(
+          "h-6 min-w-0 flex-1 rounded border bg-bg px-1.5 text-[11px] text-fg outline-none transition placeholder:text-fg-muted/60 focus:border-warning/60 focus:ring-1 focus:ring-warning/40",
+          failed ? "border-danger/60 placeholder:text-danger/80" : "border-border",
+        )}
+      />
+      <button
+        type="button"
+        onClick={() => void send()}
+        disabled={sending || value.trim().length === 0}
+        aria-label={t("workspace.kanban.quickReply.send")}
+        className="inline-flex h-6 shrink-0 items-center justify-center rounded border border-border bg-bg px-1.5 text-fg-muted transition hover:border-warning/50 hover:text-fg disabled:cursor-default disabled:opacity-45"
+      >
+        <CornerDownLeft size={11} />
+      </button>
     </span>
   );
 }
