@@ -135,7 +135,7 @@ export function WhatsNewModal({
             label={dt(t, "dialogs.whatsNew.loadingReleaseNotes")}
           />
         ) : trimmedBody.length > 0 ? (
-          <Markdown content={trimmedBody} className="text-xs" />
+          <Markdown content={trimmedBody} className="text-xs" softBreaks />
         ) : error ? null : (
           <p className="text-xs text-fg-muted">
             {dt(t, "dialogs.whatsNew.noReleaseNotes")}
