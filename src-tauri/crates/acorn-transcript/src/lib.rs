@@ -199,9 +199,10 @@ fn collect_mappings_cached(
     mappings
 }
 
-/// Resolve the provider conversation id created by a completed one-shot
-/// agent run. Native chat uses this after non-interactive CLI calls that
-/// create provider-side transcripts but do not print their id on stdout.
+/// Resolve the provider conversation id created by an agent run in `cwd`.
+/// Native chat uses this after non-interactive one-shot CLI calls that
+/// create provider-side transcripts but do not print their id on stdout;
+/// the path-returning sibling below also serves live processes.
 ///
 /// The helper intentionally returns `None` for ambiguous matches instead
 /// of guessing. A wrong provider cursor would silently resume another chat,

@@ -5496,6 +5496,10 @@ fn refine_shell_hint_for_unpaired_agent(
 /// the process's own cwd and start time under the conservative
 /// single-candidate policy, and persist the marker so title generation and
 /// resume converge on the same binding.
+///
+/// Known limitation: the single-candidate policy has no `assigned`-set
+/// reservation, so two codex processes in the same cwd stay ambiguous and
+/// the fallback fails safe to `None` rather than guessing.
 fn codex_live_transcript_fallback(
     sys: &System,
     session_id: Option<Uuid>,
@@ -5549,6 +5553,13 @@ fn codex_live_transcript_fallback(
     })
 }
 
+/// Resolve the nearest live agent process under `root`, with its pid.
+///
+/// `found_pid` rides side-channel out of the closure; the pairing with the
+/// returned kind is only sound because `nearest_agent_kind_in_tree` stops at
+/// the FIRST `Some` the callback yields (see its doc). If that traversal ever
+/// keeps scanning past a match, refactor the callback to return
+/// `Option<(StatusAgentKind, Pid)>` instead of relying on this capture.
 fn live_agent_in_descendants(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
@@ -5599,6 +5610,10 @@ fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
         || process_basename_matches(proc, "SkyComputerUseClient")
 }
 
+/// BFS from `root` that returns on the FIRST pid the callback classifies.
+/// `live_agent_in_descendants` depends on this early-return to pair its
+/// side-channel pid with the returned kind — keep the invariant if this
+/// traversal ever grows ranking or multi-match behavior.
 fn nearest_agent_kind_in_tree<F>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,

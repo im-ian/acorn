@@ -314,6 +314,44 @@ mod tests {
         assert_eq!(pids[0].root_pid, Some(10));
     }
 
+    /// `bind_marker_in_state_dir` backs both the background tick and the
+    /// status poll's codex fallback: it must create a fresh marker, stay
+    /// idempotent on the same uuid, and move forward to a new uuid.
+    #[test]
+    fn bind_marker_writes_and_stays_idempotent() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-bindmk-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("codex.id");
+
+        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-aaaa-76b0-8410-2e073b38a2c1")
+            .unwrap();
+        assert_eq!(
+            read_trimmed(&marker).as_deref(),
+            Some("019e2001-aaaa-76b0-8410-2e073b38a2c1"),
+            "first bind must create the marker"
+        );
+
+        let mtime_before = fs::metadata(&marker).unwrap().modified().unwrap();
+        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-aaaa-76b0-8410-2e073b38a2c1")
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&marker).unwrap().modified().unwrap(),
+            mtime_before,
+            "same-uuid rebind must not rewrite the marker"
+        );
+
+        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-bbbb-76b0-8410-2e073b38a2c2")
+            .unwrap();
+        assert_eq!(
+            read_trimmed(&marker).as_deref(),
+            Some("019e2001-bbbb-76b0-8410-2e073b38a2c2"),
+            "a new uuid must replace the marker"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Forward birth-order moves always pass; a backwards move passes
     /// only while the older transcript is being actively written (a real
     /// `--resume`), and is skipped once it has gone dormant (the
