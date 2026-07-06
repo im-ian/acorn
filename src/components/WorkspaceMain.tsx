@@ -187,6 +187,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
   const selectSession = useAppStore((s) => s.selectSession);
   const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
+  const terminalPopupSessionId = useAppStore((s) => s.terminalPopupSessionId);
   const [prefs, setPrefs] = useState<KanbanBoardPrefs>(() =>
     readKanbanBoardPrefs(projectId),
   );
@@ -267,6 +268,31 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
       pendingPrefsWriteRef.current?.();
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (!terminalPopupSessionId) {
+      setTerminalPopover((current) => (current ? null : current));
+      return;
+    }
+    if (
+      !visibleSessions.some(
+        (session) => session.id === terminalPopupSessionId,
+      )
+    ) {
+      return;
+    }
+    const anchor = document.querySelector<HTMLElement>(
+      `[data-kanban-session-id="${cssAttributeEscape(terminalPopupSessionId)}"]`,
+    );
+    if (!anchor) return;
+    anchor.scrollIntoView({ block: "nearest", inline: "nearest" });
+    setTerminalPopover((current) =>
+      current?.sessionId === terminalPopupSessionId &&
+      current.anchor === anchor
+        ? current
+        : { sessionId: terminalPopupSessionId, anchor },
+    );
+  }, [terminalPopupSessionId, visibleSessions]);
 
   useEffect(() => {
     if (!terminalPopover) return;

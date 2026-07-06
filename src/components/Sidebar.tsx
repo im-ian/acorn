@@ -5,11 +5,13 @@ import {
   CheckCheck,
   ChevronRight,
   Copy,
+  ExternalLink,
   Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
   GitFork,
+  GitPullRequest,
   Home,
   LayoutPanelLeft,
   MessageSquareText,
@@ -24,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   useCallback,
   useEffect,
@@ -77,6 +80,12 @@ import {
   canRegenerateSessionTitle,
   canRenameSession,
 } from "../lib/sessionTitle";
+import {
+  currentPullRequestSearchQuery,
+  findCurrentPullRequestForBranch,
+  summarizeAllSessionProcesses,
+  summarizeSessionProcesses,
+} from "../lib/sessionContext";
 import { suggestDefaultSessionName } from "../lib/sessionName";
 import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import {
@@ -135,6 +144,7 @@ import type {
   SessionMode,
   SessionNotification,
   SessionNotificationKind,
+  SessionPullRequestSummary,
   SessionStatus,
 } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -189,6 +199,16 @@ const SESSION_FOLDER_DROP_PREFIX = `${SESSION_DRAG_PREFIX}folder:`;
 const SESSION_PROJECT_DROP_PREFIX = `${SESSION_DRAG_PREFIX}project:`;
 const LOCAL_SESSION_ROOT_DROP_ID = "__local-session-root__";
 const LOCAL_TERMINAL_AREA_SELECTOR = "[data-local-terminal-area='true']";
+const CURRENT_PR_CACHE_TTL_MS = 60_000;
+const CURRENT_PR_EMPTY_RETRY_MS = 15_000;
+
+type CurrentPullRequestCacheEntry = {
+  value: SessionPullRequestSummary | null;
+  expiresAt: number;
+  promise?: Promise<SessionPullRequestSummary | null>;
+};
+
+const currentPullRequestCache = new Map<string, CurrentPullRequestCacheEntry>();
 
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 
@@ -229,6 +249,106 @@ function contextMenuGroupTitle(
 
 function statusLabel(t: Translator, status: SessionStatus): string {
   return sidebarText(t, `sidebar.status.${status}`);
+}
+
+function currentPullRequestCacheKey(repoPath: string, branch: string): string {
+  return `${repoPath}\u0000${branch}`;
+}
+
+function loadCurrentPullRequest(
+  repoPath: string,
+  branch: string,
+): Promise<SessionPullRequestSummary | null> {
+  const key = currentPullRequestCacheKey(repoPath, branch);
+  const now = Date.now();
+  const cached = currentPullRequestCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.promise ?? Promise.resolve(cached.value);
+  }
+
+  const query = currentPullRequestSearchQuery(branch);
+  if (!query) return Promise.resolve(null);
+
+  const promise = api
+    .listPullRequests(repoPath, "open", 10, query)
+    .then((listing) => findCurrentPullRequestForBranch(listing, branch))
+    .catch(() => null);
+
+  currentPullRequestCache.set(key, {
+    value: cached?.value ?? null,
+    expiresAt: now + CURRENT_PR_CACHE_TTL_MS,
+    promise,
+  });
+
+  return promise.then((value) => {
+    currentPullRequestCache.set(key, {
+      value,
+      expiresAt:
+        Date.now() +
+        (value ? CURRENT_PR_CACHE_TTL_MS : CURRENT_PR_EMPTY_RETRY_MS),
+    });
+    return value;
+  });
+}
+
+function useCurrentPullRequest(
+  session: Session,
+): SessionPullRequestSummary | null {
+  const branch = session.branch.trim();
+  const repoPath =
+    session.git_context_path?.trim() ||
+    session.worktree_path ||
+    session.repo_path;
+  const cacheKey = branch ? currentPullRequestCacheKey(repoPath, branch) : null;
+  const [lookupAttempt, setLookupAttempt] = useState(0);
+  const [currentPullRequest, setCurrentPullRequest] =
+    useState<SessionPullRequestSummary | null>(() =>
+      cacheKey ? (currentPullRequestCache.get(cacheKey)?.value ?? null) : null,
+    );
+
+  useEffect(() => {
+    const query = currentPullRequestSearchQuery(branch);
+    if (!branch || !cacheKey || !query) {
+      setCurrentPullRequest(null);
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimer: number | null = null;
+    const scheduleEmptyRetry = (value: SessionPullRequestSummary | null) => {
+      if (value || cancelled) return;
+      retryTimer = window.setTimeout(() => {
+        if (!cancelled) setLookupAttempt((attempt) => attempt + 1);
+      }, CURRENT_PR_EMPTY_RETRY_MS);
+    };
+    const cached = currentPullRequestCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      setCurrentPullRequest(cached.value);
+      if (!cached.promise) {
+        scheduleEmptyRetry(cached.value);
+        return () => {
+          cancelled = true;
+          if (retryTimer !== null) window.clearTimeout(retryTimer);
+        };
+      }
+    } else {
+      setCurrentPullRequest(cached?.value ?? null);
+    }
+
+    loadCurrentPullRequest(repoPath, branch).then((value) => {
+      if (!cancelled) {
+        setCurrentPullRequest(value);
+        scheduleEmptyRetry(value);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [branch, cacheKey, lookupAttempt, repoPath]);
+
+  return currentPullRequest;
 }
 
 function isLocalTerminalAreaFocused(): boolean {
@@ -1416,6 +1536,7 @@ function SessionRowPreview({
         session={session}
         titleText={titleText}
         metadataText={metadataText}
+        currentPullRequest={null}
         showKindIcons={sessionDisplay.icons.sessionKind}
         t={t}
         onSubmitRename={() => undefined}
@@ -2668,6 +2789,7 @@ function SessionRow({
     isWorktreeWorkspace(currentProjectFolder) &&
     normalizeWorkspacePath(session.worktree_path) ===
       normalizeWorkspacePath(currentWorkspaceCwd);
+  const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
     t,
@@ -2682,7 +2804,7 @@ function SessionRow({
     },
   );
   const hoverDetails = sessionDisplay.showDetailsOnHover
-    ? buildSessionHoverDetails(t, session)
+    ? buildSessionHoverDetails(t, session, currentPullRequest)
     : null;
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
@@ -3097,6 +3219,7 @@ function SessionRow({
         session={session}
         titleText={titleText}
         metadataText={metadataText}
+        currentPullRequest={currentPullRequest}
         showKindIcons={sessionDisplay.icons.sessionKind}
         hideWorktreeIcon={hideWorkspaceDuplicateContext}
         t={t}
@@ -3158,6 +3281,7 @@ interface SessionRowLabelProps {
   session: Session;
   titleText: string;
   metadataText: string;
+  currentPullRequest: SessionPullRequestSummary | null;
   showKindIcons: boolean;
   hideWorktreeIcon?: boolean;
   t: Translator;
@@ -3170,6 +3294,7 @@ function SessionRowLabel({
   session,
   titleText,
   metadataText,
+  currentPullRequest,
   showKindIcons,
   hideWorktreeIcon = false,
   t,
@@ -3182,6 +3307,8 @@ function SessionRowLabel({
   // in which case `liveInWorktree[id]` is `undefined`.
   const liveInWorktree = useAppStore((s) => s.liveInWorktree[session.id]);
   const inWorktree = liveInWorktree ?? hasRecordedWorktree(session);
+  const processSummary = summarizeSessionProcesses(session.active_processes);
+  const hasContextMetadata = Boolean(currentPullRequest || processSummary);
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex h-5 items-center gap-1">
@@ -3212,8 +3339,49 @@ function SessionRowLabel({
         ) : null}
       </span>
       {metadataText ? (
-        <span className="block truncate text-[11px] text-fg-muted">
+        <span
+          data-session-base-metadata="true"
+          className="block truncate text-[11px] text-fg-muted"
+        >
           {metadataText}
+        </span>
+      ) : null}
+      {hasContextMetadata ? (
+        <span
+          data-session-context-metadata="true"
+          className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-fg-muted"
+        >
+          {currentPullRequest ? (
+            <button
+              type="button"
+              aria-label={`${sidebarText(t, "sidebar.metadata.openPullRequest")} #${currentPullRequest.number}`}
+              title={currentPullRequest.title}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+              onKeyUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                void openUrl(currentPullRequest.url).catch((err: unknown) => {
+                  console.error("[Sidebar] open PR URL failed", err);
+                });
+              }}
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-accent underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+            >
+              <span>{`PR #${currentPullRequest.number}`}</span>
+              <ExternalLink size={9} aria-hidden className="opacity-80" />
+            </button>
+          ) : null}
+          {currentPullRequest && processSummary ? (
+            <span aria-hidden className="shrink-0 text-fg-muted/70">
+              ·
+            </span>
+          ) : null}
+          {processSummary ? (
+            <span className="min-w-0 truncate font-mono">
+              {processSummary}
+            </span>
+          ) : null}
         </span>
       ) : null}
     </span>
@@ -3777,6 +3945,7 @@ function SidebarActivityRow({
 }) {
   const t = useTranslation();
   const selectSession = useAppStore((s) => s.selectSession);
+  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const markRead = useAppStore((s) => s.markSessionNotificationRead);
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
@@ -3784,6 +3953,9 @@ function SidebarActivityRow({
   const openSession = () => {
     markRead(notification.id);
     selectSession(notification.sessionId);
+    if (useAppStore.getState().workspaceViewMode === "kanban") {
+      openTerminalPopup(notification.sessionId);
+    }
   };
 
   return (
@@ -4174,6 +4346,7 @@ function LocalSessionRow({
     (s) => s.toggleSessionAutoClose,
   );
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
+  const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
   const metadataText = composeSessionMetadata(
     t,
@@ -4184,7 +4357,7 @@ function LocalSessionRow({
     ? resolveSessionAgentProvider(session)
     : null;
   const hoverDetails = sessionDisplay.showDetailsOnHover
-    ? buildSessionHoverDetails(t, session)
+    ? buildSessionHoverDetails(t, session, currentPullRequest)
     : null;
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
@@ -4367,6 +4540,7 @@ function LocalSessionRow({
         session={session}
         titleText={titleText}
         metadataText={metadataText}
+        currentPullRequest={currentPullRequest}
         showKindIcons={sessionDisplay.icons.sessionKind}
         t={t}
         onSubmitRename={async (next) => {
@@ -4467,9 +4641,16 @@ function composeSessionMetadata(
   return parts.join(" · ");
 }
 
-function buildSessionHoverDetails(t: Translator, session: Session): ReactNode {
+function buildSessionHoverDetails(
+  t: Translator,
+  session: Session,
+  currentPullRequest: SessionPullRequestSummary | null = null,
+): ReactNode {
   const branch =
     session.branch || sidebarText(t, "sidebar.metadata.detached");
+  const processSummary = summarizeAllSessionProcesses(
+    session.active_processes,
+  );
 
   return (
     <span className="flex w-72 max-w-full flex-col gap-1.5">
@@ -4484,12 +4665,28 @@ function buildSessionHoverDetails(t: Translator, session: Session): ReactNode {
         value={branch}
         valueClassName="font-mono"
       />
+      {currentPullRequest ? (
+        <SessionHoverDetailRow
+          icon={<GitPullRequest size={12} />}
+          iconClassName="text-accent"
+          label={sidebarText(t, "sidebar.metadata.openPullRequest")}
+          value={`#${currentPullRequest.number} ${currentPullRequest.title}`}
+        />
+      ) : null}
       <SessionHoverDetailRow
         icon={<Folder size={12} />}
         label={sidebarText(t, "sidebar.metadata.workingDirectory")}
         value={session.worktree_path}
         valueClassName="break-all font-mono"
       />
+      {processSummary ? (
+        <SessionHoverDetailRow
+          icon={<Activity size={12} />}
+          label={sidebarText(t, "sidebar.metadata.processes")}
+          value={processSummary}
+          valueClassName="font-mono"
+        />
+      ) : null}
       <SessionHoverDetailRow
         icon={<Activity size={12} />}
         iconClassName={STATUS_ICON[session.status]}

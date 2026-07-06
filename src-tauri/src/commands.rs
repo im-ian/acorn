@@ -4923,17 +4923,30 @@ pub struct SessionStatusEntry {
     pub last_agent_message: Option<String>,
     pub agent_provider: Option<SessionAgentProvider>,
     pub agent_transcript_id: Option<String>,
+    pub active_processes: Vec<SessionProcessSummary>,
     /// Current branch read live from the session's worktree on each poll.
     /// `None` when the worktree has no readable HEAD (e.g. detached, or
     /// path was deleted out from under acorn). Lets the frontend reflect
     /// `git checkout` performed inside the session without requiring a
     /// manual refresh.
     pub branch: Option<String>,
+    /// Git workdir that produced `branch`. This may differ from the
+    /// recorded session worktree when a shell has `cd`'d into another
+    /// repo/worktree; consumers that query git/GitHub should keep the
+    /// branch and repo path paired.
+    pub git_context_path: Option<String>,
     /// Auto-title opt-in after this poll. Carries the promotion performed
     /// when an agent transcript is first detected (see
     /// `auto_title_promotion_needed`) so the frontend planner becomes
     /// eligible without waiting for the next full session refresh.
     pub auto_title_enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SessionProcessSummary {
+    pub pid: u32,
+    pub name: String,
+    pub depth: u32,
 }
 
 /// A session created as a plain terminal starts with
@@ -4985,6 +4998,16 @@ fn collapse_status_preview(s: &str) -> Option<String> {
         ""
     };
     Some(format!("{truncated}{suffix}"))
+}
+
+fn git_context_for_path(path: &std::path::Path) -> Option<(String, String)> {
+    let branch = worktree::current_branch(path).ok()?;
+    let repo = worktree::ensure_repo(path).ok()?;
+    let workdir = repo.workdir()?;
+    let root = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
+    Some((branch, root.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -5116,9 +5139,13 @@ fn detect_session_statuses_blocking(
                 .map(|s| s.status)
                 .unwrap_or(SessionStatus::Idle);
             if matches!(session.as_ref().map(|s| s.mode), Some(SessionMode::Chat)) {
-                let branch = session
+                let git_context = session
                     .as_ref()
-                    .and_then(|s| worktree::current_branch(&s.worktree_path).ok());
+                    .and_then(|s| git_context_for_path(&s.worktree_path));
+                let branch = git_context
+                    .as_ref()
+                    .map(|(branch, _)| branch.clone());
+                let git_context_path = git_context.map(|(_, path)| path);
                 let conversation_preview = persistence::load_chat_session_state(&id)
                     .ok()
                     .map(|state| chat_conversation_preview(&state));
@@ -5139,7 +5166,9 @@ fn detect_session_statuses_blocking(
                     agent_transcript_id: session
                         .as_ref()
                         .and_then(|s| s.agent_transcript_id.clone()),
+                    active_processes: Vec::new(),
                     branch,
+                    git_context_path,
                     auto_title_enabled: session.as_ref().and_then(|s| s.auto_title_enabled),
                 };
             }
@@ -5174,6 +5203,9 @@ fn detect_session_statuses_blocking(
                 }
             });
             let root_pid_value = root_pid.map(|(pid, _)| pid);
+            let active_processes = root_pid_value
+                .map(|pid| session_process_summaries(&sys, &children, Pid::from_u32(pid)))
+                .unwrap_or_default();
             let live_agent_kind = root_pid_value.and_then(|pid| {
                 live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
             });
@@ -5298,14 +5330,17 @@ fn detect_session_statuses_blocking(
             //     performed inside the terminal (and `claude -w` worktrees)
             //  2. recorded session worktree_path — fallback when no live PTY
             //     or descendant cwd lies outside any git repo
-            let live_cwd_branch = root_pid_value
+            let live_git_context = root_pid_value
                 .and_then(|pid| deepest_descendant_cwd(&sys, Pid::from_u32(pid)))
-                .and_then(|p| worktree::current_branch(std::path::Path::new(&p)).ok());
-            let branch = live_cwd_branch.or_else(|| {
-                session
-                    .as_ref()
-                    .and_then(|s| worktree::current_branch(&s.worktree_path).ok())
-            });
+                .and_then(|p| git_context_for_path(std::path::Path::new(&p)));
+            let fallback_git_context = session
+                .as_ref()
+                .and_then(|s| git_context_for_path(&s.worktree_path));
+            let git_context = live_git_context.or(fallback_git_context);
+            let branch = git_context
+                .as_ref()
+                .map(|(branch, _)| branch.clone());
+            let git_context_path = git_context.map(|(_, path)| path);
             // Mirror the detected status into the in-memory store so persisted
             // sessions reflect liveness on next save. Best-effort: ignore errors
             // (e.g. UUID parse failure for a stale id from the frontend).
@@ -5338,7 +5373,9 @@ fn detect_session_statuses_blocking(
                     .and_then(|p| p.last_agent_message.clone()),
                 agent_provider,
                 agent_transcript_id,
+                active_processes,
                 branch,
+                git_context_path,
                 auto_title_enabled,
             }
         })
@@ -5567,6 +5604,52 @@ fn has_live_descendant(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> bool {
     children.get(&root).is_some_and(|direct| !direct.is_empty())
 }
 
+fn session_process_summaries(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> Vec<SessionProcessSummary> {
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&root) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct.into_iter().map(|pid| (pid, 1)));
+    }
+
+    let mut summaries = Vec::new();
+    let mut fallback = Vec::new();
+    while let Some((pid, depth)) = queue.pop_front() {
+        if let Some(proc) = sys.process(pid) {
+            let summary = SessionProcessSummary {
+                pid: pid.as_u32(),
+                name: process_display_name(proc),
+                depth,
+            };
+            if is_session_process_noise(&summary.name) {
+                fallback.push(summary);
+            } else {
+                summaries.push(summary);
+            }
+        }
+        if let Some(kids) = children.get(&pid) {
+            let mut kids = kids.clone();
+            kids.sort_by_key(|child| child.as_u32());
+            queue.extend(kids.into_iter().map(|child| (child, depth + 1)));
+        }
+    }
+
+    if summaries.is_empty() {
+        fallback
+    } else {
+        summaries
+    }
+}
+
+fn is_session_process_noise(name: &str) -> bool {
+    let base = basename(name).trim_matches(&['(', ')'][..]);
+    matches!(base, "sh" | "bash" | "zsh" | "tail")
+}
+
 #[cfg(test)]
 mod status_hint_tests {
     use super::*;
@@ -5720,6 +5803,14 @@ mod status_hint_tests {
             |pid| pid == codex,
             |pid| pid == helper,
         ));
+    }
+
+    #[test]
+    fn session_process_noise_filters_shell_wrappers() {
+        assert!(is_session_process_noise("(zsh)"));
+        assert!(is_session_process_noise("tail"));
+        assert!(!is_session_process_noise("codex"));
+        assert!(!is_session_process_noise("rg"));
     }
 }
 

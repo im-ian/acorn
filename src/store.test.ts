@@ -2213,6 +2213,40 @@ describe("pollSessionStatuses", () => {
     );
   });
 
+  it("merges active process summaries from status polling", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, {
+          status: "running",
+          active_processes: [{ pid: 10, name: "node", depth: 1 }],
+        }),
+      ],
+    );
+    mockApi.detectSessionStatuses.mockResolvedValueOnce([
+      {
+        id: "a1",
+        status: "running",
+        branch: null,
+        git_context_path: "/repo/acorn-worktree",
+        active_processes: [
+          { pid: 11, name: "codex", depth: 2 },
+          { pid: 12, name: "rg", depth: 3 },
+        ],
+      },
+    ]);
+
+    await useAppStore.getState().pollSessionStatuses(["a1"]);
+
+    expect(useAppStore.getState().sessions[0]?.active_processes).toEqual([
+      { pid: 11, name: "codex", depth: 2 },
+      { pid: 12, name: "rg", depth: 3 },
+    ]);
+    expect(useAppStore.getState().sessions[0]?.git_context_path).toBe(
+      "/repo/acorn-worktree",
+    );
+  });
+
   it("merges last messages from status polling even when status is unchanged", async () => {
     await seed(
       [project(REPO_A, 0)],

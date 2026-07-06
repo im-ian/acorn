@@ -1203,9 +1203,11 @@ test.describe("right panel: tab switching", () => {
       return null;
     });
     await tauri.handle("list_pull_requests", (args) => {
-      const w = window as unknown as { __prRepoPaths?: string[] };
-      w.__prRepoPaths = w.__prRepoPaths ?? [];
-      w.__prRepoPaths.push((args as { repoPath: string }).repoPath);
+      const w = window as unknown as {
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
+      };
+      w.__prCalls = w.__prCalls ?? [];
+      w.__prCalls.push(args as { repoPath: string; query?: string | null });
       return { kind: "ok", items: [], account: null };
     });
     await tauri.handle("list_issues", (args) => {
@@ -1250,12 +1252,14 @@ test.describe("right panel: tab switching", () => {
     await page.waitForTimeout(1_500);
     const initialCalls = await page.evaluate(() => {
       const w = window as unknown as {
-        __prRepoPaths?: string[];
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
         __issueRepoPaths?: string[];
         __workflowRepoPaths?: string[];
       };
       return [
-        ...(w.__prRepoPaths ?? []),
+        ...(w.__prCalls ?? [])
+          .filter((call) => !call.query?.startsWith("head:"))
+          .map((call) => call.repoPath),
         ...(w.__issueRepoPaths ?? []),
         ...(w.__workflowRepoPaths ?? []),
       ];
@@ -1268,11 +1272,11 @@ test.describe("right panel: tab switching", () => {
 
     await page.evaluate(() => {
       const w = window as unknown as {
-        __prRepoPaths?: string[];
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
         __issueRepoPaths?: string[];
         __workflowRepoPaths?: string[];
       };
-      w.__prRepoPaths = [];
+      w.__prCalls = [];
       w.__issueRepoPaths = [];
       w.__workflowRepoPaths = [];
     });
@@ -1285,12 +1289,14 @@ test.describe("right panel: tab switching", () => {
 
     const calls = await page.evaluate(() => {
       const w = window as unknown as {
-        __prRepoPaths?: string[];
+        __prCalls?: Array<{ repoPath: string; query?: string | null }>;
         __issueRepoPaths?: string[];
         __workflowRepoPaths?: string[];
       };
       return {
-        prs: w.__prRepoPaths ?? [],
+        prs: (w.__prCalls ?? [])
+          .filter((call) => !call.query?.startsWith("head:"))
+          .map((call) => call.repoPath),
         issues: w.__issueRepoPaths ?? [],
         workflows: w.__workflowRepoPaths ?? [],
       };
