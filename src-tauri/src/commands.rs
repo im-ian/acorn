@@ -5532,6 +5532,7 @@ fn codex_live_transcript_fallback(
         &id,
     ) {
         Ok(()) => {
+            note_codex_bind_recovered(&mut codex_bind_failure_registry(), session_id);
             tracing::info!(
                 %session_id,
                 %id,
@@ -5540,10 +5541,20 @@ fn codex_live_transcript_fallback(
             );
         }
         Err(err) => {
-            tracing::warn!(
-                %session_id, %id, error = %err,
-                "status poll: codex marker fallback write failed"
-            );
+            // A persistent write failure (permissions, deleted state dir)
+            // re-enters this fallback every poll tick; warn once per
+            // failure streak, then drop to debug until a bind succeeds.
+            if note_codex_bind_failure(&mut codex_bind_failure_registry(), session_id) {
+                tracing::warn!(
+                    %session_id, %id, error = %err,
+                    "status poll: codex marker fallback write failed"
+                );
+            } else {
+                tracing::debug!(
+                    %session_id, %id, error = %err,
+                    "status poll: codex marker fallback write still failing"
+                );
+            }
         }
     }
     Some(agent_resume::LiveTranscript {
@@ -5551,6 +5562,28 @@ fn codex_live_transcript_fallback(
         path,
         kind: agent_resume::AgentKind::Codex,
     })
+}
+
+/// Sessions whose codex marker fallback already warned about a write
+/// failure this streak. Guards the poll-frequency `warn!` from repeating
+/// every tick while the failure persists.
+fn codex_bind_failure_registry() -> std::sync::MutexGuard<'static, HashSet<Uuid>> {
+    static WARNED: std::sync::OnceLock<Mutex<HashSet<Uuid>>> = std::sync::OnceLock::new();
+    WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record a fallback write failure; `true` when this is the first failure
+/// of the current streak (i.e. the caller should warn, not just debug).
+fn note_codex_bind_failure(warned: &mut HashSet<Uuid>, session_id: Uuid) -> bool {
+    warned.insert(session_id)
+}
+
+/// A successful bind ends the failure streak so the next failure warns again.
+fn note_codex_bind_recovered(warned: &mut HashSet<Uuid>, session_id: Uuid) {
+    warned.remove(&session_id);
 }
 
 /// Resolve the nearest live agent process under `root`, with its pid.
@@ -8129,6 +8162,21 @@ mod tests {
         assert!(!super::auto_title_promotion_needed(Some(true), true));
         // Legacy rows keep using compatibility heuristics.
         assert!(!super::auto_title_promotion_needed(None, true));
+    }
+
+    /// The fallback's write-failure warning must fire once per failure
+    /// streak: repeat failures drop to debug, and a successful bind
+    /// re-arms the warning for the next streak.
+    #[test]
+    fn codex_bind_failure_warns_once_per_streak() {
+        let mut warned = std::collections::HashSet::new();
+        let session_id = Uuid::from_u128(7);
+
+        assert!(super::note_codex_bind_failure(&mut warned, session_id));
+        assert!(!super::note_codex_bind_failure(&mut warned, session_id));
+
+        super::note_codex_bind_recovered(&mut warned, session_id);
+        assert!(super::note_codex_bind_failure(&mut warned, session_id));
     }
 
     #[test]
