@@ -3194,7 +3194,7 @@ describe("right panel groups", () => {
     expect(s.rightTabByGroup.github).toBe("actions");
     // Other groups untouched.
     expect(s.rightTabByGroup.code).toBe("files");
-    expect(s.rightTabByGroup.agents).toBe("activity");
+    expect(s.rightTabByGroup.agents).toBe("history");
   });
 
   it("setRightGroup restores the group's last sub-tab", () => {
