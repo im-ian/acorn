@@ -199,6 +199,45 @@ describe("notifications", () => {
     dispose();
   });
 
+  it("coalesces repeated needs-input activity for the same session", () => {
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+    const firstId = useAppStore.getState().sessionNotifications[0]?.id;
+    expect(firstId).toBeTruthy();
+
+    useAppStore.getState().markSessionNotificationRead(firstId!);
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "running",
+          updated_at: "2026-01-01T00:01:30Z",
+        }),
+      ],
+    });
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          updated_at: "2026-01-01T00:02:00Z",
+        }),
+      ],
+    });
+
+    const notifications = useAppStore.getState().sessionNotifications;
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.id).not.toBe(firstId);
+    expect(notifications[0]?.readAt).toBeUndefined();
+    dispose();
+  });
+
   it("marks in-app activity read when its session tab is focused and auto-delete is disabled", async () => {
     useSettings.getState().patchNotifications({ autoDeleteRead: false });
     const disposeActivity = startSessionActivityInboxWatcher();
@@ -226,24 +265,28 @@ describe("notifications", () => {
 
   it("trims in-app activity to the configured maximum", () => {
     useSettings.getState().patchNotifications({ maxHistory: 2 });
+    useAppStore.setState({
+      sessions: [
+        session({ id: "session-1", name: "Agent 1" }),
+        session({ id: "session-2", name: "Agent 2" }),
+        session({ id: "session-3", name: "Agent 3" }),
+      ],
+    });
     const dispose = startSessionActivityInboxWatcher();
 
     for (let i = 1; i <= 3; i += 1) {
+      const id = `session-${i}`;
       useAppStore.setState({
-        sessions: [
-          session({
-            status: "needs_input",
-            updated_at: `2026-01-01T00:0${i}:00Z`,
-          }),
-        ],
-      });
-      useAppStore.setState({
-        sessions: [
-          session({
-            status: "running",
-            updated_at: `2026-01-01T00:0${i}:30Z`,
-          }),
-        ],
+        sessions: useAppStore.getState().sessions.map((existing) =>
+          existing.id === id
+            ? session({
+                id,
+                name: existing.name,
+                status: "needs_input",
+                updated_at: `2026-01-01T00:0${i}:00Z`,
+              })
+            : existing,
+        ),
       });
     }
 

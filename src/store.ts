@@ -104,6 +104,31 @@ interface SessionPlacementIntent {
 const sessionPlacementById = new Map<string, SessionPlacementIntent>();
 const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
 
+function coalescedSessionNotificationKey(
+  notification: SessionNotification,
+): string | null {
+  if (notification.kind !== "needs_input") return null;
+  return `${notification.sessionId}:${notification.kind}`;
+}
+
+function normalizeSessionNotifications(
+  notifications: SessionNotification[],
+  maxHistory: number,
+): SessionNotification[] {
+  const seen = new Set<string>();
+  const next: SessionNotification[] = [];
+  for (const notification of notifications) {
+    const key = coalescedSessionNotificationKey(notification);
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    next.push(notification);
+    if (next.length >= maxHistory) break;
+  }
+  return next;
+}
+
 async function loadWorkSummaryTokenBaseline(
   session: Session | null | undefined,
 ): Promise<WorkSummaryTokenBaseline | undefined> {
@@ -3134,12 +3159,17 @@ export const useAppStore = create<AppStateModel>()(
 
   addSessionNotification(notification) {
     const maxHistory = useSettings.getState().settings.notifications.maxHistory;
-    set((s) => ({
-      sessionNotifications: [
-        notification,
-        ...s.sessionNotifications.filter((n) => n.id !== notification.id),
-      ].slice(0, maxHistory),
-    }));
+    set((s) => {
+      const existing = s.sessionNotifications.filter(
+        (n) => n.id !== notification.id,
+      );
+      return {
+        sessionNotifications: normalizeSessionNotifications(
+          [notification, ...existing],
+          maxHistory,
+        ),
+      };
+    });
   },
 
   markSessionNotificationRead(id) {
@@ -3636,6 +3666,10 @@ export const useAppStore = create<AppStateModel>()(
         state.sessionFolderIds = normalizeStringRecord(state.sessionFolderIds);
         state.autoCloseSessionIds = normalizeTrueRecord(
           state.autoCloseSessionIds,
+        );
+        state.sessionNotifications = normalizeSessionNotifications(
+          state.sessionNotifications ?? [],
+          useSettings.getState().settings.notifications.maxHistory,
         );
         state.activeProjectFolderId =
           state.activeProjectFolderId ??
