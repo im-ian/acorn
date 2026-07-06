@@ -1665,6 +1665,10 @@ function App() {
         e.preventDefault();
         useAppStore.getState().cycleTab(-1);
       },
+      [shortcuts.focusLatestNeedsInput]: (e: KeyboardEvent) => {
+        e.preventDefault();
+        useAppStore.getState().selectLatestNeedsInputSession();
+      },
       [shortcuts.nextProject]: (e: KeyboardEvent) => {
         e.preventDefault();
         useAppStore.getState().cycleProject(1);

@@ -338,6 +338,46 @@ test.describe("pane / sidebar shortcuts", () => {
     );
   });
 
+  test("Control+Alt+] focuses the latest needs-input tab", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      {
+        ...SESSION,
+        id: "idle",
+        name: "idle",
+        status: "idle",
+      },
+      {
+        ...SESSION,
+        id: "need-earlier",
+        name: "earlier",
+        status: "needs_input",
+      },
+      {
+        ...SESSION,
+        id: "need-latest",
+        name: "latest",
+        status: "needs_input",
+      },
+    ]);
+
+    await page.goto("/");
+    await expect(page.locator('[data-tab-drag-handle="idle"]')).toBeVisible();
+    await expect(
+      page.locator('[data-tab-drag-handle="need-latest"]'),
+    ).toBeVisible();
+
+    await pressHotkey(page, { control: true, alt: true, key: "]" });
+
+    const latestTab = page
+      .locator('[data-tab-drag-handle="need-latest"]')
+      .locator("xpath=ancestor::div[@role='button'][1]");
+    await expect(latestTab).toHaveClass(/acorn-tab-active-bg/);
+  });
+
   test("tab close button has a reliable hit area outside the drag handle", async ({
     page,
     tauri,

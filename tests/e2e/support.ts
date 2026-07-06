@@ -166,7 +166,13 @@ export const test = base.extend<{
  */
 export async function pressHotkey(
   page: Page,
-  combo: { mod?: boolean; shift?: boolean; alt?: boolean; key: string },
+  combo: {
+    mod?: boolean;
+    control?: boolean;
+    shift?: boolean;
+    alt?: boolean;
+    key: string;
+  },
 ): Promise<void> {
   await page.evaluate((c) => {
     const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -208,7 +214,7 @@ export async function pressHotkey(
       key: c.key,
       code: deriveCode(c.key),
       metaKey: !!c.mod && isMac,
-      ctrlKey: !!c.mod && !isMac,
+      ctrlKey: !!c.control || (!!c.mod && !isMac),
       shiftKey: !!c.shift,
       altKey: !!c.alt,
       bubbles: true,

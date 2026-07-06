@@ -269,6 +269,65 @@ describe("multi-input", () => {
   });
 });
 
+describe("needs-input navigation", () => {
+  it("selects the latest needs-input session from the activity inbox", async () => {
+    await seed(
+      [project(REPO_A, 0), project(REPO_B, 1)],
+      [
+        session("a1", REPO_A, { status: "needs_input" }),
+        session("b1", REPO_B, { status: "needs_input" }),
+      ],
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n-a", {
+        sessionId: "a1",
+        sessionName: "a1",
+        repoPath: REPO_A,
+        createdAt: "2026-01-01T00:00:01Z",
+      }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("n-b", {
+        sessionId: "b1",
+        sessionName: "b1",
+        repoPath: REPO_B,
+        createdAt: "2026-01-01T00:00:02Z",
+      }),
+    );
+    useAppStore.getState().setActiveProject(REPO_B);
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    useAppStore.getState().setActiveProject(REPO_A);
+
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+
+    expect(useAppStore.getState().activeProject).toBe(REPO_B);
+    expect(useAppStore.getState().activeSessionId).toBe("b1");
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+  });
+
+  it("falls back to the last current needs-input session", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("a1", REPO_A, { status: "needs_input" }),
+        session("a2", REPO_A, { status: "idle" }),
+        session("a3", REPO_A, { status: "needs_input" }),
+      ],
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("stale", {
+        sessionId: "a2",
+        sessionName: "a2",
+        repoPath: REPO_A,
+      }),
+    );
+
+    expect(useAppStore.getState().selectLatestNeedsInputSession()).toBe(true);
+
+    expect(useAppStore.getState().activeSessionId).toBe("a3");
+  });
+});
+
 describe("sessionNotifications", () => {
   it("adds newest notifications first and caps the in-memory list", () => {
     for (let i = 0; i < 105; i += 1) {

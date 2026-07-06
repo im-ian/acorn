@@ -75,6 +75,7 @@ export const DEFAULT_HOTKEYS = {
   // reserved by macOS for OS-level app switching.
   nextTab: "Control+Tab",
   prevTab: "Control+Shift+Tab",
+  focusLatestNeedsInput: "Control+Alt+BracketRight",
   nextProject: "Control+Alt+Tab",
   prevProject: "Control+Alt+Shift+Tab",
 } as const;

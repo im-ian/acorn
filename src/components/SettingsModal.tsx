@@ -217,6 +217,10 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
         labelKey: "settings.shortcuts.items.prevTab.label",
       },
       {
+        id: "focusLatestNeedsInput",
+        labelKey: "settings.shortcuts.items.focusLatestNeedsInput.label",
+      },
+      {
         id: "nextProject",
         labelKey: "settings.shortcuts.items.nextProject.label",
       },
