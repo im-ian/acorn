@@ -3593,12 +3593,26 @@ fn session_title_readiness_inner(
         .as_ref()
         .map(|input| input.transcript_id.as_str());
     if !crate::session_titles::can_generate_title(&session, transcript_id) {
+        // The auto-title planner retries on this status forever; without a
+        // trace the gate that keeps a tab stuck on "new session-N" is
+        // invisible (auto-title opt-out, manual title, unchanged transcript).
+        tracing::debug!(
+            session_id = %id,
+            title_source = ?session.title_source,
+            auto_title_enabled = ?session.auto_title_enabled,
+            has_title_input = transcript_id.is_some(),
+            "session title readiness: skipped (not eligible)"
+        );
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::Skipped,
             session: enrich_session(session),
         });
     }
     if title_input.is_none() {
+        tracing::debug!(
+            session_id = %id,
+            "session title readiness: not ready (no transcript context resolved)"
+        );
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::NotReady,
             session: enrich_session(session),

@@ -504,6 +504,19 @@ fn scan_live_mappings(
                 }
             }
             out.push((c.session_id, c.kind, uuid));
+        } else {
+            // A live agent process with no matching transcript is the
+            // failure this scan exists to prevent — downstream, resume
+            // and tab-title generation silently stall on it. Keep the
+            // miss visible.
+            tracing::debug!(
+                session_id = %c.session_id,
+                kind = ?c.kind,
+                pid = c.pid,
+                cwd = ?c.cwd,
+                role = ?c.role,
+                "transcript_watcher: live agent matched no transcript this cycle"
+            );
         }
     }
 
