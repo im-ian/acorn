@@ -24,34 +24,62 @@
 //! lands in `*.id` while the old ack stays put, so the modal pops
 //! exactly once per fresh UUID per session.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use acorn_session::Session;
 use acorn_transcript::{self as transcript_watcher, AgentKind, SessionPid};
+use uuid::Uuid;
 
 use crate::agent_resume;
 use crate::state::AppState;
 
 /// Snapshot every Acorn session's PTY root pid for `acorn_transcript`'s
-/// scanner. Daemon-managed sessions take priority — the stream registry
-/// records the daemon-side pid as soon as the attachment lands — with
-/// the in-process `PtyManager` as fallback for non-daemon sessions.
+/// scanner. Attached daemon streams take priority because they cache the
+/// daemon-side pid; in-process PTYs cover non-daemon sessions; daemon
+/// `ListSessions` covers live background PTYs that are not attached.
 /// Lives here (and not in the transcript crate) because the AppState
 /// surface is owned by the host crate.
 pub fn collect_session_pids(state: &AppState) -> Vec<SessionPid> {
-    state
-        .sessions
-        .list()
-        .into_iter()
+    let sessions = state.sessions.list();
+    let daemon_pids = daemon_session_pids(state);
+    collect_session_pids_from_rows(
+        &sessions,
+        |id| state.stream_registry.pid(id),
+        |id| state.pty.child_pid(id),
+        |id| daemon_pids.get(id).copied(),
+    )
+}
+
+fn collect_session_pids_from_rows(
+    sessions: &[Session],
+    mut stream_pid: impl FnMut(&Uuid) -> Option<u32>,
+    mut pty_pid: impl FnMut(&Uuid) -> Option<u32>,
+    mut daemon_pid: impl FnMut(&Uuid) -> Option<u32>,
+) -> Vec<SessionPid> {
+    sessions
+        .iter()
         .map(|s| SessionPid {
             session_id: s.id,
-            root_pid: state
-                .stream_registry
-                .pid(&s.id)
-                .or_else(|| state.pty.child_pid(&s.id)),
+            root_pid: stream_pid(&s.id)
+                .or_else(|| pty_pid(&s.id))
+                .or_else(|| daemon_pid(&s.id)),
         })
+        .collect()
+}
+
+fn daemon_session_pids(state: &AppState) -> HashMap<Uuid, u32> {
+    state
+        .daemon_bridge
+        .list_sessions()
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter(|s| s.alive)
+        .filter_map(|s| s.pid.map(|pid| (s.id, pid)))
         .collect()
 }
 
@@ -89,16 +117,13 @@ fn tick(state: &AppState) -> io::Result<()> {
         .iter()
         .map(|s| (s.id, s.worktree_path.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    let sessions = session_rows
-        .into_iter()
-        .map(|s| SessionPid {
-            session_id: s.id,
-            root_pid: state
-                .stream_registry
-                .pid(&s.id)
-                .or_else(|| state.pty.child_pid(&s.id)),
-        })
-        .collect::<Vec<_>>();
+    let daemon_pids = daemon_session_pids(state);
+    let sessions = collect_session_pids_from_rows(
+        &session_rows,
+        |id| state.stream_registry.pid(id),
+        |id| state.pty.child_pid(id),
+        |id| daemon_pids.get(id).copied(),
+    );
     let mappings = transcript_watcher::collect_session_owner_mappings(&sessions);
     if mappings.is_empty() {
         return Ok(());
@@ -224,9 +249,56 @@ fn read_trimmed(path: &PathBuf) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn session_with_id(id: Uuid) -> Session {
+        let mut session = Session::new(
+            "test".to_string(),
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            "main".to_string(),
+            false,
+            acorn_session::SessionKind::Regular,
+        );
+        session.id = id;
+        session
+    }
+
     fn set_mtime(path: &Path, t: SystemTime) {
         let f = fs::File::options().write(true).open(path).unwrap();
         f.set_times(fs::FileTimes::new().set_modified(t)).unwrap();
+    }
+
+    #[test]
+    fn collect_session_pids_falls_back_to_daemon_pid() {
+        let id = Uuid::from_u128(1);
+        let sessions = vec![session_with_id(id)];
+
+        let pids = collect_session_pids_from_rows(
+            &sessions,
+            |_| None,
+            |_| None,
+            |candidate| (*candidate == id).then_some(42),
+        );
+
+        assert_eq!(pids.len(), 1);
+        assert_eq!(pids[0].session_id, id);
+        assert_eq!(pids[0].root_pid, Some(42));
+    }
+
+    #[test]
+    fn collect_session_pids_keeps_live_attachment_priority() {
+        let id = Uuid::from_u128(2);
+        let sessions = vec![session_with_id(id)];
+
+        let pids = collect_session_pids_from_rows(
+            &sessions,
+            |candidate| (*candidate == id).then_some(10),
+            |candidate| (*candidate == id).then_some(20),
+            |candidate| (*candidate == id).then_some(30),
+        );
+
+        assert_eq!(pids.len(), 1);
+        assert_eq!(pids[0].session_id, id);
+        assert_eq!(pids[0].root_pid, Some(10));
     }
 
     /// Forward birth-order moves always pass; a backwards move passes
