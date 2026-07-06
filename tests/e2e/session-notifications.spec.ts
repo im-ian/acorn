@@ -80,13 +80,16 @@ test.describe("session notification center", () => {
 
     const activityBody = page.getByTestId("sidebar-activity-body");
     const resizeHandle = page.getByTestId("sidebar-activity-resize-handle");
-    const [bodyBoxBefore, resizeHandleBox] = await Promise.all([
-      activityBody.boundingBox(),
-      resizeHandle.boundingBox(),
-    ]);
+    const [bodyBoxBefore, resizeHandleBox, activityBoxBeforeResize] =
+      await Promise.all([
+        activityBody.boundingBox(),
+        resizeHandle.boundingBox(),
+        activity.boundingBox(),
+      ]);
     expect(bodyBoxBefore).not.toBeNull();
     expect(resizeHandleBox).not.toBeNull();
-    if (!bodyBoxBefore || !resizeHandleBox) {
+    expect(activityBoxBeforeResize).not.toBeNull();
+    if (!bodyBoxBefore || !resizeHandleBox || !activityBoxBeforeResize) {
       throw new Error("missing sidebar activity resize target");
     }
     expect(resizeHandleBox.height).toBeGreaterThanOrEqual(12);
@@ -107,6 +110,23 @@ test.describe("session notification center", () => {
         ),
       )
       .toBeGreaterThan(bodyBoxBefore.height + 48);
+    const [resizeHandleBoxAfter, activityBoxAfterResize] = await Promise.all([
+      resizeHandle.boundingBox(),
+      activity.boundingBox(),
+    ]);
+    expect(resizeHandleBoxAfter).not.toBeNull();
+    expect(activityBoxAfterResize).not.toBeNull();
+    if (!resizeHandleBoxAfter || !activityBoxAfterResize) {
+      throw new Error("missing sidebar activity resized layout");
+    }
+    expect(resizeHandleBoxAfter.y).toBeLessThan(resizeHandleBox.y - 48);
+    expect(
+      Math.abs(
+        activityBoxAfterResize.y +
+          activityBoxAfterResize.height -
+          (activityBoxBeforeResize.y + activityBoxBeforeResize.height),
+      ),
+    ).toBeLessThan(4);
 
     await page.getByRole("button", { name: "Session notifications" }).click();
 
