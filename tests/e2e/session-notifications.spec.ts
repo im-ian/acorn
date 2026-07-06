@@ -143,4 +143,102 @@ test.describe("session notification center", () => {
       .not.toContainText("1");
     await expect(activity).toContainText("0 unread");
   });
+
+  test("opens the kanban terminal popover from sidebar activity rows", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { defaultWorkspaceViewMode: "kanban" },
+        }),
+      );
+    });
+    await tauri.handle("list_projects", () => [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.handle("list_sessions", () => [
+      {
+        id: "session-1",
+        name: "foreground",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+      },
+      {
+        id: "session-2",
+        name: "agent run",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "main",
+        isolated: false,
+        project_scoped: true,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:05Z",
+        last_message: null,
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 1,
+        in_worktree: false,
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "session-2",
+        status: "needs_input",
+        branch: "main",
+        agent_provider: null,
+        last_message: "Awaiting input.",
+        last_user_message: null,
+        last_agent_message: "Awaiting input.",
+      },
+    ]);
+
+    await page.goto("/");
+
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+    const activity = page.getByRole("region", {
+      name: "Session activity",
+    });
+    await expect(activity).toContainText("1 unread");
+    await activity.getByRole("button", { name: /demo · agent run/ }).click();
+
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+    await expect(
+      popover.getByRole("heading", { name: "agent run" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("terminal-popover-body")).toBeVisible();
+    await expect(
+      page
+        .getByTestId("terminal-popover-body")
+        .locator(
+          '[data-acorn-terminal-slot="session-2"] .acorn-terminal-shell',
+        ),
+    ).toBeVisible();
+    await expect(activity).toContainText("0 unread");
+  });
 });
