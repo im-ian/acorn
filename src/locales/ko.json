@@ -508,6 +508,9 @@
         "prevTab": {
           "label": "이전 탭"
         },
+        "focusLatestNeedsInput": {
+          "label": "마지막 입력 필요 탭"
+        },
         "nextProject": {
           "label": "다음 프로젝트"
         },
