@@ -5076,13 +5076,12 @@ fn detect_session_statuses_blocking(
     // root). Without this, the StatusBar/Sidebar branch stays pinned to the
     // project root's branch regardless of `git checkout` performed inside
     // the PTY.
-    let mut sys =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
-    );
+    let refresh = ProcessRefreshKind::new()
+        .with_cwd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .with_cmd(UpdateKind::Always);
+    let mut sys = System::new_with_specifics(RefreshKind::new().with_processes(refresh));
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
     let children = build_children_map(&sys);
     let daemon_session_pids = std::sync::OnceLock::<HashMap<Uuid, u32>>::new();
     let daemon_pid_for = |uuid: Uuid| {
@@ -5178,6 +5177,10 @@ fn detect_session_statuses_blocking(
             let live_agent_kind = root_pid_value.and_then(|pid| {
                 live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
             });
+            let live_codex_tool_child = matches!(live_agent_kind, Some(StatusAgentKind::Codex))
+                && root_pid_value.is_some_and(|pid| {
+                    live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
+                });
             // Resolve the live transcript via the persister's resume markers
             // first (covers claude/codex/antigravity run inside a shell session — JSONL
             // is named after the agent's own UUID, not Acorn's). When the PTY
@@ -5279,7 +5282,14 @@ fn detect_session_statuses_blocking(
                 if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
                     let _ = state.sessions.refresh_status(&uuid, reconciled);
                 }
-                reconciled.unwrap_or(stored)
+                let hook_status = reconciled.unwrap_or(stored);
+                // Codex can report turn-complete while a background terminal
+                // command is still alive. Keep the UI Running until it exits.
+                if hook_status == SessionStatus::NeedsInput && live_codex_tool_child {
+                    SessionStatus::Running
+                } else {
+                    hook_status
+                }
             } else {
                 detection.status
             };
@@ -5444,6 +5454,30 @@ fn live_agent_kind_in_descendants(
     })
 }
 
+fn live_codex_has_tool_descendant(
+    sys: &System,
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+) -> bool {
+    has_unignored_descendant_below_nearest_matching(
+        children,
+        root,
+        |pid| {
+            sys.process(pid)
+                .is_some_and(|proc| process_primary_basename_matches(proc, "codex"))
+        },
+        |pid| {
+            sys.process(pid)
+                .is_some_and(is_codex_persistent_helper_process)
+        },
+    )
+}
+
+fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
+    process_basename_matches(proc, "node_repl")
+        || process_basename_matches(proc, "SkyComputerUseClient")
+}
+
 fn nearest_agent_kind_in_tree<F>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
@@ -5469,6 +5503,61 @@ where
         }
     }
     None
+}
+
+fn nearest_descendant_matching<F>(
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    mut matches: F,
+) -> Option<Pid>
+where
+    F: FnMut(Pid) -> bool,
+{
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&root) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct);
+    }
+    while let Some(pid) = queue.pop_front() {
+        if matches(pid) {
+            return Some(pid);
+        }
+        if let Some(kids) = children.get(&pid) {
+            let mut kids = kids.clone();
+            kids.sort_by_key(|pid| pid.as_u32());
+            queue.extend(kids);
+        }
+    }
+    None
+}
+
+fn has_unignored_descendant_below_nearest_matching<F, G>(
+    children: &HashMap<Pid, Vec<Pid>>,
+    root: Pid,
+    matches: F,
+    mut ignore_subtree: G,
+) -> bool
+where
+    F: FnMut(Pid) -> bool,
+    G: FnMut(Pid) -> bool,
+{
+    let Some(anchor) = nearest_descendant_matching(children, root, matches) else {
+        return false;
+    };
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&anchor) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct);
+    }
+    while let Some(pid) = queue.pop_front() {
+        if ignore_subtree(pid) {
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 /// `true` if any descendant of `root` exists in the children map. The root
@@ -5560,6 +5649,77 @@ mod status_hint_tests {
 
         assert!(has_live_descendant(&children, root));
         assert!(!has_live_descendant(&children, grandchild));
+    }
+
+    #[test]
+    fn matching_agent_with_child_reports_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let wrapper = Pid::from_u32(2);
+        let codex = Pid::from_u32(3);
+        let tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![wrapper]);
+        children.insert(wrapper, vec![codex]);
+        children.insert(codex, vec![tool]);
+
+        assert!(has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_without_child_reports_no_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+
+        assert!(!has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_with_only_ignored_child_reports_no_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let helper_child = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper]);
+        children.insert(helper, vec![helper_child]);
+
+        assert!(!has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_with_ignored_helper_and_tool_reports_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper, tool]);
+
+        assert!(has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+        ));
     }
 }
 
@@ -6046,13 +6206,46 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
 }
 
 /// Match a process by `target` against any of: exe-path basename,
-/// `proc.name()`, or argv[0] basename. macOS `p_comm` is truncated to
+/// `proc.name()`, or argv basename. macOS `p_comm` is truncated to
 /// 16 chars and can land as a full path *or* a basename depending on
 /// how the process was invoked; sysinfo can also surface either form
 /// from `exe()` (resolved via `proc_pidinfo`). Checking every channel
 /// makes the detection robust against the user's `claude` binary
 /// being a Bun-compiled symlink target rather than a script.
 fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    if process_primary_basename_matches(proc, target) {
+        return true;
+    }
+    for arg in proc.cmd().iter().skip(1) {
+        let s = arg.to_string_lossy();
+        if process_basename_part_matches(&s, target) {
+            return true;
+        }
+    }
+    false
+}
+
+fn process_primary_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
+    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
+        if process_basename_part_matches(exe, target) {
+            return true;
+        }
+    }
+    if let Some(name) = proc.name().to_str() {
+        if process_basename_part_matches(name, target) {
+            return true;
+        }
+    }
+    if let Some(arg0) = proc.cmd().first() {
+        let s = arg0.to_string_lossy();
+        if process_basename_part_matches(&s, target) {
+            return true;
+        }
+    }
+    false
+}
+
+fn process_basename_part_matches(s: &str, target: &str) -> bool {
     fn basename_matches(s: &str, target: &str) -> bool {
         let base = s.rsplit('/').next().unwrap_or(s);
         base == target
@@ -6061,23 +6254,7 @@ fn process_basename_matches(proc: &sysinfo::Process, target: &str) -> bool {
             || base.strip_suffix(".cjs") == Some(target)
     }
 
-    if let Some(exe) = proc.exe().and_then(|p| p.to_str()) {
-        if basename_matches(exe, target) {
-            return true;
-        }
-    }
-    if let Some(name) = proc.name().to_str() {
-        if basename_matches(name, target) {
-            return true;
-        }
-    }
-    for arg in proc.cmd() {
-        let s = arg.to_string_lossy();
-        if basename_matches(&s, target) {
-            return true;
-        }
-    }
-    false
+    basename_matches(s, target)
 }
 
 pub(crate) fn sanitize_worktree_name(name: &str) -> String {
