@@ -42,7 +42,7 @@ const BASE_SESSION: Session = {
   worktree_path: "/repo/acorn",
   branch: "main",
   isolated: false,
-  status: "running",
+  status: "working",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   last_message: null,
@@ -99,7 +99,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -123,7 +123,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -140,7 +140,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -149,7 +149,7 @@ describe("notifications", () => {
     expect(useAppStore.getState().sessionNotifications).toMatchObject([
       {
         sessionId: "session-1",
-        status: "needs_input",
+        status: "waiting_for_input",
       },
     ]);
     expect(useAppStore.getState().sessionNotifications[0]?.readAt).toBeUndefined();
@@ -163,7 +163,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -184,7 +184,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -193,7 +193,7 @@ describe("notifications", () => {
     expect(useAppStore.getState().sessionNotifications).toMatchObject([
       {
         sessionId: "session-1",
-        status: "needs_input",
+        status: "waiting_for_input",
       },
     ]);
     dispose();
@@ -205,7 +205,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -217,7 +217,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "running",
+          status: "working",
           updated_at: "2026-01-01T00:01:30Z",
         }),
       ],
@@ -225,7 +225,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:02:00Z",
         }),
       ],
@@ -246,7 +246,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -256,7 +256,7 @@ describe("notifications", () => {
     const [notification] = useAppStore.getState().sessionNotifications;
     expect(notification).toMatchObject({
       sessionId: "session-1",
-      status: "needs_input",
+      status: "waiting_for_input",
     });
     expect(notification?.readAt).toEqual(expect.any(String));
     disposeActivity();
@@ -282,7 +282,7 @@ describe("notifications", () => {
             ? session({
                 id,
                 name: existing.name,
-                status: "needs_input",
+                status: "waiting_for_input",
                 updated_at: `2026-01-01T00:0${i}:00Z`,
               })
             : existing,
@@ -302,7 +302,7 @@ describe("notifications", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],

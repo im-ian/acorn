@@ -452,7 +452,7 @@ describe("SettingsModal font controls", () => {
     openInterfaceTab();
 
     act(() => {
-      checkboxByLabel("Move needs-input and failed tabs to the top").click();
+      checkboxByLabel("Move waiting and error tabs to the top").click();
     });
 
     expect(patchInterface).toHaveBeenCalledWith({

@@ -78,8 +78,8 @@
         "label": "프로젝트 탭",
         "hint": "좌측 사이드바의 각 프로젝트 안에서 세션과 작업공간이 표시되는 순서를 제어합니다.",
         "priority": {
-          "label": "입력 필요 및 실패 탭을 상단으로 이동",
-          "description": "수동 순서는 저장된 채로 유지하고, 사용자 입력을 기다리거나 오류로 막힌 탭을 유휴 작업보다 먼저 표시합니다."
+          "label": "입력 대기 및 오류 탭을 상단으로 이동",
+          "description": "수동 순서는 저장된 채로 유지하고, 사용자 입력을 기다리거나 오류로 막힌 탭을 준비된 작업보다 먼저 표시합니다."
         }
       },
       "kanbanTerminalPopover": {
@@ -186,9 +186,9 @@
         "checkbox": "일반 세션을 제거하기 전에 확인 표시"
       },
       "warnBeforeClosingRunning": {
-        "label": "실행 중 세션 닫기 경고",
-        "hint": "아직 실행 중인 세션을 닫기 전에 경고를 표시합니다. 실행 중인 세션을 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
-        "checkbox": "실행 중인 세션을 닫기 전에 경고 표시"
+        "label": "작업 중 세션 닫기 경고",
+        "hint": "아직 작업 중인 세션을 닫기 전에 경고를 표시합니다. 작업 중인 세션을 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
+        "checkbox": "작업 중인 세션을 닫기 전에 경고 표시"
       },
       "confirmDeleteIsolatedWorktrees": {
         "label": "격리 워크트리 정리 확인",
@@ -419,17 +419,13 @@
       },
       "triggers": {
         "label": "알림 조건",
-        "needsInput": {
-          "label": "입력 필요",
-          "description": "Claude가 사용자 입력을 기다리고 있습니다."
+        "waitingForInput": {
+          "label": "입력 대기",
+          "description": "에이전트 또는 셸 명령이 사용자 입력을 기다리고 있습니다."
         },
-        "failed": {
-          "label": "실패",
-          "description": "세션이 오류로 종료되었습니다."
-        },
-        "completed": {
-          "label": "완료",
-          "description": "세션이 완료 상태에 도달했습니다."
+        "errored": {
+          "label": "오류",
+          "description": "세션에서 에이전트 또는 런타임 오류가 발생했습니다."
         }
       },
       "history": {
@@ -836,11 +832,10 @@
     "agentTokensResetIn": "갱신까지 {reset}",
     "agentTokensUpdated": "확인 시각 {time}",
     "sessionStatus": {
-      "idle": "유휴",
-      "running": "실행 중",
-      "needsInput": "입력 필요",
-      "failed": "실패",
-      "completed": "완료"
+      "ready": "준비됨",
+      "working": "작업 중",
+      "waitingForInput": "입력 대기",
+      "errored": "오류"
     },
     "notifications": {
       "ariaLabel": "세션 알림",
@@ -851,10 +846,9 @@
       "empty": "아직 세션 상태 변경이 없습니다.",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "입력 필요",
-        "failed": "실패",
-        "completed": "완료",
-        "becameIdle": "유휴"
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
       },
       "actions": {
         "markAllRead": "모두 읽음",
@@ -1039,11 +1033,10 @@
   },
   "sidebar": {
     "status": {
-      "idle": "유휴",
-      "running": "실행 중",
-      "needs_input": "입력 필요",
-      "failed": "실패",
-      "completed": "완료"
+      "ready": "준비됨",
+      "working": "작업 중",
+      "waiting_for_input": "입력 대기",
+      "errored": "오류"
     },
     "dialog": {
       "selectExistingProject": "기존 프로젝트 선택",
@@ -1142,10 +1135,9 @@
       "empty": "아직 세션 활동이 없습니다",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "입력 필요",
-        "failed": "실패",
-        "completed": "완료",
-        "becameIdle": "유휴"
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
       },
       "actions": {
         "markAllRead": "모두 읽음",
@@ -1335,10 +1327,9 @@
       "empty": "아직 세션 활동이 없습니다",
       "itemTitle": "{project} · {session}",
       "kind": {
-        "needsInput": "입력 필요",
-        "failed": "실패",
-        "completed": "완료",
-        "becameIdle": "유휴"
+        "waitingForInput": "입력 대기",
+        "errored": "오류",
+        "becameReady": "준비됨"
       },
       "actions": {
         "markAllRead": "모두 읽음",
@@ -1584,8 +1575,8 @@
       "remove": "제거"
     },
     "runningSessionClose": {
-      "title": "실행 중인 세션을 닫을까요?",
-      "message": "이 세션은 아직 실행 중입니다. 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
+      "title": "작업 중인 세션을 닫을까요?",
+      "message": "이 세션은 아직 작업 중입니다. 닫으면 활성 셸이나 에이전트 프로세스가 종료됩니다.",
       "sessionLabel": "세션",
       "dontWarnAgain": "다시 경고하지 않기(설정 → 세션에서 변경)",
       "continue": "세션 닫기"

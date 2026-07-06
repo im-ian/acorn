@@ -13,7 +13,7 @@ const BASE_SESSION: Session = {
   worktree_path: "/repo/acorn",
   branch: "main",
   isolated: false,
-  status: "running",
+  status: "working",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   last_message: null,
@@ -59,29 +59,29 @@ describe("session auto-close", () => {
     expect(
       shouldAutoCloseFinishedSession(
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           status_reason: "turn_complete",
           agent_provider: "codex",
         }),
-        "running",
+        "working",
         true,
       ),
     ).toBe(true);
     expect(
       shouldAutoCloseFinishedSession(
-        session({ status: "completed" }),
-        "running",
+        session({ status: "ready" }),
+        "working",
         true,
       ),
     ).toBe(true);
     expect(
       shouldAutoCloseFinishedSession(
         session({
-          status: "idle",
+          status: "ready",
           agent_provider: null,
           agent_transcript_id: null,
         }),
-        "running",
+        "working",
         true,
         true,
       ),
@@ -92,25 +92,25 @@ describe("session auto-close", () => {
     expect(
       shouldAutoCloseFinishedSession(
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           agent_provider: null,
           agent_transcript_id: null,
         }),
-        "running",
+        "working",
         true,
       ),
     ).toBe(false);
     expect(
       shouldAutoCloseFinishedSession(
-        session({ status: "failed" }),
-        "running",
+        session({ status: "errored" }),
+        "working",
         true,
       ),
     ).toBe(false);
     expect(
       shouldAutoCloseFinishedSession(
-        session({ status: "needs_input" }),
-        "running",
+        session({ status: "waiting_for_input" }),
+        "working",
         false,
       ),
     ).toBe(false);
@@ -119,8 +119,8 @@ describe("session auto-close", () => {
   it("does not close active needs_input states that may be approvals", () => {
     expect(
       shouldAutoCloseFinishedSession(
-        session({ status: "needs_input", agent_provider: "codex" }),
-        "running",
+        session({ status: "waiting_for_input", agent_provider: "codex" }),
+        "working",
         true,
       ),
     ).toBe(false);
@@ -128,7 +128,7 @@ describe("session auto-close", () => {
 
   it("does not treat historical transcripts as an active agent signal", () => {
     const historicalAgentSession = session({
-      status: "needs_input",
+      status: "waiting_for_input",
       status_reason: "turn_complete",
       agent_provider: null,
       agent_transcript_id: "codex-old",
@@ -137,14 +137,14 @@ describe("session auto-close", () => {
     expect(
       shouldAutoCloseFinishedSession(
         historicalAgentSession,
-        "running",
+        "working",
         true,
       ),
     ).toBe(false);
     expect(
       shouldAutoCloseFinishedSession(
-        { ...historicalAgentSession, status: "idle" },
-        "running",
+        { ...historicalAgentSession, status: "ready" },
+        "working",
         true,
       ),
     ).toBe(false);
@@ -153,8 +153,8 @@ describe("session auto-close", () => {
   it("does not auto-close control sessions that could cascade to workers", () => {
     expect(
       shouldAutoCloseFinishedSession(
-        session({ kind: "control", status: "needs_input" }),
-        "running",
+        session({ kind: "control", status: "waiting_for_input" }),
+        "working",
         true,
       ),
     ).toBe(false);
@@ -171,7 +171,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           status_reason: "turn_complete",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:00Z",
@@ -187,7 +187,7 @@ describe("session auto-close", () => {
   it("removes a session when turn-complete reason arrives after needs_input", async () => {
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({
-      sessions: [session({ status: "needs_input", agent_provider: "codex" })],
+      sessions: [session({ status: "waiting_for_input", agent_provider: "codex" })],
       autoCloseSessionIds: { "session-1": true },
       removeSession,
     });
@@ -196,7 +196,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           status_reason: "turn_complete",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:00Z",
@@ -220,7 +220,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:00Z",
         }),
@@ -232,7 +232,7 @@ describe("session auto-close", () => {
     dispose();
   });
 
-  it("removes an agent-backed session when it returns to idle after running", async () => {
+  it("removes an agent-backed session when it returns to ready after working", async () => {
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({
       autoCloseSessionIds: { "session-1": true },
@@ -243,7 +243,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "idle",
+          status: "ready",
           agent_provider: null,
           agent_transcript_id: null,
           updated_at: "2026-01-01T00:01:00Z",
@@ -256,15 +256,15 @@ describe("session auto-close", () => {
     dispose();
   });
 
-  it("removes an agent-backed session when it exits to idle from needs_input", async () => {
-    // A hooked Claude/Codex session settles at needs_input between turns; when
-    // the agent process exits the poll reports idle. That exit should close the
-    // session, matching the running→idle path.
+  it("removes an agent-backed session when it exits to ready from waiting_for_input", async () => {
+    // A hooked Claude/Codex session settles at waiting_for_input between turns;
+    // when the agent process exits the poll reports ready. That exit should
+    // close the session, matching the working→ready path.
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           updated_at: "2026-01-01T00:01:00Z",
         }),
       ],
@@ -276,7 +276,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "idle",
+          status: "ready",
           agent_provider: null,
           agent_transcript_id: null,
           updated_at: "2026-01-01T00:02:00Z",
@@ -306,7 +306,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           agent_provider: null,
           agent_transcript_id: "codex-old",
           updated_at: "2026-01-01T00:01:00Z",
@@ -319,7 +319,7 @@ describe("session auto-close", () => {
     dispose();
   });
 
-  it("does not remove a session whose status reverts to running before the queued close runs", async () => {
+  it("does not remove a session whose status reverts to working before the queued close runs", async () => {
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({
       autoCloseSessionIds: { "session-1": true },
@@ -330,7 +330,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           status_reason: "turn_complete",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:00Z",
@@ -342,7 +342,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "running",
+          status: "working",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:01Z",
         }),
@@ -365,7 +365,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           status_reason: "turn_complete",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:00Z",
@@ -375,7 +375,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "running",
+          status: "working",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:01:01Z",
         }),
@@ -387,7 +387,7 @@ describe("session auto-close", () => {
     useAppStore.setState({
       sessions: [
         session({
-          status: "needs_input",
+          status: "waiting_for_input",
           status_reason: "turn_complete",
           agent_provider: "codex",
           updated_at: "2026-01-01T00:02:00Z",
@@ -404,7 +404,7 @@ describe("session auto-close", () => {
     const removeSession = vi.fn(async () => null);
     useAppStore.setState({
       sessions: [
-        session({ status: "needs_input", status_reason: "turn_complete" }),
+        session({ status: "waiting_for_input", status_reason: "turn_complete" }),
       ],
       autoCloseSessionIds: { "session-1": true },
       removeSession,

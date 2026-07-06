@@ -8,7 +8,7 @@ const CHAT_SESSION = {
   branch: "main",
   isolated: false,
   project_scoped: true,
-  status: "needs_input",
+  status: "waiting_for_input",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   last_message: null,

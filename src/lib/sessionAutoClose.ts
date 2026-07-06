@@ -13,39 +13,38 @@ export function shouldAutoCloseFinishedSession(
   const statusSignalChanged =
     previousStatus !== session.status || previousStatusReason !== statusReason;
   const activeAgentSignal = hasActiveAgentSignal(session);
-  const completedByHook = session.status === "completed";
-  // `needs_input` can also mean an approval/permission request. Status polling
-  // marks transcript-level final answers as `turn_complete`; auto-close only
-  // trusts that explicit reason.
-  const needsInputAfterTurnComplete =
-    session.status === "needs_input" && statusReason === "turn_complete";
-  // A hooked agent settles at needs_input between turns, then collapses to idle
-  // when its process exits; a non-hooked or fast exit can go straight from
-  // running to idle. Treat an exit from either the working (running) or resting
-  // (needs_input) state as the run ending — but never the running→needs_input
-  // turn boundary itself, so an interactive session is not closed mid-work.
-  const returnedIdleAfterRun =
-    (previousStatus === "running" || previousStatus === "needs_input") &&
-    session.status === "idle";
+  // `waiting_for_input` can also mean an approval/permission request. Status
+  // polling marks transcript-level final answers as `turn_complete`; auto-close
+  // only trusts that explicit reason.
+  const waitingForInputAfterTurnComplete =
+    session.status === "waiting_for_input" && statusReason === "turn_complete";
+  // A hooked agent settles at waiting_for_input between turns, then collapses
+  // to ready when its process exits; a non-hooked or fast exit can go straight
+  // from working to ready. Treat an exit from either the working or resting
+  // state as the run ending — but never the working→waiting_for_input turn
+  // boundary itself, so an interactive session is not closed mid-work.
+  const returnedReadyAfterRun =
+    (previousStatus === "working" ||
+      previousStatus === "waiting_for_input") &&
+    session.status === "ready";
 
   return (
     enabled &&
     session.kind === "regular" &&
     statusSignalChanged &&
-    (completedByHook || needsInputAfterTurnComplete || returnedIdleAfterRun) &&
+    (waitingForInputAfterTurnComplete || returnedReadyAfterRun) &&
     (hadActiveAgentSignal || activeAgentSignal)
   );
 }
 
 // Auto-close must only ever remove sessions that are still finished at the
-// moment of removal; anything else (notably `running`) means a new turn
+// moment of removal; anything else (notably `working`) means a new turn
 // started after the close was queued.
 function isStillFinished(session: Session): boolean {
   return (
-    session.status === "completed" ||
-    (session.status === "needs_input" &&
+    (session.status === "waiting_for_input" &&
       (session.status_reason ?? null) === "turn_complete") ||
-    session.status === "idle"
+    session.status === "ready"
   );
 }
 
@@ -95,7 +94,7 @@ export function startSessionAutoCloseWatcher(): () => void {
         );
         const stillEnabled = Boolean(latest.autoCloseSessionIds[session.id]);
         // Re-validate against the freshest state: the status can flip back to
-        // `running` in the same tick (a new turn), and removal kills the pty.
+        // `working` in the same tick (a new turn), and removal kills the pty.
         if (!stillEnabled || !latestSession || !isStillFinished(latestSession)) {
           closingIds.delete(session.id);
           return;

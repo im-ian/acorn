@@ -25,7 +25,7 @@ function session(
     branch: "main",
     isolated: false,
     project_scoped: true,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     last_message: null,

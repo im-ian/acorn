@@ -110,19 +110,17 @@ import {
 } from "../lib/workspaceTabDrag";
 
 const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "accent",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent animate-pulse",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/60",
+  ready: "text-fg-muted",
+  working: "text-accent animate-pulse",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
 
 const EMPTY_PANE_DOUBLE_SPACE_MS = 500;
@@ -1559,11 +1557,10 @@ function TabItem({
             <StatusDot
               tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
               size="sm"
-              pulse={session?.status === "running"}
+              pulse={session?.status === "working"}
               className={cn(
                 "pointer-events-none",
                 !session && "opacity-70",
-                session?.status === "completed" && "opacity-60",
               )}
             />
           )}
@@ -1728,11 +1725,10 @@ function WorkspaceTabDragGhost({
         <StatusDot
           tone={session ? SESSION_STATUS_TONE[session.status] : "neutral"}
           size="sm"
-          pulse={session?.status === "running"}
+          pulse={session?.status === "working"}
           className={cn(
             "pointer-events-none",
             !session && "opacity-70",
-            session?.status === "completed" && "opacity-60",
           )}
         />
       )}
