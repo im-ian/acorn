@@ -1165,6 +1165,8 @@
       "branch": "Branch",
       "detached": "(detached)",
       "workingDirectory": "Working directory",
+      "openPullRequest": "Open PR",
+      "processes": "Processes",
       "status": "Status",
       "kind": "Kind",
       "controlSession": "Control session",

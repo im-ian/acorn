@@ -1165,6 +1165,8 @@
       "branch": "브랜치",
       "detached": "(detached)",
       "workingDirectory": "작업 디렉터리",
+      "openPullRequest": "열린 PR",
+      "processes": "프로세스",
       "status": "상태",
       "kind": "종류",
       "controlSession": "컨트롤 세션",
