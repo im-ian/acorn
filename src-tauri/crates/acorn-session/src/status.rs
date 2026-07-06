@@ -31,13 +31,13 @@
 //!
 //! Transcript resolution lives in the host `acorn` crate (it consults
 //! `agent_resume`'s persister markers + the legacy `~/.claude/projects/`
-//! UUID-named fallback) and is passed in here as `(PathBuf, AgentKind)`
-//! so this crate stays a leaf with no upstream dependency.
+//! UUID-named fallback) and is passed in here as `(PathBuf, AgentKind)`.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use acorn_agent::AgentKind;
 use acorn_pty::ShellHint;
 use serde::Serialize;
 
@@ -47,16 +47,6 @@ use crate::session::SessionStatus;
 // Claude responses. JSONL lines are one-per-message, so a long assistant
 // response can be many KB on a single line.
 const TAIL_BYTES: u64 = 262_144;
-
-/// Which agent's transcript format the tail should be parsed as. The host
-/// crate maps its richer `agent_resume::AgentKind` onto this enum when a
-/// transcript exists.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Antigravity,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -22,9 +22,9 @@ use crate::pull_requests::{
 use crate::state::AppState;
 use crate::todos::{self, TodoItem};
 use crate::worktree;
+use acorn_agent::AgentKind;
 use acorn_session::scrollback;
 use acorn_session::status as session_status;
-use acorn_session::status::AgentKind as StatusAgentKind;
 use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
     Project, Session, SessionAgentProvider, SessionKind, SessionMode, SessionOwner, SessionStatus,
@@ -856,7 +856,7 @@ struct ChatCliInvocation {
     prompt: String,
     native_thread_id: Option<String>,
     resume_token: Option<String>,
-    transcript_discovery: Option<acorn_transcript::AgentKind>,
+    transcript_discovery: Option<AgentKind>,
     output_mode: ChatCliOutputMode,
 }
 
@@ -958,7 +958,7 @@ fn resolve_chat_cli_invocation(
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
-                    transcript_discovery: Some(acorn_transcript::AgentKind::Codex),
+                    transcript_discovery: Some(AgentKind::Codex),
                     output_mode: ChatCliOutputMode::CodexJson,
                 })
             }
@@ -988,7 +988,7 @@ fn resolve_chat_cli_invocation(
                     prompt,
                     native_thread_id: None,
                     resume_token: None,
-                    transcript_discovery: Some(acorn_transcript::AgentKind::Antigravity),
+                    transcript_discovery: Some(AgentKind::Antigravity),
                     output_mode: ChatCliOutputMode::Text,
                 })
             }
@@ -3921,13 +3921,13 @@ fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<
             continue;
         }
         match kind {
-            acorn_transcript::AgentKind::Claude => {
+            AgentKind::Claude => {
                 detection.claude = Some(uuid);
             }
-            acorn_transcript::AgentKind::Codex => {
+            AgentKind::Codex => {
                 detection.codex = Some(uuid);
             }
-            acorn_transcript::AgentKind::Antigravity => {
+            AgentKind::Antigravity => {
                 detection.antigravity = Some(uuid);
             }
         }
@@ -5209,7 +5209,7 @@ fn detect_session_statuses_blocking(
             let live_agent_kind = root_pid_value.and_then(|pid| {
                 live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
             });
-            let live_codex_tool_child = matches!(live_agent_kind, Some(StatusAgentKind::Codex))
+            let live_codex_tool_child = matches!(live_agent_kind, Some(AgentKind::Codex))
                 && root_pid_value.is_some_and(|pid| {
                     live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
                 });
@@ -5220,38 +5220,22 @@ fn detect_session_statuses_blocking(
             // marker. A nested peer agent from another provider can update its
             // own marker while the parent agent is still the session owner.
             let live = parsed_id.and_then(|uuid| match live_agent_kind {
-                Some(kind) => agent_resume::live_transcript_for_kind(
-                    uuid,
-                    status_agent_kind_to_resume_kind(kind),
-                ),
+                Some(kind) => agent_resume::live_transcript_for_kind(uuid, kind),
                 None => agent_resume::live_transcript(uuid),
             });
             let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
             let transcript = match live.as_ref() {
-                Some(t) => {
-                    let kind = match t.kind {
-                        agent_resume::AgentKind::Claude => acorn_session::status::AgentKind::Claude,
-                        agent_resume::AgentKind::Codex => acorn_session::status::AgentKind::Codex,
-                        agent_resume::AgentKind::Antigravity => {
-                            acorn_session::status::AgentKind::Antigravity
-                        }
-                    };
-                    Some((t.path.clone(), kind))
-                }
-                None if matches!(live_agent_kind, None | Some(StatusAgentKind::Claude)) => {
+                Some(t) => Some((t.path.clone(), t.kind)),
+                None if matches!(live_agent_kind, None | Some(AgentKind::Claude)) => {
                     todos::locate_transcript_for(&id)
                         .ok()
                         .flatten()
-                        .map(|p| (p, acorn_session::status::AgentKind::Claude))
+                        .map(|p| (p, AgentKind::Claude))
                 }
                 None => None,
             };
             let conversation_preview = transcript.as_ref().and_then(|(path, kind)| {
-                agent_resume::extract_conversation_preview(
-                    status_agent_kind_to_resume_kind(*kind),
-                    path,
-                )
-                .ok()
+                agent_resume::extract_conversation_preview(*kind, path).ok()
             });
             let transcript_preview = conversation_preview
                 .as_ref()
@@ -5264,7 +5248,7 @@ fn detect_session_statuses_blocking(
             // Durable transcript markers keep resume/title features working
             // after exit, but provider badges should reflect only a live
             // agent process under the PTY.
-            let agent_provider = live_agent_kind.map(status_agent_kind_to_provider);
+            let agent_provider = live_agent_kind;
             let auto_title_enabled = {
                 let current = session.as_ref().and_then(|s| s.auto_title_enabled);
                 match parsed_id {
@@ -5423,22 +5407,6 @@ fn shell_hint_for_unattached_daemon_status_poll(has_live_descendant: bool) -> ac
     }
 }
 
-fn status_agent_kind_to_provider(kind: StatusAgentKind) -> SessionAgentProvider {
-    match kind {
-        StatusAgentKind::Claude => SessionAgentProvider::Claude,
-        StatusAgentKind::Codex => SessionAgentProvider::Codex,
-        StatusAgentKind::Antigravity => SessionAgentProvider::Antigravity,
-    }
-}
-
-fn status_agent_kind_to_resume_kind(kind: StatusAgentKind) -> agent_resume::AgentKind {
-    match kind {
-        StatusAgentKind::Claude => agent_resume::AgentKind::Claude,
-        StatusAgentKind::Codex => agent_resume::AgentKind::Codex,
-        StatusAgentKind::Antigravity => agent_resume::AgentKind::Antigravity,
-    }
-}
-
 /// One pass over `sys.processes()` that yields parent→children adjacency.
 /// Built once per poll so the per-session BFS does not rescan the whole
 /// table for every PTY root.
@@ -5455,13 +5423,13 @@ fn build_children_map(sys: &System) -> HashMap<Pid, Vec<Pid>> {
 fn refine_shell_hint_for_unpaired_agent(
     shell_hint: Option<acorn_pty::ShellHint>,
     has_transcript: bool,
-    live_agent_kind: Option<StatusAgentKind>,
+    live_agent_kind: Option<AgentKind>,
 ) -> Option<acorn_pty::ShellHint> {
     if has_transcript {
         return shell_hint;
     }
     match (shell_hint, live_agent_kind) {
-        (Some(acorn_pty::ShellHint::Running), Some(StatusAgentKind::Codex)) => {
+        (Some(acorn_pty::ShellHint::Running), Some(AgentKind::Codex)) => {
             Some(acorn_pty::ShellHint::NeedsInput)
         }
         _ => shell_hint,
@@ -5472,20 +5440,20 @@ fn live_agent_kind_in_descendants(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
-) -> Option<StatusAgentKind> {
+) -> Option<AgentKind> {
     nearest_agent_kind_in_tree(children, root, |pid| {
         let proc = sys.process(pid)?;
         if process_basename_matches(proc, "codex") {
-            return Some(StatusAgentKind::Codex);
+            return Some(AgentKind::Codex);
         }
         if process_basename_matches(proc, "claude") {
-            return Some(StatusAgentKind::Claude);
+            return Some(AgentKind::Claude);
         }
         if process_basename_matches(proc, "agy")
             || process_basename_matches(proc, "antigravity")
             || process_basename_matches(proc, "antigravity-cli")
         {
-            return Some(StatusAgentKind::Antigravity);
+            return Some(AgentKind::Antigravity);
         }
         None
     })
@@ -5519,9 +5487,9 @@ fn nearest_agent_kind_in_tree<F>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
     mut kind_for_pid: F,
-) -> Option<StatusAgentKind>
+) -> Option<AgentKind>
 where
-    F: FnMut(Pid) -> Option<StatusAgentKind>,
+    F: FnMut(Pid) -> Option<AgentKind>,
 {
     let mut queue = VecDeque::new();
     if let Some(direct) = children.get(&root) {
@@ -5660,7 +5628,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 false,
-                Some(StatusAgentKind::Codex),
+                Some(AgentKind::Codex),
             ),
             Some(acorn_pty::ShellHint::NeedsInput),
         );
@@ -5672,7 +5640,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 true,
-                Some(StatusAgentKind::Codex),
+                Some(AgentKind::Codex),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -5684,7 +5652,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 false,
-                Some(StatusAgentKind::Claude),
+                Some(AgentKind::Claude),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -5692,7 +5660,7 @@ mod status_hint_tests {
             refine_shell_hint_for_unpaired_agent(
                 Some(acorn_pty::ShellHint::Running),
                 false,
-                Some(StatusAgentKind::Antigravity),
+                Some(AgentKind::Antigravity),
             ),
             Some(acorn_pty::ShellHint::Running),
         );
@@ -5710,15 +5678,15 @@ mod status_hint_tests {
 
         let kind = nearest_agent_kind_in_tree(&children, root, |pid| {
             if pid == codex {
-                Some(StatusAgentKind::Codex)
+                Some(AgentKind::Codex)
             } else if pid == nested_claude {
-                Some(StatusAgentKind::Claude)
+                Some(AgentKind::Claude)
             } else {
                 None
             }
         });
 
-        assert_eq!(kind, Some(StatusAgentKind::Codex));
+        assert_eq!(kind, Some(AgentKind::Codex));
     }
 
     #[test]

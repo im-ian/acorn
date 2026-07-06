@@ -30,8 +30,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use acorn_agent::AgentKind;
 use acorn_session::Session;
-use acorn_transcript::{self as transcript_watcher, AgentKind, SessionPid};
+use acorn_transcript::{self as transcript_watcher, SessionPid};
 use uuid::Uuid;
 
 use crate::agent_resume;
@@ -200,15 +201,10 @@ fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
 /// `claude --resume` of an older conversation also moves backwards, but
 /// its transcript is being appended right now (hot), so it passes.
 fn marker_rollback_is_dormant_echo(kind: AgentKind, prev_uuid: &str, next_uuid: &str) -> bool {
-    let resume_kind = match kind {
-        AgentKind::Claude => agent_resume::AgentKind::Claude,
-        AgentKind::Codex => agent_resume::AgentKind::Codex,
-        AgentKind::Antigravity => agent_resume::AgentKind::Antigravity,
-    };
-    let Some(prev_path) = agent_resume::locate_transcript(resume_kind, prev_uuid) else {
+    let Some(prev_path) = agent_resume::locate_transcript(kind, prev_uuid) else {
         return false;
     };
-    let Some(next_path) = agent_resume::locate_transcript(resume_kind, next_uuid) else {
+    let Some(next_path) = agent_resume::locate_transcript(kind, next_uuid) else {
         return false;
     };
     rollback_is_dormant_echo(&prev_path, &next_path, SystemTime::now())

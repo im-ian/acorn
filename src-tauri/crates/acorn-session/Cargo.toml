@@ -8,6 +8,7 @@ publish = false
 name = "acorn_session"
 
 [dependencies]
+acorn-agent = { path = "../acorn-agent" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

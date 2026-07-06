@@ -30,6 +30,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use acorn_agent::AgentKind;
+
 const AGENT_STATE_DIR_NAME: &str = "agent-state";
 
 const CLAUDE_ID_FILE: &str = "claude.id";
@@ -124,15 +126,6 @@ pub struct LiveTranscript {
     pub id: String,
     pub path: PathBuf,
     pub kind: AgentKind,
-}
-
-/// Which agent's transcript a marker points at. Public so other modules
-/// (e.g. `session_status`) can dispatch their per-format parser.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Antigravity,
 }
 
 /// Resolve `session_id` to the live transcript its in-flight agent is

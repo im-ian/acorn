@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
+use acorn_agent::AgentKind;
 use chrono::{Datelike, Local, TimeZone, Utc};
 use parking_lot::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
@@ -93,13 +94,6 @@ fn scan_cache() -> &'static Mutex<Option<ScanCache>> {
 fn owner_scan_cache() -> &'static Mutex<Option<ScanCache>> {
     static CACHE: OnceLock<Mutex<Option<ScanCache>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Antigravity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

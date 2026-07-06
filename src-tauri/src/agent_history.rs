@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use acorn_agent::AgentKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -30,6 +31,16 @@ pub enum AgentHistoryProvider {
     Claude,
     Codex,
     Antigravity,
+}
+
+impl From<AgentKind> for AgentHistoryProvider {
+    fn from(kind: AgentKind) -> Self {
+        match kind {
+            AgentKind::Claude => Self::Claude,
+            AgentKind::Codex => Self::Codex,
+            AgentKind::Antigravity => Self::Antigravity,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
