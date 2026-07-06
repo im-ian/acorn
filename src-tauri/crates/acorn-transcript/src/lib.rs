@@ -44,6 +44,13 @@ use chrono::{Datelike, Local, TimeZone, Utc};
 use parking_lot::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 
+mod line;
+
+pub use line::{
+    assistant_message_text, collapse_preview, latest_turn_state, parse_transcript_line,
+    parse_transcript_value, read_tail, ParsedTranscriptLine, TailRead, TranscriptRole, TurnState,
+};
+
 // Maximum age (mtime → now) of a transcript that will be paired with
 // a live agent process. Generous so an idle agent waiting on user
 // input still surfaces as a Fork target.

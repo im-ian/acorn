@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use acorn_agent::AgentKind;
+use acorn_transcript::{
+    collapse_preview, parse_transcript_line, parse_transcript_value, ParsedTranscriptLine,
+    TranscriptRole,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -39,6 +43,16 @@ impl From<AgentKind> for AgentHistoryProvider {
             AgentKind::Claude => Self::Claude,
             AgentKind::Codex => Self::Codex,
             AgentKind::Antigravity => Self::Antigravity,
+        }
+    }
+}
+
+impl AgentHistoryProvider {
+    fn kind(&self) -> AgentKind {
+        match self {
+            Self::Claude => AgentKind::Claude,
+            Self::Codex => AgentKind::Codex,
+            Self::Antigravity => AgentKind::Antigravity,
         }
     }
 }
@@ -494,7 +508,7 @@ fn parse_file_budget(limit: usize) -> usize {
 }
 
 fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let state = parse_codex_state(path)?;
+    let state = parse_agent_state(AgentKind::Codex, path)?;
     if state.internal_title_generation {
         return None;
     }
@@ -525,7 +539,7 @@ fn parse_codex_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistory
 }
 
 fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let state = parse_claude_state(path)?;
+    let state = parse_agent_state(AgentKind::Claude, path)?;
     if state.internal_title_generation {
         return None;
     }
@@ -560,7 +574,7 @@ fn parse_claude_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistor
 }
 
 fn parse_antigravity_file(path: &Path, scope: HistoryScope<'_>) -> Option<AgentHistoryItem> {
-    let state = parse_antigravity_state(path)?;
+    let state = parse_agent_state(AgentKind::Antigravity, path)?;
     if state.internal_title_generation {
         return None;
     }
@@ -607,11 +621,7 @@ pub fn transcript_first_user_message(
     path: &Path,
     max_chars: usize,
 ) -> Option<String> {
-    let state = match provider {
-        AgentHistoryProvider::Codex => parse_codex_state(path)?,
-        AgentHistoryProvider::Claude => parse_claude_state(path)?,
-        AgentHistoryProvider::Antigravity => parse_antigravity_state(path)?,
-    };
+    let state = parse_agent_state(provider.kind(), path)?;
     state
         .title
         .and_then(|title| truncate_preserving_lines(&title, max_chars))
@@ -624,6 +634,7 @@ pub fn transcript_title_context(
 ) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     let mut builder = TitleContextBuilder::new(max_chars);
+    let kind = provider.kind();
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let line = line.trim();
         if !line.starts_with('{') {
@@ -632,7 +643,8 @@ pub fn transcript_title_context(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(entry) = title_context_entry(&provider, &value) else {
+        let parsed = parse_transcript_value(kind, &value);
+        let Some(entry) = title_context_entry(&parsed) else {
             continue;
         };
         builder.push(entry);
@@ -659,6 +671,7 @@ fn summarize_agent_transcript(
     let mut assistant_messages = 0_u64;
     let mut summed_usage = AgentTranscriptTokenUsage::default();
     let mut cumulative_usage = AgentTranscriptTokenUsage::default();
+    let kind = provider.kind();
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let line = line.trim();
@@ -668,7 +681,8 @@ fn summarize_agent_transcript(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(entry) = title_context_entry(&provider, &value) {
+        let parsed = parse_transcript_value(kind, &value);
+        if let Some(entry) = title_context_entry(&parsed) {
             match entry.role {
                 "User" => user_messages += 1,
                 "Assistant" => assistant_messages += 1,
@@ -815,7 +829,7 @@ fn is_cumulative_usage_event(provider: &AgentHistoryProvider, value: &Value) -> 
 }
 
 fn codex_token_count_event(value: &Value) -> Option<&Value> {
-    if string_at(Some(value), "type").as_deref() == Some("token_count") {
+    if value.get("type").and_then(Value::as_str) == Some("token_count") {
         return Some(value);
     }
     for key in ["msg", "payload"] {
@@ -847,105 +861,28 @@ fn max_token_usage(
     }
 }
 
-fn parse_codex_state(path: &Path) -> Option<ParsedAgentFile> {
-    let mut state = ParsedAgentFile::default();
-    for line in sample_lines(path).ok()? {
-        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
-        let payload = value.get("payload");
-
-        if state.id.is_none() {
-            state.id = string_at(payload, "id")
-                .or_else(|| string_at(payload, "session_id"))
-                .or_else(|| string_at(Some(&value), "session_id"));
-        }
-        if state.cwd.is_none() {
-            state.cwd = string_at(payload, "cwd")
-                .or_else(|| string_at(Some(&value), "cwd"))
-                .or_else(|| extract_cwd_from_text(&value_texts(&value)));
-        }
-
-        let role = string_at(payload, "role");
-        let texts = value_texts(&value);
-        let text = first_text(&texts);
-        if role.as_deref() == Some("user") {
-            if let Some(user_text) = joined_text(&texts) {
-                if looks_like_acorn_title_generation_prompt(&user_text) {
-                    state.internal_title_generation = true;
-                }
-                if state.title.is_none() {
-                    state.title = Some(user_text);
-                }
-            }
-        }
-        if role.as_deref() == Some("assistant") {
-            state.preview = text.clone().or(state.preview);
-        }
-        if state.preview.is_none() {
-            state.preview = response_text(&value).or(state.preview);
-        }
-    }
-
-    Some(state)
-}
-
-fn parse_claude_state(path: &Path) -> Option<ParsedAgentFile> {
-    let mut state = ParsedAgentFile::default();
-    for line in sample_lines(path).ok()? {
-        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
-        if state.id.is_none() {
-            state.id = string_at(Some(&value), "sessionId");
-        }
-        if state.cwd.is_none() {
-            state.cwd =
-                string_at(Some(&value), "cwd").or_else(|| string_at(Some(&value), "project"));
-        }
-        if is_claude_meta_event(&value) {
-            continue;
-        }
-        let ty = string_at(Some(&value), "type");
-        let texts = value_texts(&value);
-        let text = first_claude_display_text(&texts);
-        if ty.as_deref() == Some("user") {
-            if let Some(user_text) = joined_claude_display_text(&texts) {
-                if looks_like_acorn_title_generation_prompt(&user_text) {
-                    state.internal_title_generation = true;
-                }
-                if state.title.is_none() {
-                    state.title = Some(user_text);
-                }
-            }
-        }
-        if ty.as_deref() == Some("assistant") {
-            state.preview = text.clone().or(state.preview);
-        }
-    }
-
-    Some(state)
-}
-
-fn parse_antigravity_state(path: &Path) -> Option<ParsedAgentFile> {
+fn parse_agent_state(kind: AgentKind, path: &Path) -> Option<ParsedAgentFile> {
     let mut state = ParsedAgentFile {
-        id: antigravity_id_from_path(path),
+        id: if kind == AgentKind::Antigravity {
+            antigravity_id_from_path(path)
+        } else {
+            None
+        },
         ..ParsedAgentFile::default()
     };
     for line in sample_lines(path).ok()? {
-        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+        let Some(parsed) = parse_transcript_line(kind, line.trim()) else {
             continue;
         };
-        let ty = string_at(Some(&value), "type");
-        let text = string_at(Some(&value), "content").or_else(|| first_text(&value_texts(&value)));
-        if state.cwd.is_none() {
-            state.cwd = string_at(Some(&value), "cwd")
-                .or_else(|| string_at(Some(&value), "project"))
-                .or_else(|| first_workspace_path(&value));
+        if state.id.is_none() {
+            state.id = parsed.session_id.clone();
         }
-        match ty.as_deref() {
-            Some("USER_INPUT") => {
-                if let Some(user_text) = text.and_then(|s| extract_antigravity_user_request(&s)) {
+        if state.cwd.is_none() {
+            state.cwd = parsed.cwd.clone();
+        }
+        match parsed.state_role {
+            TranscriptRole::User => {
+                if let Some(user_text) = parsed.state_text {
                     if looks_like_acorn_title_generation_prompt(&user_text) {
                         state.internal_title_generation = true;
                     }
@@ -954,10 +891,15 @@ fn parse_antigravity_state(path: &Path) -> Option<ParsedAgentFile> {
                     }
                 }
             }
-            Some("PLANNER_RESPONSE") => {
-                state.preview = text.or(state.preview);
+            TranscriptRole::Assistant => {
+                if let Some(text) = parsed.state_text {
+                    state.preview = Some(text);
+                }
             }
-            _ => {}
+            TranscriptRole::Other => {}
+        }
+        if kind == AgentKind::Codex && state.preview.is_none() {
+            state.preview = parsed.response_text;
         }
     }
 
@@ -969,64 +911,12 @@ struct TitleContextEntry {
     text: String,
 }
 
-fn title_context_entry(
-    provider: &AgentHistoryProvider,
-    value: &Value,
-) -> Option<TitleContextEntry> {
-    match provider {
-        AgentHistoryProvider::Codex => codex_title_context_entry(value),
-        AgentHistoryProvider::Claude => claude_title_context_entry(value),
-        AgentHistoryProvider::Antigravity => antigravity_title_context_entry(value),
-    }
-}
-
-fn codex_title_context_entry(value: &Value) -> Option<TitleContextEntry> {
-    let payload = value.get("payload");
-    let role = string_at(payload, "role").or_else(|| string_at(Some(value), "role"))?;
-    let texts = value_texts(value);
-    match role.as_str() {
-        "user" => joined_text(&texts).map(|text| TitleContextEntry { role: "User", text }),
-        "assistant" => first_text(&texts)
-            .or_else(|| response_text(value))
-            .map(|text| TitleContextEntry {
-                role: "Assistant",
-                text,
-            }),
-        _ => None,
-    }
-}
-
-fn claude_title_context_entry(value: &Value) -> Option<TitleContextEntry> {
-    if is_claude_meta_event(value) {
-        return None;
-    }
-    let ty = string_at(Some(value), "type")?;
-    let texts = value_texts(value);
-    match ty.as_str() {
-        "user" => {
-            joined_claude_display_text(&texts).map(|text| TitleContextEntry { role: "User", text })
-        }
-        "assistant" => first_claude_display_text(&texts).map(|text| TitleContextEntry {
-            role: "Assistant",
-            text,
-        }),
-        _ => None,
-    }
-}
-
-fn antigravity_title_context_entry(value: &Value) -> Option<TitleContextEntry> {
-    let ty = string_at(Some(value), "type")?;
-    let text = string_at(Some(value), "content").or_else(|| first_text(&value_texts(value)));
-    match ty.as_str() {
-        "USER_INPUT" => text
-            .and_then(|s| extract_antigravity_user_request(&s))
-            .map(|text| TitleContextEntry { role: "User", text }),
-        "PLANNER_RESPONSE" => text.map(|text| TitleContextEntry {
-            role: "Assistant",
-            text,
-        }),
-        _ => None,
-    }
+fn title_context_entry(parsed: &ParsedTranscriptLine) -> Option<TitleContextEntry> {
+    parsed
+        .role
+        .title_label()
+        .zip(parsed.text.clone())
+        .map(|(role, text)| TitleContextEntry { role, text })
 }
 
 struct TitleContextBuilder {
@@ -1111,29 +1001,6 @@ impl TitleContextBuilder {
     }
 }
 
-fn extract_antigravity_user_request(content: &str) -> Option<String> {
-    let marker = "<USER_REQUEST>";
-    let end_marker = "</USER_REQUEST>";
-    if let Some(start) = content.find(marker) {
-        let after = start + marker.len();
-        let end = content[after..]
-            .find(end_marker)
-            .map(|offset| after + offset)
-            .unwrap_or(content.len());
-        return nonempty_trimmed(&content[after..end]);
-    }
-    nonempty_trimmed(content)
-}
-
-fn first_workspace_path(value: &Value) -> Option<String> {
-    value
-        .get("workspacePaths")
-        .or_else(|| value.get("workspace_paths"))
-        .and_then(|paths| paths.as_array())
-        .and_then(|paths| paths.iter().find_map(|path| path.as_str()))
-        .map(ToString::to_string)
-}
-
 #[derive(Default)]
 struct ParsedAgentFile {
     id: Option<String>,
@@ -1187,150 +1054,6 @@ fn sample_lines(path: &Path) -> std::io::Result<Vec<String>> {
         .collect())
 }
 
-fn value_texts(value: &Value) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_texts(value.get("message").unwrap_or(value), &mut out);
-    if let Some(payload) = value.get("payload") {
-        collect_texts(payload, &mut out);
-    }
-    out
-}
-
-fn collect_texts(value: &Value, out: &mut Vec<String>) {
-    match value {
-        Value::String(s) => {
-            if !s.trim().is_empty() {
-                out.push(s.clone());
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_texts(item, out);
-            }
-        }
-        Value::Object(map) => {
-            for key in ["text", "output_text", "message", "content"] {
-                if let Some(child) = map.get(key) {
-                    collect_texts(child, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn first_text(texts: &[String]) -> Option<String> {
-    texts
-        .iter()
-        .map(|s| s.trim())
-        .find(|s| !s.is_empty() && !looks_like_context_block(s))
-        .map(str::to_string)
-}
-
-fn joined_text(texts: &[String]) -> Option<String> {
-    join_display_texts(texts, |s| !looks_like_context_block(s))
-}
-
-fn first_claude_display_text(texts: &[String]) -> Option<String> {
-    texts
-        .iter()
-        .map(|s| s.trim())
-        .find(|s| {
-            !s.is_empty() && !looks_like_context_block(s) && !looks_like_claude_control_text(s)
-        })
-        .map(str::to_string)
-}
-
-fn joined_claude_display_text(texts: &[String]) -> Option<String> {
-    join_display_texts(texts, |s| {
-        !looks_like_context_block(s) && !looks_like_claude_control_text(s)
-    })
-}
-
-fn join_display_texts(texts: &[String], include: impl Fn(&str) -> bool) -> Option<String> {
-    let mut parts = Vec::new();
-    for text in texts
-        .iter()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && include(s))
-    {
-        if parts.last().copied() != Some(text) {
-            parts.push(text);
-        }
-    }
-    let joined = parts.join("\n\n");
-    nonempty_trimmed(&joined)
-}
-
-fn is_claude_meta_event(value: &Value) -> bool {
-    value.get("isMeta").and_then(|v| v.as_bool()) == Some(true)
-}
-
-fn looks_like_claude_control_text(text: &str) -> bool {
-    let lower = text.trim_start().to_ascii_lowercase();
-    [
-        "<command-message>",
-        "<command-name>",
-        "<ide-context>",
-        "<local-command-",
-        "<system-reminder>",
-        "<task-notification>",
-    ]
-    .iter()
-    .any(|tag| lower.starts_with(tag))
-        || lower.starts_with("caveat: the messages below were generated by a local command")
-}
-
-fn response_text(value: &Value) -> Option<String> {
-    for pointer in [
-        "/payload/response/output",
-        "/response_payload/output",
-        "/payload/output",
-    ] {
-        if let Some(v) = value.pointer(pointer) {
-            let texts = value_texts(v);
-            if let Some(text) = first_text(&texts) {
-                return Some(text);
-            }
-        }
-    }
-    None
-}
-
-fn looks_like_context_block(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("<environment_context>")
-        || lower.contains("<cwd>")
-        || lower.contains("# agents.md")
-        || lower.contains("<instructions>")
-}
-
-fn extract_cwd_from_text(texts: &[String]) -> Option<String> {
-    for text in texts {
-        let Some(start) = text.find("<cwd>") else {
-            continue;
-        };
-        let after = start + "<cwd>".len();
-        let Some(end) = text[after..].find("</cwd>") else {
-            continue;
-        };
-        let cwd = text[after..after + end].trim();
-        if !cwd.is_empty() {
-            return Some(cwd.to_string());
-        }
-    }
-    None
-}
-
-fn string_at(value: Option<&Value>, key: &str) -> Option<String> {
-    value?
-        .get(key)
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 fn codex_id_from_filename(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     uuid_suffix(stem)
@@ -1338,15 +1061,11 @@ fn codex_id_from_filename(path: &Path) -> Option<String> {
 
 fn codex_id_from_transcript(path: &Path) -> Option<String> {
     for line in sample_lines(path).ok()? {
-        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+        let Some(parsed) = parse_transcript_line(AgentKind::Codex, line.trim()) else {
             continue;
         };
-        let payload = value.get("payload");
-        if let Some(id) = string_at(payload, "id")
-            .or_else(|| string_at(payload, "session_id"))
-            .or_else(|| string_at(Some(&value), "session_id"))
-        {
-            return Some(id);
+        if parsed.session_id.is_some() {
+            return parsed.session_id;
         }
     }
     None
@@ -1434,18 +1153,6 @@ fn numeric_component(component: &std::ffi::OsStr, len: usize) -> bool {
         .unwrap_or(false)
 }
 
-fn collapse_preview(s: &str, max_chars: usize) -> Option<String> {
-    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    let mut out = collapsed.chars().take(max_chars).collect::<String>();
-    if collapsed.chars().count() > max_chars {
-        out.push('…');
-    }
-    Some(out)
-}
-
 fn truncate_preserving_lines(s: &str, max_chars: usize) -> Option<String> {
     let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
     let trimmed_lines = normalized
@@ -1462,15 +1169,6 @@ fn truncate_preserving_lines(s: &str, max_chars: usize) -> Option<String> {
         out.push('…');
     }
     Some(out)
-}
-
-fn nonempty_trimmed(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 fn path_is_within(cwd: &str, repo: &Path) -> bool {

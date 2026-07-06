@@ -120,6 +120,7 @@ version = "0.1.0"
 dependencies = [
  "acorn-agent",
  "acorn-pty",
+ "acorn-transcript",
  "chrono",
  "dashmap",
  "serde",

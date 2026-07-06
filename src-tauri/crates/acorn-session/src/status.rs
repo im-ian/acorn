@@ -33,12 +33,11 @@
 //! `agent_resume`'s persister markers + the legacy `~/.claude/projects/`
 //! UUID-named fallback) and is passed in here as `(PathBuf, AgentKind)`.
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use acorn_agent::AgentKind;
 use acorn_pty::ShellHint;
+use acorn_transcript::{latest_turn_state, read_tail, TurnState};
 use serde::Serialize;
 
 use crate::session::SessionStatus;
@@ -113,20 +112,15 @@ pub fn detect_with_reason(
         None => return detect_shell_hint(shell_hint),
     };
 
-    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    let read_full = file_size <= TAIL_BYTES;
-    let tail = read_tail(&path, TAIL_BYTES).unwrap_or_default();
-    let classified = match kind {
-        AgentKind::Claude => classify_claude_tail(&tail, read_full),
-        AgentKind::Codex => classify_codex_tail(&tail, read_full),
-        AgentKind::Antigravity => classify_antigravity_tail(&tail, read_full),
-    };
+    let classified = read_tail(&path, TAIL_BYTES)
+        .ok()
+        .and_then(|tail| latest_turn_state(kind, &tail.text, tail.read_full));
 
     match classified {
-        Some(TurnClass::NeedsInput) => {
+        Some(TurnState::NeedsInput) => {
             StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::TurnComplete))
         }
-        Some(TurnClass::Running) => StatusDetection::new(SessionStatus::Running, None),
+        Some(TurnState::Running) => StatusDetection::new(SessionStatus::Running, None),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
         // to Idle. The next poll that lands on a real turn line corrects
@@ -148,141 +142,6 @@ fn detect_shell_hint(hint: Option<ShellHint>) -> StatusDetection {
         }
         Some(ShellHint::Idle) | None => StatusDetection::new(SessionStatus::Idle, None),
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TurnClass {
-    NeedsInput,
-    Running,
-}
-
-fn read_tail(path: &Path, max_bytes: u64) -> std::io::Result<String> {
-    let mut f = File::open(path)?;
-    let len = f.metadata()?.len();
-    let start = len.saturating_sub(max_bytes);
-    f.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::with_capacity(max_bytes.min(len) as usize);
-    f.read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn classify_claude_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
-    for line in tail_lines_newest_first(tail, read_full) {
-        let Some(v) = parse_json_line(line) else {
-            continue;
-        };
-        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if line_type != "user" && line_type != "assistant" {
-            continue;
-        }
-        let Some(msg) = v.get("message") else {
-            continue;
-        };
-        if line_type == "user" {
-            return Some(TurnClass::Running);
-        }
-        let stop_reason = msg
-            .get("stop_reason")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
-        return Some(match stop_reason {
-            "end_turn" | "stop_sequence" => TurnClass::NeedsInput,
-            "tool_use" => TurnClass::Running,
-            // Unknown / null → assume the assistant turn is still live.
-            _ => TurnClass::Running,
-        });
-    }
-    None
-}
-
-fn classify_codex_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
-    for line in tail_lines_newest_first(tail, read_full) {
-        let Some(v) = parse_json_line(line) else {
-            continue;
-        };
-        let payload_type = v
-            .pointer("/payload/type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        match payload_type {
-            // `task_complete` is emitted exactly once per turn, after the
-            // final `agent_message`. Authoritative "codex is waiting".
-            "task_complete" => return Some(TurnClass::NeedsInput),
-            "user_message" => return Some(TurnClass::Running),
-            "function_call" | "function_call_output" | "reasoning" => {
-                return Some(TurnClass::Running);
-            }
-            "agent_message" => {
-                // The final answer phase is the user-visible "turn over"
-                // signal when `task_complete` got truncated out of the
-                // tail window. `commentary` is intermediate narration
-                // between tool calls — keep treating those as Running.
-                let phase = v
-                    .pointer("/payload/phase")
-                    .and_then(|p| p.as_str())
-                    .unwrap_or("");
-                return Some(if phase == "final_answer" {
-                    TurnClass::NeedsInput
-                } else {
-                    TurnClass::Running
-                });
-            }
-            "message" => {
-                // `response_item` mirror of an `agent_message`. Treat
-                // assistant messages as in-flight unless we have stronger
-                // signal upstream (the `task_complete` / `final_answer`
-                // branches above land first when present).
-                if v.pointer("/payload/role").and_then(|r| r.as_str()) == Some("assistant") {
-                    return Some(TurnClass::Running);
-                }
-                continue;
-            }
-            // event_msg lines that are pure telemetry (`token_count`,
-            // `agent_reasoning_*`, `rate_limit_*`, etc.) are skipped —
-            // they don't change the turn-completion state.
-            _ => continue,
-        }
-    }
-    None
-}
-
-fn classify_antigravity_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
-    for line in tail_lines_newest_first(tail, read_full) {
-        let Some(v) = parse_json_line(line) else {
-            continue;
-        };
-        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
-        match line_type {
-            "USER_INPUT" => return Some(TurnClass::Running),
-            "PLANNER_RESPONSE" => {
-                return Some(if status == "DONE" {
-                    TurnClass::NeedsInput
-                } else {
-                    TurnClass::Running
-                });
-            }
-            "CONVERSATION_HISTORY" => continue,
-            "" => continue,
-            _ => return Some(TurnClass::Running),
-        }
-    }
-    None
-}
-
-fn tail_lines_newest_first(tail: &str, read_full: bool) -> impl Iterator<Item = &str> {
-    let mut lines: Vec<&str> = tail.lines().collect();
-    // The first line in the buffer may be truncated when we tail-read; drop
-    // it. When the entire file fit in the buffer, the first line is intact
-    // and we keep it.
-    if !read_full && lines.len() > 1 {
-        lines.remove(0);
-    }
-    lines.into_iter().rev().filter(|l| !l.trim().is_empty())
-}
-
-fn parse_json_line(line: &str) -> Option<serde_json::Value> {
-    serde_json::from_str(line.trim()).ok()
 }
 
 #[cfg(test)]
@@ -314,16 +173,20 @@ mod tests {
         ]
     }
 
+    fn classify_tail(kind: AgentKind, tail: &str, read_full: bool) -> Option<TurnState> {
+        latest_turn_state(kind, tail, read_full)
+    }
+
     #[test]
     fn empty_tail_returns_none() {
-        assert_eq!(classify_claude_tail("", true), None);
+        assert_eq!(classify_tail(AgentKind::Claude, "", true), None);
     }
 
     #[test]
     fn user_turn_maps_to_running() {
         assert_eq!(
-            classify_claude_tail(user_turn(), true),
-            Some(TurnClass::Running),
+            classify_tail(AgentKind::Claude, user_turn(), true),
+            Some(TurnState::Running),
         );
     }
 
@@ -337,45 +200,48 @@ mod tests {
             tail.push('\n');
         }
         assert_eq!(
-            classify_claude_tail(&tail, true),
-            Some(TurnClass::NeedsInput),
+            classify_tail(AgentKind::Claude, &tail, true),
+            Some(TurnState::NeedsInput),
         );
     }
 
     #[test]
     fn assistant_tool_use_maps_to_running() {
         assert_eq!(
-            classify_claude_tail(&assistant("tool_use"), true),
-            Some(TurnClass::Running),
+            classify_tail(AgentKind::Claude, &assistant("tool_use"), true),
+            Some(TurnState::Running),
         );
     }
 
     #[test]
     fn unknown_stop_reason_treated_as_running() {
         assert_eq!(
-            classify_claude_tail(&assistant("max_tokens"), true),
-            Some(TurnClass::Running),
+            classify_tail(AgentKind::Claude, &assistant("max_tokens"), true),
+            Some(TurnState::Running),
         );
     }
 
     #[test]
     fn truncated_first_line_is_dropped_when_not_read_full() {
         let tail = format!("ent\":[]}}}}\n{}\n", user_turn());
-        assert_eq!(classify_claude_tail(&tail, false), Some(TurnClass::Running),);
+        assert_eq!(
+            classify_tail(AgentKind::Claude, &tail, false),
+            Some(TurnState::Running),
+        );
     }
 
     #[test]
     fn intact_first_line_is_kept_when_read_full() {
         assert_eq!(
-            classify_claude_tail(user_turn(), true),
-            Some(TurnClass::Running),
+            classify_tail(AgentKind::Claude, user_turn(), true),
+            Some(TurnState::Running),
         );
     }
 
     #[test]
     fn meta_only_tail_returns_none() {
         let tail = meta_lines().join("\n");
-        assert_eq!(classify_claude_tail(&tail, true), None);
+        assert_eq!(classify_tail(AgentKind::Claude, &tail, true), None);
     }
 
     #[test]
@@ -407,7 +273,10 @@ mod tests {
     #[test]
     fn assistant_without_message_is_skipped() {
         let tail = format!("{}\n{}\n", r#"{"type":"assistant"}"#, user_turn(),);
-        assert_eq!(classify_claude_tail(&tail, true), Some(TurnClass::Running),);
+        assert_eq!(
+            classify_tail(AgentKind::Claude, &tail, true),
+            Some(TurnState::Running),
+        );
     }
 
     // --- codex format ---
@@ -415,7 +284,10 @@ mod tests {
     #[test]
     fn codex_task_complete_maps_to_needs_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::NeedsInput),
+        );
     }
 
     #[test]
@@ -424,25 +296,37 @@ mod tests {
         // the walker falls back to the most recent `agent_message`
         // phase.
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::NeedsInput),
+        );
     }
 
     #[test]
     fn codex_function_call_maps_to_running() {
         let tail = r#"{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c1"}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::Running)
+        );
     }
 
     #[test]
     fn codex_commentary_agent_message_maps_to_running() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"checking","phase":"commentary","memory_citation":null}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::Running)
+        );
     }
 
     #[test]
     fn codex_user_message_maps_to_running() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"hi","images":[],"local_images":[],"text_elements":[]}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::Running)
+        );
     }
 
     #[test]
@@ -455,12 +339,15 @@ mod tests {
             "\n",
             r#"{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{}}}"#,
         );
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+        assert_eq!(
+            classify_tail(AgentKind::Codex, tail, true),
+            Some(TurnState::NeedsInput),
+        );
     }
 
     #[test]
     fn codex_empty_tail_returns_none() {
-        assert_eq!(classify_codex_tail("", true), None);
+        assert_eq!(classify_tail(AgentKind::Codex, "", true), None);
     }
 
     // --- antigravity format ---
@@ -469,8 +356,8 @@ mod tests {
     fn antigravity_done_planner_maps_to_needs_input() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
-            classify_antigravity_tail(tail, true),
-            Some(TurnClass::NeedsInput),
+            classify_tail(AgentKind::Antigravity, tail, true),
+            Some(TurnState::NeedsInput),
         );
     }
 
@@ -478,8 +365,8 @@ mod tests {
     fn antigravity_user_input_maps_to_running() {
         let tail = r#"{"type":"USER_INPUT","status":"DONE","content":"hi"}"#;
         assert_eq!(
-            classify_antigravity_tail(tail, true),
-            Some(TurnClass::Running),
+            classify_tail(AgentKind::Antigravity, tail, true),
+            Some(TurnState::Running),
         );
     }
 
@@ -487,8 +374,8 @@ mod tests {
     fn antigravity_non_planner_done_maps_to_running() {
         let tail = r#"{"type":"TOOL_CALL","status":"DONE","content":"done"}"#;
         assert_eq!(
-            classify_antigravity_tail(tail, true),
-            Some(TurnClass::Running),
+            classify_tail(AgentKind::Antigravity, tail, true),
+            Some(TurnState::Running),
         );
     }
 
@@ -496,10 +383,7 @@ mod tests {
 
     #[test]
     fn detect_returns_idle_when_no_transcript_and_no_hint() {
-        assert_eq!(
-            detect(None, SessionStatus::Idle, None),
-            SessionStatus::Idle
-        );
+        assert_eq!(detect(None, SessionStatus::Idle, None), SessionStatus::Idle);
     }
 
     #[test]
@@ -577,10 +461,8 @@ mod tests {
     }
 
     fn write_status_transcript(body: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "acorn-status-test-{}.jsonl",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("acorn-status-test-{}.jsonl", uuid::Uuid::new_v4()));
         std::fs::write(&path, body).expect("write status transcript");
         path
     }

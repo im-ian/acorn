@@ -9,6 +9,7 @@ name = "acorn_session"
 
 [dependencies]
 acorn-agent = { path = "../acorn-agent" }
+acorn-transcript = { path = "../acorn-transcript" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

@@ -29,6 +29,7 @@ use acorn_session::status::StatusReason as SessionStatusReason;
 use acorn_session::{
     Project, Session, SessionAgentProvider, SessionKind, SessionMode, SessionOwner, SessionStatus,
 };
+use acorn_transcript::{assistant_message_text, collapse_preview};
 
 use serde::Serialize;
 use tauri_plugin_dialog::DialogExt;
@@ -754,35 +755,6 @@ fn json_delta_text(value: &serde_json::Value) -> Option<String> {
         .or_else(|| string_field(value, &["delta", "content"]))
         .or_else(|| string_field(value, &["text"]))
         .or_else(|| string_field(value, &["content"]))
-}
-
-fn assistant_message_text(value: &serde_json::Value) -> Option<String> {
-    if value
-        .get("role")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|role| role != "assistant")
-    {
-        return None;
-    }
-    if let Some(text) = value.get("content").and_then(serde_json::Value::as_str) {
-        return Some(text.to_string());
-    }
-    let content = value.get("content")?.as_array()?;
-    let text = content
-        .iter()
-        .filter_map(chat_content_part_text)
-        .collect::<String>();
-    if text.is_empty() { None } else { Some(text) }
-}
-
-fn chat_content_part_text(value: &serde_json::Value) -> Option<&str> {
-    let part_type = value.get("type").and_then(serde_json::Value::as_str);
-    match part_type {
-        Some("text") | Some("output_text") | Some("message") | None => {
-            value.get("text").and_then(serde_json::Value::as_str)
-        }
-        _ => None,
-    }
 }
 
 fn string_field(value: &serde_json::Value, path: &[&str]) -> Option<String> {
@@ -4964,14 +4936,17 @@ fn auto_title_promotion_needed(auto_title_enabled: Option<bool>, has_transcript:
 fn chat_conversation_preview(
     chat_state: &persistence::ChatSessionState,
 ) -> agent_resume::ConversationPreview {
+    const STATUS_PREVIEW_CHARS: usize = 90;
     let mut preview = agent_resume::ConversationPreview::default();
     for message in chat_state.messages.iter().rev() {
         match message.role {
             persistence::ChatRole::User if preview.last_user_message.is_none() => {
-                preview.last_user_message = collapse_status_preview(&message.content);
+                preview.last_user_message =
+                    collapse_preview(&message.content, STATUS_PREVIEW_CHARS);
             }
             persistence::ChatRole::Assistant if preview.last_agent_message.is_none() => {
-                preview.last_agent_message = collapse_status_preview(&message.content);
+                preview.last_agent_message =
+                    collapse_preview(&message.content, STATUS_PREVIEW_CHARS);
             }
             _ => {}
         }
@@ -4980,24 +4955,6 @@ fn chat_conversation_preview(
         }
     }
     preview
-}
-
-fn collapse_status_preview(s: &str) -> Option<String> {
-    const STATUS_PREVIEW_CHARS: usize = 90;
-    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    let truncated = collapsed
-        .chars()
-        .take(STATUS_PREVIEW_CHARS)
-        .collect::<String>();
-    let suffix = if collapsed.chars().count() > STATUS_PREVIEW_CHARS {
-        "…"
-    } else {
-        ""
-    };
-    Some(format!("{truncated}{suffix}"))
 }
 
 fn git_context_for_path(path: &std::path::Path) -> Option<(String, String)> {
