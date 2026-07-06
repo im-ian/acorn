@@ -131,13 +131,15 @@ impl ProjectStore {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
-    Idle,
-    Running,
-    NeedsInput,
-    Failed,
-    Completed,
+    #[serde(rename = "ready", alias = "idle", alias = "completed")]
+    Ready,
+    #[serde(rename = "working", alias = "running")]
+    Working,
+    #[serde(rename = "waiting_for_input", alias = "needs_input")]
+    WaitingForInput,
+    #[serde(rename = "errored", alias = "failed")]
+    Errored,
 }
 
 /// Distinguishes ordinary terminal sessions from "control" sessions, which
@@ -303,7 +305,7 @@ pub struct Session {
     /// Whether this session has ever reported an agent lifecycle hook event.
     /// Persisted so hook ownership of the status survives an app restart: a
     /// daemon-managed PTY outlives the app, and its resting hook-set status
-    /// (`needs_input`) must not be clobbered back to Running by the
+    /// (`waiting_for_input`) must not be clobbered back to Working by the
     /// transcript-tail poll before the agent emits its first event to the
     /// new app instance (a resting agent may never emit one).
     #[serde(default)]
@@ -337,7 +339,7 @@ impl Session {
             branch,
             isolated,
             project_scoped: true,
-            status: SessionStatus::Idle,
+            status: SessionStatus::Ready,
             created_at: now,
             updated_at: now,
             last_message: None,
@@ -364,12 +366,12 @@ pub struct SessionStore {
     /// Sessions that reported at least one agent lifecycle hook event
     /// (Start/Stop/NeedsInput/Error) *this run*. Runtime-only. The status
     /// poll consults hook activity to decide whether hooks own the
-    /// Running/NeedsInput/Completed classification: once a session proves its
+    /// Working/WaitingForInput classification: once a session proves its
     /// hook channel is live, the transcript-tail poll stops second-guessing
     /// turn completion (a long or tool-heavy Claude turn often leaves no
     /// `end_turn` line inside the tail window, so the tail keeps reading
-    /// Running long after the turn ended) and only keeps ownership of the
-    /// Idle (process-gone) edge, which no hook reports.
+    /// Working long after the turn ended) and only keeps ownership of the
+    /// Ready (process-gone) edge, which no hook reports.
     ///
     /// Hook activity itself also persists across restarts via the session's
     /// `hook_active` field; this set distinguishes "confirmed live this run"
@@ -771,8 +773,7 @@ mod tests {
             .as_object_mut()
             .expect("session is an object")
             .remove("hook_active");
-        let reloaded: Session =
-            serde_json::from_value(value).expect("legacy session deserializes");
+        let reloaded: Session = serde_json::from_value(value).expect("legacy session deserializes");
         assert!(!reloaded.hook_active);
     }
 

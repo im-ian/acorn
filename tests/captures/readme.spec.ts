@@ -300,9 +300,9 @@ function persistedWorkspace(sceneName: SceneName) {
         {
           id: "n-1",
           sessionId: "workspace-polish",
-          kind: "needs_input",
-          status: "needs_input",
-          previousStatus: "running",
+          kind: "waiting_for_input",
+          status: "waiting_for_input",
+          previousStatus: "working",
           sessionName: "workspace-polish",
           projectName: "acorn-app",
           repoPath: REPOS.app,
@@ -1258,17 +1258,17 @@ function captureMockHandlersSource(sceneName: SceneName) {
 function seedSessions(sceneName: SceneName) {
   const baseSessions = [
     session("workspace-polish", "workspace-polish", REPOS.app, "main", {
-      status: "needs_input",
+      status: "waiting_for_input",
       agent: "codex",
       position: 0,
     }),
     session("agent-resume", "agent-resume", REPOS.app, "main", {
-      status: "running",
+      status: "working",
       agent: "claude",
       position: 1,
     }),
     session("api-contracts", "api-contracts", REPOS.app, "main", {
-      status: "idle",
+      status: "ready",
       agent: "claude",
       position: 2,
     }),
@@ -1278,7 +1278,7 @@ function seedSessions(sceneName: SceneName) {
       REPOS.app,
       "feature/ui-capture",
       {
-        status: "completed",
+        status: "ready",
         agent: "codex",
         position: 3,
         cwd: `${REPOS.app}/packages/desktop`,
@@ -1290,7 +1290,7 @@ function seedSessions(sceneName: SceneName) {
       REPOS.app,
       "release/readme-captures",
       {
-        status: "running",
+        status: "working",
         agent: "claude",
         position: 5,
         isolated: true,
@@ -1300,18 +1300,18 @@ function seedSessions(sceneName: SceneName) {
     ),
 
     session("landing-refresh", "landing-refresh", REPOS.website, "main", {
-      status: "running",
+      status: "working",
       agent: "codex",
       position: 0,
     }),
     session("landing-copy", "landing-copy", REPOS.website, "main", {
-      status: "idle",
+      status: "ready",
       agent: "codex",
       position: 2,
       cwd: `${REPOS.website}/apps/www`,
     }),
     session("site-build", "site-build", REPOS.website, "preview/readme", {
-      status: "running",
+      status: "working",
       agent: "claude",
       position: 4,
       isolated: true,
@@ -1320,23 +1320,23 @@ function seedSessions(sceneName: SceneName) {
     }),
 
     session("docs-outline", "docs-outline", REPOS.docs, "main", {
-      status: "idle",
+      status: "ready",
       agent: "codex",
       position: 0,
     }),
     session("install-flow", "install-flow", REPOS.docs, "main", {
-      status: "needs_input",
+      status: "waiting_for_input",
       agent: "claude",
       position: 1,
     }),
     session("guide-refresh", "guide-refresh", REPOS.docs, "main", {
-      status: "running",
+      status: "working",
       agent: "codex",
       position: 2,
       cwd: `${REPOS.docs}/guides`,
     }),
     session("api-reference", "api-reference", REPOS.docs, "api/reference", {
-      status: "idle",
+      status: "ready",
       agent: "claude",
       position: 3,
       isolated: true,
@@ -1351,7 +1351,12 @@ function seedSessions(sceneName: SceneName) {
         REPOS.local,
         "HEAD",
         {
-          status: index === 2 ? "running" : index === 4 ? "needs_input" : "idle",
+          status:
+            index === 2
+              ? "working"
+              : index === 4
+                ? "waiting_for_input"
+                : "ready",
           agent: index % 2 === 0 ? "claude" : "codex",
           position: index,
           projectScoped: false,
@@ -1364,7 +1369,7 @@ function seedSessions(sceneName: SceneName) {
   if (sceneName === "chat-session") {
     return [
       session("chat-handoff", "Chat handoff review", REPOS.app, "main", {
-        status: "running",
+        status: "working",
         agent: "claude",
         position: 0,
         mode: "chat",
@@ -1385,26 +1390,26 @@ function seedSessions(sceneName: SceneName) {
         REPOS.app,
         "main",
         {
-          status: "running",
+          status: "working",
           agent: "codex",
           position: 0,
           kind: "control",
         },
       ),
       session("ui-worker", "ui-worker", REPOS.app, "feature/pane-dnd", {
-        status: "running",
+        status: "working",
         agent: "codex",
         position: 1,
         owner: controlOwner,
       }),
       session("test-runner", "test-runner", REPOS.app, "main", {
-        status: "running",
+        status: "working",
         agent: "claude",
         position: 2,
         owner: controlOwner,
       }),
       session("docs-refresh", "docs-refresh", REPOS.app, "docs/screenshots", {
-        status: "idle",
+        status: "ready",
         agent: "codex",
         position: 3,
         owner: controlOwner,
@@ -1432,7 +1437,7 @@ function session(
   repoPath: string,
   branch: string,
   options: {
-    status: "idle" | "running" | "needs_input" | "failed" | "completed";
+    status: "ready" | "working" | "waiting_for_input" | "errored";
     agent: "claude" | "codex" | "antigravity";
     position: number;
     cwd?: string;

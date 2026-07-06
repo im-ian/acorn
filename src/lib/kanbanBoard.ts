@@ -9,16 +9,22 @@ export type KanbanSortMode = "updated-desc" | "created-desc" | "name-asc";
  * needs the order and identity of each column.
  */
 export const KANBAN_COLUMN_STATUSES: readonly SessionStatus[] = [
-  "idle",
-  "needs_input",
-  "running",
-  "failed",
-  "completed",
+  "ready",
+  "waiting_for_input",
+  "working",
+  "errored",
 ];
 
-export const KANBAN_COLUMN_DEFAULT_WIDTH = 192;
-export const KANBAN_COLUMN_MIN_WIDTH = 152;
+export const KANBAN_COLUMN_DEFAULT_WIDTH = 240;
+export const KANBAN_COLUMN_MIN_WIDTH = 180;
 export const DEFAULT_KANBAN_SORT_MODE: KanbanSortMode = "updated-desc";
+
+const KANBAN_STATUS_STORAGE_KEYS: Record<SessionStatus, readonly string[]> = {
+  ready: ["ready", "idle", "completed"],
+  waiting_for_input: ["waiting_for_input", "needs_input"],
+  working: ["working", "running"],
+  errored: ["errored", "failed"],
+};
 
 const BOARD_PREFS_STORAGE_KEY = "acorn:workspace-kanban:board-prefs:v1";
 
@@ -146,9 +152,11 @@ function columnWidthsFromStored(
 ): number[] {
   const fallback = defaultKanbanColumnWidths();
   if (!stored || typeof stored !== "object") return fallback;
-  const byStatus = stored as Partial<Record<SessionStatus, unknown>>;
+  const byStatus = stored as Record<string, unknown>;
   return KANBAN_COLUMN_STATUSES.map((status, index) => {
-    const value = byStatus[status];
+    const value = KANBAN_STATUS_STORAGE_KEYS[status]
+      .map((key) => byStatus[key])
+      .find((candidate) => candidate !== undefined);
     return typeof value === "number" && Number.isFinite(value)
       ? clampKanbanColumnWidth(value)
       : (fallback[index] ?? KANBAN_COLUMN_DEFAULT_WIDTH);

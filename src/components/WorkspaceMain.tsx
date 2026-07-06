@@ -78,11 +78,10 @@ import { ResizeHandle } from "./ResizeHandle";
 import { Tooltip } from "./Tooltip";
 
 const STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "success",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 // Pair each column status (ordered by the board library) with its UI tone, so
@@ -96,11 +95,10 @@ const KANBAN_COLUMNS: ReadonlyArray<{
 }));
 
 const STATUS_ICON_CLASS: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/70",
+  ready: "text-fg-muted",
+  working: "text-accent",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
 
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
@@ -482,7 +480,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
                     <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
                       <StatusDot
                         tone={column.tone}
-                        pulse={column.status === "running"}
+                        pulse={column.status === "working"}
                       />
                       <h2 className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">
                         {label}
@@ -1307,7 +1305,7 @@ function KanbanTerminalPopover({
                 icon={
                   <StatusDot
                     tone={statusTone}
-                    pulse={session.status === "running"}
+                    pulse={session.status === "working"}
                     size="xs"
                   />
                 }
@@ -1591,10 +1589,9 @@ function WorkspaceSessionIcon({
     isMedium ? "size-6 rounded-md" : "size-5 rounded",
     "shrink-0 border border-border bg-bg-elevated",
     "flex items-center justify-center transition-colors",
-    session.status === "needs_input" && "border-warning/35",
-    session.status === "failed" && "border-danger/35",
-    session.status === "running" && "border-accent/35",
-    session.status === "completed" && "border-accent/25",
+    session.status === "waiting_for_input" && "border-warning/35",
+    session.status === "errored" && "border-danger/35",
+    session.status === "working" && "border-accent/35",
     STATUS_ICON_CLASS[session.status],
   );
 
@@ -1669,16 +1666,14 @@ function WorkspaceSessionTerminalPopoverMetaItem({
 
 function statusLabel(t: Translator, status: SessionStatus): string {
   switch (status) {
-    case "idle":
-      return t("sidebar.status.idle");
-    case "running":
-      return t("sidebar.status.running");
-    case "needs_input":
-      return t("sidebar.status.needs_input");
-    case "failed":
-      return t("sidebar.status.failed");
-    case "completed":
-      return t("sidebar.status.completed");
+    case "ready":
+      return t("sidebar.status.ready");
+    case "working":
+      return t("sidebar.status.working");
+    case "waiting_for_input":
+      return t("sidebar.status.waiting_for_input");
+    case "errored":
+      return t("sidebar.status.errored");
   }
 }
 

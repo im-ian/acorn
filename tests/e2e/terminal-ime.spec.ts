@@ -55,7 +55,7 @@ async function seed(tauri: TauriMock): Promise<void> {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -81,7 +81,7 @@ async function seed(tauri: TauriMock): Promise<void> {
 async function activateTerminal(page: Page): Promise<void> {
   await page.goto("/");
   await page
-    .getByRole("button", { name: /^shell main · Idle$/ })
+    .getByRole("button", { name: /^shell main · Ready$/ })
     .click();
   // xterm renders its hidden helper textarea once `term.open(container)` runs.
   // The element is intentionally off-screen ("hidden" to Playwright) — wait

@@ -34,16 +34,16 @@ function session(id: string, status: SessionStatus): Session {
 
 describe("session status polling schedule", () => {
   it("uses fast active, medium volatile, and slow stable intervals", () => {
-    expect(sessionStatusPollIntervalMs(session("a", "idle"), "a")).toBe(
+    expect(sessionStatusPollIntervalMs(session("a", "ready"), "a")).toBe(
       ACTIVE_SESSION_STATUS_POLL_INTERVAL_MS,
     );
-    expect(sessionStatusPollIntervalMs(session("b", "running"), "a")).toBe(
+    expect(sessionStatusPollIntervalMs(session("b", "working"), "a")).toBe(
       VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS,
     );
-    expect(sessionStatusPollIntervalMs(session("c", "needs_input"), "a")).toBe(
+    expect(sessionStatusPollIntervalMs(session("c", "waiting_for_input"), "a")).toBe(
       VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS,
     );
-    expect(sessionStatusPollIntervalMs(session("d", "completed"), "a")).toBe(
+    expect(sessionStatusPollIntervalMs(session("d", "ready"), "a")).toBe(
       STABLE_SESSION_STATUS_POLL_INTERVAL_MS,
     );
   });
@@ -51,18 +51,18 @@ describe("session status polling schedule", () => {
   it("selects only sessions whose adaptive interval has elapsed", () => {
     const now = 60_000;
     const sessions = [
-      session("active", "idle"),
-      session("running", "running"),
-      session("needs", "needs_input"),
-      session("idle", "idle"),
-      session("failed", "failed"),
+      session("active", "ready"),
+      session("working", "working"),
+      session("needs", "waiting_for_input"),
+      session("ready", "ready"),
+      session("errored", "errored"),
     ];
     const lastPolledAt = new Map([
       ["active", now - ACTIVE_SESSION_STATUS_POLL_INTERVAL_MS],
-      ["running", now - VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS + 1],
+      ["working", now - VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS + 1],
       ["needs", now - VOLATILE_SESSION_STATUS_POLL_INTERVAL_MS],
-      ["idle", now - STABLE_SESSION_STATUS_POLL_INTERVAL_MS + 1],
-      ["failed", now - STABLE_SESSION_STATUS_POLL_INTERVAL_MS],
+      ["ready", now - STABLE_SESSION_STATUS_POLL_INTERVAL_MS + 1],
+      ["errored", now - STABLE_SESSION_STATUS_POLL_INTERVAL_MS],
     ]);
 
     expect(
@@ -72,19 +72,19 @@ describe("session status polling schedule", () => {
         lastPolledAt,
         now,
       }),
-    ).toEqual(["active", "needs", "failed"]);
+    ).toEqual(["active", "needs", "errored"]);
   });
 
   it("prioritizes active and newly seen sessions for immediate polling", () => {
     const sessions = [
-      session("active", "idle"),
-      session("running", "running"),
-      session("new", "idle"),
-      session("stable", "completed"),
+      session("active", "ready"),
+      session("working", "working"),
+      session("new", "ready"),
+      session("stable", "ready"),
     ];
     const lastPolledAt = new Map([
       ["active", 100],
-      ["running", 100],
+      ["working", 100],
       ["stable", 100],
     ]);
 
@@ -102,20 +102,20 @@ describe("session status polling schedule", () => {
         lastPolledAt,
         includeVolatile: true,
       }),
-    ).toEqual(["active", "running", "new"]);
+    ).toEqual(["active", "working", "new"]);
   });
 
   it("returns the delay until the next session becomes due", () => {
     const now = 60_000;
     const sessions = [
-      session("active", "idle"),
-      session("running", "running"),
-      session("idle", "idle"),
+      session("active", "ready"),
+      session("working", "working"),
+      session("ready", "ready"),
     ];
     const lastPolledAt = new Map([
       ["active", now - 250],
-      ["running", now - 4500],
-      ["idle", now - 1000],
+      ["working", now - 4500],
+      ["ready", now - 1000],
     ]);
 
     expect(

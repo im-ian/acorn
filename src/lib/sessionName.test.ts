@@ -15,7 +15,7 @@ function session(name: string): Session {
     worktree_path: "/repo",
     branch: "main",
     isolated: false,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,

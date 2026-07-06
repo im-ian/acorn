@@ -95,7 +95,9 @@ function itemHasPriorityStatus(item: ProjectTopLevelItem): boolean {
 }
 
 function hasPriorityStatus(session: Session): boolean {
-  return session.status === "needs_input" || session.status === "failed";
+  return (
+    session.status === "waiting_for_input" || session.status === "errored"
+  );
 }
 
 function stablePartition<T>(

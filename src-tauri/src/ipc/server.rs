@@ -885,7 +885,7 @@ mod tests {
             false,
             kind,
         );
-        s.status = SessionStatus::Idle;
+        s.status = SessionStatus::Ready;
         s
     }
 

@@ -15,15 +15,14 @@ import type {
 } from "./types";
 
 // Notification body copy keyed by the status the session transitioned *into*.
-// The watcher only fires on transitions to `needs_input` / `failed` /
-// `completed`; `idle` / `running` entries are placeholders so the record
+// The watcher only fires on transitions to `waiting_for_input` / `errored`;
+// `ready` / `working` entries are placeholders so the record
 // stays exhaustive against `SessionStatus`.
 const STATUS_SENTENCE: Record<SessionStatus, string> = {
-  idle: "Session is idle.",
-  running: "Session is running.",
-  needs_input: "Awaiting your next input.",
-  failed: "Session failed.",
-  completed: "Session complete.",
+  ready: "Session is ready.",
+  working: "Session is working.",
+  waiting_for_input: "Awaiting your next input.",
+  errored: "Session hit an error.",
 };
 
 // Cached OS permission result for the steady-state notification path. Reused
@@ -63,12 +62,13 @@ async function refreshPermission(): Promise<boolean> {
 
 function shouldNotifyTransition(prev: SessionStatus, next: SessionStatus): {
   notify: boolean;
-  key: "needsInput" | "failed" | "completed" | null;
+  key: "waitingForInput" | "errored" | null;
 } {
   if (prev === next) return { notify: false, key: null };
-  if (next === "needs_input") return { notify: true, key: "needsInput" };
-  if (next === "failed") return { notify: true, key: "failed" };
-  if (next === "completed") return { notify: true, key: "completed" };
+  if (next === "waiting_for_input") {
+    return { notify: true, key: "waitingForInput" };
+  }
+  if (next === "errored") return { notify: true, key: "errored" };
   return { notify: false, key: null };
 }
 
@@ -77,10 +77,9 @@ function notificationKindForTransition(
   next: SessionStatus,
 ): SessionNotificationKind | null {
   if (prev === next) return null;
-  if (next === "needs_input") return "needs_input";
-  if (next === "failed") return "failed";
-  if (next === "completed") return "completed";
-  if (next === "idle") return "became_idle";
+  if (next === "waiting_for_input") return "waiting_for_input";
+  if (next === "errored") return "errored";
+  if (next === "ready") return "became_ready";
   return null;
 }
 

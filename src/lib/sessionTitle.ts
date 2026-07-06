@@ -76,9 +76,9 @@ function hasAgentChatWork(session: Session): boolean {
   if (transcriptId) return true;
 
   const hasWorkStatus =
-    session.status === "running" ||
-    session.status === "needs_input" ||
-    session.status === "failed";
+    session.status === "working" ||
+    session.status === "waiting_for_input" ||
+    session.status === "errored";
   if (!hasWorkStatus) return false;
 
   return session.mode === "chat" || session.agent_provider != null;
@@ -90,8 +90,8 @@ function hasSessionTitleAgentSignal(session: Session): boolean {
     session.agent_transcript_id != null ||
     session.agent_provider != null ||
     inferAgentProvider(session.name) != null ||
-    session.status === "running" ||
-    session.status === "needs_input"
+    session.status === "working" ||
+    session.status === "waiting_for_input"
   );
 }
 
