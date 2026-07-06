@@ -459,6 +459,129 @@ test.describe("sidebar: project lifecycle", () => {
     await expect(tooltip.locator("svg")).toHaveCount(6);
   });
 
+  test("session rows surface open PR and active process context", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [
+      {
+        repo_path: "/tmp/demo",
+        name: "demo",
+        created_at: "2026-01-01T00:00:00Z",
+        position: 0,
+      },
+    ]);
+    await tauri.respond("list_sessions", [
+      {
+        id: "session-1",
+        name: "context-session",
+        repo_path: "/tmp/demo",
+        worktree_path: "/tmp/demo",
+        branch: "feature/session-context",
+        isolated: false,
+        project_scoped: true,
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: 0,
+        in_worktree: false,
+        active_processes: [
+          { pid: 11, name: "codex", depth: 2 },
+          { pid: 12, name: "rg", depth: 3 },
+          { pid: 13, name: "node", depth: 3 },
+          { pid: 14, name: "cargo", depth: 3 },
+        ],
+      },
+    ]);
+    await tauri.handle("detect_session_statuses", () => [
+      {
+        id: "session-1",
+        status: "running",
+        branch: "feature/session-context",
+        git_context_path: "/tmp/demo-live-worktree",
+        active_processes: [
+          { pid: 11, name: "codex", depth: 2 },
+          { pid: 12, name: "rg", depth: 3 },
+          { pid: 13, name: "node", depth: 3 },
+          { pid: 14, name: "cargo", depth: 3 },
+        ],
+      },
+    ]);
+    await tauri.handle("list_pull_requests", (args) => {
+      if (
+        args?.repoPath !== "/tmp/demo-live-worktree" ||
+        args?.query !== "head:feature/session-context"
+      ) {
+        return { kind: "ok", items: [], account: "test" };
+      }
+      return {
+        kind: "ok",
+        account: "test",
+        items: [
+          {
+            number: 99,
+            title: "Show session context",
+            state: "OPEN",
+            author: "ian",
+            head_branch: "feature/session-context",
+            base_branch: "main",
+            url: "https://github.com/im-ian/acorn/pull/99",
+            updated_at: "2026-01-01T00:00:00Z",
+            is_draft: false,
+            checks: null,
+            labels: [],
+          },
+        ],
+      };
+    });
+    await tauri.handle("plugin:opener|open_url", (args) => {
+      const w = window as unknown as {
+        __openUrlCalls?: Array<{ url?: string }>;
+      };
+      w.__openUrlCalls = w.__openUrlCalls ?? [];
+      w.__openUrlCalls.push(args as { url?: string });
+      return null;
+    });
+
+    await page.goto("/");
+
+    const row = page
+      .locator("aside")
+      .getByRole("button", { name: /context-session/ });
+    const contextLine = row.locator(
+      '[data-session-context-metadata="true"]',
+    );
+    await expect(contextLine).toHaveText(/PR #99\s*·\s*codex, rg \+2/);
+    const prButton = contextLine.getByRole("button", {
+      name: "Open PR #99",
+    });
+    await expect(prButton).toBeVisible();
+    await prButton.click();
+    const openedUrls = await page.evaluate(
+      () =>
+        (
+          (window as unknown as {
+            __openUrlCalls?: Array<{ url?: string }>;
+          }).__openUrlCalls ?? []
+        ).map((call) => call.url),
+    );
+    expect(openedUrls).toEqual([
+      "https://github.com/im-ian/acorn/pull/99",
+    ]);
+
+    await row.hover();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("Open PR");
+    await expect(tooltip).toContainText("#99 Show session context");
+    await expect(tooltip).toContainText("Processes");
+    await expect(tooltip).toContainText("codex, rg, node, cargo");
+  });
+
   test("clears agent provider icon after the agent process exits", async ({
     page,
     tauri,
