@@ -3945,6 +3945,7 @@ function SidebarActivityRow({
 }) {
   const t = useTranslation();
   const selectSession = useAppStore((s) => s.selectSession);
+  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const markRead = useAppStore((s) => s.markSessionNotificationRead);
   const dismiss = useAppStore((s) => s.dismissSessionNotification);
   const unread = !notification.readAt;
@@ -3952,6 +3953,9 @@ function SidebarActivityRow({
   const openSession = () => {
     markRead(notification.id);
     selectSession(notification.sessionId);
+    if (useAppStore.getState().workspaceViewMode === "kanban") {
+      openTerminalPopup(notification.sessionId);
+    }
   };
 
   return (
