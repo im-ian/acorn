@@ -5034,6 +5034,36 @@ fn poll_defers_to_hook(hook_active: bool, live_agent: bool) -> bool {
     hook_active && live_agent
 }
 
+/// Recover a turn boundary that was crossed while the app was closed.
+///
+/// `hook_active` persists across restarts, so right after boot the poll
+/// already defers to the persisted hook-set status. But a hooked agent whose
+/// turn *ended* while no app instance was listening lost that turn-end event
+/// forever — the store still says Running and, since a resting agent emits no
+/// further events, nothing would ever correct it. Until the first hook event
+/// of this run confirms the channel, allow exactly the one transition hooks
+/// can no longer report: Running → NeedsInput backed by a real turn-complete
+/// marker in the transcript.
+///
+/// One-directional on purpose: while the app is closed nobody can submit a
+/// prompt to the session, so NeedsInput → Running cannot happen offline and a
+/// stale-tail Running must never demote a persisted resting status. Once an
+/// event lands this run (`hook_confirmed_this_run`), hooks own both
+/// directions again and this reconciliation switches off — leaving it open
+/// in-run would recreate the UserPromptSubmit-vs-stale-tail race the full
+/// hook deference exists to close.
+fn hook_boot_reconciled_status(
+    stored: SessionStatus,
+    hook_confirmed_this_run: bool,
+    detection: session_status::StatusDetection,
+) -> Option<SessionStatus> {
+    (!hook_confirmed_this_run
+        && stored == SessionStatus::Running
+        && detection.status == SessionStatus::NeedsInput
+        && detection.reason == Some(SessionStatusReason::TurnComplete))
+    .then_some(SessionStatus::NeedsInput)
+}
+
 fn detect_session_statuses_blocking(
     state: AppState,
     ids: Vec<String>,
@@ -5231,10 +5261,28 @@ fn detect_session_statuses_blocking(
             // I/O, and reusing the `previous` captured before that I/O would
             // clobber the newer hook status back to an old value.
             let status = if defer_to_hook {
-                let hook_status = parsed_id
+                let stored = parsed_id
                     .and_then(|uuid| state.sessions.get(&uuid).ok())
                     .map(|s| s.status)
                     .unwrap_or(previous);
+                // A turn that ended while the app was closed lost its
+                // turn-end hook event; recover it from the transcript until
+                // the first event of this run re-confirms the channel (see
+                // `hook_boot_reconciled_status`). The this-run flag is read
+                // here — after the poll's I/O — so an event landing during
+                // that window disables the recovery before it can clobber
+                // the fresher hook write.
+                let reconciled = parsed_id.and_then(|uuid| {
+                    hook_boot_reconciled_status(
+                        stored,
+                        state.sessions.is_hook_confirmed_this_run(&uuid),
+                        detection,
+                    )
+                });
+                if let (Some(uuid), Some(reconciled)) = (parsed_id, reconciled) {
+                    let _ = state.sessions.refresh_status(&uuid, reconciled);
+                }
+                let hook_status = reconciled.unwrap_or(stored);
                 // Codex can report turn-complete while a background terminal
                 // command is still alive. Keep the UI Running until it exits.
                 if hook_status == SessionStatus::NeedsInput && live_codex_tool_child {
@@ -5411,10 +5459,23 @@ fn live_codex_has_tool_descendant(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
 ) -> bool {
-    has_descendant_below_nearest_matching(children, root, |pid| {
-        sys.process(pid)
-            .is_some_and(|proc| process_primary_basename_matches(proc, "codex"))
-    })
+    has_unignored_descendant_below_nearest_matching(
+        children,
+        root,
+        |pid| {
+            sys.process(pid)
+                .is_some_and(|proc| process_primary_basename_matches(proc, "codex"))
+        },
+        |pid| {
+            sys.process(pid)
+                .is_some_and(is_codex_persistent_helper_process)
+        },
+    )
+}
+
+fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
+    process_basename_matches(proc, "node_repl")
+        || process_basename_matches(proc, "SkyComputerUseClient")
 }
 
 fn nearest_agent_kind_in_tree<F>(
@@ -5471,16 +5532,32 @@ where
     None
 }
 
-fn has_descendant_below_nearest_matching<F>(
+fn has_unignored_descendant_below_nearest_matching<F, G>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
     matches: F,
+    mut ignore_subtree: G,
 ) -> bool
 where
     F: FnMut(Pid) -> bool,
+    G: FnMut(Pid) -> bool,
 {
-    nearest_descendant_matching(children, root, matches)
-        .is_some_and(|pid| children.get(&pid).is_some_and(|direct| !direct.is_empty()))
+    let Some(anchor) = nearest_descendant_matching(children, root, matches) else {
+        return false;
+    };
+    let mut queue = VecDeque::new();
+    if let Some(direct) = children.get(&anchor) {
+        let mut direct = direct.clone();
+        direct.sort_by_key(|pid| pid.as_u32());
+        queue.extend(direct);
+    }
+    while let Some(pid) = queue.pop_front() {
+        if ignore_subtree(pid) {
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 /// `true` if any descendant of `root` exists in the children map. The root
@@ -5585,10 +5662,11 @@ mod status_hint_tests {
         children.insert(wrapper, vec![codex]);
         children.insert(codex, vec![tool]);
 
-        assert!(has_descendant_below_nearest_matching(
+        assert!(has_unignored_descendant_below_nearest_matching(
             &children,
             root,
             |pid| pid == codex,
+            |_| false,
         ));
     }
 
@@ -5599,10 +5677,48 @@ mod status_hint_tests {
         let mut children = HashMap::new();
         children.insert(root, vec![codex]);
 
-        assert!(!has_descendant_below_nearest_matching(
+        assert!(!has_unignored_descendant_below_nearest_matching(
             &children,
             root,
             |pid| pid == codex,
+            |_| false,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_with_only_ignored_child_reports_no_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let helper_child = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper]);
+        children.insert(helper, vec![helper_child]);
+
+        assert!(!has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
+        ));
+    }
+
+    #[test]
+    fn matching_agent_with_ignored_helper_and_tool_reports_live_work_below_agent() {
+        let root = Pid::from_u32(1);
+        let codex = Pid::from_u32(2);
+        let helper = Pid::from_u32(3);
+        let tool = Pid::from_u32(4);
+        let mut children = HashMap::new();
+        children.insert(root, vec![codex]);
+        children.insert(codex, vec![helper, tool]);
+
+        assert!(has_unignored_descendant_below_nearest_matching(
+            &children,
+            root,
+            |pid| pid == codex,
+            |pid| pid == helper,
         ));
     }
 }
@@ -6090,7 +6206,7 @@ fn agent_is_running_in_session(state: &AppState, session_id: &Uuid, basename: &s
 }
 
 /// Match a process by `target` against any of: exe-path basename,
-/// `proc.name()`, or argv[0] basename. macOS `p_comm` is truncated to
+/// `proc.name()`, or argv basename. macOS `p_comm` is truncated to
 /// 16 chars and can land as a full path *or* a basename depending on
 /// how the process was invoked; sysinfo can also surface either form
 /// from `exe()` (resolved via `proc_pidinfo`). Checking every channel
@@ -6342,6 +6458,81 @@ mod tests {
         // before hooks registered) — the transcript poll is the only signal.
         assert!(!poll_defers_to_hook(false, true));
         assert!(!poll_defers_to_hook(false, false));
+    }
+
+    #[test]
+    fn boot_reconciliation_recovers_turn_end_lost_while_app_was_closed() {
+        // Persisted hook status says Running, no event has confirmed the
+        // channel this run, and the transcript holds a real turn-complete
+        // marker — the turn ended while nobody was listening.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::NeedsInput,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Running,
+                false,
+                detection
+            ),
+            Some(acorn_session::SessionStatus::NeedsInput)
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_is_off_once_a_hook_event_confirms_the_channel() {
+        // An event reached this run's hook server — hooks own both directions
+        // again; re-opening the transcript passthrough would recreate the
+        // UserPromptSubmit-vs-stale-tail race.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::NeedsInput,
+            reason: Some(super::SessionStatusReason::TurnComplete),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Running,
+                true,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_never_demotes_a_resting_status() {
+        // Nobody can submit a prompt while the app is closed, so a persisted
+        // NeedsInput can only be stale in the direction hooks will re-report;
+        // a stale-tail reading must not touch it.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::Running,
+            reason: None,
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::NeedsInput,
+                false,
+                detection
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn boot_reconciliation_requires_a_turn_complete_marker() {
+        // A shell-prompt NeedsInput hint is not evidence the agent's turn
+        // ended — only a transcript turn-complete marker flips Running.
+        let detection = super::session_status::StatusDetection {
+            status: acorn_session::SessionStatus::NeedsInput,
+            reason: Some(super::SessionStatusReason::ShellPrompt),
+        };
+        assert_eq!(
+            super::hook_boot_reconciled_status(
+                acorn_session::SessionStatus::Running,
+                false,
+                detection
+            ),
+            None
+        );
     }
 
     #[test]

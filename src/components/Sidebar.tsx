@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  CheckCheck,
   ChevronRight,
   Copy,
   Folder,
@@ -29,7 +30,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   DndContext,
@@ -130,12 +133,15 @@ import type {
   SessionAgentProvider,
   SessionKind,
   SessionMode,
+  SessionNotification,
+  SessionNotificationKind,
   SessionStatus,
 } from "../lib/types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { RemoveProjectFolderDialog } from "./RemoveProjectFolderDialog";
+import { ResizeHandle } from "./ResizeHandle";
 import { SessionTitleGeneratingIndicator } from "./SessionTitleGeneratingIndicator";
 import { Tooltip } from "./Tooltip";
 import {
@@ -170,6 +176,11 @@ function autoCloseSessionRowClassName(active: boolean): string {
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 const FOLDER_COLLAPSED_KEY = "acorn:sidebar:collapsed-project-folders";
 const PROJECT_ITEM_ORDER_KEY = "acorn:sidebar:project-item-order";
+const ACTIVITY_HEIGHT_KEY = "acorn:sidebar:activity-height";
+const ACTIVITY_DEFAULT_HEIGHT = 192;
+const ACTIVITY_MIN_HEIGHT = 96;
+const ACTIVITY_MAX_HEIGHT = 420;
+const ACTIVITY_KEYBOARD_STEP = 16;
 
 const PROJECT_DRAG_PREFIX = "project:";
 const FOLDER_DRAG_PREFIX = "folder:";
@@ -183,6 +194,18 @@ type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 
 function sidebarText(t: Translator, key: SidebarTranslationKey): string {
   return t(key);
+}
+
+function sidebarFormat(
+  t: Translator,
+  key: SidebarTranslationKey,
+  values: Record<string, string | number>,
+): string {
+  return sidebarText(t, key).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(values, name)
+      ? String(values[name])
+      : match,
+  );
 }
 
 type SidebarContextMenuGroup =
@@ -1220,6 +1243,7 @@ export function Sidebar() {
               : null}
           </DragOverlay>
         </DndContext>
+        <SessionActivityInbox />
       </div>
       <NewProjectDialog
         open={newProjectOpen}
@@ -3528,6 +3552,332 @@ function LocalTerminalArea({
       </div>
     </section>
   );
+}
+
+const SIDEBAR_ACTIVITY_KIND_KEYS: Record<
+  SessionNotificationKind,
+  SidebarTranslationKey
+> = {
+  needs_input: "sidebar.activity.kind.needsInput",
+  failed: "sidebar.activity.kind.failed",
+  completed: "sidebar.activity.kind.completed",
+  became_idle: "sidebar.activity.kind.becameIdle",
+};
+
+function SessionActivityInbox() {
+  const t = useTranslation();
+  const notifications = useAppStore((s) => s.sessionNotifications);
+  const markAllRead = useAppStore((s) => s.markAllSessionNotificationsRead);
+  const clearRead = useAppStore((s) => s.clearReadSessionNotifications);
+  const [activityHeight, setActivityHeight] = useState(() =>
+    readSidebarActivityHeight(),
+  );
+  const [resizing, setResizing] = useState(false);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const unreadCount = notifications.filter((notification) => !notification.readAt)
+    .length;
+  const readCount = notifications.length - unreadCount;
+
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    };
+  }, []);
+
+  function commitHeight(nextHeight: number) {
+    const clamped = clampSidebarActivityHeight(nextHeight);
+    setActivityHeight(clamped);
+    writeSidebarActivityHeight(clamped);
+  }
+
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizeCleanupRef.current?.();
+
+    const source = event.currentTarget;
+    const pointerId = event.pointerId;
+    const startY = event.clientY;
+    const startHeight = activityHeight;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    setResizing(true);
+
+    const cleanup = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setResizing(false);
+      try {
+        source.releasePointerCapture?.(pointerId);
+      } catch {
+        // The pointer may already be released if the handle unmounted.
+      }
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      source.removeEventListener("lostpointercapture", onPointerEnd);
+      if (resizeCleanupRef.current === cleanup) {
+        resizeCleanupRef.current = null;
+      }
+    };
+
+    function onPointerMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      commitHeight(startHeight + startY - moveEvent.clientY);
+    }
+
+    function onPointerEnd(endEvent: PointerEvent) {
+      if (endEvent.pointerId !== pointerId) return;
+      cleanup();
+    }
+
+    resizeCleanupRef.current = cleanup;
+    try {
+      source.setPointerCapture?.(pointerId);
+    } catch {
+      // Window listeners still cover normal in-window dragging.
+    }
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+    source.addEventListener("lostpointercapture", onPointerEnd);
+  }
+
+  function onResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    commitHeight(
+      activityHeight +
+        (event.key === "ArrowUp"
+          ? ACTIVITY_KEYBOARD_STEP
+          : -ACTIVITY_KEYBOARD_STEP),
+    );
+  }
+
+  return (
+    <section
+      aria-label={sidebarText(t, "sidebar.activity.ariaLabel")}
+      className="mt-3 flex shrink-0 flex-col pt-1"
+    >
+      <ResizeHandle
+        mode="manual"
+        direction="vertical"
+        gap
+        manualDragging={resizing}
+        onPointerDown={startResize}
+        onKeyDown={onResizeKeyDown}
+        aria-label={sidebarText(t, "sidebar.activity.actions.resize")}
+        aria-valuemin={ACTIVITY_MIN_HEIGHT}
+        aria-valuemax={ACTIVITY_MAX_HEIGHT}
+        aria-valuenow={activityHeight}
+        data-testid="sidebar-activity-resize-handle"
+        className="mx-1 h-3"
+      />
+      <header className="flex h-8 shrink-0 items-center justify-between gap-2 px-3">
+        <h2 className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-fg-muted">
+          <Activity size={13} className="shrink-0" />
+          <span className="truncate">
+            {sidebarText(t, "sidebar.activity.title")}
+          </span>
+          {unreadCount > 0 ? (
+            <span className="min-w-3 shrink-0 rounded-full bg-warning px-1 text-center text-[9px] leading-3 text-bg-sidebar">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          ) : null}
+        </h2>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Tooltip
+            label={sidebarText(t, "sidebar.activity.actions.markAllRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+              aria-label={sidebarText(
+                t,
+                "sidebar.activity.actions.markAllRead",
+              )}
+              className="flex size-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <CheckCheck size={13} />
+            </button>
+          </Tooltip>
+          <Tooltip
+            label={sidebarText(t, "sidebar.activity.actions.clearRead")}
+            side="top"
+          >
+            <button
+              type="button"
+              onClick={clearRead}
+              disabled={readCount === 0}
+              aria-label={sidebarText(t, "sidebar.activity.actions.clearRead")}
+              className="flex size-6 items-center justify-center rounded text-fg-muted transition hover:bg-bg-elevated hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+            >
+              <Trash2 size={12} />
+            </button>
+          </Tooltip>
+        </div>
+      </header>
+      <div className="mx-1 overflow-hidden rounded-md border border-border/70 bg-bg/20">
+        <div className="flex items-center gap-2 border-b border-border/60 px-2 py-1 text-[10px] uppercase text-fg-muted">
+          <span>
+            {sidebarFormat(t, "sidebar.activity.unreadCount", {
+              count: unreadCount,
+            })}
+          </span>
+          {readCount > 0 ? (
+            <span>
+              {sidebarFormat(t, "sidebar.activity.readCount", {
+                count: readCount,
+              })}
+            </span>
+          ) : null}
+        </div>
+        <div
+          className="min-h-0"
+          style={{ height: activityHeight }}
+          data-testid="sidebar-activity-body"
+        >
+          {notifications.length === 0 ? (
+            <div className="flex h-full items-center justify-center px-3 text-center text-[11px] text-fg-muted">
+              {sidebarText(t, "sidebar.activity.empty")}
+            </div>
+          ) : (
+            <ul className="acorn-no-scrollbar h-full overflow-y-auto p-1">
+              {notifications.map((notification) => (
+                <SidebarActivityRow
+                  key={notification.id}
+                  notification={notification}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SidebarActivityRow({
+  notification,
+}: {
+  notification: SessionNotification;
+}) {
+  const t = useTranslation();
+  const selectSession = useAppStore((s) => s.selectSession);
+  const markRead = useAppStore((s) => s.markSessionNotificationRead);
+  const dismiss = useAppStore((s) => s.dismissSessionNotification);
+  const unread = !notification.readAt;
+
+  const openSession = () => {
+    markRead(notification.id);
+    selectSession(notification.sessionId);
+  };
+
+  return (
+    <li
+      className={listRowClassName({
+        density: "sidebar",
+        surface: "sidebar",
+        interactive: true,
+        selected: unread,
+        selectedClassName: "bg-warning/5",
+        className: "group flex items-start gap-2",
+      })}
+    >
+      <button
+        type="button"
+        onClick={openSession}
+        className="flex min-w-0 flex-1 items-start gap-2 text-left"
+      >
+        <StatusDot
+          tone={sidebarActivityDotTone(notification.kind)}
+          size="sm"
+          className="mt-1"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                "truncate font-mono text-[11px]",
+                unread ? "text-fg" : "text-fg-muted",
+              )}
+            >
+              {sidebarText(t, SIDEBAR_ACTIVITY_KIND_KEYS[notification.kind])}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-fg-muted/70">
+              {formatSidebarActivityTime(notification.createdAt)}
+            </span>
+          </span>
+          <span className="block truncate text-[11px] text-fg">
+            {sidebarFormat(t, "sidebar.activity.itemTitle", {
+              project: notification.projectName,
+              session: notification.sessionName,
+            })}
+          </span>
+          <span className="block truncate text-[10px] text-fg-muted">
+            {notification.repoPath}
+          </span>
+        </span>
+      </button>
+      <Tooltip label={sidebarText(t, "sidebar.activity.actions.dismiss")} side="top">
+        <button
+          type="button"
+          onClick={() => dismiss(notification.id)}
+          aria-label={sidebarText(t, "sidebar.activity.actions.dismiss")}
+          className="rounded p-1 text-fg-muted opacity-0 transition hover:bg-bg-sidebar hover:text-fg group-hover:opacity-100"
+        >
+          <X size={12} />
+        </button>
+      </Tooltip>
+    </li>
+  );
+}
+
+function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
+  if (kind === "failed") return "danger";
+  if (kind === "completed") return "accent";
+  return "warning";
+}
+
+function formatSidebarActivityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function clampSidebarActivityHeight(height: number): number {
+  if (!Number.isFinite(height)) return ACTIVITY_DEFAULT_HEIGHT;
+  return Math.round(
+    Math.min(Math.max(height, ACTIVITY_MIN_HEIGHT), ACTIVITY_MAX_HEIGHT),
+  );
+}
+
+function readSidebarActivityHeight(): number {
+  try {
+    const raw = localStorage.getItem(ACTIVITY_HEIGHT_KEY);
+    if (!raw) return ACTIVITY_DEFAULT_HEIGHT;
+    const parsed = Number(raw);
+    return clampSidebarActivityHeight(parsed);
+  } catch {
+    return ACTIVITY_DEFAULT_HEIGHT;
+  }
+}
+
+function writeSidebarActivityHeight(height: number): void {
+  try {
+    localStorage.setItem(
+      ACTIVITY_HEIGHT_KEY,
+      String(clampSidebarActivityHeight(height)),
+    );
+  } catch {
+    // Ignore storage failures; the current drag should still resize the panel.
+  }
 }
 
 interface LocalWorkspaceViewProps {

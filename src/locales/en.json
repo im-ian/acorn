@@ -375,7 +375,7 @@
         "hint": "Choose which optional badges show in the bottom status bar.",
         "sessionActivity": {
           "label": "Session activity",
-          "description": "Bell shortcut for unread session activity. The Activity tab remains available when hidden."
+          "description": "Bell shortcut for unread session activity. The sidebar activity list remains available when hidden."
         },
         "sessionCount": {
           "label": "Session count",
@@ -1130,6 +1130,26 @@
       "newSession": "New instant session",
       "newWorkspace": "New workspace",
       "empty": "Double-click to start an instant session."
+    },
+    "activity": {
+      "ariaLabel": "Session activity",
+      "title": "Activity",
+      "unreadCount": "{count} unread",
+      "readCount": "{count} read",
+      "empty": "No session activity yet",
+      "itemTitle": "{project} · {session}",
+      "kind": {
+        "needsInput": "Needs input",
+        "failed": "Failed",
+        "completed": "Completed",
+        "becameIdle": "Idle"
+      },
+      "actions": {
+        "markAllRead": "Mark all read",
+        "clearRead": "Clear read",
+        "resize": "Resize activity",
+        "dismiss": "Dismiss"
+      }
     },
     "emptyProject": {
       "createSession": "Double-click to start a session."
