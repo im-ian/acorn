@@ -3593,12 +3593,26 @@ fn session_title_readiness_inner(
         .as_ref()
         .map(|input| input.transcript_id.as_str());
     if !crate::session_titles::can_generate_title(&session, transcript_id) {
+        // The auto-title planner retries on this status forever; without a
+        // trace the gate that keeps a tab stuck on "new session-N" is
+        // invisible (auto-title opt-out, manual title, unchanged transcript).
+        tracing::debug!(
+            session_id = %id,
+            title_source = ?session.title_source,
+            auto_title_enabled = ?session.auto_title_enabled,
+            has_title_input = transcript_id.is_some(),
+            "session title readiness: skipped (not eligible)"
+        );
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::Skipped,
             session: enrich_session(session),
         });
     }
     if title_input.is_none() {
+        tracing::debug!(
+            session_id = %id,
+            "session title readiness: not ready (no transcript context resolved)"
+        );
         return Ok(SessionTitleReadinessResult {
             status: SessionTitleReadinessStatus::NotReady,
             session: enrich_session(session),
@@ -5206,9 +5220,9 @@ fn detect_session_statuses_blocking(
             let active_processes = root_pid_value
                 .map(|pid| session_process_summaries(&sys, &children, Pid::from_u32(pid)))
                 .unwrap_or_default();
-            let live_agent_kind = root_pid_value.and_then(|pid| {
-                live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
-            });
+            let live_agent = root_pid_value
+                .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
+            let live_agent_kind = live_agent.map(|(kind, _)| kind);
             let live_codex_tool_child = matches!(live_agent_kind, Some(StatusAgentKind::Codex))
                 && root_pid_value.is_some_and(|pid| {
                     live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
@@ -5226,6 +5240,12 @@ fn detect_session_statuses_blocking(
                 ),
                 None => agent_resume::live_transcript(uuid),
             });
+            // Claude gets a marker-less fallback below via the todos
+            // mapping; codex has no equivalent, so a persister miss (pid
+            // gap at spawn, ambiguous host scan) silently disables auto
+            // titles and resume for the whole session. Bind the live
+            // codex process straight to its rollout instead.
+            let live = live.or_else(|| codex_live_transcript_fallback(&sys, parsed_id, live_agent));
             let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
             let transcript = match live.as_ref() {
                 Some(t) => {
@@ -5468,27 +5488,135 @@ fn refine_shell_hint_for_unpaired_agent(
     }
 }
 
-fn live_agent_kind_in_descendants(
+/// Bind a live codex process to its rollout when the durable `codex.id`
+/// marker is missing. The persister normally writes that marker within
+/// seconds, but it can miss a run entirely (no root pid captured at spawn,
+/// host-scan ambiguity) and nothing retries on its behalf — codex, unlike
+/// claude, has no marker-less transcript mapping. Resolve the rollout from
+/// the process's own cwd and start time under the conservative
+/// single-candidate policy, and persist the marker so title generation and
+/// resume converge on the same binding.
+///
+/// Known limitation: the single-candidate policy has no `assigned`-set
+/// reservation, so two codex processes in the same cwd stay ambiguous and
+/// the fallback fails safe to `None` rather than guessing.
+fn codex_live_transcript_fallback(
+    sys: &System,
+    session_id: Option<Uuid>,
+    live_agent: Option<(StatusAgentKind, Pid)>,
+) -> Option<agent_resume::LiveTranscript> {
+    let session_id = session_id?;
+    let (kind, pid) = live_agent?;
+    if kind != StatusAgentKind::Codex {
+        return None;
+    }
+    let proc = sys.process(pid)?;
+    let cwd = proc.cwd()?;
+    let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
+    let Some((path, id)) = acorn_transcript::find_agent_run_transcript(
+        cwd,
+        acorn_transcript::AgentKind::Codex,
+        process_start,
+    ) else {
+        tracing::debug!(
+            %session_id,
+            pid = pid.as_u32(),
+            ?cwd,
+            "status poll: live codex has no unambiguous rollout; marker fallback skipped"
+        );
+        return None;
+    };
+    match crate::agent_resume_persister::bind_session_marker(
+        session_id,
+        acorn_transcript::AgentKind::Codex,
+        &id,
+    ) {
+        Ok(()) => {
+            note_codex_bind_recovered(&mut codex_bind_failure_registry(), session_id);
+            tracing::info!(
+                %session_id,
+                %id,
+                ?path,
+                "status poll: bound live codex transcript via marker fallback"
+            );
+        }
+        Err(err) => {
+            // A persistent write failure (permissions, deleted state dir)
+            // re-enters this fallback every poll tick; warn once per
+            // failure streak, then drop to debug until a bind succeeds.
+            if note_codex_bind_failure(&mut codex_bind_failure_registry(), session_id) {
+                tracing::warn!(
+                    %session_id, %id, error = %err,
+                    "status poll: codex marker fallback write failed"
+                );
+            } else {
+                tracing::debug!(
+                    %session_id, %id, error = %err,
+                    "status poll: codex marker fallback write still failing"
+                );
+            }
+        }
+    }
+    Some(agent_resume::LiveTranscript {
+        id,
+        path,
+        kind: agent_resume::AgentKind::Codex,
+    })
+}
+
+/// Sessions whose codex marker fallback already warned about a write
+/// failure this streak. Guards the poll-frequency `warn!` from repeating
+/// every tick while the failure persists.
+fn codex_bind_failure_registry() -> std::sync::MutexGuard<'static, HashSet<Uuid>> {
+    static WARNED: std::sync::OnceLock<Mutex<HashSet<Uuid>>> = std::sync::OnceLock::new();
+    WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record a fallback write failure; `true` when this is the first failure
+/// of the current streak (i.e. the caller should warn, not just debug).
+fn note_codex_bind_failure(warned: &mut HashSet<Uuid>, session_id: Uuid) -> bool {
+    warned.insert(session_id)
+}
+
+/// A successful bind ends the failure streak so the next failure warns again.
+fn note_codex_bind_recovered(warned: &mut HashSet<Uuid>, session_id: Uuid) {
+    warned.remove(&session_id);
+}
+
+/// Resolve the nearest live agent process under `root`, with its pid.
+///
+/// `found_pid` rides side-channel out of the closure; the pairing with the
+/// returned kind is only sound because `nearest_agent_kind_in_tree` stops at
+/// the FIRST `Some` the callback yields (see its doc). If that traversal ever
+/// keeps scanning past a match, refactor the callback to return
+/// `Option<(StatusAgentKind, Pid)>` instead of relying on this capture.
+fn live_agent_in_descendants(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
-) -> Option<StatusAgentKind> {
-    nearest_agent_kind_in_tree(children, root, |pid| {
+) -> Option<(StatusAgentKind, Pid)> {
+    let mut found_pid = None;
+    let kind = nearest_agent_kind_in_tree(children, root, |pid| {
         let proc = sys.process(pid)?;
-        if process_basename_matches(proc, "codex") {
-            return Some(StatusAgentKind::Codex);
-        }
-        if process_basename_matches(proc, "claude") {
-            return Some(StatusAgentKind::Claude);
-        }
-        if process_basename_matches(proc, "agy")
+        let kind = if process_basename_matches(proc, "codex") {
+            StatusAgentKind::Codex
+        } else if process_basename_matches(proc, "claude") {
+            StatusAgentKind::Claude
+        } else if process_basename_matches(proc, "agy")
             || process_basename_matches(proc, "antigravity")
             || process_basename_matches(proc, "antigravity-cli")
         {
-            return Some(StatusAgentKind::Antigravity);
-        }
-        None
-    })
+            StatusAgentKind::Antigravity
+        } else {
+            return None;
+        };
+        found_pid = Some(pid);
+        Some(kind)
+    })?;
+    Some((kind, found_pid?))
 }
 
 fn live_codex_has_tool_descendant(
@@ -5515,6 +5643,10 @@ fn is_codex_persistent_helper_process(proc: &sysinfo::Process) -> bool {
         || process_basename_matches(proc, "SkyComputerUseClient")
 }
 
+/// BFS from `root` that returns on the FIRST pid the callback classifies.
+/// `live_agent_in_descendants` depends on this early-return to pair its
+/// side-channel pid with the returned kind — keep the invariant if this
+/// traversal ever grows ranking or multi-match behavior.
 fn nearest_agent_kind_in_tree<F>(
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
@@ -8030,6 +8162,21 @@ mod tests {
         assert!(!super::auto_title_promotion_needed(Some(true), true));
         // Legacy rows keep using compatibility heuristics.
         assert!(!super::auto_title_promotion_needed(None, true));
+    }
+
+    /// The fallback's write-failure warning must fire once per failure
+    /// streak: repeat failures drop to debug, and a successful bind
+    /// re-arms the warning for the next streak.
+    #[test]
+    fn codex_bind_failure_warns_once_per_streak() {
+        let mut warned = std::collections::HashSet::new();
+        let session_id = Uuid::from_u128(7);
+
+        assert!(super::note_codex_bind_failure(&mut warned, session_id));
+        assert!(!super::note_codex_bind_failure(&mut warned, session_id));
+
+        super::note_codex_bind_recovered(&mut warned, session_id);
+        assert!(super::note_codex_bind_failure(&mut warned, session_id));
     }
 
     #[test]

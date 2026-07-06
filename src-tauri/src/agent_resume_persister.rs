@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use acorn_session::Session;
@@ -151,23 +152,7 @@ fn tick(state: &AppState) -> io::Result<()> {
                 }
             }
         }
-        let id_file = state_dir.join(id_filename(kind));
-        let previous = read_trimmed(&id_file);
-        if previous.as_deref() == Some(uuid.as_str()) {
-            continue;
-        }
-        // A backwards move (to an earlier-born transcript) is legitimate
-        // when the user `--resume`d an old conversation — that transcript
-        // is hot again. But right after an in-session `/new` rotation the
-        // scan can echo the abandoned original once the new transcript
-        // goes idle; writing that echo would oscillate the marker. Skip
-        // only the dormant-echo case so the marker never flaps.
-        if let Some(prev) = previous.as_deref() {
-            if marker_rollback_is_dormant_echo(kind, prev, &uuid) {
-                continue;
-            }
-        }
-        if let Err(err) = write_if_changed(&id_file, &format!("{uuid}\n")) {
+        if let Err(err) = bind_marker_in_state_dir(&state_dir, kind, &uuid) {
             tracing::warn!(
                 %session_id, ?kind, %uuid, error = %err,
                 "agent_resume_persister: write failed"
@@ -175,6 +160,52 @@ fn tick(state: &AppState) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Bind `uuid` as `session_id`'s durable resume marker for `kind`, under
+/// the same guards the background tick applies. Exposed so out-of-band
+/// binders (the status poll's codex fallback) share one write policy
+/// instead of growing a second, subtly different marker writer.
+///
+/// Writer hierarchy: the background tick stays authoritative — its
+/// PTY-tree scan disambiguates multi-process cwds the fallback abstains
+/// from — and a fallback write it disagrees with is corrected on the next
+/// tick (forward moves pass, the dormant-echo gate blocks bad rollbacks).
+pub fn bind_session_marker(session_id: uuid::Uuid, kind: AgentKind, uuid: &str) -> io::Result<()> {
+    let state_dir = agent_resume::ensure_session_state_dir(session_id)?;
+    bind_marker_in_state_dir(&state_dir, kind, uuid)
+}
+
+/// Serializes marker writes across the background tick and the status
+/// poll's fallback. The read-check-write below is not atomic on its own;
+/// two threads interleaving could skip the dormant-echo arbitration and
+/// flap the marker.
+fn marker_bind_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn bind_marker_in_state_dir(state_dir: &Path, kind: AgentKind, uuid: &str) -> io::Result<()> {
+    let _guard = marker_bind_lock()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let id_file = state_dir.join(id_filename(kind));
+    let previous = read_trimmed(&id_file);
+    if previous.as_deref() == Some(uuid) {
+        return Ok(());
+    }
+    // A backwards move (to an earlier-born transcript) is legitimate
+    // when the user `--resume`d an old conversation — that transcript
+    // is hot again. But right after an in-session `/new` rotation the
+    // scan can echo the abandoned original once the new transcript
+    // goes idle; writing that echo would oscillate the marker. Skip
+    // only the dormant-echo case so the marker never flaps.
+    if let Some(prev) = previous.as_deref() {
+        if marker_rollback_is_dormant_echo(kind, prev, uuid) {
+            return Ok(());
+        }
+    }
+    write_if_changed(&id_file, &format!("{uuid}\n"))
 }
 
 fn id_filename(kind: AgentKind) -> &'static str {
@@ -299,6 +330,80 @@ mod tests {
         assert_eq!(pids.len(), 1);
         assert_eq!(pids[0].session_id, id);
         assert_eq!(pids[0].root_pid, Some(10));
+    }
+
+    /// `bind_marker_in_state_dir` backs both the background tick and the
+    /// status poll's codex fallback: it must create a fresh marker, stay
+    /// idempotent on the same uuid, and move forward to a new uuid.
+    #[test]
+    fn bind_marker_writes_and_stays_idempotent() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-bindmk-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("codex.id");
+
+        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-aaaa-76b0-8410-2e073b38a2c1")
+            .unwrap();
+        assert_eq!(
+            read_trimmed(&marker).as_deref(),
+            Some("019e2001-aaaa-76b0-8410-2e073b38a2c1"),
+            "first bind must create the marker"
+        );
+
+        let mtime_before = fs::metadata(&marker).unwrap().modified().unwrap();
+        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-aaaa-76b0-8410-2e073b38a2c1")
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&marker).unwrap().modified().unwrap(),
+            mtime_before,
+            "same-uuid rebind must not rewrite the marker"
+        );
+
+        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-bbbb-76b0-8410-2e073b38a2c2")
+            .unwrap();
+        assert_eq!(
+            read_trimmed(&marker).as_deref(),
+            Some("019e2001-bbbb-76b0-8410-2e073b38a2c2"),
+            "a new uuid must replace the marker"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two writers race the same marker (background tick vs status-poll
+    /// fallback). The bind lock must serialize them: every call succeeds
+    /// and the surviving value is one of the written uuids, never a torn
+    /// or empty file.
+    #[test]
+    fn concurrent_binds_serialize_cleanly() {
+        let dir =
+            std::env::temp_dir().join(format!("acorn-bindrace-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let a = "019e2001-aaaa-76b0-8410-2e073b38a2c1";
+        let b = "019e2001-bbbb-76b0-8410-2e073b38a2c2";
+        let handles: Vec<_> = [a, b, a, b]
+            .into_iter()
+            .map(|uuid| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..50 {
+                        bind_marker_in_state_dir(&dir, AgentKind::Codex, uuid).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let survivor = read_trimmed(&dir.join("codex.id"));
+        assert!(
+            survivor.as_deref() == Some(a) || survivor.as_deref() == Some(b),
+            "marker must hold one intact uuid, got {survivor:?}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Forward birth-order moves always pass; a backwards move passes
