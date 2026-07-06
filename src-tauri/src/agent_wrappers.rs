@@ -106,7 +106,7 @@ if [ -n "${ACORN_AGENT_HOOK_URL-}" ] &&
   ) &
   ACORN_CODEX_WATCHER_PID=$!
 
-  "$REAL_BIN" --enable codex_hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
+  "$REAL_BIN" --enable hooks -c "notify=[\"bash\",\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\"]" "$@"
   ACORN_CODEX_STATUS=$?
 
   if [ -n "${ACORN_CODEX_WATCHER_PID-}" ]; then
@@ -489,7 +489,8 @@ mod tests {
         let dir = ensure_agent_wrapper_dir_at(base.path()).unwrap();
 
         let wrapper = fs::read_to_string(dir.join("codex")).unwrap();
-        assert!(wrapper.contains("--enable codex_hooks"));
+        assert!(wrapper.contains("--enable hooks"));
+        assert!(!wrapper.contains("--enable codex_hooks"));
         assert!(wrapper
             .contains("notify=[\\\"bash\\\",\\\"$ACORN_AGENT_WRAPPER_DIR/acorn-codex-notify\\\"]"));
         assert!(wrapper.contains("CODEX_TUI_RECORD_SESSION=1"));
