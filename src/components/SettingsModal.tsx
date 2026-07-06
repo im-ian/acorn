@@ -2140,38 +2140,29 @@ function NotificationSettings() {
       <Field label={st(t, "settings.notifications.triggers.label")}>
         <div className="flex flex-col gap-1">
           <CheckboxRow
-            label={st(t, "settings.notifications.triggers.needsInput.label")}
+            label={st(
+              t,
+              "settings.notifications.triggers.waitingForInput.label",
+            )}
             description={st(
               t,
-              "settings.notifications.triggers.needsInput.description",
+              "settings.notifications.triggers.waitingForInput.description",
             )}
-            checked={settings.notifications.events.needsInput}
+            checked={settings.notifications.events.waitingForInput}
             disabled={!enabled}
             onChange={(v) =>
-              patchNotifications({ events: { needsInput: v } })
+              patchNotifications({ events: { waitingForInput: v } })
             }
           />
           <CheckboxRow
-            label={st(t, "settings.notifications.triggers.failed.label")}
+            label={st(t, "settings.notifications.triggers.errored.label")}
             description={st(
               t,
-              "settings.notifications.triggers.failed.description",
+              "settings.notifications.triggers.errored.description",
             )}
-            checked={settings.notifications.events.failed}
+            checked={settings.notifications.events.errored}
             disabled={!enabled}
-            onChange={(v) => patchNotifications({ events: { failed: v } })}
-          />
-          <CheckboxRow
-            label={st(t, "settings.notifications.triggers.completed.label")}
-            description={st(
-              t,
-              "settings.notifications.triggers.completed.description",
-            )}
-            checked={settings.notifications.events.completed}
-            disabled={!enabled}
-            onChange={(v) =>
-              patchNotifications({ events: { completed: v } })
-            }
+            onChange={(v) => patchNotifications({ events: { errored: v } })}
           />
         </div>
       </Field>

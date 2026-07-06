@@ -13,7 +13,7 @@ import type { Session } from "./types";
 
 function session(
   id: string,
-  status: Session["status"] = "idle",
+  status: Session["status"] = "ready",
   position: number | null = null,
 ): Session {
   return {
@@ -54,25 +54,25 @@ function project(): ProjectFolderProjectGroup {
     repoPath: "/repo/app",
     name: "app",
     sessions: [
-      session("idle-root", "idle", 0),
-      session("failed-root", "failed", 1),
-      session("needs-root", "needs_input", 2),
-      session("running-root", "running", 3),
-      session("nested-idle", "idle", 4),
-      session("nested-needs", "needs_input", 5),
+      session("idle-root", "ready", 0),
+      session("failed-root", "errored", 1),
+      session("needs-root", "waiting_for_input", 2),
+      session("running-root", "working", 3),
+      session("nested-idle", "ready", 4),
+      session("nested-needs", "waiting_for_input", 5),
     ],
     folders: [
       {
         folder: root,
         sessions: [
-          session("idle-root", "idle", 0),
-          session("failed-root", "failed", 1),
-          session("needs-root", "needs_input", 2),
-          session("running-root", "running", 3),
+          session("idle-root", "ready", 0),
+          session("failed-root", "errored", 1),
+          session("needs-root", "waiting_for_input", 2),
+          session("running-root", "working", 3),
         ],
       },
-      folderGroup("idle-folder", [session("nested-idle", "idle", 4)]),
-      folderGroup("needs-folder", [session("nested-needs", "needs_input", 5)]),
+      folderGroup("idle-folder", [session("nested-idle", "ready", 4)]),
+      folderGroup("needs-folder", [session("nested-needs", "waiting_for_input", 5)]),
     ],
   };
 }
@@ -98,7 +98,7 @@ describe("sidebar project items", () => {
     ]);
   });
 
-  it("can move needs-input and failed project items above idle work", () => {
+  it("can move waiting and error project items above ready work", () => {
     const items = buildProjectTopLevelItems(
       project(),
       [
@@ -158,31 +158,31 @@ describe("sidebar project items", () => {
     ]);
   });
 
-  it("can move needs-input and failed sessions above idle work", () => {
+  it("can move waiting and error sessions above ready work", () => {
     const sessions = [
-      session("idle", "idle"),
-      session("failed", "failed"),
-      session("needs", "needs_input"),
-      session("running", "running"),
+      session("ready", "ready"),
+      session("errored", "errored"),
+      session("needs", "waiting_for_input"),
+      session("working", "working"),
     ];
 
     expect(orderSessionsByPriority(sessions, true).map((s) => s.id)).toEqual([
-      "failed",
+      "errored",
       "needs",
-      "idle",
-      "running",
+      "ready",
+      "working",
     ]);
     expect(orderSessionsByPriority(sessions, false).map((s) => s.id)).toEqual([
-      "idle",
-      "failed",
+      "ready",
+      "errored",
       "needs",
-      "running",
+      "working",
     ]);
     expect(sessions.map((s) => s.id)).toEqual([
-      "idle",
-      "failed",
+      "ready",
+      "errored",
       "needs",
-      "running",
+      "working",
     ]);
   });
 });

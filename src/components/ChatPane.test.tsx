@@ -228,7 +228,7 @@ function session(overrides: Partial<Session> = {}): Session {
     branch: "main",
     isolated: false,
     project_scoped: true,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
@@ -624,7 +624,7 @@ describe("ChatPane", () => {
 
     expect(textarea!.value).toBe("");
     expect(scroll.scrollTop).toBe(320);
-    expect(useAppStore.getState().sessions[0]?.status).toBe("running");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("working");
 
     await act(async () => {
       resolveSend(
@@ -655,7 +655,7 @@ describe("ChatPane", () => {
     });
     await settle();
 
-    expect(useAppStore.getState().sessions[0]?.status).toBe("needs_input");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("waiting_for_input");
   });
 
   it("rolls back the optimistic first message when sending fails", async () => {
@@ -697,7 +697,7 @@ describe("ChatPane", () => {
     expect(
       container.querySelector('button[aria-label="Stop response"]'),
     ).toBeNull();
-    expect(useAppStore.getState().sessions[0]?.status).toBe("failed");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("errored");
   });
 
   it("preserves existing messages when a follow-up send fails", async () => {
@@ -754,7 +754,7 @@ describe("ChatPane", () => {
     expect(
       container.querySelector('button[aria-label="Stop response"]'),
     ).toBeNull();
-    expect(useAppStore.getState().sessions[0]?.status).toBe("failed");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("errored");
   });
 
   it("keeps newer backend chat state when a send rejects after an event", async () => {
@@ -786,7 +786,7 @@ describe("ChatPane", () => {
       );
     });
     await settle();
-    expect(useAppStore.getState().sessions[0]?.status).toBe("running");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("working");
 
     await act(async () => {
       emitChatState(
@@ -827,7 +827,7 @@ describe("ChatPane", () => {
     expect(textarea!.value).toBe("");
     expect(container.textContent).toContain("Error: late transport failure");
     expect(container.textContent).not.toContain("Running Claude");
-    expect(useAppStore.getState().sessions[0]?.status).toBe("needs_input");
+    expect(useAppStore.getState().sessions[0]?.status).toBe("waiting_for_input");
   });
 
   it("shows a scroll-to-bottom button when the chat is scrolled up", async () => {

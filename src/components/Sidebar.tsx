@@ -162,19 +162,17 @@ import {
 } from "./ui";
 
 const SESSION_STATUS_TONE: Record<SessionStatus, StatusTone> = {
-  idle: "neutral",
-  running: "accent",
-  needs_input: "warning",
-  failed: "danger",
-  completed: "accent",
+  ready: "neutral",
+  working: "accent",
+  waiting_for_input: "warning",
+  errored: "danger",
 };
 
 const STATUS_ICON: Record<SessionStatus, string> = {
-  idle: "text-fg-muted",
-  running: "text-accent animate-pulse",
-  needs_input: "text-warning",
-  failed: "text-danger",
-  completed: "text-accent/60",
+  ready: "text-fg-muted",
+  working: "text-accent animate-pulse",
+  waiting_for_input: "text-warning",
+  errored: "text-danger",
 };
 
 function autoCloseSessionRowClassName(active: boolean): string {
@@ -3425,8 +3423,7 @@ function SessionStatusMarker({
         <StatusDot
           tone={SESSION_STATUS_TONE[session.status]}
           size="sm"
-          pulse={session.status === "running"}
-          className={session.status === "completed" ? "opacity-60" : undefined}
+          pulse={session.status === "working"}
         />
       )}
     </span>
@@ -3733,10 +3730,9 @@ const SIDEBAR_ACTIVITY_KIND_KEYS: Record<
   SessionNotificationKind,
   SidebarTranslationKey
 > = {
-  needs_input: "sidebar.activity.kind.needsInput",
-  failed: "sidebar.activity.kind.failed",
-  completed: "sidebar.activity.kind.completed",
-  became_idle: "sidebar.activity.kind.becameIdle",
+  waiting_for_input: "sidebar.activity.kind.waitingForInput",
+  errored: "sidebar.activity.kind.errored",
+  became_ready: "sidebar.activity.kind.becameReady",
 };
 
 function SessionActivityInbox() {
@@ -4019,8 +4015,8 @@ function SidebarActivityRow({
 }
 
 function sidebarActivityDotTone(kind: SessionNotificationKind): StatusTone {
-  if (kind === "failed") return "danger";
-  if (kind === "completed") return "accent";
+  if (kind === "errored") return "danger";
+  if (kind === "became_ready") return "neutral";
   return "warning";
 }
 

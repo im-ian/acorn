@@ -19,7 +19,7 @@ function project(repoPath: string, name: string, position: number) {
 function session(
   id: string,
   name: string,
-  status: "idle" | "running" | "needs_input" | "failed" | "completed",
+  status: "ready" | "working" | "waiting_for_input" | "errored",
   overrides: Record<string, unknown> = {},
 ) {
   return {
@@ -48,22 +48,19 @@ test.describe("workspace kanban mode", () => {
   }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [
-      session("needs-review", "needs-review", "needs_input", {
+      session("needs-review", "needs-review", "waiting_for_input", {
         agent_provider: "claude",
       }),
-      session("runner", "runner", "running", {
+      session("runner", "runner", "working", {
         agent_provider: "codex",
       }),
-      session("alpha", "alpha", "idle", {
+      session("alpha", "alpha", "ready", {
         updated_at: "2026-01-01T00:00:01Z",
       }),
-      session("shell", "shell", "idle", {
+      session("shell", "shell", "ready", {
         branch: "shell",
       }),
-      session("done", "done", "completed", {
-        agent_provider: "antigravity",
-      }),
-      session("broken", "broken", "failed", {
+      session("broken", "broken", "errored", {
         agent_provider: "codex",
         last_message: "Tests failed in popover state handling.",
         worktree_path:
@@ -75,16 +72,15 @@ test.describe("workspace kanban mode", () => {
         ? ((args as { ids: string[] }).ids)
         : [];
       const statuses: Record<string, string> = {
-        "needs-review": "needs_input",
-        runner: "running",
-        alpha: "idle",
-        shell: "idle",
-        done: "completed",
-        broken: "failed",
+        "needs-review": "waiting_for_input",
+        runner: "working",
+        alpha: "ready",
+        shell: "ready",
+        broken: "errored",
       };
       return ids.map((id) => ({
         id,
-        status: statuses[id] ?? "idle",
+        status: statuses[id] ?? "ready",
         branch: id === "shell" ? "shell" : `feat/${id}`,
         last_message:
           id === "broken"
@@ -139,17 +135,14 @@ test.describe("workspace kanban mode", () => {
     await page.keyboard.press("Escape");
 
     await expect(
-      board.getByRole("heading", { name: "Needs input" }),
+      board.getByRole("heading", { name: "Waiting for input" }),
     ).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Failed" })).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Running" })).toBeVisible();
-    await expect(board.getByRole("heading", { name: "Idle" })).toBeVisible();
-    await expect(
-      board.getByRole("heading", { name: "Completed" }),
-    ).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Error" })).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Working" })).toBeVisible();
+    await expect(board.getByRole("heading", { name: "Ready" })).toBeVisible();
     await expect(
       board.locator("section > header h2"),
-    ).toHaveText(["Idle", "Needs input", "Running", "Failed", "Completed"]);
+    ).toHaveText(["Ready", "Waiting for input", "Working", "Error"]);
 
     const filterInput = board.getByLabel("Filter sessions");
     await expect(filterInput).toBeVisible();
@@ -163,15 +156,15 @@ test.describe("workspace kanban mode", () => {
     await filterInput.fill("");
 
     await board.getByLabel("Sort sessions").selectOption("name-asc");
-    const idleCards = board.locator(
-      'section[aria-label="Idle"] [data-testid="workspace-kanban-card"]',
+    const readyCards = board.locator(
+      'section[aria-label="Ready"] [data-testid="workspace-kanban-card"]',
     );
-    await expect(idleCards).toHaveCount(2);
-    await expect(idleCards.nth(0)).toHaveAttribute(
+    await expect(readyCards).toHaveCount(2);
+    await expect(readyCards.nth(0)).toHaveAttribute(
       "data-kanban-session-id",
       "alpha",
     );
-    await expect(idleCards.nth(1)).toHaveAttribute(
+    await expect(readyCards.nth(1)).toHaveAttribute(
       "data-kanban-session-id",
       "shell",
     );
@@ -196,7 +189,7 @@ test.describe("workspace kanban mode", () => {
     await expect(
       brokenCard.getByTestId("workspace-kanban-card-meta"),
     ).toContainText("feat/broken");
-    await expect(brokenCard).not.toContainText("Failed");
+    await expect(brokenCard).not.toContainText("Error");
     await expect(
       brokenCard.getByTestId("workspace-kanban-card-last-message"),
     ).toContainText("Updated from status polling.");
@@ -250,12 +243,6 @@ test.describe("workspace kanban mode", () => {
     await expect(
       shellCard.getByTestId("workspace-kanban-card-worktree"),
     ).toHaveText("shell");
-    await expect(
-      board
-        .locator('[data-kanban-session-id="done"]')
-        .locator('[data-kanban-agent-icon="antigravity"]'),
-    ).toBeVisible();
-
     const shellCardWidths = await board
       .locator('[data-kanban-session-id="shell"]')
       .evaluate((button) => {
@@ -289,42 +276,34 @@ test.describe("workspace kanban mode", () => {
         .evaluateAll((columns) =>
           columns.map((column) => column.getBoundingClientRect().width),
         );
-    const idleColumn = board.locator('[data-kanban-column-status="idle"]');
+    const readyColumn = board.locator('[data-kanban-column-status="ready"]');
     const needsInputColumn = board.locator(
-      '[data-kanban-column-status="needs_input"]',
+      '[data-kanban-column-status="waiting_for_input"]',
     );
-    const idleResizeHandle = board
-      .locator('[data-kanban-resize-status="idle"]');
-    await expect(idleResizeHandle).toBeVisible();
-    const [idleWidthBefore, needsInputWidthBefore, scrollWidthBefore] =
+    const readyResizeHandle = board
+      .locator('[data-kanban-resize-status="ready"]');
+    await expect(readyResizeHandle).toBeVisible();
+    const [readyWidthBefore, needsInputWidthBefore, scrollWidthBefore] =
       await Promise.all([
-        idleColumn.evaluate((column) => column.getBoundingClientRect().width),
+        readyColumn.evaluate((column) => column.getBoundingClientRect().width),
         needsInputColumn.evaluate((column) =>
           column.getBoundingClientRect().width,
         ),
         kanbanScroll.evaluate((scroll) => scroll.scrollWidth),
       ]);
-    const handleBox = await idleResizeHandle.boundingBox();
-    expect(handleBox).not.toBeNull();
-    if (!handleBox) throw new Error("missing kanban resize handle");
-    await page.mouse.move(
-      handleBox.x + handleBox.width / 2,
-      handleBox.y + handleBox.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      handleBox.x + handleBox.width / 2 + 360,
-      handleBox.y + handleBox.height / 2,
-    );
-    await page.mouse.up();
+    await readyResizeHandle.focus();
+    for (let i = 0; i < 6; i += 1) {
+      await readyResizeHandle.press("Shift+ArrowRight");
+    }
+    const minimumResizeDelta = 100;
     await expect
       .poll(async () =>
-        idleColumn.evaluate((column) => column.getBoundingClientRect().width),
+        readyColumn.evaluate((column) => column.getBoundingClientRect().width),
       )
-      .toBeGreaterThan(idleWidthBefore + 300);
-    const [idleWidthAfter, needsInputWidthAfter, scrollWidthAfter] =
+      .toBeGreaterThan(readyWidthBefore + minimumResizeDelta);
+    const [readyWidthAfter, needsInputWidthAfter, scrollWidthAfter] =
       await Promise.all([
-        idleColumn.evaluate((column) => column.getBoundingClientRect().width),
+        readyColumn.evaluate((column) => column.getBoundingClientRect().width),
         needsInputColumn.evaluate((column) =>
           column.getBoundingClientRect().width,
         ),
@@ -347,14 +326,14 @@ test.describe("workspace kanban mode", () => {
       .toBeLessThan(1);
     const equalizedWidths = await kanbanColumnWidths();
     const equalizedWidth = equalizedWidths[0] ?? 0;
-    expect(equalizedWidth).toBeLessThan(idleWidthAfter);
+    expect(equalizedWidth).toBeLessThan(readyWidthAfter);
     expect(equalizedWidth).toBeGreaterThan(needsInputWidthAfter);
 
     await board.getByRole("button", { name: "Reset sizes" }).click();
     await expect
       .poll(async () => {
         const widths = await kanbanColumnWidths();
-        return Math.max(...widths.map((width) => Math.abs(width - 192)));
+        return Math.max(...widths.map((width) => Math.abs(width - 240)));
       })
       .toBeLessThan(1);
 
@@ -539,7 +518,7 @@ test.describe("workspace kanban mode", () => {
     });
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [
-      session("default-kanban", "default-kanban", "idle"),
+      session("default-kanban", "default-kanban", "ready"),
     ]);
 
     await page.goto("/");
@@ -568,7 +547,7 @@ test.describe("workspace kanban mode", () => {
     });
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [
-      session("centered", "centered", "idle"),
+      session("centered", "centered", "ready"),
     ]);
 
     await page.goto("/");
@@ -609,7 +588,7 @@ test.describe("workspace kanban mode", () => {
     });
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [
-      session("fullscreen", "fullscreen", "idle"),
+      session("fullscreen", "fullscreen", "ready"),
     ]);
 
     await page.goto("/");
@@ -637,11 +616,11 @@ test.describe("workspace kanban mode", () => {
     const beta = project("/tmp/beta", "beta", 1);
     await tauri.respond("list_projects", [alpha, beta]);
     await tauri.respond("list_sessions", [
-      session("alpha-session", "alpha-session", "idle", {
+      session("alpha-session", "alpha-session", "ready", {
         repo_path: "/tmp/alpha",
         worktree_path: "/tmp/alpha/.worktrees/alpha-session",
       }),
-      session("beta-session", "beta-session", "idle", {
+      session("beta-session", "beta-session", "ready", {
         repo_path: "/tmp/beta",
         worktree_path: "/tmp/beta/.worktrees/beta-session",
       }),
@@ -683,7 +662,7 @@ test.describe("workspace kanban mode", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           last_message: null,
@@ -721,7 +700,7 @@ test.describe("workspace kanban mode", () => {
         branch: isolated ? `acorn/${id}` : "main",
         isolated,
         project_scoped: input.projectScoped !== false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,

@@ -121,7 +121,7 @@ test.describe("project settings", () => {
           branch: "main",
           isolated: false,
           project_scoped: true,
-          status: "idle",
+          status: "ready",
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:05Z",
           last_message: null,
@@ -176,7 +176,7 @@ test.describe("project settings", () => {
     const sidebar = page.locator('[data-panel-id="sidebar"]');
     await expect(
       sidebar.getByRole("button", {
-        name: /^alpha terminal worktree main · Idle/,
+        name: /^alpha terminal worktree main · Ready/,
       }),
     ).toBeVisible();
 
@@ -204,7 +204,7 @@ test.describe("project settings", () => {
 
     await expect(
       sidebar.getByRole("button", {
-        name: /^alpha terminal worktree main · Idle/,
+        name: /^alpha terminal worktree main · Ready/,
       }),
     ).toHaveCount(0);
     await expect(alphaRow).toHaveCount(0);
@@ -248,7 +248,7 @@ test.describe("project settings", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -266,7 +266,7 @@ test.describe("project settings", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,

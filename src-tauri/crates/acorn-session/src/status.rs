@@ -2,32 +2,32 @@
 //! transcript the in-flight agent is writing. Status mapping:
 //!
 //! Claude transcripts:
-//! - last assistant turn with `stop_reason=end_turn` → NeedsInput (claude
+//! - last assistant turn with `stop_reason=end_turn` → WaitingForInput (claude
 //!   has finished its turn and is awaiting the user's next prompt). Surfaces
 //!   the warning-tone status dot in the Sidebar and triggers the
-//!   `needsInput` system notification when the user has it enabled.
-//! - last assistant turn with `stop_reason=tool_use` → Running (tool pending)
-//! - last user turn (new prompt or tool_result) → Running (assistant pending)
-//! - no transcript yet → Idle (session has not produced any conversation)
+//!   `waitingForInput` system notification when the user has it enabled.
+//! - last assistant turn with `stop_reason=tool_use` → Working (tool pending)
+//! - last user turn (new prompt or tool_result) → Working (assistant pending)
+//! - no transcript yet → Ready (session has not produced any conversation)
 //!
 //! Codex transcripts:
 //! - last `payload.type=task_complete` (or `agent_message` with
-//!   `phase=final_answer`) → NeedsInput (codex finished a turn).
-//! - last `payload.type=user_message` → Running (the user just sent a
+//!   `phase=final_answer`) → WaitingForInput (codex finished a turn).
+//! - last `payload.type=user_message` → Working (the user just sent a
 //!   prompt and codex is composing the response).
-//! - everything else with content → Running (function calls, intermediate
+//! - everything else with content → Working (function calls, intermediate
 //!   `agent_message phase=commentary`, reasoning, etc.).
 //!
 //! Antigravity transcripts:
-//! - last `type=PLANNER_RESPONSE` with `status=DONE` → NeedsInput.
-//! - last `type=USER_INPUT` or any non-DONE model/tool line → Running.
+//! - last `type=PLANNER_RESPONSE` with `status=DONE` → WaitingForInput.
+//! - last `type=USER_INPUT` or any non-DONE model/tool line → Working.
 //!
 //! Meta-only lines (claude: `last-prompt` / `permission-mode` /
 //! `attachment` / `file-history-snapshot` / `system`; codex: `token_count`
 //! and other event_msg telemetry) are ignored when picking the last
 //! message. The transcript line itself is the source of truth — we
 //! deliberately do NOT gate on mtime, otherwise the moment after a turn
-//! ends (file still warm) gets misreported as Running.
+//! ends (file still warm) gets misreported as Working.
 //!
 //! Transcript resolution lives in the host `acorn` crate (it consults
 //! `agent_resume`'s persister markers + the legacy `~/.claude/projects/`
@@ -90,17 +90,17 @@ impl StatusDetection {
 /// `last-prompt`/`attachment`/`file-history-snapshot` lines from recent
 /// claude versions, or codex `token_count` telemetry, can push the actual
 /// turn out of the 256 KiB tail window). Without this fallback, polling
-/// momentarily reclassifies a live session as Idle, leaving the Sidebar
-/// dot stuck at Idle until the agent emits another turn line within the
+/// momentarily reclassifies a live session as Ready, leaving the Sidebar
+/// dot stuck at Ready until the agent emits another turn line within the
 /// tail window — which for long sessions can be never.
 ///
 /// `shell_hint` carries the descendant-process snapshot for the session's
 /// PTY. It also guards transcript markers from becoming sticky state:
 /// resume markers are durable, so an old transcript can still end in
-/// `NeedsInput` long after the agent process exited. When the PTY is idle
+/// `waiting_for_input` long after the agent process exited. When the PTY is idle
 /// (or gone), the durable marker is stale for status purposes and the
-/// session should be Idle. When a live descendant exists, the transcript
-/// tail refines that live process into Running vs NeedsInput.
+/// session should be Ready. When a live descendant exists, the transcript
+/// tail refines that live process into Working vs WaitingForInput.
 pub fn detect(
     transcript: Option<(PathBuf, AgentKind)>,
     previous: SessionStatus,
@@ -115,7 +115,7 @@ pub fn detect_with_reason(
     shell_hint: Option<ShellHint>,
 ) -> StatusDetection {
     if matches!(shell_hint, Some(ShellHint::Idle) | None) {
-        return StatusDetection::new(SessionStatus::Idle, None);
+        return StatusDetection::new(SessionStatus::Ready, None);
     }
 
     let (path, kind) = match transcript {
@@ -133,13 +133,14 @@ pub fn detect_with_reason(
     };
 
     match classified {
-        Some(TurnClass::NeedsInput) => {
-            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::TurnComplete))
-        }
-        Some(TurnClass::Running) => StatusDetection::new(SessionStatus::Running, None),
+        Some(TurnClass::WaitingForInput) => StatusDetection::new(
+            SessionStatus::WaitingForInput,
+            Some(StatusReason::TurnComplete),
+        ),
+        Some(TurnClass::Working) => StatusDetection::new(SessionStatus::Working, None),
         // Transcript exists but the tail held no turn lines; keep
         // whatever the caller previously observed instead of regressing
-        // to Idle. The next poll that lands on a real turn line corrects
+        // to Ready. The next poll that lands on a real turn line corrects
         // it.
         None => StatusDetection::new(previous, None),
     }
@@ -152,18 +153,19 @@ fn map_shell_hint(hint: Option<ShellHint>) -> SessionStatus {
 
 fn detect_shell_hint(hint: Option<ShellHint>) -> StatusDetection {
     match hint {
-        Some(ShellHint::Running) => StatusDetection::new(SessionStatus::Running, None),
-        Some(ShellHint::NeedsInput) => {
-            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::ShellPrompt))
-        }
-        Some(ShellHint::Idle) | None => StatusDetection::new(SessionStatus::Idle, None),
+        Some(ShellHint::Running) => StatusDetection::new(SessionStatus::Working, None),
+        Some(ShellHint::NeedsInput) => StatusDetection::new(
+            SessionStatus::WaitingForInput,
+            Some(StatusReason::ShellPrompt),
+        ),
+        Some(ShellHint::Idle) | None => StatusDetection::new(SessionStatus::Ready, None),
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TurnClass {
-    NeedsInput,
-    Running,
+    WaitingForInput,
+    Working,
 }
 
 fn read_tail(path: &Path, max_bytes: u64) -> std::io::Result<String> {
@@ -189,17 +191,17 @@ fn classify_claude_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
             continue;
         };
         if line_type == "user" {
-            return Some(TurnClass::Running);
+            return Some(TurnClass::Working);
         }
         let stop_reason = msg
             .get("stop_reason")
             .and_then(|s| s.as_str())
             .unwrap_or("");
         return Some(match stop_reason {
-            "end_turn" | "stop_sequence" => TurnClass::NeedsInput,
-            "tool_use" => TurnClass::Running,
+            "end_turn" | "stop_sequence" => TurnClass::WaitingForInput,
+            "tool_use" => TurnClass::Working,
             // Unknown / null → assume the assistant turn is still live.
-            _ => TurnClass::Running,
+            _ => TurnClass::Working,
         });
     }
     None
@@ -217,24 +219,24 @@ fn classify_codex_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
         match payload_type {
             // `task_complete` is emitted exactly once per turn, after the
             // final `agent_message`. Authoritative "codex is waiting".
-            "task_complete" => return Some(TurnClass::NeedsInput),
-            "user_message" => return Some(TurnClass::Running),
+            "task_complete" => return Some(TurnClass::WaitingForInput),
+            "user_message" => return Some(TurnClass::Working),
             "function_call" | "function_call_output" | "reasoning" => {
-                return Some(TurnClass::Running);
+                return Some(TurnClass::Working);
             }
             "agent_message" => {
                 // The final answer phase is the user-visible "turn over"
                 // signal when `task_complete` got truncated out of the
                 // tail window. `commentary` is intermediate narration
-                // between tool calls — keep treating those as Running.
+                // between tool calls — keep treating those as Working.
                 let phase = v
                     .pointer("/payload/phase")
                     .and_then(|p| p.as_str())
                     .unwrap_or("");
                 return Some(if phase == "final_answer" {
-                    TurnClass::NeedsInput
+                    TurnClass::WaitingForInput
                 } else {
-                    TurnClass::Running
+                    TurnClass::Working
                 });
             }
             "message" => {
@@ -243,7 +245,7 @@ fn classify_codex_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
                 // signal upstream (the `task_complete` / `final_answer`
                 // branches above land first when present).
                 if v.pointer("/payload/role").and_then(|r| r.as_str()) == Some("assistant") {
-                    return Some(TurnClass::Running);
+                    return Some(TurnClass::Working);
                 }
                 continue;
             }
@@ -264,17 +266,17 @@ fn classify_antigravity_tail(tail: &str, read_full: bool) -> Option<TurnClass> {
         let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
         match line_type {
-            "USER_INPUT" => return Some(TurnClass::Running),
+            "USER_INPUT" => return Some(TurnClass::Working),
             "PLANNER_RESPONSE" => {
                 return Some(if status == "DONE" {
-                    TurnClass::NeedsInput
+                    TurnClass::WaitingForInput
                 } else {
-                    TurnClass::Running
+                    TurnClass::Working
                 });
             }
             "CONVERSATION_HISTORY" => continue,
             "" => continue,
-            _ => return Some(TurnClass::Running),
+            _ => return Some(TurnClass::Working),
         }
     }
     None
@@ -318,7 +320,7 @@ mod tests {
             // System lines (turn_duration, away_summary) get appended after the
             // assistant's `end_turn`. The walker must skip past them and still
             // classify the trailing assistant turn — otherwise the sidebar
-            // dot regresses to Idle the moment claude finishes a turn.
+            // dot regresses to Ready the moment claude finishes a turn.
             r#"{"type":"system","subtype":"turn_duration","durationMs":1234}"#,
             r#"{"type":"system","subtype":"away_summary","content":"…"}"#,
         ]
@@ -330,10 +332,10 @@ mod tests {
     }
 
     #[test]
-    fn user_turn_maps_to_running() {
+    fn user_turn_maps_to_working() {
         assert_eq!(
             classify_claude_tail(user_turn(), true),
-            Some(TurnClass::Running),
+            Some(TurnClass::Working),
         );
     }
 
@@ -348,37 +350,37 @@ mod tests {
         }
         assert_eq!(
             classify_claude_tail(&tail, true),
-            Some(TurnClass::NeedsInput),
+            Some(TurnClass::WaitingForInput),
         );
     }
 
     #[test]
-    fn assistant_tool_use_maps_to_running() {
+    fn assistant_tool_use_maps_to_working() {
         assert_eq!(
             classify_claude_tail(&assistant("tool_use"), true),
-            Some(TurnClass::Running),
+            Some(TurnClass::Working),
         );
     }
 
     #[test]
-    fn unknown_stop_reason_treated_as_running() {
+    fn unknown_stop_reason_treated_as_working() {
         assert_eq!(
             classify_claude_tail(&assistant("max_tokens"), true),
-            Some(TurnClass::Running),
+            Some(TurnClass::Working),
         );
     }
 
     #[test]
     fn truncated_first_line_is_dropped_when_not_read_full() {
         let tail = format!("ent\":[]}}}}\n{}\n", user_turn());
-        assert_eq!(classify_claude_tail(&tail, false), Some(TurnClass::Running),);
+        assert_eq!(classify_claude_tail(&tail, false), Some(TurnClass::Working),);
     }
 
     #[test]
     fn intact_first_line_is_kept_when_read_full() {
         assert_eq!(
             classify_claude_tail(user_turn(), true),
-            Some(TurnClass::Running),
+            Some(TurnClass::Working),
         );
     }
 
@@ -389,70 +391,76 @@ mod tests {
     }
 
     #[test]
-    fn shell_hint_running_maps_to_running() {
+    fn shell_hint_running_maps_to_working() {
         assert_eq!(
             map_shell_hint(Some(ShellHint::Running)),
-            SessionStatus::Running
+            SessionStatus::Working
         );
     }
 
     #[test]
-    fn shell_hint_needs_input_maps_to_needs_input() {
+    fn shell_hint_needs_input_maps_to_waiting_for_input() {
         assert_eq!(
             map_shell_hint(Some(ShellHint::NeedsInput)),
-            SessionStatus::NeedsInput,
+            SessionStatus::WaitingForInput,
         );
     }
 
     #[test]
-    fn shell_hint_idle_maps_to_idle() {
-        assert_eq!(map_shell_hint(Some(ShellHint::Idle)), SessionStatus::Idle);
+    fn shell_hint_idle_maps_to_ready() {
+        assert_eq!(map_shell_hint(Some(ShellHint::Idle)), SessionStatus::Ready);
     }
 
     #[test]
-    fn shell_hint_none_maps_to_idle() {
-        assert_eq!(map_shell_hint(None), SessionStatus::Idle);
+    fn shell_hint_none_maps_to_ready() {
+        assert_eq!(map_shell_hint(None), SessionStatus::Ready);
     }
 
     #[test]
     fn assistant_without_message_is_skipped() {
         let tail = format!("{}\n{}\n", r#"{"type":"assistant"}"#, user_turn(),);
-        assert_eq!(classify_claude_tail(&tail, true), Some(TurnClass::Running),);
+        assert_eq!(classify_claude_tail(&tail, true), Some(TurnClass::Working),);
     }
 
     // --- codex format ---
 
     #[test]
-    fn codex_task_complete_maps_to_needs_input() {
+    fn codex_task_complete_maps_to_waiting_for_input() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done","completed_at":1,"duration_ms":1,"time_to_first_token_ms":1}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+        assert_eq!(
+            classify_codex_tail(tail, true),
+            Some(TurnClass::WaitingForInput),
+        );
     }
 
     #[test]
-    fn codex_final_answer_agent_message_maps_to_needs_input() {
+    fn codex_final_answer_agent_message_maps_to_waiting_for_input() {
         // Simulates `task_complete` falling outside the tail window so
         // the walker falls back to the most recent `agent_message`
         // phase.
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"all done","phase":"final_answer","memory_citation":null}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+        assert_eq!(
+            classify_codex_tail(tail, true),
+            Some(TurnClass::WaitingForInput),
+        );
     }
 
     #[test]
-    fn codex_function_call_maps_to_running() {
+    fn codex_function_call_maps_to_working() {
         let tail = r#"{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c1"}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Working));
     }
 
     #[test]
-    fn codex_commentary_agent_message_maps_to_running() {
+    fn codex_commentary_agent_message_maps_to_working() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"agent_message","message":"checking","phase":"commentary","memory_citation":null}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Working));
     }
 
     #[test]
-    fn codex_user_message_maps_to_running() {
+    fn codex_user_message_maps_to_working() {
         let tail = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"hi","images":[],"local_images":[],"text_elements":[]}}"#;
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Running));
+        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::Working));
     }
 
     #[test]
@@ -465,7 +473,10 @@ mod tests {
             "\n",
             r#"{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{}}}"#,
         );
-        assert_eq!(classify_codex_tail(tail, true), Some(TurnClass::NeedsInput),);
+        assert_eq!(
+            classify_codex_tail(tail, true),
+            Some(TurnClass::WaitingForInput),
+        );
     }
 
     #[test]
@@ -476,89 +487,89 @@ mod tests {
     // --- antigravity format ---
 
     #[test]
-    fn antigravity_done_planner_maps_to_needs_input() {
+    fn antigravity_done_planner_maps_to_waiting_for_input() {
         let tail = r#"{"type":"PLANNER_RESPONSE","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify_antigravity_tail(tail, true),
-            Some(TurnClass::NeedsInput),
+            Some(TurnClass::WaitingForInput),
         );
     }
 
     #[test]
-    fn antigravity_user_input_maps_to_running() {
+    fn antigravity_user_input_maps_to_working() {
         let tail = r#"{"type":"USER_INPUT","status":"DONE","content":"hi"}"#;
         assert_eq!(
             classify_antigravity_tail(tail, true),
-            Some(TurnClass::Running),
+            Some(TurnClass::Working),
         );
     }
 
     #[test]
-    fn antigravity_non_planner_done_maps_to_running() {
+    fn antigravity_non_planner_done_maps_to_working() {
         let tail = r#"{"type":"TOOL_CALL","status":"DONE","content":"done"}"#;
         assert_eq!(
             classify_antigravity_tail(tail, true),
-            Some(TurnClass::Running),
+            Some(TurnClass::Working),
         );
     }
 
     // --- detect() entry point ---
 
     #[test]
-    fn detect_returns_idle_when_no_transcript_and_no_hint() {
+    fn detect_returns_ready_when_no_transcript_and_no_hint() {
         assert_eq!(
-            detect(None, SessionStatus::Idle, None),
-            SessionStatus::Idle
+            detect(None, SessionStatus::Ready, None),
+            SessionStatus::Ready
         );
     }
 
     #[test]
     fn detect_uses_shell_hint_when_no_transcript() {
         assert_eq!(
-            detect(None, SessionStatus::Idle, Some(ShellHint::Running)),
-            SessionStatus::Running
+            detect(None, SessionStatus::Ready, Some(ShellHint::Running)),
+            SessionStatus::Working
         );
     }
 
     #[test]
-    fn detect_ignores_stale_needs_input_transcript_when_shell_is_idle() {
+    fn detect_ignores_stale_waiting_for_input_transcript_when_shell_is_idle() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
             detect(
                 Some((path, AgentKind::Claude)),
-                SessionStatus::NeedsInput,
+                SessionStatus::WaitingForInput,
                 Some(ShellHint::Idle),
             ),
-            SessionStatus::Idle,
+            SessionStatus::Ready,
         );
     }
 
     #[test]
-    fn detect_ignores_stale_needs_input_transcript_without_live_pty() {
+    fn detect_ignores_stale_waiting_for_input_transcript_without_live_pty() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
             detect(
                 Some((path, AgentKind::Claude)),
-                SessionStatus::NeedsInput,
+                SessionStatus::WaitingForInput,
                 None,
             ),
-            SessionStatus::Idle,
+            SessionStatus::Ready,
         );
     }
 
     #[test]
-    fn detect_uses_needs_input_transcript_while_shell_has_live_child() {
+    fn detect_uses_waiting_for_input_transcript_while_shell_has_live_child() {
         let path = write_status_transcript(&assistant("end_turn"));
 
         assert_eq!(
             detect(
                 Some((path, AgentKind::Claude)),
-                SessionStatus::Running,
+                SessionStatus::Working,
                 Some(ShellHint::Running),
             ),
-            SessionStatus::NeedsInput,
+            SessionStatus::WaitingForInput,
         );
     }
 
@@ -571,26 +582,30 @@ mod tests {
         assert_eq!(
             detect_with_reason(
                 Some((path, AgentKind::Codex)),
-                SessionStatus::Running,
+                SessionStatus::Working,
                 Some(ShellHint::Running),
             ),
-            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::TurnComplete)),
+            StatusDetection::new(
+                SessionStatus::WaitingForInput,
+                Some(StatusReason::TurnComplete),
+            ),
         );
     }
 
     #[test]
     fn detect_reports_shell_prompt_reason_for_shell_needs_input() {
         assert_eq!(
-            detect_with_reason(None, SessionStatus::Running, Some(ShellHint::NeedsInput)),
-            StatusDetection::new(SessionStatus::NeedsInput, Some(StatusReason::ShellPrompt)),
+            detect_with_reason(None, SessionStatus::Working, Some(ShellHint::NeedsInput)),
+            StatusDetection::new(
+                SessionStatus::WaitingForInput,
+                Some(StatusReason::ShellPrompt),
+            ),
         );
     }
 
     fn write_status_transcript(body: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "acorn-status-test-{}.jsonl",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("acorn-status-test-{}.jsonl", uuid::Uuid::new_v4()));
         std::fs::write(&path, body).expect("write status transcript");
         path
     }

@@ -121,7 +121,7 @@ const activeSessionPlacementIntents = new Set<SessionPlacementIntent>();
 function coalescedSessionNotificationKey(
   notification: SessionNotification,
 ): string | null {
-  if (notification.kind !== "needs_input") return null;
+  if (notification.kind !== "waiting_for_input") return null;
   return `${notification.sessionId}:${notification.kind}`;
 }
 
@@ -986,13 +986,13 @@ function latestNeedsInputSessionId(
     state.sessions.map((session) => [session.id, session]),
   );
   for (const notification of state.sessionNotifications) {
-    if (notification.kind !== "needs_input") continue;
+    if (notification.kind !== "waiting_for_input") continue;
     const session = sessionsById.get(notification.sessionId);
-    if (session?.status === "needs_input") return session.id;
+    if (session?.status === "waiting_for_input") return session.id;
   }
   for (let index = state.sessions.length - 1; index >= 0; index -= 1) {
     const session = state.sessions[index];
-    if (session.status === "needs_input") return session.id;
+    if (session.status === "waiting_for_input") return session.id;
   }
   return null;
 }

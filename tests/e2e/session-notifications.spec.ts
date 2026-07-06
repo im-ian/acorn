@@ -22,7 +22,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -39,7 +39,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -52,7 +52,7 @@ test.describe("session notification center", () => {
     await tauri.handle("detect_session_statuses", () => [
       {
         id: "session-2",
-        status: "needs_input",
+        status: "waiting_for_input",
         branch: null,
         agent_provider: null,
       },
@@ -131,13 +131,13 @@ test.describe("session notification center", () => {
     await page.getByRole("button", { name: "Session notifications" }).click();
 
     await expect(
-      page.getByRole("menu").getByText("Needs input"),
+      page.getByRole("menu").getByText("Waiting for input"),
     ).toBeVisible();
     await expect(
       page.getByRole("menu").getByText("demo · agent run"),
     ).toBeVisible();
 
-    await page.getByRole("menuitem", { name: /Needs input/ }).click();
+    await page.getByRole("menuitem", { name: /Waiting for input/ }).click();
 
     await expect(page.getByRole("button", { name: "Session notifications" }))
       .not.toContainText("1");
@@ -173,7 +173,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -191,7 +191,7 @@ test.describe("session notification center", () => {
         branch: "main",
         isolated: false,
         project_scoped: true,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -205,7 +205,7 @@ test.describe("session notification center", () => {
     await tauri.handle("detect_session_statuses", () => [
       {
         id: "session-2",
-        status: "needs_input",
+        status: "waiting_for_input",
         branch: "main",
         agent_provider: null,
         last_message: "Awaiting input.",

@@ -23,7 +23,7 @@ async function seedActiveSession(
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -50,7 +50,7 @@ async function seedActiveWorktreeSession(
       worktree_path: "/tmp/demo/.acorn/worktrees/demo-1",
       branch: "main",
       isolated: true,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -1019,7 +1019,7 @@ test.describe("right panel: tab switching", () => {
     await tauri.handle("read_session_todos", () => null);
 
     await page.goto("/");
-    await page.getByRole("button", { name: /^sess main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^sess main · Ready$/ }).click();
     // Give the polling loop a tick to fetch and apply the null response.
     await expect(page.getByText(/Select a commit to see diff/i)).toBeVisible();
   });
@@ -1056,7 +1056,7 @@ test.describe("right panel: tab switching", () => {
         worktree_path: "/tmp/repo-a",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1068,7 +1068,7 @@ test.describe("right panel: tab switching", () => {
         worktree_path: "/tmp/repo-b",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1113,7 +1113,7 @@ test.describe("right panel: tab switching", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: /^sess-a main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^sess-a main · Ready$/ }).click();
     // Wait for A's first page to render.
     await expect(page.getByText("p0 AAA #0")).toBeVisible();
     // Trigger loadMore by scrolling the commits panel to the bottom — the
@@ -1135,7 +1135,7 @@ test.describe("right panel: tab switching", () => {
       );
     });
     // Switch to project B before A's page-1 resolves.
-    await page.getByRole("button", { name: /^sess-b main · Idle$/ }).click();
+    await page.getByRole("button", { name: /^sess-b main · Ready$/ }).click();
     // Wait for B's first page to render — confirms switch landed.
     await expect(page.getByText("p0 BBB #0")).toBeVisible();
     // Give A's delayed page-1 plenty of time to resolve.
@@ -1177,7 +1177,7 @@ test.describe("right panel: tab switching", () => {
         branch: "alpha",
         isolated: true,
         in_worktree: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1190,7 +1190,7 @@ test.describe("right panel: tab switching", () => {
         branch: "beta",
         isolated: true,
         in_worktree: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1226,7 +1226,7 @@ test.describe("right panel: tab switching", () => {
     await page.goto("/");
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^alpha worktree alpha · Idle$/ })
+      .getByRole("button", { name: /^alpha worktree alpha · Ready$/ })
       .click();
     await page.getByRole("button", { name: "GitHub" }).click();
     await expect(page.getByText(/No open pull requests/i)).toBeVisible();
@@ -1240,7 +1240,7 @@ test.describe("right panel: tab switching", () => {
     await pressHotkey(page, { mod: true, key: "d" });
     await page
       .locator('[data-panel-id="sidebar"]')
-      .getByRole("button", { name: /^beta worktree beta · Idle$/ })
+      .getByRole("button", { name: /^beta worktree beta · Ready$/ })
       .click();
     await expect(page.locator("[data-pane-body]")).toHaveCount(2);
     await expect(page.getByText(/No open pull requests/i)).toBeVisible();
@@ -1405,7 +1405,7 @@ test.describe("right panel: groups", () => {
         branch: "HEAD",
         isolated: false,
         project_scoped: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         last_message: null,
@@ -1596,7 +1596,7 @@ test.describe("right panel: groups", () => {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -1612,7 +1612,7 @@ test.describe("right panel: groups", () => {
         worktree_path: (args as { worktreePath: string }).worktreePath,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1686,7 +1686,7 @@ test.describe("right panel: groups", () => {
         worktree_path: (args as { repoPath: string }).repoPath,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -1750,7 +1750,7 @@ test.describe("right panel: groups", () => {
       worktree_path: "/tmp/demo",
       branch: "main",
       isolated: false,
-      status: "idle",
+      status: "ready",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:05Z",
       last_message: null,
@@ -1766,7 +1766,7 @@ test.describe("right panel: groups", () => {
         worktree_path: (args as { worktreePath: string }).worktreePath,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,

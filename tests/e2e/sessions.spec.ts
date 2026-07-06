@@ -18,7 +18,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -30,7 +30,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "running",
+        status: "working",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:04Z",
         last_message: null,
@@ -42,7 +42,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "needs_input",
+        status: "waiting_for_input",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:03Z",
         last_message: null,
@@ -54,21 +54,9 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "failed",
+        status: "errored",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:02Z",
-        last_message: null,
-      },
-      {
-        id: "s-done",
-        name: "epsilon",
-        repo_path: "/tmp/demo",
-        worktree_path: "/tmp/demo",
-        branch: "main",
-        isolated: false,
-        status: "completed",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:01Z",
         last_message: null,
       },
     ]);
@@ -78,19 +66,16 @@ test.describe("sessions: list rendering", () => {
     // Each session row exposes a button with accessible name
     // "<session> <branch> · <Status>" — assert one per status.
     await expect(
-      page.getByRole("button", { name: /^alpha main · Idle$/ }),
+      page.getByRole("button", { name: /^alpha main · Ready$/ }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /^beta main · Running$/ }),
+      page.getByRole("button", { name: /^beta main · Working$/ }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /^gamma main · Needs input$/ }),
+      page.getByRole("button", { name: /^gamma main · Waiting for input$/ }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /^delta main · Failed$/ }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /^epsilon main · Completed$/ }),
+      page.getByRole("button", { name: /^delta main · Error$/ }),
     ).toBeVisible();
   });
 
@@ -114,7 +99,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo-iso",
         branch: "feature/iso",
         isolated: true,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -126,7 +111,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:04Z",
         last_message: null,
@@ -141,11 +126,11 @@ test.describe("sessions: list rendering", () => {
     // worktree_path is a linked worktree — the icon doesn't distinguish.
     await expect(
       page.getByRole("button", {
-        name: /^iso worktree feature\/iso · Idle$/,
+        name: /^iso worktree feature\/iso · Ready$/,
       }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /^plain main · Idle$/ }),
+      page.getByRole("button", { name: /^plain main · Ready$/ }),
     ).toBeVisible();
     // Scope to the sidebar and use exact match — the tab strip renders the
     // same icon, and the parent button's accessible name also contains
@@ -175,7 +160,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-05T00:00:00Z",
         last_message: null,
@@ -191,7 +176,7 @@ test.describe("sessions: list rendering", () => {
         worktree_path: "/tmp/demo",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-02T00:00:00Z",
         updated_at: "2026-01-03T00:00:00Z",
         last_message: null,
@@ -205,10 +190,10 @@ test.describe("sessions: list rendering", () => {
     await page.goto("/");
 
     const newer = page.getByRole("button", {
-      name: /^newer-created main · Idle$/,
+      name: /^newer-created main · Ready$/,
     });
     const older = page.getByRole("button", {
-      name: /^older-created main · Idle$/,
+      name: /^older-created main · Ready$/,
     });
     await expect(newer).toBeVisible();
     await expect(older).toBeVisible();

@@ -1689,18 +1689,18 @@ fn prepare_chat_retry_branch(
 fn chat_session_status_for_message_status(status: persistence::ChatMessageStatus) -> SessionStatus {
     match status {
         persistence::ChatMessageStatus::Pending | persistence::ChatMessageStatus::Streaming => {
-            SessionStatus::Running
+            SessionStatus::Working
         }
         persistence::ChatMessageStatus::Complete | persistence::ChatMessageStatus::Cancelled => {
-            SessionStatus::NeedsInput
+            SessionStatus::WaitingForInput
         }
-        persistence::ChatMessageStatus::Error => SessionStatus::Failed,
+        persistence::ChatMessageStatus::Error => SessionStatus::Errored,
     }
 }
 
 fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> SessionStatus {
     if chat_state_has_running_message(chat_state) {
-        return SessionStatus::Running;
+        return SessionStatus::Working;
     }
     let last_message = chat_state.messages.last();
     let last_turn = chat_state.turns.last();
@@ -1709,9 +1709,9 @@ fn chat_session_status_for_state(chat_state: &persistence::ChatSessionState) -> 
         .is_some_and(|status| status == persistence::ChatMessageStatus::Error)
         || last_turn.is_some_and(|turn| turn.status == persistence::ChatTurnStatus::Error)
     {
-        SessionStatus::Failed
+        SessionStatus::Errored
     } else {
-        SessionStatus::NeedsInput
+        SessionStatus::WaitingForInput
     }
 }
 
@@ -5081,10 +5081,10 @@ fn hook_boot_reconciled_status(
     detection: session_status::StatusDetection,
 ) -> Option<SessionStatus> {
     (!hook_confirmed_this_run
-        && stored == SessionStatus::Running
-        && detection.status == SessionStatus::NeedsInput
+        && stored == SessionStatus::Working
+        && detection.status == SessionStatus::WaitingForInput
         && detection.reason == Some(SessionStatusReason::TurnComplete))
-    .then_some(SessionStatus::NeedsInput)
+    .then_some(SessionStatus::WaitingForInput)
 }
 
 fn detect_session_statuses_blocking(
@@ -5137,7 +5137,7 @@ fn detect_session_statuses_blocking(
             let previous = session
                 .as_ref()
                 .map(|s| s.status)
-                .unwrap_or(SessionStatus::Idle);
+                .unwrap_or(SessionStatus::Ready);
             if matches!(session.as_ref().map(|s| s.mode), Some(SessionMode::Chat)) {
                 let git_context = session
                     .as_ref()
@@ -5317,8 +5317,8 @@ fn detect_session_statuses_blocking(
                 let hook_status = reconciled.unwrap_or(stored);
                 // Codex can report turn-complete while a background terminal
                 // command is still alive. Keep the UI Running until it exits.
-                if hook_status == SessionStatus::NeedsInput && live_codex_tool_child {
-                    SessionStatus::Running
+                if hook_status == SessionStatus::WaitingForInput && live_codex_tool_child {
+                    SessionStatus::Working
                 } else {
                     hook_status
                 }
@@ -6557,16 +6557,16 @@ mod tests {
         // channel this run, and the transcript holds a real turn-complete
         // marker — the turn ended while nobody was listening.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::NeedsInput,
+            status: acorn_session::SessionStatus::WaitingForInput,
             reason: Some(super::SessionStatusReason::TurnComplete),
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
-                acorn_session::SessionStatus::Running,
+                acorn_session::SessionStatus::Working,
                 false,
                 detection
             ),
-            Some(acorn_session::SessionStatus::NeedsInput)
+            Some(acorn_session::SessionStatus::WaitingForInput)
         );
     }
 
@@ -6576,12 +6576,12 @@ mod tests {
         // again; re-opening the transcript passthrough would recreate the
         // UserPromptSubmit-vs-stale-tail race.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::NeedsInput,
+            status: acorn_session::SessionStatus::WaitingForInput,
             reason: Some(super::SessionStatusReason::TurnComplete),
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
-                acorn_session::SessionStatus::Running,
+                acorn_session::SessionStatus::Working,
                 true,
                 detection
             ),
@@ -6595,12 +6595,12 @@ mod tests {
         // NeedsInput can only be stale in the direction hooks will re-report;
         // a stale-tail reading must not touch it.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::Running,
+            status: acorn_session::SessionStatus::Working,
             reason: None,
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
-                acorn_session::SessionStatus::NeedsInput,
+                acorn_session::SessionStatus::WaitingForInput,
                 false,
                 detection
             ),
@@ -6613,12 +6613,12 @@ mod tests {
         // A shell-prompt NeedsInput hint is not evidence the agent's turn
         // ended — only a transcript turn-complete marker flips Running.
         let detection = super::session_status::StatusDetection {
-            status: acorn_session::SessionStatus::NeedsInput,
+            status: acorn_session::SessionStatus::WaitingForInput,
             reason: Some(super::SessionStatusReason::ShellPrompt),
         };
         assert_eq!(
             super::hook_boot_reconciled_status(
-                acorn_session::SessionStatus::Running,
+                acorn_session::SessionStatus::Working,
                 false,
                 detection
             ),
@@ -6632,31 +6632,31 @@ mod tests {
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Pending
             ),
-            acorn_session::SessionStatus::Running
+            acorn_session::SessionStatus::Working
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Streaming
             ),
-            acorn_session::SessionStatus::Running
+            acorn_session::SessionStatus::Working
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Complete
             ),
-            acorn_session::SessionStatus::NeedsInput
+            acorn_session::SessionStatus::WaitingForInput
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Error
             ),
-            acorn_session::SessionStatus::Failed
+            acorn_session::SessionStatus::Errored
         );
         assert_eq!(
             super::chat_session_status_for_message_status(
                 crate::persistence::ChatMessageStatus::Cancelled
             ),
-            acorn_session::SessionStatus::NeedsInput
+            acorn_session::SessionStatus::WaitingForInput
         );
     }
 

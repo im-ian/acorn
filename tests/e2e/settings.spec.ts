@@ -227,7 +227,7 @@ test.describe("settings modal", () => {
       .toBe(false);
   });
 
-  test("toggles the running-session close warning from Sessions settings", async ({
+  test("toggles the working-session close warning from Sessions settings", async ({
     page,
   }) => {
     await page.goto("/");
@@ -237,7 +237,7 @@ test.describe("settings modal", () => {
     await modal.getByRole("button", { name: /^(Sessions|세션)$/ }).click();
 
     const checkbox = modal.getByRole("checkbox", {
-      name: /Show warning before closing running sessions|실행 중인 세션을 닫기 전에 경고 표시/,
+      name: /Show warning before closing working sessions|작업 중인 세션을 닫기 전에 경고 표시/,
     });
     await expect(checkbox).toBeChecked();
     await checkbox.click();

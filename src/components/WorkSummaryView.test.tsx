@@ -55,7 +55,7 @@ function session(overrides: Partial<Session> = {}): Session {
     worktree_path: `${REPO}/.worktrees/s1`,
     branch: "feat/summary",
     isolated: false,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: "done",

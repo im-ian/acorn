@@ -17,7 +17,7 @@ function session(overrides: Partial<Session> = {}): Session {
     worktree_path: "/tmp/repo",
     branch: "main",
     isolated: false,
-    status: "idle",
+    status: "ready",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     last_message: null,
@@ -151,7 +151,7 @@ describe("session title helpers", () => {
         session({
           title_source: "manual",
           mode: "chat",
-          status: "needs_input",
+          status: "waiting_for_input",
           agent_provider: null,
         }),
       ),
@@ -161,7 +161,7 @@ describe("session title helpers", () => {
         session({
           title_source: "manual",
           mode: "chat",
-          status: "idle",
+          status: "ready",
           agent_provider: null,
         }),
       ),
@@ -179,7 +179,7 @@ describe("session title helpers", () => {
     ).toBe(false);
     expect(
       canAutoGenerateSessionTitle(
-        session({ agent_provider: null, status: "running" }),
+        session({ agent_provider: null, status: "working" }),
         true,
       ),
     ).toBe(true);
@@ -194,7 +194,7 @@ describe("session title helpers", () => {
         session({
           agent_provider: null,
           mode: "chat",
-          status: "needs_input",
+          status: "waiting_for_input",
         }),
         true,
       ),
@@ -204,7 +204,7 @@ describe("session title helpers", () => {
         session({
           agent_provider: null,
           mode: "chat",
-          status: "needs_input",
+          status: "waiting_for_input",
         }),
         false,
       ),
@@ -218,7 +218,7 @@ describe("session title helpers", () => {
           auto_title_enabled: false,
           agent_provider: "codex",
           agent_transcript_id: "codex-1",
-          status: "running",
+          status: "working",
         }),
         true,
       ),
@@ -229,7 +229,7 @@ describe("session title helpers", () => {
     const legacy = session({
       agent_provider: "codex",
       agent_transcript_id: "codex-1",
-      status: "running",
+      status: "working",
     });
     delete legacy.auto_title_enabled;
 
@@ -272,7 +272,7 @@ describe("session title helpers", () => {
           auto_title_enabled: true,
           agent_provider: null,
           mode: "chat",
-          status: "needs_input",
+          status: "waiting_for_input",
         }),
         false,
       ),
@@ -289,14 +289,14 @@ describe("session title helpers", () => {
             auto_title_enabled: false,
             agent_provider: "codex",
             agent_transcript_id: "codex-1",
-            status: "running",
+            status: "working",
           }),
           session({ id: "manual", title_source: "manual" }),
           session({ id: "terminal", agent_provider: null }),
           session({
             id: "detected-running",
             agent_provider: null,
-            status: "running",
+            status: "working",
           }),
           session({
             id: "named-antigravity",
@@ -338,12 +338,12 @@ describe("session title helpers", () => {
     expect(
       planAutoGenerateSessionTitles({
         sessions: [
-          session({ id: "terminal", agent_provider: null, status: "running" }),
+          session({ id: "terminal", agent_provider: null, status: "working" }),
           session({
             id: "chat",
             agent_provider: null,
             mode: "chat",
-            status: "needs_input",
+            status: "waiting_for_input",
           }),
         ],
         enabled: false,

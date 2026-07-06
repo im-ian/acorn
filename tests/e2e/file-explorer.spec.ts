@@ -124,7 +124,7 @@ test.describe("file explorer", () => {
         worktree_path: repo,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -193,7 +193,7 @@ test.describe("file explorer", () => {
 
     await page.goto("/");
     await page
-      .getByRole("button", { name: /^alpha main · Idle$/ })
+      .getByRole("button", { name: /^alpha main · Ready$/ })
       .click();
     await page.getByRole("button", { name: "Code" }).click();
     await page.getByRole("button", { name: "Files", exact: true }).click();
@@ -342,7 +342,7 @@ test.describe("file explorer", () => {
         worktree_path: worktree,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -495,7 +495,7 @@ test.describe("file explorer", () => {
         worktree_path: worktreeA,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -507,7 +507,7 @@ test.describe("file explorer", () => {
         worktree_path: worktreeB,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -856,7 +856,7 @@ test.describe("file explorer", () => {
         worktree_path: worktreeA,
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,
@@ -868,7 +868,7 @@ test.describe("file explorer", () => {
         worktree_path: "/tmp/beta/.worktrees/b-session",
         branch: "main",
         isolated: false,
-        status: "idle",
+        status: "ready",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:05Z",
         last_message: null,

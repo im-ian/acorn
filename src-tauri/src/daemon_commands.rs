@@ -339,7 +339,7 @@ pub fn daemon_adopt_session(
         branch,
         isolated: false,
         project_scoped: true,
-        status: acorn_session::SessionStatus::Idle,
+        status: acorn_session::SessionStatus::Ready,
         created_at: now,
         updated_at: now,
         last_message: None,
