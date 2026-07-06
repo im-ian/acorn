@@ -5122,9 +5122,8 @@ fn detect_session_statuses_blocking(
             // Routing-aware pid lookup. Daemon-managed sessions live
             // in `stream_registry` (their root pid was captured from
             // the daemon at spawn / attach); legacy in-process sessions
-            // live in `state.pty`. Each side drives its own shell-state
-            // machine because the sticky NeedsInput deadline is
-            // per-attachment, not global.
+            // live in `state.pty`. Each side keeps separate liveness storage
+            // because the sticky NeedsInput deadline is per attachment.
             let daemon_pid = session
                 .as_ref()
                 .and_then(|s| s.daemon_session_id)
