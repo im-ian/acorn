@@ -272,7 +272,9 @@ describe("multi-input", () => {
 describe("sessionNotifications", () => {
   it("adds newest notifications first and caps the in-memory list", () => {
     for (let i = 0; i < 105; i += 1) {
-      useAppStore.getState().addSessionNotification(notification(`n${i}`));
+      useAppStore.getState().addSessionNotification(
+        notification(`n${i}`, { sessionId: `s${i}` }),
+      );
     }
 
     const maxHistory = DEFAULT_SETTINGS.notifications.maxHistory;
@@ -282,10 +284,67 @@ describe("sessionNotifications", () => {
     expect(items[items.length - 1]?.id).toBe(`n${105 - maxHistory}`);
   });
 
+  it("coalesces needs-input activity per session", () => {
+    useAppStore.getState().addSessionNotification(
+      notification("old", {
+        sessionId: "s1",
+        createdAt: "2026-01-01T00:00:00Z",
+        readAt: "2026-01-01T00:01:00Z",
+      }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("other", { sessionId: "s2" }),
+    );
+    useAppStore.getState().addSessionNotification(
+      notification("latest", {
+        sessionId: "s1",
+        createdAt: "2026-01-01T00:02:00Z",
+      }),
+    );
+
+    const items = useAppStore.getState().sessionNotifications;
+    expect(items.map((item) => item.id)).toEqual(["latest", "other"]);
+    expect(items[0]?.readAt).toBeUndefined();
+  });
+
+  it("normalizes duplicate persisted needs-input activity on rehydrate", async () => {
+    window.localStorage.clear();
+    resetStore();
+    window.localStorage.setItem(
+      "acorn-workspaces",
+      JSON.stringify({
+        state: {
+          sessionNotifications: [
+            notification("latest", {
+              sessionId: "s1",
+              createdAt: "2026-01-01T00:02:00Z",
+            }),
+            notification("old", {
+              sessionId: "s1",
+              createdAt: "2026-01-01T00:00:00Z",
+            }),
+            notification("other", { sessionId: "s2" }),
+          ],
+        },
+        version: 4,
+      }),
+    );
+
+    await useAppStore.persist.rehydrate();
+
+    expect(
+      useAppStore.getState().sessionNotifications.map((item) => item.id),
+    ).toEqual(["latest", "other"]);
+  });
+
   it("marks individual and all notifications read, then clears read items when auto-delete is disabled", () => {
     useSettings.getState().patchNotifications({ autoDeleteRead: false });
-    useAppStore.getState().addSessionNotification(notification("n1"));
-    useAppStore.getState().addSessionNotification(notification("n2"));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n1", { sessionId: "s1" }));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n2", { sessionId: "s2" }));
 
     useAppStore.getState().markSessionNotificationRead("n1");
     expect(
@@ -311,8 +370,12 @@ describe("sessionNotifications", () => {
   });
 
   it("dismisses one notification without touching others", () => {
-    useAppStore.getState().addSessionNotification(notification("n1"));
-    useAppStore.getState().addSessionNotification(notification("n2"));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n1", { sessionId: "s1" }));
+    useAppStore
+      .getState()
+      .addSessionNotification(notification("n2", { sessionId: "s2" }));
 
     useAppStore.getState().dismissSessionNotification("n1");
 
