@@ -1,4 +1,4 @@
-use git2::{Repository, WorktreePruneOptions};
+use git2::{BranchType, Repository, WorktreeAddOptions, WorktreePruneOptions};
 use serde::Serialize;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -114,8 +114,38 @@ pub fn create_worktree(repo_path: &Path, name: &str) -> AppResult<PathBuf> {
         )));
     }
 
-    repo.worktree(name, &target, None)?;
+    let base = worktree_base_commit(&repo)?;
+    repo.branch(name, &base, false)?;
+    let branch_ref_name = format!("refs/heads/{name}");
+    let branch_ref = repo.find_reference(&branch_ref_name)?;
+    let mut opts = WorktreeAddOptions::new();
+    opts.checkout_existing(true).reference(Some(&branch_ref));
+    if let Err(err) = repo.worktree(name, &target, Some(&opts)) {
+        if let Ok(mut branch) = repo.find_branch(name, BranchType::Local) {
+            let _ = branch.delete();
+        }
+        return Err(err.into());
+    }
     Ok(target)
+}
+
+fn worktree_base_commit(repo: &Repository) -> AppResult<git2::Commit<'_>> {
+    // Acorn-created worktrees start from the project's stable default branch,
+    // not whichever feature branch the project root is currently using.
+    for name in [
+        "refs/heads/main",
+        "refs/remotes/origin/main",
+        "refs/heads/master",
+        "refs/remotes/origin/master",
+    ] {
+        if let Ok(commit) = repo
+            .find_reference(name)
+            .and_then(|reference| reference.peel_to_commit())
+        {
+            return Ok(commit);
+        }
+    }
+    Ok(repo.head()?.peel_to_commit()?)
 }
 
 /// Returns absolute on-disk paths of linked worktrees. Used by the
@@ -431,6 +461,68 @@ mod tests {
             .expect("initial commit");
         drop(tree);
         repo
+    }
+
+    fn checkout_branch(repo: &Repository, name: &str) {
+        let refname = format!("refs/heads/{name}");
+        let object = repo
+            .revparse_single(&refname)
+            .unwrap_or_else(|_| panic!("find {refname}"));
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        repo.checkout_tree(&object, Some(&mut checkout))
+            .unwrap_or_else(|_| panic!("checkout {refname} tree"));
+        repo.set_head(&refname)
+            .unwrap_or_else(|_| panic!("set HEAD to {refname}"));
+    }
+
+    #[test]
+    fn create_worktree_starts_new_branch_from_main_when_head_is_elsewhere() {
+        let root = unique_temp_dir("base-main");
+        let repo = init_repo_with_tracked_file(&root);
+        let sig = git2::Signature::now("acorn-test", "test@acorn").expect("sig");
+        let initial = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("initial commit");
+        let main_oid = initial.id();
+        repo.branch("main", &initial, false)
+            .expect("create main branch");
+        repo.branch("feature", &initial, false)
+            .expect("create feature branch");
+        drop(initial);
+
+        checkout_branch(&repo, "feature");
+        std::fs::write(root.join("tracked.txt"), "feature").expect("write feature contents");
+        let tree_id = {
+            let mut idx = repo.index().expect("index");
+            idx.add_path(Path::new("tracked.txt"))
+                .expect("add feature file");
+            idx.write_tree().expect("write feature tree")
+        };
+        let tree = repo.find_tree(tree_id).expect("feature tree");
+        let parent = repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .expect("feature parent");
+        repo.commit(Some("HEAD"), &sig, &sig, "feature", &tree, &[&parent])
+            .expect("feature commit");
+        drop(parent);
+        drop(tree);
+        drop(repo);
+
+        let worktree_path = create_worktree(&root, "worker").expect("create worktree");
+        let worktree_repo = Repository::open(&worktree_path).expect("open worktree repo");
+        let head = worktree_repo.head().expect("worktree head");
+
+        assert_eq!(head.shorthand(), Some("worker"));
+        assert_eq!(head.target(), Some(main_oid));
+        assert_eq!(
+            std::fs::read_to_string(worktree_path.join("tracked.txt")).unwrap(),
+            "initial"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

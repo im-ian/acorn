@@ -8110,19 +8110,15 @@ mod tests {
         repo
     }
 
-    // Regression: libgit2's default `Repository::worktree(name, path, None)`
-    // auto-creates a branch named after the worktree. When that branch
-    // already exists (e.g. the user's primary branch happens to share the
-    // repo basename), the call returned ErrorCode::Exists and bubbled up to
-    // the user as "failed to write reference 'refs/heads/<name>'". The
-    // retry loop now bumps the suffix on Exists just like it does for
-    // path collisions.
+    // Regression: a generated worktree branch name can collide with an
+    // existing branch. The retry loop bumps the suffix on Exists just like it
+    // does for path collisions.
     #[test]
     fn create_unique_worktree_bumps_suffix_when_branch_name_taken() {
         let repo_dir = unique_repo_dir("branch-collision");
         let repo = init_repo_with_commit(&repo_dir);
-        // Create a branch named after the repo so the libgit2 auto-branch
-        // creation would collide on the first attempt.
+        // Create a branch named after the repo so generated branch creation
+        // collides on the first attempt.
         let head_commit = repo
             .head()
             .and_then(|h| h.peel_to_commit())
