@@ -29,6 +29,7 @@ import type {
   SessionAgentProvider,
   SessionKind,
   SessionMode,
+  SessionProcessSummary,
   SessionStatus,
   SessionStatusReason,
   SessionTitleReadinessResult,
@@ -644,6 +645,8 @@ export const api = {
       last_agent_message?: string | null;
       agent_provider?: SessionAgentProvider | null;
       agent_transcript_id?: string | null;
+      active_processes?: SessionProcessSummary[];
+      git_context_path?: string | null;
       branch: string | null;
       auto_title_enabled?: boolean | null;
     }[]
@@ -658,6 +661,8 @@ export const api = {
         last_agent_message?: string | null;
         agent_provider?: SessionAgentProvider | null;
         agent_transcript_id?: string | null;
+        active_processes?: SessionProcessSummary[];
+        git_context_path?: string | null;
         branch: string | null;
         auto_title_enabled?: boolean | null;
       }[]

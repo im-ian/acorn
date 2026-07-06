@@ -140,6 +140,16 @@ export interface Session {
   agent_provider?: SessionAgentProvider | null;
   /** Most recently paired agent transcript id, if Acorn has paired this tab to one. */
   agent_transcript_id?: string | null;
+  /** Ephemeral live process names observed under the session PTY. */
+  active_processes?: SessionProcessSummary[];
+  /** Ephemeral git workdir that produced the current live branch. */
+  git_context_path?: string | null;
+}
+
+export interface SessionProcessSummary {
+  pid: number;
+  name: string;
+  depth: number;
 }
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
@@ -441,6 +451,15 @@ export type PullRequestListing =
   | { kind: "ok"; items: PullRequestInfo[]; account: string }
   | { kind: "not_github" }
   | { kind: "no_access"; slug: string; accounts: AccountSummary[] };
+
+export interface SessionPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  head_branch: string;
+  base_branch: string;
+  is_draft: boolean;
+}
 
 export interface IssueInfo {
   number: number;

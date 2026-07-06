@@ -9,6 +9,7 @@ import type {
   SessionMode,
   SessionTitleGenerationStatus,
   SessionNotification,
+  SessionProcessSummary,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
@@ -93,6 +94,19 @@ let activeStatusPollAll = false;
 let activeStatusPollIds = new Set<string>();
 let refreshSessionsSeq = 0;
 let sessionPlacementSeq = 0;
+
+function sessionProcessSummariesEqual(
+  a: readonly SessionProcessSummary[],
+  b: readonly SessionProcessSummary[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (process, index) =>
+      process.pid === b[index]?.pid &&
+      process.name === b[index]?.name &&
+      process.depth === b[index]?.depth,
+  );
+}
 
 interface SessionPlacementIntent {
   projectFolderId: string;
@@ -1636,6 +1650,19 @@ export const useAppStore = create<AppStateModel>()(
                 )
                   ? (update.agent_transcript_id ?? null)
                   : (sess.agent_transcript_id ?? null);
+                const currentActiveProcesses = sess.active_processes ?? [];
+                const nextActiveProcesses = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "active_processes",
+                )
+                  ? (update.active_processes ?? [])
+                  : currentActiveProcesses;
+                const nextGitContextPath = Object.prototype.hasOwnProperty.call(
+                  update,
+                  "git_context_path",
+                )
+                  ? (update.git_context_path ?? null)
+                  : (sess.git_context_path ?? null);
                 // Carries the backend's auto-title promotion (terminal
                 // session that started an agent) so the title planner sees
                 // eligibility on the next poll instead of waiting for a
@@ -1651,6 +1678,11 @@ export const useAppStore = create<AppStateModel>()(
                   nextLastAgentMessage !== (sess.last_agent_message ?? null) ||
                   nextAgentProvider !== (sess.agent_provider ?? null) ||
                   nextAgentTranscriptId !== (sess.agent_transcript_id ?? null) ||
+                  !sessionProcessSummariesEqual(
+                    nextActiveProcesses,
+                    currentActiveProcesses,
+                  ) ||
+                  nextGitContextPath !== (sess.git_context_path ?? null) ||
                   nextAutoTitleEnabled !== (sess.auto_title_enabled ?? null)
                 ) {
                   changed = true;
@@ -1664,6 +1696,8 @@ export const useAppStore = create<AppStateModel>()(
                     last_agent_message: nextLastAgentMessage,
                     agent_provider: nextAgentProvider,
                     agent_transcript_id: nextAgentTranscriptId,
+                    active_processes: nextActiveProcesses,
+                    git_context_path: nextGitContextPath,
                     auto_title_enabled: nextAutoTitleEnabled,
                   };
                 }
