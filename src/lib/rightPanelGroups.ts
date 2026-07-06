@@ -7,7 +7,6 @@ export type RightTab =
   | "prs"
   | "issues"
   | "actions"
-  | "activity"
   | "todos"
   | "history";
 
@@ -16,7 +15,7 @@ export const RIGHT_GROUPS: ReadonlyArray<RightGroup> = ["code", "github", "agent
 const TABS_BY_GROUP: Record<RightGroup, ReadonlyArray<RightTab>> = {
   code: ["files", "staged", "commits"],
   github: ["prs", "issues", "actions"],
-  agents: ["activity", "history", "todos"],
+  agents: ["history", "todos"],
 };
 
 export function tabsForGroup(group: RightGroup): ReadonlyArray<RightTab> {

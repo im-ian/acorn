@@ -209,6 +209,10 @@ export function startSessionActivityInboxWatcher(): () => void {
 
       const kind = notificationKindForTransition(prev, s.status);
       if (!kind) continue;
+      if (isSessionFocused(s.id, state.activeSessionId)) {
+        markSessionNotificationsRead(s.id);
+        continue;
+      }
       store.addSessionNotification(buildInboxNotification(s, prev, kind));
     }
 
