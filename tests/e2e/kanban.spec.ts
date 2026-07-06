@@ -352,6 +352,12 @@ test.describe("workspace kanban mode", () => {
       page.getByRole("menuitem", { name: "Open shell" }),
     ).toBeVisible();
     await expect(
+      page.getByRole("menuitem", { name: "Rename" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Regenerate Name" }),
+    ).toBeVisible();
+    await expect(
       page.getByRole("menuitem", { name: "Open Work Summary" }),
     ).toBeVisible();
     await expect(
@@ -501,6 +507,87 @@ test.describe("workspace kanban mode", () => {
       page
         .getByTestId("terminal-popover-body")
         .locator('[data-acorn-terminal-slot="broken"] .acorn-terminal-shell'),
+    ).toBeVisible();
+  });
+
+  test("card context menu can rename a session", async ({ page, tauri }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "rename-me",
+          name: "rename-me",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo/.worktrees/rename-me",
+          branch: "feat/rename-me",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          mode: "terminal",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.handle("rename_session", (args) => {
+      const w = window as unknown as {
+        __renameCalls?: unknown[];
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__renameCalls = w.__renameCalls ?? [];
+      w.__renameCalls.push(args);
+      const a = args as { id: string; name: string };
+      const current = w.__sessions?.[0] ?? {};
+      const updated = { ...current, id: a.id, name: a.name };
+      w.__sessions = [updated];
+      return updated;
+    });
+
+    await page.goto("/");
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    const card = board.getByRole("button", { name: "Open rename-me" });
+    await card.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+
+    const input = board.locator("[data-kanban-card-rename-input]");
+    await expect(input).toBeFocused();
+    await input.fill("renamed from kanban");
+    await input.press("Enter");
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __renameCalls?: unknown[] })
+              .__renameCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+
+    const calls = (await page.evaluate(
+      () =>
+        (window as unknown as { __renameCalls?: unknown[] }).__renameCalls,
+    )) as Array<{ id: string; name: string }>;
+    expect(calls[0]).toEqual({
+      id: "rename-me",
+      name: "renamed from kanban",
+    });
+    await expect(
+      board.getByRole("button", { name: "Open renamed from kanban" }),
     ).toBeVisible();
   });
 
