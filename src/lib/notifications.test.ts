@@ -156,6 +156,49 @@ describe("notifications", () => {
     dispose();
   });
 
+  it("does not record in-app activity for the focused session transition", () => {
+    useAppStore.setState({ activeSessionId: "session-1" });
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+
+    expect(useAppStore.getState().sessionNotifications).toEqual([]);
+    dispose();
+  });
+
+  it("records in-app activity for the active session when the app is not focused", () => {
+    Object.defineProperty(document, "hasFocus", {
+      configurable: true,
+      value: () => false,
+    });
+    useAppStore.setState({ activeSessionId: "session-1" });
+    const dispose = startSessionActivityInboxWatcher();
+
+    useAppStore.setState({
+      sessions: [
+        session({
+          status: "needs_input",
+          updated_at: "2026-01-01T00:01:00Z",
+        }),
+      ],
+    });
+
+    expect(useAppStore.getState().sessionNotifications).toMatchObject([
+      {
+        sessionId: "session-1",
+        status: "needs_input",
+      },
+    ]);
+    dispose();
+  });
+
   it("marks in-app activity read when its session tab is focused and auto-delete is disabled", async () => {
     useSettings.getState().patchNotifications({ autoDeleteRead: false });
     const disposeActivity = startSessionActivityInboxWatcher();
