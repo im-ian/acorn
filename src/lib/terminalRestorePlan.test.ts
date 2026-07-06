@@ -58,7 +58,7 @@ describe("terminal restore plan", () => {
     });
   });
 
-  it("skips replay when there is no daemon session to replay", () => {
+  it("uses daemon replay when no local snapshot is restored", () => {
     expect(
       planTerminalRestore({
         daemonAlive: false,
@@ -68,7 +68,7 @@ describe("terminal restore plan", () => {
     ).toEqual({
       snapshot: null,
       source: null,
-      replayScrollback: false,
+      replayScrollback: true,
     });
   });
 });
