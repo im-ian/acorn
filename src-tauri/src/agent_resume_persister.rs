@@ -151,23 +151,7 @@ fn tick(state: &AppState) -> io::Result<()> {
                 }
             }
         }
-        let id_file = state_dir.join(id_filename(kind));
-        let previous = read_trimmed(&id_file);
-        if previous.as_deref() == Some(uuid.as_str()) {
-            continue;
-        }
-        // A backwards move (to an earlier-born transcript) is legitimate
-        // when the user `--resume`d an old conversation — that transcript
-        // is hot again. But right after an in-session `/new` rotation the
-        // scan can echo the abandoned original once the new transcript
-        // goes idle; writing that echo would oscillate the marker. Skip
-        // only the dormant-echo case so the marker never flaps.
-        if let Some(prev) = previous.as_deref() {
-            if marker_rollback_is_dormant_echo(kind, prev, &uuid) {
-                continue;
-            }
-        }
-        if let Err(err) = write_if_changed(&id_file, &format!("{uuid}\n")) {
+        if let Err(err) = bind_marker_in_state_dir(&state_dir, kind, &uuid) {
             tracing::warn!(
                 %session_id, ?kind, %uuid, error = %err,
                 "agent_resume_persister: write failed"
@@ -175,6 +159,35 @@ fn tick(state: &AppState) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Bind `uuid` as `session_id`'s durable resume marker for `kind`, under
+/// the same guards the background tick applies. Exposed so out-of-band
+/// binders (the status poll's codex fallback) share one write policy
+/// instead of growing a second, subtly different marker writer.
+pub fn bind_session_marker(session_id: uuid::Uuid, kind: AgentKind, uuid: &str) -> io::Result<()> {
+    let state_dir = agent_resume::ensure_session_state_dir(session_id)?;
+    bind_marker_in_state_dir(&state_dir, kind, uuid)
+}
+
+fn bind_marker_in_state_dir(state_dir: &Path, kind: AgentKind, uuid: &str) -> io::Result<()> {
+    let id_file = state_dir.join(id_filename(kind));
+    let previous = read_trimmed(&id_file);
+    if previous.as_deref() == Some(uuid) {
+        return Ok(());
+    }
+    // A backwards move (to an earlier-born transcript) is legitimate
+    // when the user `--resume`d an old conversation — that transcript
+    // is hot again. But right after an in-session `/new` rotation the
+    // scan can echo the abandoned original once the new transcript
+    // goes idle; writing that echo would oscillate the marker. Skip
+    // only the dormant-echo case so the marker never flaps.
+    if let Some(prev) = previous.as_deref() {
+        if marker_rollback_is_dormant_echo(kind, prev, uuid) {
+            return Ok(());
+        }
+    }
+    write_if_changed(&id_file, &format!("{uuid}\n"))
 }
 
 fn id_filename(kind: AgentKind) -> &'static str {

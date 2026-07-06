@@ -5206,9 +5206,9 @@ fn detect_session_statuses_blocking(
             let active_processes = root_pid_value
                 .map(|pid| session_process_summaries(&sys, &children, Pid::from_u32(pid)))
                 .unwrap_or_default();
-            let live_agent_kind = root_pid_value.and_then(|pid| {
-                live_agent_kind_in_descendants(&sys, &children, Pid::from_u32(pid))
-            });
+            let live_agent = root_pid_value
+                .and_then(|pid| live_agent_in_descendants(&sys, &children, Pid::from_u32(pid)));
+            let live_agent_kind = live_agent.map(|(kind, _)| kind);
             let live_codex_tool_child = matches!(live_agent_kind, Some(StatusAgentKind::Codex))
                 && root_pid_value.is_some_and(|pid| {
                     live_codex_has_tool_descendant(&sys, &children, Pid::from_u32(pid))
@@ -5226,6 +5226,12 @@ fn detect_session_statuses_blocking(
                 ),
                 None => agent_resume::live_transcript(uuid),
             });
+            // Claude gets a marker-less fallback below via the todos
+            // mapping; codex has no equivalent, so a persister miss (pid
+            // gap at spawn, ambiguous host scan) silently disables auto
+            // titles and resume for the whole session. Bind the live
+            // codex process straight to its rollout instead.
+            let live = live.or_else(|| codex_live_transcript_fallback(&sys, parsed_id, live_agent));
             let agent_transcript_id = live.as_ref().map(|t| t.id.clone());
             let transcript = match live.as_ref() {
                 Some(t) => {
@@ -5468,27 +5474,91 @@ fn refine_shell_hint_for_unpaired_agent(
     }
 }
 
-fn live_agent_kind_in_descendants(
+/// Bind a live codex process to its rollout when the durable `codex.id`
+/// marker is missing. The persister normally writes that marker within
+/// seconds, but it can miss a run entirely (no root pid captured at spawn,
+/// host-scan ambiguity) and nothing retries on its behalf — codex, unlike
+/// claude, has no marker-less transcript mapping. Resolve the rollout from
+/// the process's own cwd and start time under the conservative
+/// single-candidate policy, and persist the marker so title generation and
+/// resume converge on the same binding.
+fn codex_live_transcript_fallback(
+    sys: &System,
+    session_id: Option<Uuid>,
+    live_agent: Option<(StatusAgentKind, Pid)>,
+) -> Option<agent_resume::LiveTranscript> {
+    let session_id = session_id?;
+    let (kind, pid) = live_agent?;
+    if kind != StatusAgentKind::Codex {
+        return None;
+    }
+    let proc = sys.process(pid)?;
+    let cwd = proc.cwd()?;
+    let process_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(proc.start_time());
+    let Some((path, id)) = acorn_transcript::find_agent_run_transcript(
+        cwd,
+        acorn_transcript::AgentKind::Codex,
+        process_start,
+    ) else {
+        tracing::debug!(
+            %session_id,
+            pid = pid.as_u32(),
+            ?cwd,
+            "status poll: live codex has no unambiguous rollout; marker fallback skipped"
+        );
+        return None;
+    };
+    match crate::agent_resume_persister::bind_session_marker(
+        session_id,
+        acorn_transcript::AgentKind::Codex,
+        &id,
+    ) {
+        Ok(()) => {
+            tracing::info!(
+                %session_id,
+                %id,
+                ?path,
+                "status poll: bound live codex transcript via marker fallback"
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                %session_id, %id, error = %err,
+                "status poll: codex marker fallback write failed"
+            );
+        }
+    }
+    Some(agent_resume::LiveTranscript {
+        id,
+        path,
+        kind: agent_resume::AgentKind::Codex,
+    })
+}
+
+fn live_agent_in_descendants(
     sys: &System,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
-) -> Option<StatusAgentKind> {
-    nearest_agent_kind_in_tree(children, root, |pid| {
+) -> Option<(StatusAgentKind, Pid)> {
+    let mut found_pid = None;
+    let kind = nearest_agent_kind_in_tree(children, root, |pid| {
         let proc = sys.process(pid)?;
-        if process_basename_matches(proc, "codex") {
-            return Some(StatusAgentKind::Codex);
-        }
-        if process_basename_matches(proc, "claude") {
-            return Some(StatusAgentKind::Claude);
-        }
-        if process_basename_matches(proc, "agy")
+        let kind = if process_basename_matches(proc, "codex") {
+            StatusAgentKind::Codex
+        } else if process_basename_matches(proc, "claude") {
+            StatusAgentKind::Claude
+        } else if process_basename_matches(proc, "agy")
             || process_basename_matches(proc, "antigravity")
             || process_basename_matches(proc, "antigravity-cli")
         {
-            return Some(StatusAgentKind::Antigravity);
-        }
-        None
-    })
+            StatusAgentKind::Antigravity
+        } else {
+            return None;
+        };
+        found_pid = Some(pid);
+        Some(kind)
+    })?;
+    Some((kind, found_pid?))
 }
 
 fn live_codex_has_tool_descendant(

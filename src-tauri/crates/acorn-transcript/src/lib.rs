@@ -211,6 +211,18 @@ pub fn find_completed_agent_run(
     kind: AgentKind,
     process_start: SystemTime,
 ) -> Option<String> {
+    find_agent_run_transcript(cwd, kind, process_start).map(|(_, id)| id)
+}
+
+/// Path-returning form of [`find_completed_agent_run`]. The status poll's
+/// codex marker fallback needs the transcript path (to read status and
+/// previews) alongside the id it persists, under the same conservative
+/// matching policy.
+pub fn find_agent_run_transcript(
+    cwd: &Path,
+    kind: AgentKind,
+    process_start: SystemTime,
+) -> Option<(PathBuf, String)> {
     let now = SystemTime::now();
     let recency_cutoff = now
         .checked_sub(Duration::from_secs(RECENCY_WINDOW_SECS))
@@ -228,22 +240,19 @@ pub fn find_completed_agent_run(
             now,
             false,
             &HashSet::new(),
-        )
-        .map(|(_, id)| id),
+        ),
         AgentKind::Codex => find_completed_codex_jsonl(
             cwd,
             codex_sessions_root().as_deref(),
             recency_cutoff,
             process_start,
-        )
-        .map(|(_, id)| id),
+        ),
         AgentKind::Antigravity => find_completed_antigravity_jsonl(
             cwd,
             &antigravity_brain_roots(),
             recency_cutoff,
             process_start,
-        )
-        .map(|(_, id)| id),
+        ),
     }
 }
 
@@ -2401,6 +2410,47 @@ mod tests {
         assert!(
             picked.is_some(),
             "legacy rollouts without originator must remain eligible"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Backs `find_agent_run_transcript`, the path-returning form the
+    /// status poll's codex marker fallback consumes: the resolver must
+    /// hand back the rollout path alongside the id.
+    #[test]
+    fn find_completed_codex_jsonl_returns_path_and_id() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let root =
+            std::env::temp_dir().join(format!("acorn-cxlive-{}", uuid::Uuid::new_v4().simple()));
+        let day = root.join("sessions").join("2026").join("06").join("10");
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.join("repo");
+
+        let id = "019e2001-3250-76b0-8410-2e073b38a2f1";
+        let rollout = day.join(format!("rollout-2026-06-10T10-00-00-{id}.jsonl"));
+        let mut f = File::create(&rollout).unwrap();
+        writeln!(
+            f,
+            "{{\"payload\":{{\"cwd\":\"{}\",\"originator\":\"codex-tui\"}}}}",
+            cwd.display()
+        )
+        .unwrap();
+        let now = fs::metadata(&rollout).unwrap().modified().unwrap();
+        let process_start = now - Duration::from_secs(5);
+
+        let resolved = find_completed_codex_jsonl(
+            &cwd,
+            Some(&root.join("sessions")),
+            SystemTime::UNIX_EPOCH,
+            process_start,
+        );
+        assert_eq!(
+            resolved,
+            Some((rollout.clone(), id.to_string())),
+            "resolver must return both the rollout path and its id"
         );
 
         fs::remove_dir_all(&root).unwrap();
