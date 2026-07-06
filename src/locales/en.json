@@ -508,6 +508,9 @@
         "prevTab": {
           "label": "Previous tab"
         },
+        "focusLatestNeedsInput": {
+          "label": "Latest needs-input tab"
+        },
         "nextProject": {
           "label": "Next project"
         },

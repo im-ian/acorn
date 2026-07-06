@@ -320,6 +320,7 @@ interface AppStateModel {
   requestRemoveSession: (id: string) => void;
   clearPendingRemove: () => void;
   cycleTab: (direction: 1 | -1) => void;
+  selectLatestNeedsInputSession: () => boolean;
   cycleProject: (direction: 1 | -1) => void;
   addProject: (title?: string) => Promise<void>;
   createNewProject: (
@@ -935,6 +936,24 @@ function findProjectFolder(
   for (const folders of Object.values(state.projectFolders ?? {})) {
     const folder = folders.find((candidate) => candidate.id === folderId);
     if (folder) return folder;
+  }
+  return null;
+}
+
+function latestNeedsInputSessionId(
+  state: Pick<AppStateModel, "sessions" | "sessionNotifications">,
+): string | null {
+  const sessionsById = new Map(
+    state.sessions.map((session) => [session.id, session]),
+  );
+  for (const notification of state.sessionNotifications) {
+    if (notification.kind !== "needs_input") continue;
+    const session = sessionsById.get(notification.sessionId);
+    if (session?.status === "needs_input") return session.id;
+  }
+  for (let index = state.sessions.length - 1; index >= 0; index -= 1) {
+    const session = state.sessions[index];
+    if (session.status === "needs_input") return session.id;
   }
   return null;
 }
@@ -2188,6 +2207,14 @@ export const useAppStore = create<AppStateModel>()(
       });
       return patch ?? s;
     });
+  },
+
+  selectLatestNeedsInputSession() {
+    const sessionId = latestNeedsInputSessionId(get());
+    if (!sessionId) return false;
+    get().selectSession(sessionId);
+    get().setWorkspaceViewMode("panes");
+    return get().activeSessionId === sessionId;
   },
 
   cycleProject(direction) {
