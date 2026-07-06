@@ -25,6 +25,7 @@ import {
 import { api } from "../lib/api";
 import {
   AgentProviderIcon,
+  providerSupportsTokenUsage,
   resolveSessionAgentProvider,
 } from "../lib/agentProvider";
 import { cn } from "../lib/cn";
@@ -114,7 +115,7 @@ function tildify(path: string, home: string | null): string {
 function toAgentTokenProvider(
   provider: ReturnType<typeof resolveSessionAgentProvider>,
 ): AgentTokenProvider | null {
-  return provider === "codex" || provider === "claude" ? provider : null;
+  return providerSupportsTokenUsage(provider) ? provider : null;
 }
 
 interface MemorySnapshot {

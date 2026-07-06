@@ -53,7 +53,11 @@ import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
 import { useAppStore } from "../store";
-import { AgentProviderIcon } from "../lib/agentProvider";
+import {
+  AgentProviderIcon,
+  getAgentProviderDefinition,
+  isSessionAgentProvider,
+} from "../lib/agentProvider";
 import {
   invalidateGitRepositoryStatus,
   prefetchGitHubRepoStatus,
@@ -82,7 +86,6 @@ import type {
   PullRequestInfo,
   PullRequestLabel,
   PullRequestListing,
-  SessionAgentProvider,
   StagedFile,
   TodoItem,
   WorkflowJob,
@@ -1270,16 +1273,6 @@ type AgentHistoryProviderFilter =
   | typeof ALL_AGENT_HISTORY_PROVIDERS
   | AgentHistoryProvider;
 
-function isAgentProvider(
-  provider: AgentHistoryProvider,
-): provider is SessionAgentProvider {
-  return (
-    provider === "claude" ||
-    provider === "codex" ||
-    provider === "antigravity"
-  );
-}
-
 function AgentHistoryTab({
   scope,
   repoPath,
@@ -1389,7 +1382,7 @@ function AgentHistoryTab({
     item: AgentHistoryItem,
     mode: "auto" | "repo" | "worktree" = "auto",
   ) {
-    if (!isAgentProvider(item.provider)) return;
+    if (!isSessionAgentProvider(item.provider)) return;
     const agentProvider = item.provider;
     if (!item.resume_command) return;
     setError(null);
@@ -1532,12 +1525,9 @@ function AgentHistoryTab({
         ) : (
           <div className={listBoxClassName({ text: "none" })}>
             {visibleItems.map((item) => {
+              if (!isSessionAgentProvider(item.provider)) return null;
               const providerTone =
-                item.provider === "codex"
-                  ? "bg-[#3867ff]/15 text-[#5f7dff]"
-                  : item.provider === "antigravity"
-                    ? "bg-[#19a974]/15 text-[#22b47e]"
-                  : "bg-[#de7356]/15 text-[#de7356]";
+                getAgentProviderDefinition(item.provider).brandToneClassName;
               return (
                 <div
                   key={`${item.provider}:${item.id}:${item.transcript_path}`}

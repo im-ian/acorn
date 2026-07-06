@@ -1,3 +1,8 @@
+import {
+  isSessionAgentProvider,
+  providerSupportsWorktreeAdoption,
+} from "./agentProviderRegistry";
+
 export type WorktreeAdoptionIntent = { kind: "none" } | { kind: "after-exit" };
 
 export interface WorktreeAdoptionChoiceInput {
@@ -30,6 +35,8 @@ export function chooseWorktreeToAdoptAfterExit({
 export function commandRequestsWorktreeAdoption(command: string): boolean {
   const tokens = command.trim().split(/\s+/);
   if (tokens.length < 2) return false;
-  if (tokens[0] !== "claude") return false;
+  const provider = tokens[0];
+  if (!isSessionAgentProvider(provider)) return false;
+  if (!providerSupportsWorktreeAdoption(provider)) return false;
   return tokens.slice(1).some((token) => token === "--worktree" || token === "-w");
 }

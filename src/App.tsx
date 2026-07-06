@@ -487,12 +487,11 @@ function App() {
   // zustand pushes a new `sessions` array reference (boot rehydrate,
   // reconcile, refresh, status polling) does NOT re-probe sessions we
   // already checked. Busy sessions are marked as checked without hitting
-  // the candidate APIs, because an active claude/codex should never be
-  // interrupted by a resume prompt for the transcript it is already using.
-  // That dedup is what holds the "cold boot only" UX promise: after
-  // the user finishes a claude run and the persister updates
-  // `claude.id`, the in-memory map stays stable, so the modal never
-  // pops mid-session.
+  // the candidate APIs, because an active agent should never be interrupted
+  // by a resume prompt for the transcript it is already using. That dedup
+  // is what holds the "cold boot only" UX promise: after the user finishes
+  // an agent run and the persister updates its marker file, the in-memory
+  // map stays stable, so the modal never pops mid-session.
   const resumeModalEnabled = useSettings(
     (s) => s.settings.experiments.resumeModal,
   );

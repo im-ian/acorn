@@ -26,12 +26,6 @@ type AgentContextMenuOptions =
       onAttach: (provider: SessionAgentProvider, transcriptId: string) => void;
     };
 
-const EMPTY_SESSION_AGENT_DETECTION: SessionAgentDetection = {
-  claude: null,
-  codex: null,
-  antigravity: null,
-};
-
 const FORK_KEYS = {
   pane: {
     session: {
@@ -90,7 +84,9 @@ const ATTACH_KEYS = {
 } as const satisfies Record<SessionAgentProvider, TranslationKey>;
 
 export function createEmptySessionAgentDetection(): SessionAgentDetection {
-  return { ...EMPTY_SESSION_AGENT_DETECTION };
+  return Object.fromEntries(
+    AGENT_PROVIDER_ORDER.map((provider) => [provider, null]),
+  ) as SessionAgentDetection;
 }
 
 export function hasDetectedAgent(

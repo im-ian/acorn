@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AcornIpcStatus,
-  AgentHistoryProvider,
   AgentTokenUsageSnapshot,
   AgentHistoryItem,
   AgentTranscriptSummary,
@@ -605,7 +604,7 @@ export const api = {
   },
   agentTranscriptSummaryAtPath(
     repoPath: string,
-    provider: AgentHistoryProvider,
+    provider: SessionAgentProvider,
     id: string,
     transcriptPath: string,
   ): Promise<AgentTranscriptSummary | null> {
