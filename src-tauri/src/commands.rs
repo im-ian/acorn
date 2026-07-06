@@ -3759,16 +3759,16 @@ pub fn prepare_chat_session_worktree(
     Ok(enrich_session(updated))
 }
 
-#[derive(Serialize, Default)]
-pub struct AgentDetection {
-    /// Parent claude session id when a claude transcript is present at
-    /// `~/.claude/projects/<slug>/<uuid>.jsonl`. This is whatever UUID
-    /// claude minted for its most recent run in this Acorn session.
-    pub claude: Option<String>,
-    /// Codex session UUID captured from the live rollout transcript.
-    pub codex: Option<String>,
-    /// Antigravity conversation UUID captured from the live brain transcript.
-    pub antigravity: Option<String>,
+pub type AgentDetection = HashMap<AgentKind, Option<String>>;
+
+fn empty_agent_detection() -> AgentDetection {
+    [
+        (AgentKind::Claude, None),
+        (AgentKind::Codex, None),
+        (AgentKind::Antigravity, None),
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// Stage a parent claude transcript inside the new worktree's project
@@ -3887,22 +3887,12 @@ fn detect_session_agent_inner(state: AppState, session_id: String) -> AppResult<
     let parsed = parse_id(&session_id)?;
     let session_pids = crate::agent_resume_persister::collect_session_pids(&state);
     let mappings = acorn_transcript::collect_live_mappings(&session_pids);
-    let mut detection = AgentDetection::default();
+    let mut detection = empty_agent_detection();
     for (sid, kind, uuid) in mappings {
         if sid != parsed {
             continue;
         }
-        match kind {
-            AgentKind::Claude => {
-                detection.claude = Some(uuid);
-            }
-            AgentKind::Codex => {
-                detection.codex = Some(uuid);
-            }
-            AgentKind::Antigravity => {
-                detection.antigravity = Some(uuid);
-            }
-        }
+        detection.insert(kind, Some(uuid));
     }
     Ok(detection)
 }
@@ -6102,77 +6092,41 @@ pub(crate) fn stage_remove_linked_worktree_at_path(
     worktree::stage_remove_worktree_at_path(repo_path, worktree_path)
 }
 
-/// Surface the "이전 Claude 대화 있음" candidate for a session — used by
-/// the frontend modal that pops on session focus. `None` means there is
-/// nothing the user needs to decide about (no claude has run, or the
-/// last id is already acknowledged, or claude is currently active in
-/// this session's PTY tree and the modal would be redundant).
+/// Surface the previous-agent-conversation candidate for a session. `None`
+/// means there is nothing the user needs to decide about, or the same
+/// provider is currently active in this session's PTY tree and the modal
+/// would be redundant.
 #[tauri::command]
-pub fn get_claude_resume_candidate(
+pub fn get_agent_resume_candidate(
     state: State<'_, AppState>,
     session_id: String,
+    kind: AgentKind,
 ) -> AppResult<Option<agent_resume::ResumeCandidate>> {
     let id = parse_id(&session_id)?;
-    if agent_is_running_in_session(&state, &id, "claude") {
-        return Ok(None);
-    }
-    agent_resume::claude_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-/// Codex equivalent of `get_claude_resume_candidate`. Codex auto-resume
-/// (which the deleted shim used to perform) is gone; the user now picks
-/// the resume target through the modal whenever a fresh codex UUID lands
-/// in the per-session state file.
-#[tauri::command]
-pub fn get_codex_resume_candidate(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<Option<agent_resume::ResumeCandidate>> {
-    let id = parse_id(&session_id)?;
-    if agent_is_running_in_session(&state, &id, "codex") {
-        return Ok(None);
-    }
-    agent_resume::codex_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-/// Antigravity equivalent of `get_claude_resume_candidate`.
-#[tauri::command]
-pub fn get_antigravity_resume_candidate(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> AppResult<Option<agent_resume::ResumeCandidate>> {
-    let id = parse_id(&session_id)?;
-    if agent_is_running_in_session(&state, &id, "agy")
-        || agent_is_running_in_session(&state, &id, "antigravity")
-        || agent_is_running_in_session(&state, &id, "antigravity-cli")
+    if agent_running_basenames(kind)
+        .iter()
+        .any(|basename| agent_is_running_in_session(&state, &id, basename))
     {
         return Ok(None);
     }
-    agent_resume::antigravity_resume_candidate(id).map_err(|e| AppError::Other(e.to_string()))
+    agent_resume::resume_candidate(id, kind).map_err(|e| AppError::Other(e.to_string()))
 }
 
-/// Mark the current `claude.id` as seen so the modal does not pop again
-/// for the same UUID. Invoked by every modal-button handler (이어하기 /
-/// ID 복사 / 취소) — the only thing that revives the candidate is a
-/// *new* JSONL appearing under a different UUID.
+/// Mark the provider's current id as seen so the modal does not pop again
+/// for the same UUID. The only thing that revives the candidate is a new
+/// transcript appearing under a different UUID.
 #[tauri::command]
-pub fn acknowledge_claude_resume(session_id: String) -> AppResult<()> {
+pub fn acknowledge_agent_resume(session_id: String, kind: AgentKind) -> AppResult<()> {
     let id = parse_id(&session_id)?;
-    agent_resume::acknowledge_claude_resume(id).map_err(|e| AppError::Other(e.to_string()))
+    agent_resume::acknowledge_resume(id, kind).map_err(|e| AppError::Other(e.to_string()))
 }
 
-/// Codex equivalent of `acknowledge_claude_resume`.
-#[tauri::command]
-pub fn acknowledge_codex_resume(session_id: String) -> AppResult<()> {
-    let id = parse_id(&session_id)?;
-    agent_resume::acknowledge_codex_resume(id).map_err(|e| AppError::Other(e.to_string()))
-}
-
-/// Antigravity equivalent of `acknowledge_claude_resume`.
-#[tauri::command]
-pub fn acknowledge_antigravity_resume(session_id: String) -> AppResult<()> {
-    let id = parse_id(&session_id)?;
-    agent_resume::acknowledge_antigravity_resume(id).map_err(|e| AppError::Other(e.to_string()))
+fn agent_running_basenames(kind: AgentKind) -> &'static [&'static str] {
+    match kind {
+        AgentKind::Claude => &["claude"],
+        AgentKind::Codex => &["codex"],
+        AgentKind::Antigravity => &["agy", "antigravity", "antigravity-cli"],
+    }
 }
 
 /// `true` when a process matching `basename` is alive anywhere in the

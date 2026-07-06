@@ -38,6 +38,7 @@ import {
   type ResumeCandidate,
   type StagedRevMismatch,
 } from "./lib/api";
+import { AGENT_PROVIDER_ORDER } from "./lib/agentProviderRegistry";
 import {
   DEFAULT_HOTKEYS,
   hotkeyBindingsFor,
@@ -573,12 +574,15 @@ function App() {
     for (const sid of toProbe) probedSessionsRef.current.add(sid);
     void Promise.all(
       toProbe.map(async (sid) => {
-        const [claude, codex, antigravity] = await Promise.all([
-          api.getClaudeResumeCandidate(sid).catch(() => null),
-          api.getCodexResumeCandidate(sid).catch(() => null),
-          api.getAntigravityResumeCandidate(sid).catch(() => null),
-        ]);
-        const pick = pickResumeCandidate(claude, codex, antigravity);
+        const candidates = await Promise.all(
+          AGENT_PROVIDER_ORDER.map(async (agent) => {
+            const candidate = await api
+              .getAgentResumeCandidate(agent, sid)
+              .catch(() => null);
+            return [agent, candidate] as const;
+          }),
+        );
+        const pick = pickResumeCandidate(candidates);
         return pick ? ([sid, pick] as const) : null;
       }),
     )
@@ -1921,17 +1925,10 @@ function App() {
  * means the transcript path could not be stat'd; treat as oldest.
  */
 function pickResumeCandidate(
-  claude: ResumeCandidate | null,
-  codex: ResumeCandidate | null,
-  antigravity: ResumeCandidate | null,
+  entries: readonly (readonly [AgentKind, ResumeCandidate | null])[],
 ): { agent: AgentKind; candidate: ResumeCandidate } | null {
-  const candidates = [
-    claude ? ({ agent: "claude", candidate: claude } as const) : null,
-    codex ? ({ agent: "codex", candidate: codex } as const) : null,
-    antigravity
-      ? ({ agent: "antigravity", candidate: antigravity } as const)
-      : null,
-  ]
+  const candidates = entries
+    .map(([agent, candidate]) => (candidate ? { agent, candidate } : null))
     .filter(
       (entry): entry is { agent: AgentKind; candidate: ResumeCandidate } =>
         entry !== null,

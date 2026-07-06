@@ -3,10 +3,10 @@
 //! The `agent_resume_persister` background task mirrors the live transcript
 //! UUID of each running `claude` / `codex` / `antigravity` process into
 //! per-session files under Acorn's data dir. This module owns the on-disk
-//! layout, the modal candidate readers for providers with verified resume
-//! commands, and the acknowledgement writers; the persister is the only
+//! layout, the modal candidate reader for providers with verified resume
+//! commands, and the acknowledgement writer; the persister is the only
 //! writer of `*.id`, the frontend modal is the only writer of
-//! `*.id.acknowledged` via the `acknowledge_*_resume` commands.
+//! `*.id.acknowledged`.
 //!
 //! On-disk layout (under `<data_dir>/agent-state/<session-uuid>/`):
 //!
@@ -43,8 +43,7 @@ const ANTIGRAVITY_ID_FILE: &str = "antigravity.id";
 const ANTIGRAVITY_ID_ACK_FILE: &str = "antigravity.id.acknowledged";
 
 /// Per-Acorn-session scratch directory the resume persister writes
-/// `*.id` into. The directory is also the modal's read source via the
-/// provider-specific `*_resume_candidate` helpers.
+/// `*.id` into. The directory is also the modal's read source.
 pub fn ensure_session_state_dir(session_id: uuid::Uuid) -> io::Result<PathBuf> {
     ensure_session_state_dir_at(&acorn_daemon::paths::data_dir()?, session_id)
 }
@@ -83,38 +82,19 @@ pub struct ResumeCandidate {
     pub preview: Option<String>,
 }
 
-/// Surface the claude-side modal candidate for `session_id`, or `Ok(None)`
-/// when there is nothing to ask the user about (no claude has run, or the
-/// latest UUID was already acknowledged).
-pub fn claude_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
+/// Surface the modal candidate for `session_id` and `kind`, or `Ok(None)`
+/// when there is nothing to ask the user about.
+pub fn resume_candidate(
+    session_id: uuid::Uuid,
+    kind: AgentKind,
+) -> io::Result<Option<ResumeCandidate>> {
+    let (id_file, ack_file) = resume_state_files(kind);
     candidate_at(
         &acorn_daemon::paths::data_dir()?,
         session_id,
-        CLAUDE_ID_FILE,
-        CLAUDE_ID_ACK_FILE,
-        AgentKind::Claude,
-    )
-}
-
-/// Surface the codex-side modal candidate for `session_id`, or `Ok(None)`.
-pub fn codex_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
-    candidate_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        CODEX_ID_FILE,
-        CODEX_ID_ACK_FILE,
-        AgentKind::Codex,
-    )
-}
-
-/// Antigravity equivalent of `codex_resume_candidate`.
-pub fn antigravity_resume_candidate(session_id: uuid::Uuid) -> io::Result<Option<ResumeCandidate>> {
-    candidate_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        ANTIGRAVITY_ID_FILE,
-        ANTIGRAVITY_ID_ACK_FILE,
-        AgentKind::Antigravity,
+        id_file,
+        ack_file,
+        kind,
     )
 }
 
@@ -208,36 +188,15 @@ fn live_transcript_for_kind_in_dir_with_locator(
     Some(LiveTranscript { id, path, kind })
 }
 
-/// Mark the current `claude.id` value as seen so the modal stops popping
-/// for the same UUID. No-op if `claude.id` does not exist.
-pub fn acknowledge_claude_resume(session_id: uuid::Uuid) -> io::Result<()> {
+/// Mark the current provider id value as seen so the modal stops popping
+/// for the same UUID. No-op if the provider id file does not exist.
+pub fn acknowledge_resume(session_id: uuid::Uuid, kind: AgentKind) -> io::Result<()> {
+    let (id_file, ack_file) = resume_state_files(kind);
     acknowledge_at(
         &acorn_daemon::paths::data_dir()?,
         session_id,
-        CLAUDE_ID_FILE,
-        CLAUDE_ID_ACK_FILE,
-    )
-}
-
-/// Mark the current `codex.id` value as seen. No-op if `codex.id` does
-/// not exist.
-pub fn acknowledge_codex_resume(session_id: uuid::Uuid) -> io::Result<()> {
-    acknowledge_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        CODEX_ID_FILE,
-        CODEX_ID_ACK_FILE,
-    )
-}
-
-/// Mark the current `antigravity.id` value as seen. No-op if `antigravity.id`
-/// does not exist.
-pub fn acknowledge_antigravity_resume(session_id: uuid::Uuid) -> io::Result<()> {
-    acknowledge_at(
-        &acorn_daemon::paths::data_dir()?,
-        session_id,
-        ANTIGRAVITY_ID_FILE,
-        ANTIGRAVITY_ID_ACK_FILE,
+        id_file,
+        ack_file,
     )
 }
 
@@ -283,6 +242,14 @@ fn candidate_at(
         last_activity_unix,
         preview,
     }))
+}
+
+fn resume_state_files(kind: AgentKind) -> (&'static str, &'static str) {
+    match kind {
+        AgentKind::Claude => (CLAUDE_ID_FILE, CLAUDE_ID_ACK_FILE),
+        AgentKind::Codex => (CODEX_ID_FILE, CODEX_ID_ACK_FILE),
+        AgentKind::Antigravity => (ANTIGRAVITY_ID_FILE, ANTIGRAVITY_ID_ACK_FILE),
+    }
 }
 
 fn acknowledge_at(

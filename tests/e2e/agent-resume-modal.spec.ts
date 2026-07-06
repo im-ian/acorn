@@ -33,9 +33,11 @@ test.describe("agent resume modal", () => {
   }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [RUNNING_SESSION]);
-    await tauri.handle("get_claude_resume_candidate", () => {
+    await tauri.handle("get_agent_resume_candidate", (args) => {
       const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };
       w.__ACORN_RESUME_PROBES__ = (w.__ACORN_RESUME_PROBES__ ?? 0) + 1;
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
       return {
         uuid: CANDIDATE_UUID,
         lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
@@ -68,9 +70,11 @@ test.describe("agent resume modal", () => {
     await tauri.handle("detect_session_statuses", () => [
       { id: "s-resume", status: "running", branch: null },
     ]);
-    await tauri.handle("get_claude_resume_candidate", () => {
+    await tauri.handle("get_agent_resume_candidate", (args) => {
       const w = window as unknown as { __ACORN_RESUME_PROBES__?: number };
       w.__ACORN_RESUME_PROBES__ = (w.__ACORN_RESUME_PROBES__ ?? 0) + 1;
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
       return {
         uuid: CANDIDATE_UUID,
         lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
@@ -100,11 +104,15 @@ test.describe("agent resume modal", () => {
   }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [SESSION]);
-    await tauri.handle("get_claude_resume_candidate", () => ({
-      uuid: "deadbeef-1234-5678-9abc-def012345678",
-      lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
-      preview: "Preview of the previous conversation",
-    }));
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 600,
+        preview: "Preview of the previous conversation",
+      };
+    });
     // Stash every pty_write call on window so we can assert against
     // it from outside the page context — the handler body cannot
     // close over node-side variables.
@@ -125,13 +133,15 @@ test.describe("agent resume modal", () => {
       });
       return undefined;
     });
-    await tauri.handle("acknowledge_claude_resume", (args) => {
+    await tauri.handle("acknowledge_agent_resume", (args) => {
       const w = window as unknown as {
         __ACORN_ACKED__?: string[];
       };
       w.__ACORN_ACKED__ = w.__ACORN_ACKED__ ?? [];
-      const input = (args ?? {}) as { sessionId?: string };
-      if (input.sessionId) w.__ACORN_ACKED__.push(input.sessionId);
+      const input = (args ?? {}) as { kind?: string; sessionId?: string };
+      if (input.kind === "claude" && input.sessionId) {
+        w.__ACORN_ACKED__.push(input.sessionId);
+      }
       return undefined;
     });
 
@@ -180,11 +190,15 @@ test.describe("agent resume modal", () => {
   }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [SESSION]);
-    await tauri.handle("get_codex_resume_candidate", () => ({
-      uuid: "deadbeef-1234-5678-9abc-def012345678",
-      lastActivityUnix: Math.floor(Date.now() / 1000) - 120,
-      preview: null,
-    }));
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "codex") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 120,
+        preview: null,
+      };
+    });
     await tauri.handle("pty_write", (args) => {
       const w = window as unknown as {
         __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];
@@ -202,11 +216,13 @@ test.describe("agent resume modal", () => {
       });
       return undefined;
     });
-    await tauri.handle("acknowledge_codex_resume", (args) => {
+    await tauri.handle("acknowledge_agent_resume", (args) => {
       const w = window as unknown as { __ACORN_CODEX_ACKED__?: string[] };
       w.__ACORN_CODEX_ACKED__ = w.__ACORN_CODEX_ACKED__ ?? [];
-      const input = (args ?? {}) as { sessionId?: string };
-      if (input.sessionId) w.__ACORN_CODEX_ACKED__.push(input.sessionId);
+      const input = (args ?? {}) as { kind?: string; sessionId?: string };
+      if (input.kind === "codex" && input.sessionId) {
+        w.__ACORN_CODEX_ACKED__.push(input.sessionId);
+      }
       return undefined;
     });
 
@@ -246,11 +262,15 @@ test.describe("agent resume modal", () => {
   }) => {
     await tauri.respond("list_projects", [PROJECT]);
     await tauri.respond("list_sessions", [SESSION]);
-    await tauri.handle("get_claude_resume_candidate", () => ({
-      uuid: "deadbeef-1234-5678-9abc-def012345678",
-      lastActivityUnix: Math.floor(Date.now() / 1000) - 60,
-      preview: null,
-    }));
+    await tauri.handle("get_agent_resume_candidate", (args) => {
+      const input = (args ?? {}) as { kind?: string };
+      if (input.kind !== "claude") return null;
+      return {
+        uuid: "deadbeef-1234-5678-9abc-def012345678",
+        lastActivityUnix: Math.floor(Date.now() / 1000) - 60,
+        preview: null,
+      };
+    });
     await tauri.handle("pty_write", (args) => {
       const w = window as unknown as {
         __ACORN_PTY_WRITES__?: { sessionId: string; data: string }[];

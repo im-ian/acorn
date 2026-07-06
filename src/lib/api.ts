@@ -26,6 +26,7 @@ import type {
   PullRequestDiffListing,
   PullRequestListing,
   Session,
+  SessionAgentDetection,
   SessionAgentProvider,
   SessionKind,
   SessionMode,
@@ -674,19 +675,8 @@ export const api = {
    */
   detectSessionAgent(
     sessionId: string,
-  ): Promise<{
-    claude: string | null;
-    codex: string | null;
-    antigravity: string | null;
-  }> {
-    return invoke<{
-      claude: string | null;
-      codex: string | null;
-      antigravity: string | null;
-    }>(
-      "detect_session_agent",
-      { sessionId },
-    );
+  ): Promise<SessionAgentDetection> {
+    return invoke<SessionAgentDetection>("detect_session_agent", { sessionId });
   },
   /**
    * Copy a parent claude transcript into the new worktree's project slug
@@ -907,59 +897,34 @@ export const api = {
     });
   },
   /**
-   * Resolve the "이전 Claude 대화 있음" candidate for a session. The
-   * filesystem watcher writes `claude.id` after every fresh bare-flag
-   * claude run, and the app surfaces it via this command on session
-   * focus. Returns `null` when there is nothing to offer — no claude
-   * has run, the user already dismissed the modal for this UUID, or
-   * claude is actively running in the PTY tree (in which case the
-   * modal would be redundant).
+   * Resolve a previous-agent-conversation candidate for a session. The
+   * filesystem watcher writes provider id markers after fresh agent runs,
+   * and the app surfaces them on session focus. Returns `null` when there
+   * is nothing to offer, the user already dismissed the modal for this
+   * UUID, or the provider is actively running in the PTY tree.
    */
-  getClaudeResumeCandidate(
+  getAgentResumeCandidate(
+    provider: SessionAgentProvider,
     sessionId: string,
   ): Promise<ResumeCandidate | null> {
     return invoke<ResumeCandidate | null>(
-      "get_claude_resume_candidate",
-      { sessionId },
+      "get_agent_resume_candidate",
+      { kind: provider, sessionId },
     );
   },
   /**
-   * Codex equivalent of `getClaudeResumeCandidate`. Returns the codex
-   * rollout UUID + preview the user is being offered to resume, or
-   * `null` when there's nothing to surface.
+   * Mark the provider's current id as seen so the modal does not pop
+   * again for the same UUID; only a new transcript under a different UUID
+   * reactivates it.
    */
-  getCodexResumeCandidate(
+  acknowledgeAgentResume(
+    provider: SessionAgentProvider,
     sessionId: string,
-  ): Promise<ResumeCandidate | null> {
-    return invoke<ResumeCandidate | null>(
-      "get_codex_resume_candidate",
-      { sessionId },
-    );
-  },
-  /** Antigravity equivalent of `getClaudeResumeCandidate`. */
-  getAntigravityResumeCandidate(
-    sessionId: string,
-  ): Promise<ResumeCandidate | null> {
-    return invoke<ResumeCandidate | null>(
-      "get_antigravity_resume_candidate",
-      { sessionId },
-    );
-  },
-  /**
-   * Mark the current `claude.id` as seen. All three modal buttons call
-   * this so the modal does not pop again for the same UUID; only a new
-   * JSONL appearing under a different UUID reactivates it.
-   */
-  acknowledgeClaudeResume(sessionId: string): Promise<void> {
-    return invoke<void>("acknowledge_claude_resume", { sessionId });
-  },
-  /** Codex equivalent of `acknowledgeClaudeResume`. */
-  acknowledgeCodexResume(sessionId: string): Promise<void> {
-    return invoke<void>("acknowledge_codex_resume", { sessionId });
-  },
-  /** Antigravity equivalent of `acknowledgeClaudeResume`. */
-  acknowledgeAntigravityResume(sessionId: string): Promise<void> {
-    return invoke<void>("acknowledge_antigravity_resume", { sessionId });
+  ): Promise<void> {
+    return invoke<void>("acknowledge_agent_resume", {
+      kind: provider,
+      sessionId,
+    });
   },
   /**
    * Write raw bytes to a session's PTY master (i.e. as if the user
@@ -1136,7 +1101,7 @@ function encodeStringToBase64(input: string): string {
 }
 
 /** Which user-invoked agent a resume candidate belongs to. */
-export type AgentKind = "claude" | "codex" | "antigravity";
+export type AgentKind = SessionAgentProvider;
 
 export interface ResumeCandidate {
   /** JSONL transcript UUID the user is being offered to resume. */

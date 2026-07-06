@@ -44,6 +44,8 @@ export type SessionTitleSource = "default" | "generated" | "manual";
 
 export type SessionAgentProvider = "claude" | "codex" | "antigravity";
 
+export type SessionAgentDetection = Record<SessionAgentProvider, string | null>;
+
 export type SessionTitleGenerationStatus =
   | "generated"
   | "not_ready"
