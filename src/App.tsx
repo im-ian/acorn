@@ -1388,14 +1388,14 @@ function App() {
     };
   }, []);
 
-  // Agent hook callbacks update backend session status immediately. Refresh
-  // the session list from backend state so hook status can surface without
-  // waiting for the next transcript/process poll.
+  // Agent hook callbacks update backend session status immediately. Poll the
+  // affected session so hook status still goes through process-aware status
+  // arbitration before it reaches the UI.
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let cancelled = false;
-    listen<string>(AGENT_HOOK_STATUS_EVENT, () => {
-      useAppStore.getState().refreshSessions();
+    listen<string>(AGENT_HOOK_STATUS_EVENT, (event) => {
+      void useAppStore.getState().pollSessionStatuses([event.payload]);
     })
       .then((fn) => {
         if (cancelled) {
