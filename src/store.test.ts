@@ -1699,6 +1699,39 @@ describe("splitFocusedPane", () => {
     expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
   });
 
+  it("stores the instant session view mode separately from project mode", async () => {
+    await seed(
+      [project(REPO_A, 0)],
+      [
+        session("project", REPO_A, { worktree_path: REPO_A }),
+        session("instant", REPO_A, {
+          project_scoped: false,
+          worktree_path: REPO_A,
+        }),
+      ],
+    );
+
+    useAppStore.getState().selectSession("project");
+    useAppStore.getState().setWorkspaceViewMode("kanban");
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    useAppStore.getState().selectSession("instant");
+    useAppStore.getState().setWorkspaceViewMode("panes");
+
+    let state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("panes");
+    expect(state.workspaces[REPO_A].viewMode).toBe("kanban");
+    expect(state.workspaces[REPO_A].localViewMode).toBe("panes");
+
+    useAppStore.getState().selectSession("project");
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    useAppStore.getState().selectSession("instant");
+    state = useAppStore.getState();
+    expect(state.workspaceViewMode).toBe("panes");
+    expect(state.workspaces[REPO_A].viewMode).toBe("kanban");
+  });
+
   it("tracks the terminal popup session independently from pane selection", async () => {
     await seed([project(REPO_A, 0)], [session("a1", REPO_A), session("a2", REPO_A)]);
 

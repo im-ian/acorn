@@ -193,11 +193,13 @@ export interface ProjectWorkspace {
   panes: Record<PaneId, PaneState>;
   focusedPaneId: PaneId;
   viewMode?: WorkspaceViewMode;
+  localViewMode?: WorkspaceViewMode;
   rightTab?: RightTab;
   rightTabByGroup?: Record<RightGroup, RightTab>;
 }
 
 export type WorkspaceViewMode = "panes" | "kanban";
+type WorkspaceViewScope = "project" | "local";
 
 export interface MoveTabArgs {
   tabId: string;
@@ -545,6 +547,7 @@ function emptyWorkspace(
 }
 
 type PersistedWorkspaceState = Partial<ProjectWorkspace> & {
+  localViewMode?: unknown;
   rightTab?: unknown;
   rightTabByGroup?: Partial<Record<RightGroup, unknown>>;
 };
@@ -582,6 +585,17 @@ function normalizeWorkspaceViewMode(
   return readWorkspaceViewMode(value) ?? fallback;
 }
 
+function scopedWorkspaceViewMode(
+  ws: ProjectWorkspace,
+  scope: WorkspaceViewScope,
+): WorkspaceViewMode {
+  const projectMode = normalizeWorkspaceViewMode(ws.viewMode);
+  if (scope === "local") {
+    return readWorkspaceViewMode(ws.localViewMode) ?? projectMode;
+  }
+  return projectMode;
+}
+
 let indexedSessions: Session[] | null = null;
 let indexedSessionsById: ReadonlyMap<string, Session> = new Map();
 
@@ -612,22 +626,62 @@ function fallbackEmptyMirror() {
   };
 }
 
+type WorkspaceViewContext = Pick<
+  AppStateModel,
+  "sessions" | "projects" | "projectFolders" | "activeProject"
+>;
+
+function workspaceViewScopeForActiveWorkspace(
+  workspaces: Record<string, ProjectWorkspace>,
+  activeWorkspaceId: string | null,
+  context?: WorkspaceViewContext,
+): WorkspaceViewScope {
+  if (!context) return "project";
+  const ws = activeWorkspaceId ? workspaces[activeWorkspaceId] : null;
+  const activeTabId = ws?.panes[ws.focusedPaneId]?.activeTabId ?? null;
+  const activeSessionId = activeSessionIdFromTabId(activeTabId);
+  const activeSession = activeSessionId
+    ? context.sessions.find((session) => session.id === activeSessionId)
+    : null;
+  if (activeSession?.project_scoped === false) return "local";
+
+  const repoPath = activeWorkspaceId
+    ? (repoPathForProjectFolderId(context, activeWorkspaceId) ??
+      context.activeProject)
+    : context.activeProject;
+  if (!repoPath) return "project";
+
+  const hasProjectIdentity =
+    context.projects.some((project) => project.repo_path === repoPath) ||
+    context.sessions.some(
+      (session) =>
+        session.repo_path === repoPath && session.project_scoped !== false,
+    );
+  return hasProjectIdentity ? "project" : "local";
+}
+
 function mirrorActive(
   workspaces: Record<string, ProjectWorkspace>,
   activeWorkspaceId: string | null,
+  context?: WorkspaceViewContext,
 ) {
   if (!activeWorkspaceId) return fallbackEmptyMirror();
   const ws = workspaces[activeWorkspaceId];
   if (!ws) return fallbackEmptyMirror();
   const activeTabId = ws.panes[ws.focusedPaneId]?.activeTabId ?? null;
   const rightPanel = normalizeRightPanelState(ws.rightTab, ws.rightTabByGroup);
+  const viewScope = workspaceViewScopeForActiveWorkspace(
+    workspaces,
+    activeWorkspaceId,
+    context,
+  );
   return {
     layout: ws.layout,
     panes: ws.panes,
     focusedPaneId: ws.focusedPaneId,
     activeTabId,
     activeSessionId: activeSessionIdFromTabId(activeTabId),
-    workspaceViewMode: normalizeWorkspaceViewMode(ws.viewMode),
+    workspaceViewMode: scopedWorkspaceViewMode(ws, viewScope),
     ...rightPanel,
   };
 }
@@ -957,6 +1011,22 @@ function setProjectWorkspaceViewMode(
   return next;
 }
 
+function setLocalWorkspaceViewMode(
+  workspaces: Record<string, ProjectWorkspace>,
+  projectFolders: ProjectFoldersByRepo,
+  repoPath: string,
+  mode: WorkspaceViewMode,
+): Record<string, ProjectWorkspace> {
+  let next = workspaces;
+  for (const workspaceId of projectWorkspaceIds(projectFolders, repoPath)) {
+    const ws = next[workspaceId];
+    if (!ws || readWorkspaceViewMode(ws.localViewMode) === mode) continue;
+    if (next === workspaces) next = { ...workspaces };
+    next[workspaceId] = { ...ws, localViewMode: mode };
+  }
+  return next;
+}
+
 function repoPathForProjectFolderId(
   state: Pick<AppStateModel, "projectFolders">,
   folderId: string,
@@ -1143,7 +1213,12 @@ function applySessionWorkspaceHint(
     sessionFolderIds: reconciled.sessionFolderIds,
     activeProject: reconciled.activeProject,
     activeProjectFolderId: reconciled.activeProjectFolderId,
-    ...mirrorActive(reconciled.workspaces, reconciled.activeProjectFolderId),
+    ...mirrorActive(reconciled.workspaces, reconciled.activeProjectFolderId, {
+      sessions: state.sessions,
+      projects: state.projects,
+      projectFolders: reconciled.projectFolders,
+      activeProject: reconciled.activeProject,
+    }),
   };
 }
 
@@ -1160,7 +1235,7 @@ function updateActiveWorkspace(
   const workspaces = { ...s.workspaces, [workspaceId]: next };
   return {
     workspaces,
-    ...mirrorActive(workspaces, workspaceId),
+    ...mirrorActive(workspaces, workspaceId, s),
   };
 }
 
@@ -1319,7 +1394,7 @@ function applySessionPlacementIntent(
   return {
     workspaces,
     ...(activeWorkspaceId(s) === placement.projectFolderId
-      ? mirrorActive(workspaces, placement.projectFolderId)
+      ? mirrorActive(workspaces, placement.projectFolderId, s)
       : {}),
   };
 }
@@ -1468,6 +1543,12 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(
             reconciled.workspaces,
             reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects: s.projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
           ),
         };
         return applyKnownSessionPlacementIntents(nextState);
@@ -1517,6 +1598,12 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(
             reconciled.workspaces,
             reconciled.activeProjectFolderId,
+            {
+              sessions: s.sessions,
+              projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
           ),
         };
       });
@@ -1598,6 +1685,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions,
+            projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
       return applyKnownSessionPlacementIntents(nextState);
@@ -1808,7 +1901,10 @@ export const useAppStore = create<AppStateModel>()(
           workspaces,
           activeProject,
           activeProjectFolderId: owner.projectFolderId,
-          ...mirrorActive(workspaces, owner.projectFolderId),
+          ...mirrorActive(workspaces, owner.projectFolderId, {
+            ...s,
+            activeProject,
+          }),
         };
       }
 
@@ -1853,7 +1949,10 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         activeProject: session.repo_path,
         activeProjectFolderId: workspaceId,
-        ...mirrorActive(workspaces, workspaceId),
+        ...mirrorActive(workspaces, workspaceId, {
+          ...s,
+          activeProject: session.repo_path,
+        }),
       };
     });
   },
@@ -1937,7 +2036,11 @@ export const useAppStore = create<AppStateModel>()(
         projectFolders,
         activeProject: repoPath,
         activeProjectFolderId: folderId,
-        ...mirrorActive(workspaces, folderId),
+        ...mirrorActive(workspaces, folderId, {
+          ...s,
+          projectFolders,
+          activeProject: repoPath,
+        }),
       };
     });
   },
@@ -1965,7 +2068,10 @@ export const useAppStore = create<AppStateModel>()(
         workspaces,
         activeProject: folder.repoPath,
         activeProjectFolderId: folder.id,
-        ...mirrorActive(workspaces, folder.id),
+        ...mirrorActive(workspaces, folder.id, {
+          ...s,
+          activeProject: folder.repoPath,
+        }),
       };
     });
   },
@@ -2038,6 +2144,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions: s.sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2106,6 +2218,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions: s.sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2146,6 +2264,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions: s.sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2166,16 +2290,29 @@ export const useAppStore = create<AppStateModel>()(
     set((s) => {
       const workspaceId = activeWorkspaceId(s);
       if (!s.activeProject || !workspaceId) return s;
-      const workspaces = setProjectWorkspaceViewMode(
+      const viewScope = workspaceViewScopeForActiveWorkspace(
         s.workspaces,
-        s.projectFolders,
-        s.activeProject,
-        mode,
+        workspaceId,
+        s,
       );
+      const workspaces =
+        viewScope === "local"
+          ? setLocalWorkspaceViewMode(
+              s.workspaces,
+              s.projectFolders,
+              s.activeProject,
+              mode,
+            )
+          : setProjectWorkspaceViewMode(
+              s.workspaces,
+              s.projectFolders,
+              s.activeProject,
+              mode,
+            );
       if (workspaces === s.workspaces) return s;
       return {
         workspaces,
-        ...mirrorActive(workspaces, workspaceId),
+        ...mirrorActive(workspaces, workspaceId, s),
       };
     });
   },
@@ -2555,6 +2692,12 @@ export const useAppStore = create<AppStateModel>()(
             ...mirrorActive(
               reconciled.workspaces,
               reconciled.activeProjectFolderId,
+              {
+                sessions: s.sessions,
+                projects: s.projects,
+                projectFolders: reconciled.projectFolders,
+                activeProject: reconciled.activeProject,
+              },
             ),
           };
         });
@@ -2697,6 +2840,12 @@ export const useAppStore = create<AppStateModel>()(
         ...mirrorActive(
           reconciled.workspaces,
           reconciled.activeProjectFolderId,
+          {
+            sessions,
+            projects: s.projects,
+            projectFolders: reconciled.projectFolders,
+            activeProject: reconciled.activeProject,
+          },
         ),
       };
     });
@@ -2901,7 +3050,14 @@ export const useAppStore = create<AppStateModel>()(
           sessionFolderIds,
           activeProject: nextActive,
           activeProjectFolderId: nextActiveFolderId,
-          ...mirrorActive(rest, nextActiveFolderId),
+          ...mirrorActive(rest, nextActiveFolderId, {
+            sessions: s.sessions,
+            projects: s.projects.filter(
+              (project) => project.repo_path !== repoPath,
+            ),
+            projectFolders,
+            activeProject: nextActive,
+          }),
         };
       });
       await get().refreshAll();
@@ -3023,6 +3179,12 @@ export const useAppStore = create<AppStateModel>()(
           ...mirrorActive(
             reconciled.workspaces,
             reconciled.activeProjectFolderId,
+            {
+              sessions,
+              projects: s.projects,
+              projectFolders: reconciled.projectFolders,
+              activeProject: reconciled.activeProject,
+            },
           ),
         };
       });
@@ -3406,7 +3568,7 @@ export const useAppStore = create<AppStateModel>()(
           ? { ...s.workspaceTabs, [existing.id]: tab }
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, workspaceId),
+        ...mirrorActive(newWorkspaces, workspaceId, s),
       };
     });
   },
@@ -3508,7 +3670,7 @@ export const useAppStore = create<AppStateModel>()(
           ? s.workspaceTabs
           : { ...s.workspaceTabs, [tab.id]: tab },
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, workspaceId),
+        ...mirrorActive(newWorkspaces, workspaceId, s),
       };
     });
 
@@ -3566,7 +3728,7 @@ export const useAppStore = create<AppStateModel>()(
       return {
         workspaceTabs: rest,
         workspaces: newWorkspaces,
-        ...mirrorActive(newWorkspaces, activeWorkspaceId(s)),
+        ...mirrorActive(newWorkspaces, activeWorkspaceId(s), s),
       };
     });
   },
@@ -3683,6 +3845,9 @@ export const useAppStore = create<AppStateModel>()(
           const explicitViewMode = readWorkspaceViewMode(
             (ws as PersistedWorkspaceState).viewMode,
           );
+          const explicitLocalViewMode = readWorkspaceViewMode(
+            (ws as PersistedWorkspaceState).localViewMode,
+          );
           const newPanes: Record<PaneId, PaneState> = {};
           for (const [pid, pane] of Object.entries(ws.panes ?? {})) {
             const normalized = normalizePaneState(
@@ -3719,6 +3884,11 @@ export const useAppStore = create<AppStateModel>()(
           } else {
             delete normalizedWorkspace.viewMode;
           }
+          if (explicitLocalViewMode) {
+            normalizedWorkspace.localViewMode = explicitLocalViewMode;
+          } else {
+            delete normalizedWorkspace.localViewMode;
+          }
           sanitized[key] = normalizedWorkspace;
         }
         const projectFolders = normalizePersistedProjectFolders(
@@ -3748,7 +3918,7 @@ export const useAppStore = create<AppStateModel>()(
         state.workspaceTabs = restoredTabs;
         Object.assign(
           state,
-          mirrorActive(state.workspaces, activeWorkspaceId(state)),
+          mirrorActive(state.workspaces, activeWorkspaceId(state), state),
         );
       },
     },
