@@ -42,6 +42,109 @@ function session(
 }
 
 test.describe("workspace kanban mode", () => {
+  test("updates card PR metadata when the PR list refresh discovers a new PR", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("runner", "runner", "working", {
+        agent_provider: "codex",
+      }),
+    ]);
+    await tauri.handle("detect_session_statuses", (args) => {
+      const ids = Array.isArray((args as { ids?: unknown }).ids)
+        ? ((args as { ids: string[] }).ids)
+        : [];
+      return ids.map((id) => ({
+        id,
+        status: "working",
+        branch: "feat/runner",
+        last_message: null,
+        last_user_message: null,
+        last_agent_message: null,
+      }));
+    });
+    await tauri.handle("list_pull_requests", (args) => {
+      const w = window as unknown as {
+        __kanbanPrCreated?: boolean;
+        __kanbanCurrentPrQueries?: number;
+        __kanbanOpenPrRefreshes?: number;
+      };
+      const pr = {
+        number: 77,
+        title: "Add kanban PR context",
+        state: "OPEN",
+        author: "ian",
+        head_branch: "feat/runner",
+        base_branch: "main",
+        url: "https://github.com/im-ian/acorn/pull/77",
+        updated_at: "2026-01-01T00:00:00Z",
+        is_draft: false,
+        checks: null,
+        labels: [],
+      };
+      const created = w.__kanbanPrCreated === true;
+      if (args?.query === "head:feat/runner") {
+        w.__kanbanCurrentPrQueries = (w.__kanbanCurrentPrQueries ?? 0) + 1;
+        return {
+          kind: "ok",
+          account: "test",
+          items: created ? [pr] : [],
+        };
+      }
+      if (args?.state === "open" && !args?.query) {
+        w.__kanbanOpenPrRefreshes = (w.__kanbanOpenPrRefreshes ?? 0) + 1;
+        return {
+          kind: "ok",
+          account: "test",
+          items: created ? [pr] : [],
+        };
+      }
+      return { kind: "ok", account: "test", items: [] };
+    });
+
+    await page.goto("/");
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    await expect(board).toBeVisible();
+    const runnerCard = board.locator('[data-kanban-session-id="runner"]');
+    await expect(runnerCard).toBeVisible();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __kanbanCurrentPrQueries?: number;
+                }
+              ).__kanbanCurrentPrQueries ?? 0,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBeGreaterThan(0);
+    await expect(runnerCard).not.toContainText("PR #77");
+
+    await page.evaluate(() => {
+      (window as unknown as { __kanbanPrCreated?: boolean })
+        .__kanbanPrCreated = true;
+    });
+    await page.getByRole("button", { name: "GitHub" }).click();
+    const refresh = page.locator("aside").getByRole("button", {
+      name: "Refresh",
+    });
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
+
+    await expect(
+      runnerCard.getByTestId("workspace-kanban-card-context"),
+    ).toContainText("PR #77");
+  });
+
   test("groups active workspace sessions by status and opens a card terminal popover", async ({
     page,
     tauri,
