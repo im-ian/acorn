@@ -61,6 +61,31 @@ test.describe("settings modal", () => {
       .toBe(0.75);
   });
 
+  test("adjusts terminal line height and persists it", async ({ page }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const field = modal.getByText("Line height", { exact: true }).locator("..");
+    const valueInput = field.getByRole("textbox", { name: /^(Value|값)$/ });
+    await expect(valueInput).toHaveValue("1.00");
+
+    await valueInput.fill("1.35");
+    await valueInput.press("Enter");
+
+    await expect(valueInput).toHaveValue("1.35");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          return raw ? JSON.parse(raw).terminal?.lineHeight : null;
+        }),
+      )
+      .toBe(1.35);
+  });
+
   test("changes terminal anti-aliasing and persists it", async ({ page }) => {
     await page.goto("/");
     await pressHotkey(page, { mod: true, key: "," });

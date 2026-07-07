@@ -688,6 +688,34 @@ test.describe("terminal: spawn", () => {
       });
   });
 
+  test("applies terminal line height setting to xterm rows", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { fontSize: 20, lineHeight: 2 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+
+    const firstRow = page
+      .locator("[data-pane-body] .xterm-rows > div")
+      .first();
+    await firstRow.waitFor({ state: "attached" });
+    await expect
+      .poll(() =>
+        firstRow.evaluate((element) => element.getBoundingClientRect().height),
+      )
+      .toBeGreaterThan(30);
+  });
+
   test("normalizes no-break spaces when pasting shell commands", async ({
     page,
     tauri,
