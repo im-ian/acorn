@@ -490,9 +490,9 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
             return (
               <Fragment key={column.status}>
                 <div
-                  className="h-full min-h-0 shrink-0"
+                  className="h-full min-w-0 grow shrink-0"
                   style={{
-                    width: `${
+                    flexBasis: `${
                       columnWidths[columnIndex] ?? KANBAN_COLUMN_DEFAULT_WIDTH
                     }px`,
                   }}
