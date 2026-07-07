@@ -7,6 +7,7 @@ import {
   Keyboard,
   Loader2,
   RefreshCcw,
+  Save,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -68,7 +69,6 @@ import {
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
-  TERMINAL_FONT_PRESETS,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
@@ -566,32 +566,67 @@ function terminalFontSmoothingLabel(
 
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
+  const applyTerminalFontPreset = useSettings((s) => s.applyTerminalFontPreset);
+  const saveTerminalFontPreset = useSettings((s) => s.saveTerminalFontPreset);
+  const deleteTerminalFontPreset = useSettings(
+    (s) => s.deleteTerminalFontPreset,
+  );
   const patchTerminal = useSettings((s) => s.patchTerminal);
-  const patchExperiments = useSettings((s) => s.patchExperiments);
   const t = useTranslation();
-  const activeFontPresetId = matchingTerminalFontPresetId(settings);
+  const terminalFontPresets = settings.fontPresets.terminal;
+  const activeFontPresetId = matchingTerminalFontPresetId(
+    settings,
+    terminalFontPresets,
+  );
+  const activeFontPreset = activeFontPresetId
+    ? terminalFontPresetById(terminalFontPresets, activeFontPresetId)
+    : null;
+  const [presetNameDraft, setPresetNameDraft] = useState(
+    () => activeFontPreset?.name ?? "",
+  );
+  const activeFontPresetMarker = `${activeFontPresetId ?? ""}\u0000${
+    activeFontPreset?.name ?? ""
+  }`;
+  const previousActiveFontPresetMarkerRef = useRef<string>(
+    activeFontPresetMarker,
+  );
+
+  useEffect(() => {
+    if (previousActiveFontPresetMarkerRef.current === activeFontPresetMarker) {
+      return;
+    }
+    previousActiveFontPresetMarkerRef.current = activeFontPresetMarker;
+    setPresetNameDraft(activeFontPreset?.name ?? "");
+  }, [activeFontPreset?.name, activeFontPresetMarker]);
+
+  const hasFontPresets = terminalFontPresets.length > 0;
   const fontPresetOptions: SelectItem[] = [
-    ...(activeFontPresetId === null
+    ...(hasFontPresets && activeFontPresetId === null
       ? [
           {
             value: "custom",
             label: st(t, "settings.terminal.fontPreset.custom"),
+            description: st(t, "settings.terminal.fontPreset.customHint"),
             disabled: true,
           },
         ]
       : []),
-    ...TERMINAL_FONT_PRESETS.map((preset) => ({
-      value: preset.id,
-      label: st(
-        t,
-        `settings.terminal.fontPreset.options.${preset.id}.label` as TranslationKey,
-      ),
-      description: st(
-        t,
-        `settings.terminal.fontPreset.options.${preset.id}.description` as TranslationKey,
-      ),
-    })),
+    ...(hasFontPresets
+      ? terminalFontPresets.map((preset) => ({
+          value: preset.id,
+          label: preset.name,
+        }))
+      : [
+          {
+            value: "empty",
+            label: st(t, "settings.terminal.fontPreset.empty"),
+            disabled: true,
+          },
+        ]),
   ];
+  const savePreset = () => {
+    saveTerminalFontPreset(presetNameDraft);
+  };
 
   return (
     <section className="space-y-4">
@@ -599,18 +634,62 @@ function TerminalSettings() {
         label={st(t, "settings.terminal.fontPreset.label")}
         hint={st(t, "settings.terminal.fontPreset.hint")}
       >
-        <Select
-          value={activeFontPresetId ?? "custom"}
-          onValueChange={(presetId) => {
-            const preset = terminalFontPresetById(presetId);
-            if (!preset) return;
-            patchTerminal(preset.settings);
-            patchExperiments(preset.experiments);
-          }}
-          options={fontPresetOptions}
-          className="min-w-[14rem]"
-          aria-label={st(t, "settings.terminal.fontPreset.label")}
-        />
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={
+                activeFontPresetId ??
+                (hasFontPresets ? "custom" : "empty")
+              }
+              onValueChange={(presetId) => {
+                if (presetId === "custom" || presetId === "empty") return;
+                applyTerminalFontPreset(presetId);
+              }}
+              options={fontPresetOptions}
+              className="min-w-[14rem] flex-1"
+              aria-label={st(t, "settings.terminal.fontPreset.selectLabel")}
+            />
+            <Button
+              variant="dangerGhost"
+              onClick={() => {
+                if (activeFontPresetId) {
+                  deleteTerminalFontPreset(activeFontPresetId);
+                }
+              }}
+              disabled={!activeFontPresetId}
+              aria-label={st(t, "settings.terminal.fontPreset.deleteLabel")}
+            >
+              <Trash2 size={12} />
+              {st(t, "settings.terminal.fontPreset.delete")}
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <TextInput
+              value={presetNameDraft}
+              onChange={(event) => setPresetNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  savePreset();
+                  event.currentTarget.blur();
+                }
+              }}
+              placeholder={st(
+                t,
+                "settings.terminal.fontPreset.namePlaceholder",
+              )}
+              aria-label={st(t, "settings.terminal.fontPreset.nameLabel")}
+              className="min-w-[14rem] flex-1"
+            />
+            <Button
+              variant="outline"
+              onClick={savePreset}
+              disabled={!presetNameDraft.trim()}
+            >
+              <Save size={12} />
+              {st(t, "settings.terminal.fontPreset.save")}
+            </Button>
+          </div>
+        </div>
       </Field>
       <Field
         label={st(t, "settings.terminal.fontFamily.label")}

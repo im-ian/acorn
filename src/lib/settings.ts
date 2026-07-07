@@ -168,6 +168,43 @@ export type TerminalFontSmoothing =
 export const TERMINAL_FONT_SMOOTHING_VALUES: ReadonlyArray<TerminalFontSmoothing> =
   ["grayscale", "subpixel", "system", "none"];
 
+export const TERMINAL_FONT_PRESET_FIELDS = [
+  "fontFamily",
+  "fontSize",
+  "letterSpacing",
+  "fontSmoothing",
+  "fontWeight",
+  "fontWeightBold",
+  "lineHeight",
+] as const;
+
+export const TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS = [
+  "cjkCellWidthHeuristic",
+] as const;
+
+type TerminalFontPresetField = (typeof TERMINAL_FONT_PRESET_FIELDS)[number];
+type TerminalFontPresetExperimentField =
+  (typeof TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS)[number];
+
+export type TerminalFontPresetSettings = Pick<
+  AcornSettings["terminal"],
+  TerminalFontPresetField
+>;
+export type TerminalFontPresetExperimentSettings = Pick<
+  AcornSettings["experiments"],
+  TerminalFontPresetExperimentField
+>;
+
+export interface TerminalFontPreset {
+  id: string;
+  name: string;
+  settings: TerminalFontPresetSettings;
+  experiments: TerminalFontPresetExperimentSettings;
+}
+
+export const TERMINAL_FONT_PRESET_LIMIT = 50;
+export const TERMINAL_FONT_PRESET_NAME_MAX_CHARS = 80;
+
 /**
  * Which field acorn shows as the primary line of a sidebar session row.
  * Mirrors Warp's "Pane title as" picker — `name` is the editable session
@@ -444,6 +481,9 @@ export interface AcornSettings {
     uiScalePercent: number;
     toastPosition: ToastPosition;
   };
+  fontPresets: {
+    terminal: TerminalFontPreset[];
+  };
   shortcuts: HotkeyConfig;
   /**
    * Opt-in toggles for unfinished features. Anything under here is
@@ -585,6 +625,9 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     uiScalePercent: 100,
     toastPosition: "top",
   },
+  fontPresets: {
+    terminal: [],
+  },
   shortcuts: { ...DEFAULT_HOTKEYS },
   experiments: {
     stickyPrompt: false,
@@ -594,125 +637,36 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
 };
 
-export const TERMINAL_FONT_PRESET_FIELDS = [
-  "fontFamily",
-  "fontSize",
-  "letterSpacing",
-  "fontSmoothing",
-  "fontWeight",
-  "fontWeightBold",
-  "lineHeight",
-] as const;
-
-export const TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS = [
-  "cjkCellWidthHeuristic",
-] as const;
-
-type TerminalFontPresetField = (typeof TERMINAL_FONT_PRESET_FIELDS)[number];
-type TerminalFontPresetExperimentField =
-  (typeof TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS)[number];
-
-export type TerminalFontPresetSettings = Pick<
-  AcornSettings["terminal"],
-  TerminalFontPresetField
->;
-export type TerminalFontPresetExperimentSettings = Pick<
-  AcornSettings["experiments"],
-  TerminalFontPresetExperimentField
->;
-
-export type TerminalFontPresetId =
-  | "default"
-  | "compact"
-  | "comfortable"
-  | "cjk";
-
-export interface TerminalFontPreset {
-  id: TerminalFontPresetId;
-  settings: TerminalFontPresetSettings;
-  experiments: TerminalFontPresetExperimentSettings;
-}
-
-export const TERMINAL_FONT_PRESETS = [
-  {
-    id: "default",
-    settings: {
-      fontFamily: DEFAULT_SETTINGS.terminal.fontFamily,
-      fontSize: DEFAULT_SETTINGS.terminal.fontSize,
-      letterSpacing: DEFAULT_SETTINGS.terminal.letterSpacing,
-      fontSmoothing: DEFAULT_SETTINGS.terminal.fontSmoothing,
-      fontWeight: DEFAULT_SETTINGS.terminal.fontWeight,
-      fontWeightBold: DEFAULT_SETTINGS.terminal.fontWeightBold,
-      lineHeight: DEFAULT_SETTINGS.terminal.lineHeight,
-    },
-    experiments: {
-      cjkCellWidthHeuristic:
-        DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
-    },
-  },
-  {
-    id: "compact",
-    settings: {
-      fontFamily: fontStackFromSlots(
-        ["JetBrains Mono", "Fira Code", "Menlo"],
-        "monospace",
-      ),
-      fontSize: 11,
-      letterSpacing: -0.25,
-      fontSmoothing: "grayscale",
-      fontWeight: 400,
-      fontWeightBold: 700,
-      lineHeight: 1.0,
-    },
-    experiments: {
-      cjkCellWidthHeuristic: false,
-    },
-  },
-  {
-    id: "comfortable",
-    settings: {
-      fontFamily: fontStackFromSlots(
-        ["JetBrains Mono", "Fira Code", "Menlo"],
-        "monospace",
-      ),
-      fontSize: 13.25,
-      letterSpacing: 0.25,
-      fontSmoothing: "grayscale",
-      fontWeight: 400,
-      fontWeightBold: 700,
-      lineHeight: 1.2,
-    },
-    experiments: {
-      cjkCellWidthHeuristic: false,
-    },
-  },
-  {
-    id: "cjk",
-    settings: {
-      fontFamily: fontStackFromSlots(
-        ["D2Coding", "Sarasa Mono K", "JetBrains Mono"],
-        "monospace",
-      ),
-      fontSize: 13,
-      letterSpacing: 0,
-      fontSmoothing: "grayscale",
-      fontWeight: 400,
-      fontWeightBold: 700,
-      lineHeight: 1.15,
-    },
-    experiments: {
-      cjkCellWidthHeuristic: true,
-    },
-  },
-] as const satisfies ReadonlyArray<TerminalFontPreset>;
-
 export function terminalFontPresetById(
+  presets: ReadonlyArray<TerminalFontPreset>,
   id: string,
 ): TerminalFontPreset | null {
-  return TERMINAL_FONT_PRESETS.find((preset) => preset.id === id) ?? null;
+  return presets.find((preset) => preset.id === id) ?? null;
 }
 
-function terminalFontPresetMatches(
+export function terminalFontPresetSettings(
+  settings: Pick<AcornSettings, "terminal">,
+): TerminalFontPresetSettings {
+  return {
+    fontFamily: settings.terminal.fontFamily,
+    fontSize: settings.terminal.fontSize,
+    letterSpacing: settings.terminal.letterSpacing,
+    fontSmoothing: settings.terminal.fontSmoothing,
+    fontWeight: settings.terminal.fontWeight,
+    fontWeightBold: settings.terminal.fontWeightBold,
+    lineHeight: settings.terminal.lineHeight,
+  };
+}
+
+export function terminalFontPresetExperiments(
+  settings: Pick<AcornSettings, "experiments">,
+): TerminalFontPresetExperimentSettings {
+  return {
+    cjkCellWidthHeuristic: settings.experiments.cjkCellWidthHeuristic,
+  };
+}
+
+export function terminalFontPresetMatches(
   settings: Pick<AcornSettings, "terminal" | "experiments">,
   preset: TerminalFontPreset,
 ): boolean {
@@ -728,9 +682,10 @@ function terminalFontPresetMatches(
 
 export function matchingTerminalFontPresetId(
   settings: Pick<AcornSettings, "terminal" | "experiments">,
-): TerminalFontPresetId | null {
+  presets: ReadonlyArray<TerminalFontPreset>,
+): string | null {
   return (
-    TERMINAL_FONT_PRESETS.find((preset) =>
+    presets.find((preset) =>
       terminalFontPresetMatches(settings, preset),
     )?.id ?? null
   );
@@ -929,6 +884,143 @@ function normalizeWeight(
   return fallback;
 }
 
+function normalizeTerminalFontPresetName(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const name = v.trim().replace(/\s+/g, " ");
+  if (!name) return null;
+  return Array.from(name)
+    .slice(0, TERMINAL_FONT_PRESET_NAME_MAX_CHARS)
+    .join("");
+}
+
+function terminalFontPresetIdBase(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug ? `font-${slug}` : "font-preset";
+}
+
+function uniqueTerminalFontPresetId(
+  name: string,
+  presets: ReadonlyArray<TerminalFontPreset>,
+): string {
+  const existing = new Set(presets.map((preset) => preset.id));
+  const base = terminalFontPresetIdBase(name);
+  if (!existing.has(base)) return base;
+
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+
+  return `${base}-${Date.now()}`;
+}
+
+function normalizeTerminalFontPresetId(v: unknown, fallback: string): string {
+  if (typeof v !== "string") return fallback;
+  const id = v.trim();
+  return id ? id.slice(0, 120) : fallback;
+}
+
+function normalizeTerminalFontPresetSettings(
+  v: unknown,
+): TerminalFontPresetSettings | null {
+  if (!v || typeof v !== "object") return null;
+  const raw = v as Partial<TerminalFontPresetSettings>;
+  return {
+    fontFamily:
+      typeof raw.fontFamily === "string" && raw.fontFamily.trim()
+        ? raw.fontFamily
+        : DEFAULT_SETTINGS.terminal.fontFamily,
+    fontSize: normalizeTerminalFontSize(
+      raw.fontSize,
+      DEFAULT_SETTINGS.terminal.fontSize,
+    ),
+    letterSpacing: normalizeTerminalLetterSpacing(
+      raw.letterSpacing,
+      DEFAULT_SETTINGS.terminal.letterSpacing,
+    ),
+    fontSmoothing: normalizeTerminalFontSmoothing(
+      raw.fontSmoothing,
+      DEFAULT_SETTINGS.terminal.fontSmoothing,
+    ),
+    fontWeight: normalizeWeight(
+      raw.fontWeight,
+      DEFAULT_SETTINGS.terminal.fontWeight,
+    ),
+    fontWeightBold: normalizeWeight(
+      raw.fontWeightBold,
+      DEFAULT_SETTINGS.terminal.fontWeightBold,
+    ),
+    lineHeight: normalizeLineHeight(
+      raw.lineHeight,
+      DEFAULT_SETTINGS.terminal.lineHeight,
+    ),
+  };
+}
+
+function normalizeTerminalFontPresetExperiments(
+  v: unknown,
+): TerminalFontPresetExperimentSettings {
+  const raw =
+    v && typeof v === "object"
+      ? (v as Partial<TerminalFontPresetExperimentSettings>)
+      : {};
+  return {
+    cjkCellWidthHeuristic:
+      typeof raw.cjkCellWidthHeuristic === "boolean"
+        ? raw.cjkCellWidthHeuristic
+        : DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
+  };
+}
+
+function normalizeTerminalFontPresets(
+  v: unknown,
+): TerminalFontPreset[] {
+  if (!Array.isArray(v)) return DEFAULT_SETTINGS.fontPresets.terminal;
+
+  const presets: TerminalFontPreset[] = [];
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+
+  for (const item of v) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as {
+      id?: unknown;
+      name?: unknown;
+      settings?: unknown;
+      experiments?: unknown;
+    };
+    const name = normalizeTerminalFontPresetName(raw.name);
+    const settings = normalizeTerminalFontPresetSettings(raw.settings);
+    if (!name || !settings) continue;
+
+    const nameKey = name.toLocaleLowerCase();
+    if (seenNames.has(nameKey)) continue;
+
+    const fallbackId = uniqueTerminalFontPresetId(name, presets);
+    const id = normalizeTerminalFontPresetId(raw.id, fallbackId);
+    const uniqueId = seenIds.has(id)
+      ? uniqueTerminalFontPresetId(name, presets)
+      : id;
+
+    presets.push({
+      id: uniqueId,
+      name,
+      settings,
+      experiments: normalizeTerminalFontPresetExperiments(raw.experiments),
+    });
+    seenIds.add(uniqueId);
+    seenNames.add(nameKey);
+
+    if (presets.length >= TERMINAL_FONT_PRESET_LIMIT) break;
+  }
+
+  return presets;
+}
+
 function normalizeSelectedAgent(
   v: unknown,
   fallback: SelectedAgent,
@@ -1047,6 +1139,9 @@ function loadSettings(): AcornSettings {
       AcornSettings["interface"]
     >;
     const terminalRaw: Partial<AcornSettings["terminal"]> = parsed.terminal ?? {};
+    const fontPresetsRaw = (parsed.fontPresets ?? {}) as {
+      terminal?: unknown;
+    };
     const sessionsRaw = (parsed.sessions ?? {}) as PersistedSessionSettings;
     const notificationEventsRaw = (parsed.notifications?.events ?? {}) as {
       waitingForInput?: unknown;
@@ -1350,6 +1445,9 @@ function loadSettings(): AcornSettings {
             : DEFAULT_SETTINGS.sessionDisplay.showDetailsOnHover,
       },
       appearance,
+      fontPresets: {
+        terminal: normalizeTerminalFontPresets(fontPresetsRaw.terminal),
+      },
       shortcuts: resolveHotkeys(
         (parsed.shortcuts ?? {}) as Partial<Record<HotkeyId, unknown>>,
       ),
@@ -1439,6 +1537,9 @@ interface SettingsState {
       fontSlots?: AcornSettings["appearance"]["fontSlots"];
     },
   ) => void;
+  applyTerminalFontPreset: (id: string) => void;
+  saveTerminalFontPreset: (name: string) => string | null;
+  deleteTerminalFontPreset: (id: string) => void;
   patchShortcut: (id: HotkeyId, binding: string) => void;
   resetShortcut: (id: HotkeyId) => void;
   resetShortcuts: () => void;
@@ -1698,6 +1799,86 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const next: AcornSettings = {
         ...s.settings,
         appearance,
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  applyTerminalFontPreset: (id) =>
+    set((s) => {
+      const preset = terminalFontPresetById(
+        s.settings.fontPresets.terminal,
+        id,
+      );
+      if (!preset) return s;
+      const next: AcornSettings = {
+        ...s.settings,
+        terminal: {
+          ...s.settings.terminal,
+          ...preset.settings,
+        },
+        experiments: {
+          ...s.settings.experiments,
+          ...preset.experiments,
+        },
+      };
+      persist(next);
+      return { settings: next };
+    }),
+  saveTerminalFontPreset: (name) => {
+    let savedId: string | null = null;
+    set((s) => {
+      const normalizedName = normalizeTerminalFontPresetName(name);
+      if (!normalizedName) return s;
+
+      const presets = s.settings.fontPresets.terminal;
+      const existingIndex = presets.findIndex(
+        (preset) =>
+          preset.name.toLocaleLowerCase() ===
+          normalizedName.toLocaleLowerCase(),
+      );
+      const preset: TerminalFontPreset = {
+        id:
+          existingIndex >= 0
+            ? presets[existingIndex].id
+            : uniqueTerminalFontPresetId(normalizedName, presets),
+        name: normalizedName,
+        settings: terminalFontPresetSettings(s.settings),
+        experiments: terminalFontPresetExperiments(s.settings),
+      };
+      savedId = preset.id;
+
+      const terminal =
+        existingIndex >= 0
+          ? presets.map((item, index) =>
+              index === existingIndex ? preset : item,
+            )
+          : [preset, ...presets].slice(0, TERMINAL_FONT_PRESET_LIMIT);
+      const next: AcornSettings = {
+        ...s.settings,
+        fontPresets: {
+          ...s.settings.fontPresets,
+          terminal,
+        },
+      };
+      persist(next);
+      return { settings: next };
+    });
+    return savedId;
+  },
+  deleteTerminalFontPreset: (id) =>
+    set((s) => {
+      const terminal = s.settings.fontPresets.terminal.filter(
+        (preset) => preset.id !== id,
+      );
+      if (terminal.length === s.settings.fontPresets.terminal.length) {
+        return s;
+      }
+      const next: AcornSettings = {
+        ...s.settings,
+        fontPresets: {
+          ...s.settings.fontPresets,
+          terminal,
+        },
       };
       persist(next);
       return { settings: next };
