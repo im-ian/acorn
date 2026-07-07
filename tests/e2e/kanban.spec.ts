@@ -349,6 +349,40 @@ test.describe("workspace kanban mode", () => {
         .evaluateAll((columns) =>
           columns.map((column) => column.getBoundingClientRect().width),
         );
+    const kanbanFitMetrics = () =>
+      board
+        .locator("[data-kanban-column-status]")
+        .evaluateAll((columns) => {
+          const firstColumn = columns[0];
+          if (!firstColumn) throw new Error("missing kanban columns");
+          const row = firstColumn.parentElement?.parentElement;
+          if (!row) throw new Error("missing kanban row");
+          const rowStyle = window.getComputedStyle(row);
+          const paddingX =
+            parseFloat(rowStyle.paddingLeft) +
+            parseFloat(rowStyle.paddingRight);
+          const handleWidth = Array.from(
+            row.querySelectorAll(
+              '[data-testid="workspace-kanban-column-resize-handle"]',
+            ),
+          ).reduce(
+            (total, handle) => total + handle.getBoundingClientRect().width,
+            0,
+          );
+          const columnWidths = columns.map(
+            (column) => column.getBoundingClientRect().width,
+          );
+          const usedWidth =
+            columnWidths.reduce((total, width) => total + width, 0) +
+            handleWidth +
+            paddingX;
+          return {
+            columnWidths,
+            unusedWidth: row.getBoundingClientRect().width - usedWidth,
+          };
+        });
+    const columnWidthSpread = (widths: number[]) =>
+      Math.max(...widths) - Math.min(...widths);
     const readyColumn = board.locator('[data-kanban-column-status="ready"]');
     const needsInputColumn = board.locator(
       '[data-kanban-column-status="waiting_for_input"]',
@@ -356,6 +390,9 @@ test.describe("workspace kanban mode", () => {
     const readyResizeHandle = board
       .locator('[data-kanban-resize-status="ready"]');
     await expect(readyResizeHandle).toBeVisible();
+    const initialFit = await kanbanFitMetrics();
+    expect(columnWidthSpread(initialFit.columnWidths)).toBeLessThan(1);
+    expect(Math.abs(initialFit.unusedWidth)).toBeLessThan(1);
     const [readyWidthBefore, needsInputWidthBefore, scrollWidthBefore] =
       await Promise.all([
         readyColumn.evaluate((column) => column.getBoundingClientRect().width),
@@ -383,18 +420,22 @@ test.describe("workspace kanban mode", () => {
         kanbanScroll.evaluate((scroll) => scroll.scrollWidth),
       ]);
     expect(
-      Math.abs(needsInputWidthAfter - needsInputWidthBefore),
-    ).toBeLessThan(1);
-    expect(scrollWidthAfter).toBeGreaterThan(scrollWidthBefore + 40);
+      needsInputWidthAfter,
+    ).toBeLessThanOrEqual(needsInputWidthBefore);
+    expect(scrollWidthAfter).toBeGreaterThanOrEqual(scrollWidthBefore);
 
     // Equalize distributes the mean width across columns, so every column ends
     // up the same width as the others (distinct from reset, which restores the
-    // fixed default) and lands between the resized and untouched widths.
+    // default responsive basis) and lands between the resized and untouched
+    // widths.
     await board.getByRole("button", { name: "Equalize sizes" }).click();
     await expect
       .poll(async () => {
-        const widths = await kanbanColumnWidths();
-        return Math.max(...widths) - Math.min(...widths);
+        const metrics = await kanbanFitMetrics();
+        return Math.max(
+          columnWidthSpread(metrics.columnWidths),
+          Math.abs(metrics.unusedWidth),
+        );
       })
       .toBeLessThan(1);
     const equalizedWidths = await kanbanColumnWidths();
@@ -405,8 +446,11 @@ test.describe("workspace kanban mode", () => {
     await board.getByRole("button", { name: "Reset sizes" }).click();
     await expect
       .poll(async () => {
-        const widths = await kanbanColumnWidths();
-        return Math.max(...widths.map((width) => Math.abs(width - 240)));
+        const metrics = await kanbanFitMetrics();
+        return Math.max(
+          columnWidthSpread(metrics.columnWidths),
+          Math.abs(metrics.unusedWidth),
+        );
       })
       .toBeLessThan(1);
 
