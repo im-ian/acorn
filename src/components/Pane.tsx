@@ -12,7 +12,6 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GitFork,
   MessageSquareText,
   Pencil,
   PencilLine,
@@ -38,6 +37,10 @@ import { mediaKindFromPath } from "../lib/mediaFiles";
 import { ChatPane } from "./ChatPane";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
+import {
+  buildAgentContextMenuItems,
+  createEmptySessionAgentDetection,
+} from "../lib/agentContextMenu";
 import {
   AgentProviderIcon,
   buildAgentForkCommand,
@@ -89,6 +92,7 @@ import { StatusDot, type StatusTone } from "./ui";
 import type {
   Project,
   Session,
+  SessionAgentDetection,
   SessionAgentProvider,
   SessionKind,
   SessionStatus,
@@ -1067,11 +1071,7 @@ function TabItem({
   // Per-session agent detection result, refreshed each time the context
   // menu opens. Null while loading; the menu rebuilds when this resolves
   // so the Fork item gets the right label / enabled state.
-  const [agent, setAgent] = useState<{
-    claude: string | null;
-    codex: string | null;
-    antigravity: string | null;
-  } | null>(null);
+  const [agent, setAgent] = useState<SessionAgentDetection | null>(null);
 
   useEffect(() => {
     if (!menu || !session) return;
@@ -1088,7 +1088,7 @@ function TabItem({
           err,
         });
         if (!cancelled) {
-          setAgent({ claude: null, codex: null, antigravity: null });
+          setAgent(createEmptySessionAgentDetection());
         }
       });
     return () => {
@@ -1237,60 +1237,13 @@ function TabItem({
 
   const forkItems: ContextMenuItem[] = (() => {
     if (!agent || !onFork) return [];
-    const items: ContextMenuItem[] = [];
-    const providerCount = [agent.claude, agent.codex, agent.antigravity].filter(
-      Boolean,
-    ).length;
-    const multiple = providerCount > 1;
-    if (agent.claude) {
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkClaudeSession")
-          : paneT(t, "pane.menu.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => onFork("claude", agent.claude!, false),
-      });
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkClaudeInNewWorktree")
-          : paneT(t, "pane.menu.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => onFork("claude", agent.claude!, true),
-      });
-    }
-    if (agent.codex) {
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkCodexSession")
-          : paneT(t, "pane.menu.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => onFork("codex", agent.codex!, false),
-      });
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkCodexInNewWorktree")
-          : paneT(t, "pane.menu.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => onFork("codex", agent.codex!, true),
-      });
-    }
-    if (agent.antigravity) {
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkAntigravitySession")
-          : paneT(t, "pane.menu.forkSession"),
-        icon: <GitFork size={12} />,
-        onClick: () => onFork("antigravity", agent.antigravity!, false),
-      });
-      items.push({
-        label: multiple
-          ? paneT(t, "pane.menu.forkAntigravityInNewWorktree")
-          : paneT(t, "pane.menu.forkInNewWorktree"),
-        icon: <GitBranch size={12} />,
-        onClick: () => onFork("antigravity", agent.antigravity!, true),
-      });
-    }
-    return items;
+    return buildAgentContextMenuItems({
+      mode: "fork",
+      surface: "pane",
+      detection: agent,
+      t,
+      onFork,
+    });
   })();
 
   const menuItems: ContextMenuItem[] = [

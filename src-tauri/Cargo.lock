@@ -6,6 +6,7 @@ version = 4
 name = "acorn"
 version = "1.22.0"
 dependencies = [
+ "acorn-agent",
  "acorn-daemon",
  "acorn-ipc",
  "acorn-paths",
@@ -54,9 +55,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "acorn-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "acorn-daemon"
 version = "0.1.0"
 dependencies = [
+ "acorn-agent",
  "acorn-paths",
  "chrono",
  "dashmap",
@@ -109,7 +118,9 @@ dependencies = [
 name = "acorn-session"
 version = "0.1.0"
 dependencies = [
+ "acorn-agent",
  "acorn-pty",
+ "acorn-transcript",
  "chrono",
  "dashmap",
  "serde",
@@ -123,6 +134,7 @@ dependencies = [
 name = "acorn-transcript"
 version = "0.1.0"
 dependencies = [
+ "acorn-agent",
  "chrono",
  "directories",
  "parking_lot",

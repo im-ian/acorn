@@ -31,8 +31,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use acorn_agent::AgentKind;
 use acorn_session::Session;
-use acorn_transcript::{self as transcript_watcher, AgentKind, SessionPid};
+use acorn_transcript::{self as transcript_watcher, SessionPid};
 use uuid::Uuid;
 
 use crate::agent_resume;
@@ -231,15 +232,10 @@ fn cwd_filename(kind: AgentKind) -> Option<&'static str> {
 /// `claude --resume` of an older conversation also moves backwards, but
 /// its transcript is being appended right now (hot), so it passes.
 fn marker_rollback_is_dormant_echo(kind: AgentKind, prev_uuid: &str, next_uuid: &str) -> bool {
-    let resume_kind = match kind {
-        AgentKind::Claude => agent_resume::AgentKind::Claude,
-        AgentKind::Codex => agent_resume::AgentKind::Codex,
-        AgentKind::Antigravity => agent_resume::AgentKind::Antigravity,
-    };
-    let Some(prev_path) = agent_resume::locate_transcript(resume_kind, prev_uuid) else {
+    let Some(prev_path) = agent_resume::locate_transcript(kind, prev_uuid) else {
         return false;
     };
-    let Some(next_path) = agent_resume::locate_transcript(resume_kind, next_uuid) else {
+    let Some(next_path) = agent_resume::locate_transcript(kind, next_uuid) else {
         return false;
     };
     rollback_is_dormant_echo(&prev_path, &next_path, SystemTime::now())
@@ -342,8 +338,12 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let marker = dir.join("codex.id");
 
-        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-aaaa-76b0-8410-2e073b38a2c1")
-            .unwrap();
+        bind_marker_in_state_dir(
+            &dir,
+            AgentKind::Codex,
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1",
+        )
+        .unwrap();
         assert_eq!(
             read_trimmed(&marker).as_deref(),
             Some("019e2001-aaaa-76b0-8410-2e073b38a2c1"),
@@ -351,16 +351,24 @@ mod tests {
         );
 
         let mtime_before = fs::metadata(&marker).unwrap().modified().unwrap();
-        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-aaaa-76b0-8410-2e073b38a2c1")
-            .unwrap();
+        bind_marker_in_state_dir(
+            &dir,
+            AgentKind::Codex,
+            "019e2001-aaaa-76b0-8410-2e073b38a2c1",
+        )
+        .unwrap();
         assert_eq!(
             fs::metadata(&marker).unwrap().modified().unwrap(),
             mtime_before,
             "same-uuid rebind must not rewrite the marker"
         );
 
-        bind_marker_in_state_dir(&dir, AgentKind::Codex, "019e2001-bbbb-76b0-8410-2e073b38a2c2")
-            .unwrap();
+        bind_marker_in_state_dir(
+            &dir,
+            AgentKind::Codex,
+            "019e2001-bbbb-76b0-8410-2e073b38a2c2",
+        )
+        .unwrap();
         assert_eq!(
             read_trimmed(&marker).as_deref(),
             Some("019e2001-bbbb-76b0-8410-2e073b38a2c2"),

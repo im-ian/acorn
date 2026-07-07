@@ -13,6 +13,11 @@ import {
   type HotkeyId,
 } from "./hotkeys";
 import { isLanguage, type Language } from "./i18n";
+import {
+  AGENT_PROVIDER_ORDER,
+  getAgentProviderDefinition,
+  isSessionAgentProvider,
+} from "./agentProviderRegistry";
 
 const STORAGE_KEY = "acorn:settings:v1";
 
@@ -41,23 +46,14 @@ export const AGENT_OPTIONS: ReadonlyArray<{
   label: string;
   /** One-shot invocation hint shown in Settings. */
   oneshotHint: string;
-}> = [
-  {
-    value: "claude",
-    label: "Claude Code",
-    oneshotHint: "claude -p --output-format text",
-  },
-  {
-    value: "codex",
-    label: "Codex",
-    oneshotHint: "codex exec --skip-git-repo-check",
-  },
-  {
-    value: "antigravity",
-    label: "Antigravity",
-    oneshotHint: "agy -p <prompt>",
-  },
-];
+}> = AGENT_PROVIDER_ORDER.map((value) => {
+  const definition = getAgentProviderDefinition(value);
+  return {
+    value,
+    label: definition.agentOptionLabel,
+    oneshotHint: definition.oneshotHint,
+  };
+});
 
 const LEGACY_DEFAULT_SESSION_TITLE_PROMPT = `You are naming an Acorn terminal tab from the user's first agent prompt.
 
@@ -465,12 +461,11 @@ export interface AcornSettings {
      */
     cjkCellWidthHeuristic: boolean;
     /**
-     * Cold-boot "Resume previous conversation" modal for claude / codex.
+     * Cold-boot "Resume previous conversation" modal for session agents.
      * On Acorn launch, probes every persisted session for an unfinished
      * agent transcript and pops a one-shot modal when the user focuses
-     * one. Disable to suppress the modal entirely (the underlying
-     * `claude.id` / `codex.id` files still get written by the persister
-     * for future debugging).
+     * one. Disable to suppress the modal entirely; marker files still get
+     * written by the persister for future debugging.
      */
     resumeModal: boolean;
     /**
@@ -592,12 +587,6 @@ export const DEFAULT_SETTINGS: AcornSettings = {
 
 const VALID_WEIGHTS = new Set<TerminalFontWeight>([
   100, 200, 300, 400, 500, 600, 700, 800, 900,
-]);
-
-const VALID_AGENTS = new Set<AgentProvider>([
-  "claude",
-  "antigravity",
-  "codex",
 ]);
 
 const VALID_PR_INTERVALS = new Set<number>(
@@ -792,7 +781,7 @@ function normalizeSelectedAgent(
   if (v === "gemini") return "antigravity";
   if (
     typeof v === "string" &&
-    (VALID_AGENTS.has(v as AgentProvider) || v === "custom")
+    (isSessionAgentProvider(v) || v === "custom")
   ) {
     return v as SelectedAgent;
   }

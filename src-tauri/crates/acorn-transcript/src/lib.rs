@@ -39,9 +39,17 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
+use acorn_agent::AgentKind;
 use chrono::{Datelike, Local, TimeZone, Utc};
 use parking_lot::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
+
+mod line;
+
+pub use line::{
+    assistant_message_text, collapse_preview, latest_turn_state, parse_transcript_line,
+    parse_transcript_value, read_tail, ParsedTranscriptLine, TailRead, TranscriptRole, TurnState,
+};
 
 // Maximum age (mtime → now) of a transcript that will be paired with
 // a live agent process. Generous so an idle agent waiting on user
@@ -93,13 +101,6 @@ fn scan_cache() -> &'static Mutex<Option<ScanCache>> {
 fn owner_scan_cache() -> &'static Mutex<Option<ScanCache>> {
     static CACHE: OnceLock<Mutex<Option<ScanCache>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Antigravity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

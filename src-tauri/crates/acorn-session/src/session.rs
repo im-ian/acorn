@@ -1,3 +1,4 @@
+pub use acorn_agent::AgentKind as SessionAgentProvider;
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, DashSet};
 use serde::{Deserialize, Serialize};
@@ -207,28 +208,6 @@ pub enum SessionTitleSource {
 
 fn default_title_source_for_existing_sessions() -> SessionTitleSource {
     SessionTitleSource::Manual
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SessionAgentProvider {
-    Claude,
-    Codex,
-    Antigravity,
-}
-
-impl SessionAgentProvider {
-    pub fn supports_hooks(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
-    }
-
-    pub fn hook_provider_env_value(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-            Self::Antigravity => "antigravity",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -973,6 +952,18 @@ mod tests {
         assert!(SessionAgentProvider::Claude.supports_hooks());
         assert!(SessionAgentProvider::Codex.supports_hooks());
         assert!(SessionAgentProvider::Antigravity.supports_hooks());
+        assert_eq!(
+            serde_json::to_string(&SessionAgentProvider::Claude).unwrap(),
+            "\"claude\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SessionAgentProvider::Codex).unwrap(),
+            "\"codex\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SessionAgentProvider::Antigravity).unwrap(),
+            "\"antigravity\""
+        );
         assert_eq!(
             SessionAgentProvider::Claude.hook_provider_env_value(),
             "claude"

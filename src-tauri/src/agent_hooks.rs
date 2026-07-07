@@ -65,7 +65,7 @@ pub fn apply_agent_hook_event(
 
     // Mark the hook channel live so the transcript-tail status poll defers
     // turn-boundary classification to these events instead of clobbering a
-    // just-set resting status (Completed/NeedsInput) back to Running on its
+    // just-set resting status (Ready/WaitingForInput) back to Working on its
     // next tick. See `poll_defers_to_hook` in `commands`.
     sessions.mark_hook_active(&event.session_id);
 

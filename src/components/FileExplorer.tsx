@@ -30,6 +30,11 @@ import {
 } from "lucide-react";
 import { api, type FsEntry, FS_CHANGED_EVENT } from "../lib/api";
 import type { FsChangePayload, FsGitStatus, FsGitStatusEntry } from "../lib/api";
+import {
+  buildAgentContextMenuItems,
+  createEmptySessionAgentDetection,
+  hasDetectedAgent,
+} from "../lib/agentContextMenu";
 import { cn } from "../lib/cn";
 import { planGitRefresh } from "../lib/git-refresh-scheduler";
 import type { TranslationKey, Translator } from "../lib/i18n";
@@ -52,6 +57,7 @@ import {
   scopeWithProjectRootLaunch,
 } from "../lib/sessionCreation";
 import { findProjectFolderById } from "../lib/projectFolders";
+import type { SessionAgentDetection } from "../lib/types";
 
 const SHOW_HIDDEN_KEY = "acorn:fs-show-hidden";
 const RESPECT_GITIGNORE_KEY = "acorn:fs-respect-gitignore";
@@ -341,11 +347,9 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   // Which agent (if any) is currently running in the focused session.
   // Drives the "Attach to Conversation" context-menu entries — null
   // values mean no live process found for that agent kind.
-  const [agent, setAgent] = useState<{
-    claude: string | null;
-    codex: string | null;
-    antigravity: string | null;
-  }>({ claude: null, codex: null, antigravity: null });
+  const [agent, setAgent] = useState<SessionAgentDetection>(
+    createEmptySessionAgentDetection(),
+  );
   const gitStatsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gitStatusRef = useRef<Record<string, FsGitStatusEntry>>({});
   const gitHugeRef = useRef(false);
@@ -598,7 +602,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
         lastSyncedSessionId = sid;
         setActiveSessionIdLocal(sid);
         if (!sid) {
-          setAgent({ claude: null, codex: null, antigravity: null });
+          setAgent(createEmptySessionAgentDetection());
         }
       };
       sync(useAppStore.getState().activeSessionId);
@@ -615,10 +619,10 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
   useEffect(() => {
     if (!menu) return;
     if (!activeSessionId) {
-      setAgent({ claude: null, codex: null, antigravity: null });
+      setAgent(createEmptySessionAgentDetection());
       return;
     }
-    setAgent({ claude: null, codex: null, antigravity: null });
+    setAgent(createEmptySessionAgentDetection());
     let cancelled = false;
     api
       .detectSessionAgent(activeSessionId)
@@ -627,7 +631,7 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
       })
       .catch(() => {
         if (!cancelled) {
-          setAgent({ claude: null, codex: null, antigravity: null });
+          setAgent(createEmptySessionAgentDetection());
         }
       });
     return () => {
@@ -1194,53 +1198,26 @@ export function FileExplorer({ rootPath }: FileExplorerProps) {
     }
 
     // Group 2: Agent attach (only when an agent is live)
-    if (entry && (agent.claude || agent.codex || agent.antigravity)) {
+    const agentAttachItems = entry
+      ? buildAgentContextMenuItems({
+          mode: "attach",
+          surface: "fileExplorer",
+          detection: hasDetectedAgent(agent) ? agent : null,
+          t,
+          onAttach: () => {
+            void writeToActiveSession(
+              activeSessionId,
+              ` @${rel} `,
+              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
+            ).catch(
+              (e) => setError(e instanceof Error ? e.message : String(e)),
+            );
+          },
+        })
+      : [];
+    if (agentAttachItems.length > 0) {
       items.push({ type: "separator" });
-      if (agent.claude) {
-        items.push({
-          label: fileExplorerText(t, "fileExplorer.menu.attachToClaude"),
-          icon: <MessageSquarePlus size={13} />,
-          onClick: () => {
-            void writeToActiveSession(
-              activeSessionId,
-              ` @${rel} `,
-              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
-            ).catch(
-              (e) => setError(e instanceof Error ? e.message : String(e)),
-            );
-          },
-        });
-      }
-      if (agent.codex) {
-        items.push({
-          label: fileExplorerText(t, "fileExplorer.menu.attachToCodex"),
-          icon: <MessageSquarePlus size={13} />,
-          onClick: () => {
-            void writeToActiveSession(
-              activeSessionId,
-              ` @${rel} `,
-              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
-            ).catch(
-              (e) => setError(e instanceof Error ? e.message : String(e)),
-            );
-          },
-        });
-      }
-      if (agent.antigravity) {
-        items.push({
-          label: fileExplorerText(t, "fileExplorer.menu.attachToAntigravity"),
-          icon: <MessageSquarePlus size={13} />,
-          onClick: () => {
-            void writeToActiveSession(
-              activeSessionId,
-              ` @${rel} `,
-              fileExplorerText(t, "fileExplorer.errors.noActiveSession"),
-            ).catch(
-              (e) => setError(e instanceof Error ? e.message : String(e)),
-            );
-          },
-        });
-      }
+      items.push(...agentAttachItems);
     }
 
     // Group 3: Path copy

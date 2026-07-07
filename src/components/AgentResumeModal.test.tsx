@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ptyWrite: vi.fn<(sessionId: string, data: string) => Promise<void>>(),
-  acknowledgeClaudeResume: vi.fn<(sessionId: string) => Promise<void>>(),
-  acknowledgeCodexResume: vi.fn<(sessionId: string) => Promise<void>>(),
+  acknowledgeAgentResume: vi.fn<
+    (provider: AgentKind, sessionId: string) => Promise<void>
+  >(),
   clipboardWriteText: vi.fn<(text: string) => Promise<void>>(),
   toastShow: vi.fn<(msg: string) => void>(),
 }));
@@ -13,8 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/api", () => ({
   api: {
     ptyWrite: mocks.ptyWrite,
-    acknowledgeClaudeResume: mocks.acknowledgeClaudeResume,
-    acknowledgeCodexResume: mocks.acknowledgeCodexResume,
+    acknowledgeAgentResume: mocks.acknowledgeAgentResume,
   },
 }));
 
@@ -39,8 +39,7 @@ describe("AgentResumeModal", () => {
 
   beforeEach(() => {
     mocks.ptyWrite.mockResolvedValue();
-    mocks.acknowledgeClaudeResume.mockResolvedValue();
-    mocks.acknowledgeCodexResume.mockResolvedValue();
+    mocks.acknowledgeAgentResume.mockResolvedValue();
     mocks.clipboardWriteText.mockResolvedValue();
     mocks.toastShow.mockClear();
     Object.assign(navigator, {
@@ -102,8 +101,7 @@ describe("AgentResumeModal", () => {
     // Resume must not ack — the user picked the conversation back up,
     // so subsequent exits should re-offer the modal at the next cold
     // boot.
-    expect(mocks.acknowledgeClaudeResume).not.toHaveBeenCalled();
-    expect(mocks.acknowledgeCodexResume).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
   });
 
   it("Resume on a codex candidate dispatches `codex resume <uuid>` to the PTY without ack", () => {
@@ -114,8 +112,7 @@ describe("AgentResumeModal", () => {
       `codex resume ${CANDIDATE.uuid}\r`,
     );
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(mocks.acknowledgeCodexResume).not.toHaveBeenCalled();
-    expect(mocks.acknowledgeClaudeResume).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeAgentResume).not.toHaveBeenCalled();
   });
 
   it("Copy ID writes the UUID to the clipboard and toasts", async () => {
@@ -123,7 +120,10 @@ describe("AgentResumeModal", () => {
     clickButton("Copy ID");
     expect(mocks.clipboardWriteText).toHaveBeenCalledWith(CANDIDATE.uuid);
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(mocks.acknowledgeClaudeResume).toHaveBeenCalledWith(SESSION_ID);
+    expect(mocks.acknowledgeAgentResume).toHaveBeenCalledWith(
+      "claude",
+      SESSION_ID,
+    );
     // Allow the clipboard promise to flush before checking the toast.
     await Promise.resolve();
     await Promise.resolve();
@@ -137,7 +137,10 @@ describe("AgentResumeModal", () => {
     const payload = mocks.ptyWrite.mock.calls[0][1];
     expect(payload).toBe(`# claude --resume ${CANDIDATE.uuid}\r`);
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(mocks.acknowledgeClaudeResume).toHaveBeenCalledWith(SESSION_ID);
+    expect(mocks.acknowledgeAgentResume).toHaveBeenCalledWith(
+      "claude",
+      SESSION_ID,
+    );
   });
 
   it("Cancel on a codex candidate writes a single `#`-commented `codex resume` command", () => {
@@ -146,6 +149,9 @@ describe("AgentResumeModal", () => {
     const payload = mocks.ptyWrite.mock.calls[0][1];
     expect(payload).toBe(`# codex resume ${CANDIDATE.uuid}\r`);
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(mocks.acknowledgeCodexResume).toHaveBeenCalledWith(SESSION_ID);
+    expect(mocks.acknowledgeAgentResume).toHaveBeenCalledWith(
+      "codex",
+      SESSION_ID,
+    );
   });
 });

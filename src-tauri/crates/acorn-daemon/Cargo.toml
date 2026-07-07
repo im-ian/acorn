@@ -8,6 +8,7 @@ publish = false
 name = "acorn_daemon"
 
 [dependencies]
+acorn-agent = { path = "../acorn-agent" }
 acorn-paths = { path = "../acorn-paths" }
 serde = { workspace = true }
 serde_json = { workspace = true }
