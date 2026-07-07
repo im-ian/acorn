@@ -159,17 +159,10 @@ interface WorkspaceMainProps {
 export function WorkspaceMain({ layout, viewMode }: WorkspaceMainProps) {
   const isKanban = viewMode === "kanban";
   const closeTerminalPopup = useAppStore((s) => s.closeTerminalPopup);
-  const activeWorkspaceId = useAppStore(
-    (s) => s.activeProjectFolderId ?? s.activeProject,
-  );
 
   useEffect(() => {
     if (!isKanban) closeTerminalPopup();
   }, [closeTerminalPopup, isKanban]);
-
-  useEffect(() => {
-    closeTerminalPopup();
-  }, [activeWorkspaceId, closeTerminalPopup]);
 
   return (
     <div className="h-full min-w-0 overflow-hidden" data-workspace-main>
@@ -302,6 +295,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
         (session) => session.id === terminalPopupSessionId,
       )
     ) {
+      closeTerminalPopup();
       return;
     }
     const anchor = document.querySelector<HTMLElement>(
@@ -315,7 +309,7 @@ function KanbanBoard({ projectId }: { projectId: string | null }) {
         ? current
         : { sessionId: terminalPopupSessionId, anchor },
     );
-  }, [terminalPopupSessionId, visibleSessions]);
+  }, [closeTerminalPopup, terminalPopupSessionId, visibleSessions]);
 
   useEffect(() => {
     if (!terminalPopover) return;

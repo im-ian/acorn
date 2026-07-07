@@ -1034,6 +1034,143 @@ test.describe("workspace kanban mode", () => {
     });
   });
 
+  test("opens a terminal popover when selecting a project session from the sidebar in kanban mode", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("alpha", "alpha", "ready"),
+      session("shell", "shell", "working", {
+        branch: "shell",
+      }),
+    ]);
+
+    await page.goto("/");
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+    await expect(page.getByTestId("kanban-terminal-popover")).toHaveCount(0);
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: /shell/ })
+      .click();
+
+    const shellPopover = page.getByTestId("kanban-terminal-popover");
+    await expect(shellPopover).toBeVisible();
+    await expect(
+      shellPopover.getByRole("heading", { name: "shell" }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByTestId("terminal-popover-body")
+        .locator('[data-acorn-terminal-slot="shell"] .acorn-terminal-shell'),
+    ).toBeVisible();
+  });
+
+  test("keeps the sidebar-opened terminal popover when switching kanban workspaces", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { defaultWorkspaceViewMode: "kanban" },
+        }),
+      );
+    });
+    const alpha = project("/tmp/alpha", "alpha", 0);
+    const beta = project("/tmp/beta", "beta", 1);
+    await tauri.respond("list_projects", [alpha, beta]);
+    await tauri.respond("list_sessions", [
+      session("alpha-session", "alpha-session", "ready", {
+        repo_path: "/tmp/alpha",
+        worktree_path: "/tmp/alpha/.worktrees/alpha-session",
+        branch: "feat/alpha",
+      }),
+      session("beta-session", "beta-session", "working", {
+        repo_path: "/tmp/beta",
+        worktree_path: "/tmp/beta/.worktrees/beta-session",
+        branch: "feat/beta",
+      }),
+    ]);
+
+    await page.goto("/");
+
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "Project beta" })
+      .click();
+
+    const betaPopover = page.getByTestId("kanban-terminal-popover");
+    await expect(betaPopover).toBeVisible();
+    await expect(
+      betaPopover.getByRole("heading", { name: "beta-session" }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByTestId("terminal-popover-body")
+        .locator(
+          '[data-acorn-terminal-slot="beta-session"] .acorn-terminal-shell',
+        ),
+    ).toBeVisible();
+  });
+
+  test("opens a terminal popover when selecting an instant session from the sidebar in kanban mode", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { defaultWorkspaceViewMode: "kanban" },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("instant-shell", "instant-shell", "ready", {
+        repo_path: "/Users/me",
+        worktree_path: "/Users/me",
+        branch: "home",
+        project_scoped: false,
+      }),
+    ]);
+
+    await page.goto("/");
+
+    await expect(page.getByTestId("workspace-view-status")).toContainText(
+      "Kanban",
+    );
+    await expect(page.getByTestId("kanban-terminal-popover")).toHaveCount(0);
+
+    await page
+      .locator('[data-local-terminal-area="true"]')
+      .getByRole("button", { name: /instant-shell/ })
+      .click();
+
+    const instantPopover = page.getByTestId("kanban-terminal-popover");
+    await expect(instantPopover).toBeVisible();
+    await expect(
+      instantPopover.getByRole("heading", { name: "instant-shell" }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByTestId("terminal-popover-body")
+        .locator(
+          '[data-acorn-terminal-slot="instant-shell"] .acorn-terminal-shell',
+        ),
+    ).toBeVisible();
+  });
+
   test("opens the new terminal popover from the kanban toolbar when enabled", async ({
     page,
     tauri,
