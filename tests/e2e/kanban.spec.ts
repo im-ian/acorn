@@ -903,6 +903,87 @@ test.describe("workspace kanban mode", () => {
     await expect(page.getByTestId("workspace-kanban")).toBeVisible();
   });
 
+  test("restores kanban or pane mode between project and instant sessions", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("project-session", "project", "ready", {
+        project_scoped: true,
+        worktree_path: "/tmp/demo",
+      }),
+      session("instant-session", "instant", "ready", {
+        project_scoped: false,
+        worktree_path: "/tmp/demo",
+      }),
+    ]);
+
+    await page.goto("/");
+
+    const modeSelect = page.getByTestId("workspace-view-status");
+    await page.getByRole("button", { name: "project Close session" }).click();
+    await expect(page.locator("footer")).toContainText("feat/project-session");
+    await expect(modeSelect).toContainText("Panes");
+    await modeSelect.click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+    await expect(modeSelect).toContainText("Kanban");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem("acorn-workspaces");
+          return raw
+            ? JSON.parse(raw).state.workspaces["/tmp/demo"]?.viewMode
+            : null;
+        }),
+      )
+      .toBe("kanban");
+
+    const instantArea = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    const instantSession = instantArea.getByRole("button", {
+      name: /^instant\b/,
+    });
+    const clickInstantSession = async () => {
+      const box = await instantSession.boundingBox();
+      if (!box) throw new Error("instant session row is not visible");
+      await page.mouse.click(box.x + 20, box.y + box.height / 2);
+    };
+    await clickInstantSession();
+    await expect(page.locator("footer")).toContainText("feat/instant-session");
+    await modeSelect.click();
+    await page.getByRole("option", { name: "Panes" }).click();
+    await expect(modeSelect).toContainText("Panes");
+    await expect(page.getByTestId("workspace-kanban")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem("acorn-workspaces");
+          const workspace = raw
+            ? JSON.parse(raw).state.workspaces["/tmp/demo"]
+            : null;
+          return workspace
+            ? {
+                viewMode: workspace.viewMode,
+                localViewMode: workspace.localViewMode,
+              }
+            : null;
+        }),
+      )
+      .toEqual({ viewMode: "kanban", localViewMode: "panes" });
+
+    await page.getByRole("button", { name: "project Close session" }).click();
+    await expect(page.locator("footer")).toContainText("feat/project-session");
+    await expect(modeSelect).toContainText("Kanban");
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+
+    await clickInstantSession();
+    await expect(page.locator("footer")).toContainText("feat/instant-session");
+    await expect(modeSelect).toContainText("Panes");
+    await expect(page.getByTestId("workspace-kanban")).toHaveCount(0);
+  });
+
   test("creates regular and worktree sessions from the kanban toolbar", async ({
     page,
     tauri,
