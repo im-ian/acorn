@@ -256,6 +256,7 @@ export function Sidebar() {
   const activeProjectFolderId = useAppStore((s) => s.activeProjectFolderId);
   const workspaceViewMode = useAppStore((s) => s.workspaceViewMode);
   const selectSession = useAppStore((s) => s.selectSession);
+  const openTerminalPopup = useAppStore((s) => s.openTerminalPopup);
   const focusLocalSessions = useAppStore((s) => s.focusLocalSessions);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
   const setActiveProjectFolder = useAppStore((s) => s.setActiveProjectFolder);
@@ -391,6 +392,13 @@ export function Sidebar() {
     });
   }
 
+  function selectSidebarSession(sessionId: string) {
+    selectSession(sessionId);
+    if (useAppStore.getState().workspaceViewMode === "kanban") {
+      openTerminalPopup(sessionId);
+    }
+  }
+
   function applyClickPlan(
     plan: ProjectClickPlan,
     project: ProjectFolderProjectGroup,
@@ -403,7 +411,7 @@ export function Sidebar() {
     if (plan.shouldActivate) {
       setActiveProject(project.repoPath);
       const target = pickSessionToActivate(project.sessions, activeSessionId);
-      if (target) selectSession(target);
+      if (target) selectSidebarSession(target);
     }
   }
 
@@ -1213,12 +1221,12 @@ export function Sidebar() {
                             project.sessions,
                             activeSessionId,
                           );
-                          if (target) selectSession(target);
+                          if (target) selectSidebarSession(target);
                         }}
                         onSelectFolder={setActiveProjectFolder}
                         onSelectSession={(folderId, sessionId) => {
                           setActiveProjectFolder(folderId);
-                          selectSession(sessionId);
+                          selectSidebarSession(sessionId);
                         }}
                         onRemoveSession={(s) => requestRemoveSession(s.id)}
                         onAddSession={(
@@ -1286,7 +1294,7 @@ export function Sidebar() {
               onFocusArea={focusLocalSessions}
               onSelectFolder={setActiveProjectFolder}
               onToggleFolder={toggleProjectFolder}
-              onSelectSession={selectSession}
+              onSelectSession={selectSidebarSession}
               onRemoveSession={(s) => requestRemoveSession(s.id)}
               onRenameFolder={renameProjectFolder}
               onRemoveFolder={requestRemoveProjectFolder}
