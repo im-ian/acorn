@@ -594,6 +594,148 @@ export const DEFAULT_SETTINGS: AcornSettings = {
   },
 };
 
+export const TERMINAL_FONT_PRESET_FIELDS = [
+  "fontFamily",
+  "fontSize",
+  "letterSpacing",
+  "fontSmoothing",
+  "fontWeight",
+  "fontWeightBold",
+  "lineHeight",
+] as const;
+
+export const TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS = [
+  "cjkCellWidthHeuristic",
+] as const;
+
+type TerminalFontPresetField = (typeof TERMINAL_FONT_PRESET_FIELDS)[number];
+type TerminalFontPresetExperimentField =
+  (typeof TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS)[number];
+
+export type TerminalFontPresetSettings = Pick<
+  AcornSettings["terminal"],
+  TerminalFontPresetField
+>;
+export type TerminalFontPresetExperimentSettings = Pick<
+  AcornSettings["experiments"],
+  TerminalFontPresetExperimentField
+>;
+
+export type TerminalFontPresetId =
+  | "default"
+  | "compact"
+  | "comfortable"
+  | "cjk";
+
+export interface TerminalFontPreset {
+  id: TerminalFontPresetId;
+  settings: TerminalFontPresetSettings;
+  experiments: TerminalFontPresetExperimentSettings;
+}
+
+export const TERMINAL_FONT_PRESETS = [
+  {
+    id: "default",
+    settings: {
+      fontFamily: DEFAULT_SETTINGS.terminal.fontFamily,
+      fontSize: DEFAULT_SETTINGS.terminal.fontSize,
+      letterSpacing: DEFAULT_SETTINGS.terminal.letterSpacing,
+      fontSmoothing: DEFAULT_SETTINGS.terminal.fontSmoothing,
+      fontWeight: DEFAULT_SETTINGS.terminal.fontWeight,
+      fontWeightBold: DEFAULT_SETTINGS.terminal.fontWeightBold,
+      lineHeight: DEFAULT_SETTINGS.terminal.lineHeight,
+    },
+    experiments: {
+      cjkCellWidthHeuristic:
+        DEFAULT_SETTINGS.experiments.cjkCellWidthHeuristic,
+    },
+  },
+  {
+    id: "compact",
+    settings: {
+      fontFamily: fontStackFromSlots(
+        ["JetBrains Mono", "Fira Code", "Menlo"],
+        "monospace",
+      ),
+      fontSize: 11,
+      letterSpacing: -0.25,
+      fontSmoothing: "grayscale",
+      fontWeight: 400,
+      fontWeightBold: 700,
+      lineHeight: 1.0,
+    },
+    experiments: {
+      cjkCellWidthHeuristic: false,
+    },
+  },
+  {
+    id: "comfortable",
+    settings: {
+      fontFamily: fontStackFromSlots(
+        ["JetBrains Mono", "Fira Code", "Menlo"],
+        "monospace",
+      ),
+      fontSize: 13.25,
+      letterSpacing: 0.25,
+      fontSmoothing: "grayscale",
+      fontWeight: 400,
+      fontWeightBold: 700,
+      lineHeight: 1.2,
+    },
+    experiments: {
+      cjkCellWidthHeuristic: false,
+    },
+  },
+  {
+    id: "cjk",
+    settings: {
+      fontFamily: fontStackFromSlots(
+        ["D2Coding", "Sarasa Mono K", "JetBrains Mono"],
+        "monospace",
+      ),
+      fontSize: 13,
+      letterSpacing: 0,
+      fontSmoothing: "grayscale",
+      fontWeight: 400,
+      fontWeightBold: 700,
+      lineHeight: 1.15,
+    },
+    experiments: {
+      cjkCellWidthHeuristic: true,
+    },
+  },
+] as const satisfies ReadonlyArray<TerminalFontPreset>;
+
+export function terminalFontPresetById(
+  id: string,
+): TerminalFontPreset | null {
+  return TERMINAL_FONT_PRESETS.find((preset) => preset.id === id) ?? null;
+}
+
+function terminalFontPresetMatches(
+  settings: Pick<AcornSettings, "terminal" | "experiments">,
+  preset: TerminalFontPreset,
+): boolean {
+  return (
+    TERMINAL_FONT_PRESET_FIELDS.every((field) =>
+      Object.is(settings.terminal[field], preset.settings[field]),
+    ) &&
+    TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS.every((field) =>
+      Object.is(settings.experiments[field], preset.experiments[field]),
+    )
+  );
+}
+
+export function matchingTerminalFontPresetId(
+  settings: Pick<AcornSettings, "terminal" | "experiments">,
+): TerminalFontPresetId | null {
+  return (
+    TERMINAL_FONT_PRESETS.find((preset) =>
+      terminalFontPresetMatches(settings, preset),
+    )?.id ?? null
+  );
+}
+
 const VALID_WEIGHTS = new Set<TerminalFontWeight>([
   100, 200, 300, 400, 500, 600, 700, 800, 900,
 ]);

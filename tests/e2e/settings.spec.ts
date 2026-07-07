@@ -112,6 +112,60 @@ test.describe("settings modal", () => {
       .toBe("subpixel");
   });
 
+  test("applies terminal font presets and marks manual font changes as custom", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await pressHotkey(page, { mod: true, key: "," });
+
+    const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
+    await modal.getByRole("button", { name: /^(Terminal|터미널)$/ }).click();
+
+    const presetSelect = modal.getByRole("combobox", {
+      name: /^(Font preset|글꼴 프리셋)$/,
+    });
+    await expect(presetSelect).toContainText("Acorn default");
+
+    await presetSelect.click();
+    await page.getByRole("option", { name: /CJK mono/ }).click();
+
+    await expect(presetSelect).toContainText("CJK mono");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          const settings = raw ? JSON.parse(raw) : null;
+          const terminal = settings?.terminal ?? null;
+          return {
+            fontFamily: terminal?.fontFamily ?? null,
+            fontSize: terminal?.fontSize ?? null,
+            letterSpacing: terminal?.letterSpacing ?? null,
+            lineHeight: terminal?.lineHeight ?? null,
+            cjkCellWidthHeuristic:
+              settings?.experiments?.cjkCellWidthHeuristic ?? null,
+          };
+        }),
+      )
+      .toEqual({
+        fontFamily: 'D2Coding, "Sarasa Mono K", "JetBrains Mono", monospace',
+        fontSize: 13,
+        letterSpacing: 0,
+        lineHeight: 1.15,
+        cjkCellWidthHeuristic: true,
+      });
+
+    const fontSizeField = modal
+      .getByText("Font size", { exact: true })
+      .locator("..");
+    const fontSizeInput = fontSizeField.getByRole("textbox", {
+      name: /^(Value|값)$/,
+    });
+    await fontSizeInput.fill("14");
+    await fontSizeInput.press("Enter");
+
+    await expect(presetSelect).toContainText("Custom");
+  });
+
   test("changes kanban terminal popover settings and persists them", async ({
     page,
   }) => {
