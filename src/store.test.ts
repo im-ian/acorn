@@ -551,6 +551,28 @@ describe("focusLocalSessions", () => {
     expect(useAppStore.getState().activeProject).toBeNull();
     expect(useAppStore.getState().activeSessionId).toBeNull();
   });
+
+  it("can switch the empty local area out of kanban mode", async () => {
+    useSettings.setState({
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        interface: {
+          ...DEFAULT_SETTINGS.interface,
+          defaultWorkspaceViewMode: "kanban",
+        },
+      },
+    });
+    await seed([project(REPO_A, 0)], [session("a1", REPO_A)]);
+
+    useAppStore.getState().focusLocalSessions();
+    expect(useAppStore.getState().activeProject).toBeNull();
+    expect(useAppStore.getState().workspaceViewMode).toBe("kanban");
+
+    useAppStore.getState().setWorkspaceViewMode("panes");
+
+    expect(useAppStore.getState().workspaceViewMode).toBe("panes");
+    expect(useAppStore.getState().workspaces[REPO_A].viewMode).toBe("kanban");
+  });
 });
 
 describe("local workspaces", () => {
