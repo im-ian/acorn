@@ -62,11 +62,13 @@ import {
   NOTIFICATION_HISTORY_LIMIT_MAX,
   NOTIFICATION_HISTORY_LIMIT_MIN,
   PR_REFRESH_INTERVAL_OPTIONS,
+  matchingTerminalFontPresetId,
   resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   SESSION_TITLE_PROMPT_PREVIEW_MESSAGE,
   SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_OPTIONS,
+  TERMINAL_FONT_PRESETS,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
@@ -89,6 +91,7 @@ import {
   type ToastPosition,
   TERMINAL_FONT_SMOOTHING_VALUES,
   TERMINAL_FONT_WEIGHTS,
+  terminalFontPresetById,
   useSettings,
 } from "../lib/settings";
 import {
@@ -564,10 +567,51 @@ function terminalFontSmoothingLabel(
 function TerminalSettings() {
   const settings = useSettings((s) => s.settings);
   const patchTerminal = useSettings((s) => s.patchTerminal);
+  const patchExperiments = useSettings((s) => s.patchExperiments);
   const t = useTranslation();
+  const activeFontPresetId = matchingTerminalFontPresetId(settings);
+  const fontPresetOptions: SelectItem[] = [
+    ...(activeFontPresetId === null
+      ? [
+          {
+            value: "custom",
+            label: st(t, "settings.terminal.fontPreset.custom"),
+            disabled: true,
+          },
+        ]
+      : []),
+    ...TERMINAL_FONT_PRESETS.map((preset) => ({
+      value: preset.id,
+      label: st(
+        t,
+        `settings.terminal.fontPreset.options.${preset.id}.label` as TranslationKey,
+      ),
+      description: st(
+        t,
+        `settings.terminal.fontPreset.options.${preset.id}.description` as TranslationKey,
+      ),
+    })),
+  ];
 
   return (
     <section className="space-y-4">
+      <Field
+        label={st(t, "settings.terminal.fontPreset.label")}
+        hint={st(t, "settings.terminal.fontPreset.hint")}
+      >
+        <Select
+          value={activeFontPresetId ?? "custom"}
+          onValueChange={(presetId) => {
+            const preset = terminalFontPresetById(presetId);
+            if (!preset) return;
+            patchTerminal(preset.settings);
+            patchExperiments(preset.experiments);
+          }}
+          options={fontPresetOptions}
+          className="min-w-[14rem]"
+          aria-label={st(t, "settings.terminal.fontPreset.label")}
+        />
+      </Field>
       <Field
         label={st(t, "settings.terminal.fontFamily.label")}
         hint={st(t, "settings.terminal.fontFamily.hint")}

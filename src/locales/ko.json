@@ -116,6 +116,29 @@
       }
     },
     "terminal": {
+      "fontPreset": {
+        "label": "글꼴 프리셋",
+        "hint": "서체 목록, 크기, 간격, 안티앨리어싱, 두께, 줄 높이를 함께 적용합니다.",
+        "custom": "사용자 지정",
+        "options": {
+          "default": {
+            "label": "Acorn 기본값",
+            "description": "JetBrains Mono 스택을 12px로 맞춘 균형 잡힌 설정입니다."
+          },
+          "compact": {
+            "label": "조밀하게",
+            "description": "더 작은 글꼴과 촘촘한 가로 간격을 사용합니다."
+          },
+          "comfortable": {
+            "label": "넓게",
+            "description": "더 큰 글꼴과 여유 있는 행/셀 간격을 사용합니다."
+          },
+          "cjk": {
+            "label": "CJK 고정폭",
+            "description": "한국어와 CJK 글리프에 맞춘 D2Coding / Sarasa 스택입니다."
+          }
+        }
+      },
       "fontFamily": {
         "label": "글꼴 패밀리",
         "hint": "쉼표로 구분한 글꼴 목록입니다. 먼저 해석되는 글꼴이 사용됩니다."

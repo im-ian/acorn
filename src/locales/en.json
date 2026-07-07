@@ -116,6 +116,29 @@
       }
     },
     "terminal": {
+      "fontPreset": {
+        "label": "Font preset",
+        "hint": "Applies the family stack, size, spacing, anti-aliasing, weights, and line height together.",
+        "custom": "Custom",
+        "options": {
+          "default": {
+            "label": "Acorn default",
+            "description": "Balanced JetBrains Mono stack at 12px."
+          },
+          "compact": {
+            "label": "Compact",
+            "description": "Smaller type with tighter horizontal spacing."
+          },
+          "comfortable": {
+            "label": "Comfortable",
+            "description": "Larger type with more row and cell spacing."
+          },
+          "cjk": {
+            "label": "CJK mono",
+            "description": "D2Coding / Sarasa stack tuned for Korean and CJK glyphs."
+          }
+        }
+      },
       "fontFamily": {
         "label": "Font family",
         "hint": "Comma-separated stack. First family that resolves wins."

@@ -7,6 +7,9 @@ import {
   MOUNTED_TERMINAL_LIMIT_MAX,
   MOUNTED_TERMINAL_LIMIT_MIN,
   NOTIFICATION_HISTORY_LIMIT_MAX,
+  TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS,
+  TERMINAL_FONT_PRESET_FIELDS,
+  TERMINAL_FONT_PRESETS,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_STEP,
@@ -17,10 +20,12 @@ import {
   TERMINAL_LINE_HEIGHT_MAX,
   TERMINAL_LINE_HEIGHT_MIN,
   TERMINAL_LINE_HEIGHT_STEP,
+  matchingTerminalFontPresetId,
   resolveAiCommitRequest,
   resolveAiExecutionRequest,
   resolveSessionTitlePrompt,
   SESSION_TITLE_PROMPT_MAX_CHARS,
+  terminalFontPresetById,
 } from "./settings";
 import { DEFAULT_HOTKEYS } from "./hotkeys";
 
@@ -398,6 +403,141 @@ describe("terminal.fontSmoothing settings", () => {
       fontSmoothing: invalidFontSmoothing,
     });
     expect(useSettings.getState().settings.terminal.fontSmoothing).toBe("none");
+  });
+});
+
+describe("terminal font presets", () => {
+  const STORAGE_KEY = "acorn:settings:v1";
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return storage.size;
+        },
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        key: (index: number) => Array.from(storage.keys())[index] ?? null,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      } satisfies Storage,
+    });
+  });
+
+  it("matches the default terminal font settings to the default preset", () => {
+    expect(matchingTerminalFontPresetId(DEFAULT_SETTINGS)).toBe(
+      "default",
+    );
+    expect(terminalFontPresetById("missing")).toBeNull();
+  });
+
+  it("covers every font-related field in each preset", () => {
+    expect(TERMINAL_FONT_PRESET_FIELDS).toEqual([
+      "fontFamily",
+      "fontSize",
+      "letterSpacing",
+      "fontSmoothing",
+      "fontWeight",
+      "fontWeightBold",
+      "lineHeight",
+    ]);
+    expect(TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS).toEqual([
+      "cjkCellWidthHeuristic",
+    ]);
+
+    const expectedFields = [...TERMINAL_FONT_PRESET_FIELDS].sort();
+    const expectedExperimentFields = [
+      ...TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS,
+    ].sort();
+    for (const preset of TERMINAL_FONT_PRESETS) {
+      expect(Object.keys(preset.settings).sort()).toEqual(expectedFields);
+      expect(Object.keys(preset.experiments).sort()).toEqual(
+        expectedExperimentFields,
+      );
+    }
+  });
+
+  it("applies and persists all font-related fields from a preset", async () => {
+    vi.resetModules();
+    const {
+      TERMINAL_FONT_PRESET_EXPERIMENT_FIELDS: experimentFields,
+      TERMINAL_FONT_PRESET_FIELDS: fields,
+      matchingTerminalFontPresetId: matchPreset,
+      terminalFontPresetById: presetById,
+      useSettings,
+    } = await import("./settings");
+
+    const preset = presetById("comfortable");
+    expect(preset).not.toBeNull();
+    if (!preset) return;
+
+    useSettings.getState().patchTerminal(preset.settings);
+    useSettings.getState().patchExperiments(preset.experiments);
+
+    const settings = useSettings.getState().settings;
+    const persisted = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) ?? "{}",
+    );
+
+    expect(matchPreset(settings)).toBe("comfortable");
+    for (const field of fields) {
+      expect(settings.terminal[field]).toBe(preset.settings[field]);
+      expect(persisted.terminal[field]).toBe(preset.settings[field]);
+    }
+    for (const field of experimentFields) {
+      expect(settings.experiments[field]).toBe(preset.experiments[field]);
+      expect(persisted.experiments[field]).toBe(preset.experiments[field]);
+    }
+  });
+
+  it("treats manually changed font settings as custom", () => {
+    expect(
+      matchingTerminalFontPresetId({
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          fontSize: DEFAULT_SETTINGS.terminal.fontSize + 0.25,
+        },
+        experiments: DEFAULT_SETTINGS.experiments,
+      }),
+    ).toBeNull();
+  });
+
+  it("includes the CJK cell-width correction in preset matching", () => {
+    const preset = terminalFontPresetById("cjk");
+    expect(preset).not.toBeNull();
+    if (!preset) return;
+
+    expect(
+      matchingTerminalFontPresetId({
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          ...preset.settings,
+        },
+        experiments: {
+          ...DEFAULT_SETTINGS.experiments,
+          ...preset.experiments,
+        },
+      }),
+    ).toBe("cjk");
+    expect(
+      matchingTerminalFontPresetId({
+        terminal: {
+          ...DEFAULT_SETTINGS.terminal,
+          ...preset.settings,
+        },
+        experiments: {
+          ...DEFAULT_SETTINGS.experiments,
+          cjkCellWidthHeuristic: false,
+        },
+      }),
+    ).toBeNull();
   });
 });
 
