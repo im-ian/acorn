@@ -73,6 +73,9 @@ import {
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
   TERMINAL_LETTER_SPACING_STEP,
+  TERMINAL_LINE_HEIGHT_MAX,
+  TERMINAL_LINE_HEIGHT_MIN,
+  TERMINAL_LINE_HEIGHT_STEP,
   TOAST_POSITION_OPTIONS,
   type KanbanTerminalPopoverDefaultSize,
   type KanbanTerminalPopoverPlacement,
@@ -649,9 +652,9 @@ function TerminalSettings() {
       >
         <Stepper
           value={settings.terminal.lineHeight}
-          min={1.0}
-          max={2.0}
-          step={0.05}
+          min={TERMINAL_LINE_HEIGHT_MIN}
+          max={TERMINAL_LINE_HEIGHT_MAX}
+          step={TERMINAL_LINE_HEIGHT_STEP}
           format={(n) => n.toFixed(2)}
           onChange={(n) => patchTerminal({ lineHeight: n })}
         />
