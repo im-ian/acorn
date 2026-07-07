@@ -42,6 +42,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
 
+const MAIN_WINDOW_LABEL: &str = "main";
+
 #[derive(Clone, Copy)]
 struct NonPanickingStderr;
 
@@ -114,6 +116,49 @@ fn normalize_loaded_session(mut session: acorn_session::Session) -> (acorn_sessi
         session.repo_path = repo_path;
     }
     (session, changed)
+}
+
+fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    if let Err(err) = app.show() {
+        tracing::warn!(error = %err, "failed to show application");
+    }
+
+    let window = match app.get_webview_window(MAIN_WINDOW_LABEL) {
+        Some(window) => window,
+        None => {
+            let Some(config) = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == MAIN_WINDOW_LABEL)
+                .or_else(|| app.config().app.windows.first())
+            else {
+                tracing::warn!("failed to recreate main window: no window config");
+                return;
+            };
+            match tauri::WebviewWindowBuilder::from_config(app, config)
+                .and_then(|builder| builder.build())
+            {
+                Ok(window) => window,
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to recreate main window");
+                    return;
+                }
+            }
+        }
+    };
+
+    if let Err(err) = window.unminimize() {
+        tracing::warn!(error = %err, "failed to unminimize main window");
+    }
+    if let Err(err) = window.show() {
+        tracing::warn!(error = %err, "failed to show main window");
+    }
+    if let Err(err) = window.set_focus() {
+        tracing::warn!(error = %err, "failed to focus main window");
+    }
 }
 
 #[cfg(test)]
@@ -191,14 +236,10 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            reveal_main_window(app);
         }));
     }
-    builder
+    builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -304,7 +345,7 @@ pub fn run() {
                 }
                 #[cfg(debug_assertions)]
                 if event.id() == "reload" {
-                    if let Some(window) = handle.get_webview_window("main") {
+                    if let Some(window) = handle.get_webview_window(MAIN_WINDOW_LABEL) {
                         if let Err(err) = window.eval("window.location.reload()") {
                             tracing::warn!("failed to reload webview: {err}");
                         }
@@ -656,7 +697,15 @@ pub fn run() {
             fs_explorer::fs_git_diff_stats,
             fs_explorer::fs_git_diff_lines,
             fs_explorer::fs_watch_set_root,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        ]);
+
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|app, _event| {
+        #[cfg(target_os = "macos")]
+        if matches!(_event, tauri::RunEvent::Reopen { .. }) {
+            reveal_main_window(app);
+        }
+    });
 }
