@@ -518,7 +518,9 @@ describe("SettingsModal font controls", () => {
       await Promise.resolve();
     });
 
-    const fontFamily = document.querySelector<HTMLInputElement>("input");
+    const fontFamily = Array.from(
+      document.querySelectorAll<HTMLInputElement>("input"),
+    ).find((input) => input.value === DEFAULT_SETTINGS.terminal.fontFamily);
     const patchTerminal = useSettings.getState().patchTerminal;
     const bodyText = document.body.textContent ?? "";
 
