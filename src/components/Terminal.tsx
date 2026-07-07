@@ -33,7 +33,6 @@ import {
 import { registerScrollbackFlusher } from "../lib/scrollback-coordinator";
 import {
   patchTerminalCellMeasurements,
-  unpatchTerminalCellMeasurements,
 } from "../lib/terminal-cjk-cell-width-addon";
 import {
   createTerminalRepaintScheduler,
@@ -901,9 +900,13 @@ export function Terminal({
     const fitWithCellMeasurements = () => {
       const cjkEnabled =
         useSettings.getState().settings.experiments.cjkCellWidthHeuristic;
-      if (cjkEnabled) patchTerminalCellMeasurements(term);
+      patchTerminalCellMeasurements(term, {
+        cjkCellWidthHeuristic: cjkEnabled,
+      });
       fitAddon.fit();
-      if (cjkEnabled) patchTerminalCellMeasurements(term);
+      patchTerminalCellMeasurements(term, {
+        cjkCellWidthHeuristic: cjkEnabled,
+      });
     };
     fitTerminalRef.current = fitWithCellMeasurements;
     try {
@@ -1074,11 +1077,9 @@ export function Terminal({
       const cjkNow = state.settings.experiments.cjkCellWidthHeuristic;
       const cjkPrev = prev.settings.experiments.cjkCellWidthHeuristic;
       if (cjkNow !== cjkPrev) {
-        if (cjkNow) {
-          patchTerminalCellMeasurements(term);
-        } else {
-          unpatchTerminalCellMeasurements(term);
-        }
+        patchTerminalCellMeasurements(term, {
+          cjkCellWidthHeuristic: cjkNow,
+        });
       }
       const nextBackground = state.settings.appearance.background;
       const previousBackground = prev.settings.appearance.background;

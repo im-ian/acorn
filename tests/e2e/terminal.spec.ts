@@ -649,6 +649,45 @@ test.describe("terminal: spawn", () => {
       .toBe("subpixel-antialiased");
   });
 
+  test("applies fractional terminal letter spacing to the renderer", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({ terminal: { letterSpacing: -0.25 } }),
+      );
+    });
+    await seedWritableTerminal(tauri);
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /^shell main · Ready$/ })
+      .click();
+    await page.locator(".xterm-helper-textarea").waitFor({ state: "attached" });
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const rowContainer =
+            document.querySelector<HTMLElement>(".xterm-rows");
+          const firstRow =
+            document.querySelector<HTMLElement>(".xterm-rows > div");
+          return {
+            letterSpacing: Number.parseFloat(
+              rowContainer?.style.letterSpacing ?? "",
+            ),
+            firstRowWidth: firstRow?.style.width ?? null,
+          };
+        }),
+      )
+      .toMatchObject({
+        letterSpacing: expect.closeTo(-0.25, 0.05),
+        firstRowWidth: expect.stringMatching(/\.\d+px$/),
+      });
+  });
+
   test("normalizes no-break spaces when pasting shell commands", async ({
     page,
     tauri,
