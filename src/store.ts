@@ -2269,7 +2269,9 @@ export const useAppStore = create<AppStateModel>()(
   setWorkspaceViewMode(mode) {
     set((s) => {
       const workspaceId = activeWorkspaceId(s);
-      if (!s.activeProject || !workspaceId) return s;
+      if (!s.activeProject || !workspaceId) {
+        return s.workspaceViewMode === mode ? s : { workspaceViewMode: mode };
+      }
       const viewScope = workspaceViewScopeForActiveWorkspace(
         s.workspaces,
         workspaceId,

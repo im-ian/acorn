@@ -984,6 +984,55 @@ test.describe("workspace kanban mode", () => {
     await expect(page.getByTestId("workspace-kanban")).toHaveCount(0);
   });
 
+  test("switches mode after focusing the empty instant sessions area", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { defaultWorkspaceViewMode: "kanban" },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("project-session", "project", "ready", {
+        project_scoped: true,
+        worktree_path: "/tmp/demo",
+      }),
+    ]);
+
+    await page.goto("/");
+
+    const modeSelect = page.getByTestId("workspace-view-status");
+    await expect(modeSelect).toContainText("Kanban");
+    await expect(page.getByTestId("workspace-kanban")).toBeVisible();
+
+    const instantArea = page.getByRole("region", {
+      name: "Local terminal sessions",
+    });
+    await instantArea
+      .getByText("Double-click to start an instant session.")
+      .click();
+    await modeSelect.click();
+    await page.getByRole("option", { name: "Panes" }).click();
+
+    await expect(modeSelect).toContainText("Panes");
+    await expect(page.getByTestId("workspace-kanban")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem("acorn-workspaces");
+          return raw
+            ? JSON.parse(raw).state.workspaces["/tmp/demo"]?.viewMode
+            : null;
+        }),
+      )
+      .toBe("kanban");
+  });
+
   test("creates regular and worktree sessions from the kanban toolbar", async ({
     page,
     tauri,
