@@ -1,4 +1,6 @@
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::str;
@@ -13,6 +15,7 @@ use crate::cli_resolver;
 use crate::error::{AppError, AppResult};
 
 const ONESHOT_TIMEOUT: Duration = Duration::from_secs(60);
+const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,6 +201,7 @@ fn run_oneshot_in_dir_cancellable_with_transport(
     }
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
+    isolate_child_process_group(&mut command_builder);
     command_builder
         .args(&command_args)
         .stdin(match prompt_transport {
@@ -269,6 +273,7 @@ where
     }
     let mut command_builder = Command::new(&resolved);
     crate::shell_env::apply_to_command(&mut command_builder);
+    isolate_child_process_group(&mut command_builder);
     command_builder
         .args(&command_args)
         .stdin(match prompt_transport {
@@ -323,6 +328,7 @@ fn wait_with_timeout(
     timeout: Duration,
     cancellation: Option<ChatCancellation>,
 ) -> AppResult<Output> {
+    let child_id = child.id();
     let stdout = child
         .stdout
         .take()
@@ -332,34 +338,55 @@ fn wait_with_timeout(
         .take()
         .ok_or_else(|| AppError::Other(format!("{command} stderr missing")))?;
 
-    let stdout_reader = thread::spawn(move || {
-        let mut reader = stdout;
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).map(|_| buf)
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut reader = stderr;
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).map(|_| buf)
-    });
+    let (pipe_tx, pipe_rx) = mpsc::channel();
+    spawn_pipe_reader(PipeKind::Stdout, stdout, pipe_tx.clone());
+    spawn_pipe_reader(PipeKind::Stderr, stderr, pipe_tx);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
 
     let started = Instant::now();
     let status = if let Some(cancellation) = cancellation {
         cancellation.set_child(child);
         let status = loop {
+            drain_pipe_events(
+                command,
+                &pipe_rx,
+                &mut stdout,
+                &mut stderr,
+                &mut stdout_open,
+                &mut stderr_open,
+            )?;
             if cancellation.is_cancelled() {
+                terminate_child_process_group(child_id);
                 cancellation.kill_and_wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drain_pipe_events_until_closed(
+                    command,
+                    &pipe_rx,
+                    &mut stdout,
+                    &mut stderr,
+                    &mut stdout_open,
+                    &mut stderr_open,
+                    PIPE_DRAIN_TIMEOUT,
+                )?;
                 cancellation.clear_child();
                 return Err(AppError::Other(format!("{command} cancelled")));
             }
             match cancellation.try_wait(command)? {
                 Some(status) => break status,
                 None if started.elapsed() >= timeout => {
+                    terminate_child_process_group(child_id);
                     cancellation.kill_and_wait();
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
+                    drain_pipe_events_until_closed(
+                        command,
+                        &pipe_rx,
+                        &mut stdout,
+                        &mut stderr,
+                        &mut stdout_open,
+                        &mut stderr_open,
+                        PIPE_DRAIN_TIMEOUT,
+                    )?;
                     cancellation.clear_child();
                     return Err(AppError::Other(format!(
                         "{command} timed out after {} seconds",
@@ -373,16 +400,32 @@ fn wait_with_timeout(
         status
     } else {
         loop {
+            drain_pipe_events(
+                command,
+                &pipe_rx,
+                &mut stdout,
+                &mut stderr,
+                &mut stdout_open,
+                &mut stderr_open,
+            )?;
             match child
                 .try_wait()
                 .map_err(|e| AppError::Other(format!("failed waiting for {command}: {e}")))?
             {
                 Some(status) => break status,
                 None if started.elapsed() >= timeout => {
+                    terminate_child_process_group(child_id);
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
+                    drain_pipe_events_until_closed(
+                        command,
+                        &pipe_rx,
+                        &mut stdout,
+                        &mut stderr,
+                        &mut stdout_open,
+                        &mut stderr_open,
+                        PIPE_DRAIN_TIMEOUT,
+                    )?;
                     return Err(AppError::Other(format!(
                         "{command} timed out after {} seconds",
                         timeout.as_secs()
@@ -393,20 +436,185 @@ fn wait_with_timeout(
         }
     };
 
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| AppError::Other(format!("{command} stdout reader failed")))?
-        .map_err(|e| AppError::Other(format!("failed reading {command} stdout: {e}")))?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| AppError::Other(format!("{command} stderr reader failed")))?
-        .map_err(|e| AppError::Other(format!("failed reading {command} stderr: {e}")))?;
+    if stdout_open || stderr_open {
+        terminate_child_process_group(child_id);
+    }
+    drain_pipe_events_until_closed(
+        command,
+        &pipe_rx,
+        &mut stdout,
+        &mut stderr,
+        &mut stdout_open,
+        &mut stderr_open,
+        PIPE_DRAIN_TIMEOUT,
+    )?;
+    if stdout_open || stderr_open {
+        tracing::warn!(
+            command,
+            stdout_open,
+            stderr_open,
+            "AI one-shot pipe reader did not finish after child exit"
+        );
+    }
 
     Ok(Output {
         status,
         stdout,
         stderr,
     })
+}
+
+#[cfg(unix)]
+fn isolate_child_process_group(command: &mut Command) {
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn isolate_child_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_child_process_group(child_id: u32) {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+
+    let Ok(raw_child_id) = i32::try_from(child_id) else {
+        return;
+    };
+    let process_group = Pid::from_raw(-raw_child_id);
+    let _ = kill(process_group, Signal::SIGTERM);
+    thread::sleep(Duration::from_millis(50));
+    let _ = kill(process_group, Signal::SIGKILL);
+}
+
+#[cfg(not(unix))]
+fn terminate_child_process_group(_child_id: u32) {}
+
+#[derive(Clone, Copy)]
+enum PipeKind {
+    Stdout,
+    Stderr,
+}
+
+enum PipeEvent {
+    Chunk(PipeKind, io::Result<Vec<u8>>),
+    Done(PipeKind),
+}
+
+fn spawn_pipe_reader<R>(kind: PipeKind, mut reader: R, tx: mpsc::Sender<PipeEvent>)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    let _ = tx.send(PipeEvent::Done(kind));
+                    break;
+                }
+                Ok(n) => {
+                    if tx
+                        .send(PipeEvent::Chunk(kind, Ok(buf[..n].to_vec())))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(PipeEvent::Chunk(kind, Err(err)));
+                    let _ = tx.send(PipeEvent::Done(kind));
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn process_pipe_event(
+    command: &str,
+    event: PipeEvent,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_open: &mut bool,
+    stderr_open: &mut bool,
+) -> AppResult<()> {
+    match event {
+        PipeEvent::Chunk(kind, Ok(bytes)) => match kind {
+            PipeKind::Stdout => stdout.extend_from_slice(&bytes),
+            PipeKind::Stderr => stderr.extend_from_slice(&bytes),
+        },
+        PipeEvent::Chunk(kind, Err(err)) => {
+            let stream = match kind {
+                PipeKind::Stdout => "stdout",
+                PipeKind::Stderr => "stderr",
+            };
+            return Err(AppError::Other(format!(
+                "failed reading {command} {stream}: {err}"
+            )));
+        }
+        PipeEvent::Done(PipeKind::Stdout) => *stdout_open = false,
+        PipeEvent::Done(PipeKind::Stderr) => *stderr_open = false,
+    }
+    Ok(())
+}
+
+fn drain_pipe_events(
+    command: &str,
+    rx: &Receiver<PipeEvent>,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_open: &mut bool,
+    stderr_open: &mut bool,
+) -> AppResult<()> {
+    loop {
+        match rx.try_recv() {
+            Ok(event) => {
+                process_pipe_event(command, event, stdout, stderr, stdout_open, stderr_open)?
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
+fn drain_pipe_events_until_closed(
+    command: &str,
+    rx: &Receiver<PipeEvent>,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_open: &mut bool,
+    stderr_open: &mut bool,
+    timeout: Duration,
+) -> AppResult<()> {
+    let deadline = Instant::now() + timeout;
+    while *stdout_open || *stderr_open {
+        match rx.try_recv() {
+            Ok(event) => {
+                process_pipe_event(command, event, stdout, stderr, stdout_open, stderr_open)?
+            }
+            Err(TryRecvError::Empty) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Ok(());
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                let wait = remaining.min(Duration::from_millis(25));
+                match rx.recv_timeout(wait) {
+                    Ok(event) => process_pipe_event(
+                        command,
+                        event,
+                        stdout,
+                        stderr,
+                        stdout_open,
+                        stderr_open,
+                    )?,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                }
+            }
+            Err(TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 struct Utf8ChunkDecoder {
@@ -511,6 +719,7 @@ fn wait_with_timeout_streaming<F>(
 where
     F: FnMut(&str),
 {
+    let child_id = child.id();
     let stdout_pipe = child
         .stdout
         .take()
@@ -559,6 +768,7 @@ where
                 on_stdout_chunk,
             )?;
             if cancellation.is_cancelled() {
+                terminate_child_process_group(child_id);
                 cancellation.kill_and_wait();
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
@@ -568,6 +778,7 @@ where
             match cancellation.try_wait(command)? {
                 Some(status) => break status,
                 None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
+                    terminate_child_process_group(child_id);
                     cancellation.kill_and_wait();
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
@@ -598,6 +809,7 @@ where
             {
                 Some(status) => break status,
                 None if timeout.is_some_and(|timeout| started.elapsed() >= timeout) => {
+                    terminate_child_process_group(child_id);
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = stdout_reader.join();
@@ -613,6 +825,9 @@ where
         }
     };
 
+    if !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        terminate_child_process_group(child_id);
+    }
     stdout_reader
         .join()
         .map_err(|_| AppError::Other(format!("{command} stdout reader failed")))?;
@@ -764,6 +979,30 @@ mod tests {
         assert_eq!(output, "arg= stdin=hello");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn oneshot_returns_when_background_child_inherits_stdout() {
+        let args = vec!["-c".to_string(), "printf done; (sleep 30) &".to_string()];
+
+        let started = std::time::Instant::now();
+        let output = run_oneshot_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "",
+            "test settings",
+            None,
+            None,
+            PromptTransport::Stdin,
+        )
+        .unwrap();
+
+        assert_eq!(output, "done");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "one-shot call waited for an inherited stdout pipe to close"
+        );
+    }
+
     #[test]
     fn streams_stdout_chunks_before_returning() {
         let args = vec![
@@ -786,5 +1025,32 @@ mod tests {
         assert_eq!(output, "onetwo");
         assert_eq!(chunks.concat(), "onetwo");
         assert!(!chunks.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_returns_when_background_child_inherits_stdout() {
+        let args = vec!["-c".to_string(), "printf done; (sleep 30) &".to_string()];
+        let mut chunks = Vec::new();
+
+        let started = std::time::Instant::now();
+        let output = run_streaming_in_dir_cancellable_with_transport(
+            "/bin/sh",
+            &args,
+            "",
+            "test settings",
+            None,
+            None,
+            PromptTransport::Stdin,
+            |chunk| chunks.push(chunk.to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(output, "done");
+        assert_eq!(chunks.concat(), "done");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "streaming call waited for an inherited stdout pipe to close"
+        );
     }
 }
