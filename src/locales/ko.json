@@ -85,6 +85,10 @@
       "kanbanTerminalPopover": {
         "title": "칸반 터미널 팝오버",
         "description": "칸반 카드에서 터미널을 열 때 위치와 시작 크기를 정합니다.",
+        "openOnCreate": {
+          "label": "새 세션 터미널을 즉시 열기",
+          "description": "칸반 모드에서 터미널 세션을 만들면 해당 터미널 팝오버를 바로 엽니다."
+        },
         "placement": {
           "label": "표시 위치",
           "hint": "칸반 카드에서 터미널을 열 때 처음 나타나는 위치입니다.",

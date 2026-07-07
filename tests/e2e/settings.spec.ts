@@ -121,6 +121,9 @@ test.describe("settings modal", () => {
     const modal = page.getByRole("dialog", { name: SETTINGS_DIALOG_NAME });
     await expect(modal.getByText("Kanban terminal popover")).toBeVisible();
 
+    await modal
+      .getByText("Open new session terminals immediately", { exact: true })
+      .click();
     await modal.getByText("Center of screen", { exact: true }).click();
     await modal.getByText("Full screen", { exact: true }).click();
 
@@ -134,12 +137,15 @@ test.describe("settings modal", () => {
               settings?.interface?.kanbanTerminalPopoverPlacement ?? null,
             defaultSize:
               settings?.interface?.kanbanTerminalPopoverDefaultSize ?? null,
+            openOnCreate:
+              settings?.interface?.openKanbanTerminalOnSessionCreate ?? null,
           };
         }),
       )
       .toEqual({
         placement: "center",
         defaultSize: "fullscreen",
+        openOnCreate: true,
       });
   });
 

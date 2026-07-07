@@ -106,6 +106,9 @@ describe("interface settings", () => {
     expect(
       DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize,
     ).toBe("custom");
+    expect(
+      DEFAULT_SETTINGS.interface.openKanbanTerminalOnSessionCreate,
+    ).toBe(false);
   });
 
   it("loads a persisted default workspace mode", async () => {
@@ -117,6 +120,7 @@ describe("interface settings", () => {
           prioritizeNeedsInputTabs: true,
           kanbanTerminalPopoverPlacement: "center",
           kanbanTerminalPopoverDefaultSize: "fullscreen",
+          openKanbanTerminalOnSessionCreate: true,
         },
       }),
     );
@@ -138,6 +142,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("fullscreen");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(true);
   });
 
   it("falls back for unsupported interface values", async () => {
@@ -149,6 +157,7 @@ describe("interface settings", () => {
           prioritizeNeedsInputTabs: "yes",
           kanbanTerminalPopoverPlacement: "dock",
           kanbanTerminalPopoverDefaultSize: "huge",
+          openKanbanTerminalOnSessionCreate: "yes",
         },
       }),
     );
@@ -170,6 +179,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("custom");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(false);
   });
 
   it("patches interface settings and preserves the previous value for invalid patches", async () => {
@@ -183,6 +196,7 @@ describe("interface settings", () => {
         prioritizeNeedsInputTabs: true,
         kanbanTerminalPopoverPlacement: "center",
         kanbanTerminalPopoverDefaultSize: "fullscreen",
+        openKanbanTerminalOnSessionCreate: true,
       });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
@@ -198,6 +212,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("fullscreen");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(true);
 
     const invalidMode =
       "grid" as unknown as typeof DEFAULT_SETTINGS.interface.defaultWorkspaceViewMode;
@@ -205,12 +223,15 @@ describe("interface settings", () => {
       "dock" as unknown as typeof DEFAULT_SETTINGS.interface.kanbanTerminalPopoverPlacement;
     const invalidDefaultSize =
       "huge" as unknown as typeof DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize;
+    const invalidOpenOnCreate =
+      "yes" as unknown as typeof DEFAULT_SETTINGS.interface.openKanbanTerminalOnSessionCreate;
     useSettings
       .getState()
       .patchInterface({
         defaultWorkspaceViewMode: invalidMode,
         kanbanTerminalPopoverPlacement: invalidPlacement,
         kanbanTerminalPopoverDefaultSize: invalidDefaultSize,
+        openKanbanTerminalOnSessionCreate: invalidOpenOnCreate,
       });
     expect(
       useSettings.getState().settings.interface.defaultWorkspaceViewMode,
@@ -226,6 +247,10 @@ describe("interface settings", () => {
       useSettings.getState().settings.interface
         .kanbanTerminalPopoverDefaultSize,
     ).toBe("fullscreen");
+    expect(
+      useSettings.getState().settings.interface
+        .openKanbanTerminalOnSessionCreate,
+    ).toBe(true);
   });
 });
 
