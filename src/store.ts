@@ -9,7 +9,9 @@ import type {
   SessionMode,
   SessionTitleGenerationStatus,
   SessionNotification,
+  SessionNotificationKind,
   SessionProcessSummary,
+  SessionStatus,
 } from "./lib/types";
 import { commandRequestsWorktreeAdoption } from "./lib/worktreeAdoption";
 import { CONTROL_GUIDE_DISMISSED_KEY } from "./components/ControlSessionGuideModal";
@@ -124,13 +126,94 @@ function coalescedSessionNotificationKey(
   return `${notification.sessionId}:${notification.kind}`;
 }
 
+function normalizeSessionStatus(value: unknown): SessionStatus | null {
+  if (
+    value === "ready" ||
+    value === "working" ||
+    value === "waiting_for_input" ||
+    value === "errored"
+  ) {
+    return value;
+  }
+  if (value === "idle") return "ready";
+  if (value === "running") return "working";
+  if (value === "needs_input") return "waiting_for_input";
+  if (value === "error") return "errored";
+  return null;
+}
+
+function normalizeSessionNotificationKind(
+  value: unknown,
+): SessionNotificationKind | null {
+  if (
+    value === "waiting_for_input" ||
+    value === "errored" ||
+    value === "became_ready"
+  ) {
+    return value;
+  }
+  if (value === "needs_input") return "waiting_for_input";
+  if (value === "became_idle") return "became_ready";
+  if (value === "error") return "errored";
+  return null;
+}
+
+function statusForNotificationKind(
+  kind: SessionNotificationKind,
+): SessionStatus {
+  if (kind === "waiting_for_input") return "waiting_for_input";
+  if (kind === "errored") return "errored";
+  return "ready";
+}
+
+function normalizeSessionNotification(
+  value: unknown,
+): SessionNotification | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const kind = normalizeSessionNotificationKind(raw.kind);
+  if (!kind || typeof raw.sessionId !== "string") return null;
+  const status =
+    normalizeSessionStatus(raw.status) ?? statusForNotificationKind(kind);
+  const previousStatus = normalizeSessionStatus(raw.previousStatus) ?? "ready";
+  const createdAt =
+    typeof raw.createdAt === "string"
+      ? raw.createdAt
+      : new Date(0).toISOString();
+  const repoPath = typeof raw.repoPath === "string" ? raw.repoPath : "";
+  const sessionName =
+    typeof raw.sessionName === "string" ? raw.sessionName : raw.sessionId;
+  const projectName =
+    typeof raw.projectName === "string"
+      ? raw.projectName
+      : repoPath.split("/").filter(Boolean).pop() ?? repoPath;
+  return {
+    id:
+      typeof raw.id === "string"
+        ? raw.id
+        : `${createdAt}:${raw.sessionId}:${kind}`,
+    sessionId: raw.sessionId,
+    kind,
+    status,
+    previousStatus,
+    sessionName,
+    projectName,
+    repoPath,
+    createdAt,
+    ...(typeof raw.readAt === "string" ? { readAt: raw.readAt } : {}),
+  };
+}
+
 function normalizeSessionNotifications(
-  notifications: SessionNotification[],
+  notifications: unknown,
   maxHistory: number,
 ): SessionNotification[] {
+  if (!Array.isArray(notifications)) return [];
   const seen = new Set<string>();
   const next: SessionNotification[] = [];
-  for (const notification of notifications) {
+  for (const rawNotification of notifications) {
+    const notification = normalizeSessionNotification(rawNotification);
+    if (!notification) continue;
     const key = coalescedSessionNotificationKey(notification);
     if (key) {
       if (seen.has(key)) continue;

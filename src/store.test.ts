@@ -395,6 +395,68 @@ describe("sessionNotifications", () => {
     ).toEqual(["latest", "other"]);
   });
 
+  it("migrates legacy persisted activity status names on rehydrate", async () => {
+    window.localStorage.clear();
+    resetStore();
+    window.localStorage.setItem(
+      "acorn-workspaces",
+      JSON.stringify({
+        state: {
+          sessionNotifications: [
+            {
+              id: "legacy-needs",
+              sessionId: "s1",
+              kind: "needs_input",
+              status: "needs_input",
+              previousStatus: "running",
+              sessionName: "s1",
+              projectName: "repo-a",
+              repoPath: REPO_A,
+              createdAt: "2026-01-01T00:02:00Z",
+            },
+            {
+              id: "legacy-idle",
+              sessionId: "s2",
+              kind: "became_idle",
+              status: "idle",
+              previousStatus: "needs_input",
+              sessionName: "s2",
+              projectName: "repo-b",
+              repoPath: REPO_B,
+              createdAt: "2026-01-01T00:01:00Z",
+            },
+            {
+              id: "unknown",
+              sessionId: "s3",
+              kind: "unknown",
+              status: "idle",
+              previousStatus: "running",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+        },
+        version: 4,
+      }),
+    );
+
+    await useAppStore.persist.rehydrate();
+
+    expect(useAppStore.getState().sessionNotifications).toMatchObject([
+      {
+        id: "legacy-needs",
+        kind: "waiting_for_input",
+        status: "waiting_for_input",
+        previousStatus: "working",
+      },
+      {
+        id: "legacy-idle",
+        kind: "became_ready",
+        status: "ready",
+        previousStatus: "waiting_for_input",
+      },
+    ]);
+  });
+
   it("marks individual and all notifications read, then clears read items when auto-delete is disabled", () => {
     useSettings.getState().patchNotifications({ autoDeleteRead: false });
     useAppStore
