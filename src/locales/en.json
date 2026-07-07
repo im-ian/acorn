@@ -85,6 +85,10 @@
       "kanbanTerminalPopover": {
         "title": "Kanban terminal popover",
         "description": "Controls where card terminals open and how large they start.",
+        "openOnCreate": {
+          "label": "Open new session terminals immediately",
+          "description": "When you create a terminal session in kanban mode, open its terminal popover right away."
+        },
         "placement": {
           "label": "Open position",
           "hint": "Initial placement when you open a terminal from a kanban card.",

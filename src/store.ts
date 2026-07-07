@@ -2572,6 +2572,14 @@ export const useAppStore = create<AppStateModel>()(
       // through the store) immediately surfaces it in its pane instead of
       // silently appending behind the existing active tab.
       get().selectSession(created.id);
+      if (
+        mode === "terminal" &&
+        get().workspaceViewMode === "kanban" &&
+        useSettings.getState().settings.interface
+          .openKanbanTerminalOnSessionCreate
+      ) {
+        get().openTerminalPopup(created.id);
+      }
       // Grab keyboard focus for the new session's xterm. rAF defers past the
       // portal reattach in `TerminalHost` so the slot is mounted in its pane
       // body by the time `Terminal` calls `term.focus()`.
