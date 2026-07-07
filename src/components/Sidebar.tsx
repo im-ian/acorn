@@ -88,7 +88,6 @@ import {
   summarizeSessionProcesses,
 } from "../lib/sessionContext";
 import { suggestDefaultSessionName } from "../lib/sessionName";
-import { canConfigureSessionAutoClose } from "../lib/sessionAgentState";
 import {
   hasRecordedWorktree,
   shouldAutoDeleteSessionWorktree,
@@ -178,12 +177,6 @@ const STATUS_ICON: Record<SessionStatus, string> = {
   waiting_for_input: "text-warning",
   errored: "text-danger",
 };
-
-function autoCloseSessionRowClassName(active: boolean): string {
-  return active
-    ? "!bg-warning/15 text-fg shadow-sm ring-1 ring-warning/25 focus-visible:!bg-warning/15"
-    : "!bg-warning/10 text-fg hover:!bg-warning/15 focus-visible:!bg-warning/15";
-}
 
 const COLLAPSED_KEY = "acorn:sidebar:collapsed-projects";
 const FOLDER_COLLAPSED_KEY = "acorn:sidebar:collapsed-project-folders";
@@ -358,11 +351,6 @@ export function Sidebar() {
     }
     return null;
   }, [allWorkspaceGroups, pendingRemoveProjectFolderId]);
-  const localSessions = useMemo(
-    () => buildLocalSessions(sessions),
-    [sessions],
-  );
-
   const sensors = useSensors(
     useSensor(PointerSensor, {
       // 5px movement avoids hijacking clicks on the project header / session row.
@@ -874,6 +862,31 @@ export function Sidebar() {
     return true;
   }
 
+  function currentSessionDragSnapshot() {
+    const state = useAppStore.getState();
+    const currentProjectGroups = buildProjectFolderGroups(
+      state.projects,
+      state.sessions,
+      state.projectFolders,
+      state.sessionFolderIds,
+    );
+    const currentLocalWorkspaceGroups = buildLocalSessionFolderGroups(
+      state.projects,
+      state.sessions,
+      state.projectFolders,
+      state.sessionFolderIds,
+    );
+    return {
+      sessions: state.sessions,
+      projectGroups: currentProjectGroups,
+      localSessions: buildLocalSessions(state.sessions),
+      allWorkspaceGroups: [
+        ...currentProjectGroups,
+        ...currentLocalWorkspaceGroups,
+      ],
+    };
+  }
+
   function onDragEnd(event: DragEndEvent) {
     setActiveDragId(null);
     const { active, over } = event;
@@ -910,21 +923,32 @@ export function Sidebar() {
       return;
     }
 
-    if (activeId.startsWith(SESSION_DRAG_PREFIX)) {
+    const sessionDragSnapshot = activeId.startsWith(SESSION_DRAG_PREFIX)
+      ? currentSessionDragSnapshot()
+      : null;
+
+    if (sessionDragSnapshot && activeId.startsWith(SESSION_DRAG_PREFIX)) {
+      const {
+        sessions: currentSessions,
+        allWorkspaceGroups: currentAllWorkspaceGroups,
+      } = sessionDragSnapshot;
       const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
-      const activeSession = sessions.find((s) => s.id === activeSid);
+      const activeSession = currentSessions.find((s) => s.id === activeSid);
       if (!activeSession) return;
       const activeFolderId = projectFolderIdForSession(
-        allWorkspaceGroups,
+        currentAllWorkspaceGroups,
         activeSid,
       );
       const activeFolder = activeFolderId
-        ? projectFolderById(allWorkspaceGroups, activeFolderId)
+        ? projectFolderById(currentAllWorkspaceGroups, activeFolderId)
         : null;
 
       if (overId.startsWith(SESSION_FOLDER_DROP_PREFIX)) {
         const folderId = overId.slice(SESSION_FOLDER_DROP_PREFIX.length);
-        const targetFolder = projectFolderById(allWorkspaceGroups, folderId);
+        const targetFolder = projectFolderById(
+          currentAllWorkspaceGroups,
+          folderId,
+        );
         if (targetFolder?.repoPath !== activeSession.repo_path) return;
         if (
           isSessionDragCrossingLockedWorkspace(
@@ -955,7 +979,7 @@ export function Sidebar() {
             : dropRepoPath;
         const targetFolderId = defaultProjectFolderId(repoPath);
         const targetFolder = projectFolderById(
-          allWorkspaceGroups,
+          currentAllWorkspaceGroups,
           targetFolderId,
         );
         if (
@@ -977,13 +1001,20 @@ export function Sidebar() {
     }
 
     if (
+      sessionDragSnapshot &&
       activeId.startsWith(SESSION_DRAG_PREFIX) &&
       overId.startsWith(SESSION_DRAG_PREFIX)
     ) {
+      const {
+        sessions: currentSessions,
+        projectGroups: currentProjectGroups,
+        localSessions: currentLocalSessions,
+        allWorkspaceGroups: currentAllWorkspaceGroups,
+      } = sessionDragSnapshot;
       const activeSid = activeId.slice(SESSION_DRAG_PREFIX.length);
       const overSid = overId.slice(SESSION_DRAG_PREFIX.length);
-      const activeSession = sessions.find((s) => s.id === activeSid);
-      const overSession = sessions.find((s) => s.id === overSid);
+      const activeSession = currentSessions.find((s) => s.id === activeSid);
+      const overSession = currentSessions.find((s) => s.id === overSid);
       if (!activeSession || !overSession) return;
       if (
         (activeSession.project_scoped === false) !==
@@ -994,18 +1025,18 @@ export function Sidebar() {
       // Cross-project drops are not supported yet — silently ignore.
       if (activeSession.repo_path !== overSession.repo_path) return;
       const activeFolderId = projectFolderIdForSession(
-        allWorkspaceGroups,
+        currentAllWorkspaceGroups,
         activeSid,
       );
       const overFolderId = projectFolderIdForSession(
-        allWorkspaceGroups,
+        currentAllWorkspaceGroups,
         overSid,
       );
       const activeFolder = activeFolderId
-        ? projectFolderById(allWorkspaceGroups, activeFolderId)
+        ? projectFolderById(currentAllWorkspaceGroups, activeFolderId)
         : null;
       const overFolder = overFolderId
-        ? projectFolderById(allWorkspaceGroups, overFolderId)
+        ? projectFolderById(currentAllWorkspaceGroups, overFolderId)
         : null;
       if (
         isSessionDragCrossingLockedWorkspace(
@@ -1020,7 +1051,7 @@ export function Sidebar() {
       }
       const project =
         activeSession.project_scoped !== false
-          ? (projectGroups.find(
+          ? (currentProjectGroups.find(
               (group) => group.repoPath === activeSession.repo_path,
             ) ?? null)
           : null;
@@ -1065,11 +1096,17 @@ export function Sidebar() {
           sessionFolderAssignmentForDrop(activeSession, overFolderId),
         );
       }
+      const targetFolderSessions = overFolderId
+        ? projectFolderGroupById(currentAllWorkspaceGroups, overFolderId)
+            ?.sessions
+        : null;
       const orderedSessions =
-        activeSession.project_scoped === false
-          ? localSessions
-          : (projectGroups.find((g) => g.repoPath === activeSession.repo_path)
-              ?.sessions ?? []);
+        targetFolderSessions ??
+        (activeSession.project_scoped === false
+          ? currentLocalSessions
+          : (currentProjectGroups.find(
+              (g) => g.repoPath === activeSession.repo_path,
+            )?.sessions ?? []));
       const next = orderedSessionIdsAfterDrop(
         orderedSessions,
         activeSid,
@@ -1476,11 +1513,18 @@ function projectFolderById(
   projectGroups: ProjectFolderProjectGroup[],
   folderId: string,
 ): ProjectFolder | null {
+  return projectFolderGroupById(projectGroups, folderId)?.folder ?? null;
+}
+
+function projectFolderGroupById(
+  projectGroups: ProjectFolderProjectGroup[],
+  folderId: string,
+): ProjectFolderGroup | null {
   for (const project of projectGroups) {
     const folderGroup = project.folders.find(
       (candidate) => candidate.folder.id === folderId,
     );
-    if (folderGroup) return folderGroup.folder;
+    if (folderGroup) return folderGroup;
   }
   return null;
 }
@@ -2651,9 +2695,6 @@ function SessionRow({
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
   const openWorkSummaryTab = useAppStore((s) => s.openWorkSummaryTab);
-  const toggleSessionAutoClose = useAppStore(
-    (s) => s.toggleSessionAutoClose,
-  );
   const createSession = useAppStore((s) => s.createSession);
   const selectSession = useAppStore((s) => s.selectSession);
   const setPendingTerminalInput = useAppStore(
@@ -2701,10 +2742,6 @@ function SessionRow({
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
-  const autoCloseEnabled = useAppStore((s) =>
-    Boolean(s.autoCloseSessionIds[session.id]),
-  );
-  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
@@ -2921,16 +2958,6 @@ function SessionRow({
         void openWorkSummaryTab({ sessionId: session.id });
       },
     },
-    ...(canConfigureAutoClose
-      ? [
-          {
-            type: "checkbox",
-            label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
-            checked: autoCloseEnabled,
-            onChange: () => toggleSessionAutoClose(session.id),
-          } satisfies ContextMenuItem,
-        ]
-      : []),
     ...(forkItems.length > 0
       ? [contextMenuGroupTitle(t, "fork"), ...forkItems]
       : []),
@@ -3033,15 +3060,10 @@ function SessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: autoCloseEnabled
-          ? autoCloseSessionRowClassName(true)
-          : "bg-bg-elevated shadow-sm",
+        selectedClassName: "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
-          autoCloseEnabled &&
-            !active &&
-            autoCloseSessionRowClassName(false),
           isDragging && "opacity-40",
         ),
       })}
@@ -4187,9 +4209,6 @@ function LocalSessionRow({
   const showToast = useToasts((s) => s.show);
   const renameSession = useAppStore((s) => s.renameSession);
   const generateSessionTitle = useAppStore((s) => s.generateSessionTitle);
-  const toggleSessionAutoClose = useAppStore(
-    (s) => s.toggleSessionAutoClose,
-  );
   const sessionDisplay = useSettings((s) => s.settings.sessionDisplay);
   const currentPullRequest = useCurrentPullRequest(session);
   const titleText = resolveSessionTitle(session, sessionDisplay.title);
@@ -4207,10 +4226,6 @@ function LocalSessionRow({
   const isGeneratingTitle = useAppStore((s) =>
     Boolean(s.generatingSessionTitleIds[session.id]),
   );
-  const autoCloseEnabled = useAppStore((s) =>
-    Boolean(s.autoCloseSessionIds[session.id]),
-  );
-  const canConfigureAutoClose = canConfigureSessionAutoClose(session);
   const canRename = canRenameSession(session, { isGeneratingTitle });
   const canRegenerateTitle =
     canRegenerateSessionTitle(session) && !isGeneratingTitle;
@@ -4278,16 +4293,6 @@ function LocalSessionRow({
       onClick: () => void regenerateTitle(),
       disabled: !canRegenerateTitle,
     },
-    ...(canConfigureAutoClose
-      ? [
-          {
-            type: "checkbox",
-            label: sidebarText(t, "sidebar.actions.autoCloseWhenFinished"),
-            checked: autoCloseEnabled,
-            onChange: () => toggleSessionAutoClose(session.id),
-          } satisfies ContextMenuItem,
-        ]
-      : []),
     ...(canCreateWorktreeWorkspace
       ? [
           { type: "separator" as const },
@@ -4358,15 +4363,10 @@ function LocalSessionRow({
         density: "sidebar",
         interactive: true,
         selected: active,
-        selectedClassName: autoCloseEnabled
-          ? autoCloseSessionRowClassName(true)
-          : "bg-bg-elevated shadow-sm",
+        selectedClassName: "bg-bg-elevated shadow-sm",
         surface: "sidebar",
         className: cn(
           "group flex w-full cursor-pointer items-start gap-1.5 text-left",
-          autoCloseEnabled &&
-            !active &&
-            autoCloseSessionRowClassName(false),
           isDragging && "opacity-40",
         ),
       })}
