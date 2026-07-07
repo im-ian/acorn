@@ -49,6 +49,7 @@ import { api, FS_CHANGED_EVENT, type FsChangePayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { openFileInEditor } from "../lib/editor";
 import { joinPath } from "../lib/paths";
+import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import { rightPanelCache } from "../lib/right-panel-cache";
 import { classifyRightPanelFsChange } from "../lib/right-panel-invalidation";
 import { useSettings } from "../lib/settings";
@@ -4674,15 +4675,7 @@ function PrRow({
   /** Render CI/check status in the metadata row. */
   showChecks?: boolean;
 }) {
-  const upper = pr.state.toUpperCase();
-  const isDraft = pr.is_draft && upper === "OPEN";
-  const numberColor = isDraft
-    ? "text-fg-muted"
-    : upper === "OPEN"
-      ? "text-emerald-400"
-      : upper === "MERGED"
-        ? "text-purple-400"
-        : "text-rose-400";
+  const numberColor = pullRequestNumberClassName(pr);
   const meta =
     showBranches || showChecks ? (
       <span className="flex min-w-0 items-center gap-1">

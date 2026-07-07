@@ -84,8 +84,6 @@ import {
   canRenameSession,
 } from "../lib/sessionTitle";
 import {
-  currentPullRequestSearchQuery,
-  findCurrentPullRequestForBranch,
   summarizeAllSessionProcesses,
   summarizeSessionProcesses,
 } from "../lib/sessionContext";
@@ -97,6 +95,7 @@ import {
 } from "../lib/sessionWorktree";
 import { useToasts } from "../lib/toasts";
 import { useTranslation } from "../lib/useTranslation";
+import { useCurrentPullRequest } from "../lib/useCurrentPullRequest";
 import { showWorktreeRemovalToast } from "../lib/operationToasts";
 import {
   buildLocalSessions,
@@ -140,6 +139,7 @@ import {
   planTitleClick,
   type ProjectClickPlan,
 } from "../lib/sidebar-actions";
+import { pullRequestNumberClassName } from "../lib/pullRequestPresentation";
 import type {
   Session,
   SessionAgentDetection,
@@ -201,16 +201,6 @@ const SESSION_FOLDER_DROP_PREFIX = `${SESSION_DRAG_PREFIX}folder:`;
 const SESSION_PROJECT_DROP_PREFIX = `${SESSION_DRAG_PREFIX}project:`;
 const LOCAL_SESSION_ROOT_DROP_ID = "__local-session-root__";
 const LOCAL_TERMINAL_AREA_SELECTOR = "[data-local-terminal-area='true']";
-const CURRENT_PR_CACHE_TTL_MS = 60_000;
-const CURRENT_PR_EMPTY_RETRY_MS = 15_000;
-
-type CurrentPullRequestCacheEntry = {
-  value: SessionPullRequestSummary | null;
-  expiresAt: number;
-  promise?: Promise<SessionPullRequestSummary | null>;
-};
-
-const currentPullRequestCache = new Map<string, CurrentPullRequestCacheEntry>();
 
 type SidebarTranslationKey = Extract<TranslationKey, `sidebar.${string}`>;
 
@@ -251,106 +241,6 @@ function contextMenuGroupTitle(
 
 function statusLabel(t: Translator, status: SessionStatus): string {
   return sidebarText(t, `sidebar.status.${status}`);
-}
-
-function currentPullRequestCacheKey(repoPath: string, branch: string): string {
-  return `${repoPath}\u0000${branch}`;
-}
-
-function loadCurrentPullRequest(
-  repoPath: string,
-  branch: string,
-): Promise<SessionPullRequestSummary | null> {
-  const key = currentPullRequestCacheKey(repoPath, branch);
-  const now = Date.now();
-  const cached = currentPullRequestCache.get(key);
-  if (cached && cached.expiresAt > now) {
-    return cached.promise ?? Promise.resolve(cached.value);
-  }
-
-  const query = currentPullRequestSearchQuery(branch);
-  if (!query) return Promise.resolve(null);
-
-  const promise = api
-    .listPullRequests(repoPath, "open", 10, query)
-    .then((listing) => findCurrentPullRequestForBranch(listing, branch))
-    .catch(() => null);
-
-  currentPullRequestCache.set(key, {
-    value: cached?.value ?? null,
-    expiresAt: now + CURRENT_PR_CACHE_TTL_MS,
-    promise,
-  });
-
-  return promise.then((value) => {
-    currentPullRequestCache.set(key, {
-      value,
-      expiresAt:
-        Date.now() +
-        (value ? CURRENT_PR_CACHE_TTL_MS : CURRENT_PR_EMPTY_RETRY_MS),
-    });
-    return value;
-  });
-}
-
-function useCurrentPullRequest(
-  session: Session,
-): SessionPullRequestSummary | null {
-  const branch = session.branch.trim();
-  const repoPath =
-    session.git_context_path?.trim() ||
-    session.worktree_path ||
-    session.repo_path;
-  const cacheKey = branch ? currentPullRequestCacheKey(repoPath, branch) : null;
-  const [lookupAttempt, setLookupAttempt] = useState(0);
-  const [currentPullRequest, setCurrentPullRequest] =
-    useState<SessionPullRequestSummary | null>(() =>
-      cacheKey ? (currentPullRequestCache.get(cacheKey)?.value ?? null) : null,
-    );
-
-  useEffect(() => {
-    const query = currentPullRequestSearchQuery(branch);
-    if (!branch || !cacheKey || !query) {
-      setCurrentPullRequest(null);
-      return;
-    }
-
-    let cancelled = false;
-    let retryTimer: number | null = null;
-    const scheduleEmptyRetry = (value: SessionPullRequestSummary | null) => {
-      if (value || cancelled) return;
-      retryTimer = window.setTimeout(() => {
-        if (!cancelled) setLookupAttempt((attempt) => attempt + 1);
-      }, CURRENT_PR_EMPTY_RETRY_MS);
-    };
-    const cached = currentPullRequestCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      setCurrentPullRequest(cached.value);
-      if (!cached.promise) {
-        scheduleEmptyRetry(cached.value);
-        return () => {
-          cancelled = true;
-          if (retryTimer !== null) window.clearTimeout(retryTimer);
-        };
-      }
-    } else {
-      setCurrentPullRequest(cached?.value ?? null);
-    }
-
-    loadCurrentPullRequest(repoPath, branch).then((value) => {
-      if (!cancelled) {
-        setCurrentPullRequest(value);
-        scheduleEmptyRetry(value);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      if (retryTimer !== null) window.clearTimeout(retryTimer);
-    };
-  }, [branch, cacheKey, lookupAttempt, repoPath]);
-
-  return currentPullRequest;
 }
 
 function isLocalTerminalAreaFocused(): boolean {
@@ -3260,6 +3150,9 @@ function SessionRowLabel({
   const inWorktree = liveInWorktree ?? hasRecordedWorktree(session);
   const processSummary = summarizeSessionProcesses(session.active_processes);
   const hasContextMetadata = Boolean(currentPullRequest || processSummary);
+  const pullRequestColor = currentPullRequest
+    ? pullRequestNumberClassName(currentPullRequest)
+    : null;
   const body = (
     <span className="min-w-0 flex-1">
       <span className="flex h-5 items-center gap-1">
@@ -3317,7 +3210,10 @@ function SessionRowLabel({
                   console.error("[Sidebar] open PR URL failed", err);
                 });
               }}
-              className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-accent underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+              className={cn(
+                "inline-flex shrink-0 items-center gap-0.5 rounded-sm underline-offset-2 transition hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
+                pullRequestColor,
+              )}
             >
               <span>{`PR #${currentPullRequest.number}`}</span>
               <ExternalLink size={9} aria-hidden className="opacity-80" />
@@ -4617,9 +4513,10 @@ function buildSessionHoverDetails(
       {currentPullRequest ? (
         <SessionHoverDetailRow
           icon={<GitPullRequest size={12} />}
-          iconClassName="text-accent"
+          iconClassName={pullRequestNumberClassName(currentPullRequest)}
           label={sidebarText(t, "sidebar.metadata.openPullRequest")}
           value={`#${currentPullRequest.number} ${currentPullRequest.title}`}
+          valueClassName={pullRequestNumberClassName(currentPullRequest)}
         />
       ) : null}
       <SessionHoverDetailRow

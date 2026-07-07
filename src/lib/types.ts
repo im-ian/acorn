@@ -462,6 +462,7 @@ export interface SessionPullRequestSummary {
   url: string;
   head_branch: string;
   base_branch: string;
+  state: string;
   is_draft: boolean;
 }
 
