@@ -1200,11 +1200,15 @@ function InterfaceSettings({ t }: { t: SettingsTranslator }) {
       <KanbanTerminalPopoverSettings
         placement={settings.interface.kanbanTerminalPopoverPlacement}
         defaultSize={settings.interface.kanbanTerminalPopoverDefaultSize}
+        openOnCreate={settings.interface.openKanbanTerminalOnSessionCreate}
         onPlacementChange={(kanbanTerminalPopoverPlacement) =>
           patchInterface({ kanbanTerminalPopoverPlacement })
         }
         onDefaultSizeChange={(kanbanTerminalPopoverDefaultSize) =>
           patchInterface({ kanbanTerminalPopoverDefaultSize })
+        }
+        onOpenOnCreateChange={(openKanbanTerminalOnSessionCreate) =>
+          patchInterface({ openKanbanTerminalOnSessionCreate })
         }
         t={t}
       />
@@ -1289,14 +1293,18 @@ function DefaultWorkspaceViewModeSection({
 function KanbanTerminalPopoverSettings({
   placement,
   defaultSize,
+  openOnCreate,
   onPlacementChange,
   onDefaultSizeChange,
+  onOpenOnCreateChange,
   t,
 }: {
   placement: KanbanTerminalPopoverPlacement;
   defaultSize: KanbanTerminalPopoverDefaultSize;
+  openOnCreate: boolean;
   onPlacementChange: (value: KanbanTerminalPopoverPlacement) => void;
   onDefaultSizeChange: (value: KanbanTerminalPopoverDefaultSize) => void;
+  onOpenOnCreateChange: (value: boolean) => void;
   t: SettingsTranslator;
 }) {
   return (
@@ -1308,6 +1316,18 @@ function KanbanTerminalPopoverSettings({
       )}
     >
       <div className="space-y-4">
+        <CheckboxRow
+          label={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.openOnCreate.label",
+          )}
+          description={st(
+            t,
+            "settings.interface.kanbanTerminalPopover.openOnCreate.description",
+          )}
+          checked={openOnCreate}
+          onChange={onOpenOnCreateChange}
+        />
         <Field
           label={st(
             t,

@@ -985,6 +985,19 @@ test.describe("workspace kanban mode", () => {
     });
     await createSessionButton.click();
     await page.getByRole("menuitem", { name: "New session" }).click();
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __createSessionCalls?: Array<Record<string, unknown>>;
+              }
+            ).__createSessionCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+    await expect(page.getByTestId("kanban-terminal-popover")).toHaveCount(0);
     await createSessionButton.click();
     await page.getByRole("menuitem", { name: "New worktree session" }).click();
 
@@ -1019,5 +1032,107 @@ test.describe("workspace kanban mode", () => {
       isolated: true,
       kind: "regular",
     });
+  });
+
+  test("opens the new terminal popover from the kanban toolbar when enabled", async ({
+    page,
+    tauri,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "acorn:settings:v1",
+        JSON.stringify({
+          interface: { openKanbanTerminalOnSessionCreate: true },
+        }),
+      );
+    });
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.handle("list_sessions", () => {
+      const w = window as unknown as {
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__sessions = w.__sessions ?? [
+        {
+          id: "seed",
+          name: "seed",
+          repo_path: "/tmp/demo",
+          worktree_path: "/tmp/demo",
+          branch: "main",
+          isolated: false,
+          project_scoped: true,
+          status: "ready",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          last_message: null,
+          title_source: "manual",
+          kind: "regular",
+          mode: "terminal",
+          owner: { kind: "user" },
+          position: null,
+          in_worktree: false,
+        },
+      ];
+      return w.__sessions;
+    });
+    await tauri.handle("create_session", (args) => {
+      const input = args as Record<string, unknown>;
+      const w = window as unknown as {
+        __createSessionCalls?: Array<Record<string, unknown>>;
+        __sessions?: Array<Record<string, unknown>>;
+      };
+      w.__createSessionCalls = w.__createSessionCalls ?? [];
+      w.__createSessionCalls.push(input);
+      const id = `created-${w.__createSessionCalls.length}`;
+      const repoPath =
+        typeof input.repoPath === "string" ? input.repoPath : "/tmp/demo";
+      const session = {
+        id,
+        name: typeof input.name === "string" ? input.name : id,
+        repo_path: repoPath,
+        worktree_path: repoPath,
+        branch: "main",
+        isolated: false,
+        project_scoped: input.projectScoped !== false,
+        status: "ready",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        last_message: null,
+        title_source: "manual",
+        kind: typeof input.kind === "string" ? input.kind : "regular",
+        mode: "terminal",
+        owner: { kind: "user" },
+        position: null,
+        in_worktree: false,
+      };
+      w.__sessions = [...(w.__sessions ?? []), session];
+      return session;
+    });
+
+    await page.goto("/");
+
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+
+    const board = page.getByTestId("workspace-kanban");
+    await board.getByRole("button", { name: "Create session" }).click();
+    await page.getByRole("menuitem", { name: "New session" }).click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __createSessionCalls?: Array<Record<string, unknown>>;
+              }
+            ).__createSessionCalls?.length ?? 0,
+        ),
+      )
+      .toBe(1);
+    await expect(
+      board.locator('[data-kanban-session-id="created-1"]'),
+    ).toBeVisible();
+    await expect(page.getByTestId("kanban-terminal-popover")).toBeVisible();
+    await expect(page.getByTestId("terminal-popover-body")).toBeVisible();
   });
 });

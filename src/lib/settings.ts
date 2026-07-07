@@ -235,6 +235,11 @@ export interface AcornSettings {
      * `custom` uses the remembered user-resized popover size.
      */
     kanbanTerminalPopoverDefaultSize: KanbanTerminalPopoverDefaultSize;
+    /**
+     * Open the terminal popover as soon as a terminal session is created while
+     * the active workspace is in kanban mode.
+     */
+    openKanbanTerminalOnSessionCreate: boolean;
   };
   terminal: {
     fontFamily: string;
@@ -487,6 +492,7 @@ export const DEFAULT_SETTINGS: AcornSettings = {
     prioritizeNeedsInputTabs: false,
     kanbanTerminalPopoverPlacement: "card",
     kanbanTerminalPopoverDefaultSize: "custom",
+    openKanbanTerminalOnSessionCreate: false,
   },
   terminal: {
     fontFamily: fontStackFromSlots(
@@ -1011,6 +1017,10 @@ function loadSettings(): AcornSettings {
             interfaceRaw.kanbanTerminalPopoverDefaultSize,
             DEFAULT_SETTINGS.interface.kanbanTerminalPopoverDefaultSize,
           ),
+        openKanbanTerminalOnSessionCreate:
+          typeof interfaceRaw.openKanbanTerminalOnSessionCreate === "boolean"
+            ? interfaceRaw.openKanbanTerminalOnSessionCreate
+            : DEFAULT_SETTINGS.interface.openKanbanTerminalOnSessionCreate,
       },
       terminal: {
         ...DEFAULT_SETTINGS.terminal,
@@ -1339,6 +1349,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
                   patch.kanbanTerminalPopoverDefaultSize,
                   s.settings.interface.kanbanTerminalPopoverDefaultSize,
                 ),
+          openKanbanTerminalOnSessionCreate:
+            patch.openKanbanTerminalOnSessionCreate === undefined
+              ? s.settings.interface.openKanbanTerminalOnSessionCreate
+              : typeof patch.openKanbanTerminalOnSessionCreate === "boolean"
+                ? patch.openKanbanTerminalOnSessionCreate
+                : s.settings.interface.openKanbanTerminalOnSessionCreate,
         },
       };
       persist(next);
