@@ -1,4 +1,4 @@
-import { test, expect } from "./support";
+import { test, expect, pressHotkey } from "./support";
 
 const PROJECT = {
   repo_path: "/tmp/demo",
@@ -728,6 +728,61 @@ test.describe("workspace kanban mode", () => {
     expect(Math.abs(box.y + box.height / 2 - viewport.height / 2)).toBeLessThan(
       8,
     );
+  });
+
+  test("keeps a terminal popover open while editing settings", async ({
+    page,
+    tauri,
+  }) => {
+    await tauri.respond("list_projects", [PROJECT]);
+    await tauri.respond("list_sessions", [
+      session("settings-popover", "settings-popover", "ready"),
+    ]);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-view-status").click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+    await page
+      .getByTestId("workspace-kanban")
+      .getByRole("button", { name: "Open settings-popover" })
+      .click();
+
+    const popover = page.getByTestId("kanban-terminal-popover");
+    await expect(popover).toBeVisible();
+
+    await pressHotkey(page, { mod: true, key: "," });
+    const modal = page.getByRole("dialog", { name: /^(Settings|설정)$/ });
+    await expect(modal).toBeVisible();
+
+    await modal
+      .getByRole("combobox", { name: "Default workspace mode" })
+      .click();
+    await page.getByRole("option", { name: "Kanban" }).click();
+    await expect(popover).toBeVisible();
+
+    await modal.getByText("Center of screen", { exact: true }).click();
+    await modal.getByText("Full screen", { exact: true }).click();
+    await expect(popover).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("acorn:settings:v1");
+          const settings = raw ? JSON.parse(raw) : null;
+          return {
+            defaultMode:
+              settings?.interface?.defaultWorkspaceViewMode ?? null,
+            placement:
+              settings?.interface?.kanbanTerminalPopoverPlacement ?? null,
+            defaultSize:
+              settings?.interface?.kanbanTerminalPopoverDefaultSize ?? null,
+          };
+        }),
+      )
+      .toEqual({
+        defaultMode: "kanban",
+        placement: "center",
+        defaultSize: "fullscreen",
+      });
   });
 
   test("uses configured fullscreen kanban terminal popover size", async ({
